@@ -29,10 +29,13 @@ from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import load_tokenizer
+from levanter.data.image import ImageMixtureDatasetConfig, ImageIODatasetConfig
 from levanter.data.text import LmDatasetFormatBase, LMMixtureDatasetConfig, TextLmDatasetFormat
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main.train_lm import TrainLmConfig
+from levanter.main.train_vlm import TrainVLMConfig
 from levanter.models.llama import LlamaConfig
+from levanter.models.llava_onevision import LlavaOnevisionConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
 from levanter.schedule import BatchSchedule
@@ -52,6 +55,7 @@ from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.simple_vlm_train_config import SimpleVlmTrainConfig
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
@@ -75,7 +79,9 @@ from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigB
 from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
     TrainLmOnPodConfig,
+    TrainVlmOnPodConfig,
     run_levanter_train_lm,
+    run_levanter_train_vlm,
 )
 
 logger = logging.getLogger("ray")
@@ -427,6 +433,148 @@ def default_train(
             f"= {total_examples * train_length} tokens."
         ),
         fn=run_levanter_train_lm,
+        config=config,
+        override_output_path=override_output_path,
+    )
+
+
+def default_train_vlm(
+    name: str,
+    data_config: ImageMixtureDatasetConfig | ImageIODatasetConfig,
+    model_config: LlavaOnevisionConfig,
+    train_config: SimpleVlmTrainConfig,
+    tags: Sequence[str] = (),
+    override_output_path: str | None = None,
+) -> ExecutorStep:
+    """
+    Train a Vision-Language Model using the default configuration.
+
+    Args:
+        name: The name of the training run. Will form the basis of the output path.
+        data_config: Image dataset configuration (ImageMixtureDatasetConfig or ImageIODatasetConfig).
+        model_config: LlavaOnevisionConfig for the VLM architecture.
+        train_config: SimpleVlmTrainConfig for training hyperparameters.
+        tags: Additional tags for WandB logging.
+        override_output_path: Optional explicit output path.
+
+    Returns:
+        An ExecutorStep configured for VLM training.
+    """
+    steps_per_export = train_config.steps_per_export
+
+    # Truncate name for WANDB (max 64 characters)
+    if len(name) > 64:
+        old_name = name
+        if "-" not in name:
+            name = name[:64]
+        else:
+            prefix, suffix = name.rsplit("-", 1)
+            if len(suffix) >= 64:
+                suffix = suffix[:64]
+                name = suffix
+            else:
+                name = prefix[: 63 - len(suffix)] + "-" + suffix
+        logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
+
+    if train_config.steps_per_hf_export is None:
+        steps_per_export_hf = steps_per_export
+    elif train_config.steps_per_hf_export == -1:
+        steps_per_export_hf = None
+    else:
+        steps_per_export_hf = train_config.steps_per_hf_export
+
+    # Get training sequence length from config or model
+    actual_model_config = unwrap_versioned_value(model_config)
+    train_length = train_config.train_seq_len
+    if train_length is None and hasattr(actual_model_config.text_config, "max_seq_len"):
+        train_length = actual_model_config.text_config.max_seq_len
+
+    # Create TrainVLMConfig
+    inner_config = TrainVLMConfig(
+        data=data_config,
+        trainer=TrainerConfig(
+            tracker=WandbConfig(
+                project="marin-vlm",
+                tags=[*tags],
+            ),
+            mp=jmp.get_policy(train_config.mp),
+            train_batch_size=train_config.train_batch_size,
+            per_device_parallelism=train_config.per_device_parallelism,
+            num_train_steps=train_config.num_train_steps,
+            steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
+            checkpointer=CheckpointerConfig(
+                save_interval=timedelta(minutes=10),
+                keep=[dict(every=steps_per_export)],
+            ),
+            mesh=MeshConfig(
+                compute_mapping={
+                    "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                    "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                }
+            ),
+            allow_partial_checkpoint=train_config.allow_partial_checkpoint,
+            max_eval_batches=train_config.max_eval_batches,
+            allow_nondivisible_batch_size=True,
+            quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
+            initialize_from=None if train_config.reset_data_loader_on_init else train_config.initialize_from_checkpoint_path,
+            watch=train_config.watch,
+            profiler=train_config.profiler,
+            profiler_start_step=train_config.profiler_start_step,
+            profiler_num_steps=train_config.profiler_num_steps,
+            use_explicit_mesh_axes=train_config.explicit_mesh_axes,
+        ),
+        model=model_config,
+        optimizer=(
+            train_config.optimizer_config
+            if train_config.optimizer_config is not None
+            else AdamConfig(
+                learning_rate=train_config.learning_rate,
+                weight_decay=train_config.weight_decay if train_config.weight_decay is not None else AdamConfig().weight_decay,
+                beta1=train_config.beta1 if train_config.beta1 is not None else AdamConfig().beta1,
+                beta2=train_config.beta2 if train_config.beta2 is not None else AdamConfig().beta2,
+                epsilon=train_config.epsilon if train_config.epsilon is not None else AdamConfig().epsilon,
+                max_grad_norm=train_config.max_grad_norm if train_config.max_grad_norm is not None else AdamConfig().max_grad_norm,
+                warmup=train_config.warmup if train_config.warmup is not None else AdamConfig().warmup,
+                rewarmup=train_config.rewarmup if train_config.rewarmup is not None else AdamConfig().rewarmup,
+                decay=train_config.decay if train_config.decay is not None else AdamConfig().decay,
+                lr_schedule=train_config.lr_schedule if train_config.lr_schedule is not None else AdamConfig().lr_schedule,
+                cycle_length=train_config.cycle_length,
+                min_lr_ratio=train_config.min_lr_ratio if train_config.min_lr_ratio is not None else AdamConfig().min_lr_ratio,
+                skip_bad_steps=train_config.skip_bad_steps,
+            )
+        ),
+        # VLM-specific options
+        initialize_from_hf=train_config.initialize_from_hf or False,
+        use_hf_model_config=train_config.use_hf_model_config,
+        vision_checkpoint=train_config.vision_checkpoint,
+        llm_checkpoint=train_config.llm_checkpoint,
+        freeze_vision_encoder=train_config.freeze_vision_encoder,
+        freeze_llm=train_config.freeze_llm,
+        no_eval=train_config.no_eval,
+        epoch=train_config.epoch,
+        hf_save_steps=steps_per_export_hf,
+        data_seed=train_config.data_seed,
+        # Streaming mode performance tuning
+        streaming_max_buffered_batches=train_config.streaming_max_buffered_batches,
+        streaming_prefetch_size=train_config.streaming_prefetch_size,
+    )
+
+    # Create the pod config
+    pod_resource_config = train_config.resources
+
+    # Create the full config
+    config = TrainVlmOnPodConfig(
+        train_config=inner_config,
+        resources=pod_resource_config,
+        output_path=this_output_path(),
+    )
+
+    return ExecutorStep(
+        name=os.path.join("checkpoints", name),
+        description=(
+            f"Train VLM for {train_config.num_train_steps} steps with batch size {train_config.train_batch_size}"
+        ),
+        fn=run_levanter_train_vlm,
         config=config,
         override_output_path=override_output_path,
     )

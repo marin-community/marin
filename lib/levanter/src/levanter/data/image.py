@@ -1578,9 +1578,10 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         self._data_loaded = threading.Event()
 
         # Prefetch cache for PROCESSED data (large - includes pixel_values)
-        # Key: global_idx, Value: ImageTextDict
+        # Key: monotonically increasing counter, Value: ImageTextDict
         # Items are popped when accessed - cache only holds prefetched but not-yet-accessed data
         self._processed_cache: OrderedDict[int, ImageTextDict] = OrderedDict()
+        self._cache_key_counter: int = 0  # Monotonic counter to avoid key collision when items are popped
         self._cache_lock = threading.Lock()
 
         # Background sequential prefetch
@@ -1767,8 +1768,9 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
 
                     with self._cache_lock:
                         for item in processed:
-                            cache_key = len(self._processed_cache)
-                            self._processed_cache[cache_key] = item
+                            # Use monotonic counter to avoid key collision when items are popped
+                            self._processed_cache[self._cache_key_counter] = item
+                            self._cache_key_counter += 1
                         # Evict oldest entries if over limit
                         while len(self._processed_cache) > self.cache_size:
                             self._processed_cache.popitem(last=False)
@@ -1787,28 +1789,27 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         return list(processed)
 
     def _get_from_cache_or_process(self, indices: Sequence[int]) -> List[ImageTextDict]:
-        """Get items from cache or process them (step-based mode).
+        """Get items from cache (step-based mode).
 
         In step-based mode, indices are ignored - we just return batch_size items
-        in sequential order from the cache or by processing.
+        in sequential order from the cache. Only the prefetch thread produces data
+        to avoid duplicate consumption of the data stream.
         """
         self._ensure_data_loaded()
         batch_size = len(indices)
         results: List[ImageTextDict] = []
 
-        # Get items from cache first
-        with self._cache_lock:
-            sorted_keys = sorted(self._processed_cache.keys())
-            for key in sorted_keys[:batch_size]:
-                results.append(self._processed_cache.pop(key))
+        # Wait for cache to have enough items (only prefetch thread produces data)
+        while len(results) < batch_size:
+            with self._cache_lock:
+                sorted_keys = sorted(self._processed_cache.keys())
+                needed = batch_size - len(results)
+                for key in sorted_keys[:needed]:
+                    results.append(self._processed_cache.pop(key))
 
-        # Process remaining items if needed
-        remaining = batch_size - len(results)
-        if remaining > 0:
-            raw_items = [self._get_next_item() for _ in range(remaining)]
-            with self._processor_lock:
-                processed = self._batch_processor(raw_items)
-            results.extend(processed)
+            if len(results) < batch_size:
+                # Wait a bit for prefetch thread to add more items
+                time.sleep(0.01)
 
         return results
 
@@ -2422,7 +2423,10 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
             # Get dataset size and log it
             try:
                 dataset_len = asyncio.run(streaming_ds.async_len())
-                logger.info(f"Built streaming dataset for {name} ({split}): {dataset_len:,} datapoints")
+                if dataset_len == sys.maxsize:
+                    logger.info(f"Built streaming dataset for {name} ({split}): streaming mode")
+                else:
+                    logger.info(f"Built streaming dataset for {name} ({split}): {dataset_len:,} datapoints")
             except Exception:
                 logger.info(f"Built streaming dataset for {name} ({split})")
 

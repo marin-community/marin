@@ -58,15 +58,21 @@ RESOURCES = ResourceConfig.with_tpu(TPU_TYPE)
 
 # Extract TPU chip count from TPU_TYPE (e.g., "v5p-64" -> 64)
 TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
-# Batch size scales with TPU chips (1 sample per chip)
-BATCH_SIZE = TPU_CHIPS
+
+# Gradient accumulation configuration
+# - per_device_parallelism: samples processed per device at a time (limited by memory)
+# - gradient_accumulation_steps: how many micro-batches to accumulate before updating
+# - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
+PER_DEVICE_PARALLELISM = 2  # 1 sample per device (memory-safe for VLM with large images)
+GRADIENT_ACCUMULATION_STEPS = 2  # Accumulate 4 micro-batches
+BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
 # ============================================================================
 # 2. MODEL CONFIGURATION
 # ============================================================================
 
 # Flash attention block size (set to None to disable flash attention)
-FLASH_ATTENTION_BLOCK_SIZE = 1536
+FLASH_ATTENTION_BLOCK_SIZE = 1024
 
 # Vision encoder: SigLIP-like (matches google/siglip-so400m-patch14-384)
 vision_config = SiglipVisionConfig(
@@ -99,6 +105,10 @@ vlm_config = LlavaOnevisionConfig(
     vision_encoder_type="siglip",
     vision_feature_select_strategy="full",
     vision_aspect_ratio="anyres_max_9",
+    # Disable tensor parallelism for vision encoder to reduce AllReduce overhead.
+    # This is recommended when freeze_vision_encoder=True since the vision encoder
+    # doesn't need gradient synchronization.
+    disable_vision_sharding=True,
 )
 
 # ============================================================================
@@ -145,6 +155,7 @@ NUM_TRAIN_STEPS = (DATASET_SIZE // BATCH_SIZE) * NUM_EPOCHS
 train_config = SimpleVlmTrainConfig(
     resources=RESOURCES,
     train_batch_size=BATCH_SIZE,
+    per_device_parallelism=PER_DEVICE_PARALLELISM,
     num_train_steps=NUM_TRAIN_STEPS,
     epoch=0,  # Disable epoch mode (use num_train_steps instead)
     learning_rate=2e-4,
@@ -169,13 +180,18 @@ train_config = SimpleVlmTrainConfig(
     # Freeze components during training (only train projector)
     freeze_vision_encoder=True,
     freeze_llm=True,
+
+    # Profiler configuration
+    profiler=True,
+    profiler_start_step=10,
+    profiler_num_steps=20,
 )
 
 # ============================================================================
 # 5. CREATE TRAINING STEP
 # ============================================================================
 vlm_training = default_train_vlm(
-    name="vlm-demo4-qwen3-1.7b",
+    name="vlm-demo8-qwen3-1.7b",
     data_config=data_config,
     model_config=vlm_config,
     train_config=train_config,

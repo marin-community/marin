@@ -73,6 +73,11 @@ class LlavaOnevisionConfig:
     multimodal_projector_bias: bool = True
     gradient_checkpointing: bool = True
 
+    # Disable tensor parallelism for vision encoder to reduce AllReduce overhead.
+    # When True, the vision encoder runs with empty axis mapping, avoiding
+    # per-layer AllReduce operations. Recommended when vision encoder is frozen.
+    disable_vision_sharding: bool = False
+
     # Reference checkpoint for loading pretrained models
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
@@ -483,7 +488,14 @@ class LlavaOnevisionModel(eqx.Module):
         pixel_values_flat = hax.flatten_axes(pixel_values, (batch_ax, num_patches_ax), VisionBatch)
 
         # Run vision tower on all patches (including padding patches)
-        image_outputs = self.vision_tower(pixel_values_flat, output_hidden_states=True, key=k_vision)
+        # When disable_vision_sharding is True, run with empty axis mapping to avoid
+        # tensor parallelism AllReduce overhead. This is beneficial when the vision
+        # encoder is frozen since we don't need gradient synchronization.
+        if self.config.disable_vision_sharding:
+            with hax.axis_mapping({}):
+                image_outputs = self.vision_tower(pixel_values_flat, output_hidden_states=True, key=k_vision)
+        else:
+            image_outputs = self.vision_tower(pixel_values_flat, output_hidden_states=True, key=k_vision)
         if image_outputs.hidden_states is None:
             raise ValueError("Vision tower must return hidden states when output_hidden_states=True")
 

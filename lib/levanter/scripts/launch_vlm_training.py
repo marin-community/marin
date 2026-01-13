@@ -208,6 +208,13 @@ def parse_args():
         "Useful for vision encoder fine-tuning or projector-only training.",
     )
     parser.add_argument(
+        "--disable_vision_sharding",
+        action="store_true",
+        help="Disable tensor parallelism for vision encoder to reduce AllReduce overhead. "
+        "Recommended when --freeze_vision_encoder is set, as the frozen vision encoder "
+        "doesn't need gradient synchronization across devices.",
+    )
+    parser.add_argument(
         "--fsdp_axis",
         type=str,
         default="embed",
@@ -374,6 +381,7 @@ def get_model_config(args) -> LlavaOnevisionConfig:
         vision_config=vision_config,
         text_config=text_config,
         gradient_checkpointing=use_gradient_checkpointing,
+        disable_vision_sharding=args.disable_vision_sharding,
     )
 
     # Log optimization settings
@@ -381,6 +389,7 @@ def get_model_config(args) -> LlavaOnevisionConfig:
     logger.info(f"  Flash attention: {use_flash}")
     if use_flash:
         logger.info(f"  Flash attention block size: {flash_block_size}")
+    logger.info(f"  Disable vision sharding: {args.disable_vision_sharding}")
 
     return config
 
