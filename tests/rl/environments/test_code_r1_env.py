@@ -351,6 +351,10 @@ def add(a, b): return a + b
         )
 
         assert "code_r1.train_mean_execution_time" in metrics
+        assert "code_r1.train_max_execution_time" in metrics
+        assert "code_r1.train_min_execution_time" in metrics
         assert "code_r1.train_total_execution_time" in metrics
         assert metrics["code_r1.train_mean_execution_time"] >= 0.0
+        assert metrics["code_r1.train_max_execution_time"] >= 0.0
+        assert metrics["code_r1.train_min_execution_time"] >= 0.0
         assert metrics["code_r1.train_total_execution_time"] >= 0.0

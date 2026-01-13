@@ -452,6 +452,7 @@ class CodeR1Env(MarinEnv):
         pass_sum = 0.0
         code_extracted_sum = 0.0
         execution_time_sum = 0.0
+        execution_times = []
         response_token_count = 0
         truncated_count = 0
 
@@ -527,6 +528,7 @@ class CodeR1Env(MarinEnv):
             pass_sum += score_result.is_correct
             code_extracted_sum += score_result.code_extracted
             execution_time_sum += score_result.execution_time
+            execution_times.append(score_result.execution_time)
             response_token_count += rollout.response_tokens.size
 
             if task.choice.finish_reason == "length":
@@ -550,6 +552,8 @@ class CodeR1Env(MarinEnv):
             f"{prefix}_code_extracted_rate": code_extracted_sum / total_choices,
             f"{prefix}_mean_response_tokens": response_token_count / total_choices,
             f"{prefix}_mean_execution_time": execution_time_sum / total_choices,
+            f"{prefix}_max_execution_time": max(execution_times) if execution_times else 0.0,
+            f"{prefix}_min_execution_time": min(execution_times) if execution_times else 0.0,
             f"{prefix}_total_execution_time": execution_time_sum,
             f"{prefix}_total_responses": float(total_choices),
             f"{prefix}_sampled_examples": float(len(sampled_examples)),
