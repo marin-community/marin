@@ -483,6 +483,8 @@ rl_on_50b_moe:
   owners: [dlwh, AlienKevin]
   target_date: "2026-03-15"
   labels: [timeline, rl, moe]
+  dependencies:
+    - train_50b_moe
 
 
 beat_qwen3_32b_with_32b:
@@ -500,6 +502,168 @@ automated_ingestion_datasets_environments:
   status: planned
   target_date: "2026-03-31"
   labels: [timeline, infra, data_pipeline, agent_friendly]
+  description: |
+    Turn “someone found a dataset / env we should use” into a repeatable workflow that produces ready-to-train
+    artifacts *with a durable paper trail* (provenance + transforms + stats), so we can trust, reproduce, and compare
+    data across runs.
+
+    This should codify and automate the workflow in `docs/recipes/add_dataset.md`, including the *schema inspection*
+    first step, and extend it to cover:
+    - dataset ingestion (download/import), validation, and publishing in our preferred format
+    - environment ingestion (RL environments and other task envs), including a minimal contract and test harness
+
+    The point is not “datasets are uniform so ingestion can be fully automated”. Datasets are special snowflakes.
+    The goal is to make the *repeatable parts* easy and to make the “snowflake” decisions explicit and reviewable,
+    while ensuring every ingestion produces consistent artifacts and metadata.
+  definition_of_done: |
+    - A single documented “intake” workflow exists for datasets that follows `docs/recipes/add_dataset.md` but is mostly
+      runnable end-to-end (CLI/recipe), producing:
+      - a dataset manifest (schema, licensing, source pointers, token counts)
+      - validation reports (sampling sanity, corruption checks)
+      - train/eval splits or slices when applicable
+    - A parallel “intake” workflow exists for environments that:
+      - defines a minimal environment contract
+      - runs contract tests in CI on new/changed envs
+    - Ingestion outputs are standard artifacts that can be consumed by ferries/pipelines without manual glue.
+  dependencies:
+    - automate_add_dataset_recipe
+    - dataset_ingestion_artifact_manifest
+    - dataset_ingestion_validation_gates
+    - environment_ingestion_contract
+    - environment_ingestion_ci_gates
+    - dataset_processing
+    - data_validation
+
+
+automate_add_dataset_recipe:
+  title: "Agent-in-the-loop dataset intake scaffold (encode `docs/recipes/add_dataset.md`)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, data_pipeline, agent_friendly, newbie_friendly]
+  description: |
+    The purpose of `docs/recipes/add_dataset.md` is not “fully automated dataset addition” — datasets are special
+    snowflakes and require intelligence/iteration.
+
+    The goal here is to automate the *repeatable scaffolding* and make the “snowflake” parts explicit, interactive,
+    and reviewable:
+    - scaffold a new dataset addition with the right files/structure and a manifest stub
+    - run schema inspection and emit a summary that an agent can reason about
+    - run standard validation gates and produce a report
+    - provide explicit checkpoints where an agent/human must decide:
+      normalization/mapping, filtering, licensing constraints, splitting strategy, dedupe strategy, etc.
+
+    In other words: encode the recipe as an agent-friendly workflow that is fast to iterate on, without pretending that
+    datasets are uniform.
+  definition_of_done: |
+    - Given a dataset source (HF dataset, GCS bucket, local files, etc.), we can run a documented workflow that:
+      - generates a dataset addition scaffold (files + manifest stub)
+      - runs schema inspection and writes a machine-readable + human-readable summary
+      - runs standard validations and writes a report
+    - The workflow makes “agent decisions” explicit checkpoints (it should pause/fail with actionable guidance rather
+      than silently guessing).
+
+
+dataset_ingestion_artifact_manifest:
+  title: "Dataset manifests for doc + tokenized artifacts (linked provenance)"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, data_pipeline, agent_friendly, newbie_friendly]
+  description: |
+    Standardize the metadata we emit for every ingested dataset so downstream pipelines can trust and reason about it.
+
+    This is closely related to what `lib/marin/tools/get_hf_dataset_schema.py` already produces (schema inspection),
+    but the “manifest” is the durable, versioned paper trail that we *store alongside the dataset artifact* and keep
+    stable across time.
+
+    Because we separate “doc” artifacts (jsonl/parquet/untokenized) from “tokenized” artifacts, we need manifests for
+    both, with explicit linkage:
+
+    - Doc manifest (source-of-truth provenance for the raw/normalized dataset):
+      - dataset name/version/source pointers (and commit hashes where applicable)
+      - license and usage constraints
+      - schema (fields + types) and any normalization performed
+      - split/slice definitions
+      - basic quality stats (language, length distributions, corruption rate)
+
+    - Tokenized manifest (tokenization-specific paper trail):
+      - tokenizer identity + revision (and any special tokenization settings)
+      - token counts and length distribution stats per split
+      - pointer to the exact doc-manifest version/hash it was tokenized from
+      - (optional) pointer to tokenization logs / validation reports
+  definition_of_done: |
+    - A versioned doc-manifest format exists and is produced by ingestion, stored alongside the doc artifact.
+    - A versioned tokenized-manifest format exists and is produced by tokenization, stored alongside the tokenized
+      artifact, and references the doc-manifest it was derived from.
+    - Pipelines reference the correct manifest(s) for the artifact they consume.
+
+
+dataset_ingestion_validation_gates:
+  title: "Dataset ingestion validation gates (sanity checks + reports)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, data_pipeline, testing, agent_friendly]
+  description: |
+    Add validation steps that run automatically during ingestion so we catch problems before training:
+    - schema and invariants
+    - empty/corrupted samples and encoding issues
+    - tokenization sanity (e.g. pathological length spikes)
+    - dedupe verification and token count stats where relevant
+
+    This should build on `data_validation` and produce agent-readable reports.
+  dependencies:
+    - data_validation
+
+
+environment_ingestion_contract:
+  title: "Environment contract: minimal interface + fixtures for RL/task environments"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, rl, environments, testing, agent_friendly]
+  description: |
+    Define a minimal contract for “environment plugins” so we can add environments without bespoke wiring.
+
+    Current state: we already have a minimal `MarinEnv` interface (`sample(...) -> (rollouts, metrics)`) and an
+    environment loader via `EnvConfig` in `lib/marin/src/marin/rl/environments/base.py`.
+
+    We also have an explicit plan to standardize on Prime Intellect / Verifiers “hub environments”, with a wrapper
+    implementation in `lib/marin/src/marin/rl/environments/prime_intellect_env.py`. That wrapper is a *great* direction
+    for reducing bespoke per-env code, but it does not fully replace the need for an explicit contract and test harness.
+
+    The contract is the “quality bar” we enforce for *any* environment source (hub-backed or local):
+    determinism/seeding, bounded episode length, metadata, and a minimal regression slice for CI.
+
+    Examples (exact contract tbd):
+    - deterministic seeding
+    - bounded episode length / max tokens
+    - structured outputs (reward, termination reason, metadata)
+    - a small fixed eval slice for regression tests
+  definition_of_done: |
+    - Contract is written down and enforced in code with a shared test harness/fixtures (ideally runnable without
+      network access).
+    - Prime Intellect hub environments (via `PrimeIntellectEnv`) are either:
+      - demonstrated to satisfy the contract (with shims where needed), or
+      - explicitly documented as “best-effort” with clear gaps (e.g. non-deterministic datasets) and mitigations.
+    - At least one existing environment (not `MockEnv`) is migrated to the contract as proof.
+
+
+environment_ingestion_ci_gates:
+  title: "CI gates for environment additions (contract tests + minimal integration)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, rl, environments, testing, agent_friendly]
+  description: |
+    When a new environment is added or changed, CI should run:
+    - contract tests (fast, deterministic)
+    - a minimal integration test that exercises rollout + scoring (CPU-only if possible)
+
+    This is meant to keep environment quality high while enabling rapid additions.
+  dependencies:
+    - environment_ingestion_contract
 
 
 automated_ingestion_architectures_algorithms:
@@ -508,6 +672,125 @@ automated_ingestion_architectures_algorithms:
   status: planned
   target_date: "2026-03-31"
   labels: [timeline, infra, agent_friendly]
+  description: |
+    Make it easy (and safe) to add “new architecture” or “new training algorithm/optimizer” to Marin/Levanter without
+    bespoke glue each time.
+
+    This is not about pretending architectures/algorithms are uniform. It’s about:
+    - a standard *intake scaffold* (where to put code/config, what metadata to record, how to run a minimal test)
+    - explicit “contract tests” and preflight checks (compile, shapes, sharding) so failures happen early
+    - a durable paper trail of what changed and how it was evaluated
+
+    Related foundation:
+    - overall repo structure and executor pattern: `docs/recipes/architecture.md`
+    - this should eventually align with the “gruggification” work on experiment structure.
+
+    Concrete example to emulate:
+    - The Grug/Grugformer project doc (PR #2171) describes a “canonical core + hackable speedrun edit surface +
+      upstreaming agreement” workflow. That is exactly the style we want for architecture/algorithm intake:
+      experiments happen in copy-pasteable speedrun files with a standard gauntlet, and successful changes get upstreamed
+      into the canonical library with tests.
+  definition_of_done: |
+    - There is a documented workflow for adding an architecture or algorithm that produces:
+      - a standardized config entry (or plugin registration)
+      - a minimal smoke benchmark run (train step + eval step) with logged metrics
+      - a machine-readable manifest recording what was run (code version, config hash, hardware, compile status)
+    - CI runs contract tests for new/changed components and rejects changes that break:
+      - compilation (where applicable) or basic shape/sharding invariants
+      - minimal correctness checks on a tiny model
+    - At least one “external” architecture/algorithm is added end-to-end using this workflow as proof.
+  dependencies:
+    - architecture_algorithm_intake_scaffold
+    - architecture_contract_tests
+    - algorithm_contract_tests
+    - benchmark_smoke_suite
+    - aot_compilation
+    - test_cluster
+    - experiment_structure_overhaul
+
+
+architecture_algorithm_intake_scaffold:
+  title: "Intake scaffold for architectures/algorithms (where to put things, what to record)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, developer_experience, agent_friendly, newbie_friendly]
+  description: |
+    Provide a clear, repeatable “how to add X” scaffold for:
+    - new model architecture variants (attention, MoE variants, Mamba-like, etc.)
+    - new training algorithms (loss variants, optimizer variants, schedule variants)
+
+    This should include:
+    - recommended directory layout / naming
+    - minimal metadata/manifest expectations
+    - a small example/template that adds a toy architecture/algorithm as a starting point
+
+    We should explicitly support the “canonical core + speedrun edit surface” pattern described in the Grug/Grugformer
+    project doc (PR #2171):
+    - canonical implementation lives in the library
+    - speedrun scripts are the copy/paste surface for A/B experiments (explicit hack points)
+    - upstreaming a win updates the library + tests (speedruns remain snapshots)
+  definition_of_done: |
+    - We write down the canonical “where does this go” guidance (doc + template).
+    - An example/template exists that newcomers and agents can copy.
+
+
+architecture_contract_tests:
+  title: "Contract tests for architecture changes (shapes, sharding, compilation, numerics)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, testing, performance, agent_friendly]
+  description: |
+    Add tests that catch common failure modes when changing model architecture:
+    - shape mismatches / incorrect parameter initialization
+    - sharding rules that fail on common meshes
+    - compilation failures (ideally via preflight)
+    - obvious numeric instability (NaNs, divergence on tiny runs)
+  dependencies:
+    - aot_compilation
+
+
+algorithm_contract_tests:
+  title: "Contract tests for training algorithm changes (optimizer/loss/schedule invariants)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, testing, agent_friendly]
+  description: |
+    Add tests that catch common failure modes when changing training algorithms:
+    - optimizer state shape/type mismatches
+    - loss scaling / KL/regularization invariants
+    - schedule changes that produce invalid values
+    - convergence sanity on tiny runs (not “good”, just “not broken”)
+
+
+benchmark_smoke_suite:
+  title: "Smoke benchmark suite for new architectures/algorithms"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, testing, performance, agent_friendly]
+  description: |
+    A minimal, reproducible benchmark suite (“gauntlet”) that is used for architecture/algorithm intake.
+
+    This should look like the Grug/Grugformer “hackable speedrun gauntlet” idea (PR #2171):
+    - a standard set of checks that every change runs through
+    - a clear edit surface in a speedrun file (copy/paste-friendly) for rapid experimentation
+
+    Minimum gauntlet checks:
+    - correctness sanity (when there is a reference path, compare reference vs fast kernels on tiny shapes)
+    - compile sanity (TTFS for `train_step`, ideally via `aot_compilation` preflight)
+    - throughput sanity (tokens/sec, step time on a fixed micro-benchmark)
+    - memory sanity (best-effort capture of max HBM/VMEM if available)
+
+    Goal is not to predict final quality, but to make it easy to validate:
+    - it compiles
+    - it runs end-to-end
+    - performance is not obviously terrible
+  dependencies:
+    - test_cluster
+    - aot_compilation
 
 
 agent_driven_parameter_sweep_demo:
@@ -2625,6 +2908,131 @@ jax_gpu_performance:
     - support_nvidia_gpu_clusters
     - test_cluster
 
+
+agent_driven_profiling:
+  title: "Agent-driven profiling (xprof/TensorBoard/Perfetto -> actionable optimization)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly, newbie_friendly]
+  description: |
+    Make profiling data *machine-usable* so agents can automatically improve utilization of specific kernels and the
+    full training/inference pipeline.
+
+    The end state is:
+    - a standard way to capture profiles for representative workloads (train/eval/inference/RL)
+    - a parser that turns profiles (e.g. xprof) into structured data and summaries
+    - agent tooling that can answer: “what’s slow, why, and what should we try next?”
+  definition_of_done: |
+    - We have a documented workflow to collect profiles for at least one representative workload.
+    - Agents can ingest a profile artifact and produce a deterministic, structured summary:
+      hot ops, time breakdown (compute/comm/host stalls), and top candidates for optimization.
+    - We run at least one “agent-driven optimization loop” end-to-end (measure -> propose -> patch/flag -> re-measure)
+      and demonstrate a measurable throughput win or a clear root-cause report.
+  dependencies:
+    - agent_profiling_research
+    - xprof_profile_ingestion
+    - profile_summary_schema
+    - agent_profile_query_tooling
+    - profiling_regression_tracking
+
+
+agent_profiling_research:
+  title: "Research: what profile tooling exists (xprof/JAX/TensorBoard/Perfetto) and how to parse it"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly, newbie_friendly]
+  description: |
+    Survey what’s available and pick an initial “source of truth” profile format for Marin on TPUs and GPUs.
+
+    Deliverable should include:
+    - how to generate profiles for our common workloads (TPU via xprof; GPU via Nsight/Perfetto/TB, etc.)
+    - what artifacts are produced (protobufs, JSON traces, sqlite, etc.)
+    - whether there are stable parsers/APIs we can depend on, and licensing/maintenance considerations
+    - a recommended MVP scope (e.g. xprof trace -> structured summary)
+  definition_of_done: |
+    - A short plan document is written (in an issue or in-repo doc) naming:
+      1) the initial target formats, 2) the ingestion approach, 3) the first workload(s), and 4) success metrics.
+
+
+xprof_profile_ingestion:
+  title: "Ingest xprof (and friends) into a structured profile artifact"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Implement ingestion of at least xprof outputs into a normalized, versioned internal representation so we can:
+    - store profiles alongside experiment artifacts
+    - compare profiles across runs
+    - build stable tooling for agents and dashboards
+
+    Non-goals for MVP:
+    - perfect support for every profiler format
+    - fancy UI (we can start with CLI + JSON summaries)
+  dependencies:
+    - profile_summary_schema
+
+
+profile_summary_schema:
+  title: "Profile summary schema (normalized timeline + aggregates)"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Define a stable, versioned schema for “profile summaries” that agents can consume.
+
+    Minimum fields we likely want:
+    - run metadata: hardware type, mesh/topology, git SHA, config hash
+    - time breakdown: step time, compile time, compute/comm/host waits
+    - hot ops: top-k by time, plus callsite/module attribution when possible
+    - comm breakdown: all-reduce/all-gather/etc time and volume if available
+  definition_of_done: |
+    - A JSON schema (or equivalent) is defined with a version tag.
+    - At least one real profile can be summarized into this schema reproducibly.
+
+
+agent_profile_query_tooling:
+  title: "Agent tooling: query profiles and propose optimizations"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Build the agent-facing interface that turns profile summaries into actions.
+
+    Example queries:
+    - “What are the top 10 ops by exclusive time?”
+    - “Is comm or compute dominating? Which collective is worst?”
+    - “Did this change improve step time? What regressed?”
+    - “Which kernels are memory-bound vs compute-bound (when inferable)?”
+
+    Output should be actionable:
+    - targeted hypotheses (e.g. fusion opportunity, sharding change, kernel selection, host->device stall)
+    - small, testable patches or config tweaks
+    - links back to the exact profile evidence (op name, time range, source module)
+  dependencies:
+    - profile_summary_schema
+
+
+profiling_regression_tracking:
+  title: "Profiling regression tracking: store/compare profiles over time"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, observability, agent_friendly]
+  description: |
+    Make it easy to detect regressions and validate improvements.
+
+    This should integrate with `test_cluster` over time:
+    - periodically profile a small representative workload
+    - store summaries as artifacts
+    - alert on regressions in step time or key bottlenecks
+  dependencies:
+    - test_cluster
+    - profile_summary_schema
 
 test_cluster:
   title: "Test cluster: run accelerator regression tests regularly"
