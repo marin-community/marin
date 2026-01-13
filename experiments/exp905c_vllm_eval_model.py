@@ -288,18 +288,30 @@ MODELS = [
         "apply_chat_template": True,
         "tensor_parallel_size": 4,
     },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
-        "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-2000/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
-        "path": "gs://marin-us-central1/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-2000/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
+    #     "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-2000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
+    #     "path": "gs://marin-us-central1/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-2000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
+    #     "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-3000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
+    #     "path": "gs://marin-us-central1/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-3000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
 ]
 
 
