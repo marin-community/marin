@@ -228,7 +228,6 @@ def compute_ppo_loss(
     loss_masks: jax.Array,
 ) -> jax.Array:
     """Compute PPO loss (per-example normalization)."""
-    # -1 * mean( sum(obj * mask) / sum(mask) )
     return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
 
 
@@ -237,16 +236,8 @@ def compute_dapo_loss(
     loss_masks: jax.Array,
 ) -> jax.Array:
     """Compute DAPO-like loss (global token normalization)."""
-    # -1 * mean( sum(obj * mask) / global_sum_mask) ... wait, original was:
-    # loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
-    # Note: jnp.sum(loss_masks) is a scalar (total tokens in batch).
-    # The mean over batch axis simply divides by batch_size.
-    # So effectively: -1 * sum(obj * mask) / (total_tokens * batch_size) ?
-    # Original code:  -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
-    # This divides each example's sum by TOTAL tokens, then averages over examples.
-    # This seems to double-counts batch size in denominator?
-    # Correct DAPO matches "more like DAPO loss" comment in original code:
-    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
+    # This matches the normalization pattern from the original implementation.
+    return -1 * jnp.sum(loss_objective * loss_masks) / jnp.sum(loss_masks)
 
 
 def compute_grpo_loss(
