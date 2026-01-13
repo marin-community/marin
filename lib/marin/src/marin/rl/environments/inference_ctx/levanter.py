@@ -108,14 +108,6 @@ class LevanterInferenceContext(BaseInferenceContext):
         system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
         """Call OpenAI API in batches with concurrency control."""
-        if temperature < 1e-4:
-            logger.warning(
-                "Temperature is very low (%f). Greedy decoding is generally "
-                "not useful for RL training as it limits exploration.",
-                temperature,
-            )
-        if top_k == 1:
-            logger.warning("top_k is 1. Greedy decoding is generally not useful for RL training.")
 
         if max_tokens is None:
             max_tokens = self.max_tokens

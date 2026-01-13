@@ -318,15 +318,6 @@ class vLLMInferenceContext(BaseInferenceContext):
             stop: Stop sequences
             system_prompt: Optional system prompt (only used if prompts are strings)
         """
-        if temperature < 1e-4:
-            logger.warning(
-                "Temperature is very low (%f). Greedy decoding is generally "
-                "not useful for RL training as it limits exploration.",
-                temperature,
-            )
-        if top_k == 1:
-            logger.warning("top_k is 1. Greedy decoding is generally not useful for RL training.")
-
         if SamplingParams is None:
             raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
         sampling_params = SamplingParams(
