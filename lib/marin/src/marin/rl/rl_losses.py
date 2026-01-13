@@ -235,9 +235,9 @@ def compute_dapo_loss(
     loss_objective: jax.Array,
     loss_masks: jax.Array,
 ) -> jax.Array:
-    """Compute DAPO-like loss (global token normalization)."""
-    # This matches the normalization pattern from the original implementation.
-    return -1 * jnp.sum(loss_objective * loss_masks) / jnp.sum(loss_masks)
+    """Compute DAPO-like loss (per-example normalization)."""
+    # Use per-example normalization (averaging the per-example means)
+    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
 
 
 def compute_grpo_loss(
