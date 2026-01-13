@@ -22,7 +22,11 @@ import logging
 import math
 import os
 import re
-from collections.abc import Iterator
+
+import json
+import fsspec
+
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 
 from levanter.data.text import LMMixtureDatasetConfig
@@ -42,6 +46,7 @@ from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.processing.tokenize import get_vocab_size_for_tokenizer, lm_mixture_data_config
+
 from marin.scaling_laws import (
     CandidateConfig,
     FitScalingLawsResult,
@@ -412,7 +417,7 @@ class IsoFlopAnalysisConfig:
     This config is for use with ExecutorStep.
     """
 
-    training_runs: tuple[str, ...]
+    training_runs: Sequence[str]
     """Training run output paths (executor resolves InputName to str at runtime)."""
 
     output_path: str
@@ -449,12 +454,12 @@ def run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> FitScalingLawsRe
     Returns:
         FitScalingLawsResult with fitted scaling laws
     """
-    import json
-
-    import fsspec
-
     # Read raw records from training runs
-    raw_records = read_raw_records(config)
+    raw_records = read_raw_records(
+        training_runs=config.training_runs,
+        metrics_filename=config.metrics_filename,
+        wandb_entity_project=config.wandb_entity_project,
+    )
 
     if not raw_records:
         logger.warning("No eval metrics found in training runs")

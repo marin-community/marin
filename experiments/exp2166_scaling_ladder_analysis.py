@@ -133,7 +133,7 @@ analysis_step = ExecutorStep(
     name=f"{EXPERIMENT_NAME}-analysis",
     fn=run_isoflop_analysis_step,
     config=IsoFlopAnalysisConfig(
-        training_runs=tuple(r.as_input_name() for r in nemotron_training),
+        training_runs=[r.as_input_name() for r in nemotron_training],
         output_path=this_output_path(),
         recipe=MARIN_2025_RECIPE,
     ),
