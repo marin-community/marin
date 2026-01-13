@@ -16,7 +16,7 @@
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
 import cloudpickle
 import httpx
@@ -27,11 +27,11 @@ from connectrpc.request import RequestContext
 from starlette.testclient import TestClient
 
 from fluster import cluster_pb2
+from fluster.cluster.worker.builder import BuildResult, ImageCache, VenvCache
 from fluster.cluster.worker.bundle import BundleCache
-from fluster.cluster.worker.builder import BuildResult, ImageBuilder, VenvCache
 from fluster.cluster.worker.dashboard import WorkerDashboard
+from fluster.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime
 from fluster.cluster.worker.manager import JobManager, PortAllocator
-from fluster.cluster.worker.runtime import ContainerResult, DockerRuntime
 from fluster.cluster.worker.service import WorkerServiceImpl
 from fluster.cluster_connect import WorkerServiceClient
 
@@ -43,8 +43,8 @@ from fluster.cluster_connect import WorkerServiceClient
 @pytest.fixture
 def mock_bundle_cache():
     """Create mock BundleCache."""
-    cache = AsyncMock(spec=BundleCache)
-    cache.get_bundle = AsyncMock(return_value=Path("/tmp/bundle"))
+    cache = Mock(spec=BundleCache)
+    cache.get_bundle = Mock(return_value=Path("/tmp/bundle"))
     return cache
 
 
@@ -57,10 +57,10 @@ def mock_venv_cache():
 
 
 @pytest.fixture
-def mock_image_builder():
-    """Create mock ImageBuilder."""
-    builder = AsyncMock(spec=ImageBuilder)
-    builder.build = AsyncMock(
+def mock_image_cache():
+    """Create mock ImageCache."""
+    cache = Mock(spec=ImageCache)
+    cache.build = Mock(
         return_value=BuildResult(
             image_tag="test-image:latest",
             deps_hash="abc123",
@@ -68,34 +68,47 @@ def mock_image_builder():
             from_cache=False,
         )
     )
-    return builder
+    return cache
 
 
 @pytest.fixture
 def mock_runtime():
-    """Create mock DockerRuntime."""
-    runtime = AsyncMock(spec=DockerRuntime)
-    runtime.run = AsyncMock(
-        return_value=ContainerResult(
-            container_id="container123",
-            exit_code=0,
-            started_at=0.0,
-            finished_at=1.0,
+    """Create mock DockerRuntime for sync model.
+
+    The sync model uses create_container/start_container/inspect pattern
+    instead of the blocking run() method.
+    """
+    runtime = Mock(spec=DockerRuntime)
+
+    # Container lifecycle methods
+    runtime.create_container = Mock(return_value="container123")
+    runtime.start_container = Mock()
+
+    # Inspect returns not-running so jobs complete immediately
+    runtime.inspect = Mock(return_value=ContainerStatus(running=False, exit_code=0))
+
+    runtime.kill = Mock()
+    runtime.remove = Mock()
+    runtime.get_stats = Mock(
+        return_value=ContainerStats(
+            memory_mb=100,
+            cpu_percent=50,
+            process_count=1,
+            available=True,
         )
     )
-    runtime.kill = AsyncMock()
-    runtime.remove = AsyncMock()
+    runtime.get_logs = Mock(return_value=[])
     return runtime
 
 
 @pytest.fixture
-def job_manager(mock_bundle_cache, mock_venv_cache, mock_image_builder, mock_runtime):
+def job_manager(mock_bundle_cache, mock_venv_cache, mock_image_cache, mock_runtime):
     """Create JobManager with mocked dependencies."""
     port_allocator = PortAllocator(port_range=(50000, 50100))
     return JobManager(
         bundle_cache=mock_bundle_cache,
         venv_cache=mock_venv_cache,
-        image_builder=mock_image_builder,
+        image_cache=mock_image_cache,
         runtime=mock_runtime,
         port_allocator=port_allocator,
         max_concurrent_jobs=5,
@@ -129,7 +142,10 @@ def create_run_job_request(job_id: str = "test-job-1", ports: list[str] | None =
 
     env_config = cluster_pb2.EnvironmentConfig(
         workspace="/workspace",
-        env_vars={"TEST_VAR": "value"},
+        env_vars={
+            "TEST_VAR": "value",
+            "JOB_VAR": "job_value",
+        },
         extras=["dev"],
     )
 
@@ -144,7 +160,6 @@ def create_run_job_request(job_id: str = "test-job-1", ports: list[str] | None =
         environment=env_config,
         bundle_gcs_path="gs://bucket/bundle.zip",
         resources=resources,
-        env_vars={"JOB_VAR": "job_value"},
         timeout_seconds=300,
         ports=ports or [],
     )
@@ -192,8 +207,7 @@ def test_dashboard_loads(client):
 # ============================================================================
 
 
-@pytest.mark.asyncio
-async def test_stats_empty(client, service):
+def test_stats_empty(client, service):
     """Test /api/stats with no jobs."""
     response = client.get("/api/stats")
     assert response.status_code == 200
@@ -201,16 +215,20 @@ async def test_stats_empty(client, service):
     assert data == {"running": 0, "pending": 0, "building": 0, "completed": 0}
 
 
-@pytest.mark.asyncio
-async def test_stats_with_jobs(client, service):
+def test_stats_with_jobs(client, service):
     """Test /api/stats with various job states."""
-    # Submit jobs
+    # Submit jobs and let them complete
     for i in range(5):
         request = create_run_job_request(job_id=f"job-{i}")
-        await service.run_job(request, Mock())
+        service.run_job(request, Mock())
 
-    # Set jobs to different states
+    # Wait for all job threads to complete (mock makes them finish immediately)
     jobs = service._manager.list_jobs()
+    for job in jobs:
+        if job.thread:
+            job.thread.join(timeout=5.0)
+
+    # Now manually set states (threads are done, we control the state)
     jobs[0].status = cluster_pb2.JOB_STATE_RUNNING
     jobs[1].status = cluster_pb2.JOB_STATE_PENDING
     jobs[2].status = cluster_pb2.JOB_STATE_BUILDING
@@ -238,12 +256,11 @@ def test_list_jobs_empty(client):
     assert response.json() == []
 
 
-@pytest.mark.asyncio
-async def test_list_jobs_with_data(client, service):
+def test_list_jobs_with_data(client, service):
     """Test /api/jobs returns all jobs."""
     for i in range(3):
         request = create_run_job_request(job_id=f"job-{i}")
-        await service.run_job(request, Mock())
+        service.run_job(request, Mock())
 
     response = client.get("/api/jobs")
     assert response.status_code == 200
@@ -266,11 +283,10 @@ def test_get_job_not_found(client):
     assert response.json() == {"error": "Not found"}
 
 
-@pytest.mark.asyncio
-async def test_get_job_success(client, service):
+def test_get_job_success(client, service):
     """Test /api/jobs/{job_id} returns job details."""
     request = create_run_job_request(job_id="job-details", ports=["http", "grpc"])
-    await service.run_job(request, Mock())
+    service.run_job(request, Mock())
 
     # Set some details
     job = service._manager.get_job("job-details")
@@ -295,11 +311,10 @@ async def test_get_job_success(client, service):
 # ============================================================================
 
 
-@pytest.mark.asyncio
-async def test_get_logs_with_tail_parameter(client, service):
+def test_get_logs_with_tail_parameter(client, service):
     """Test /api/jobs/{job_id}/logs?tail=N returns last N lines."""
     request = create_run_job_request(job_id="job-tail")
-    await service.run_job(request, Mock())
+    service.run_job(request, Mock())
 
     # Add logs directly to job.logs (since we no longer use file-based logging)
     job = service._manager.get_job("job-tail")
@@ -315,14 +330,22 @@ async def test_get_logs_with_tail_parameter(client, service):
     assert logs[4]["data"] == "Log line 99"
 
 
-@pytest.mark.asyncio
-async def test_get_logs_with_source_filter(client, service):
+def test_get_logs_with_source_filter(client, service):
     """Test /api/jobs/{job_id}/logs?source=stdout filters by source."""
-    request = create_run_job_request(job_id="job-source-filter")
-    await service.run_job(request, Mock())
+    import time
 
-    # Add logs directly to job.logs (since we no longer use file-based logging)
+    request = create_run_job_request(job_id="job-source-filter")
+    service.run_job(request, Mock())
+
+    # Stop the job thread so it doesn't add more logs
     job = service._manager.get_job("job-source-filter")
+    time.sleep(0.05)
+    job.should_stop = True
+    if job.thread:
+        job.thread.join(timeout=1.0)
+
+    # Clear any existing logs and add test logs
+    job.logs.lines.clear()
     job.logs.add("stdout", "stdout line 1")
     job.logs.add("stdout", "stdout line 2")
     job.logs.add("stderr", "stderr line 1")
@@ -349,11 +372,10 @@ async def test_get_logs_with_source_filter(client, service):
     assert len(logs) == 4  # 2 stdout + 2 stderr
 
 
-@pytest.mark.asyncio
-async def test_list_jobs_includes_resource_and_build_metrics(client, service):
+def test_list_jobs_includes_resource_and_build_metrics(client, service):
     """Test /api/jobs includes resource and build metrics."""
     request = create_run_job_request(job_id="job-with-metrics")
-    await service.run_job(request, Mock())
+    service.run_job(request, Mock())
 
     # Set some resource and build metrics
     job = service._manager.get_job("job-with-metrics")
@@ -379,11 +401,10 @@ async def test_list_jobs_includes_resource_and_build_metrics(client, service):
     assert job_data["image_tag"] == "test-image:v1.0"
 
 
-@pytest.mark.asyncio
-async def test_get_job_includes_nested_resources_and_build(client, service):
+def test_get_job_includes_nested_resources_and_build(client, service):
     """Test /api/jobs/{job_id} includes nested resources and build objects."""
     request = create_run_job_request(job_id="job-nested-metrics")
-    await service.run_job(request, Mock())
+    service.run_job(request, Mock())
 
     # Set some resource and build metrics
     job = service._manager.get_job("job-nested-metrics")
@@ -434,22 +455,26 @@ def test_job_detail_page_loads(client):
 # ============================================================================
 
 
-@pytest.mark.asyncio
-async def test_run_job_generates_job_id_if_missing(service, request_context):
+def test_run_job_generates_job_id_if_missing(service, request_context):
     """Test run_job generates job_id when not provided."""
     request = create_run_job_request(job_id="")
-    response = await service.run_job(request, request_context)
+    response = service.run_job(request, request_context)
 
     assert response.job_id  # Should have a generated ID
     assert len(response.job_id) > 0
-    assert response.state == cluster_pb2.JOB_STATE_PENDING
+    # Job may have already transitioned from PENDING since threads start immediately
+    assert response.state in (
+        cluster_pb2.JOB_STATE_PENDING,
+        cluster_pb2.JOB_STATE_BUILDING,
+        cluster_pb2.JOB_STATE_RUNNING,
+        cluster_pb2.JOB_STATE_SUCCEEDED,
+    )
 
 
-@pytest.mark.asyncio
-async def test_run_job_with_ports(service, request_context):
+def test_run_job_with_ports(service, request_context):
     """Test run_job allocates ports correctly."""
     request = create_run_job_request(job_id="job-with-ports", ports=["http", "grpc"])
-    response = await service.run_job(request, request_context)
+    response = service.run_job(request, request_context)
 
     assert response.job_id == "job-with-ports"
 
@@ -460,30 +485,28 @@ async def test_run_job_with_ports(service, request_context):
     assert "grpc" in job.ports
 
 
-@pytest.mark.asyncio
-async def test_get_job_status_not_found(service, request_context):
+def test_get_job_status_not_found(service, request_context):
     """Test get_job_status raises NOT_FOUND for nonexistent job."""
     status_request = cluster_pb2.GetStatusRequest(job_id="nonexistent")
 
     with pytest.raises(ConnectError) as exc_info:
-        await service.get_job_status(status_request, request_context)
+        service.get_job_status(status_request, request_context)
 
     assert exc_info.value.code == Code.NOT_FOUND
     assert "nonexistent" in str(exc_info.value)
 
 
-@pytest.mark.asyncio
-async def test_get_job_status_completed_job(service, request_context):
+def test_get_job_status_completed_job(service, request_context):
     """Test get_job_status for completed job includes timing info."""
     request = create_run_job_request(job_id="job-completed")
-    await service.run_job(request, request_context)
+    service.run_job(request, request_context)
 
     # Wait for job to complete
     job = service._manager.get_job("job-completed")
-    await asyncio.wait_for(job.task, timeout=5.0)
+    job.thread.join(timeout=5.0)
 
     status_request = cluster_pb2.GetStatusRequest(job_id="job-completed")
-    status = await service.get_job_status(status_request, request_context)
+    status = service.get_job_status(status_request, request_context)
 
     assert status.job_id == "job-completed"
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
@@ -492,11 +515,10 @@ async def test_get_job_status_completed_job(service, request_context):
     assert status.finished_at_ms > 0
 
 
-@pytest.mark.asyncio
-async def test_fetch_logs_tail_with_negative_start_line(service, request_context):
+def test_fetch_logs_tail_with_negative_start_line(service, request_context):
     """Test fetch_logs with negative start_line for tailing."""
     request = create_run_job_request(job_id="job-logs-tail")
-    await service.run_job(request, request_context)
+    service.run_job(request, request_context)
 
     # Add logs directly to job.logs
     job = service._manager.get_job("job-logs-tail")
@@ -505,7 +527,7 @@ async def test_fetch_logs_tail_with_negative_start_line(service, request_context
 
     log_filter = cluster_pb2.FetchLogsFilter(start_line=-3)
     logs_request = cluster_pb2.FetchLogsRequest(job_id="job-logs-tail", filter=log_filter)
-    response = await service.fetch_logs(logs_request, request_context)
+    response = service.fetch_logs(logs_request, request_context)
 
     assert len(response.logs) == 3
     assert response.logs[0].data == "Log line 7"
@@ -513,11 +535,10 @@ async def test_fetch_logs_tail_with_negative_start_line(service, request_context
     assert response.logs[2].data == "Log line 9"
 
 
-@pytest.mark.asyncio
-async def test_fetch_logs_with_regex_filter(service, request_context):
+def test_fetch_logs_with_regex_filter(service, request_context):
     """Test fetch_logs with regex content filter."""
     request = create_run_job_request(job_id="job-logs-regex")
-    await service.run_job(request, request_context)
+    service.run_job(request, request_context)
 
     # Add logs with different patterns
     job = service._manager.get_job("job-logs-regex")
@@ -528,18 +549,17 @@ async def test_fetch_logs_with_regex_filter(service, request_context):
 
     log_filter = cluster_pb2.FetchLogsFilter(regex="ERROR")
     logs_request = cluster_pb2.FetchLogsRequest(job_id="job-logs-regex", filter=log_filter)
-    response = await service.fetch_logs(logs_request, request_context)
+    response = service.fetch_logs(logs_request, request_context)
 
     assert len(response.logs) == 2
     assert "ERROR" in response.logs[0].data
     assert "ERROR" in response.logs[1].data
 
 
-@pytest.mark.asyncio
-async def test_fetch_logs_combined_filters(service, request_context):
+def test_fetch_logs_combined_filters(service, request_context):
     """Test fetch_logs with multiple filters combined."""
     request = create_run_job_request(job_id="job-logs-combined")
-    await service.run_job(request, request_context)
+    service.run_job(request, request_context)
 
     # Add logs
     job = service._manager.get_job("job-logs-combined")
@@ -553,63 +573,69 @@ async def test_fetch_logs_combined_filters(service, request_context):
     # Use regex to filter ERRORs, then limit to 2
     log_filter = cluster_pb2.FetchLogsFilter(regex="ERROR", max_lines=2)
     logs_request = cluster_pb2.FetchLogsRequest(job_id="job-logs-combined", filter=log_filter)
-    response = await service.fetch_logs(logs_request, request_context)
+    response = service.fetch_logs(logs_request, request_context)
 
     assert len(response.logs) == 2
     assert "ERROR" in response.logs[0].data
     assert "ERROR" in response.logs[1].data
 
 
-@pytest.mark.asyncio
-async def test_kill_job_not_found(service, request_context):
+def test_kill_job_not_found(service, request_context):
     """Test kill_job raises NOT_FOUND for nonexistent job."""
     kill_request = cluster_pb2.KillJobRequest(job_id="nonexistent")
 
     with pytest.raises(ConnectError) as exc_info:
-        await service.kill_job(kill_request, request_context)
+        service.kill_job(kill_request, request_context)
 
     assert exc_info.value.code == Code.NOT_FOUND
     assert "nonexistent" in str(exc_info.value)
 
 
-@pytest.mark.asyncio
-async def test_kill_job_already_completed(service, request_context):
+def test_kill_job_already_completed(service, request_context):
     """Test kill_job fails for already completed job."""
     request = create_run_job_request(job_id="job-completed")
-    await service.run_job(request, request_context)
+    service.run_job(request, request_context)
 
     # Wait for job to complete
     job = service._manager.get_job("job-completed")
-    await asyncio.wait_for(job.task, timeout=5.0)
+    job.thread.join(timeout=5.0)
 
     # Try to kill completed job
     kill_request = cluster_pb2.KillJobRequest(job_id="job-completed")
 
     with pytest.raises(ConnectError) as exc_info:
-        await service.kill_job(kill_request, request_context)
+        service.kill_job(kill_request, request_context)
 
     assert exc_info.value.code == Code.FAILED_PRECONDITION
     assert "already completed" in str(exc_info.value)
 
 
-@pytest.mark.asyncio
-async def test_kill_job_with_custom_timeout(service, request_context):
-    """Test kill_job respects custom term_timeout_ms."""
+def test_kill_job_with_custom_timeout(service, request_context):
+    """Test kill_job accepts custom term_timeout_ms and attempts termination.
+
+    Note: With mocks, the job thread completes immediately. This test verifies
+    the API works and runtime.kill is called, not the actual kill behavior.
+    """
     request = create_run_job_request(job_id="job-kill")
-    await service.run_job(request, request_context)
+    service.run_job(request, request_context)
 
-    await asyncio.sleep(0.1)
-
-    # Manually set job to RUNNING to simulate mid-execution
+    # Wait for job thread to finish (mock makes it complete immediately)
     job = service._manager.get_job("job-kill")
+    if job.thread:
+        job.thread.join(timeout=5.0)
+
+    # Manually set job to RUNNING to simulate mid-execution state
     job.status = cluster_pb2.JOB_STATE_RUNNING
     job.container_id = "container123"
 
     kill_request = cluster_pb2.KillJobRequest(job_id="job-kill", term_timeout_ms=100)
-    response = await service.kill_job(kill_request, request_context)
+    response = service.kill_job(kill_request, request_context)
 
+    # Verify API response and that should_stop was set
     assert isinstance(response, cluster_pb2.Empty)
-    assert job.status == cluster_pb2.JOB_STATE_KILLED
+    assert job.should_stop is True
+    # The runtime.kill should have been called (may be called twice: SIGTERM then SIGKILL)
+    assert service._manager._runtime.kill.called
 
 
 # ============================================================================
@@ -617,8 +643,7 @@ async def test_kill_job_with_custom_timeout(service, request_context):
 # ============================================================================
 
 
-@pytest.mark.asyncio
-async def test_rpc_endpoint_mounted_correctly(server):
+def test_rpc_endpoint_mounted_correctly(server):
     """Test Connect RPC is mounted at correct path."""
     # Check that the RPC path is included in routes
     route_paths = [route.path for route in server._app.routes]
@@ -645,7 +670,7 @@ async def test_rpc_run_job_via_connect_client(service):
         # Give server time to start
         await asyncio.sleep(0.5)
 
-        # Create Connect client
+        # Create Connect client (async client talks to WSGI server via WSGIMiddleware)
         async with httpx.AsyncClient() as http_client:
             client = WorkerServiceClient(address="http://127.0.0.1:18080", session=http_client)
 
@@ -654,7 +679,13 @@ async def test_rpc_run_job_via_connect_client(service):
             response = await client.run_job(request)
 
             assert response.job_id == "rpc-test-job"
-            assert response.state == cluster_pb2.JOB_STATE_PENDING
+            # Job may have already transitioned from PENDING since threads start immediately
+            assert response.state in (
+                cluster_pb2.JOB_STATE_PENDING,
+                cluster_pb2.JOB_STATE_BUILDING,
+                cluster_pb2.JOB_STATE_RUNNING,
+                cluster_pb2.JOB_STATE_SUCCEEDED,
+            )
 
     finally:
         server_task.cancel()

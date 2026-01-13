@@ -18,8 +18,7 @@ import fsspec
 import hashlib
 import zipfile
 from pathlib import Path
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+import threading
 from collections import defaultdict
 
 
@@ -38,8 +37,7 @@ class BundleCache:
         self._bundles_dir = cache_dir / "bundles"
         self._extracts_dir = cache_dir / "extracts"
         self._max_bundles = max_bundles
-        self._executor = ThreadPoolExecutor(max_workers=4)
-        self._extract_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._extract_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 
         self._bundles_dir.mkdir(parents=True, exist_ok=True)
         self._extracts_dir.mkdir(parents=True, exist_ok=True)
@@ -48,7 +46,7 @@ class BundleCache:
         """Convert GCS path to cache key (hash)."""
         return hashlib.sha256(gcs_path.encode()).hexdigest()[:16]
 
-    async def get_bundle(self, gcs_path: str, expected_hash: str | None = None) -> Path:
+    def get_bundle(self, gcs_path: str, expected_hash: str | None = None) -> Path:
         """Get bundle path, downloading if needed.
 
         Args:
@@ -67,7 +65,7 @@ class BundleCache:
             return extract_path
 
         # Use a lock per bundle to prevent concurrent extractions to the same path
-        async with self._extract_locks[key]:
+        with self._extract_locks[key]:
             # Double-check after acquiring lock - another task may have extracted it
             if extract_path.exists():
                 extract_path.touch()
@@ -76,22 +74,17 @@ class BundleCache:
             # Download and extract
             zip_path = self._bundles_dir / f"{key}.zip"
             if not zip_path.exists():
-                await self._download(gcs_path, zip_path)
+                self._download_sync(gcs_path, zip_path)
 
             if expected_hash:
-                actual_hash = await self._compute_hash(zip_path)
+                actual_hash = self._compute_hash_sync(zip_path)
                 if actual_hash != expected_hash:
                     raise ValueError(f"Bundle hash mismatch: {actual_hash} != {expected_hash}")
 
-            await self._extract(zip_path, extract_path)
-            await self._evict_old_bundles()
+            self._extract_sync(zip_path, extract_path)
+            self._evict_old_bundles()
 
             return extract_path
-
-    async def _download(self, gcs_path: str, local_path: Path) -> None:
-        """Download bundle using fsspec."""
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(self._executor, self._download_sync, gcs_path, local_path)
 
     def _download_sync(self, gcs_path: str, local_path: Path) -> None:
         """Synchronous download implementation."""
@@ -99,11 +92,6 @@ class BundleCache:
         with fsspec.open(gcs_path, "rb") as src:
             with open(local_path, "wb") as dst:
                 dst.write(src.read())
-
-    async def _extract(self, zip_path: Path, extract_path: Path) -> None:
-        """Extract zip to directory."""
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(self._executor, self._extract_sync, zip_path, extract_path)
 
     def _extract_sync(self, zip_path: Path, extract_path: Path) -> None:
         """Synchronous extraction implementation with zip slip protection."""
@@ -116,11 +104,6 @@ class BundleCache:
                     raise ValueError(f"Zip slip detected: {member} attempts to write outside extract path")
             zf.extractall(extract_path)
 
-    async def _compute_hash(self, path: Path) -> str:
-        """Compute SHA256 hash of file."""
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, self._compute_hash_sync, path)
-
     def _compute_hash_sync(self, path: Path) -> str:
         """Synchronous hash computation implementation."""
         h = hashlib.sha256()
@@ -129,7 +112,7 @@ class BundleCache:
                 h.update(chunk)
         return h.hexdigest()
 
-    async def _evict_old_bundles(self) -> None:
+    def _evict_old_bundles(self) -> None:
         """LRU eviction when over max_bundles."""
         extracts = list(self._extracts_dir.iterdir())
         if len(extracts) <= self._max_bundles:

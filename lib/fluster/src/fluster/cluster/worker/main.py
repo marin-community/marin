@@ -19,17 +19,16 @@ Provides two commands:
 - cleanup: Remove cached bundles, venvs, and images
 """
 
-import asyncio
 import shutil
 from pathlib import Path
 
 import click
 
 from fluster.cluster.worker.bundle import BundleCache
-from fluster.cluster.worker.builder import ImageBuilder, VenvCache
+from fluster.cluster.worker.builder import ImageCache, VenvCache
 from fluster.cluster.worker.dashboard import WorkerDashboard
+from fluster.cluster.worker.docker import DockerRuntime
 from fluster.cluster.worker.manager import JobManager, PortAllocator
-from fluster.cluster.worker.runtime import DockerRuntime
 from fluster.cluster.worker.service import WorkerServiceImpl
 
 
@@ -61,32 +60,6 @@ def serve(
     max_images: int,
 ):
     """Start the Fluster worker service."""
-    asyncio.run(
-        _serve(
-            host,
-            port,
-            cache_dir,
-            uv_cache_dir,
-            registry,
-            max_concurrent_jobs,
-            port_range,
-            max_bundles,
-            max_images,
-        )
-    )
-
-
-async def _serve(
-    host: str,
-    port: int,
-    cache_dir: str,
-    uv_cache_dir: str,
-    registry: str,
-    max_concurrent_jobs: int,
-    port_range: str,
-    max_bundles: int,
-    max_images: int,
-):
     cache_path = Path(cache_dir).expanduser()
     uv_cache_path = Path(uv_cache_dir).expanduser()
 
@@ -95,7 +68,7 @@ async def _serve(
     # Initialize components
     bundle_cache = BundleCache(cache_path, max_bundles=max_bundles)
     venv_cache = VenvCache(uv_cache_path)
-    image_builder = ImageBuilder(cache_path, registry=registry, max_images=max_images)
+    image_cache = ImageCache(cache_path, registry=registry, max_images=max_images)
     runtime = DockerRuntime()
     port_allocator = PortAllocator((port_start, port_end))
 
@@ -105,7 +78,7 @@ async def _serve(
     manager = JobManager(
         bundle_cache=bundle_cache,
         venv_cache=venv_cache,
-        image_builder=image_builder,
+        image_cache=image_cache,
         runtime=runtime,
         port_allocator=port_allocator,
         max_concurrent_jobs=max_concurrent_jobs,
@@ -118,7 +91,7 @@ async def _serve(
     click.echo(f"  Registry: {registry}")
     click.echo(f"  Cache dir: {cache_path}")
     click.echo(f"  Max concurrent jobs: {max_concurrent_jobs}")
-    await dashboard.run_async()
+    dashboard.run()
 
 
 @cli.command()

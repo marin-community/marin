@@ -44,13 +44,13 @@ class WorkerServiceImpl:
         self._manager = manager
         self._start_time = time.time()
 
-    async def run_job(
+    def run_job(
         self,
         request: cluster_pb2.RunJobRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.RunJobResponse:
         """Submit job for execution."""
-        job_id = await self._manager.submit_job(request)
+        job_id = self._manager.submit_job(request)
         job = self._manager.get_job(job_id)
 
         if not job:
@@ -61,7 +61,7 @@ class WorkerServiceImpl:
             state=job.to_proto().state,
         )
 
-    async def get_job_status(
+    def get_job_status(
         self,
         request: cluster_pb2.GetStatusRequest,
         _ctx: RequestContext,
@@ -72,7 +72,7 @@ class WorkerServiceImpl:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
         return job.to_proto()
 
-    async def list_jobs(
+    def list_jobs(
         self,
         _request: cluster_pb2.ListJobsRequest,
         _ctx: RequestContext,
@@ -88,7 +88,7 @@ class WorkerServiceImpl:
             jobs=[job.to_proto() for job in jobs],
         )
 
-    async def fetch_logs(
+    def fetch_logs(
         self,
         request: cluster_pb2.FetchLogsRequest,
         _ctx: RequestContext,
@@ -129,7 +129,7 @@ class WorkerServiceImpl:
 
         return cluster_pb2.FetchLogsResponse(logs=result)
 
-    async def kill_job(
+    def kill_job(
         self,
         request: cluster_pb2.KillJobRequest,
         _ctx: RequestContext,
@@ -140,7 +140,7 @@ class WorkerServiceImpl:
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        success = await self._manager.kill_job(
+        success = self._manager.kill_job(
             request.job_id,
             term_timeout_ms=request.term_timeout_ms or 5000,
         )
@@ -153,7 +153,7 @@ class WorkerServiceImpl:
             )
         return cluster_pb2.Empty()
 
-    async def health_check(
+    def health_check(
         self,
         _request: cluster_pb2.Empty,
         _ctx: RequestContext,

@@ -16,6 +16,8 @@ syntax = "proto3";
 
 package fluster.cluster;
 
+option python_package = "fluster.cluster";
+
 option py_generic_services = true;
 
 // ============================================================================
@@ -58,7 +60,7 @@ message GpuDevice {
 
 message TpuDevice {
   string variant = 1;       // e.g., "v5litepod-16", "v4-8"
-  string topology = 2;      // Optional topology spec (e.g., "2x2x1")
+  string topology = 2;      // topology spec (e.g., "2x2x1")
 }
 
 // Unified resource specification for jobs
@@ -89,19 +91,18 @@ message ResourceSpec {
 message EnvironmentConfig {
   oneof source {
     string workspace = 1;        // Path to workspace root for uv-based execution
-    string docker_image = 2;     // Docker image for containerized execution
   }
 
-  repeated string pip_packages = 3;  // Additional pip packages to install
-  map<string, string> env_vars = 4;  // Environment variables to set
-  repeated string extras = 5;         // Extra dependency groups for uv (e.g., ["tpu", "eval"])
+  repeated string pip_packages = 2;  // Additional pip packages to install
+  map<string, string> env_vars = 3;  // Environment variables to set
+  repeated string extras = 4;         // Extra dependency groups for uv (e.g., ["tpu", "eval"])
 }
 
 // ============================================================================
 // CONTROLLER MESSAGES (Job Management & Endpoint Registry)
 // ============================================================================
 
-message JobSpec {
+message LaunchJobRequest {
   string name = 1;
   bytes serialized_entrypoint = 2;   // cloudpickle(Entrypoint)
   ResourceSpec resources = 3;         // Full resource specification
@@ -112,15 +113,24 @@ message JobSpec {
   string bundle_hash = 6;            // SHA256 hash for caching
 }
 
-message JobHandle {
+message LaunchJobResponse {
   string job_id = 1;
-  JobState status = 2;
-  string worker_id = 3;
-  string error = 4;
 }
 
 message ListJobsRequest {
   string namespace = 1;
+}
+
+message GetJobStatusRequest {
+  string job_id = 1;
+}
+
+message GetJobStatusResponse {
+  JobStatus job = 1;
+}
+
+message TerminateJobRequest {
+  string job_id = 1;
 }
 
 message ListJobsResponse {
@@ -146,18 +156,30 @@ message RegisterEndpointRequest {
   map<string, string> metadata = 5;
 }
 
-message LookupRequest {
+message RegisterEndpointResponse {
+  string endpoint_id = 1;
+}
+
+message UnregisterEndpointRequest {
+  string endpoint_id = 1;
+}
+
+message LookupEndpointRequest {
   string name = 1;
   string namespace = 2;
 }
 
-message LookupResponse {
-  repeated Endpoint endpoints = 1;
+message LookupEndpointResponse {
+  Endpoint endpoint = 1;
 }
 
 message ListEndpointsRequest {
   string prefix = 1;
   string namespace = 2;
+}
+
+message ListEndpointsResponse {
+  repeated Endpoint endpoints = 1;
 }
 
 // ============================================================================
@@ -174,9 +196,6 @@ message RunJobRequest {
 
   // Resource specification
   ResourceSpec resources = 6;
-
-  // Environment variables to inject (merged with environment.env_vars)
-  map<string, string> env_vars = 7;
 
   int32 timeout_seconds = 8;
 
@@ -226,6 +245,9 @@ message JobStatus {
   string status_message = 9;
 
   BuildMetrics build_metrics = 10;
+
+  // Worker ID (populated by controller, not worker)
+  string worker_id = 11;
 }
 
 message LogEntry {
@@ -268,16 +290,16 @@ message HealthResponse {
 
 service ControllerService {
   // Job lifecycle
-  rpc LaunchJob(JobSpec) returns (JobHandle);
-  rpc GetJobStatus(JobHandle) returns (JobHandle);
-  rpc TerminateJob(JobHandle) returns (Empty);
+  rpc LaunchJob(LaunchJobRequest) returns (LaunchJobResponse);
+  rpc GetJobStatus(GetJobStatusRequest) returns (GetJobStatusResponse);
+  rpc TerminateJob(TerminateJobRequest) returns (Empty);
   rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
 
   // Endpoint registry (generic service discovery)
-  rpc RegisterEndpoint(RegisterEndpointRequest) returns (Endpoint);
-  rpc UnregisterEndpoint(Endpoint) returns (Empty);
-  rpc LookupEndpoints(LookupRequest) returns (LookupResponse);
-  rpc ListEndpoints(ListEndpointsRequest) returns (LookupResponse);
+  rpc RegisterEndpoint(RegisterEndpointRequest) returns (RegisterEndpointResponse);
+  rpc UnregisterEndpoint(UnregisterEndpointRequest) returns (Empty);
+  rpc LookupEndpoint(LookupEndpointRequest) returns (LookupEndpointResponse);
+  rpc ListEndpoints(ListEndpointsRequest) returns (ListEndpointsResponse);
 }
 
 service WorkerService {

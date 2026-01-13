@@ -14,23 +14,21 @@
 
 """Port allocation and job lifecycle management for worker jobs."""
 
-import asyncio
 import base64
-import cloudpickle
 import socket
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
 
-import docker
+import cloudpickle
 
 from fluster import cluster_pb2
-from fluster.cluster.worker.worker_types import Job
+from fluster.cluster.worker.builder import ImageCache, VenvCache
 from fluster.cluster.worker.bundle import BundleCache
-from fluster.cluster.worker.builder import VenvCache, ImageBuilder
-from fluster.cluster.worker.runtime import DockerRuntime, ContainerConfig
-from fluster.cluster.worker.stats import collect_container_stats, collect_workdir_size_mb
+from fluster.cluster.worker.docker import ContainerConfig, ContainerRuntime
+from fluster.cluster.worker.worker_types import Job, collect_workdir_size_mb
 
 
 class PortAllocator:
@@ -43,11 +41,11 @@ class PortAllocator:
     def __init__(self, port_range: tuple[int, int] = (30000, 40000)):
         self._range = port_range
         self._allocated: set[int] = set()
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
-    async def allocate(self, count: int = 1) -> list[int]:
+    def allocate(self, count: int = 1) -> list[int]:
         """Allocate N unused ports."""
-        async with self._lock:
+        with self._lock:
             ports = []
             for _ in range(count):
                 port = self._find_free_port()
@@ -55,9 +53,9 @@ class PortAllocator:
                 ports.append(port)
             return ports
 
-    async def release(self, ports: list[int]) -> None:
+    def release(self, ports: list[int]) -> None:
         """Release allocated ports."""
-        async with self._lock:
+        with self._lock:
             for port in ports:
                 self._allocated.discard(port)
 
@@ -97,24 +95,24 @@ class JobManager:
         self,
         bundle_cache: BundleCache,
         venv_cache: VenvCache,
-        image_builder: ImageBuilder,
-        runtime: DockerRuntime,
+        image_cache: ImageCache,
+        runtime: ContainerRuntime,
         port_allocator: PortAllocator,
         max_concurrent_jobs: int = 10,
     ):
         self._bundle_cache = bundle_cache
         self._venv_cache = venv_cache
-        self._image_builder = image_builder
+        self._image_cache = image_cache
         self._runtime = runtime
         self._port_allocator = port_allocator
-        self._semaphore = asyncio.Semaphore(max_concurrent_jobs)
-        self._docker_client = docker.from_env()
+        self._max_concurrent_jobs = max_concurrent_jobs
+        self._semaphore = threading.Semaphore(max_concurrent_jobs)
         # TODO: Jobs are never removed from this dict, causing unbounded memory growth.
         # Need to implement LRU eviction for completed jobs similar to BundleCache/VenvCache.
         self._jobs: dict[str, Job] = {}
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
-    async def submit_job(self, request: cluster_pb2.RunJobRequest) -> str:
+    def submit_job(self, request: cluster_pb2.RunJobRequest) -> str:
         """Submit job for execution.
 
         Returns job_id immediately, execution happens in background.
@@ -128,7 +126,7 @@ class JobManager:
 
         # Allocate requested ports
         port_names = list(request.ports)
-        allocated_ports = await self._port_allocator.allocate(len(port_names)) if port_names else []
+        allocated_ports = self._port_allocator.allocate(len(port_names)) if port_names else []
         ports = dict(zip(port_names, allocated_ports, strict=True))
 
         # Create job working directory
@@ -143,126 +141,160 @@ class JobManager:
             workdir=workdir,
         )
 
-        async with self._lock:
+        with self._lock:
             self._jobs[job_id] = job
 
         # Start execution in background
-        job.task = asyncio.create_task(self._execute_job(job))
+        job.thread = threading.Thread(target=self._execute_job, args=(job,), daemon=True)
+        job.thread.start()
 
         return job_id
 
-    async def _execute_job(self, job: Job) -> None:
-        """Execute job through all phases."""
-        async with self._semaphore:
-            try:
-                # Phase 1: Download bundle
-                job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="downloading bundle")
-                job.started_at_ms = int(time.time() * 1000)
+    def _execute_job(self, job: Job) -> None:
+        """Execute job through all phases with integrated stats collection."""
+        import shutil
 
-                bundle_path = await self._bundle_cache.get_bundle(
-                    job.request.bundle_gcs_path,
-                    expected_hash=None,
-                )
+        try:
+            # Acquire semaphore to limit concurrent jobs
+            self._semaphore.acquire()
 
-                # Phase 2: Build image
-                job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="building image")
-                job.build_started_ms = int(time.time() * 1000)
-                env_config = job.request.environment
-                extras = list(env_config.extras)
+            # Phase 1: Download bundle
+            job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="downloading bundle")
+            job.started_at_ms = int(time.time() * 1000)
 
-                # Compute deps_hash for caching
-                deps_hash = self._venv_cache.compute_deps_hash(bundle_path)
+            bundle_path = self._bundle_cache.get_bundle(
+                job.request.bundle_gcs_path,
+                expected_hash=None,
+            )
 
-                job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="populating uv cache")
-                job.logs.add("build", "Building Docker image...")
-                build_result = await self._image_builder.build(
-                    bundle_path=bundle_path,
-                    base_image="python:3.11-slim",
-                    extras=extras,
-                    job_id=job.job_id,
-                    deps_hash=deps_hash,
-                    job_logs=job.logs,
-                )
+            # Phase 2: Build image
+            job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="building image")
+            job.build_started_ms = int(time.time() * 1000)
+            env_config = job.request.environment
+            extras = list(env_config.extras)
 
-                job.build_finished_ms = int(time.time() * 1000)
-                job.build_from_cache = build_result.from_cache
-                job.image_tag = build_result.image_tag
+            # Compute deps_hash for caching
+            deps_hash = self._venv_cache.compute_deps_hash(bundle_path)
 
-                # Phase 3: Run container
-                job.transition_to(cluster_pb2.JOB_STATE_RUNNING)
+            job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="populating uv cache")
+            job.logs.add("build", "Building Docker image...")
+            build_result = self._image_cache.build(
+                bundle_path=bundle_path,
+                base_image="python:3.11-slim",
+                extras=extras,
+                job_id=job.job_id,
+                deps_hash=deps_hash,
+                job_logs=job.logs,
+            )
 
-                # Deserialize entrypoint
-                entrypoint = cloudpickle.loads(job.request.serialized_entrypoint)
-                command = self._build_command(entrypoint)
+            job.build_finished_ms = int(time.time() * 1000)
+            job.build_from_cache = build_result.from_cache
+            job.image_tag = build_result.image_tag
 
-                # Build environment
-                env = dict(job.request.env_vars)
-                env.update(dict(env_config.env_vars))
-                env["FLUSTER_JOB_ID"] = job.job_id
-                for name, port in job.ports.items():
-                    env[f"FLUSTER_PORT_{name.upper()}"] = str(port)
+            # Phase 3: Create and start container
+            job.transition_to(cluster_pb2.JOB_STATE_RUNNING)
 
-                # Add FRAY_PORT_MAPPING for communicating all port mappings as a single variable
-                if job.ports:
-                    port_mapping = ",".join(f"{name}:{port}" for name, port in job.ports.items())
-                    env["FRAY_PORT_MAPPING"] = port_mapping
+            # Deserialize entrypoint
+            entrypoint = cloudpickle.loads(job.request.serialized_entrypoint)
+            command = self._build_command(entrypoint)
 
-                config = ContainerConfig(
-                    image=build_result.image_tag,
-                    command=command,
-                    env=env,
-                    resources=job.request.resources if job.request.HasField("resources") else None,
-                    timeout_seconds=job.request.timeout_seconds or None,
-                    ports=job.ports,
-                )
+            # Build environment from EnvironmentConfig
+            env = dict(env_config.env_vars)
+            env["FLUSTER_JOB_ID"] = job.job_id
+            for name, port in job.ports.items():
+                env[f"FLUSTER_PORT_{name.upper()}"] = str(port)
 
-                result = await self._runtime.run(config)
-                job.container_id = result.container_id
+            # Add FRAY_PORT_MAPPING for communicating all port mappings as a single variable
+            if job.ports:
+                port_mapping = ",".join(f"{name}:{port}" for name, port in job.ports.items())
+                env["FRAY_PORT_MAPPING"] = port_mapping
 
-                # Start stats collection
-                job.stats_task = asyncio.create_task(self._collect_stats_loop(job))
+            config = ContainerConfig(
+                image=build_result.image_tag,
+                command=command,
+                env=env,
+                resources=job.request.resources if job.request.HasField("resources") else None,
+                timeout_seconds=job.request.timeout_seconds or None,
+                ports=job.ports,
+            )
 
-                # Phase 4: Complete
-                if result.error:
+            # Create and start container
+            container_id = self._runtime.create_container(config)
+            job.container_id = container_id
+            self._runtime.start_container(container_id)
+
+            # Phase 4: Poll loop - check status and collect stats
+            timeout = config.timeout_seconds
+            start_time = time.time()
+
+            while True:
+                # Check if we should stop
+                if job.should_stop:
+                    job.transition_to(cluster_pb2.JOB_STATE_KILLED)
+                    break
+
+                # Check timeout
+                if timeout and (time.time() - start_time) > timeout:
+                    self._runtime.kill(container_id, force=True)
                     job.transition_to(
                         cluster_pb2.JOB_STATE_FAILED,
-                        error=result.error,
-                        exit_code=result.exit_code,
+                        error="Timeout exceeded",
+                        exit_code=-1,
                     )
-                elif result.exit_code == 0:
-                    job.transition_to(cluster_pb2.JOB_STATE_SUCCEEDED, exit_code=0)
-                else:
-                    job.transition_to(
-                        cluster_pb2.JOB_STATE_FAILED,
-                        error=f"Exit code: {result.exit_code}",
-                        exit_code=result.exit_code,
-                    )
+                    break
 
-            except asyncio.CancelledError:
-                # Task was cancelled (likely from kill_job)
-                job.transition_to(cluster_pb2.JOB_STATE_KILLED)
-                raise
-            except Exception as e:
-                job.transition_to(cluster_pb2.JOB_STATE_FAILED, error=repr(e))
-            finally:
-                # Cancel stats collection task
-                if job.stats_task and not job.stats_task.done():
-                    job.stats_task.cancel()
-                    try:
-                        await job.stats_task
-                    except asyncio.CancelledError:
-                        pass
+                # Check container status
+                status = self._runtime.inspect(container_id)
+                if not status.running:
+                    # Container has stopped
+                    if status.error:
+                        job.transition_to(
+                            cluster_pb2.JOB_STATE_FAILED,
+                            error=status.error,
+                            exit_code=status.exit_code or -1,
+                        )
+                    elif status.exit_code == 0:
+                        job.transition_to(cluster_pb2.JOB_STATE_SUCCEEDED, exit_code=0)
+                    else:
+                        job.transition_to(
+                            cluster_pb2.JOB_STATE_FAILED,
+                            error=f"Exit code: {status.exit_code}",
+                            exit_code=status.exit_code or -1,
+                        )
+                    break
 
-                # Cleanup: release ports, remove workdir (keep container for logs)
-                if not job.cleanup_done:
-                    job.cleanup_done = True
-                    await self._port_allocator.release(list(job.ports.values()))
-                    # Keep container around for log retrieval via docker logs
-                    # Remove working directory (no longer needed since logs come from Docker)
-                    if job.workdir and job.workdir.exists():
-                        import shutil
+                # Collect stats
+                try:
+                    stats = self._runtime.get_stats(container_id)
+                    if stats.available:
+                        job.current_memory_mb = stats.memory_mb
+                        job.current_cpu_percent = stats.cpu_percent
+                        job.process_count = stats.process_count
+                        if stats.memory_mb > job.peak_memory_mb:
+                            job.peak_memory_mb = stats.memory_mb
 
-                        shutil.rmtree(job.workdir, ignore_errors=True)
+                    if job.workdir:
+                        job.disk_mb = collect_workdir_size_mb(job.workdir)
+                except Exception:
+                    pass  # Don't fail job on stats collection errors
+
+                # Sleep before next poll
+                time.sleep(5.0)
+
+        except Exception as e:
+            job.transition_to(cluster_pb2.JOB_STATE_FAILED, error=repr(e))
+        finally:
+            # Release semaphore
+            self._semaphore.release()
+
+            # Cleanup: release ports, remove workdir (keep container for logs)
+            if not job.cleanup_done:
+                job.cleanup_done = True
+                self._port_allocator.release(list(job.ports.values()))
+                # Keep container around for log retrieval via docker logs
+                # Remove working directory (no longer needed since logs come from Docker)
+                if job.workdir and job.workdir.exists():
+                    shutil.rmtree(job.workdir, ignore_errors=True)
 
     def _build_command(self, entrypoint) -> list[str]:
         """Build command to run entrypoint."""
@@ -276,26 +308,6 @@ class JobManager:
         )
         return ["python", "-c", cmd]
 
-    async def _collect_stats_loop(self, job: Job) -> None:
-        """Poll Docker stats every 5 seconds during execution."""
-        while job.status == cluster_pb2.JOB_STATE_RUNNING:
-            try:
-                if job.container_id:
-                    stats = await collect_container_stats(self._docker_client, job.container_id)
-                    if stats.available:
-                        job.current_memory_mb = stats.memory_mb
-                        job.current_cpu_percent = stats.cpu_percent
-                        job.process_count = stats.process_count
-                        if stats.memory_mb > job.peak_memory_mb:
-                            job.peak_memory_mb = stats.memory_mb
-
-                if job.workdir:
-                    job.disk_mb = await collect_workdir_size_mb(job.workdir)
-            except Exception:
-                pass  # Don't fail job on stats collection errors
-
-            await asyncio.sleep(5.0)
-
     def get_job(self, job_id: str) -> Job | None:
         """Get job by ID."""
         return self._jobs.get(job_id)
@@ -304,10 +316,10 @@ class JobManager:
         """List all jobs."""
         return list(self._jobs.values())
 
-    async def kill_job(self, job_id: str, term_timeout_ms: int = 5000) -> bool:
-        """Kill a running job.
+    def kill_job(self, job_id: str, term_timeout_ms: int = 5000) -> bool:
+        """Kill a running job by setting should_stop flag.
 
-        Handles race conditions where job may complete between state check and kill.
+        The poll loop in _execute_job will handle the actual termination.
         """
         job = self._jobs.get(job_id)
         if not job:
@@ -321,40 +333,35 @@ class JobManager:
         ):
             return False
 
-        # Cancel the task to interrupt execution
-        if job.task and not job.task.done():
-            job.task.cancel()
+        # Set flag to signal thread to stop
+        job.should_stop = True
 
         # If container exists, try to kill it
         if job.container_id:
             try:
                 # Send SIGTERM
-                await self._runtime.kill(job.container_id, force=False)
+                self._runtime.kill(job.container_id, force=False)
 
                 # Wait for graceful shutdown
-                try:
-                    await asyncio.wait_for(
-                        self._wait_for_termination(job),
-                        timeout=term_timeout_ms / 1000,
-                    )
-                except asyncio.TimeoutError:
-                    # Force kill
-                    try:
-                        await self._runtime.kill(job.container_id, force=True)
-                    except RuntimeError:
-                        # Container may have already stopped
-                        pass
+                timeout_sec = term_timeout_ms / 1000
+                start_time = time.time()
+                while job.status in (
+                    cluster_pb2.JOB_STATE_RUNNING,
+                    cluster_pb2.JOB_STATE_BUILDING,
+                ):
+                    if (time.time() - start_time) > timeout_sec:
+                        # Force kill
+                        try:
+                            self._runtime.kill(job.container_id, force=True)
+                        except RuntimeError:
+                            pass
+                        break
+                    time.sleep(0.1)
             except RuntimeError:
                 # Container may have already been removed or stopped
                 pass
 
-        job.transition_to(cluster_pb2.JOB_STATE_KILLED)
         return True
-
-    async def _wait_for_termination(self, job: Job) -> None:
-        """Wait until job reaches terminal state."""
-        while job.status in (cluster_pb2.JOB_STATE_RUNNING, cluster_pb2.JOB_STATE_BUILDING):
-            await asyncio.sleep(0.1)
 
     def get_logs(self, job_id: str, start_line: int = 0) -> list[cluster_pb2.LogEntry]:
         """Get logs for a job.

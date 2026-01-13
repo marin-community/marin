@@ -18,8 +18,8 @@ These tests exercise end-to-end functionality with real Docker containers.
 Tests are marked with @pytest.mark.slow and require Docker to be running.
 """
 
-import asyncio
 import subprocess
+import time
 import zipfile
 from unittest.mock import Mock
 
@@ -29,10 +29,10 @@ from connectrpc.request import RequestContext
 
 from fluster import cluster_pb2
 from fluster.cluster.types import Entrypoint
+from fluster.cluster.worker.builder import ImageCache, VenvCache
 from fluster.cluster.worker.bundle import BundleCache
-from fluster.cluster.worker.builder import ImageBuilder, VenvCache
+from fluster.cluster.worker.docker import ContainerConfig, DockerRuntime
 from fluster.cluster.worker.manager import JobManager, PortAllocator
-from fluster.cluster.worker.runtime import ContainerConfig, DockerRuntime
 from fluster.cluster.worker.service import WorkerServiceImpl
 
 
@@ -121,15 +121,15 @@ def test_bundle(tmp_path):
 def real_manager(cache_dir):
     """Create JobManager with real components (not mocks)."""
     bundle_cache = BundleCache(cache_dir, max_bundles=10)
-    venv_cache = VenvCache(cache_dir, cache_dir / "uv", max_entries=5)
-    image_builder = ImageBuilder(cache_dir, registry="localhost:5000", max_images=10)
+    venv_cache = VenvCache(cache_dir / "uv")
+    image_cache = ImageCache(cache_dir, registry="localhost:5000", max_images=10)
     runtime = DockerRuntime()
     port_allocator = PortAllocator((40000, 40100))
 
     return JobManager(
         bundle_cache=bundle_cache,
         venv_cache=venv_cache,
-        image_builder=image_builder,
+        image_cache=image_cache,
         runtime=runtime,
         port_allocator=port_allocator,
         max_concurrent_jobs=2,
@@ -151,22 +151,20 @@ def runtime():
 class TestBundleCacheIntegration:
     """Integration tests for BundleCache with local file:// paths."""
 
-    @pytest.mark.asyncio
-    async def test_download_local_bundle(self, cache_dir, test_bundle):
+    def test_download_local_bundle(self, cache_dir, test_bundle):
         """Test downloading a bundle from local file:// path."""
         cache = BundleCache(cache_dir)
-        bundle_path = await cache.get_bundle(test_bundle)
+        bundle_path = cache.get_bundle(test_bundle)
 
         assert bundle_path.exists()
         assert (bundle_path / "pyproject.toml").exists()
 
-    @pytest.mark.asyncio
-    async def test_cache_hit_reuses_bundle(self, cache_dir, test_bundle):
+    def test_cache_hit_reuses_bundle(self, cache_dir, test_bundle):
         """Test that second download uses cached bundle."""
         cache = BundleCache(cache_dir)
 
-        path1 = await cache.get_bundle(test_bundle)
-        path2 = await cache.get_bundle(test_bundle)
+        path1 = cache.get_bundle(test_bundle)
+        path2 = cache.get_bundle(test_bundle)
 
         assert path1 == path2
         # Should only be one bundle in cache
@@ -177,10 +175,9 @@ class TestBundleCacheIntegration:
 class TestDockerRuntimeIntegration:
     """Integration tests for DockerRuntime with real containers."""
 
-    @pytest.mark.asyncio
     @pytest.mark.slow
-    async def test_run_simple_container(self, runtime):
-        """Run a simple container and verify exit code."""
+    def test_create_and_start_container(self, runtime):
+        """Create and start a simple container and verify it runs."""
         if not check_docker_available():
             pytest.skip("Docker not available")
 
@@ -190,17 +187,25 @@ class TestDockerRuntimeIntegration:
             env={},
         )
 
-        result = await runtime.run(config)
+        container_id = runtime.create_container(config)
+        assert container_id is not None
 
-        assert result.exit_code == 0
-        assert result.container_id is not None
+        runtime.start_container(container_id)
+
+        # Wait for container to finish
+        import time
+
+        time.sleep(1)
+
+        status = runtime.inspect(container_id)
+        assert not status.running
+        assert status.exit_code == 0
 
         # Cleanup
-        await runtime.remove(result.container_id)
+        runtime.remove(container_id)
 
-    @pytest.mark.asyncio
     @pytest.mark.slow
-    async def test_container_with_output(self, runtime):
+    def test_container_with_output(self, runtime):
         """Test container runs and produces output."""
         if not check_docker_available():
             pytest.skip("Docker not available")
@@ -211,18 +216,24 @@ class TestDockerRuntimeIntegration:
             env={},
         )
 
-        result = await runtime.run(config)
+        container_id = runtime.create_container(config)
+        runtime.start_container(container_id)
 
-        assert result.exit_code == 0
-        assert result.container_id is not None
+        # Wait for container to finish
+        import time
+
+        time.sleep(1)
+
+        status = runtime.inspect(container_id)
+        assert not status.running
+        assert status.exit_code == 0
 
         # Cleanup
-        await runtime.remove(result.container_id)
+        runtime.remove(container_id)
 
-    @pytest.mark.asyncio
     @pytest.mark.slow
-    async def test_timeout_kills_container(self, runtime):
-        """Test timeout kills container."""
+    def test_kill_container(self, runtime):
+        """Test killing a running container."""
         if not check_docker_available():
             pytest.skip("Docker not available")
 
@@ -230,27 +241,35 @@ class TestDockerRuntimeIntegration:
             image="alpine:latest",
             command=["sleep", "60"],
             env={},
-            timeout_seconds=1,
         )
 
-        result = await runtime.run(config)
+        container_id = runtime.create_container(config)
+        runtime.start_container(container_id)
 
-        assert result.error == "Timeout exceeded"
-        assert result.exit_code == -1
+        # Wait for container to start
+        import time
+
+        time.sleep(1)
+
+        # Kill container
+        runtime.kill(container_id, force=True)
+
+        # Verify it's stopped
+        status = runtime.inspect(container_id)
+        assert not status.running
 
         # Cleanup
-        await runtime.remove(result.container_id)
+        runtime.remove(container_id)
 
 
 class TestPortAllocatorIntegration:
     """Integration tests for PortAllocator."""
 
-    @pytest.mark.asyncio
-    async def test_allocate_and_release_ports(self):
+    def test_allocate_and_release_ports(self):
         """Test port allocation and release cycle."""
         allocator = PortAllocator((40000, 40100))
 
-        ports = await allocator.allocate(3)
+        ports = allocator.allocate(3)
         assert len(ports) == 3
         assert len(set(ports)) == 3  # All unique
 
@@ -259,8 +278,8 @@ class TestPortAllocatorIntegration:
             assert 40000 <= port < 40100
 
         # Release and reallocate
-        await allocator.release(ports)
-        ports2 = await allocator.allocate(3)
+        allocator.release(ports)
+        ports2 = allocator.allocate(3)
 
         # Should get same ports back (they were released)
         assert set(ports) == set(ports2)
@@ -269,21 +288,22 @@ class TestPortAllocatorIntegration:
 class TestJobManagerIntegration:
     """Integration tests for JobManager with real components."""
 
-    @pytest.mark.asyncio
     @pytest.mark.slow
-    async def test_submit_job_lifecycle(self, real_manager, test_bundle):
+    def test_submit_job_lifecycle(self, real_manager, test_bundle):
         """Test full job lifecycle from submission to completion."""
         if not check_docker_available():
             pytest.skip("Docker not available")
 
         request = create_run_job_request(test_bundle, "integration-test-1")
 
-        job_id = await real_manager.submit_job(request)
+        job_id = real_manager.submit_job(request)
         assert job_id == "integration-test-1"
 
         # Poll until job completes or times out
+        import time
+
         for _ in range(30):  # 30 second timeout
-            await asyncio.sleep(1)
+            time.sleep(1)
             job = real_manager.get_job(job_id)
 
             if job.status in (
@@ -300,9 +320,8 @@ class TestJobManagerIntegration:
             cluster_pb2.JOB_STATE_FAILED,
         )
 
-    @pytest.mark.asyncio
     @pytest.mark.slow
-    async def test_concurrent_job_limit(self, real_manager, test_bundle):
+    def test_concurrent_job_limit(self, real_manager, test_bundle):
         """Test that max_concurrent_jobs is enforced."""
         if not check_docker_available():
             pytest.skip("Docker not available")
@@ -310,9 +329,11 @@ class TestJobManagerIntegration:
         # Submit 4 jobs to manager with max_concurrent=2
         requests = [create_run_job_request(test_bundle, f"concurrent-{i}") for i in range(4)]
 
-        _job_ids = [await real_manager.submit_job(r) for r in requests]
+        _job_ids = [real_manager.submit_job(r) for r in requests]
 
-        await asyncio.sleep(1)  # Let jobs start
+        import time
+
+        time.sleep(1)  # Let jobs start
 
         jobs = real_manager.list_jobs()
         running = sum(1 for j in jobs if j.status == cluster_pb2.JOB_STATE_RUNNING)
@@ -324,20 +345,18 @@ class TestJobManagerIntegration:
 class TestWorkerServiceIntegration:
     """Integration tests for WorkerService RPC implementation."""
 
-    @pytest.mark.asyncio
     @pytest.mark.slow
-    async def test_health_check_rpc(self, real_service):
+    def test_health_check_rpc(self, real_service):
         """Test HealthCheck RPC returns healthy status."""
         ctx = Mock(spec=RequestContext)
 
-        response = await real_service.health_check(cluster_pb2.Empty(), ctx)
+        response = real_service.health_check(cluster_pb2.Empty(), ctx)
 
         assert response.healthy
         assert response.uptime_ms >= 0
 
-    @pytest.mark.asyncio
     @pytest.mark.slow
-    async def test_fetch_logs_tail(self, real_service, test_bundle):
+    def test_fetch_logs_tail(self, real_service, test_bundle):
         """Test FetchLogs with negative start_line for tailing."""
         if not check_docker_available():
             pytest.skip("Docker not available")
@@ -346,10 +365,10 @@ class TestWorkerServiceIntegration:
 
         # Submit a job
         request = create_run_job_request(test_bundle, "logs-test")
-        await real_service.run_job(request, ctx)
+        real_service.run_job(request, ctx)
 
         # Wait a bit for logs
-        await asyncio.sleep(2)
+        time.sleep(2)
 
         # Fetch last 10 lines
         log_request = cluster_pb2.FetchLogsRequest(
@@ -357,7 +376,7 @@ class TestWorkerServiceIntegration:
             filter=cluster_pb2.FetchLogsFilter(start_line=-10),
         )
 
-        response = await real_service.fetch_logs(log_request, ctx)
+        response = real_service.fetch_logs(log_request, ctx)
         # response.logs is a protobuf repeated field, check it's valid
         assert response.logs is not None
         assert len(response.logs) >= 0  # Can be empty if job hasn't produced logs yet

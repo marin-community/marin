@@ -63,8 +63,7 @@ def test_bundle_hash(test_bundle):
     return h.hexdigest()
 
 
-@pytest.mark.asyncio
-async def test_download_local_bundle(temp_cache_dir, test_bundle):
+def test_download_local_bundle(temp_cache_dir, test_bundle):
     """Test downloading a local bundle using file:// path."""
     cache = BundleCache(temp_cache_dir)
 
@@ -72,7 +71,7 @@ async def test_download_local_bundle(temp_cache_dir, test_bundle):
     file_url = f"file://{test_bundle}"
 
     # Get bundle
-    extract_path = await cache.get_bundle(file_url)
+    extract_path = cache.get_bundle(file_url)
 
     # Verify extraction
     assert extract_path.exists()
@@ -82,15 +81,14 @@ async def test_download_local_bundle(temp_cache_dir, test_bundle):
     assert (extract_path / "src" / "module.py").exists()
 
 
-@pytest.mark.asyncio
-async def test_caching_behavior(temp_cache_dir, test_bundle):
+def test_caching_behavior(temp_cache_dir, test_bundle):
     """Test that bundles are cached and not re-downloaded."""
     cache = BundleCache(temp_cache_dir)
 
     file_url = f"file://{test_bundle}"
 
     # First download
-    extract_path1 = await cache.get_bundle(file_url)
+    extract_path1 = cache.get_bundle(file_url)
 
     # Should have zip and extract
     key = cache._path_to_key(file_url)
@@ -98,29 +96,27 @@ async def test_caching_behavior(temp_cache_dir, test_bundle):
     assert zip_path.exists()
 
     # Second request - should use cache
-    extract_path2 = await cache.get_bundle(file_url)
+    extract_path2 = cache.get_bundle(file_url)
 
     # Same path returned
     assert extract_path1 == extract_path2
     assert extract_path2.exists()
 
 
-@pytest.mark.asyncio
-async def test_hash_verification_success(temp_cache_dir, test_bundle, test_bundle_hash):
+def test_hash_verification_success(temp_cache_dir, test_bundle, test_bundle_hash):
     """Test that hash verification passes with correct hash."""
     cache = BundleCache(temp_cache_dir)
 
     file_url = f"file://{test_bundle}"
 
     # Get bundle with correct hash
-    extract_path = await cache.get_bundle(file_url, expected_hash=test_bundle_hash)
+    extract_path = cache.get_bundle(file_url, expected_hash=test_bundle_hash)
 
     # Should succeed
     assert extract_path.exists()
 
 
-@pytest.mark.asyncio
-async def test_hash_verification_failure(temp_cache_dir, test_bundle):
+def test_hash_verification_failure(temp_cache_dir, test_bundle):
     """Test that hash verification fails with incorrect hash."""
     cache = BundleCache(temp_cache_dir)
 
@@ -131,11 +127,10 @@ async def test_hash_verification_failure(temp_cache_dir, test_bundle):
 
     # Should raise ValueError
     with pytest.raises(ValueError, match="Bundle hash mismatch"):
-        await cache.get_bundle(file_url, expected_hash=wrong_hash)
+        cache.get_bundle(file_url, expected_hash=wrong_hash)
 
 
-@pytest.mark.asyncio
-async def test_lru_eviction(temp_cache_dir, tmp_path):
+def test_lru_eviction(temp_cache_dir, tmp_path):
     """Test LRU eviction when cache exceeds max_bundles."""
     # Create cache with max 2 bundles
     cache = BundleCache(temp_cache_dir, max_bundles=2)
@@ -157,7 +152,7 @@ async def test_lru_eviction(temp_cache_dir, tmp_path):
     paths = []
     for bundle in bundles:
         file_url = f"file://{bundle}"
-        path = await cache.get_bundle(file_url)
+        path = cache.get_bundle(file_url)
         paths.append(path)
 
     # First bundle should be evicted (only 2 should remain)
@@ -170,8 +165,7 @@ async def test_lru_eviction(temp_cache_dir, tmp_path):
     assert len(extracts) == 2
 
 
-@pytest.mark.asyncio
-async def test_path_to_key_consistency(temp_cache_dir):
+def test_path_to_key_consistency(temp_cache_dir):
     """Test that path_to_key produces consistent keys."""
     cache = BundleCache(temp_cache_dir)
 
@@ -192,18 +186,18 @@ async def test_path_to_key_consistency(temp_cache_dir):
     assert key1 != key2
 
 
-@pytest.mark.asyncio
-async def test_concurrent_downloads(temp_cache_dir, test_bundle):
+def test_concurrent_downloads(temp_cache_dir, test_bundle):
     """Test that concurrent downloads work correctly."""
+    import concurrent.futures
+
     cache = BundleCache(temp_cache_dir)
 
     file_url = f"file://{test_bundle}"
 
-    # Request same bundle multiple times concurrently
-    import asyncio
-
-    tasks = [cache.get_bundle(file_url) for _ in range(5)]
-    paths = await asyncio.gather(*tasks)
+    # Request same bundle multiple times concurrently using threads
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(cache.get_bundle, file_url) for _ in range(5)]
+        paths = [f.result() for f in futures]
 
     # All should return the same path
     assert all(p == paths[0] for p in paths)

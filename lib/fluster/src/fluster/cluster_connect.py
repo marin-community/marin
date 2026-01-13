@@ -25,17 +25,21 @@ from connectrpc.interceptor import Interceptor, InterceptorSync
 from connectrpc.method import IdempotencyLevel, MethodInfo
 from connectrpc.request import Headers, RequestContext
 from connectrpc.server import ConnectASGIApplication, ConnectWSGIApplication, Endpoint, EndpointSync
-from fluster import cluster_pb2 as cluster__pb2
+import cluster_pb2 as cluster__pb2
 
 
 class ControllerService(Protocol):
-    async def launch_job(self, request: cluster__pb2.JobSpec, ctx: RequestContext) -> cluster__pb2.JobHandle:
+    async def launch_job(
+        self, request: cluster__pb2.LaunchJobRequest, ctx: RequestContext
+    ) -> cluster__pb2.LaunchJobResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_job_status(self, request: cluster__pb2.JobHandle, ctx: RequestContext) -> cluster__pb2.JobHandle:
+    async def get_job_status(
+        self, request: cluster__pb2.GetJobStatusRequest, ctx: RequestContext
+    ) -> cluster__pb2.GetJobStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def terminate_job(self, request: cluster__pb2.JobHandle, ctx: RequestContext) -> cluster__pb2.Empty:
+    async def terminate_job(self, request: cluster__pb2.TerminateJobRequest, ctx: RequestContext) -> cluster__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def list_jobs(
@@ -45,20 +49,22 @@ class ControllerService(Protocol):
 
     async def register_endpoint(
         self, request: cluster__pb2.RegisterEndpointRequest, ctx: RequestContext
-    ) -> cluster__pb2.Endpoint:
+    ) -> cluster__pb2.RegisterEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def unregister_endpoint(self, request: cluster__pb2.Endpoint, ctx: RequestContext) -> cluster__pb2.Empty:
+    async def unregister_endpoint(
+        self, request: cluster__pb2.UnregisterEndpointRequest, ctx: RequestContext
+    ) -> cluster__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def lookup_endpoints(
-        self, request: cluster__pb2.LookupRequest, ctx: RequestContext
-    ) -> cluster__pb2.LookupResponse:
+    async def lookup_endpoint(
+        self, request: cluster__pb2.LookupEndpointRequest, ctx: RequestContext
+    ) -> cluster__pb2.LookupEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def list_endpoints(
         self, request: cluster__pb2.ListEndpointsRequest, ctx: RequestContext
-    ) -> cluster__pb2.LookupResponse:
+    ) -> cluster__pb2.ListEndpointsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -77,8 +83,8 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                     method=MethodInfo(
                         name="LaunchJob",
                         service_name="fluster.cluster.ControllerService",
-                        input=cluster__pb2.JobSpec,
-                        output=cluster__pb2.JobHandle,
+                        input=cluster__pb2.LaunchJobRequest,
+                        output=cluster__pb2.LaunchJobResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.launch_job,
@@ -87,8 +93,8 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                     method=MethodInfo(
                         name="GetJobStatus",
                         service_name="fluster.cluster.ControllerService",
-                        input=cluster__pb2.JobHandle,
-                        output=cluster__pb2.JobHandle,
+                        input=cluster__pb2.GetJobStatusRequest,
+                        output=cluster__pb2.GetJobStatusResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_job_status,
@@ -97,7 +103,7 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                     method=MethodInfo(
                         name="TerminateJob",
                         service_name="fluster.cluster.ControllerService",
-                        input=cluster__pb2.JobHandle,
+                        input=cluster__pb2.TerminateJobRequest,
                         output=cluster__pb2.Empty,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
@@ -118,7 +124,7 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         name="RegisterEndpoint",
                         service_name="fluster.cluster.ControllerService",
                         input=cluster__pb2.RegisterEndpointRequest,
-                        output=cluster__pb2.Endpoint,
+                        output=cluster__pb2.RegisterEndpointResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.register_endpoint,
@@ -127,28 +133,28 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                     method=MethodInfo(
                         name="UnregisterEndpoint",
                         service_name="fluster.cluster.ControllerService",
-                        input=cluster__pb2.Endpoint,
+                        input=cluster__pb2.UnregisterEndpointRequest,
                         output=cluster__pb2.Empty,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.unregister_endpoint,
                 ),
-                "/fluster.cluster.ControllerService/LookupEndpoints": Endpoint.unary(
+                "/fluster.cluster.ControllerService/LookupEndpoint": Endpoint.unary(
                     method=MethodInfo(
-                        name="LookupEndpoints",
+                        name="LookupEndpoint",
                         service_name="fluster.cluster.ControllerService",
-                        input=cluster__pb2.LookupRequest,
-                        output=cluster__pb2.LookupResponse,
+                        input=cluster__pb2.LookupEndpointRequest,
+                        output=cluster__pb2.LookupEndpointResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=svc.lookup_endpoints,
+                    function=svc.lookup_endpoint,
                 ),
                 "/fluster.cluster.ControllerService/ListEndpoints": Endpoint.unary(
                     method=MethodInfo(
                         name="ListEndpoints",
                         service_name="fluster.cluster.ControllerService",
                         input=cluster__pb2.ListEndpointsRequest,
-                        output=cluster__pb2.LookupResponse,
+                        output=cluster__pb2.ListEndpointsResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_endpoints,
@@ -167,18 +173,18 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
 class ControllerServiceClient(ConnectClient):
     async def launch_job(
         self,
-        request: cluster__pb2.JobSpec,
+        request: cluster__pb2.LaunchJobRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.JobHandle:
+    ) -> cluster__pb2.LaunchJobResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="LaunchJob",
                 service_name="fluster.cluster.ControllerService",
-                input=cluster__pb2.JobSpec,
-                output=cluster__pb2.JobHandle,
+                input=cluster__pb2.LaunchJobRequest,
+                output=cluster__pb2.LaunchJobResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -187,18 +193,18 @@ class ControllerServiceClient(ConnectClient):
 
     async def get_job_status(
         self,
-        request: cluster__pb2.JobHandle,
+        request: cluster__pb2.GetJobStatusRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.JobHandle:
+    ) -> cluster__pb2.GetJobStatusResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="GetJobStatus",
                 service_name="fluster.cluster.ControllerService",
-                input=cluster__pb2.JobHandle,
-                output=cluster__pb2.JobHandle,
+                input=cluster__pb2.GetJobStatusRequest,
+                output=cluster__pb2.GetJobStatusResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -207,7 +213,7 @@ class ControllerServiceClient(ConnectClient):
 
     async def terminate_job(
         self,
-        request: cluster__pb2.JobHandle,
+        request: cluster__pb2.TerminateJobRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
@@ -217,7 +223,7 @@ class ControllerServiceClient(ConnectClient):
             method=MethodInfo(
                 name="TerminateJob",
                 service_name="fluster.cluster.ControllerService",
-                input=cluster__pb2.JobHandle,
+                input=cluster__pb2.TerminateJobRequest,
                 output=cluster__pb2.Empty,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
@@ -251,14 +257,14 @@ class ControllerServiceClient(ConnectClient):
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.Endpoint:
+    ) -> cluster__pb2.RegisterEndpointResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="RegisterEndpoint",
                 service_name="fluster.cluster.ControllerService",
                 input=cluster__pb2.RegisterEndpointRequest,
-                output=cluster__pb2.Endpoint,
+                output=cluster__pb2.RegisterEndpointResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -267,7 +273,7 @@ class ControllerServiceClient(ConnectClient):
 
     async def unregister_endpoint(
         self,
-        request: cluster__pb2.Endpoint,
+        request: cluster__pb2.UnregisterEndpointRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
@@ -277,7 +283,7 @@ class ControllerServiceClient(ConnectClient):
             method=MethodInfo(
                 name="UnregisterEndpoint",
                 service_name="fluster.cluster.ControllerService",
-                input=cluster__pb2.Endpoint,
+                input=cluster__pb2.UnregisterEndpointRequest,
                 output=cluster__pb2.Empty,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
@@ -285,20 +291,20 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def lookup_endpoints(
+    async def lookup_endpoint(
         self,
-        request: cluster__pb2.LookupRequest,
+        request: cluster__pb2.LookupEndpointRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.LookupResponse:
+    ) -> cluster__pb2.LookupEndpointResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="LookupEndpoints",
+                name="LookupEndpoint",
                 service_name="fluster.cluster.ControllerService",
-                input=cluster__pb2.LookupRequest,
-                output=cluster__pb2.LookupResponse,
+                input=cluster__pb2.LookupEndpointRequest,
+                output=cluster__pb2.LookupEndpointResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -311,14 +317,14 @@ class ControllerServiceClient(ConnectClient):
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.LookupResponse:
+    ) -> cluster__pb2.ListEndpointsResponse:
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="ListEndpoints",
                 service_name="fluster.cluster.ControllerService",
                 input=cluster__pb2.ListEndpointsRequest,
-                output=cluster__pb2.LookupResponse,
+                output=cluster__pb2.ListEndpointsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -557,13 +563,15 @@ class WorkerServiceClient(ConnectClient):
 
 
 class ControllerServiceSync(Protocol):
-    def launch_job(self, request: cluster__pb2.JobSpec, ctx: RequestContext) -> cluster__pb2.JobHandle:
+    def launch_job(self, request: cluster__pb2.LaunchJobRequest, ctx: RequestContext) -> cluster__pb2.LaunchJobResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    def get_job_status(self, request: cluster__pb2.JobHandle, ctx: RequestContext) -> cluster__pb2.JobHandle:
+    def get_job_status(
+        self, request: cluster__pb2.GetJobStatusRequest, ctx: RequestContext
+    ) -> cluster__pb2.GetJobStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    def terminate_job(self, request: cluster__pb2.JobHandle, ctx: RequestContext) -> cluster__pb2.Empty:
+    def terminate_job(self, request: cluster__pb2.TerminateJobRequest, ctx: RequestContext) -> cluster__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     def list_jobs(self, request: cluster__pb2.ListJobsRequest, ctx: RequestContext) -> cluster__pb2.ListJobsResponse:
@@ -571,18 +579,22 @@ class ControllerServiceSync(Protocol):
 
     def register_endpoint(
         self, request: cluster__pb2.RegisterEndpointRequest, ctx: RequestContext
-    ) -> cluster__pb2.Endpoint:
+    ) -> cluster__pb2.RegisterEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    def unregister_endpoint(self, request: cluster__pb2.Endpoint, ctx: RequestContext) -> cluster__pb2.Empty:
+    def unregister_endpoint(
+        self, request: cluster__pb2.UnregisterEndpointRequest, ctx: RequestContext
+    ) -> cluster__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    def lookup_endpoints(self, request: cluster__pb2.LookupRequest, ctx: RequestContext) -> cluster__pb2.LookupResponse:
+    def lookup_endpoint(
+        self, request: cluster__pb2.LookupEndpointRequest, ctx: RequestContext
+    ) -> cluster__pb2.LookupEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     def list_endpoints(
         self, request: cluster__pb2.ListEndpointsRequest, ctx: RequestContext
-    ) -> cluster__pb2.LookupResponse:
+    ) -> cluster__pb2.ListEndpointsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -599,8 +611,8 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                     method=MethodInfo(
                         name="LaunchJob",
                         service_name="fluster.cluster.ControllerService",
-                        input=cluster__pb2.JobSpec,
-                        output=cluster__pb2.JobHandle,
+                        input=cluster__pb2.LaunchJobRequest,
+                        output=cluster__pb2.LaunchJobResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.launch_job,
@@ -609,8 +621,8 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                     method=MethodInfo(
                         name="GetJobStatus",
                         service_name="fluster.cluster.ControllerService",
-                        input=cluster__pb2.JobHandle,
-                        output=cluster__pb2.JobHandle,
+                        input=cluster__pb2.GetJobStatusRequest,
+                        output=cluster__pb2.GetJobStatusResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_job_status,
@@ -619,7 +631,7 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                     method=MethodInfo(
                         name="TerminateJob",
                         service_name="fluster.cluster.ControllerService",
-                        input=cluster__pb2.JobHandle,
+                        input=cluster__pb2.TerminateJobRequest,
                         output=cluster__pb2.Empty,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
@@ -640,7 +652,7 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         name="RegisterEndpoint",
                         service_name="fluster.cluster.ControllerService",
                         input=cluster__pb2.RegisterEndpointRequest,
-                        output=cluster__pb2.Endpoint,
+                        output=cluster__pb2.RegisterEndpointResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.register_endpoint,
@@ -649,28 +661,28 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                     method=MethodInfo(
                         name="UnregisterEndpoint",
                         service_name="fluster.cluster.ControllerService",
-                        input=cluster__pb2.Endpoint,
+                        input=cluster__pb2.UnregisterEndpointRequest,
                         output=cluster__pb2.Empty,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.unregister_endpoint,
                 ),
-                "/fluster.cluster.ControllerService/LookupEndpoints": EndpointSync.unary(
+                "/fluster.cluster.ControllerService/LookupEndpoint": EndpointSync.unary(
                     method=MethodInfo(
-                        name="LookupEndpoints",
+                        name="LookupEndpoint",
                         service_name="fluster.cluster.ControllerService",
-                        input=cluster__pb2.LookupRequest,
-                        output=cluster__pb2.LookupResponse,
+                        input=cluster__pb2.LookupEndpointRequest,
+                        output=cluster__pb2.LookupEndpointResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=service.lookup_endpoints,
+                    function=service.lookup_endpoint,
                 ),
                 "/fluster.cluster.ControllerService/ListEndpoints": EndpointSync.unary(
                     method=MethodInfo(
                         name="ListEndpoints",
                         service_name="fluster.cluster.ControllerService",
                         input=cluster__pb2.ListEndpointsRequest,
-                        output=cluster__pb2.LookupResponse,
+                        output=cluster__pb2.ListEndpointsResponse,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_endpoints,
@@ -689,18 +701,18 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
 class ControllerServiceClientSync(ConnectClientSync):
     def launch_job(
         self,
-        request: cluster__pb2.JobSpec,
+        request: cluster__pb2.LaunchJobRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.JobHandle:
+    ) -> cluster__pb2.LaunchJobResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="LaunchJob",
                 service_name="fluster.cluster.ControllerService",
-                input=cluster__pb2.JobSpec,
-                output=cluster__pb2.JobHandle,
+                input=cluster__pb2.LaunchJobRequest,
+                output=cluster__pb2.LaunchJobResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -709,18 +721,18 @@ class ControllerServiceClientSync(ConnectClientSync):
 
     def get_job_status(
         self,
-        request: cluster__pb2.JobHandle,
+        request: cluster__pb2.GetJobStatusRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.JobHandle:
+    ) -> cluster__pb2.GetJobStatusResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="GetJobStatus",
                 service_name="fluster.cluster.ControllerService",
-                input=cluster__pb2.JobHandle,
-                output=cluster__pb2.JobHandle,
+                input=cluster__pb2.GetJobStatusRequest,
+                output=cluster__pb2.GetJobStatusResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -729,7 +741,7 @@ class ControllerServiceClientSync(ConnectClientSync):
 
     def terminate_job(
         self,
-        request: cluster__pb2.JobHandle,
+        request: cluster__pb2.TerminateJobRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
@@ -739,7 +751,7 @@ class ControllerServiceClientSync(ConnectClientSync):
             method=MethodInfo(
                 name="TerminateJob",
                 service_name="fluster.cluster.ControllerService",
-                input=cluster__pb2.JobHandle,
+                input=cluster__pb2.TerminateJobRequest,
                 output=cluster__pb2.Empty,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
@@ -773,14 +785,14 @@ class ControllerServiceClientSync(ConnectClientSync):
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.Endpoint:
+    ) -> cluster__pb2.RegisterEndpointResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="RegisterEndpoint",
                 service_name="fluster.cluster.ControllerService",
                 input=cluster__pb2.RegisterEndpointRequest,
-                output=cluster__pb2.Endpoint,
+                output=cluster__pb2.RegisterEndpointResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -789,7 +801,7 @@ class ControllerServiceClientSync(ConnectClientSync):
 
     def unregister_endpoint(
         self,
-        request: cluster__pb2.Endpoint,
+        request: cluster__pb2.UnregisterEndpointRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
@@ -799,7 +811,7 @@ class ControllerServiceClientSync(ConnectClientSync):
             method=MethodInfo(
                 name="UnregisterEndpoint",
                 service_name="fluster.cluster.ControllerService",
-                input=cluster__pb2.Endpoint,
+                input=cluster__pb2.UnregisterEndpointRequest,
                 output=cluster__pb2.Empty,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
@@ -807,20 +819,20 @@ class ControllerServiceClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
-    def lookup_endpoints(
+    def lookup_endpoint(
         self,
-        request: cluster__pb2.LookupRequest,
+        request: cluster__pb2.LookupEndpointRequest,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.LookupResponse:
+    ) -> cluster__pb2.LookupEndpointResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="LookupEndpoints",
+                name="LookupEndpoint",
                 service_name="fluster.cluster.ControllerService",
-                input=cluster__pb2.LookupRequest,
-                output=cluster__pb2.LookupResponse,
+                input=cluster__pb2.LookupEndpointRequest,
+                output=cluster__pb2.LookupEndpointResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -833,14 +845,14 @@ class ControllerServiceClientSync(ConnectClientSync):
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
-    ) -> cluster__pb2.LookupResponse:
+    ) -> cluster__pb2.ListEndpointsResponse:
         return self.execute_unary(
             request=request,
             method=MethodInfo(
                 name="ListEndpoints",
                 service_name="fluster.cluster.ControllerService",
                 input=cluster__pb2.ListEndpointsRequest,
-                output=cluster__pb2.LookupResponse,
+                output=cluster__pb2.ListEndpointsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

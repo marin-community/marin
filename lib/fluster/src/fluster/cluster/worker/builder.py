@@ -12,12 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Virtual environment and Docker image builder with caching."""
+"""Virtual environment and Docker image caching with UV support."""
 
-from __future__ import annotations
-
-import asyncio
-import os
 import shutil
 import time
 from dataclasses import dataclass
@@ -25,6 +21,7 @@ from pathlib import Path
 
 import xxhash
 
+from fluster.cluster.worker.docker import DockerImageBuilder
 from fluster.cluster.worker.worker_types import JobLogs
 
 
@@ -118,14 +115,14 @@ ENV PATH="/app/.venv/bin:$PATH"
 """
 
 
-class ImageBuilder:
-    """Builds Docker images with intelligent caching.
+class ImageCache:
+    """Manages Docker image building with caching.
 
     Image tag: {registry}/fluster-job-{job_id}:{deps_hash[:8]}
     Uses Docker BuildKit cache mounts for UV cache sharing.
 
-    Only supports workspace-based builds. The EnvironmentConfig.workspace
-    field must be set; docker_image is not supported.
+    Delegates actual Docker operations to DockerImageBuilder, keeping
+    caching logic separate from container runtime specifics.
     """
 
     def __init__(
@@ -138,8 +135,9 @@ class ImageBuilder:
         self._registry = registry
         self._max_images = max_images
         self._cache_dir.mkdir(parents=True, exist_ok=True)
+        self._docker = DockerImageBuilder(registry)
 
-    async def build(
+    def build(
         self,
         bundle_path: Path,
         base_image: str,
@@ -155,7 +153,7 @@ class ImageBuilder:
         image_tag = f"{self._registry}/fluster-job-{job_id}:{deps_hash[:8]}"
 
         # Check if image exists locally
-        if await self._image_exists(image_tag):
+        if self._docker.exists(image_tag):
             if job_logs:
                 job_logs.add("build", f"Using cached image: {image_tag}")
             return BuildResult(
@@ -172,10 +170,10 @@ class ImageBuilder:
             base_image=base_image,
             extras_flags=extras_flags,
         )
-        await self._docker_build(bundle_path, dockerfile, image_tag, job_logs)
+        self._docker.build(bundle_path, dockerfile, image_tag, job_logs)
         build_time_ms = int((time.time() - start) * 1000)
 
-        await self._evict_old_images()
+        self._evict_old_images()
 
         return BuildResult(
             image_tag=image_tag,
@@ -184,105 +182,15 @@ class ImageBuilder:
             from_cache=False,
         )
 
-    async def _docker_build(self, context: Path, dockerfile: str, tag: str, job_logs: JobLogs | None = None) -> None:
-        """Run docker build with BuildKit."""
-        dockerfile_path = context / "Dockerfile.fluster"
-        dockerfile_path.write_text(dockerfile)
-
-        try:
-            if job_logs:
-                job_logs.add("build", f"Starting build for image: {tag}")
-
-            cmd = [
-                "docker",
-                "build",
-                "-f",
-                str(dockerfile_path),
-                "-t",
-                tag,
-                "--build-arg",
-                "BUILDKIT_INLINE_CACHE=1",
-                str(context),
-            ]
-
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                env={**os.environ, "DOCKER_BUILDKIT": "1"},
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-
-            # Stream output to job_logs
-            if proc.stdout:
-                while True:
-                    line = await proc.stdout.readline()
-                    if not line:
-                        break
-                    if job_logs:
-                        job_logs.add("build", line.decode().rstrip())
-
-            await proc.wait()
-
-            if job_logs:
-                if proc.returncode == 0:
-                    job_logs.add("build", "Build completed successfully")
-                else:
-                    job_logs.add("build", f"Build failed with exit code {proc.returncode}")
-
-            if proc.returncode != 0:
-                raise RuntimeError(f"Docker build failed with exit code {proc.returncode}")
-        finally:
-            # Cleanup generated dockerfile
-            dockerfile_path.unlink(missing_ok=True)
-
-    async def _image_exists(self, tag: str) -> bool:
-        """Check if image exists locally."""
-        proc = await asyncio.create_subprocess_exec(
-            "docker",
-            "image",
-            "inspect",
-            tag,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await proc.wait()
-        return proc.returncode == 0
-
-    async def _evict_old_images(self) -> None:
+    def _evict_old_images(self) -> None:
         """Remove old fluster images when over limit."""
-        # List images matching our pattern
-        proc = await asyncio.create_subprocess_exec(
-            "docker",
-            "images",
-            "--format",
-            "{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}",
-            "--filter",
-            f"reference={self._registry}/fluster-job-*",
-            stdout=asyncio.subprocess.PIPE,
-        )
-        stdout, _stderr = await proc.communicate()
+        pattern = f"{self._registry}/fluster-job-*"
+        images = self._docker.list_images(pattern)
 
-        # Filter empty lines
-        lines = [line for line in stdout.decode().strip().split("\n") if line]
-        if len(lines) <= self._max_images:
+        if len(images) <= self._max_images:
             return
 
-        # Parse and sort by creation time
-        images = []
-        for line in lines:
-            if "\t" in line:
-                tag, created = line.split("\t", 1)
-                images.append((tag, created))
-
-        images.sort(key=lambda x: x[1])  # Sort by created time
-
-        # Remove oldest
-        for tag, _ in images[: len(images) - self._max_images]:
-            proc = await asyncio.create_subprocess_exec(
-                "docker",
-                "rmi",
-                tag,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.wait()
+        # Sort by creation time and remove oldest
+        images.sort(key=lambda x: x.created_at)
+        for image in images[: len(images) - self._max_images]:
+            self._docker.remove(image.tag)

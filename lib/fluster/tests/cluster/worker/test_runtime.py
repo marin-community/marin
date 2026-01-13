@@ -14,13 +14,13 @@
 
 """Tests for DockerRuntime."""
 
-import asyncio
 import subprocess
+import time
 
 import pytest
 
 from fluster import cluster_pb2
-from fluster.cluster.worker.runtime import ContainerConfig, DockerRuntime
+from fluster.cluster.worker.docker import ContainerConfig, DockerRuntime
 
 
 def check_docker_available():
@@ -43,10 +43,9 @@ def runtime():
     return DockerRuntime()
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_run_simple_container_success(runtime):
-    """Test running a simple container with exit code 0."""
+def test_create_and_start_container(runtime):
+    """Test creating and starting a simple container."""
     if not check_docker_available():
         pytest.skip("Docker not available")
 
@@ -56,21 +55,35 @@ async def test_run_simple_container_success(runtime):
         env={},
     )
 
-    result = await runtime.run(config)
+    # Create container
+    container_id = runtime.create_container(config)
+    assert container_id is not None
+    assert len(container_id) > 0
 
-    assert result.exit_code == 0
-    assert result.container_id is not None
-    assert len(result.container_id) > 0
-    assert result.finished_at > result.started_at
-    assert result.error is None
+    # Start container
+    runtime.start_container(container_id)
+
+    # Wait for completion
+    max_wait = 5
+    start = time.time()
+    while time.time() - start < max_wait:
+        status = runtime.inspect(container_id)
+        if not status.running:
+            break
+        time.sleep(0.1)
+
+    # Check final status
+    status = runtime.inspect(container_id)
+    assert not status.running
+    assert status.exit_code == 0
+    assert status.error is None
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_run_container_with_failure_exit_code(runtime):
+def test_container_with_failure_exit_code(runtime):
     """Test container that exits with non-zero code."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -81,20 +94,29 @@ async def test_run_container_with_failure_exit_code(runtime):
         env={},
     )
 
-    result = await runtime.run(config)
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
 
-    assert result.exit_code == 42
-    assert result.container_id is not None
-    assert result.finished_at > result.started_at
-    assert result.error is None
+    # Wait for completion
+    max_wait = 5
+    start = time.time()
+    while time.time() - start < max_wait:
+        status = runtime.inspect(container_id)
+        if not status.running:
+            break
+        time.sleep(0.1)
+
+    # Check exit code
+    status = runtime.inspect(container_id)
+    assert status.exit_code == 42
+    assert status.error is None
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_resource_limits_cpu(runtime):
+def test_resource_limits_cpu(runtime):
     """Test that CPU limits are applied to container."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -108,33 +130,33 @@ async def test_resource_limits_cpu(runtime):
         resources=resources,
     )
 
-    result = await runtime.run(config)
-
-    assert result.exit_code == 0
+    container_id = runtime.create_container(config)
 
     # Inspect container to verify CPU limit was set
-    proc = await asyncio.create_subprocess_exec(
-        "docker",
-        "inspect",
-        result.container_id,
-        "--format",
-        "{{.HostConfig.NanoCpus}}",
-        stdout=asyncio.subprocess.PIPE,
+    result = subprocess.run(
+        [
+            "docker",
+            "inspect",
+            container_id,
+            "--format",
+            "{{.HostConfig.NanoCpus}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
-    stdout, _ = await proc.communicate()
-    nano_cpus = int(stdout.decode().strip())
+    nano_cpus = int(result.stdout.strip())
 
     # 1 core = 1000 millicores = 1000000000 nanocpus
     expected_nano_cpus = 1_000_000_000
     assert nano_cpus == expected_nano_cpus
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_resource_limits_memory(runtime):
+def test_resource_limits_memory(runtime):
     """Test that memory limits are applied to container."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -148,33 +170,33 @@ async def test_resource_limits_memory(runtime):
         resources=resources,
     )
 
-    result = await runtime.run(config)
-
-    assert result.exit_code == 0
+    container_id = runtime.create_container(config)
 
     # Inspect container to verify memory limit was set
-    proc = await asyncio.create_subprocess_exec(
-        "docker",
-        "inspect",
-        result.container_id,
-        "--format",
-        "{{.HostConfig.Memory}}",
-        stdout=asyncio.subprocess.PIPE,
+    result = subprocess.run(
+        [
+            "docker",
+            "inspect",
+            container_id,
+            "--format",
+            "{{.HostConfig.Memory}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
-    stdout, _ = await proc.communicate()
-    memory_bytes = int(stdout.decode().strip())
+    memory_bytes = int(result.stdout.strip())
 
     # 256 MB = 268435456 bytes
     expected_bytes = 256 * 1024 * 1024
     assert memory_bytes == expected_bytes
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_resource_limits_combined(runtime):
+def test_resource_limits_combined(runtime):
     """Test that CPU and memory limits work together."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -187,21 +209,22 @@ async def test_resource_limits_combined(runtime):
         resources=resources,
     )
 
-    result = await runtime.run(config)
-
-    assert result.exit_code == 0
+    container_id = runtime.create_container(config)
 
     # Verify both limits
-    proc = await asyncio.create_subprocess_exec(
-        "docker",
-        "inspect",
-        result.container_id,
-        "--format",
-        "{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}",
-        stdout=asyncio.subprocess.PIPE,
+    result = subprocess.run(
+        [
+            "docker",
+            "inspect",
+            container_id,
+            "--format",
+            "{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
-    stdout, _ = await proc.communicate()
-    parts = stdout.decode().strip().split()
+    parts = result.stdout.strip().split()
     nano_cpus = int(parts[0])
     memory_bytes = int(parts[1])
 
@@ -209,42 +232,11 @@ async def test_resource_limits_combined(runtime):
     assert memory_bytes == 512 * 1024 * 1024
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_timeout_kills_container(runtime):
-    """Test that timeout forces container to be killed."""
-    if not check_docker_available():
-        pytest.skip("Docker not available")
-
-    # Container that sleeps for 10 seconds but timeout is 1 second
-    config = ContainerConfig(
-        image="alpine:latest",
-        command=["sleep", "10"],
-        env={},
-        timeout_seconds=1,
-    )
-
-    result = await runtime.run(config)
-
-    # Should have timed out
-    assert result.exit_code == -1
-    assert result.error == "Timeout exceeded"
-    assert result.finished_at > result.started_at
-
-    # Execution time should be around 1 second (timeout)
-    execution_time = result.finished_at - result.started_at
-    assert 0.8 < execution_time < 2.0, f"Expected ~1s execution, got {execution_time}s"
-
-    # Cleanup
-    await runtime.remove(result.container_id)
-
-
-@pytest.mark.asyncio
-@pytest.mark.slow
-async def test_environment_variables(runtime):
+def test_environment_variables(runtime):
     """Test that environment variables are passed to container."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -255,17 +247,27 @@ async def test_environment_variables(runtime):
         env={"TEST_VAR": "test_value_123"},
     )
 
-    result = await runtime.run(config)
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
 
-    assert result.exit_code == 0
+    # Wait for completion
+    max_wait = 5
+    start = time.time()
+    while time.time() - start < max_wait:
+        status = runtime.inspect(container_id)
+        if not status.running:
+            break
+        time.sleep(0.1)
+
+    status = runtime.inspect(container_id)
+    assert status.exit_code == 0
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_multiple_environment_variables(runtime):
+def test_multiple_environment_variables(runtime):
     """Test multiple environment variables."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -280,17 +282,27 @@ async def test_multiple_environment_variables(runtime):
         },
     )
 
-    result = await runtime.run(config)
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
 
-    assert result.exit_code == 0
+    # Wait for completion
+    max_wait = 5
+    start = time.time()
+    while time.time() - start < max_wait:
+        status = runtime.inspect(container_id)
+        if not status.running:
+            break
+        time.sleep(0.1)
+
+    status = runtime.inspect(container_id)
+    assert status.exit_code == 0
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_mounts(runtime, tmp_path):
+def test_mounts(runtime, tmp_path):
     """Test that volume mounts work correctly."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -308,17 +320,27 @@ async def test_mounts(runtime, tmp_path):
         mounts=[(str(host_dir), "/mnt", "ro")],
     )
 
-    result = await runtime.run(config)
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
 
-    assert result.exit_code == 0
+    # Wait for completion
+    max_wait = 5
+    start = time.time()
+    while time.time() - start < max_wait:
+        status = runtime.inspect(container_id)
+        if not status.running:
+            break
+        time.sleep(0.1)
+
+    status = runtime.inspect(container_id)
+    assert status.exit_code == 0
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_mounts_writable(runtime, tmp_path):
+def test_mounts_writable(runtime, tmp_path):
     """Test writable volume mounts."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -334,9 +356,20 @@ async def test_mounts_writable(runtime, tmp_path):
         mounts=[(str(host_dir), "/mnt", "rw")],
     )
 
-    result = await runtime.run(config)
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
 
-    assert result.exit_code == 0
+    # Wait for completion
+    max_wait = 5
+    start = time.time()
+    while time.time() - start < max_wait:
+        status = runtime.inspect(container_id)
+        if not status.running:
+            break
+        time.sleep(0.1)
+
+    status = runtime.inspect(container_id)
+    assert status.exit_code == 0
 
     # Verify file was written from container
     output_file = host_dir / "output.txt"
@@ -344,12 +377,11 @@ async def test_mounts_writable(runtime, tmp_path):
     assert "written from container" in output_file.read_text()
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_port_mapping(runtime):
+def test_port_mapping(runtime):
     """Test port mapping configuration."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -363,21 +395,35 @@ async def test_port_mapping(runtime):
         ports={"http": 8080, "metrics": 9090},
     )
 
-    result = await runtime.run(config)
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
 
-    assert result.exit_code == 0
+    # Wait for completion
+    max_wait = 5
+    start = time.time()
+    while time.time() - start < max_wait:
+        status = runtime.inspect(container_id)
+        if not status.running:
+            break
+        time.sleep(0.1)
+
+    status = runtime.inspect(container_id)
+    assert status.exit_code == 0
 
     # Inspect container to verify port mappings were configured
-    proc = await asyncio.create_subprocess_exec(
-        "docker",
-        "inspect",
-        result.container_id,
-        "--format",
-        "{{json .HostConfig.PortBindings}}",
-        stdout=asyncio.subprocess.PIPE,
+    result = subprocess.run(
+        [
+            "docker",
+            "inspect",
+            container_id,
+            "--format",
+            "{{json .HostConfig.PortBindings}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
-    stdout, _ = await proc.communicate()
-    port_bindings = stdout.decode().strip()
+    port_bindings = result.stdout.strip()
 
     # Should have port mappings (exact format depends on Docker version)
     # Just verify the ports appear in the output
@@ -385,12 +431,11 @@ async def test_port_mapping(runtime):
     assert "9090" in port_bindings
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_workdir(runtime):
+def test_workdir(runtime):
     """Test custom working directory."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -402,17 +447,27 @@ async def test_workdir(runtime):
         workdir="/custom/workdir",
     )
 
-    result = await runtime.run(config)
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
 
-    assert result.exit_code == 0
+    # Wait for completion
+    max_wait = 5
+    start = time.time()
+    while time.time() - start < max_wait:
+        status = runtime.inspect(container_id)
+        if not status.running:
+            break
+        time.sleep(0.1)
+
+    status = runtime.inspect(container_id)
+    assert status.exit_code == 0
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_container_cleanup_with_remove(runtime):
+def test_container_cleanup_with_remove(runtime):
     """Test that remove() properly cleans up containers."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -423,47 +478,61 @@ async def test_container_cleanup_with_remove(runtime):
         env={},
     )
 
-    result = await runtime.run(config)
-    container_id = result.container_id
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
+
+    # Wait for completion
+    max_wait = 5
+    start = time.time()
+    while time.time() - start < max_wait:
+        status = runtime.inspect(container_id)
+        if not status.running:
+            break
+        time.sleep(0.1)
 
     # Container should exist before removal
-    proc = await asyncio.create_subprocess_exec(
-        "docker",
-        "ps",
-        "-a",
-        "--filter",
-        f"id={container_id}",
-        "--format",
-        "{{.ID}}",
-        stdout=asyncio.subprocess.PIPE,
+    result = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            f"id={container_id}",
+            "--format",
+            "{{.ID}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
-    stdout, _ = await proc.communicate()
-    assert container_id[:12] in stdout.decode()
+    assert container_id[:12] in result.stdout
 
     # Remove container
-    await runtime.remove(container_id)
+    runtime.remove(container_id)
 
     # Wait a moment for removal to complete
-    await asyncio.sleep(0.1)
+    time.sleep(0.1)
 
     # Container should not exist after removal
-    proc = await asyncio.create_subprocess_exec(
-        "docker",
-        "ps",
-        "-a",
-        "--filter",
-        f"id={container_id}",
-        "--format",
-        "{{.ID}}",
-        stdout=asyncio.subprocess.PIPE,
+    result = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            f"id={container_id}",
+            "--format",
+            "{{.ID}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
-    stdout, _ = await proc.communicate()
-    assert stdout.decode().strip() == ""
+    assert result.stdout.strip() == ""
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_security_hardening_no_new_privileges(runtime):
+def test_security_hardening_no_new_privileges(runtime):
     """Test that no-new-privileges security option is applied."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -474,29 +543,31 @@ async def test_security_hardening_no_new_privileges(runtime):
         env={},
     )
 
-    result = await runtime.run(config)
+    container_id = runtime.create_container(config)
 
     # Inspect container security options
-    proc = await asyncio.create_subprocess_exec(
-        "docker",
-        "inspect",
-        result.container_id,
-        "--format",
-        "{{json .HostConfig.SecurityOpt}}",
-        stdout=asyncio.subprocess.PIPE,
+    result = subprocess.run(
+        [
+            "docker",
+            "inspect",
+            container_id,
+            "--format",
+            "{{json .HostConfig.SecurityOpt}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
-    stdout, _ = await proc.communicate()
-    security_opts = stdout.decode().strip()
+    security_opts = result.stdout.strip()
 
     assert "no-new-privileges" in security_opts
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_security_hardening_cap_drop_all(runtime):
+def test_security_hardening_cap_drop_all(runtime):
     """Test that all capabilities are dropped."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -507,29 +578,31 @@ async def test_security_hardening_cap_drop_all(runtime):
         env={},
     )
 
-    result = await runtime.run(config)
+    container_id = runtime.create_container(config)
 
     # Inspect container capability drops
-    proc = await asyncio.create_subprocess_exec(
-        "docker",
-        "inspect",
-        result.container_id,
-        "--format",
-        "{{json .HostConfig.CapDrop}}",
-        stdout=asyncio.subprocess.PIPE,
+    result = subprocess.run(
+        [
+            "docker",
+            "inspect",
+            container_id,
+            "--format",
+            "{{json .HostConfig.CapDrop}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
-    stdout, _ = await proc.communicate()
-    cap_drop = stdout.decode().strip()
+    cap_drop = result.stdout.strip()
 
     assert "ALL" in cap_drop
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_kill_with_sigterm(runtime):
+def test_kill_with_sigterm(runtime):
     """Test killing container with SIGTERM."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -541,40 +614,28 @@ async def test_kill_with_sigterm(runtime):
         env={},
     )
 
-    # Run in background
-    container_id = await runtime._create_container(config)
-    await runtime._start_container(container_id)
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
 
     # Wait a moment for container to be running
-    await asyncio.sleep(0.5)
+    time.sleep(0.5)
 
     # Kill with SIGTERM
-    await runtime.kill(container_id, force=False)
+    runtime.kill(container_id, force=False)
 
     # Wait longer for graceful shutdown
-    await asyncio.sleep(1.0)
+    time.sleep(1.0)
 
     # Verify container is stopped
-    proc = await asyncio.create_subprocess_exec(
-        "docker",
-        "inspect",
-        container_id,
-        "--format",
-        "{{.State.Running}}",
-        stdout=asyncio.subprocess.PIPE,
-    )
-    stdout, _ = await proc.communicate()
-    is_running = stdout.decode().strip()
-
-    assert is_running == "false"
+    status = runtime.inspect(container_id)
+    assert not status.running
 
     # Cleanup
-    await runtime.remove(container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_kill_with_sigkill(runtime):
+def test_kill_with_sigkill(runtime):
     """Test killing container with SIGKILL (force)."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -586,85 +647,80 @@ async def test_kill_with_sigkill(runtime):
         env={},
     )
 
-    container_id = await runtime._create_container(config)
-    await runtime._start_container(container_id)
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
 
     # Wait a moment for container to be running
-    await asyncio.sleep(0.5)
+    time.sleep(0.5)
 
     # Force kill with SIGKILL
-    await runtime.kill(container_id, force=True)
+    runtime.kill(container_id, force=True)
 
     # Wait for container to stop
-    await asyncio.sleep(0.5)
+    time.sleep(0.5)
 
     # Verify container is stopped
-    proc = await asyncio.create_subprocess_exec(
-        "docker",
-        "inspect",
-        container_id,
-        "--format",
-        "{{.State.Running}}",
-        stdout=asyncio.subprocess.PIPE,
-    )
-    stdout, _ = await proc.communicate()
-    is_running = stdout.decode().strip()
-
-    assert is_running == "false"
+    status = runtime.inspect(container_id)
+    assert not status.running
 
     # Cleanup
-    await runtime.remove(container_id)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_no_timeout_runs_to_completion(runtime):
-    """Test container with no timeout runs to natural completion."""
+def test_inspect_running_container(runtime):
+    """Test inspect() on a running container."""
     if not check_docker_available():
         pytest.skip("Docker not available")
 
-    # Container that sleeps briefly with no timeout
     config = ContainerConfig(
         image="alpine:latest",
-        command=["sh", "-c", "sleep 0.5 && echo 'completed'"],
+        command=["sleep", "10"],
         env={},
-        timeout_seconds=None,
     )
 
-    result = await runtime.run(config)
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
 
-    # Should complete successfully
-    assert result.exit_code == 0
-    assert result.error is None
+    # Check status while running
+    time.sleep(0.5)
+    status = runtime.inspect(container_id)
+    assert status.running
+    assert status.exit_code is None
 
-    # Cleanup
-    await runtime.remove(result.container_id)
+    # Kill and cleanup
+    runtime.kill(container_id, force=True)
+    runtime.remove(container_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_timeout_longer_than_execution(runtime):
-    """Test that timeout doesn't interfere when longer than execution time."""
+def test_inspect_stopped_container(runtime):
+    """Test inspect() on a stopped container."""
     if not check_docker_available():
         pytest.skip("Docker not available")
 
-    # Container finishes in 0.5s with 5s timeout
     config = ContainerConfig(
         image="alpine:latest",
-        command=["sh", "-c", "sleep 0.5 && echo 'done'"],
+        command=["echo", "test"],
         env={},
-        timeout_seconds=5,
     )
 
-    result = await runtime.run(config)
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
 
-    # Should complete successfully without timeout
-    assert result.exit_code == 0
-    assert result.error is None
+    # Wait for completion
+    max_wait = 5
+    start = time.time()
+    while time.time() - start < max_wait:
+        status = runtime.inspect(container_id)
+        if not status.running:
+            break
+        time.sleep(0.1)
 
-    # Execution time should be ~0.5s, not 5s
-    execution_time = result.finished_at - result.started_at
-    assert execution_time < 2.0, f"Expected <2s execution, got {execution_time}s"
+    # Check final status
+    status = runtime.inspect(container_id)
+    assert not status.running
+    assert status.exit_code == 0
 
     # Cleanup
-    await runtime.remove(result.container_id)
+    runtime.remove(container_id)

@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Internal worker types for job tracking."""
+"""Internal worker types for job tracking and statistics collection."""
 
-import asyncio
+import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -25,6 +26,34 @@ from pydantic import BaseModel
 from fluster import cluster_pb2
 from fluster.cluster.types import is_job_finished
 from fluster.cluster_pb2 import JobState
+
+
+def collect_workdir_size_mb(workdir: Path) -> int:
+    """Calculate workdir size in MB using du -sm command.
+
+    Args:
+        workdir: Path to directory to measure
+
+    Returns:
+        Directory size in megabytes, or 0 if directory doesn't exist
+    """
+    if not workdir.exists():
+        return 0
+
+    result = subprocess.run(
+        ["du", "-sm", str(workdir)],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        return 0
+
+    # du -sm output format: "SIZE\tPATH"
+    output = result.stdout.strip()
+    size_str = output.split("\t")[0]
+
+    return int(size_str)
 
 
 class LogLine(BaseModel):
@@ -85,11 +114,9 @@ class Job:
     # Internals
     container_id: str | None = None
     workdir: Path | None = None  # Job working directory with logs
-    task: asyncio.Task | None = None
+    thread: threading.Thread | None = None
     cleanup_done: bool = False
-
-    # Background tasks
-    stats_task: asyncio.Task | None = None
+    should_stop: bool = False
 
     # Structured logs (build logs stored here, container logs fetched from Docker)
     logs: JobLogs = field(default_factory=JobLogs)

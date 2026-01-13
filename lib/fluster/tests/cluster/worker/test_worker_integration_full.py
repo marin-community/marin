@@ -30,11 +30,11 @@ import pytest
 import pytest_asyncio
 from fluster import cluster_pb2
 from fluster.cluster.types import Entrypoint
-from fluster.cluster.worker.builder import ImageBuilder, VenvCache
+from fluster.cluster.worker.builder import ImageCache, VenvCache
 from fluster.cluster.worker.bundle import BundleCache
 from fluster.cluster.worker.dashboard import WorkerDashboard
+from fluster.cluster.worker.docker import DockerRuntime
 from fluster.cluster.worker.manager import JobManager, PortAllocator
-from fluster.cluster.worker.runtime import DockerRuntime
 from fluster.cluster.worker.service import WorkerServiceImpl
 from fluster.cluster_connect import WorkerServiceClient
 
@@ -120,14 +120,14 @@ async def worker_server(tmp_path, check_docker):
     # Initialize components
     bundle_cache = BundleCache(cache_dir, max_bundles=10)
     venv_cache = VenvCache(uv_cache_dir)
-    image_builder = ImageBuilder(cache_dir, registry="localhost:5000", max_images=10)
+    image_cache = ImageCache(cache_dir, registry="localhost:5000", max_images=10)
     runtime = DockerRuntime()
     port_allocator = PortAllocator((40000, 40100))
 
     manager = JobManager(
         bundle_cache=bundle_cache,
         venv_cache=venv_cache,
-        image_builder=image_builder,
+        image_cache=image_cache,
         runtime=runtime,
         port_allocator=port_allocator,
         max_concurrent_jobs=3,

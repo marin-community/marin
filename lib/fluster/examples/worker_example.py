@@ -56,6 +56,11 @@ async def example_with_ports(worker: WorkerContext):
     await worker.wait(job_id)
     print("Job completed!")
 
+    logs = await worker.logs(job_id)
+    print("Logs:")
+    for log in logs:
+        print(f"  {log}")
+
 
 async def example_concurrent(worker: WorkerContext):
     """Example with multiple concurrent jobs."""
@@ -76,9 +81,14 @@ async def example_concurrent(worker: WorkerContext):
         print(f"Submitted job {i}: {job_id}")
 
     # Wait for all
-    for job_id in job_ids:
+    for i, job_id in enumerate(job_ids):
         await worker.wait(job_id)
         print(f"Job {job_id} completed")
+
+        logs = await worker.logs(job_id)
+        print(f"Logs for job {i}:")
+        for log in logs:
+            print(f"  {log}")
 
 
 async def example_kill(worker: WorkerContext):
@@ -123,6 +133,11 @@ async def example_kill(worker: WorkerContext):
 
     status = await worker.status(job_id)
     print(f"Final state: {status.state}")
+
+    logs = await worker.logs(job_id)
+    print("Logs:")
+    for log in logs:
+        print(f"  {log}")
 
 
 async def main():

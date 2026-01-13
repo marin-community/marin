@@ -15,6 +15,7 @@ dependencies = [
     "fsspec>=2024.0.0",
     "gcsfs>=2024.0.0",
     "xxhash>=3.0.0",
+    "protobuf>=6.33.4",
     "connect-python @ git+https://github.com/connectrpc/connect-python.git@5342eacecef85e52717604ee5ac7e03a1e16c7ac",
 ]
 

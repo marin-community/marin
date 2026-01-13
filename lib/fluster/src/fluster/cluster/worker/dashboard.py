@@ -29,7 +29,9 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
 from fluster import cluster_pb2
-from fluster.cluster_connect import WorkerServiceASGIApplication
+from starlette.middleware.wsgi import WSGIMiddleware
+
+from fluster.cluster_connect import WorkerServiceWSGIApplication
 from fluster.cluster.worker.service import WorkerServiceImpl
 
 
@@ -233,7 +235,6 @@ class WorkerDashboard:
         self._host = host
         self._port = port
         self._app = self._create_app()
-        self._server = None
 
     @property
     def port(self) -> int:
@@ -241,7 +242,9 @@ class WorkerDashboard:
 
     def _create_app(self) -> Starlette:
         """Create Starlette application with all routes."""
-        rpc_app = WorkerServiceASGIApplication(service=self._service)
+        # Use WSGI application for sync RPC handlers, wrapped for ASGI compatibility
+        rpc_wsgi_app = WorkerServiceWSGIApplication(service=self._service)
+        rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         routes = [
             # Web dashboard
@@ -252,25 +255,25 @@ class WorkerDashboard:
             Route("/api/jobs", self._list_jobs),
             Route("/api/jobs/{job_id}", self._get_job),
             Route("/api/jobs/{job_id}/logs", self._get_logs),
-            # Connect RPC
-            Mount(rpc_app.path, app=rpc_app),
+            # Connect RPC - mount WSGI app wrapped for ASGI
+            Mount(rpc_wsgi_app.path, app=rpc_app),
         ]
         return Starlette(routes=routes)
 
-    async def _dashboard(self, _request: Request) -> HTMLResponse:
+    def _dashboard(self, _request: Request) -> HTMLResponse:
         """Serve web dashboard HTML."""
         return HTMLResponse(DASHBOARD_HTML)
 
-    async def _job_detail_page(self, request: Request) -> HTMLResponse:
+    def _job_detail_page(self, request: Request) -> HTMLResponse:
         """Serve detailed job view page."""
         job_id = request.path_params["job_id"]
         return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", job_id))
 
-    async def _stats(self, _request: Request) -> JSONResponse:
+    def _stats(self, _request: Request) -> JSONResponse:
         """Return job statistics by status."""
         # Call canonical RPC method
         ctx = FakeRequestContext()
-        response = await self._service.list_jobs(cluster_pb2.ListJobsRequest(), ctx)
+        response = self._service.list_jobs(cluster_pb2.ListJobsRequest(), ctx)
         jobs = response.jobs
 
         return JSONResponse(
@@ -291,11 +294,11 @@ class WorkerDashboard:
             }
         )
 
-    async def _list_jobs(self, _request: Request) -> JSONResponse:
+    def _list_jobs(self, _request: Request) -> JSONResponse:
         """List all jobs as JSON."""
         # Call canonical RPC method
         ctx = FakeRequestContext()
-        response = await self._service.list_jobs(cluster_pb2.ListJobsRequest(), ctx)
+        response = self._service.list_jobs(cluster_pb2.ListJobsRequest(), ctx)
         jobs = response.jobs
 
         return JSONResponse(
@@ -320,14 +323,14 @@ class WorkerDashboard:
             ]
         )
 
-    async def _get_job(self, request: Request) -> JSONResponse:
+    def _get_job(self, request: Request) -> JSONResponse:
         """Get single job by ID."""
         job_id = request.path_params["job_id"]
 
         # Call canonical RPC method
         ctx = FakeRequestContext()
         try:
-            job = await self._service.get_job_status(cluster_pb2.GetStatusRequest(job_id=job_id), ctx)
+            job = self._service.get_job_status(cluster_pb2.GetStatusRequest(job_id=job_id), ctx)
         except Exception:
             # RPC raises ConnectError with NOT_FOUND for missing jobs
             return JSONResponse({"error": "Not found"}, status_code=404)
@@ -362,7 +365,7 @@ class WorkerDashboard:
             }
         )
 
-    async def _get_logs(self, request: Request) -> JSONResponse:
+    def _get_logs(self, request: Request) -> JSONResponse:
         """Get logs with optional tail and source parameters."""
         job_id = request.path_params["job_id"]
 
@@ -377,9 +380,7 @@ class WorkerDashboard:
         ctx = FakeRequestContext()
         log_filter = cluster_pb2.FetchLogsFilter(start_line=start_line)
         try:
-            response = await self._service.fetch_logs(
-                cluster_pb2.FetchLogsRequest(job_id=job_id, filter=log_filter), ctx
-            )
+            response = self._service.fetch_logs(cluster_pb2.FetchLogsRequest(job_id=job_id, filter=log_filter), ctx)
         except Exception:
             # RPC raises ConnectError with NOT_FOUND for missing jobs
             return JSONResponse({"error": "Not found"}, status_code=404)
@@ -418,7 +419,7 @@ class WorkerDashboard:
         uvicorn.run(self._app, host=self._host, port=self._port)
 
     async def run_async(self) -> None:
-        """Run server (async)."""
+        """Run server asynchronously (for use with asyncio.create_task)."""
         import uvicorn
 
         config = uvicorn.Config(self._app, host=self._host, port=self._port)
@@ -426,6 +427,6 @@ class WorkerDashboard:
         await self._server.serve()
 
     async def shutdown(self) -> None:
-        """Gracefully shutdown the server."""
-        if self._server:
+        """Shutdown the async server gracefully."""
+        if hasattr(self, "_server") and self._server:
             self._server.should_exit = True

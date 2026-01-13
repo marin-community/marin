@@ -61,10 +61,10 @@ import httpx
 from fluster import cluster_pb2
 from fluster.cluster.types import Entrypoint
 from fluster.cluster.worker.bundle import BundleCache
-from fluster.cluster.worker.builder import ImageBuilder, VenvCache
+from fluster.cluster.worker.builder import ImageCache, VenvCache
 from fluster.cluster.worker.dashboard import WorkerDashboard
+from fluster.cluster.worker.docker import DockerRuntime
 from fluster.cluster.worker.manager import JobManager, PortAllocator
-from fluster.cluster.worker.runtime import DockerRuntime
 from fluster.cluster.worker.service import WorkerServiceImpl
 from fluster.cluster_connect import WorkerServiceClient
 
@@ -133,14 +133,14 @@ class WorkerContext:
         # Initialize components
         bundle_cache = BundleCache(cache_path, max_bundles=100)
         venv_cache = VenvCache(uv_cache_path)
-        image_builder = ImageBuilder(cache_path, registry=self.registry, max_images=50)
+        image_cache = ImageCache(cache_path, registry=self.registry, max_images=50)
         runtime = DockerRuntime()
         port_allocator = PortAllocator(self.port_range)
 
         manager = JobManager(
             bundle_cache=bundle_cache,
             venv_cache=venv_cache,
-            image_builder=image_builder,
+            image_cache=image_cache,
             runtime=runtime,
             port_allocator=port_allocator,
             max_concurrent_jobs=self.max_concurrent_jobs,
@@ -266,15 +266,20 @@ class WorkerContext:
         # Create entrypoint
         entrypoint = Entrypoint(callable=fn, args=args, kwargs=kwargs)
 
+        # Build environment config with env_vars
+        env_config = cluster_pb2.EnvironmentConfig(
+            workspace="/app",
+            env_vars=env_vars or {},
+        )
+
         # Build request
         request = cluster_pb2.RunJobRequest(
             job_id=job_id or "",
             serialized_entrypoint=cloudpickle.dumps(entrypoint),
             bundle_gcs_path=self._get_workspace_bundle(),
-            environment=cluster_pb2.EnvironmentConfig(workspace="/app"),
+            environment=env_config,
             timeout_seconds=timeout_seconds or 0,
             ports=ports or [],
-            env_vars=env_vars or {},
         )
 
         response = await self._client.run_job(request)

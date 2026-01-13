@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for VenvCache and ImageBuilder."""
+"""Tests for VenvCache and ImageCache."""
 
-import asyncio
 import subprocess
 
 import pytest
 
-from fluster.cluster.worker.builder import ImageBuilder, VenvCache
+from fluster.cluster.worker.builder import ImageCache, VenvCache
 
 
 @pytest.fixture
@@ -156,7 +155,7 @@ def test_ensure_permissions(uv_cache_dir):
         pass
 
 
-# ImageBuilder Tests
+# ImageCache Tests
 
 
 @pytest.fixture
@@ -217,12 +216,11 @@ def check_docker_available():
         return False
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_image_builder_initialization(tmp_path):
-    """Test ImageBuilder initialization creates cache directory."""
+def test_image_cache_initialization(tmp_path):
+    """Test ImageCache initialization creates cache directory."""
     cache_dir = tmp_path / "cache"
-    builder = ImageBuilder(cache_dir, registry="localhost:5000", max_images=10)
+    builder = ImageCache(cache_dir, registry="localhost:5000", max_images=10)
 
     assert builder._cache_dir == cache_dir / "images"
     assert builder._registry == "localhost:5000"
@@ -230,36 +228,34 @@ async def test_image_builder_initialization(tmp_path):
     assert builder._cache_dir.exists()
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_image_exists_returns_false_for_missing_image(tmp_path):
+def test_image_exists_returns_false_for_missing_image(tmp_path):
     """Test _image_exists returns False for non-existent image."""
     if not check_docker_available():
         pytest.skip("Docker not available")
 
     cache_dir = tmp_path / "cache"
-    builder = ImageBuilder(cache_dir, registry="localhost:5000")
+    builder = ImageCache(cache_dir, registry="localhost:5000")
 
-    exists = await builder._image_exists("nonexistent:tag")
+    exists = builder._docker.exists("nonexistent:tag")
     assert exists is False
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_content_addressed_image_tags(tmp_path, docker_bundle):
-    """Test that ImageBuilder generates content-addressed image tags."""
+def test_content_addressed_image_tags(tmp_path, docker_bundle):
+    """Test that ImageCache generates content-addressed image tags."""
     if not check_docker_available():
         pytest.skip("Docker not available")
 
     cache_dir = tmp_path / "cache"
-    builder = ImageBuilder(cache_dir, registry="localhost:5000")
+    builder = ImageCache(cache_dir, registry="localhost:5000")
 
     job_id = "test-job-123"
     deps_hash = "abcdef1234567890"
     base_image = "python:3.11-slim"
 
     # Build image
-    result = await builder.build(
+    result = builder.build(
         bundle_path=docker_bundle,
         base_image=base_image,
         extras=[],
@@ -275,29 +271,28 @@ async def test_content_addressed_image_tags(tmp_path, docker_bundle):
     assert result.build_time_ms > 0
 
     # Verify image exists
-    exists = await builder._image_exists(expected_tag)
+    exists = builder._docker.exists(expected_tag)
     assert exists is True
 
     # Cleanup
-    await asyncio.create_subprocess_exec("docker", "rmi", expected_tag, stdout=subprocess.DEVNULL)
+    subprocess.run(["docker", "rmi", expected_tag], stdout=subprocess.DEVNULL, check=False)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_image_caching(tmp_path, docker_bundle):
+def test_image_caching(tmp_path, docker_bundle):
     """Test that subsequent builds with same deps_hash use cached image."""
     if not check_docker_available():
         pytest.skip("Docker not available")
 
     cache_dir = tmp_path / "cache"
-    builder = ImageBuilder(cache_dir, registry="localhost:5000")
+    builder = ImageCache(cache_dir, registry="localhost:5000")
 
     job_id = "cache-test-456"
     deps_hash = "cachedep1234567890"
     base_image = "python:3.11-slim"
 
     # First build - not from cache
-    result1 = await builder.build(
+    result1 = builder.build(
         bundle_path=docker_bundle,
         base_image=base_image,
         extras=[],
@@ -309,7 +304,7 @@ async def test_image_caching(tmp_path, docker_bundle):
     assert result1.build_time_ms > 0
 
     # Second build - should be from cache
-    result2 = await builder.build(
+    result2 = builder.build(
         bundle_path=docker_bundle,
         base_image=base_image,
         extras=[],
@@ -322,25 +317,24 @@ async def test_image_caching(tmp_path, docker_bundle):
     assert result2.image_tag == result1.image_tag
 
     # Cleanup
-    await asyncio.create_subprocess_exec("docker", "rmi", result1.image_tag, stdout=subprocess.DEVNULL)
+    subprocess.run(["docker", "rmi", result1.image_tag], stdout=subprocess.DEVNULL, check=False)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_deps_hash_change_triggers_rebuild(tmp_path, docker_bundle):
+def test_deps_hash_change_triggers_rebuild(tmp_path, docker_bundle):
     """Test that changing deps_hash triggers a rebuild."""
     if not check_docker_available():
         pytest.skip("Docker not available")
 
     cache_dir = tmp_path / "cache"
-    builder = ImageBuilder(cache_dir, registry="localhost:5000")
+    builder = ImageCache(cache_dir, registry="localhost:5000")
 
     job_id = "rebuild-test-789"
     base_image = "python:3.11-slim"
 
     # Build with first deps_hash
     deps_hash1 = "oldhash1234567890"
-    result1 = await builder.build(
+    result1 = builder.build(
         bundle_path=docker_bundle,
         base_image=base_image,
         extras=[],
@@ -354,7 +348,7 @@ async def test_deps_hash_change_triggers_rebuild(tmp_path, docker_bundle):
 
     # Build with different deps_hash - should rebuild
     deps_hash2 = "newhash0987654321"
-    result2 = await builder.build(
+    result2 = builder.build(
         bundle_path=docker_bundle,
         base_image=base_image,
         extras=[],
@@ -368,25 +362,24 @@ async def test_deps_hash_change_triggers_rebuild(tmp_path, docker_bundle):
     assert result2.image_tag != result1.image_tag
 
     # Both images should exist
-    exists1 = await builder._image_exists(expected_tag1)
-    exists2 = await builder._image_exists(expected_tag2)
+    exists1 = builder._docker.exists(expected_tag1)
+    exists2 = builder._docker.exists(expected_tag2)
     assert exists1 is True
     assert exists2 is True
 
     # Cleanup
-    await asyncio.create_subprocess_exec("docker", "rmi", expected_tag1, stdout=subprocess.DEVNULL)
-    await asyncio.create_subprocess_exec("docker", "rmi", expected_tag2, stdout=subprocess.DEVNULL)
+    subprocess.run(["docker", "rmi", expected_tag1], stdout=subprocess.DEVNULL, check=False)
+    subprocess.run(["docker", "rmi", expected_tag2], stdout=subprocess.DEVNULL, check=False)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_buildkit_cache_mounts(tmp_path, docker_bundle):
+def test_buildkit_cache_mounts(tmp_path, docker_bundle):
     """Test that BuildKit cache mounts are used for UV cache."""
     if not check_docker_available():
         pytest.skip("Docker not available")
 
     cache_dir = tmp_path / "cache"
-    builder = ImageBuilder(cache_dir, registry="localhost:5000")
+    builder = ImageCache(cache_dir, registry="localhost:5000")
 
     # Verify DOCKER_BUILDKIT is set in environment during build
     job_id = "buildkit-test-abc"
@@ -394,7 +387,7 @@ async def test_buildkit_cache_mounts(tmp_path, docker_bundle):
     base_image = "python:3.11-slim"
 
     # Build image - BuildKit should be enabled
-    result = await builder.build(
+    result = builder.build(
         bundle_path=docker_bundle,
         base_image=base_image,
         extras=[],
@@ -404,16 +397,15 @@ async def test_buildkit_cache_mounts(tmp_path, docker_bundle):
 
     # Verify image was built (BuildKit enabled by default in _docker_build)
     assert result.from_cache is False
-    exists = await builder._image_exists(result.image_tag)
+    exists = builder._docker.exists(result.image_tag)
     assert exists is True
 
     # Cleanup
-    await asyncio.create_subprocess_exec("docker", "rmi", result.image_tag, stdout=subprocess.DEVNULL)
+    subprocess.run(["docker", "rmi", result.image_tag], stdout=subprocess.DEVNULL, check=False)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_image_build_with_extras(tmp_path):
+def test_image_build_with_extras(tmp_path):
     """Test building image with extras."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -457,10 +449,10 @@ packages = ["src/test_app"]
         pytest.skip("uv not available or failed to create lock file")
 
     cache_dir = tmp_path / "cache"
-    builder = ImageBuilder(cache_dir, registry="localhost:5000")
+    builder = ImageCache(cache_dir, registry="localhost:5000")
 
     # Build with extras
-    result = await builder.build(
+    result = builder.build(
         bundle_path=bundle_dir,
         base_image="python:3.11-slim",
         extras=["dev", "test"],
@@ -471,25 +463,26 @@ packages = ["src/test_app"]
     assert result.from_cache is False
 
     # Cleanup
-    await asyncio.create_subprocess_exec("docker", "rmi", result.image_tag, stdout=subprocess.DEVNULL)
+    subprocess.run(["docker", "rmi", result.image_tag], stdout=subprocess.DEVNULL, check=False)
 
 
-@pytest.mark.asyncio
 @pytest.mark.slow
-async def test_lru_eviction_of_images(tmp_path, docker_bundle):
+def test_lru_eviction_of_images(tmp_path, docker_bundle):
     """Test LRU eviction removes old images when over limit."""
+    import time
+
     if not check_docker_available():
         pytest.skip("Docker not available")
 
     cache_dir = tmp_path / "cache"
-    builder = ImageBuilder(cache_dir, registry="localhost:5000", max_images=2)
+    builder = ImageCache(cache_dir, registry="localhost:5000", max_images=2)
 
     base_image = "python:3.11-slim"
     images_built = []
 
     # Build 3 images to trigger eviction
     for i in range(3):
-        result = await builder.build(
+        result = builder.build(
             bundle_path=docker_bundle,
             base_image=base_image,
             extras=[],
@@ -499,27 +492,24 @@ async def test_lru_eviction_of_images(tmp_path, docker_bundle):
         images_built.append(result.image_tag)
 
         # Small delay to ensure different creation times
-        await asyncio.sleep(0.1)
+        time.sleep(0.1)
 
     # After building 3 images with max_images=2, oldest should be evicted
     # Note: _evict_old_images is called after each build, but only when count > max_images
 
     # At least the newest image should exist
-    exists_2 = await builder._image_exists(images_built[2])
+    exists_2 = builder._docker.exists(images_built[2])
     assert exists_2 is True
 
     # Cleanup remaining images
     for tag in images_built:
         try:
-            await asyncio.create_subprocess_exec(
-                "docker", "rmi", tag, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
+            subprocess.run(["docker", "rmi", tag], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         except Exception:
             pass  # Image may already be evicted
 
 
-@pytest.mark.asyncio
-async def test_dockerfile_template_formatting():
+def test_dockerfile_template_formatting():
     """Test that Dockerfile template is formatted correctly."""
     from fluster.cluster.worker.builder import DOCKERFILE_TEMPLATE
 
