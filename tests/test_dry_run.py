@@ -37,6 +37,8 @@ os.environ["RAY_LOCAL_CLUSTER"] = "1"
 def test_run_dry_runs(config_file, monkeypatch):
     """Test the dry runs of experiment scripts"""
     script = config_file
+    monkeypatch.setenv("WANDB_MODE", "disabled")
+    monkeypatch.setenv("WANDB_API_KEY", "")
     # first get this script path
     # Check if the script contains the skip marker
     with open(script, "r") as file:
