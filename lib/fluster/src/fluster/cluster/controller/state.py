@@ -223,6 +223,15 @@ class ControllerState:
         with self._lock:
             return [w for w in self._workers.values() if w.healthy]
 
+    def list_all_jobs(self) -> list[ControllerJob]:
+        """Get all jobs in the controller.
+
+        Returns:
+            List of all jobs (snapshot under lock)
+        """
+        with self._lock:
+            return list(self._jobs.values())
+
     def get_gang_jobs(self, gang_id: str) -> list[ControllerJob]:
         """Get all jobs in a gang.
 
