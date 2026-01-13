@@ -24,9 +24,9 @@ Wire-format types (ResourceSpec, JobStatus, etc.) are defined in cluster.proto.
 """
 
 import os
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, NewType
-from collections.abc import Callable, Sequence
 
 from fluster import cluster_pb2
 
@@ -47,11 +47,7 @@ def is_job_finished(state: int) -> bool:
     )
 
 
-# Re-export proto enum for convenience
 JobState = cluster_pb2.JobState
-
-
-# TPU Topology Information
 
 
 @dataclass(frozen=True)
