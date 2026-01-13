@@ -12,19 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Docker container runtime and image builder implementations.
-
-This module consolidates all Docker-specific code behind Protocol interfaces,
-enabling future replacement with alternative runtimes (e.g., Firecracker, Podman).
-
-Protocols:
-    ContainerRuntime: Interface for container lifecycle operations
-    ImageBuilder: Interface for image building operations
-
-Implementations:
-    DockerRuntime: Docker CLI-based container runtime with cgroups v2 resource limits
-    DockerImageBuilder: Docker BuildKit-based image builder
-"""
+"""Docker container runtime and image builder implementations."""
 
 import json
 import os
@@ -35,15 +23,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
-import docker
 import docker.errors
 
+import docker
 from fluster import cluster_pb2
 from fluster.cluster.worker.worker_types import JobLogs, LogLine
-
-# =============================================================================
-# Data Classes
-# =============================================================================
 
 
 @dataclass
@@ -145,17 +129,7 @@ class ImageInfo:
 
 
 class ContainerRuntime(Protocol):
-    """Protocol for container runtimes (Docker, Firecracker, Podman, etc.).
-
-    Implementations must provide synchronous methods for the complete container lifecycle:
-    - create_container(): Create container with configuration
-    - start_container(): Start a created container (non-blocking)
-    - inspect(): Check container status (running/exited/exit_code)
-    - kill(): Terminate running container
-    - remove(): Clean up stopped container
-    - get_logs(): Retrieve stdout/stderr
-    - get_stats(): Collect resource usage metrics
-    """
+    """Protocol for container runtimes (Docker, Firecracker, Podman, etc.)."""
 
     def create_container(self, config: ContainerConfig) -> str:
         """Create container and return container_id."""
@@ -187,14 +161,7 @@ class ContainerRuntime(Protocol):
 
 
 class ImageBuilder(Protocol):
-    """Protocol for image building (Docker build, rootfs creation, etc.).
-
-    Implementations must provide synchronous methods for image lifecycle:
-    - build(): Build image from Dockerfile/context
-    - exists(): Check if image exists locally
-    - remove(): Delete image
-    - list_images(): List images matching pattern
-    """
+    """Protocol for image building (Docker build, rootfs creation, etc.)."""
 
     def build(
         self,
@@ -219,11 +186,6 @@ class ImageBuilder(Protocol):
         ...
 
 
-# =============================================================================
-# Docker Runtime Implementation
-# =============================================================================
-
-
 class DockerRuntime:
     """Execute containers via Docker CLI with cgroups v2 resource limits.
 
@@ -236,14 +198,7 @@ class DockerRuntime:
     """
 
     def create_container(self, config: ContainerConfig) -> str:
-        """Create container with cgroups v2 resource limits.
-
-        Args:
-            config: Container configuration
-
-        Returns:
-            Container ID
-        """
+        """Create container with cgroups v2 resource limits."""
         cmd = [
             "docker",
             "create",
@@ -290,11 +245,7 @@ class DockerRuntime:
         return result.stdout.strip()
 
     def start_container(self, container_id: str) -> None:
-        """Start a created container (non-blocking).
-
-        Args:
-            container_id: Container ID to start
-        """
+        """Start a created container (non-blocking)."""
         result = subprocess.run(
             ["docker", "start", container_id],
             capture_output=True,
@@ -305,14 +256,7 @@ class DockerRuntime:
             raise RuntimeError(f"Failed to start container: {result.stderr}")
 
     def inspect(self, container_id: str) -> ContainerStatus:
-        """Check container status via docker inspect.
-
-        Args:
-            container_id: Container ID to inspect
-
-        Returns:
-            ContainerStatus with running state and exit code
-        """
+        """Check container status via docker inspect."""
         result = subprocess.run(
             [
                 "docker",
@@ -361,11 +305,7 @@ class DockerRuntime:
             raise RuntimeError(f"Failed to kill container: {result.stderr}")
 
     def remove(self, container_id: str) -> None:
-        """Remove container.
-
-        Args:
-            container_id: Container ID to remove
-        """
+        """Remove container."""
         result = subprocess.run(
             ["docker", "rm", "-f", container_id],
             capture_output=True,
@@ -376,10 +316,7 @@ class DockerRuntime:
             raise RuntimeError(f"Failed to remove container: {result.stderr}")
 
     def get_logs(self, container_id: str) -> list[LogLine]:
-        """Fetch logs from container using docker library.
-
-        Returns list of LogLine with proper timestamps from Docker.
-        """
+        """Fetch logs from container."""
         client = docker.from_env()  # type: ignore[attr-defined]
         try:
             container = client.containers.get(container_id)
@@ -405,10 +342,7 @@ class DockerRuntime:
         return logs
 
     def _parse_docker_log_line(self, line: str) -> tuple[datetime, str]:
-        """Parse Docker log line with timestamp.
-
-        Docker format: 2024-01-12T10:30:45.123456789Z message
-        """
+        """Parse Docker log line with timestamp."""
         if len(line) > 30 and line[10] == "T":
             z_idx = line.find("Z")
             if 20 < z_idx < 35:
@@ -424,16 +358,7 @@ class DockerRuntime:
         return datetime.now(timezone.utc), line
 
     def get_stats(self, container_id: str) -> ContainerStats:
-        """Collect resource usage from Docker container.
-
-        Uses container.stats(decode=True, stream=False) for single snapshot.
-
-        Args:
-            container_id: Container ID to get stats for
-
-        Returns:
-            ContainerStats with current resource usage
-        """
+        """Collect resource usage from a Docker container."""
         client = docker.from_env()  # type: ignore[attr-defined]
         try:
             container = client.containers.get(container_id)
@@ -487,16 +412,8 @@ def _calculate_cpu_percent(stats: dict) -> int:
     return int(cpu_percent)
 
 
-# =============================================================================
-# Docker Image Builder Implementation
-# =============================================================================
-
-
 class DockerImageBuilder:
-    """Build Docker images using Docker CLI with BuildKit.
-
-    Uses subprocess.run() for synchronous build operations with streaming output.
-    """
+    """Build Docker images using Docker CLI with BuildKit."""
 
     def __init__(self, registry: str):
         self._registry = registry

@@ -14,12 +14,13 @@
 
 """Bundle cache for workspace bundles from GCS."""
 
-import fsspec
 import hashlib
-import zipfile
-from pathlib import Path
 import threading
+import zipfile
 from collections import defaultdict
+from pathlib import Path
+
+import fsspec
 
 
 class BundleCache:
@@ -74,26 +75,26 @@ class BundleCache:
             # Download and extract
             zip_path = self._bundles_dir / f"{key}.zip"
             if not zip_path.exists():
-                self._download_sync(gcs_path, zip_path)
+                self._download(gcs_path, zip_path)
 
             if expected_hash:
-                actual_hash = self._compute_hash_sync(zip_path)
+                actual_hash = self._compute_hash(zip_path)
                 if actual_hash != expected_hash:
                     raise ValueError(f"Bundle hash mismatch: {actual_hash} != {expected_hash}")
 
-            self._extract_sync(zip_path, extract_path)
+            self._extract(zip_path, extract_path)
             self._evict_old_bundles()
 
             return extract_path
 
-    def _download_sync(self, gcs_path: str, local_path: Path) -> None:
+    def _download(self, gcs_path: str, local_path: Path) -> None:
         """Synchronous download implementation."""
         # fsspec handles gs://, file://, and other protocols
         with fsspec.open(gcs_path, "rb") as src:
             with open(local_path, "wb") as dst:
                 dst.write(src.read())
 
-    def _extract_sync(self, zip_path: Path, extract_path: Path) -> None:
+    def _extract(self, zip_path: Path, extract_path: Path) -> None:
         """Synchronous extraction implementation with zip slip protection."""
         extract_path.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(zip_path, "r") as zf:
@@ -104,7 +105,7 @@ class BundleCache:
                     raise ValueError(f"Zip slip detected: {member} attempts to write outside extract path")
             zf.extractall(extract_path)
 
-    def _compute_hash_sync(self, path: Path) -> str:
+    def _compute_hash(self, path: Path) -> str:
         """Synchronous hash computation implementation."""
         h = hashlib.sha256()
         with open(path, "rb") as f:
