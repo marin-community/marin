@@ -32,6 +32,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
+import click
 import cloudpickle
 import httpx
 import uvicorn
@@ -63,7 +64,7 @@ MINIMAL_PYPROJECT = """\
 name = "fluster-example"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["cloudpickle"]
 """
 
 
@@ -526,6 +527,10 @@ def example_basic(cluster: ClusterContext):
 
     status = cluster.wait(job_id)
     print(f"Completed with state: {status['state']}")
+    if status.get("error"):
+        print(f"Error: {status['error']}")
+    if status.get("exitCode"):
+        print(f"Exit code: {status['exitCode']}")
 
     logs = cluster.logs(job_id)
     if logs:
@@ -618,7 +623,11 @@ def example_kill(cluster: ClusterContext):
     print(f"Final state: {status['state']}")
 
 
-def main():
+@click.command()
+@click.option(
+    "--wait/--no-wait", default=False, help="Wait for Ctrl+C after examples complete (for dashboard exploration)"
+)
+def main(wait: bool):
     """Run all examples with a single shared cluster."""
     print("=" * 60)
     print("Fluster Cluster Example")
@@ -629,7 +638,8 @@ def main():
         with ClusterContext(max_concurrent_jobs=3) as cluster:
             print(f"\nController dashboard: {cluster.controller_url}", flush=True)
             print(f"Worker dashboard: {cluster.worker_url}", flush=True)
-            print("\nPress Ctrl+C to stop.\n", flush=True)
+            if wait:
+                print("\nPress Ctrl+C to stop.\n", flush=True)
 
             print("About to run examples...", flush=True)
             try:
@@ -666,13 +676,13 @@ def main():
 
             print("\n" + "=" * 60)
             print("All examples completed!")
-            print("Dashboards still available for exploration.")
-            print("Press Ctrl+C to stop.")
             print("=" * 60)
 
-            # Keep alive for dashboard exploration
-            while True:
-                time.sleep(1)
+            if wait:
+                print("Dashboards still available for exploration.")
+                print("Press Ctrl+C to stop.")
+                while True:
+                    time.sleep(1)
 
     except KeyboardInterrupt:
         print("\nShutting down...")

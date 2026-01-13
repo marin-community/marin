@@ -69,7 +69,7 @@ DASHBOARD_HTML = """
   <div id="stats"></div>
   <h2>Jobs</h2>
   <table id="jobs">
-    <tr><th>ID</th><th>Status</th><th>Memory</th><th>CPU</th><th>Started</th><th>Finished</th><th>Error</th></tr>
+    <tr><th>ID</th><th>Status</th><th>Exit</th><th>Memory</th><th>CPU</th><th>Started</th><th>Finished</th><th>Error</th></tr>
   </table>
   <script>
     async function refresh() {
@@ -82,9 +82,11 @@ DASHBOARD_HTML = """
       const tbody = jobs.map(j => {
         const started = j.started_at ? new Date(j.started_at).toLocaleString() : '-';
         const finished = j.finished_at ? new Date(j.finished_at).toLocaleString() : '-';
+        const exitCode = j.exit_code !== null && j.exit_code !== undefined ? j.exit_code : '-';
         return `<tr>
           <td><a href="/job/${j.job_id}" class="job-link" target="_blank">${j.job_id.slice(0, 8)}...</a></td>
           <td class="status-${j.status}">${j.status}</td>
+          <td>${exitCode}</td>
           <td>${j.memory_mb || 0}/${j.memory_peak_mb || 0} MB</td>
           <td>${j.cpu_percent || 0}%</td>
           <td>${started}</td>
@@ -93,7 +95,7 @@ DASHBOARD_HTML = """
         </tr>`;
       }).join('');
       document.getElementById('jobs').innerHTML =
-        '<tr><th>ID</th><th>Status</th><th>Memory</th><th>CPU</th><th>Started</th><th>Finished</th><th>Error</th></tr>' + tbody;
+        '<tr><th>ID</th><th>Status</th><th>Exit</th><th>Memory</th><th>CPU</th><th>Started</th><th>Finished</th><th>Error</th></tr>' + tbody;
     }
     refresh();
     setInterval(refresh, 5000);
@@ -308,6 +310,7 @@ class WorkerDashboard:
                     "status": self._status_name(j.state),
                     "started_at": j.started_at_ms,
                     "finished_at": j.finished_at_ms,
+                    "exit_code": j.exit_code,
                     "error": j.error,
                     # Add resource metrics
                     "memory_mb": j.resource_usage.memory_mb,

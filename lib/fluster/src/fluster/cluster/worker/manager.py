@@ -178,9 +178,17 @@ class JobManager:
 
             job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="populating uv cache")
             job.logs.add("build", "Building Docker image...")
+
+            # Detect host Python version for container compatibility
+            # cloudpickle serializes bytecode which is version-specific
+            import sys
+
+            py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            base_image = f"python:{py_version}-slim"
+
             build_result = self._image_cache.build(
                 bundle_path=bundle_path,
-                base_image="python:3.11-slim",
+                base_image=base_image,
                 extras=extras,
                 job_id=job.job_id,
                 deps_hash=deps_hash,
@@ -297,14 +305,19 @@ class JobManager:
                     shutil.rmtree(job.workdir, ignore_errors=True)
 
     def _build_command(self, entrypoint) -> list[str]:
-        """Build command to run entrypoint."""
-        # Serialize entrypoint and run via python -c
-        serialized = cloudpickle.dumps(entrypoint)
+        """Build command to run entrypoint.
+
+        Serializes only the raw callable/args/kwargs tuple rather than the Entrypoint
+        dataclass to avoid requiring fluster.cluster.types in the container.
+        """
+        # Extract raw components to avoid serializing the Entrypoint class itself
+        data = (entrypoint.callable, entrypoint.args, entrypoint.kwargs)
+        serialized = cloudpickle.dumps(data)
         encoded = base64.b64encode(serialized).decode()
         cmd = (
             "import cloudpickle, base64; "
-            f"e = cloudpickle.loads(base64.b64decode('{encoded}')); "
-            "e.callable(*e.args, **e.kwargs)"
+            f"fn, args, kwargs = cloudpickle.loads(base64.b64decode('{encoded}')); "
+            "fn(*args, **kwargs)"
         )
         return ["python", "-c", cmd]
 
