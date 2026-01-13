@@ -288,6 +288,11 @@ class Marin2025Recipe:
 
     def _build_model_config_from_hidden_size(self, hidden_size: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
         """Build model config from hidden_size directly."""
+        if hidden_size % self.hidden_head_ratio != 0:
+            raise ValueError(
+                f"hidden_size ({hidden_size}) must be divisible by hidden_head_ratio ({self.hidden_head_ratio}). "
+                f"Got remainder {hidden_size % self.hidden_head_ratio}."
+            )
         num_layers = self.compute_num_layers(hidden_size)
         intermediate_dim = hidden_size * self.mlp_ratio
         n_heads = max(1, hidden_size // self.hidden_head_ratio)
