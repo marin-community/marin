@@ -156,23 +156,23 @@ class IsoFlopSweepParams:
 # Predefined compute range configurations
 ISOFLOP_SWEEPS = {
     # low-compute: 1.6e17 to 2e18, steps=16_384 (v2.12)
-    "low": IsoFlopSweepParams(
-        experiment_name="text_isoflop_v2.12",
-        compute_range_name="low",
-        budgets=list(np.logspace(np.log10(1.6e17), np.log10(2e18), 5)),
-        steps_per_run=16_384,
-        hidden_step_size=128,
-    ),
-    # # mid-compute: 3.2e17 to 4e18, steps=32_768 (v2.11)
-    # "mid": IsoFlopSweepParams(
-    #     experiment_name="text_isoflop_v2.11",
-    #     compute_range_name="mid",
-    #     budgets=list(np.logspace(np.log10(3.2e17), np.log10(4e18), 5)),
-    #     steps_per_run=32_768,
+    # "low": IsoFlopSweepParams(
+    #     experiment_name="plantcad_isoflop_v2.12",
+    #     compute_range_name="low",
+    #     budgets=list(np.logspace(np.log10(1.6e17), np.log10(2e18), 5)),
+    #     steps_per_run=16_384,
+    #     hidden_step_size=128,
     # ),
+    # # mid-compute: 3.2e17 to 4e18, steps=32_768 (v2.13)
+    "mid": IsoFlopSweepParams(
+        experiment_name="plantcad_isoflop_v2.13",
+        compute_range_name="mid",
+        budgets=list(np.logspace(np.log10(3.2e17), np.log10(4e18), 5)),
+        steps_per_run=32_768,
+    ),
     # # high-compute: 6.4e17 to 8e18, steps=65_536 (v2.9)
     # "high": IsoFlopSweepParams(
-    #     experiment_name="text_isoflop_v2.9",
+    #     experiment_name="plantcad_isoflop_v2.9",
     #     compute_range_name="high",
     #     # i in [0, 1, 4]
     #     budgets=list(np.logspace(np.log10(6.4e17), np.log10(8e18), 5)),

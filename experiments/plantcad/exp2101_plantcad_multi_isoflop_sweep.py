@@ -365,9 +365,9 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
             hs_pow = math.log2(hidden_size)
             intermediate_dim = hidden_size * cfg.mlp_ratio
             num_layers = round(hidden_size / (cfg.base_hidden_layer_ratio + (hs_pow * 4) - cfg.min_hidden_pow))
-            # assert hidden_size % cfg.hidden_head_ratio == 0, (
-            #     f"hidden_size ({hidden_size}) must be evenly divisible by hidden_head_ratio ({cfg.hidden_head_ratio})"
-            # )
+            assert (
+                hidden_size % cfg.hidden_head_ratio == 0
+            ), f"hidden_size ({hidden_size}) must be evenly divisible by hidden_head_ratio ({cfg.hidden_head_ratio})"
             n_heads = max(1, hidden_size // cfg.hidden_head_ratio)
             n_kv_heads = n_heads
 
