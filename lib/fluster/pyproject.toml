@@ -13,6 +13,7 @@ dependencies = [
     "uvicorn[standard]>=0.23.0",
     "docker>=7.0.0",
     "fsspec>=2024.0.0",
+    "aiohttp>=3.8.0",
     "connect-python @ git+https://github.com/connectrpc/connect-python.git@5342eacecef85e52717604ee5ac7e03a1e16c7ac",
 ]
 
