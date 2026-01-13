@@ -615,7 +615,8 @@ def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: st
     # Auto-restore from checkpoint if path provided
     if checkpoint_path:
         try:
-            actor.restore_checkpoint.call(checkpoint_path)
+            future = actor.restore_checkpoint.remote(checkpoint_path)
+            job_ctx.get(future)
         except Exception as e:
             logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")
 

@@ -45,6 +45,7 @@ from transformers import PreTrainedTokenizer
 from typing import Literal
 
 from levanter.utils.mesh import MeshConfig
+from fray.job import get_default_job_ctx
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
@@ -599,9 +600,10 @@ class RolloutWorker:
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, step, metrics)
         # only update curriculum for full evals
         if eval_type == "eval":
-            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
+            future = self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
                 stats.rollout_stats, mode="eval", current_step=step
             )
+            get_default_job_ctx().get(future)
         return stats
 
     def _evaluate_curriculum(self, rng, step: int) -> dict:
@@ -666,7 +668,8 @@ class RolloutWorker:
                 seed = py_rng.randint(0, 2**31 - 1)
 
             try:
-                lesson_id = self._curriculum_actor.sample_lesson.call(seed)
+                future = self._curriculum_actor.sample_lesson.remote(seed)
+                lesson_id = get_default_job_ctx().get(future)
             except Exception as e:
                 logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
                 time.sleep(10.0)
@@ -736,9 +739,10 @@ class RolloutWorker:
             self._rollout_writer.write_batch(rollout_batch)
 
             stats = _compute_batch_stats(rollout_batch, lesson_id)
-            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
+            future = self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
                 stats.rollout_stats, mode="training", current_step=step
             )
+            get_default_job_ctx().get(future)
             eval_metrics = self._build_eval_metrics(
                 prefix="rollout",
                 lesson_id=lesson_id,
