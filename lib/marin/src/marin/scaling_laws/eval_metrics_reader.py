@@ -14,15 +14,14 @@
 
 """Base infrastructure for eval metrics analysis.
 
-This module provides a config and utilities for analysis jobs that
-read tracker_metrics.jsonl files from completed training runs.
+This module provides utilities for analysis jobs that read tracker_metrics.jsonl
+files from completed training runs.
 """
 
 import json
 import logging
 import os
 from collections.abc import Sequence
-from typing import Protocol
 
 import fsspec
 import wandb
@@ -86,39 +85,28 @@ def _backfill_metrics_from_wandb(
         return False
 
 
-@dataclass(frozen=True)
-class EvalMetricsAnalysisConfig:
-    """Config for analyses that read eval metrics from training runs.
-
-    The training_runs field creates blocking dependencies on the training jobs.
-    """
-
-    training_runs: Sequence[str]
-    """List of training run output paths (executor resolves InputName to str at runtime)."""
-
-    metrics_filename: str = "tracker_metrics.jsonl"
-    """Name of the metrics file within each checkpoint directory."""
-
-    wandb_entity_project: str = f"{WANDB_ENTITY}/{WANDB_PROJECT}"
-    """WandB entity/project to query for backfill (format: 'entity/project')."""
-
-
-def read_raw_records(config: EvalMetricsAnalysisConfig) -> list[dict]:
+def read_raw_records(
+    training_runs: Sequence[str],
+    metrics_filename: str = "tracker_metrics.jsonl",
+    wandb_entity_project: str = f"{WANDB_ENTITY}/{WANDB_PROJECT}",
+) -> list[dict]:
     """Read raw eval metrics from training runs.
 
     This is the shared utility that all analysis subtypes use to load metrics.
     It handles reading JSONL files and WandB backfill when files are missing.
 
     Args:
-        config: Analysis config with training_runs and backfill settings
+        training_runs: List of training run output paths.
+        metrics_filename: Name of the metrics file within each checkpoint directory.
+        wandb_entity_project: WandB entity/project to query for backfill (format: 'entity/project').
 
     Returns:
         List of raw records, each containing config, summary, run_index, and run_path.
     """
     all_records = []
 
-    for i, run_path in enumerate(config.training_runs):
-        metrics_file = os.path.join(run_path, config.metrics_filename)
+    for i, run_path in enumerate(training_runs):
+        metrics_file = os.path.join(run_path, metrics_filename)
 
         fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
 
@@ -128,7 +116,7 @@ def read_raw_records(config: EvalMetricsAnalysisConfig) -> list[dict]:
             success = _backfill_metrics_from_wandb(
                 checkpoint_path=run_path,
                 metrics_file=metrics_file,
-                entity_project=config.wandb_entity_project,
+                entity_project=wandb_entity_project,
             )
             if not success:
                 raise RuntimeError(
@@ -149,5 +137,5 @@ def read_raw_records(config: EvalMetricsAnalysisConfig) -> list[dict]:
     if not all_records:
         logger.warning("No eval metrics found in any training runs")
 
-    logger.info(f"Loaded {len(all_records)} evaluation records from {len(config.training_runs)} runs")
+    logger.info(f"Loaded {len(all_records)} evaluation records from {len(training_runs)} runs")
     return all_records
