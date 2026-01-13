@@ -94,9 +94,7 @@ class PrimeIntellectEnv(MarinEnv):
         prng_key,
         mode: str = "train",
         max_tokens: int | None = None,
-        top_k: int | None = None,
         stop: list[str] | None = None,
-        system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample problems and generate responses using the model."""
         self._ensure_verifiers_installed()
@@ -114,7 +112,6 @@ class PrimeIntellectEnv(MarinEnv):
         sampling_args = {
             "max_tokens": max_tokens or self.max_tokens,
             "temperature": temperature,
-            "top_k": top_k,
             "logprobs": True,
             "stop": stop,
             # Note: return_tokens_as_token_ids is not supported by current vLLM version
@@ -188,9 +185,6 @@ class PrimeIntellectEnv(MarinEnv):
                     response_logprobs=response_logprobs,
                     token_rewards=token_rewards,
                     episode_reward=float(reward),
-                    temperature=temperature,
-                    top_k=top_k,
-                    is_truncated=False,  # prime intellect doesn't seem to report this easily
                 )
                 rollouts.append(rollout)
 
