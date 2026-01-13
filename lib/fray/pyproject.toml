@@ -19,7 +19,6 @@ dependencies = [
     "httpx>=0.28.1",
     "fastapi>=0.100.0",
     "uvicorn[standard]>=0.23.0",
-    "connect-python @ git+https://github.com/connectrpc/connect-python.git@5342eacecef85e52717604ee5ac7e03a1e16c7ac",
 ]
 
 [project.scripts]
@@ -33,16 +32,12 @@ fray_test = [
     "numpy",
     "pip", # ray requires pip to be installed
     "pytest-timeout",
-    "pytest-asyncio",
     "pytest>=8.3.2",
-    "ray[default]",
+    "ray[default]"
 ]
 fray_tpu_test = ["jax[tpu]", { include-group = "fray_test" }]
 
 dev = [{ include-group = "fray_test" }]
-
-[tool.hatch.metadata]
-allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fray"]

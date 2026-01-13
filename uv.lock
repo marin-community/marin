@@ -1227,7 +1227,6 @@ source = { editable = "lib/fray" }
 dependencies = [
     { name = "click" },
     { name = "cloudpickle" },
-    { name = "connect-python" },
     { name = "fastapi" },
     { name = "flask" },
     { name = "fsspec" },
@@ -1250,7 +1249,6 @@ dev = [
     { name = "numpy" },
     { name = "pip" },
     { name = "pytest" },
-    { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "ray", extra = ["default"] },
 ]
@@ -1258,7 +1256,6 @@ fray-test = [
     { name = "numpy" },
     { name = "pip" },
     { name = "pytest" },
-    { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "ray", extra = ["default"] },
 ]
@@ -1267,7 +1264,6 @@ fray-tpu-test = [
     { name = "numpy" },
     { name = "pip" },
     { name = "pytest" },
-    { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "ray", extra = ["default"] },
 ]
@@ -1276,7 +1272,6 @@ fray-tpu-test = [
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "cloudpickle", specifier = ">=3.1.2" },
-    { name = "connect-python", git = "https://github.com/connectrpc/connect-python.git?rev=5342eacecef85e52717604ee5ac7e03a1e16c7ac" },
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "flask" },
     { name = "fsspec", specifier = ">=2024.0.0" },
@@ -1296,7 +1291,6 @@ dev = [
     { name = "numpy" },
     { name = "pip" },
     { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "ray", extras = ["default"] },
 ]
@@ -1304,7 +1298,6 @@ fray-test = [
     { name = "numpy" },
     { name = "pip" },
     { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "ray", extras = ["default"] },
 ]
@@ -1313,7 +1306,6 @@ fray-tpu-test = [
     { name = "numpy" },
     { name = "pip" },
     { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "ray", extras = ["default"] },
 ]
