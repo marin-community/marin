@@ -19,7 +19,7 @@ import traceback
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
+from marin.evaluation.evaluators.vllm_evaluator import BaseVllmEvaluator
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
 from fray.cluster.ray.deps import build_runtime_env_for_packages
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 # TODO: Multiple choice tasks currently don't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
-class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
+class LMEvaluationHarnessEvaluator(BaseVllmEvaluator):
     """
     Evaluator that runs lm-eval: https://github.com/EleutherAI/lm-evaluation-harness
     """

@@ -19,7 +19,7 @@ from typing import ClassVar
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
+from marin.evaluation.evaluators.vllm_evaluator import BaseVllmEvaluator
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ class TestPlan:
     temperature: float = 0
 
 
-class SimpleEvaluator(VllmTpuEvaluator):
+class SimpleEvaluator(BaseVllmEvaluator):
     """
     A simple evaluator for testing purposes.
     Runs inference with a given model on some prompts and computes the total inference time.

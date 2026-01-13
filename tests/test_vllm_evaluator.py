@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
+from marin.evaluation.evaluators.vllm_evaluator import BaseVllmEvaluator
 
 
 def test_model_config_destroy_removes_downloaded_dir(tmp_path: Path) -> None:
@@ -39,7 +39,7 @@ def test_vllm_auto_enables_streaming_for_gcs_paths() -> None:
         engine_kwargs={},
     )
 
-    model_name_or_path, model = VllmTpuEvaluator.resolve_model_name_or_path(model)
+    model_name_or_path, model = BaseVllmEvaluator.resolve_model_name_or_path(model)
 
     assert model.engine_kwargs["load_format"] == "runai_streamer"
     assert model_name_or_path == "gs://bucket/some-model"
