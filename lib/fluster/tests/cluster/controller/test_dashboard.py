@@ -12,21 +12,49 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for controller dashboard."""
+"""Tests for controller dashboard with Starlette TestClient."""
+
+from unittest.mock import Mock
 
 import pytest
-from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
+from starlette.testclient import TestClient
 
 from fluster import cluster_pb2
-from fluster.cluster.controller.dashboard import create_dashboard_app
+from fluster.cluster.controller.dashboard import ControllerDashboard
+from fluster.cluster.controller.scheduler import Scheduler
+from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
 from fluster.cluster.types import JobId, WorkerId
 
 
 @pytest.fixture
-def make_job_request():
-    """Create a minimal LaunchJobRequest for testing."""
+def state():
+    return ControllerState()
 
+
+@pytest.fixture
+def scheduler(state):
+    mock_dispatch = Mock(return_value=True)
+    return Scheduler(state, mock_dispatch)
+
+
+@pytest.fixture
+def service(state, scheduler):
+    return ControllerServiceImpl(state, scheduler)
+
+
+@pytest.fixture
+def dashboard(service):
+    return ControllerDashboard(service)
+
+
+@pytest.fixture
+def client(dashboard):
+    return TestClient(dashboard._app)
+
+
+@pytest.fixture
+def make_job_request():
     def _make(name: str = "test-job") -> cluster_pb2.LaunchJobRequest:
         return cluster_pb2.LaunchJobRequest(
             name=name,
@@ -40,260 +68,277 @@ def make_job_request():
 
 @pytest.fixture
 def make_resource_spec():
-    """Create a minimal ResourceSpec for testing."""
-
     def _make() -> cluster_pb2.ResourceSpec:
         return cluster_pb2.ResourceSpec(cpu=1, memory="1g", disk="10g")
 
     return _make
 
 
-class TestDashboard(AioHTTPTestCase):
-    """Test suite for dashboard endpoints using aiohttp test utilities."""
+def test_dashboard_returns_html(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Fluster Controller Dashboard" in response.text
 
-    async def get_application(self):
-        """Create test application with prepopulated state."""
-        self.state = ControllerState()
 
-        # Add some workers
-        worker1 = ControllerWorker(
+def test_health_endpoint(client):
+    response = client.get("/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert "workers" in data
+    assert "healthy_workers" in data
+    assert "jobs" in data
+
+
+def test_api_stats_empty(client):
+    response = client.get("/api/stats")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["jobs_pending"] == 0
+    assert data["jobs_running"] == 0
+    assert data["jobs_completed"] == 0
+    assert data["workers_healthy"] == 0
+    assert data["workers_total"] == 0
+
+
+def test_api_stats_with_data(client, state, make_job_request, make_resource_spec):
+    # Add workers
+    state.add_worker(
+        ControllerWorker(
             worker_id=WorkerId("w1"),
             address="host1:8080",
-            resources=cluster_pb2.ResourceSpec(cpu=4, memory="16g", disk="100g"),
+            resources=make_resource_spec(),
             healthy=True,
         )
-        worker2 = ControllerWorker(
+    )
+    state.add_worker(
+        ControllerWorker(
             worker_id=WorkerId("w2"),
             address="host2:8080",
-            resources=cluster_pb2.ResourceSpec(cpu=4, memory="16g", disk="100g"),
+            resources=make_resource_spec(),
             healthy=False,
         )
-        self.state.add_worker(worker1)
-        self.state.add_worker(worker2)
+    )
 
-        # Add some jobs
-        job1 = ControllerJob(
+    # Add jobs in various states
+    state.add_job(
+        ControllerJob(
             job_id=JobId("j1"),
-            request=cluster_pb2.LaunchJobRequest(
-                name="job1",
-                serialized_entrypoint=b"test",
-                resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
-                environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
-            ),
+            request=make_job_request("job1"),
+            state=cluster_pb2.JOB_STATE_PENDING,
+        )
+    )
+    state.add_job(
+        ControllerJob(
+            job_id=JobId("j2"),
+            request=make_job_request("job2"),
+            state=cluster_pb2.JOB_STATE_RUNNING,
+        )
+    )
+    state.add_job(
+        ControllerJob(
+            job_id=JobId("j3"),
+            request=make_job_request("job3"),
+            state=cluster_pb2.JOB_STATE_SUCCEEDED,
+        )
+    )
+    state.add_job(
+        ControllerJob(
+            job_id=JobId("j4"),
+            request=make_job_request("job4"),
+            state=cluster_pb2.JOB_STATE_FAILED,
+        )
+    )
+
+    response = client.get("/api/stats")
+    data = response.json()
+    assert data["jobs_pending"] == 1
+    assert data["jobs_running"] == 1
+    assert data["jobs_completed"] == 2
+    assert data["workers_healthy"] == 1
+    assert data["workers_total"] == 2
+
+
+def test_api_jobs_returns_all_jobs(client, state, make_job_request):
+    state.add_job(
+        ControllerJob(
+            job_id=JobId("j1"),
+            request=make_job_request("job1"),
             state=cluster_pb2.JOB_STATE_RUNNING,
             worker_id=WorkerId("w1"),
         )
-        job2 = ControllerJob(
+    )
+    state.add_job(
+        ControllerJob(
             job_id=JobId("j2"),
-            request=cluster_pb2.LaunchJobRequest(
-                name="job2",
-                serialized_entrypoint=b"test",
-                resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
-                environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
-            ),
+            request=make_job_request("job2"),
             state=cluster_pb2.JOB_STATE_FAILED,
-            error="Test error",
+            error="Something went wrong",
         )
-        self.state.add_job(job1)
-        self.state.add_job(job2)
+    )
 
-        # Mark job1 as running on worker1
-        worker1.running_jobs.add(job1.job_id)
+    response = client.get("/api/jobs")
+    assert response.status_code == 200
+    jobs = response.json()
+    assert len(jobs) == 2
 
-        return create_dashboard_app(self.state)
-
-    @unittest_run_loop
-    async def test_dashboard_index_returns_html(self):
-        """Verify index returns HTML with workers and jobs."""
-        resp = await self.client.request("GET", "/")
-        assert resp.status == 200
-        assert resp.content_type == "text/html"
-
-        text = await resp.text()
-        assert "Fluster Controller Dashboard" in text
-        assert "Workers" in text
-        assert "Jobs" in text
-
-    @unittest_run_loop
-    async def test_dashboard_shows_worker_info(self):
-        """Verify worker table has correct data."""
-        resp = await self.client.request("GET", "/")
-        assert resp.status == 200
-
-        text = await resp.text()
-
-        # Check worker counts
-        assert "1 healthy / 2 total" in text
-
-        # Check worker data appears
-        assert "w1" in text
-        assert "host1:8080" in text
-        assert "w2" in text
-        assert "host2:8080" in text
-
-        # Check healthy status
-        assert "Yes" in text  # w1 is healthy
-        assert "No" in text  # w2 is unhealthy
-
-    @unittest_run_loop
-    async def test_dashboard_shows_job_info(self):
-        """Verify job table has correct data."""
-        resp = await self.client.request("GET", "/")
-        assert resp.status == 200
-
-        text = await resp.text()
-
-        # Check job count
-        assert "2 total" in text
-
-        # Check job data appears
-        assert "j1" in text
-        assert "job1" in text
-        assert "j2" in text
-        assert "job2" in text
-
-        # Check job states
-        assert "RUNNING" in text
-        assert "FAILED" in text
-
-        # Check worker assignment
-        assert "w1" in text  # j1 assigned to w1
-
-        # Check error message
-        assert "Test error" in text
-
-    @unittest_run_loop
-    async def test_dashboard_health_endpoint(self):
-        """Verify /health returns JSON."""
-        resp = await self.client.request("GET", "/health")
-        assert resp.status == 200
-
-        json_data = await resp.json()
-        assert json_data["status"] == "ok"
-        assert json_data["workers"] == 2
-        assert json_data["healthy_workers"] == 1
-        assert json_data["jobs"] == 2
-
-    @unittest_run_loop
-    async def test_dashboard_escapes_html_in_user_data(self):
-        """Verify HTML special characters are escaped to prevent XSS."""
-        # Add a job with XSS payload in the name
-        xss_job = ControllerJob(
-            job_id=JobId("xss_job"),
-            request=cluster_pb2.LaunchJobRequest(
-                name="<script>alert('xss')</script>",
-                serialized_entrypoint=b"test",
-                resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
-                environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
-            ),
-            state=cluster_pb2.JOB_STATE_FAILED,
-            error="<img src=x onerror=alert('xss')>",
-        )
-        self.state.add_job(xss_job)
-
-        # Add a worker with XSS payload in address
-        xss_worker = ControllerWorker(
-            worker_id=WorkerId("<script>bad</script>"),
-            address="<img onerror=alert(1)>",
-            resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
-            healthy=True,
-        )
-        self.state.add_worker(xss_worker)
-
-        resp = await self.client.request("GET", "/")
-        text = await resp.text()
-
-        # Raw script/img tags should NOT appear (would be XSS vectors)
-        assert "<script>" not in text
-        assert "<img " not in text  # space after img to match tag, not escaped &lt;img
-
-        # Escaped versions should appear
-        assert "&lt;script&gt;" in text
-        assert "&lt;img" in text
+    job_by_id = {j["job_id"]: j for j in jobs}
+    assert job_by_id["j1"]["name"] == "job1"
+    assert job_by_id["j1"]["state"] == "running"
+    assert job_by_id["j1"]["worker_id"] == "w1"
+    assert job_by_id["j2"]["name"] == "job2"
+    assert job_by_id["j2"]["state"] == "failed"
+    assert job_by_id["j2"]["error"] == "Something went wrong"
 
 
-def test_dashboard_empty_state():
-    """Test dashboard with no workers or jobs."""
-    state = ControllerState()
-    app = create_dashboard_app(state)
-
-    # Just verify app creation succeeds
-    assert app is not None
-
-
-def test_dashboard_with_many_jobs(make_job_request, make_resource_spec):
-    """Test dashboard can handle many jobs."""
-    state = ControllerState()
-
-    # Add a worker
-    worker = ControllerWorker(
+def test_api_workers_returns_all_workers(client, state, make_resource_spec):
+    w1 = ControllerWorker(
         worker_id=WorkerId("w1"),
         address="host1:8080",
         resources=make_resource_spec(),
+        healthy=True,
+        last_heartbeat_ms=1000,
     )
-    state.add_worker(worker)
+    w1.running_jobs.add(JobId("j1"))
+    state.add_worker(w1)
 
-    # Add many jobs
-    for i in range(100):
-        job = ControllerJob(
-            job_id=JobId(f"j{i}"),
-            request=make_job_request(f"job{i}"),
-            state=cluster_pb2.JOB_STATE_PENDING if i % 2 == 0 else cluster_pb2.JOB_STATE_RUNNING,
-        )
-        state.add_job(job)
-
-    app = create_dashboard_app(state)
-    assert app is not None
-
-
-def test_dashboard_with_gang_jobs(make_job_request, make_resource_spec):
-    """Test dashboard with gang-scheduled jobs."""
-    state = ControllerState()
-
-    # Add workers
-    for i in range(4):
-        worker = ControllerWorker(
-            worker_id=WorkerId(f"w{i}"),
-            address=f"host{i}:8080",
+    state.add_worker(
+        ControllerWorker(
+            worker_id=WorkerId("w2"),
+            address="host2:8080",
             resources=make_resource_spec(),
+            healthy=False,
+            consecutive_failures=3,
         )
-        state.add_worker(worker)
+    )
 
-    # Add gang jobs
-    for i in range(4):
-        job = ControllerJob(
-            job_id=JobId(f"gang_job_{i}"),
-            request=make_job_request(f"gang_job_{i}"),
+    response = client.get("/api/workers")
+    assert response.status_code == 200
+    workers = response.json()
+    assert len(workers) == 2
+
+    worker_by_id = {w["worker_id"]: w for w in workers}
+    assert worker_by_id["w1"]["address"] == "host1:8080"
+    assert worker_by_id["w1"]["healthy"] is True
+    assert worker_by_id["w1"]["running_jobs"] == 1
+    assert worker_by_id["w2"]["healthy"] is False
+    assert worker_by_id["w2"]["consecutive_failures"] == 3
+
+
+def test_api_actions_returns_log(client, state):
+    state.log_action("job_submitted", job_id=JobId("j1"), details="test job")
+    state.log_action("worker_registered", worker_id=WorkerId("w1"))
+    state.log_action("job_started", job_id=JobId("j1"), worker_id=WorkerId("w1"))
+
+    response = client.get("/api/actions")
+    assert response.status_code == 200
+    actions = response.json()
+    assert len(actions) == 3
+
+    assert actions[0]["action"] == "job_submitted"
+    assert actions[0]["job_id"] == "j1"
+    assert actions[0]["details"] == "test job"
+    assert actions[1]["action"] == "worker_registered"
+    assert actions[1]["worker_id"] == "w1"
+    assert actions[2]["action"] == "job_started"
+
+
+def test_rpc_mounted_at_correct_path(client, state, make_job_request):
+    # Add a job so ListJobs returns something
+    state.add_job(
+        ControllerJob(
+            job_id=JobId("test-job"),
+            request=make_job_request("test"),
+            state=cluster_pb2.JOB_STATE_PENDING,
+        )
+    )
+
+    # Call ListJobs via Connect RPC
+    response = client.post(
+        "/fluster.cluster.ControllerService/ListJobs",
+        headers={"Content-Type": "application/json"},
+        content="{}",
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "jobs" in data
+    assert len(data["jobs"]) == 1
+    assert data["jobs"][0]["jobId"] == "test-job"
+
+
+def test_rpc_get_job_status(client, state, make_job_request):
+    state.add_job(
+        ControllerJob(
+            job_id=JobId("j1"),
+            request=make_job_request("test"),
             state=cluster_pb2.JOB_STATE_RUNNING,
-            worker_id=WorkerId(f"w{i}"),
-            gang_id="gang1",
+            worker_id=WorkerId("w1"),
         )
-        state.add_job(job)
+    )
 
-    app = create_dashboard_app(state)
-    assert app is not None
+    response = client.post(
+        "/fluster.cluster.ControllerService/GetJobStatus",
+        headers={"Content-Type": "application/json"},
+        content='{"jobId": "j1"}',
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["job"]["jobId"] == "j1"
+    assert data["job"]["state"] == "JOB_STATE_RUNNING"
+    assert data["job"]["workerId"] == "w1"
 
 
-def test_dashboard_all_job_states(make_job_request):
-    """Test dashboard shows all job state types correctly."""
-    state = ControllerState()
+def test_rpc_launch_job(client):
+    response = client.post(
+        "/fluster.cluster.ControllerService/LaunchJob",
+        headers={"Content-Type": "application/json"},
+        content="""{
+            "name": "new-job",
+            "serializedEntrypoint": "dGVzdA==",
+            "resources": {"cpu": 1, "memory": "1g"},
+            "environment": {"workspace": "/tmp"}
+        }""",
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "jobId" in data
+    assert len(data["jobId"]) > 0
 
+
+def test_dashboard_html_has_javascript(client):
+    """Verify dashboard has auto-refresh JavaScript."""
+    response = client.get("/")
+    assert "setInterval(refresh" in response.text
+    assert "fetch('/api/stats')" in response.text
+    assert "fetch('/api/jobs')" in response.text
+    assert "fetch('/api/workers')" in response.text
+    assert "fetch('/api/actions')" in response.text
+
+
+def test_api_jobs_includes_all_states(client, state, make_job_request):
+    """Verify all job states are represented correctly."""
     states = [
-        (cluster_pb2.JOB_STATE_PENDING, "PENDING"),
-        (cluster_pb2.JOB_STATE_RUNNING, "RUNNING"),
-        (cluster_pb2.JOB_STATE_SUCCEEDED, "SUCCEEDED"),
-        (cluster_pb2.JOB_STATE_FAILED, "FAILED"),
-        (cluster_pb2.JOB_STATE_KILLED, "KILLED"),
-        (cluster_pb2.JOB_STATE_WORKER_FAILED, "WORKER_FAILED"),
+        (cluster_pb2.JOB_STATE_PENDING, "pending"),
+        (cluster_pb2.JOB_STATE_RUNNING, "running"),
+        (cluster_pb2.JOB_STATE_SUCCEEDED, "succeeded"),
+        (cluster_pb2.JOB_STATE_FAILED, "failed"),
+        (cluster_pb2.JOB_STATE_KILLED, "killed"),
+        (cluster_pb2.JOB_STATE_WORKER_FAILED, "worker_failed"),
     ]
 
-    for state_val, state_name in states:
-        job = ControllerJob(
-            job_id=JobId(f"j_{state_name}"),
-            request=make_job_request(f"job_{state_name}"),
-            state=state_val,
+    for i, (proto_state, _) in enumerate(states):
+        state.add_job(
+            ControllerJob(
+                job_id=JobId(f"j{i}"),
+                request=make_job_request(f"job{i}"),
+                state=proto_state,
+            )
         )
-        state.add_job(job)
 
-    app = create_dashboard_app(state)
-    assert app is not None
+    response = client.get("/api/jobs")
+    jobs = response.json()
+    job_states = {j["job_id"]: j["state"] for j in jobs}
+
+    for i, (_, expected_state) in enumerate(states):
+        assert job_states[f"j{i}"] == expected_state

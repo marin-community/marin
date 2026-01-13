@@ -147,9 +147,10 @@ message LaunchJobRequest {
   ResourceSpec resources = 3;         // Full resource specification
   EnvironmentConfig environment = 4;  // Environment configuration
 
-  // Bundle information (client zips workspace and provides reference)
+  // Bundle information - either provide gcs_path OR blob (not both)
   string bundle_gcs_path = 5;        // gs://bucket/path/bundle.zip
   string bundle_hash = 6;            // SHA256 hash for caching
+  bytes bundle_blob = 7;             // Direct bundle upload (controller writes to bundle_dir)
 }
 
 message LaunchJobResponse {

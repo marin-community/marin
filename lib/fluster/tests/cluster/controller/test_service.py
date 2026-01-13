@@ -24,7 +24,7 @@ from fluster import cluster_pb2
 from fluster.cluster.controller.scheduler import Scheduler
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerJob, ControllerState
-from fluster.cluster.types import JobId
+from fluster.cluster.types import JobId, WorkerId
 
 
 @pytest.fixture
@@ -38,6 +38,16 @@ def make_job_request():
             resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
             environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         )
+
+    return _make
+
+
+@pytest.fixture
+def make_resource_spec():
+    """Create a minimal ResourceSpec for testing."""
+
+    def _make() -> cluster_pb2.ResourceSpec:
+        return cluster_pb2.ResourceSpec(cpu=1, memory="1g", disk="10g")
 
     return _make
 
@@ -270,3 +280,146 @@ def test_terminate_pending_job(service, state, make_job_request):
     # Job should be marked KILLED even though it was never running
     assert job.state == cluster_pb2.JOB_STATE_KILLED
     assert job.finished_at_ms is not None
+
+
+def test_register_worker(service, state, make_resource_spec):
+    """Verify register_worker adds worker to state."""
+    request = cluster_pb2.RegisterWorkerRequest(
+        worker_id="w1",
+        address="host1:8080",
+        resources=make_resource_spec(),
+    )
+
+    response = service.register_worker(request, None)
+
+    assert response.accepted is True
+    worker = state.get_worker(WorkerId("w1"))
+    assert worker is not None
+    assert worker.address == "host1:8080"
+    assert worker.healthy is True
+
+
+def test_register_worker_logs_action(service, state, make_resource_spec):
+    """Verify register_worker logs an action."""
+    request = cluster_pb2.RegisterWorkerRequest(
+        worker_id="w1",
+        address="host1:8080",
+        resources=make_resource_spec(),
+    )
+
+    service.register_worker(request, None)
+
+    actions = state.get_recent_actions()
+    assert len(actions) == 1
+    assert actions[0].action == "worker_registered"
+    assert actions[0].worker_id == "w1"
+
+
+def test_heartbeat_updates_worker_timestamp(service, state, make_resource_spec):
+    """Verify heartbeat updates worker timestamp."""
+    # Add a worker first
+    from fluster.cluster.controller.state import ControllerWorker
+
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host1:8080",
+        resources=make_resource_spec(),
+        last_heartbeat_ms=0,
+    )
+    state.add_worker(worker)
+
+    request = cluster_pb2.HeartbeatRequest(worker_id="w1", since_ms=0)
+    response = service.heartbeat(request, None)
+
+    assert response.timestamp_ms > 0
+    assert worker.last_heartbeat_ms > 0
+    assert worker.consecutive_failures == 0
+
+
+def test_heartbeat_not_found(service):
+    """Verify heartbeat raises NOT_FOUND for unknown worker."""
+    request = cluster_pb2.HeartbeatRequest(worker_id="nonexistent", since_ms=0)
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.heartbeat(request, None)
+
+    assert exc_info.value.code == Code.NOT_FOUND
+
+
+def test_list_workers_returns_all(service, state, make_resource_spec):
+    """Verify list_workers returns all workers."""
+    from fluster.cluster.controller.state import ControllerWorker
+
+    # Add multiple workers
+    for i in range(3):
+        worker = ControllerWorker(
+            worker_id=WorkerId(f"w{i}"),
+            address=f"host{i}:8080",
+            resources=make_resource_spec(),
+            healthy=(i != 1),  # w1 is unhealthy
+        )
+        state.add_worker(worker)
+
+    request = cluster_pb2.ListWorkersRequest()
+    response = service.list_workers(request, None)
+
+    assert len(response.workers) == 3
+    worker_ids = {w.worker_id for w in response.workers}
+    assert worker_ids == {"w0", "w1", "w2"}
+
+    # Check healthy status
+    workers_by_id = {w.worker_id: w for w in response.workers}
+    assert workers_by_id["w0"].healthy is True
+    assert workers_by_id["w1"].healthy is False
+    assert workers_by_id["w2"].healthy is True
+
+
+def test_register_endpoint_unimplemented(service):
+    """Verify endpoint registry methods return UNIMPLEMENTED."""
+    with pytest.raises(ConnectError) as exc_info:
+        service.register_endpoint(cluster_pb2.RegisterEndpointRequest(), None)
+    assert exc_info.value.code == Code.UNIMPLEMENTED
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.unregister_endpoint(cluster_pb2.UnregisterEndpointRequest(), None)
+    assert exc_info.value.code == Code.UNIMPLEMENTED
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.lookup_endpoint(cluster_pb2.LookupEndpointRequest(), None)
+    assert exc_info.value.code == Code.UNIMPLEMENTED
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.list_endpoints(cluster_pb2.ListEndpointsRequest(), None)
+    assert exc_info.value.code == Code.UNIMPLEMENTED
+
+
+def test_launch_job_logs_action(service, state, make_job_request):
+    """Verify launch_job logs an action."""
+    request = make_job_request("test-job")
+    response = service.launch_job(request, None)
+
+    actions = state.get_recent_actions()
+    assert len(actions) == 1
+    assert actions[0].action == "job_submitted"
+    assert actions[0].job_id == response.job_id
+    assert actions[0].details == "test-job"
+
+
+def test_terminate_job_logs_action(service, state, make_job_request):
+    """Verify terminate_job logs an action."""
+    # Add a running job
+    job = ControllerJob(
+        job_id=JobId("test-job-id"),
+        request=make_job_request("test-job"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+        submitted_at_ms=12345,
+    )
+    state.add_job(job)
+
+    request = cluster_pb2.TerminateJobRequest(job_id="test-job-id")
+    service.terminate_job(request, None)
+
+    actions = state.get_recent_actions()
+    assert len(actions) == 1
+    assert actions[0].action == "job_killed"
+    assert actions[0].job_id == "test-job-id"

@@ -275,3 +275,67 @@ def test_controller_state_requeue_job(make_job_request):
     popped = state.pop_next_pending()
     assert popped is not None
     assert popped.job_id == "j1"
+
+
+def test_controller_state_action_log():
+    """Test action log functionality."""
+    state = ControllerState()
+
+    # Initially empty
+    assert state.get_recent_actions() == []
+
+    # Log some actions
+    state.log_action("job_submitted", job_id=JobId("j1"), details="Test job")
+    state.log_action("worker_registered", worker_id=WorkerId("w1"))
+    state.log_action("job_started", job_id=JobId("j1"), worker_id=WorkerId("w1"))
+
+    # Should have 3 actions
+    actions = state.get_recent_actions()
+    assert len(actions) == 3
+
+    # Check order (oldest first)
+    assert actions[0].action == "job_submitted"
+    assert actions[0].job_id == "j1"
+    assert actions[0].details == "Test job"
+    assert actions[1].action == "worker_registered"
+    assert actions[1].worker_id == "w1"
+    assert actions[2].action == "job_started"
+
+    # Check timestamps are set
+    for action in actions:
+        assert action.timestamp_ms > 0
+
+
+def test_controller_state_action_log_limit():
+    """Test action log respects limit parameter."""
+    state = ControllerState()
+
+    # Log many actions
+    for i in range(10):
+        state.log_action(f"action_{i}")
+
+    # Get with limit
+    actions = state.get_recent_actions(limit=3)
+    assert len(actions) == 3
+
+    # Should be most recent 3
+    assert actions[0].action == "action_7"
+    assert actions[1].action == "action_8"
+    assert actions[2].action == "action_9"
+
+
+def test_controller_state_action_log_bounded():
+    """Test action log deque is bounded to 100 entries."""
+    state = ControllerState()
+
+    # Log more than 100 actions
+    for i in range(150):
+        state.log_action(f"action_{i}")
+
+    # Should only have 100
+    actions = state.get_recent_actions(limit=200)
+    assert len(actions) == 100
+
+    # Oldest should be action_50 (first 50 were evicted)
+    assert actions[0].action == "action_50"
+    assert actions[-1].action == "action_149"

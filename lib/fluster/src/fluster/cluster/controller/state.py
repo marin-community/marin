@@ -17,12 +17,14 @@
 This module provides the in-memory state management for the controller, including:
 - ControllerJob: Controller's view of a job with retry tracking and gang info
 - ControllerWorker: Controller's view of a worker with health and capacity
+- ActionLogEntry: Record of a controller action for the dashboard
 - ControllerState: Thread-safe state container for jobs, workers, and the queue
 
 All state mutations are protected by a reentrant lock (RLock) to support
 concurrent access from the scheduler, heartbeat monitor, and RPC handlers.
 """
 
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from threading import RLock
@@ -110,6 +112,28 @@ class ControllerWorker:
     running_jobs: set[JobId] = field(default_factory=set)
 
 
+@dataclass
+class ActionLogEntry:
+    """Record of a controller action for the dashboard.
+
+    Actions are logged when significant events occur (job submitted, job started,
+    worker registered, etc.) to provide visibility into controller activity.
+
+    Args:
+        timestamp_ms: Unix timestamp in milliseconds when action occurred
+        action: Action type (e.g., "job_submitted", "job_started", "worker_failed")
+        job_id: Associated job ID, if any
+        worker_id: Associated worker ID, if any
+        details: Additional human-readable details
+    """
+
+    timestamp_ms: int
+    action: str
+    job_id: JobId | None = None
+    worker_id: WorkerId | None = None
+    details: str = ""
+
+
 class ControllerState:
     """Thread-safe controller state.
 
@@ -128,6 +152,7 @@ class ControllerState:
         self._workers: dict[WorkerId, ControllerWorker] = {}
         self._queue: deque[JobId] = deque()  # FIFO queue of job IDs
         self._gangs: dict[str, set[JobId]] = {}  # gang_id -> job_ids
+        self._actions: deque[ActionLogEntry] = deque(maxlen=100)  # Recent actions log
 
     def add_job(self, job: ControllerJob) -> None:
         """Add a job to the controller state and queue.
@@ -253,3 +278,44 @@ class ControllerState:
         with self._lock:
             job_ids = self._gangs.get(gang_id, set())
             return [self._jobs[jid] for jid in job_ids if jid in self._jobs]
+
+    def log_action(
+        self,
+        action: str,
+        job_id: JobId | None = None,
+        worker_id: WorkerId | None = None,
+        details: str = "",
+    ) -> None:
+        """Record an action in the log.
+
+        Actions are stored in a bounded deque (last 100 entries) for display
+        on the dashboard.
+
+        Args:
+            action: Action type (e.g., "job_submitted", "job_started")
+            job_id: Associated job ID, if any
+            worker_id: Associated worker ID, if any
+            details: Additional human-readable details
+        """
+        entry = ActionLogEntry(
+            timestamp_ms=int(time.time() * 1000),
+            action=action,
+            job_id=job_id,
+            worker_id=worker_id,
+            details=details,
+        )
+        with self._lock:
+            self._actions.append(entry)
+
+    def get_recent_actions(self, limit: int = 50) -> list[ActionLogEntry]:
+        """Get most recent actions.
+
+        Args:
+            limit: Maximum number of actions to return
+
+        Returns:
+            List of recent actions, most recent last
+        """
+        with self._lock:
+            actions = list(self._actions)
+            return actions[-limit:] if limit < len(actions) else actions

@@ -1159,6 +1159,7 @@ name = "fluster"
 version = "0.1.0"
 source = { editable = "lib/fluster" }
 dependencies = [
+    { name = "aiohttp" },
     { name = "cloudpickle" },
     { name = "connect-python" },
     { name = "docker" },
@@ -1177,6 +1178,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "cloudpickle", specifier = ">=3.1.2" },
     { name = "connect-python", git = "https://github.com/connectrpc/connect-python.git?rev=5342eacecef85e52717604ee5ac7e03a1e16c7ac" },
     { name = "docker", specifier = ">=7.0.0" },
