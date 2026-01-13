@@ -14,12 +14,10 @@
 
 """Virtual environment and Docker image caching with UV support."""
 
-import shutil
+import hashlib
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
-import xxhash
 
 from fluster.cluster.worker.docker import DockerImageBuilder
 from fluster.cluster.worker.worker_types import JobLogs
@@ -35,42 +33,20 @@ class VenvCacheEntry:
 
 
 class VenvCache:
-    """UV cache manager for dependency caching.
+    """Utility for computing dependency hashes for cache invalidation.
 
-    UV handles dependency caching natively via BuildKit cache mounts.
-    This class provides utilities for computing dependency hashes and
-    ensuring proper permissions for container access.
+    UV handles dependency caching natively via BuildKit cache mounts with
+    explicit global cache ID (fluster-uv-global). This ensures all workspaces
+    share the same BuildKit-managed cache for dependency reuse.
 
-    Permissions: The UV cache directory must be writable by container user
-    (typically UID 1000). Call ensure_permissions() after creating.
+    This class provides utilities for computing dependency hashes from
+    pyproject.toml and uv.lock files to determine when Docker image layers
+    can be reused.
     """
-
-    def __init__(self, uv_cache_dir: Path):
-        self._uv_cache_dir = uv_cache_dir
-        self._uv_cache_dir.mkdir(parents=True, exist_ok=True)
-
-    def ensure_permissions(self, uid: int = 1000, gid: int = 1000) -> None:
-        """Ensure UV cache has correct permissions for container user.
-
-        Attempts to chown the UV cache directory to the specified uid/gid.
-        Silently ignores permission errors (e.g., on macOS or when not running as root).
-        """
-        try:
-            shutil.chown(self._uv_cache_dir, uid, gid)
-        except (PermissionError, OSError):
-            # Cannot chown (e.g., macOS, running as non-root user)
-            # This is expected in local development environments
-            pass
-
-        for path in self._uv_cache_dir.rglob("*"):
-            try:
-                shutil.chown(path, uid, gid)
-            except (PermissionError, OSError):
-                pass
 
     def compute_deps_hash(self, bundle_path: Path) -> str:
         """Compute hash from pyproject.toml + uv.lock."""
-        h = xxhash.xxh64()
+        h = hashlib.sha256()
         for fname in ["pyproject.toml", "uv.lock"]:
             fpath = bundle_path / fname
             if fpath.exists():
@@ -102,12 +78,12 @@ WORKDIR /app
 
 # Layer 1: Dependencies (cached when pyproject.toml/uv.lock unchanged)
 COPY pyproject.toml uv.lock* ./
-RUN --mount=type=cache,target=/opt/uv-cache \\
+RUN --mount=type=cache,id=fluster-uv-global,sharing=locked,target=/opt/uv-cache \\
     uv sync --frozen --no-install-project {extras_flags}
 
 # Layer 2: Source code + install
 COPY . .
-RUN --mount=type=cache,target=/opt/uv-cache \\
+RUN --mount=type=cache,id=fluster-uv-global,sharing=locked,target=/opt/uv-cache \\
     uv sync --frozen --no-editable {extras_flags}
 
 # Use the venv python
@@ -119,7 +95,14 @@ class ImageCache:
     """Manages Docker image building with caching.
 
     Image tag: {registry}/fluster-job-{job_id}:{deps_hash[:8]}
-    Uses Docker BuildKit cache mounts for UV cache sharing.
+    Uses Docker BuildKit cache mounts with explicit global cache ID
+    (fluster-uv-global) to ensure all workspaces share the same UV cache.
+
+    Cache behavior:
+    - All builds use id=fluster-uv-global for the UV cache mount
+    - sharing=locked prevents concurrent access issues during UV operations
+    - Different workspaces reuse cached dependencies automatically
+    - BuildKit manages cache storage in /var/lib/buildkit/
 
     Delegates actual Docker operations to DockerImageBuilder, keeping
     caching logic separate from container runtime specifics.

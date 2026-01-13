@@ -121,7 +121,7 @@ def test_bundle(tmp_path):
 def real_manager(cache_dir):
     """Create JobManager with real components (not mocks)."""
     bundle_cache = BundleCache(cache_dir, max_bundles=10)
-    venv_cache = VenvCache(cache_dir / "uv")
+    venv_cache = VenvCache()
     image_cache = ImageCache(cache_dir, registry="localhost:5000", max_images=10)
     runtime = DockerRuntime()
     port_allocator = PortAllocator((40000, 40100))

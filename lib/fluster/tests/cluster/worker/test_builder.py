@@ -22,24 +22,6 @@ from fluster.cluster.worker.builder import ImageCache, VenvCache
 
 
 @pytest.fixture
-def temp_cache_dir(tmp_path):
-    """Create a temporary cache directory."""
-    cache_dir = tmp_path / "cache"
-    uv_cache_dir = tmp_path / "uv_cache"
-    cache_dir.mkdir()
-    uv_cache_dir.mkdir()
-    return cache_dir, uv_cache_dir
-
-
-@pytest.fixture
-def uv_cache_dir(tmp_path):
-    """Create a temporary UV cache directory."""
-    uv_cache_dir = tmp_path / "uv_cache"
-    uv_cache_dir.mkdir()
-    return uv_cache_dir
-
-
-@pytest.fixture
 def test_bundle(tmp_path):
     """Create a test bundle with pyproject.toml and uv.lock."""
     bundle_dir = tmp_path / "test_bundle"
@@ -116,9 +98,9 @@ packages = ["src/test_package"]
     return bundle_dir
 
 
-def test_compute_deps_hash(uv_cache_dir, test_bundle):
+def test_compute_deps_hash(test_bundle):
     """Test that deps hash is computed from pyproject.toml and uv.lock."""
-    cache = VenvCache(uv_cache_dir)
+    cache = VenvCache()
 
     hash1 = cache.compute_deps_hash(test_bundle)
 
@@ -132,27 +114,6 @@ def test_compute_deps_hash(uv_cache_dir, test_bundle):
 
     # Hash should change
     assert hash3 != hash1
-
-
-def test_ensure_permissions(uv_cache_dir):
-    """Test ensure_permissions sets correct ownership."""
-    cache = VenvCache(uv_cache_dir)
-
-    # Create some files in uv cache
-    test_file = uv_cache_dir / "test.txt"
-    test_file.write_text("test")
-
-    subdir = uv_cache_dir / "subdir"
-    subdir.mkdir()
-    (subdir / "file.txt").write_text("test")
-
-    # Try to set permissions (may fail if not running as root)
-    # This test verifies the method runs without error
-    try:
-        cache.ensure_permissions(uid=1000, gid=1000)
-    except PermissionError:
-        # Expected on systems where we can't change ownership
-        pass
 
 
 # ImageCache Tests
@@ -518,7 +479,7 @@ def test_dockerfile_template_formatting():
     assert "FROM python:3.11-slim" in dockerfile
     assert "ghcr.io/astral-sh/uv:latest" in dockerfile
     assert "UV_CACHE_DIR=/opt/uv-cache" in dockerfile
-    assert "--mount=type=cache,target=/opt/uv-cache" in dockerfile
+    assert "--mount=type=cache,id=fluster-uv-global,sharing=locked,target=/opt/uv-cache" in dockerfile
 
     # Test with extras
     dockerfile = DOCKERFILE_TEMPLATE.format(base_image="python:3.12", extras_flags="--extra dev --extra test")

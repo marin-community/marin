@@ -114,12 +114,10 @@ async def worker_server(tmp_path, check_docker):
     """
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
-    uv_cache_dir = tmp_path / "uv_cache"
-    uv_cache_dir.mkdir()
 
     # Initialize components
     bundle_cache = BundleCache(cache_dir, max_bundles=10)
-    venv_cache = VenvCache(uv_cache_dir)
+    venv_cache = VenvCache()
     image_cache = ImageCache(cache_dir, registry="localhost:5000", max_images=10)
     runtime = DockerRuntime()
     port_allocator = PortAllocator((40000, 40100))

@@ -127,12 +127,10 @@ class WorkerContext:
             cache_path = Path(self._cache_dir)
 
         cache_path.mkdir(parents=True, exist_ok=True)
-        uv_cache_path = cache_path / "uv"
-        uv_cache_path.mkdir(exist_ok=True)
 
         # Initialize components
         bundle_cache = BundleCache(cache_path, max_bundles=100)
-        venv_cache = VenvCache(uv_cache_path)
+        venv_cache = VenvCache()
         image_cache = ImageCache(cache_path, registry=self.registry, max_images=50)
         runtime = DockerRuntime()
         port_allocator = PortAllocator(self.port_range)

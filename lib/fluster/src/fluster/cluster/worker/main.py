@@ -42,7 +42,6 @@ def cli():
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=8080, type=int, help="Bind port")
 @click.option("--cache-dir", default="~/.cache/fluster-worker", help="Cache directory")
-@click.option("--uv-cache-dir", default="~/.cache/uv", help="Shared UV cache directory")
 @click.option("--registry", required=True, help="Docker registry for built images")
 @click.option("--max-concurrent-jobs", default=10, type=int, help="Max concurrent jobs")
 @click.option("--port-range", default="30000-40000", help="Port range for job ports (start-end)")
@@ -52,7 +51,6 @@ def serve(
     host: str,
     port: int,
     cache_dir: str,
-    uv_cache_dir: str,
     registry: str,
     max_concurrent_jobs: int,
     port_range: str,
@@ -61,19 +59,15 @@ def serve(
 ):
     """Start the Fluster worker service."""
     cache_path = Path(cache_dir).expanduser()
-    uv_cache_path = Path(uv_cache_dir).expanduser()
 
     port_start, port_end = map(int, port_range.split("-"))
 
     # Initialize components
     bundle_cache = BundleCache(cache_path, max_bundles=max_bundles)
-    venv_cache = VenvCache(uv_cache_path)
+    venv_cache = VenvCache()
     image_cache = ImageCache(cache_path, registry=registry, max_images=max_images)
     runtime = DockerRuntime()
     port_allocator = PortAllocator((port_start, port_end))
-
-    # Ensure UV cache permissions for container user
-    venv_cache.ensure_permissions()
 
     manager = JobManager(
         bundle_cache=bundle_cache,
