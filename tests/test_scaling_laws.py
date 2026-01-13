@@ -25,10 +25,10 @@ from levanter.models.qwen import Qwen3Config
 
 from marin.scaling_laws.isoflop_analysis import (
     DEFAULT_SEQ_LEN,
-    IsoFlopTrainArgs,
+    CandidateConfig,
     compute_training_flops,
     fit_scaling_laws,
-    generate_isoflop_train_args,
+    generate_training_configs,
     robust_quad_logx,
     solve_for_batch_size,
     solve_for_train_steps,
@@ -97,15 +97,20 @@ def test_candidate_configs_within_tolerance():
     flop_tolerance = 0.01
     seq_len = DEFAULT_SEQ_LEN
 
-    for candidate in recipe.candidate_configs(budget, seq_len, flop_tolerance=flop_tolerance):
-        # Compute training schedule from recipe (vocab_size is owned by recipe)
-        batch_size, train_steps = recipe.compute_training_schedule(candidate, seq_len)
-        model_config = candidate.model_config
+    # Generate candidates using the new API
+    for model_config in recipe.build_model_configs(budget, seq_len):
+        flops_per_token = model_config.flops_per_token(recipe.vocab_size, seq_len)
+        tokens = budget / (3 * flops_per_token)
+        candidate = recipe.build_candidate_config(model_config, tokens, budget, seq_len)
+
+        if candidate is None:
+            continue
+
         achieved = compute_training_flops(
-            model_config,
+            candidate.model_config,
             recipe.vocab_size,
-            batch_size,
-            train_steps,
+            candidate.batch_size,
+            candidate.train_steps,
             seq_len,
         )
         relative_error = abs(achieved - budget) / budget
@@ -131,7 +136,7 @@ def test_robust_quad_logx_fits_quadratic():
 
 # --- Snapshot test for config generation ---
 
-# Snapshot of expected output for generate_isoflop_train_args with budget=3e18 training FLOPs.
+# Snapshot of expected output for generate_training_configs with budget=3e18 training FLOPs.
 EXPECTED_ISOFLOP_CONFIGS_3E18 = [
     {"batch_size": 32, "train_steps": 32844, "flops_budget": 3e18},
     {"batch_size": 16, "train_steps": 46274, "flops_budget": 3e18},
@@ -141,26 +146,25 @@ EXPECTED_ISOFLOP_CONFIGS_3E18 = [
 ]
 
 
-def test_generate_isoflop_train_args_snapshot():
-    """Snapshot test: verify generate_isoflop_train_args produces expected configs.
+def test_generate_training_configs_snapshot():
+    """Snapshot test: verify generate_training_configs produces expected configs.
 
     This ensures reproducibility of the config generation algorithm.
     """
     recipe = Marin2025Recipe()
-    result = generate_isoflop_train_args(
+    result = generate_training_configs(
         budgets=(3e18,),
         recipe=recipe,
     )
 
     assert len(result) == len(EXPECTED_ISOFLOP_CONFIGS_3E18)
 
-    for i, (args, expected) in enumerate(zip(result, EXPECTED_ISOFLOP_CONFIGS_3E18, strict=True)):
-        assert isinstance(args, IsoFlopTrainArgs)
-        # batch_size and train_steps are computed from recipe (vocab_size is owned by recipe)
-        batch_size, train_steps = recipe.compute_training_schedule(args.candidate)
-        assert batch_size == expected["batch_size"], f"Config {i}: batch_size mismatch"
-        assert train_steps == expected["train_steps"], f"Config {i}: train_steps mismatch"
-        assert args.candidate.flops_budget == expected["flops_budget"], f"Config {i}: flops_budget mismatch"
+    for i, (candidate, expected) in enumerate(zip(result, EXPECTED_ISOFLOP_CONFIGS_3E18, strict=True)):
+        assert isinstance(candidate, CandidateConfig)
+        # batch_size and train_steps are now directly on the candidate
+        assert candidate.batch_size == expected["batch_size"], f"Config {i}: batch_size mismatch"
+        assert candidate.train_steps == expected["train_steps"], f"Config {i}: train_steps mismatch"
+        assert candidate.flops_budget == expected["flops_budget"], f"Config {i}: flops_budget mismatch"
 
 
 # --- End-to-end integration test ---
