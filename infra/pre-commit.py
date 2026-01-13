@@ -46,6 +46,8 @@ EXCLUDE_PATTERNS = [
     ".git/**",
     ".github/**",
     "tests/snapshots/**",
+    # grpc generated files
+    "**/*_connect.py",
     "**/*_pb2.py",
     "**/*.gz",
     "**/*.pb",

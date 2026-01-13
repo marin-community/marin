@@ -21,6 +21,8 @@ Provides:
 - Connect RPC at /fluster.cluster.ControllerService/*
 """
 
+# TODO: observability, gregate stats over jobs , log to stable storage
+
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request

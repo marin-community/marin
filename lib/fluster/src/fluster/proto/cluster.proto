@@ -148,6 +148,8 @@ message LaunchJobRequest {
   EnvironmentConfig environment = 4;  // Environment configuration
 
   // Bundle information - either provide gcs_path OR blob (not both)
+  // TODO -- make this oneof bundle_source or bundle_gcs
+  // OR STOP OVEROPTIMIZING AND JUST SEND THE BLOB RUSSELL
   string bundle_gcs_path = 5;        // gs://bucket/path/bundle.zip
   string bundle_hash = 6;            // SHA256 hash for caching
   bytes bundle_blob = 7;             // Direct bundle upload (controller writes to bundle_dir)

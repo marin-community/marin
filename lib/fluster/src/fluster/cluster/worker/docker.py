@@ -14,6 +14,9 @@
 
 """Docker container runtime and image builder implementations."""
 
+# TODO - set things up some memray/pyspy/etc work as expected
+# these need to be installed at least, and then need maybe some permissions
+
 import json
 import os
 import re
@@ -45,6 +48,7 @@ class ContainerConfig:
 
     def _parse_memory_mb(self, memory_str: str) -> int:
         """Parse memory string like '8g', '128m' to MB."""
+        # TODO humansomething parser
         match = re.match(r"^(\d+)([gmk]?)$", memory_str.lower())
         if not match:
             raise ValueError(f"Invalid memory format: {memory_str}")

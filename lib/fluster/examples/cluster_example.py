@@ -23,6 +23,9 @@ Usage:
     uv run python examples/cluster_example.py
 """
 
+# TODO, consider having like a post-mortem view of the cluster state
+# means cluster state should be serializable, cluster dashboard would always be a mapping over the state
+
 import base64
 import socket
 import tempfile
@@ -36,7 +39,6 @@ import click
 import cloudpickle
 import httpx
 import uvicorn
-
 from fluster import cluster_pb2
 from fluster.cluster.controller.dashboard import ControllerDashboard
 from fluster.cluster.controller.heartbeat import HeartbeatMonitor
@@ -44,8 +46,8 @@ from fluster.cluster.controller.scheduler import Scheduler
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerState
 from fluster.cluster.types import Entrypoint, JobId, WorkerId
-from fluster.cluster.worker.bundle import BundleCache
 from fluster.cluster.worker.builder import ImageCache, VenvCache
+from fluster.cluster.worker.bundle import BundleCache
 from fluster.cluster.worker.dashboard import WorkerDashboard
 from fluster.cluster.worker.docker import DockerRuntime
 from fluster.cluster.worker.manager import JobManager, PortAllocator

@@ -70,11 +70,18 @@ DOCKERFILE_TEMPLATE = """FROM {base_image}
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
+# TODO -- install Cargo here.
+# How do we make Rust stuff build faster?
+# We could pre-build something similar or at least fetch Rust deps to cache?
+
 # Configure UV
+# TODO, is this wasting disk space maybe we don't care
 ENV UV_CACHE_DIR=/opt/uv-cache
 ENV UV_LINK_MODE=copy
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv
 WORKDIR /app
+
+# TODO cache dependencies once across jobs just for usefulness
 
 # Layer 1: Dependencies (cached when pyproject.toml/uv.lock unchanged)
 COPY pyproject.toml uv.lock* ./
