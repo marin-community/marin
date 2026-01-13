@@ -387,7 +387,13 @@ class CodeR1Env(MarinEnv):
 
         # Use EvalPlus assistant prefill for all examples
         effective_system_prompt = None
+        stop_string = "\n```"
         prefill = f"{EVALPLUS_RESPONSE_PREFIX}\n```python\n"
+
+        if stop is None:
+            stop = [stop_string]
+        elif stop_string not in stop:
+            stop = [*list(stop), stop_string]
 
         prompts = [example.processed_prompt for example in sampled_examples]
 
