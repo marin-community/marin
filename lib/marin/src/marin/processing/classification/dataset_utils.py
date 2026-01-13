@@ -26,6 +26,8 @@ since we have to store the mapping of id -> attributes.
 the streaming data paradigm (it might but not sure).
 """
 import datetime
+
+import datasets
 import json
 import logging
 import os
@@ -84,6 +86,30 @@ def make_json_serializable(row: dict) -> dict:
     return row
 
 
+def _coerce_table_to_schema(table, target_schema):
+    """Align a PyArrow table's column order and dtypes to the target schema."""
+    import pyarrow as pa
+
+    if table.schema == target_schema:
+        return table
+
+    missing = [name for name in target_schema.names if name not in table.schema.names]
+    if missing:
+        raise ValueError(f"New data is missing columns required by existing dataset: {missing}")
+
+    extra = [name for name in table.schema.names if name not in target_schema.names]
+    if extra:
+        raise ValueError(f"New data has unexpected columns not present in existing dataset: {extra}")
+
+    indices = [table.schema.get_field_index(name) for name in target_schema.names]
+    table = table.select(indices)
+
+    try:
+        return table.cast(target_schema)
+    except pa.ArrowInvalid as exc:
+        raise ValueError(f"Unable to cast new data to existing schema: {exc}") from exc
+
+
 def read_dataset_streaming(input_filename: str, columns: list[str] | None = None):
     """Read in a dataset as a streaming iterator using datasets library
 
@@ -94,7 +120,6 @@ def read_dataset_streaming(input_filename: str, columns: list[str] | None = None
     Returns:
         Iterator: An iterator over the dataset rows
     """
-    import datasets
 
     # Disable caching for streaming
     datasets.disable_caching()
@@ -167,13 +192,14 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
         rows = list(rows_iterator)
         if rows:
             df = pd.DataFrame(rows)
-            table = pa.Table.from_pandas(df)
+            table = pa.Table.from_pandas(df, preserve_index=False)
 
             fs, _ = fsspec.core.url_to_fs(output_filename)
             if append and fs.exists(output_filename):
                 # Read existing parquet and append
                 with fsspec.open(output_filename, "rb") as f:
                     existing_table = pq.read_table(f)
+                table = _coerce_table_to_schema(table, existing_table.schema)
                 table = pa.concat_tables([existing_table, table])
 
             with fsspec.open(output_filename, "wb") as f:

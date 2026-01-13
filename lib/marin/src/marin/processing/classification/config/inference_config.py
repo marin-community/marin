@@ -25,6 +25,8 @@ class DatasetSchemaConfig:
     id_column: tuple[str, ...] = field(default_factory=lambda: ("id",))
     """Path (tuple of keys) to the unique identifier in a row, e.g. ("metadata", "id")."""
 
+    prompt_column: str = "text"
+
 
 @dataclass
 class RuntimeConfig:
