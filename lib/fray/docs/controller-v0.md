@@ -97,77 +97,20 @@ running at a lower priority.
 This section defines a tight, incrementally testable implementation path. Each
 stage builds on the previous and has explicit test checkpoints.
 
-**Note on types.py**: The current `fluster/cluster/types.py` contains Python
-dataclasses that may duplicate proto definitions. As we implement controller
-features, prefer proto messages for wire-format types (`ResourceSpec`,
-`JobStatus`, etc). Use Python dataclasses only for controller-internal state
-that doesn't cross RPC boundaries (like `ControllerJob`, `ControllerWorker`).
-Clean up redundant types as you go.
+### Stage 1: Proto Updates for Controller-Worker Communication ✓
 
-### Stage 1: Proto Updates for Controller-Worker Communication
+**Status**: Completed
 
-**Goal**: Define the wire protocol for heartbeats, worker registration, and job state sync.
+Added to `cluster.proto`:
+- `JOB_STATE_WORKER_FAILED = 7` to JobState enum
+- Worker registration: `WorkerInfo`, `RegisterWorkerRequest`, `RegisterWorkerResponse`
+- Heartbeat: `HeartbeatRequest`, `HeartbeatResponse`, `WorkerHealthStatus`
+- `ListWorkersRequest`, `ListWorkersResponse`
+- New RPCs: `RegisterWorker`, `Heartbeat`, `ListWorkers`
 
-Add to `cluster.proto`:
-
-```protobuf
-// Worker registration and heartbeat
-
-message WorkerInfo {
-  string worker_id = 1;
-  string address = 2;              // host:port for WorkerService
-  ResourceSpec resources = 3;      // Worker capabilities
-  int64 registered_at_ms = 4;
-}
-
-message RegisterWorkerRequest {
-  string worker_id = 1;
-  string address = 2;
-  ResourceSpec resources = 3;
-}
-
-message RegisterWorkerResponse {
-  bool accepted = 1;
-  string controller_address = 2;   // For callbacks
-}
-
-message HeartbeatRequest {
-  string worker_id = 1;
-  int64 since_ms = 2;              // Return jobs modified since this timestamp
-}
-
-message HeartbeatResponse {
-  repeated JobStatus jobs = 1;     // Jobs running/completed since since_ms
-  int64 timestamp_ms = 2;
-}
-
-message WorkerHealthStatus {
-  string worker_id = 1;
-  bool healthy = 2;
-  int32 consecutive_failures = 3;
-  int64 last_heartbeat_ms = 4;
-  repeated string running_job_ids = 5;
-}
-
-// Add JOB_STATE_WORKER_FAILED to JobState enum
-// JOB_STATE_WORKER_FAILED = 7;  // Worker died, job may be retried
-
-// Controller service additions
-service ControllerService {
-  // ... existing methods ...
-  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
-  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
-  rpc ListWorkers(Empty) returns (ListWorkersResponse);
-}
-
-message ListWorkersResponse {
-  repeated WorkerHealthStatus workers = 1;
-}
-```
-
-**Deliverable**: Updated proto, regenerated Python stubs.
-
-**Test**: Proto compiles, types import correctly.
+Cleaned up `types.py`:
+- Removed redundant dataclasses (`ResourceConfig`, `JobRequest`, `VMInfo`, etc.)
+- Kept: type aliases, TPU topology info, `Entrypoint`, `create_environment()`
 
 ---
 
