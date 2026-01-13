@@ -43,8 +43,8 @@ dependencies = [
     "requests",
     "s3fs>=2024",
     "toml",
-    "torch>=2.7.0",
-    "torchvision>=0.22.0,<0.24",
+    "torch>=2.9.0",
+    "torchvision>=0.24.0,<0.26",
     "tqdm",
     "tqdm-loggable",
     "wandb",
@@ -112,15 +112,20 @@ conflicts = [
         { extra = "cpu" },
     ],
 ]
+required-environments = ["sys_platform == 'linux' and platform_machine == 'aarch64'"]
 
 
 [project.optional-dependencies]
 
-gpu = ["jax[cuda12]==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.24"]
+gpu = [
+    "jax[cuda12]==0.8.0",
+    "torch>=2.9.0; platform_machine == 'x86_64'",
+    "torchvision>=0.24.0,<0.26; platform_machine == 'x86_64'",
+]
 
-tpu = ["jax[tpu]==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.24"]
+tpu = ["jax[tpu]==0.8.0", "torch>=2.9.0", "torchvision>=0.24.0,<0.26"]
 
-cpu = ["jax==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.24"]
+cpu = ["jax==0.8.0", "torch>=2.9.0", "torchvision>=0.24.0,<0.26"]
 
 rl = [
     "prime",
@@ -143,12 +148,12 @@ torchvision = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
     # GPU index only when --extra gpu
-    { index = "pytorch-cu128", extra = "gpu" },
+    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
 ]
 resiliparse = { index = "marin-resiliparse" }
 # Use CUDA PyTorch for --extra=gpu on Linux, CPU PyTorch for TPU/CPU builds
 torch = [
-    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
 ]
