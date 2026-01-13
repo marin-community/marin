@@ -39,7 +39,7 @@ from experiments.isoflop_sweep import (
     run_isoflop_analysis_step,
 )
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.scaling_laws import ScalingFit, predict_optimal_config
 from marin.scaling_laws.tpu_utils import pick_v5p_type
@@ -100,7 +100,8 @@ def run_optimal_training(
         f"  tokens={candidate.tokens:.2e}"
     )
 
-    tpu_type = pick_v5p_type(candidate, SEQ_LEN, MARIN_2025_RECIPE)
+    estimated_memory = MARIN_2025_RECIPE.estimate_memory_bytes(candidate, SEQ_LEN)
+    tpu_type = pick_v5p_type(estimated_memory)
 
     train_config = SimpleTrainConfig(
         resources=ResourceConfig.with_tpu(tpu_type),
@@ -132,7 +133,7 @@ analysis_step = ExecutorStep(
     name=f"{EXPERIMENT_NAME}-analysis",
     fn=run_isoflop_analysis_step,
     config=IsoFlopAnalysisConfig(
-        training_runs=tuple(output_path_of(r) for r in nemotron_training),
+        training_runs=tuple(r.as_input_name() for r in nemotron_training),
         output_path=this_output_path(),
         recipe=MARIN_2025_RECIPE,
     ),
@@ -145,7 +146,7 @@ for budget in TARGET_BUDGETS:
     step = ExecutorStep(
         name=f"{EXPERIMENT_NAME}-optimal-{budget:.0e}",
         fn=lambda b=budget: run_optimal_training(
-            analysis_output_path=output_path_of(analysis_step),
+            analysis_output_path=analysis_step.as_input_name(),
             target_budget=b,
             label=LABEL,
         ),
