@@ -44,17 +44,16 @@ LEETCODE_DATASET = "newfacade/LeetCodeDataset"
 
 HUMANEVAL_DATASET = "evalplus/humanevalplus"
 
-# Code-R1 system prompt for training
-CODE_R1_SYSTEM_PROMPT = (
-    "You are a helpful programming assistant. The user will ask you a question and you as "
-    "the assistant solve it. The assistant first thinks how to solve the task through reasoning "
-    "and then provides the user with the final answer. The reasoning process and answer are "
-    "enclosed within <think>...</think> and <answer>...</answer> tags, respectively."
+# EvalPlus prompt format (Standard EvalPlus behavior)
+EVALPLUS_PROMPT_TEMPLATE = (
+    "Please provide a self-contained Python script that solves the following problem in a markdown code block:\n"
+    "```\n"
+    "{problem}\n"
+    "```\n"
 )
 
-# Code-R1 user prompt template for LeetCode (Training)
-CODE_R1_USER_TEMPLATE = (
-    "Please solve the programming task below using a self-contained code snippet in a markdown code block.\n\n{problem}"
+EVALPLUS_RESPONSE_PREFIX = (
+    "Below is a Python script with a self-contained function that" " solves the problem and passes corresponding tests:"
 )
 
 # Default timeout for code execution (seconds)
@@ -125,23 +124,8 @@ class ScoreResult(NamedTuple):
     execution_time: float
 
 
-def validate_response_structure(response: str) -> bool:
-    """Check if the response follows the <think>...</think>...<answer>...</answer> format."""
-    pattern = re.compile(r"<think>.*</think>.*<answer>.*</answer>$", re.DOTALL)
-    return bool(pattern.match(response.strip()))
-
-
 def extract_python_code(response: str) -> str | None:
-    """Extract Python code from a response.
-
-    Prioritizes extracting from <answer> tags if present, otherwise looks for markdown code blocks.
-    """
-    # Try to extract content inside <answer> tags
-    answer_match = re.findall(r"<answer>(.*?)</answer>", response, re.DOTALL)
-    if answer_match:
-        # Use the last answer block if multiple
-        response = answer_match[-1].strip()
-
+    """Extract Python code from a response within markdown code blocks."""
     # Extract code blocks
     code_blocks = re.findall(r"```(?:\w+)?\n(.*?)\n```", response, re.DOTALL)
     if code_blocks:
@@ -250,7 +234,7 @@ class CodeR1Env(MarinEnv):
         self._rng = np.random.default_rng(seed)
         self.execution_timeout = execution_timeout
         self.max_workers = max_workers
-        self.system_prompt = CODE_R1_SYSTEM_PROMPT
+        self.system_prompt = None
 
         self.train_examples = self._prepare_split(
             split_name="train",
@@ -359,18 +343,8 @@ class CodeR1Env(MarinEnv):
         if not problem or not test_cases:
             return None
 
-        # Determine which template to use based on the source
-        if "canonical_solution" in item:
-            # HumanEvalPlus (Eval) - Use EvalPlus standard instruction
-            # we mimic evalplus logic here: instruction + fenced block
-            instruction_prefix = (
-                "Please provide a self-contained Python script that"
-                " solves the following problem in a markdown code block:"
-            )
-            processed_prompt = f"{instruction_prefix}\n```\n{problem.strip()}\n```\n"
-        else:
-            # LeetCode (Train) - Use Code-R1 training template
-            processed_prompt = CODE_R1_USER_TEMPLATE.format(problem=problem)
+        # Use EvalPlus standard instruction for all examples
+        processed_prompt = EVALPLUS_PROMPT_TEMPLATE.format(problem=problem.strip())
 
         return CodeExample(
             problem=problem,
@@ -411,27 +385,9 @@ class CodeR1Env(MarinEnv):
         indices = rng.choice(len(available_examples), size=n_to_sample, replace=False)
         sampled_examples = [available_examples[int(idx)] for idx in indices]
 
-        # Use Code-R1 system prompt if not overridden
-        effective_system_prompt = system_prompt or self.system_prompt
-
-        # Determine if we are in EvalPlus mode to use prefill
-        prefill = None
-        prompts = []
-
-        is_val_mode = mode == "eval" and self.eval_source == HUMANEVAL_DATASET
-
-        if is_val_mode:
-            # EvalPlus logic:
-            # System Prompt = None (Standard EvalPlus behavior)
-            effective_system_prompt = None
-
-            # Response Prefix = Assistant Prefill
-            response_prefix = (
-                "Below is a Python script with a self-contained function that"
-                " solves the problem and passes corresponding tests:"
-            )
-            # Prepare the prefill string to match EvalPlus exactly
-            prefill = f"{response_prefix}\n```python\n"
+        # Use EvalPlus assistant prefill for all examples
+        effective_system_prompt = None
+        prefill = f"{EVALPLUS_RESPONSE_PREFIX}\n```python\n"
 
         prompts = [example.processed_prompt for example in sampled_examples]
 
@@ -568,43 +524,15 @@ class CodeR1Env(MarinEnv):
         Returns:
             ScoreResult containing reward, correctness, code extraction status, and execution time.
         """
-        is_humaneval = example.metadata.get("source") == HUMANEVAL_DATASET
-
-        if not is_humaneval:
-            # Strict format/reward shaping for training (LeetCode)
-            if not validate_response_structure(response_text):
-                return ScoreResult(
-                    reward=-ANSWER_REWARD - FORMAT_REWARD,
-                    is_correct=0.0,
-                    code_extracted=0.0,
-                    execution_time=0.0,
-                )
-
-            code = extract_python_code(response_text)
-            if not code:
-                return ScoreResult(
-                    reward=-ANSWER_REWARD - FORMAT_REWARD,
-                    is_correct=0.0,
-                    code_extracted=0.0,
-                    execution_time=0.0,
-                )
-        else:
-            # Relaxed evaluation for HumanEval (EvalPlus mode)
-            # EvalPlus prompts force python code generation directly, skipping tags.
-            # Just extract the markdown block.
-            code_blocks = re.findall(r"```(?:\w+)?\n(.*?)\n```", response_text, re.DOTALL)
-            if code_blocks:
-                code = "\n".join(code_blocks).strip()
-            else:
-                code = None
-
-            if not code:
-                return ScoreResult(
-                    reward=0.0,
-                    is_correct=0.0,
-                    code_extracted=0.0,
-                    execution_time=0.0,
-                )
+        # Use unified extraction for all examples
+        code = extract_python_code(response_text)
+        if not code:
+            return ScoreResult(
+                reward=0.0,
+                is_correct=0.0,
+                code_extracted=0.0,
+                execution_time=0.0,
+            )
 
         start_time = time.perf_counter()
         passed, error_msg = execute_code_with_tests(
@@ -616,13 +544,6 @@ class CodeR1Env(MarinEnv):
         execution_time = time.perf_counter() - start_time
 
         if passed:
-            if is_humaneval:
-                return ScoreResult(
-                    reward=1.0,
-                    is_correct=1.0,
-                    code_extracted=1.0,
-                    execution_time=execution_time,
-                )
             return ScoreResult(
                 reward=FORMAT_REWARD + ANSWER_REWARD,
                 is_correct=1.0,
@@ -631,13 +552,6 @@ class CodeR1Env(MarinEnv):
             )
         else:
             logger.debug(f"Code execution failed for {example.example_id}: {error_msg}")
-            if is_humaneval:
-                return ScoreResult(
-                    reward=0.0,
-                    is_correct=0.0,
-                    code_extracted=1.0,
-                    execution_time=execution_time,
-                )
             return ScoreResult(
                 reward=FORMAT_REWARD,
                 is_correct=0.0,

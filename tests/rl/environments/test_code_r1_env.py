@@ -27,7 +27,6 @@ from marin.rl.environments.code_r1_env import (
     CodeR1Env,
     extract_python_code,
     execute_code_with_tests,
-    CODE_R1_SYSTEM_PROMPT,
 )
 from marin.rl.environments.inference_ctx import LevanterInferenceContext
 
@@ -62,22 +61,6 @@ def multiply(x, y):
         code = extract_python_code(response)
         assert code is not None
         assert "def multiply(x, y):" in code
-
-    def test_extract_from_answer_tags(self):
-        """Extract code from <answer>...</answer> tags."""
-        response = """<think>
-Let me think about this problem...
-</think>
-<answer>
-```python
-def solve():
-    return 42
-```
-</answer>"""
-        code = extract_python_code(response)
-        assert code is not None
-        assert "def solve():" in code
-        assert "return 42" in code
 
     def test_no_code_returns_none(self):
         """Return None when no code is found."""
@@ -211,23 +194,17 @@ class TestCodeR1Env:
         env = CodeR1Env(train_dataset=train_data, max_train_examples=1)
 
         assert len(env.train_examples) == 1
-        assert env.system_prompt == CODE_R1_SYSTEM_PROMPT
-        assert "Please solve the programming task" in env.train_examples[0].processed_prompt
+        assert env.system_prompt is None
+        assert "Please provide a self-contained Python script" in env.train_examples[0].processed_prompt
 
     def test_sample_with_passing_code(self):
         """Test sampling with code that passes tests."""
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
-        # Response with correct code
-        code_response = """<think>
-I need to add two numbers.
-</think>
-<answer>
-```python
-def add(a, b):
+        # Response with correct code (no tags needed anymore)
+        code_response = """def add(a, b):
     return a + b
-```
-</answer>"""
+```"""
 
         inference_ctx = DummyInferenceContext(tokenizer, code_response)
 
@@ -258,8 +235,8 @@ def add(a, b):
         assert rollout.prompt_tokens.dtype == np.int32
         assert rollout.response_tokens.dtype == np.int32
 
-        # Code should pass, reward should be more than 1.0 (format + correct)
-        assert rollout.episode_reward > 1.0
+        # Code should pass, reward should be 1.0 (correct)
+        assert rollout.episode_reward == pytest.approx(1.1)  # FORMAT_REWARD + ANSWER_REWARD
         assert metrics["code_r1.train_pass_rate"] == pytest.approx(1.0)
 
     def test_sample_with_failing_code(self):
@@ -267,15 +244,9 @@ def add(a, b):
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
         # Response with incorrect code
-        code_response = """<think>
-I am confused.
-</think>
-<answer>
-```python
-def add(a, b):
+        code_response = """def add(a, b):
     return a - b  # Wrong!
-```
-</answer>"""
+```"""
 
         inference_ctx = DummyInferenceContext(tokenizer, code_response)
 
@@ -299,11 +270,9 @@ def add(a, b):
             mode="train",
         )
 
-        _ = rollout_groups[0].rollouts[0]
-
-        # Code failed but format might be right or wrong (here it lacks think/answer tags so reward is neg)
-        # assert rollout.episode_reward == pytest.approx(0.0)
-        # The prompt template expects <think>...<answer> struct for LeetCode, so this will fail format check too.
+        rollout = rollout_groups[0].rollouts[0]
+        # Code failed, reward should be FORMAT_REWARD
+        assert rollout.episode_reward == pytest.approx(0.1)
 
         # But code was extracted
         assert metrics["code_r1.train_code_extracted_rate"] == pytest.approx(1.0)
@@ -324,17 +293,14 @@ def add(a, b):
         prompt = env.train_examples[0].processed_prompt
 
         # Should contain the user template
-        assert "Please solve the programming task below" in prompt
+        assert "Please provide a self-contained Python script" in prompt
         assert "Test problem." in prompt
 
     def test_metrics_include_execution_time(self):
         """Test that execution time metrics are returned."""
         tokenizer = AutoTokenizer.from_pretrained("gpt2")
-        code_response = """<think>T</think><answer>
-```python
-def add(a, b): return a + b
-```
-</answer>"""
+        code_response = """def add(a, b): return a + b
+```"""
 
         inference_ctx = DummyInferenceContext(tokenizer, code_response)
         train_data = [{"content": "Prob", "test": "assert add(1,1)==2", "python": "sol"}]
