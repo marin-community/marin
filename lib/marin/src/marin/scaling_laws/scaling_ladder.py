@@ -83,10 +83,10 @@ class ScalingLadderRungConfig:
 def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
     """Run one rung of the scaling ladder (one compute-optimal training run).
 
-    The recipe handles all model-specific decisions (vocab_size is owned by the recipe):
-    - Model config is on the candidate: `candidate.model_config`
-    - Training schedule is built via `recipe.compute_training_schedule(candidate)`
-    - Optimizer config is built via `recipe.build_optimizer_config(candidate)`
+    The candidate contains all training configuration:
+    - Model config: `candidate.model_config`
+    - Optimizer config: `candidate.optimizer_config`
+    - Training schedule: `candidate.batch_size`, `candidate.train_steps`
     """
     result_path = os.path.join(config.analysis_output_path, "isoflop_analysis_result.json")
     fs, _, _ = fsspec.get_fs_token_paths(result_path)
@@ -121,11 +121,10 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
     )
 
     model_cfg = candidate.model_config
-    optimizer_cfg = config.recipe.build_optimizer_config(candidate, config.seq_len)
+    optimizer_cfg = candidate.optimizer_config
+    batch_size = candidate.batch_size
+    train_steps = candidate.train_steps
     tpu_type = pick_v5p_type(candidate, config.seq_len, config.recipe)
-
-    # Compute training schedule - recipe-specific
-    batch_size, train_steps = config.recipe.compute_training_schedule(candidate, config.seq_len)
 
     train_config = TrainLmConfig(
         data=config.tokenized,

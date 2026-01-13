@@ -30,7 +30,6 @@ from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig
-from levanter.optim.config import OptimizerConfig
 
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import EvalTaskConfig
@@ -49,11 +48,9 @@ from marin.scaling_laws import (
     IsoFlopRecord,
     ScalingRecipe,
     fit_scaling_laws,
-    generate_isoflop_train_args,
+    generate_training_configs,
     pick_v5p_type,
     round_flops_to_bucket,
-    solve_for_batch_size,
-    solve_for_train_steps,
 )
 from marin.scaling_laws.eval_metrics_reader import read_raw_records
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
@@ -64,7 +61,6 @@ DEFAULT_BUDGETS: tuple[float, ...] = (1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20)
 LEGACY_BUDGETS: tuple[float, ...] = (3e18, 9e18, 1.8e19, 3e19, 9e19, 1.8e20, 3e20)
 DEFAULT_SEQ_LEN: int = 4096
 DEFAULT_STEPS_PER_RUN: int = 2**16
-DEFAULT_FLOP_TOLERANCE: float = 0.01
 
 # ---------------- Levanter WandB Metric Keys ----------------
 # These keys correspond to the metrics logged by Levanter's training callbacks.
@@ -317,7 +313,7 @@ class Marin2025Recipe:
     ) -> int:
         """Estimate float32 memory usage in bytes for training."""
         model_config = candidate.model_config
-        batch_size, _ = self.compute_training_schedule(candidate, seq_len)
+        batch_size = candidate.batch_size
 
         param_count = model_config.total_trainable_params(self.vocab_size)
         param_bytes = param_count * optim_mult * dtype_size
@@ -327,39 +323,58 @@ class Marin2025Recipe:
         total_bytes = param_bytes + act_bytes
         return int(total_bytes * fudge_factor)
 
-    def compute_training_schedule(self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN) -> tuple[int, int]:
-        """Compute training schedule (batch_size, train_steps) for a candidate."""
-        hidden_size = candidate.model_config.hidden_dim
+    def build_model_configs(
+        self,
+        budget: float,
+        seq_len: int = DEFAULT_SEQ_LEN,
+    ) -> Iterator[LlamaConfig]:
+        """Yield candidate model architectures for the given FLOP budget."""
+        step_size = self._get_step_size(budget)
+        min_hidden = 2**self.min_hidden_pow
+        max_hidden = 2**self.max_hidden_pow
 
-        # Start with batch_size that gives us ~DEFAULT_STEPS_PER_RUN steps for the tokens
+        for hidden_size in range(min_hidden, max_hidden + 1, step_size):
+            yield self._build_model_config_from_hidden_size(hidden_size, seq_len)
+
+    def build_candidate_config(
+        self,
+        model_config: LlamaConfig,
+        tokens: float,
+        flops_budget: float,
+        seq_len: int = DEFAULT_SEQ_LEN,
+    ) -> CandidateConfig | None:
+        """Build complete training config for a model and token count.
+
+        Returns None if the configuration is invalid (e.g., batch_size < minimum
+        after learning rate constraints are applied).
+        """
+        hidden_size = model_config.hidden_dim
+
+        # Start with batch_size that gives us ~DEFAULT_STEPS_PER_RUN steps
         target_steps = DEFAULT_STEPS_PER_RUN
-        batch_exact = candidate.tokens / (target_steps * seq_len)
+        batch_exact = tokens / (target_steps * seq_len)
         batch_size = _round_to_power_of_two(batch_exact)
 
         # Adjust batch_size to respect learning rate constraints
         lr = self._compute_learning_rate(batch_size, hidden_size)
-        while lr > self.max_learning_rate and batch_size >= self.min_batch_size * 2:
+        while lr > self.max_learning_rate:
             batch_size //= 2
             lr = self._compute_learning_rate(batch_size, hidden_size)
 
-        # Ensure minimum batch size
+        # Return None if batch_size is below minimum
         if batch_size < self.min_batch_size:
-            batch_size = self.min_batch_size
+            return None
 
         # Compute train_steps to achieve target tokens
-        train_steps = round(candidate.tokens / (batch_size * seq_len))
+        train_steps = round(tokens / (batch_size * seq_len))
 
-        return (batch_size, train_steps)
+        # Compute actual tokens after rounding
+        actual_tokens = batch_size * train_steps * seq_len
 
-    def build_optimizer_config(self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN) -> OptimizerConfig:
-        """Build optimizer config for a candidate."""
-        batch_size, _ = self.compute_training_schedule(candidate, seq_len)
-        hidden_size = candidate.model_config.hidden_dim
-        learning_rate = self._compute_learning_rate(batch_size, hidden_size)
+        # Build optimizer config
         beta2 = self._compute_beta2(batch_size)
-
-        return CautiousConfig(
-            learning_rate=learning_rate,
+        optimizer_config = CautiousConfig(
+            learning_rate=lr,
             weight_decay=self.weight_decay,
             min_lr_ratio=self.min_lr_ratio,
             warmup=self.warmup,
@@ -372,54 +387,14 @@ class Marin2025Recipe:
             decay=self.decay,
         )
 
-    def candidate_configs(
-        self,
-        budget: float,
-        seq_len: int = DEFAULT_SEQ_LEN,
-        steps_per_run: int = DEFAULT_STEPS_PER_RUN,
-        flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
-    ) -> Iterator[CandidateConfig]:
-        """Yield candidate configurations within the FLOP budget.
-
-        Iterates over feasible model architectures, computes tokens to hit the
-        FLOP budget, and yields CandidateConfigs with the model_config directly.
-        """
-        step_size = self._get_step_size(budget)
-        min_hidden = 2**self.min_hidden_pow
-        max_hidden = 2**self.max_hidden_pow
-
-        for hidden_size in range(min_hidden, max_hidden + 1, step_size):
-            model_config = self._build_model_config_from_hidden_size(hidden_size, seq_len)
-
-            # Compute batch_size to hit FLOP budget
-            batch_exact = solve_for_batch_size(model_config, self.vocab_size, budget, steps_per_run, seq_len)
-            batch_size = _round_to_power_of_two(batch_exact)
-
-            # Adjust batch_size to respect learning rate constraints
-            lr = self._compute_learning_rate(batch_size, hidden_size)
-            while lr > self.max_learning_rate:
-                batch_size //= 2
-                lr = self._compute_learning_rate(batch_size, hidden_size)
-
-            if batch_size < self.min_batch_size:
-                continue
-
-            train_steps = round(solve_for_train_steps(model_config, self.vocab_size, budget, batch_size, seq_len))
-
-            # Validate achieved FLOPs are within tolerance
-            achieved_flops = (
-                3 * model_config.flops_per_token(self.vocab_size, seq_len) * batch_size * train_steps * seq_len
-            )
-            if abs(achieved_flops - budget) / budget > flop_tolerance:
-                continue
-
-            tokens = batch_size * train_steps * seq_len
-
-            yield CandidateConfig(
-                model_config=model_config,
-                tokens=tokens,
-                flops_budget=budget,
-            )
+        return CandidateConfig(
+            model_config=model_config,
+            optimizer_config=optimizer_config,
+            batch_size=batch_size,
+            train_steps=train_steps,
+            tokens=actual_tokens,
+            flops_budget=flops_budget,
+        )
 
 
 MARIN_2025_RECIPE = Marin2025Recipe()
@@ -551,7 +526,7 @@ def create_isoflop_sweep_steps(
     """Create ExecutorSteps for an ISOFlop sweep.
 
     This function creates ExecutorSteps directly in experiment code, using
-    `generate_isoflop_train_args()` from the library to compute configs.
+    `generate_training_configs()` from the library to compute configs.
 
     Args:
         tokenized: Tokenized dataset to train on.
@@ -566,14 +541,14 @@ def create_isoflop_sweep_steps(
         - steps: Training and evaluation ExecutorSteps for the sweep.
         - candidates: CandidateConfig for each training run with full config details.
     """
-    # Library provides the training arguments (model configs, optimizer configs, etc.)
-    # vocab_size is owned by the recipe
-    train_args_list = generate_isoflop_train_args(
+    # Generate complete training configs from the library
+    candidates = generate_training_configs(
         budgets=budgets,
         recipe=recipe,
+        seq_len=seq_len,
     )
 
-    # Base config for training runs (values overridden per-candidate via optimizer_config)
+    # Base config for training runs (values overridden per-candidate)
     base_train_config = SimpleTrainConfig(
         resources=ResourceConfig.with_tpu("v5p-8"),
         train_batch_size=1,
@@ -583,37 +558,39 @@ def create_isoflop_sweep_steps(
 
     train_steps: list[ExecutorStep] = []
     eval_steps: list[ExecutorStep] = []
-    candidates: list[CandidateConfig] = []
 
     # Create ExecutorSteps for each candidate configuration
-    for args in train_args_list:
-        candidate = args.candidate
-
-        # Model config is on the candidate; build optimizer config using the recipe
+    for candidate in candidates:
         model_config = candidate.model_config
-        optimizer_config = recipe.build_optimizer_config(candidate, seq_len)
         tpu_type = pick_v5p_type(candidate, seq_len, recipe)
-
-        # Compute training schedule from recipe
-        batch_size, num_steps = recipe.compute_training_schedule(candidate, seq_len)
 
         # Use local naming with architecture details for backward compatibility
         run_name = _format_run_name(
             candidate.flops_budget,
             model_config.hidden_dim,
             model_config.num_layers,
-            batch_size,
+            candidate.batch_size,
             experiment_name,
         )
         output_path = f"checkpoints/isoflop/{run_name}"
 
+        # Build tags for tracking
+        params = model_config.total_trainable_params(recipe.vocab_size)
+        tags = (
+            f"FLOPs={candidate.flops_budget:.1e}",
+            f"N={params:.1e}",
+            f"B={candidate.batch_size}",
+            f"steps={candidate.train_steps}",
+            f"tokens={candidate.tokens:.1e}",
+        )
+
         train_cfg = replace(
             base_train_config,
-            train_batch_size=batch_size,
-            learning_rate=optimizer_config.learning_rate,
-            num_train_steps=num_steps,
+            train_batch_size=candidate.batch_size,
+            learning_rate=candidate.optimizer_config.learning_rate,
+            num_train_steps=candidate.train_steps,
             resources=ResourceConfig.with_tpu(tpu_type),
-            optimizer_config=optimizer_config,
+            optimizer_config=candidate.optimizer_config,
         )
 
         # Create training step
@@ -623,13 +600,12 @@ def create_isoflop_sweep_steps(
             model_config=model_config,
             train_config=train_cfg,
             eval_harness_tasks=[],
-            tags=args.tags,
+            tags=tags,
         )
 
         # Pin to static output path for checkpoint reuse
         train_step = train_step.with_output_path(output_path)
         train_steps.append(train_step)
-        candidates.append(candidate)
 
         # Create evaluation step if eval tasks specified
         if eval_tasks:
