@@ -329,10 +329,8 @@ def generate_training_configs(
 def robust_quad_logx(x: jnp.ndarray, y: jnp.ndarray, delta: float = 1.0) -> tuple[float, float, float]:
     """Fit a robust quadratic in log10(x) space using Huber loss.
 
-    Log10 space is used because FLOP budgets and token counts span many orders of
-    magnitude (e.g., 1e18 to 1e21+). Fitting in linear space would be numerically
-    unstable and dominated by the largest values. Log space provides better
-    conditioning and more interpretable coefficients.
+    Log10 space is used because sweeps are defined in powers of 10 (scientific
+    notation like 1e18, 1e19, 3e19), so log10 produces evenly-spaced points.
 
     The Huber loss provides robustness to outliers compared to standard least squares.
 
