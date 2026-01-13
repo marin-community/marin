@@ -57,7 +57,7 @@ from marin.scaling_laws import (
     pick_v5p_type,
     round_flops_to_bucket,
 )
-from marin.scaling_laws.eval_metrics_reader import read_raw_records
+from marin.scaling_laws.eval_metrics_reader import read_eval_records
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger(__name__)
@@ -455,7 +455,7 @@ def run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> FitScalingLawsRe
         FitScalingLawsResult with fitted scaling laws
     """
     # Read raw records from training runs
-    raw_records = read_raw_records(
+    raw_records = read_eval_records(
         training_runs=config.training_runs,
         metrics_filename=config.metrics_filename,
         wandb_entity_project=config.wandb_entity_project,

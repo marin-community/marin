@@ -85,7 +85,7 @@ def _backfill_metrics_from_wandb(
         return False
 
 
-def read_raw_records(
+def read_eval_records(
     training_runs: Sequence[str],
     metrics_filename: str = "tracker_metrics.jsonl",
     wandb_entity_project: str = f"{WANDB_ENTITY}/{WANDB_PROJECT}",
