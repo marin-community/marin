@@ -1163,11 +1163,9 @@ dependencies = [
     { name = "connect-python" },
     { name = "docker" },
     { name = "fsspec" },
-    { name = "gcsfs" },
     { name = "httpx" },
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
-    { name = "xxhash" },
 ]
 
 [package.dev-dependencies]
@@ -1183,11 +1181,9 @@ requires-dist = [
     { name = "connect-python", git = "https://github.com/connectrpc/connect-python.git?rev=5342eacecef85e52717604ee5ac7e03a1e16c7ac" },
     { name = "docker", specifier = ">=7.0.0" },
     { name = "fsspec", specifier = ">=2024.0.0" },
-    { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
-    { name = "xxhash", specifier = ">=3.0.0" },
 ]
 
 [package.metadata.requires-dev]

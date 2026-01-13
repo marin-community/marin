@@ -16,8 +16,6 @@ syntax = "proto3";
 
 package fluster.cluster;
 
-option python_package = "fluster.cluster";
-
 option py_generic_services = true;
 
 // ============================================================================
