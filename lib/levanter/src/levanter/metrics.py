@@ -75,17 +75,18 @@ class Metric:
     @classmethod
     def from_value(cls, value: float | jax.Array, reduction: ReductionType) -> "Metric":
         """Create metric from single observation."""
+        # Use float literals (not int) for consistent dtype across scan iterations
         match reduction:
             case ReductionType.MEAN:
-                return cls(_value=value, _count=1, reduction=reduction)
+                return cls(_value=value, _count=1.0, reduction=reduction)
             case ReductionType.SUM:
-                return cls(_value=value, _count=0, reduction=reduction)
+                return cls(_value=value, _count=0.0, reduction=reduction)
             case ReductionType.MAX:
-                return cls(_value=value, _count=0, reduction=reduction)
+                return cls(_value=value, _count=0.0, reduction=reduction)
             case ReductionType.MIN:
-                return cls(_value=value, _count=0, reduction=reduction)
+                return cls(_value=value, _count=0.0, reduction=reduction)
             case ReductionType.LAST:
-                return cls(_value=value, _count=0, reduction=reduction)
+                return cls(_value=value, _count=0.0, reduction=reduction)
 
 
 def _metric_flatten(m: Metric):
