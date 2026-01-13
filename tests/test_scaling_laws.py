@@ -20,54 +20,16 @@ the snapshot test which ensures reproducibility of config generation.
 
 import jax.numpy as jnp
 
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
-from levanter.models.qwen import Qwen3Config
-
 from marin.scaling_laws.isoflop_analysis import (
     DEFAULT_SEQ_LEN,
     CandidateConfig,
-    compute_training_flops,
     fit_scaling_laws,
     generate_training_configs,
     robust_quad_logx,
-    solve_for_batch_size,
-    solve_for_train_steps,
 )
 
 # Import the concrete recipe and transform function from experiments
 from experiments.isoflop_sweep import Marin2025Recipe, parse_isoflop_run_name, transform_levanter_metrics
-
-# --- FLOP computation tests ---
-
-
-def test_flop_solvers_are_consistent():
-    """Test that FLOP solvers correctly invert the FLOP calculation."""
-    model_config = Qwen3Config(
-        max_seq_len=4096,
-        hidden_dim=768,
-        intermediate_dim=3072,
-        num_heads=12,
-        num_kv_heads=12,
-        num_layers=12,
-        rope=Llama3RotaryEmbeddingsConfig(),
-    )
-    vocab_size = 128256
-    seq_len = 4096
-
-    # Verify solve_for_batch_size inverts compute_training_flops
-    original_batch = 64
-    train_steps = 10000
-    target_flops = compute_training_flops(model_config, vocab_size, original_batch, train_steps, seq_len)
-    recovered_batch = solve_for_batch_size(model_config, vocab_size, target_flops, train_steps, seq_len)
-    assert abs(recovered_batch - original_batch) < 0.01
-
-    # Verify solve_for_train_steps inverts compute_training_flops
-    original_steps = 50000
-    batch_size = 32
-    target_flops = compute_training_flops(model_config, vocab_size, batch_size, original_steps, seq_len)
-    recovered_steps = solve_for_train_steps(model_config, vocab_size, target_flops, batch_size, seq_len)
-    assert abs(recovered_steps - original_steps) < 0.01
-
 
 # --- Run name parsing tests ---
 
@@ -106,13 +68,8 @@ def test_candidate_configs_within_tolerance():
         if candidate is None:
             continue
 
-        achieved = compute_training_flops(
-            candidate.model_config,
-            recipe.vocab_size,
-            candidate.batch_size,
-            candidate.train_steps,
-            seq_len,
-        )
+        # Compute training FLOPs inline: 3 * flops_per_token * batch * steps * seq_len
+        achieved = 3 * flops_per_token * candidate.batch_size * candidate.train_steps * seq_len
         relative_error = abs(achieved - budget) / budget
         assert relative_error <= flop_tolerance
 

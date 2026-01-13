@@ -23,7 +23,14 @@ The scaling ladder:
 3. Optionally trains compute-optimal models at larger target budgets
 """
 
-from experiments.defaults import default_validation_sets
+import json
+import logging
+import os
+
+import fsspec
+from fray.cluster import ResourceConfig
+
+from experiments.defaults import default_train, default_validation_sets
 from experiments.isoflop_sweep import (
     IsoFlopAnalysisConfig,
     MARIN_2025_RECIPE,
@@ -31,12 +38,13 @@ from experiments.isoflop_sweep import (
     nemotron_mix,
     run_isoflop_analysis_step,
 )
+from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.processing.tokenize import add_validation_sets_to_mixture
-from marin.scaling_laws import (
-    ScalingLadderRungConfig,
-    run_scaling_ladder_rung,
-)
+from marin.scaling_laws import ScalingFit, predict_optimal_config
+from marin.scaling_laws.tpu_utils import pick_v5p_type
+
+logger = logging.getLogger(__name__)
 
 # Get training steps from the isoflop sweep
 nemotron_training, _ = MARIN_SCALING_SUITES["nemotron"]
@@ -46,9 +54,77 @@ TARGET_BUDGETS: list[float] = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
 EXPERIMENT_NAME = "exp2166-scaling-ladder-nemotron-validation"
 LABEL = "nemo-wider-depth-adapt"
 TOKENIZER = "stanford-crfm/marin-tokenizer"
+SEQ_LEN = 4096
 
 # Add validation sets to the training mixture
 nemotron_mix_with_validation = add_validation_sets_to_mixture(nemotron_mix, default_validation_sets(tokenizer=TOKENIZER))
+
+
+def run_optimal_training(
+    analysis_output_path: str,
+    target_budget: float,
+    label: str,
+) -> ExecutorStep:
+    """Create an ExecutorStep for compute-optimal training at the given budget.
+
+    Loads scaling fits from the analysis output, predicts the optimal config,
+    and returns an ExecutorStep using default_train.
+    """
+    result_path = os.path.join(analysis_output_path, "isoflop_analysis_result.json")
+    fs, _, _ = fsspec.get_fs_token_paths(result_path)
+
+    with fs.open(result_path, "r") as f:
+        analysis_result = json.load(f)
+
+    scaling_fits: dict[str, ScalingFit] = {}
+    for key, value in analysis_result["scaling_fits"].items():
+        if len(value) != 2:
+            raise ValueError(f"Expected 2 scaling fit values for '{key}', got {len(value)}")
+        scaling_fits[key] = ScalingFit(float(value[0]), float(value[1]))
+
+    candidate = predict_optimal_config(
+        scaling_fits=scaling_fits,
+        target_flops=target_budget,
+        label=label,
+        recipe=MARIN_2025_RECIPE,
+        seq_len=SEQ_LEN,
+    )
+
+    if candidate is None:
+        raise RuntimeError(f"Could not find optimal config for budget {target_budget:.2e} and label '{label}'")
+
+    params = candidate.model_config.total_trainable_params(MARIN_2025_RECIPE.vocab_size)
+    logger.info(
+        f"Training with optimal config for {target_budget:.2e} FLOPs:\n"
+        f"  params={params:.2e}\n"
+        f"  tokens={candidate.tokens:.2e}"
+    )
+
+    tpu_type = pick_v5p_type(candidate, SEQ_LEN, MARIN_2025_RECIPE)
+
+    train_config = SimpleTrainConfig(
+        resources=ResourceConfig.with_tpu(tpu_type),
+        train_batch_size=candidate.batch_size,
+        num_train_steps=candidate.train_steps,
+        learning_rate=candidate.optimizer_config.learning_rate,
+        optimizer_config=candidate.optimizer_config,
+        train_seq_len=SEQ_LEN,
+    )
+
+    return default_train(
+        name=f"{EXPERIMENT_NAME}-optimal-{target_budget:.0e}",
+        tokenized=nemotron_mix_with_validation,
+        model_config=candidate.model_config,
+        train_config=train_config,
+        tags=[
+            "optimal-training",
+            f"FLOPs={target_budget:.1e}",
+            f"label={label}",
+            f"N={params:.1e}",
+        ],
+        use_default_validation=False,  # Already added above
+    )
+
 
 # --- Step 1: IsoFLOP Analysis ---
 # Creates scaling law fits from the training runs
@@ -68,15 +144,12 @@ optimal_runs: list[ExecutorStep] = []
 for budget in TARGET_BUDGETS:
     step = ExecutorStep(
         name=f"{EXPERIMENT_NAME}-optimal-{budget:.0e}",
-        fn=run_scaling_ladder_rung,
-        config=ScalingLadderRungConfig(
+        fn=lambda b=budget: run_optimal_training(
             analysis_output_path=output_path_of(analysis_step),
-            target_budget=budget,
+            target_budget=b,
             label=LABEL,
-            tokenized=nemotron_mix_with_validation,
-            output_path=this_output_path(),
-            recipe=MARIN_2025_RECIPE,
         ),
+        config=None,
     )
     optimal_runs.append(step)
 

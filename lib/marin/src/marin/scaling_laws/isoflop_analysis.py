@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # common loss metric that measures model perplexity on the C4 English dataset.
 # See: https://arxiv.org/abs/2312.10523
 DEFAULT_EVAL_METRIC_KEY = "eval/paloma/c4_en/bpb"
-SEQ_LEN = 4096
+DEFAULT_SEQ_LEN = 4096
 
 # ---------------- IsoFLOP Sweep Constants ----------------
 # Budgets in training FLOPs (includes 3x multiplier for forward + backward pass).
@@ -113,10 +113,6 @@ class IsoFlopRecord:
 
     label: str
     """Experiment label for grouping (e.g., 'nemo', 'dclm')."""
-
-
-# ---------------- IsoFLOP Sweep Defaults ----------------
-DEFAULT_SEQ_LEN = SEQ_LEN
 
 
 # ---------------- Model Configuration Protocol ----------------
@@ -279,86 +275,6 @@ def round_flops_to_bucket(flops: float, base: float = 1.1) -> float:
 
     k = math.log(flops) / math.log(base)
     return base ** round(k)
-
-
-def compute_training_flops(
-    model_config: ModelConfiguration,
-    vocab_size: int,
-    batch_size: int,
-    train_steps: int,
-    seq_len: int,
-) -> float:
-    """Compute total training FLOPs using the model config's own method.
-
-    This returns training FLOPs which includes forward pass (1x) + backward pass (2x) = 3x.
-    This matches the FLOP accounting in Levanter's log_performance_stats callback
-    (see train_lm.py) and standard ML conventions (e.g., Chinchilla paper).
-
-    Args:
-        model_config: Model config with flops_per_token method.
-        vocab_size: Vocabulary size.
-        batch_size: Training batch size.
-        train_steps: Number of training steps.
-        seq_len: Sequence length.
-
-    Returns:
-        Total training FLOPs (including 3x multiplier for forward + backward pass).
-    """
-    flops_per_token = model_config.flops_per_token(vocab_size, seq_len)
-    # Multiply by 3 for training: forward (1x) + backward (2x)
-    return 3 * flops_per_token * batch_size * train_steps * seq_len
-
-
-def solve_for_batch_size(
-    model_config: ModelConfiguration,
-    vocab_size: int,
-    target_flops: float,
-    train_steps: int,
-    seq_len: int,
-) -> float:
-    """Solve for batch size needed to hit a target FLOP budget.
-
-    Given: total_flops = 3 * flops_per_token * batch * steps * seq_len
-    Solve: batch = total_flops / (3 * flops_per_token * steps * seq_len)
-
-    Args:
-        model_config: Model config with flops_per_token method.
-        vocab_size: Vocabulary size.
-        target_flops: Target total training FLOPs.
-        train_steps: Number of training steps.
-        seq_len: Sequence length.
-
-    Returns:
-        Exact batch size (float) - caller decides how to round.
-    """
-    flops_per_token = model_config.flops_per_token(vocab_size, seq_len)
-    return target_flops / (3 * flops_per_token * train_steps * seq_len)
-
-
-def solve_for_train_steps(
-    model_config: ModelConfiguration,
-    vocab_size: int,
-    target_flops: float,
-    batch_size: int,
-    seq_len: int,
-) -> float:
-    """Solve for training steps needed to hit a target FLOP budget.
-
-    Given: total_flops = 3 * flops_per_token * batch * steps * seq_len
-    Solve: steps = total_flops / (3 * flops_per_token * batch * seq_len)
-
-    Args:
-        model_config: Model config with flops_per_token method.
-        vocab_size: Vocabulary size.
-        target_flops: Target total training FLOPs.
-        batch_size: Training batch size.
-        seq_len: Sequence length.
-
-    Returns:
-        Exact training steps (float) - caller decides how to round.
-    """
-    flops_per_token = model_config.flops_per_token(vocab_size, seq_len)
-    return target_flops / (3 * flops_per_token * batch_size * seq_len)
 
 
 # ---------------- Training Config Generation ----------------
@@ -607,38 +523,3 @@ def predict_optimal_config(
     logger.info(f"Selected config: N={params:.2e}, tokens={best.tokens:.2e} (optimal: {optimal_tokens:.2e})")
 
     return best
-
-
-def predict_optimal_configs_for_budgets(
-    scaling_fits: dict[str, ScalingFit],
-    target_budgets: list[float],
-    label: str,
-    recipe: ScalingRecipe,
-    seq_len: int = DEFAULT_SEQ_LEN,
-) -> list[CandidateConfig]:
-    """Predict optimal configs for multiple target compute budgets.
-
-    Args:
-        scaling_fits: Dict of {label: ScalingFit} from scaling ladder result.
-        target_budgets: List of target compute budgets in FLOPs.
-        label: Dataset/experiment label to use for scaling fit.
-        recipe: ScalingRecipe with architecture/hyperparameter settings (includes vocab_size).
-        seq_len: Sequence length for training.
-
-    Returns:
-        List of CandidateConfig for each budget.
-
-    Raises:
-        RuntimeError: If any budget cannot be predicted (to prevent silent failures).
-    """
-    configs = []
-    for budget in target_budgets:
-        config = predict_optimal_config(scaling_fits, budget, label, recipe, seq_len)
-        if config is None:
-            raise RuntimeError(
-                f"Failed to predict optimal config for budget {budget:.2e} FLOPs "
-                f"with label '{label}'. Check that the label exists in scaling_fits "
-                f"and that the budget is within a valid range."
-            )
-        configs.append(config)
-    return configs
