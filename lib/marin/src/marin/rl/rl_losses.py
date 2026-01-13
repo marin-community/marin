@@ -207,18 +207,13 @@ def compute_ppo_loss_objective(
     loss_objective = jnp.minimum(non_clipped_objective, clipped_objective)
     if trainer_inference_importance_sampling_ratio is not None:
         loss_objective = trainer_inference_importance_sampling_ratio * loss_objective
-    # Mean over response tokens per batch
-    # loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
 
     if response_truncated_array is not None:
         batch_size, _ = loss_objective.shape
         loss_objective = loss_objective * (1 - response_truncated_array.reshape(batch_size, 1))
 
-    # Dr GRPO loss, token-level loss
-    # loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / max_output_tokens)
-
-    # more like DAPO loss
-    loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
+    # Default to DAPO loss (matches original active behavior)
+    loss = compute_dapo_loss(loss_objective, loss_masks)
 
     per_batch_loss = jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1)
     metadata = {
@@ -226,6 +221,41 @@ def compute_ppo_loss_objective(
         "loss_std_over_batch": Metric.from_value(jnp.std(per_batch_loss).astype(jnp.float32), ReductionType.MEAN),
     }
     return loss, metadata
+
+
+def compute_ppo_loss(
+    loss_objective: jax.Array,
+    loss_masks: jax.Array,
+) -> jax.Array:
+    """Compute PPO loss (per-example normalization)."""
+    # -1 * mean( sum(obj * mask) / sum(mask) )
+    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
+
+
+def compute_dapo_loss(
+    loss_objective: jax.Array,
+    loss_masks: jax.Array,
+) -> jax.Array:
+    """Compute DAPO-like loss (global token normalization)."""
+    # -1 * mean( sum(obj * mask) / global_sum_mask) ... wait, original was:
+    # loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
+    # Note: jnp.sum(loss_masks) is a scalar (total tokens in batch).
+    # The mean over batch axis simply divides by batch_size.
+    # So effectively: -1 * sum(obj * mask) / (total_tokens * batch_size) ?
+    # Original code:  -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
+    # This divides each example's sum by TOTAL tokens, then averages over examples.
+    # This seems to double-counts batch size in denominator?
+    # Correct DAPO matches "more like DAPO loss" comment in original code:
+    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
+
+
+def compute_grpo_loss(
+    loss_objective: jax.Array,
+    loss_masks: jax.Array,
+    max_output_tokens: int,
+) -> jax.Array:
+    """Compute GRPO loss (token-level loss)."""
+    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / max_output_tokens)
 
 
 def importance_sampling_ratio(
