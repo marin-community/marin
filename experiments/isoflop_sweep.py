@@ -562,7 +562,8 @@ def create_isoflop_sweep_steps(
     # Create ExecutorSteps for each candidate configuration
     for candidate in candidates:
         model_config = candidate.model_config
-        tpu_type = pick_v5p_type(candidate, seq_len, recipe)
+        estimated_memory = recipe.estimate_memory_bytes(candidate, seq_len)
+        tpu_type = pick_v5p_type(estimated_memory)
 
         # Use local naming with architecture details for backward compatibility
         run_name = _format_run_name(
