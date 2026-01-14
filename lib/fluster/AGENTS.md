@@ -22,3 +22,14 @@ class Scheduler:
 It's acceptable to have a top-level class which implements the main loop of
 course, but prefer to keep other interfaces shallow and functional whenever
 possible.
+
+* Tests should evaluate _behavior_, not implementation. Don't test things that are trivially caught by the type checker. Explicitly that means:
+
+- No tests for "constant = constant"
+- No tests for "method exists"
+- No tests for "create an object(x, y, z) and attributes are x, y, z"
+
+These tests have negative value - they make our code more brittle. Test
+_behavior_ instead. You can use mocks as needed to isolate environments (e.g.
+mock around a remote API). Prefer "fakes" -- e.g. create a real database but
+with fake data -- when reasonable.

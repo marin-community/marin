@@ -102,16 +102,3 @@ DO NOT:
 - Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
 
 > This file will be expanded as agent workflows and best practices evolve.
-
-## Task Management
-
-You'll use the `weaver` tool to manage tasks. When you encounter a problem that is not directly in scope, you
-should file a `weaver` task and notify the user with:
-
-`weaver create <task_title> --description='... <detailed task description and context>'`
-
-You can add parent tasks as well as needed:
-
-`weaver create "User authentication system"` # prints task id
-`weaver create "Design auth schema" --parent <parent_task_id>`
-`weaver create "Implement JWT generation" --parent <parent_task_id>`
