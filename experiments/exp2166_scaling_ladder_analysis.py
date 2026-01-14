@@ -23,11 +23,10 @@ The scaling ladder:
 3. Optionally trains compute-optimal models at larger target budgets
 """
 
-import dataclasses
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 
 import fsspec
@@ -140,7 +139,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
         # Merge validation configs into the data mixture with weight 0
         new_configs = {
             **data.configs,
-            **{name: cfg for name, cfg in config.validation_configs.items() if name not in data.configs},
+            **{k: v for k, v in config.validation_configs.items() if k not in data.configs},
         }
         if isinstance(data.train_weights, dict):
             new_weights = {
@@ -153,7 +152,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
                 (step_idx, {**weights, **{name: 0.0 for name in config.validation_configs if name not in weights}})
                 for step_idx, weights in data.train_weights
             ]
-        data = dataclasses.replace(data, configs=new_configs, train_weights=new_weights)
+        data = replace(data, configs=new_configs, train_weights=new_weights)
 
     inner_config = train_lm.TrainLmConfig(
         data=data,
