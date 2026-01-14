@@ -254,7 +254,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
         entrypoint=Entrypoint.from_callable(_run_inference),
         resources=resources,
         environment=EnvironmentConfig.create(
-            extras=["post_training", "rl"],
+            extras=["math", "rl"],
             env_vars=env_vars,
         ),
     )
@@ -309,7 +309,7 @@ def evaluate_environment(
         fn=_run_evaluation,
         config=config,
         description=f"Evaluate model on {env_name}",
-        pip_dependency_groups=["post_training", "rl"],
+        pip_dependency_groups=["rl"],
     )
 
 
