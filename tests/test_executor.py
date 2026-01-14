@@ -18,12 +18,11 @@ import random
 import re
 import tempfile
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from threading import Thread
 
 import pytest
 from draccus.utils import Dataclass
-from marin.execution import THIS_OUTPUT_PATH
 from marin.execution.executor import (
     Executor,
     ExecutorStep,
@@ -477,7 +476,7 @@ def test_run_only_some_steps():
 class DummyCfg:
     x: int = 0
     input_path: str | None = None
-    output_path: str = THIS_OUTPUT_PATH
+    output_path: StepRef = field(default_factory=lambda: StepRef(_step=None))
 
 
 def dummy_fn(cfg: DummyCfg):
