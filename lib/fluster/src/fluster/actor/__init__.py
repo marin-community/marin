@@ -26,8 +26,7 @@ from fluster.actor.resolver import (
     ResolvedEndpoint,
     Resolver,
 )
-from fluster.actor.server import ActorServer
-from fluster.actor.types import ActorContext, ActorId, current_ctx
+from fluster.actor.server import ActorContext, ActorId, ActorServer, current_ctx
 
 __all__ = [
     "ActorClient",

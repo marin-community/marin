@@ -328,7 +328,7 @@ from starlette.applications import Starlette
 from starlette.responses import Response
 from starlette.routing import Route
 
-from fluster.actor.types import ActorContext, _set_actor_context, ActorId
+from fluster.actor.server import ActorContext, _set_actor_context, ActorId
 
 
 @dataclass
@@ -534,9 +534,7 @@ class _RpcMethod:
 ```python
 # tests/actor/test_actor_e2e.py
 import pytest
-from fluster.actor.server import ActorServer
-from fluster.actor.client import ActorClient
-from fluster.actor.types import current_ctx, ActorContext
+from fluster.actor import ActorServer, ActorClient, current_ctx, ActorContext
 
 
 class Calculator:

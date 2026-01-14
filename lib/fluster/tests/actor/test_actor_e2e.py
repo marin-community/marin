@@ -16,10 +16,7 @@
 
 import pytest
 
-from fluster.actor.client import ActorClient
-from fluster.actor.resolver import FixedResolver
-from fluster.actor.server import ActorServer
-from fluster.actor.types import ActorContext, current_ctx
+from fluster.actor import ActorClient, ActorContext, ActorServer, FixedResolver, current_ctx
 
 
 class Calculator:
