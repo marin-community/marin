@@ -23,8 +23,8 @@ from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
 # Raw dataset download step
-@step(name="raw/dolmino-mix-1124", fn=download_hf)
-def _dolmino_download(ctx: StepContext):
+@step(name="raw/dolmino-mix-1124", fn=download_hf, override_output_path="raw/dolmino-mix-1124-157960")
+def dolmino_download(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="allenai/dolmino-mix-1124",
         revision="bb54cab",
@@ -33,9 +33,9 @@ def _dolmino_download(ctx: StepContext):
     )
 
 
-downloads = {"dolmino": _dolmino_download().with_output_path("raw/dolmino-mix-1124-157960").cd("bb54cab")}
-
-_dolmino_base_dir = downloads["dolmino"].cd("data")
+def _get_dolmino_base_dir():
+    """Get the base directory for dolmino dataset."""
+    return dolmino_download().cd("bb54cab").cd("data")
 
 # The following dataset splits define file patterns for each split.
 DOLMINO_DATASETS = {
@@ -74,7 +74,7 @@ DOLMINO_LLAMA3_OVERRIDES = {
 def _get_dolmino_split_paths(split: str):
     """Helper to get file paths for a dolmino split."""
     patterns = DOLMINO_DATASETS[split]
-    dolmino_split_input_base_path = _dolmino_base_dir / split
+    dolmino_split_input_base_path = _get_dolmino_base_dir() / split
     return [dolmino_split_input_base_path / pattern for pattern in patterns]
 
 

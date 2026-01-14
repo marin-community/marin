@@ -35,7 +35,7 @@ from experiments.llama import llama3_tokenizer
 # ============================================================================
 
 
-def _tokenize_simple(
+def tokenize_simple(
     name: str,
     raw_dataset: ExecutorStep,
     tokenizer: str | None = None,
@@ -67,8 +67,8 @@ def _tokenize_simple(
 # ============================================================================
 
 
-@step(name="raw/fineweb", fn=download_hf)
-def _fineweb_download(ctx: StepContext):
+@step(name="raw/fineweb", fn=download_hf, override_output_path="raw/fineweb")
+def fineweb_download(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="HuggingFaceFW/fineweb",
         revision="cd85054",
@@ -77,8 +77,8 @@ def _fineweb_download(ctx: StepContext):
     )
 
 
-@step(name="raw/fineweb-edu", fn=download_hf)
-def _fineweb_edu_download(ctx: StepContext):
+@step(name="raw/fineweb-edu", fn=download_hf, override_output_path="raw/fineweb-edu-c2beb4")
+def fineweb_edu_download(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision="3c452cb",
@@ -87,18 +87,8 @@ def _fineweb_edu_download(ctx: StepContext):
     )
 
 
-downloads = {
-    "fineweb": _fineweb_download().with_output_path("raw/fineweb"),
-    "fineweb_edu": (
-        _fineweb_edu_download()
-        .with_output_path("raw/fineweb-edu-c2beb4")
-        .cd("3c452cb/huggingface.co/datasets/HuggingFaceFW/fineweb-edu/resolve/3c452cb")
-    ),
-}
-
-
-@step(name="raw/SlimPajama-627B", fn=download_hf)
-def _slimpajama_download(ctx: StepContext):
+@step(name="raw/SlimPajama-627B", fn=download_hf, override_output_path="raw/SlimPajama-627B-262830")
+def slimpajama_download(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="cerebras/SlimPajama-627B",
         revision="2d0accd",
@@ -107,15 +97,8 @@ def _slimpajama_download(ctx: StepContext):
     )
 
 
-downloads["slimpajama"] = (
-    _slimpajama_download()
-    .with_output_path("raw/SlimPajama-627B-262830")
-    .cd("2d0accd/huggingface.co/datasets/cerebras/SlimPajama-627B/resolve/2d0accd")
-)
-
-
-@step(name="raw/SlimPajama-6B", fn=download_hf)
-def _slimpajama_6b_download(ctx: StepContext):
+@step(name="raw/SlimPajama-6B", fn=download_hf, override_output_path="raw/SlimPajama-6B-be35b7")
+def slimpajama_6b_download(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="DKYoon/SlimPajama-6B",
         revision="b5f90f4",
@@ -124,11 +107,8 @@ def _slimpajama_6b_download(ctx: StepContext):
     )
 
 
-downloads["slimpajama_6b"] = _slimpajama_6b_download().with_output_path("raw/SlimPajama-6B-be35b7").cd("data")
-
-
-@step(name="raw/dolma3_mix-150B-1025", fn=download_hf)
-def _dolma3_mix_download(ctx: StepContext):
+@step(name="raw/dolma3_mix-150B-1025", fn=download_hf, override_output_path="raw/dolma3_mix-150B-1025-15d04ee")
+def dolma3_mix_download(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="allenai/dolma3_mix-150B-1025",
         revision="15d04ee",
@@ -138,13 +118,8 @@ def _dolma3_mix_download(ctx: StepContext):
     )
 
 
-downloads["dolma3_mix_150b_1025"] = (
-    _dolma3_mix_download().with_output_path("raw/dolma3_mix-150B-1025-15d04ee").cd("15d04ee")
-)
-
-
-@step(name="raw/dclm-baseline-1.0", fn=download_hf)
-def _dclm_baseline_wrong_download(ctx: StepContext):
+@step(name="raw/dclm-baseline-1.0", fn=download_hf, override_output_path="raw/dclm_WRONG_20250211/")
+def dclm_baseline_wrong_download(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="mlfoundations/dclm-baseline-1.0",
         revision="a3b142c",
@@ -153,11 +128,8 @@ def _dclm_baseline_wrong_download(ctx: StepContext):
     )
 
 
-downloads["dclm_baseline_wrong"] = _dclm_baseline_wrong_download().with_output_path("raw/dclm_WRONG_20250211/")
-
-
-@step(name="raw/dclm-baseline-1.0", fn=download_hf)
-def _dclm_baseline_download(ctx: StepContext):
+@step(name="raw/dclm-baseline-1.0", fn=download_hf, override_output_path="raw/dclm")
+def dclm_baseline_download(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="mlfoundations/dclm-baseline-1.0",
         revision="a3b142c",
@@ -166,11 +138,8 @@ def _dclm_baseline_download(ctx: StepContext):
     )
 
 
-downloads["dclm_baseline"] = _dclm_baseline_download().with_output_path("raw/dclm").cd("a3b142c")
-
-
-@step(name="raw/the-stack-dedup", fn=download_hf)
-def _the_stack_dedup_download(ctx: StepContext):
+@step(name="raw/the-stack-dedup", fn=download_hf, override_output_path="raw/the-stack-dedup-4ba450")
+def the_stack_dedup_download(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="bigcode/the-stack-dedup",
         revision="17cad72",
@@ -179,13 +148,8 @@ def _the_stack_dedup_download(ctx: StepContext):
     )
 
 
-downloads["the_stack_dedup"] = (
-    _the_stack_dedup_download().with_output_path("raw/the-stack-dedup-4ba450").cd("17cad72")
-)
-
-
-@step(name="raw/proof-pile-2", fn=download_hf)
-def _proofpile_2_download(ctx: StepContext):
+@step(name="raw/proof-pile-2", fn=download_hf, override_output_path="raw/proof-pile-2-f1b1d8")
+def proofpile_2_download(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="EleutherAI/proof-pile-2",
         revision="901a927",
@@ -194,15 +158,8 @@ def _proofpile_2_download(ctx: StepContext):
     )
 
 
-downloads["proofpile_2"] = (
-    _proofpile_2_download()
-    .with_output_path("raw/proof-pile-2-f1b1d8")
-    .cd("901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927")
-)
-
-
-@step(name="raw/the_pile_openwebtext2", fn=download_hf)
-def _the_pile_openwebtext2_download(ctx: StepContext):
+@step(name="raw/the_pile_openwebtext2", fn=download_hf, override_output_path="raw/the_pile_openwebtext2")
+def the_pile_openwebtext2_download(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="vietgpt/the_pile_openwebtext2",
         revision="1de27c6",
@@ -211,66 +168,13 @@ def _the_pile_openwebtext2_download(ctx: StepContext):
     )
 
 
-downloads["the_pile_openwebtext2"] = (
-    _the_pile_openwebtext2_download()
-    .with_output_path("raw/the_pile_openwebtext2")
-    .cd("1de27c6/huggingface.co/datasets/vietgpt/the_pile_openwebtext2/resolve/1de27c6")
-)
-
-
 # TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
 #   Migrate the dataset and cd can be removed.
-@step(name="raw/starcoderdata", fn=download_hf)
-def _starcoderdata_download(ctx: StepContext):
+@step(name="raw/starcoderdata", fn=download_hf, override_output_path="raw/starcoderdata-720c8c")
+def starcoderdata_download(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="bigcode/starcoderdata",
         revision="9fc30b5",
         gcs_output_path=ctx.output,
         wait_for_completion=True,
     )
-
-
-downloads["starcoderdata"] = _starcoderdata_download().with_output_path("raw/starcoderdata-720c8c")
-
-
-# ============================================================================
-# TOKENIZED DATASETS
-# ============================================================================
-
-tokenized = {
-    "dclm_baseline": _tokenize_simple(
-        "dclm_baseline",
-        downloads["dclm_baseline"],
-        tokenizer=llama3_tokenizer,
-        override_path="tokenized/dclm_baseline-0206f1/",
-    ),
-    "starcoderdata": _tokenize_simple(
-        "starcoderdata",
-        downloads["starcoderdata"],
-        tokenizer=llama3_tokenizer,
-        text_format=TextLmDatasetFormat(text_key="content"),
-        override_path="tokenized/starcoderdata-12f018/",
-    ),
-    "proofpile_2": _tokenize_simple(
-        "proofpile_2",
-        downloads["proofpile_2"],
-        tokenizer=llama3_tokenizer,
-        override_path="tokenized/proofpile_2-4a35c7/",
-    ),
-    "slimpajama_6b": _tokenize_simple(
-        "SlimPajama-6B",
-        downloads["slimpajama_6b"],
-        tokenizer=llama3_tokenizer,
-    ),
-    "fineweb_edu": _tokenize_simple(
-        "fineweb-edu",
-        downloads["fineweb_edu"],
-        tokenizer=llama3_tokenizer,
-    ),
-    "dolma3_mix_150b_1025": _tokenize_simple(
-        "dolma3_mix-150B-1025",
-        downloads["dolma3_mix_150b_1025"],
-        tokenizer=llama3_tokenizer,
-        override_path="tokenized/dolma3_mix-150B-1025-15d04ee/",
-    ),
-}

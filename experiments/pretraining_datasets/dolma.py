@@ -28,8 +28,8 @@ from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
 # Raw dataset download step
-@step(name="raw/dolma", fn=download_hf)
-def _dolma_download(ctx: StepContext):
+@step(name="raw/dolma", fn=download_hf, override_output_path="raw/dolma")
+def dolma_download(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="allenai/dolma",
         revision="7f48140",
@@ -37,8 +37,6 @@ def _dolma_download(ctx: StepContext):
         wait_for_completion=True,
     )
 
-
-downloads = {"dolma": _dolma_download().with_output_path("raw/dolma")}
 
 
 # For dolma 1.7, we hardcode the path since it was added before versioning

@@ -23,16 +23,11 @@ from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
 # Raw dataset download step
-@step(name="raw/nemotro-cc", fn=download_nemotron_cc)
-def _nemotron_cc_download(ctx: StepContext):
+@step(name="raw/nemotron-cc", fn=download_nemotron_cc)
+def nemotron_cc_download(ctx: StepContext):
     return NemotronIngressConfig(
         output_path=ctx.output,
     )
-
-
-downloads = {"nemotron_cc": _nemotron_cc_download()}
-
-_nemotron_cc_path = downloads["nemotron_cc"] / "contrib/Nemotron/Nemotron-CC/data-jsonl/"
 
 NEMOTRON_DATASETS = {
     "hq_actual": ["quality=high/kind=actual/**/*.jsonl.gz"],
@@ -70,7 +65,8 @@ NEMOTRON_LLAMA3_OVERRIDES = {
 def _get_nemotron_split_paths(split: str):
     """Helper to get file paths for a nemotron split."""
     patterns = NEMOTRON_DATASETS[split]
-    return [_nemotron_cc_path / pattern for pattern in patterns]
+    nemotron_cc_path = nemotron_cc_download() / "contrib/Nemotron/Nemotron-CC/data-jsonl/"
+    return [nemotron_cc_path / pattern for pattern in patterns]
 
 
 def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:

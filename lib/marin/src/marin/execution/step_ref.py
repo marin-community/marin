@@ -203,13 +203,26 @@ def step(
         # Create the step
         my_step = tokenize_fineweb()
 
+    Parameterized steps with format strings:
+        @step(name="tokenized/{dataset_name}", fn=tokenize_fn)
+        def tokenize_dataset(ctx: StepContext, dataset_name: str, tokenizer: str):
+            return TokenizeConfig(
+                cache_path=ctx.output,
+                tokenizer=tokenizer,
+            )
+
+        # Call with arguments - name is formatted automatically
+        step = tokenize_dataset(dataset_name="fineweb", tokenizer="llama3")
+
     Args:
-        name: Step name, used for output path generation
+        name: Step name, used for output path generation. Can contain {arg_name}
+              placeholders that will be substituted with kwargs when called.
         fn: The function to execute (receives resolved config)
-        description: Human-readable description
+        description: Human-readable description. Can also use {arg_name} placeholders.
         resources: GPU/TPU/CPU requirements
         pip_dependency_groups: Extra pip dependencies
-        override_output_path: Explicit output path (overrides automatic path generation)
+        override_output_path: Explicit output path (overrides automatic path generation).
+                              Can also use {arg_name} placeholders.
     """
 
     def decorator(config_fn: Callable[[StepContext], ConfigT]) -> Callable[..., ExecutorStep[ConfigT]]:
@@ -217,17 +230,30 @@ def step(
         def make_step(*args: Any, **kwargs: Any) -> ExecutorStep[ConfigT]:
             from marin.execution.executor import ExecutorStep
 
+            # Format name with kwargs if it contains placeholders
+            actual_name = name.format(**kwargs) if "{" in name else name
+
+            # Format description if provided and contains placeholders
+            actual_description = description
+            if description and "{" in description:
+                actual_description = description.format(**kwargs)
+
+            # Format override_output_path if provided and contains placeholders
+            actual_override_output_path = override_output_path
+            if override_output_path and "{" in override_output_path:
+                actual_override_output_path = override_output_path.format(**kwargs)
+
             ctx = StepContext()
             config = config_fn(ctx, *args, **kwargs)
 
             step_obj = ExecutorStep(
-                name=name,
+                name=actual_name,
                 fn=fn,
                 config=config,
-                description=description,
+                description=actual_description,
                 resources=resources,
                 pip_dependency_groups=pip_dependency_groups,
-                override_output_path=override_output_path,
+                override_output_path=actual_override_output_path,
                 _context=ctx,
             )
             ctx._step = step_obj
