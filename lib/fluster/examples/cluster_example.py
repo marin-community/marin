@@ -340,7 +340,7 @@ class ClusterContext:
 
     def _register_worker(self):
         """Register worker with controller."""
-        request = cluster_pb2.RegisterWorkerRequest(
+        request = cluster_pb2.Controller.RegisterWorkerRequest(
             worker_id=self._worker_id,
             address=f"127.0.0.1:{self._worker_port}",
             resources=cluster_pb2.ResourceSpec(
@@ -452,7 +452,7 @@ class ClusterContext:
 
         raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
 
-    def logs(self, job_id: str, since_ms: int | None = None) -> list[cluster_pb2.LogEntry]:
+    def logs(self, job_id: str, since_ms: int | None = None) -> list[cluster_pb2.Worker.LogEntry]:
         """Get job logs from worker.
 
         Args:

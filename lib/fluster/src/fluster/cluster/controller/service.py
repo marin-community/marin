@@ -21,8 +21,8 @@ RPC handlers for the ControllerService. It handles:
 - Job termination (terminate_job)
 - Job listing (list_jobs)
 - Worker registration (register_worker)
-- Worker heartbeat (heartbeat)
 - Worker listing (list_workers)
+- Endpoint registry operations (register/unregister/lookup/list endpoints)
 
 The service layer is thin, delegating most logic to the ControllerState and
 Scheduler. It focuses on proto message conversion and error handling.

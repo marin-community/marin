@@ -30,7 +30,7 @@ from fluster.cluster.types import JobId, WorkerId
 def make_job_request():
     """Create a minimal LaunchJobRequest for testing."""
 
-    def _make(name: str = "test-job") -> cluster_pb2.LaunchJobRequest:
+    def _make(name: str = "test-job") -> cluster_pb2.Controller.LaunchJobRequest:
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",
@@ -196,7 +196,7 @@ def test_list_jobs_returns_all_jobs(service, state, make_job_request):
     state.add_job(job3)
 
     # List jobs
-    request = cluster_pb2.ListJobsRequest()
+    request = cluster_pb2.Controller.ListJobsRequest()
     response = service.list_jobs(request, None)
 
     # Should return all jobs
@@ -277,7 +277,7 @@ def test_terminate_pending_job(service, state, make_job_request):
 
 def test_register_worker(service, state, make_resource_spec):
     """Verify register_worker adds worker to state."""
-    request = cluster_pb2.RegisterWorkerRequest(
+    request = cluster_pb2.Controller.RegisterWorkerRequest(
         worker_id="w1",
         address="host1:8080",
         resources=make_resource_spec(),
@@ -294,7 +294,7 @@ def test_register_worker(service, state, make_resource_spec):
 
 def test_register_worker_logs_action(service, state, make_resource_spec):
     """Verify register_worker logs an action."""
-    request = cluster_pb2.RegisterWorkerRequest(
+    request = cluster_pb2.Controller.RegisterWorkerRequest(
         worker_id="w1",
         address="host1:8080",
         resources=make_resource_spec(),
@@ -306,37 +306,6 @@ def test_register_worker_logs_action(service, state, make_resource_spec):
     assert len(actions) == 1
     assert actions[0].action == "worker_registered"
     assert actions[0].worker_id == "w1"
-
-
-def test_heartbeat_updates_worker_timestamp(service, state, make_resource_spec):
-    """Verify heartbeat updates worker timestamp."""
-    # Add a worker first
-    from fluster.cluster.controller.state import ControllerWorker
-
-    worker = ControllerWorker(
-        worker_id=WorkerId("w1"),
-        address="host1:8080",
-        resources=make_resource_spec(),
-        last_heartbeat_ms=0,
-    )
-    state.add_worker(worker)
-
-    request = cluster_pb2.HeartbeatRequest(worker_id="w1", since_ms=0)
-    response = service.heartbeat(request, None)
-
-    assert response.timestamp_ms > 0
-    assert worker.last_heartbeat_ms > 0
-    assert worker.consecutive_failures == 0
-
-
-def test_heartbeat_not_found(service):
-    """Verify heartbeat raises NOT_FOUND for unknown worker."""
-    request = cluster_pb2.HeartbeatRequest(worker_id="nonexistent", since_ms=0)
-
-    with pytest.raises(ConnectError) as exc_info:
-        service.heartbeat(request, None)
-
-    assert exc_info.value.code == Code.NOT_FOUND
 
 
 def test_list_workers_returns_all(service, state, make_resource_spec):
@@ -353,7 +322,7 @@ def test_list_workers_returns_all(service, state, make_resource_spec):
         )
         state.add_worker(worker)
 
-    request = cluster_pb2.ListWorkersRequest()
+    request = cluster_pb2.Controller.ListWorkersRequest()
     response = service.list_workers(request, None)
 
     assert len(response.workers) == 3

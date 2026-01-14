@@ -38,7 +38,7 @@ def make_job_request():
         cpu: int = 1,
         memory: str = "1g",
         scheduling_timeout_seconds: int = 0,
-    ) -> cluster_pb2.LaunchJobRequest:
+    ) -> cluster_pb2.Controller.LaunchJobRequest:
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",

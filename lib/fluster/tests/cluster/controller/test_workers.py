@@ -44,7 +44,7 @@ def make_resource_spec():
 def make_job_request():
     """Create a minimal LaunchJobRequest for testing."""
 
-    def _make(name: str = "test-job") -> cluster_pb2.LaunchJobRequest:
+    def _make(name: str = "test-job") -> cluster_pb2.Controller.LaunchJobRequest:
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",

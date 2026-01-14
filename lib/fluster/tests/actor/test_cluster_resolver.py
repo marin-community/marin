@@ -38,54 +38,53 @@ class AsyncControllerServiceWrapper:
         self._service = sync_service
 
     async def launch_job(
-        self, request: cluster_pb2.LaunchJobRequest, ctx: RequestContext
-    ) -> cluster_pb2.LaunchJobResponse:
+        self, request: cluster_pb2.Controller.LaunchJobRequest, ctx: RequestContext
+    ) -> cluster_pb2.Controller.LaunchJobResponse:
         return self._service.launch_job(request, ctx)
 
     async def get_job_status(
-        self, request: cluster_pb2.GetJobStatusRequest, ctx: RequestContext
-    ) -> cluster_pb2.GetJobStatusResponse:
+        self, request: cluster_pb2.Controller.GetJobStatusRequest, ctx: RequestContext
+    ) -> cluster_pb2.Controller.GetJobStatusResponse:
         return self._service.get_job_status(request, ctx)
 
-    async def terminate_job(self, request: cluster_pb2.TerminateJobRequest, ctx: RequestContext) -> cluster_pb2.Empty:
+    async def terminate_job(
+        self, request: cluster_pb2.Controller.TerminateJobRequest, ctx: RequestContext
+    ) -> cluster_pb2.Empty:
         return self._service.terminate_job(request, ctx)
 
-    async def list_jobs(self, request: cluster_pb2.ListJobsRequest, ctx: RequestContext) -> cluster_pb2.ListJobsResponse:
+    async def list_jobs(
+        self, request: cluster_pb2.Controller.ListJobsRequest, ctx: RequestContext
+    ) -> cluster_pb2.Controller.ListJobsResponse:
         return self._service.list_jobs(request, ctx)
 
     async def register_worker(
-        self, request: cluster_pb2.RegisterWorkerRequest, ctx: RequestContext
-    ) -> cluster_pb2.RegisterWorkerResponse:
+        self, request: cluster_pb2.Controller.RegisterWorkerRequest, ctx: RequestContext
+    ) -> cluster_pb2.Controller.RegisterWorkerResponse:
         return self._service.register_worker(request, ctx)
 
-    async def heartbeat(
-        self, request: cluster_pb2.HeartbeatRequest, ctx: RequestContext
-    ) -> cluster_pb2.HeartbeatResponse:
-        return self._service.heartbeat(request, ctx)
-
     async def list_workers(
-        self, request: cluster_pb2.ListWorkersRequest, ctx: RequestContext
-    ) -> cluster_pb2.ListWorkersResponse:
+        self, request: cluster_pb2.Controller.ListWorkersRequest, ctx: RequestContext
+    ) -> cluster_pb2.Controller.ListWorkersResponse:
         return self._service.list_workers(request, ctx)
 
     async def register_endpoint(
-        self, request: cluster_pb2.RegisterEndpointRequest, ctx: RequestContext
-    ) -> cluster_pb2.RegisterEndpointResponse:
+        self, request: cluster_pb2.Controller.RegisterEndpointRequest, ctx: RequestContext
+    ) -> cluster_pb2.Controller.RegisterEndpointResponse:
         return self._service.register_endpoint(request, ctx)
 
     async def unregister_endpoint(
-        self, request: cluster_pb2.UnregisterEndpointRequest, ctx: RequestContext
+        self, request: cluster_pb2.Controller.UnregisterEndpointRequest, ctx: RequestContext
     ) -> cluster_pb2.Empty:
         return self._service.unregister_endpoint(request, ctx)
 
     async def lookup_endpoint(
-        self, request: cluster_pb2.LookupEndpointRequest, ctx: RequestContext
-    ) -> cluster_pb2.LookupEndpointResponse:
+        self, request: cluster_pb2.Controller.LookupEndpointRequest, ctx: RequestContext
+    ) -> cluster_pb2.Controller.LookupEndpointResponse:
         return self._service.lookup_endpoint(request, ctx)
 
     async def list_endpoints(
-        self, request: cluster_pb2.ListEndpointsRequest, ctx: RequestContext
-    ) -> cluster_pb2.ListEndpointsResponse:
+        self, request: cluster_pb2.Controller.ListEndpointsRequest, ctx: RequestContext
+    ) -> cluster_pb2.Controller.ListEndpointsResponse:
         return self._service.list_endpoints(request, ctx)
 
 
@@ -113,7 +112,7 @@ def controller_with_endpoint():
     # Add a running job
     job = ControllerJob(
         job_id=JobId("job-1"),
-        request=cluster_pb2.LaunchJobRequest(name="test"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     state.add_job(job)
@@ -178,7 +177,7 @@ def test_cluster_resolver_multiple_endpoints(controller_with_endpoint):
     # Add another job and endpoint with the same name
     job2 = ControllerJob(
         job_id=JobId("job-2"),
-        request=cluster_pb2.LaunchJobRequest(name="test2"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     state.add_job(job2)
@@ -208,7 +207,7 @@ def test_cluster_resolver_namespace_isolation(controller_with_endpoint):
     # Add endpoint in different namespace
     job2 = ControllerJob(
         job_id=JobId("job-2"),
-        request=cluster_pb2.LaunchJobRequest(name="test2"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     state.add_job(job2)
@@ -242,7 +241,7 @@ def test_cluster_resolver_filters_exact_name_match(controller_with_endpoint):
     # Add endpoint with similar but different name
     job2 = ControllerJob(
         job_id=JobId("job-2"),
-        request=cluster_pb2.LaunchJobRequest(name="test2"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     state.add_job(job2)
@@ -271,7 +270,7 @@ def test_cluster_resolver_only_running_jobs(controller_with_endpoint):
     # Add a completed job with endpoint
     job2 = ControllerJob(
         job_id=JobId("job-2"),
-        request=cluster_pb2.LaunchJobRequest(name="test2"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_SUCCEEDED,
     )
     state.add_job(job2)
@@ -300,7 +299,7 @@ def test_cluster_resolver_metadata(controller_with_endpoint):
     # Add endpoint with metadata
     job2 = ControllerJob(
         job_id=JobId("job-2"),
-        request=cluster_pb2.LaunchJobRequest(name="test2"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     state.add_job(job2)
