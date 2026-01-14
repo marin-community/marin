@@ -14,7 +14,7 @@
 
 """Actor pool for load-balanced and broadcast RPC calls."""
 
-import itertools
+import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -143,17 +143,40 @@ class ActorPool(Generic[T]):
         self._resolver = resolver
         self._name = name
         self._timeout = timeout
-        self._round_robin: itertools.cycle | None = None
+        self._endpoint_index = 0
         self._cached_result: ResolveResult | None = None
+        self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=32)
 
     def _resolve(self) -> ResolveResult:
-        """Resolve endpoints, caching result and updating round-robin iterator."""
+        """Resolve endpoints, caching result."""
         result = self._resolver.resolve(self._name)
-        if self._cached_result is None or result.endpoints != self._cached_result.endpoints:
-            self._round_robin = itertools.cycle(result.endpoints) if result.endpoints else None
+        with self._lock:
             self._cached_result = result
         return result
+
+    def _get_next_endpoint(self) -> ResolvedEndpoint:
+        """Get the next endpoint in round-robin order.
+
+        Thread-safe: uses a lock to protect the endpoint index.
+        """
+        endpoints = self._resolve().endpoints
+        with self._lock:
+            if not endpoints:
+                raise RuntimeError(f"No endpoints for '{self._name}'")
+            endpoint = endpoints[self._endpoint_index % len(endpoints)]
+            self._endpoint_index += 1
+            return endpoint
+
+    def shutdown(self) -> None:
+        """Shutdown the thread pool executor."""
+        self._executor.shutdown(wait=True)
+
+    def __enter__(self) -> "ActorPool[T]":
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.shutdown()
 
     @property
     def size(self) -> int:
@@ -234,10 +257,7 @@ class _PoolCallProxy(Generic[T]):
         """Create a callable that invokes the method on the next endpoint in round-robin."""
 
         def call(*args, **kwargs):
-            self._pool._resolve()
-            if self._pool._round_robin is None:
-                raise RuntimeError(f"No endpoints for '{self._pool._name}'")
-            endpoint = next(self._pool._round_robin)
+            endpoint = self._pool._get_next_endpoint()
             return self._pool._call_endpoint(endpoint, method_name, args, kwargs)
 
         return call

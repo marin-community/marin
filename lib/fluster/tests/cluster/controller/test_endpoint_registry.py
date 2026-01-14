@@ -31,7 +31,7 @@ def test_add_and_lookup_endpoint(state: ControllerState):
     # Create a running job first
     job = ControllerJob(
         job_id=JobId("job-1"),
-        request=cluster_pb2.LaunchJobRequest(name="test"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     state.add_job(job)
@@ -58,7 +58,7 @@ def test_endpoint_not_returned_for_non_running_job(state: ControllerState):
     # Create a completed job
     job = ControllerJob(
         job_id=JobId("job-1"),
-        request=cluster_pb2.LaunchJobRequest(name="test"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
         state=cluster_pb2.JOB_STATE_SUCCEEDED,
     )
     state.add_job(job)
@@ -81,7 +81,7 @@ def test_remove_endpoints_on_job_termination(state: ControllerState):
     """Test that endpoints are removed when a job terminates."""
     job = ControllerJob(
         job_id=JobId("job-1"),
-        request=cluster_pb2.LaunchJobRequest(name="test"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     state.add_job(job)
@@ -113,12 +113,12 @@ def test_lookup_filters_by_namespace(state: ControllerState):
     """Test that lookup respects namespace boundaries."""
     job1 = ControllerJob(
         job_id=JobId("job-1"),
-        request=cluster_pb2.LaunchJobRequest(name="test1"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test1"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     job2 = ControllerJob(
         job_id=JobId("job-2"),
-        request=cluster_pb2.LaunchJobRequest(name="test2"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     state.add_job(job1)
@@ -156,7 +156,7 @@ def test_list_endpoints_by_prefix(state: ControllerState):
     """Test prefix-based endpoint listing."""
     job = ControllerJob(
         job_id=JobId("job-1"),
-        request=cluster_pb2.LaunchJobRequest(name="test"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     state.add_job(job)
@@ -202,12 +202,12 @@ def test_multiple_endpoints_for_same_name(state: ControllerState):
     """Test that multiple endpoints can be registered for the same name."""
     job1 = ControllerJob(
         job_id=JobId("job-1"),
-        request=cluster_pb2.LaunchJobRequest(name="test1"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test1"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     job2 = ControllerJob(
         job_id=JobId("job-2"),
-        request=cluster_pb2.LaunchJobRequest(name="test2"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     state.add_job(job1)
@@ -241,7 +241,7 @@ def test_remove_endpoint_by_id(state: ControllerState):
     """Test explicit endpoint removal by ID."""
     job = ControllerJob(
         job_id=JobId("job-1"),
-        request=cluster_pb2.LaunchJobRequest(name="test"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     state.add_job(job)
@@ -273,7 +273,7 @@ def test_pending_job_endpoints_not_returned(state: ControllerState):
     """Test that endpoints for PENDING jobs are not returned."""
     job = ControllerJob(
         job_id=JobId("job-1"),
-        request=cluster_pb2.LaunchJobRequest(name="test"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
         state=cluster_pb2.JOB_STATE_PENDING,
     )
     state.add_job(job)

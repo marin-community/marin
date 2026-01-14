@@ -275,7 +275,7 @@ class WorkerDashboard:
         """Return job statistics by status."""
         # Call canonical RPC method
         ctx = FakeRequestContext()
-        response = self._service.list_jobs(cluster_pb2.ListJobsRequest(), ctx)
+        response = self._service.list_jobs(cluster_pb2.Worker.ListJobsRequest(), ctx)
         jobs = response.jobs
 
         return JSONResponse(
@@ -300,7 +300,7 @@ class WorkerDashboard:
         """List all jobs as JSON."""
         # Call canonical RPC method
         ctx = FakeRequestContext()
-        response = self._service.list_jobs(cluster_pb2.ListJobsRequest(), ctx)
+        response = self._service.list_jobs(cluster_pb2.Worker.ListJobsRequest(), ctx)
         jobs = response.jobs
 
         return JSONResponse(
@@ -333,7 +333,7 @@ class WorkerDashboard:
         # Call canonical RPC method
         ctx = FakeRequestContext()
         try:
-            job = self._service.get_job_status(cluster_pb2.GetStatusRequest(job_id=job_id), ctx)
+            job = self._service.get_job_status(cluster_pb2.Worker.GetJobStatusRequest(job_id=job_id), ctx)
         except Exception:
             # RPC raises ConnectError with NOT_FOUND for missing jobs
             return JSONResponse({"error": "Not found"}, status_code=404)
@@ -381,9 +381,11 @@ class WorkerDashboard:
 
         # Call canonical RPC method
         ctx = FakeRequestContext()
-        log_filter = cluster_pb2.FetchLogsFilter(start_line=start_line)
+        log_filter = cluster_pb2.Worker.FetchLogsFilter(start_line=start_line)
         try:
-            response = self._service.fetch_logs(cluster_pb2.FetchLogsRequest(job_id=job_id, filter=log_filter), ctx)
+            response = self._service.fetch_logs(
+                cluster_pb2.Worker.FetchLogsRequest(job_id=job_id, filter=log_filter), ctx
+            )
         except Exception:
             # RPC raises ConnectError with NOT_FOUND for missing jobs
             return JSONResponse({"error": "Not found"}, status_code=404)

@@ -128,7 +128,7 @@ class ClusterResolver:
         """
         ns = namespace or self._namespace
 
-        request = cluster_pb2.ListEndpointsRequest(
+        request = cluster_pb2.Controller.ListEndpointsRequest(
             prefix=name,
             namespace=str(ns),
         )

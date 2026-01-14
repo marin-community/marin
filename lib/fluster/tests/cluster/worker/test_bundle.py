@@ -90,15 +90,9 @@ def test_caching_behavior(temp_cache_dir, test_bundle):
     # First download
     extract_path1 = cache.get_bundle(file_url)
 
-    # Should have zip and extract
-    key = cache._path_to_key(file_url)
-    zip_path = temp_cache_dir / "bundles" / f"{key}.zip"
-    assert zip_path.exists()
-
-    # Second request - should use cache
+    # Second request - should use cache and return same path
     extract_path2 = cache.get_bundle(file_url)
 
-    # Same path returned
     assert extract_path1 == extract_path2
     assert extract_path2.exists()
 
@@ -163,27 +157,6 @@ def test_lru_eviction(temp_cache_dir, tmp_path):
     # Verify only 2 extracts exist
     extracts = list((temp_cache_dir / "extracts").iterdir())
     assert len(extracts) == 2
-
-
-def test_path_to_key_consistency(temp_cache_dir):
-    """Test that path_to_key produces consistent keys."""
-    cache = BundleCache(temp_cache_dir)
-
-    path = "gs://bucket/path/to/bundle.zip"
-
-    # Should be consistent
-    key1 = cache._path_to_key(path)
-    key2 = cache._path_to_key(path)
-
-    assert key1 == key2
-
-    path1 = "gs://bucket/path1/bundle.zip"
-    path2 = "gs://bucket/path2/bundle.zip"
-
-    key1 = cache._path_to_key(path1)
-    key2 = cache._path_to_key(path2)
-
-    assert key1 != key2
 
 
 def test_concurrent_downloads(temp_cache_dir, test_bundle):

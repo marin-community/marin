@@ -73,9 +73,9 @@ class ControllerServiceImpl:
 
     def launch_job(
         self,
-        request: cluster_pb2.LaunchJobRequest,
+        request: cluster_pb2.Controller.LaunchJobRequest,
         ctx: Any,
-    ) -> cluster_pb2.LaunchJobResponse:
+    ) -> cluster_pb2.Controller.LaunchJobResponse:
         """Submit a new job to the controller.
 
         Creates a new job with a unique ID, adds it to the controller state,
@@ -100,7 +100,7 @@ class ControllerServiceImpl:
             bundle_path.write_bytes(request.bundle_blob)
 
             # Update the request with file:// path
-            request = cluster_pb2.LaunchJobRequest(
+            request = cluster_pb2.Controller.LaunchJobRequest(
                 name=request.name,
                 serialized_entrypoint=request.serialized_entrypoint,
                 resources=request.resources,
@@ -121,13 +121,13 @@ class ControllerServiceImpl:
         self._state.log_action("job_submitted", job_id=job.job_id, details=request.name)
         self._scheduler.wake()  # Try to schedule immediately
 
-        return cluster_pb2.LaunchJobResponse(job_id=job_id)
+        return cluster_pb2.Controller.LaunchJobResponse(job_id=job_id)
 
     def get_job_status(
         self,
-        request: cluster_pb2.GetJobStatusRequest,
+        request: cluster_pb2.Controller.GetJobStatusRequest,
         ctx: Any,
-    ) -> cluster_pb2.GetJobStatusResponse:
+    ) -> cluster_pb2.Controller.GetJobStatusResponse:
         """Get status of a specific job.
 
         Args:
@@ -144,7 +144,13 @@ class ControllerServiceImpl:
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        return cluster_pb2.GetJobStatusResponse(
+        worker_address = ""
+        if job.worker_id:
+            worker = self._state.get_worker(job.worker_id)
+            if worker:
+                worker_address = worker.address
+
+        return cluster_pb2.Controller.GetJobStatusResponse(
             job=cluster_pb2.JobStatus(
                 job_id=job.job_id,
                 state=job.state,
@@ -153,12 +159,13 @@ class ControllerServiceImpl:
                 started_at_ms=job.started_at_ms or 0,
                 finished_at_ms=job.finished_at_ms or 0,
                 worker_id=job.worker_id or "",
+                worker_address=worker_address,
             )
         )
 
     def terminate_job(
         self,
-        request: cluster_pb2.TerminateJobRequest,
+        request: cluster_pb2.Controller.TerminateJobRequest,
         ctx: Any,
     ) -> cluster_pb2.Empty:
         """Terminate a running job.
@@ -194,9 +201,9 @@ class ControllerServiceImpl:
 
     def list_jobs(
         self,
-        request: cluster_pb2.ListJobsRequest,
+        request: cluster_pb2.Controller.ListJobsRequest,
         ctx: Any,
-    ) -> cluster_pb2.ListJobsResponse:
+    ) -> cluster_pb2.Controller.ListJobsResponse:
         """List all jobs.
 
         Returns a list of all jobs in the controller, regardless of state.
@@ -209,25 +216,32 @@ class ControllerServiceImpl:
         Returns:
             ListJobsResponse containing all jobs as JobStatus protos
         """
-        jobs = [
-            cluster_pb2.JobStatus(
-                job_id=j.job_id,
-                state=j.state,
-                worker_id=j.worker_id or "",
-                error=j.error or "",
-                exit_code=j.exit_code or 0,
-                started_at_ms=j.started_at_ms or 0,
-                finished_at_ms=j.finished_at_ms or 0,
+        jobs = []
+        for j in self._state.list_all_jobs():
+            worker_address = ""
+            if j.worker_id:
+                worker = self._state.get_worker(j.worker_id)
+                if worker:
+                    worker_address = worker.address
+            jobs.append(
+                cluster_pb2.JobStatus(
+                    job_id=j.job_id,
+                    state=j.state,
+                    worker_id=j.worker_id or "",
+                    worker_address=worker_address,
+                    error=j.error or "",
+                    exit_code=j.exit_code or 0,
+                    started_at_ms=j.started_at_ms or 0,
+                    finished_at_ms=j.finished_at_ms or 0,
+                )
             )
-            for j in self._state.list_all_jobs()
-        ]
-        return cluster_pb2.ListJobsResponse(jobs=jobs)
+        return cluster_pb2.Controller.ListJobsResponse(jobs=jobs)
 
     def register_worker(
         self,
-        request: cluster_pb2.RegisterWorkerRequest,
+        request: cluster_pb2.Controller.RegisterWorkerRequest,
         ctx: Any,
-    ) -> cluster_pb2.RegisterWorkerResponse:
+    ) -> cluster_pb2.Controller.RegisterWorkerResponse:
         """Register a new worker with the controller.
 
         Workers register themselves on startup and provide their address and
@@ -255,61 +269,13 @@ class ControllerServiceImpl:
         )
         self._scheduler.wake()  # Try to schedule jobs on new worker
 
-        return cluster_pb2.RegisterWorkerResponse(accepted=True)
-
-    def heartbeat(
-        self,
-        request: cluster_pb2.HeartbeatRequest,
-        ctx: Any,
-    ) -> cluster_pb2.HeartbeatResponse:
-        """Process worker heartbeat.
-
-        Workers send periodic heartbeats to indicate they are alive. The controller
-        updates the worker's last heartbeat timestamp and returns the status of
-        jobs that have been modified since the worker's last check.
-
-        Args:
-            request: Heartbeat request with worker_id and since_ms
-            ctx: Request context (unused in v0)
-
-        Returns:
-            HeartbeatResponse with job statuses
-
-        Raises:
-            ConnectError: If worker is not found (Code.NOT_FOUND)
-        """
-        worker = self._state.get_worker(WorkerId(request.worker_id))
-        if not worker:
-            raise ConnectError(Code.NOT_FOUND, f"Worker {request.worker_id} not found")
-
-        now_ms = int(time.time() * 1000)
-        worker.last_heartbeat_ms = now_ms
-        worker.consecutive_failures = 0
-
-        # Return jobs assigned to this worker
-        jobs = []
-        for job_id in list(worker.running_jobs):
-            job = self._state.get_job(job_id)
-            if job:
-                jobs.append(
-                    cluster_pb2.JobStatus(
-                        job_id=job.job_id,
-                        state=job.state,
-                        error=job.error or "",
-                        exit_code=job.exit_code or 0,
-                        started_at_ms=job.started_at_ms or 0,
-                        finished_at_ms=job.finished_at_ms or 0,
-                        worker_id=job.worker_id or "",
-                    )
-                )
-
-        return cluster_pb2.HeartbeatResponse(jobs=jobs, timestamp_ms=now_ms)
+        return cluster_pb2.Controller.RegisterWorkerResponse(accepted=True)
 
     def list_workers(
         self,
-        request: cluster_pb2.ListWorkersRequest,
+        request: cluster_pb2.Controller.ListWorkersRequest,
         ctx: Any,
-    ) -> cluster_pb2.ListWorkersResponse:
+    ) -> cluster_pb2.Controller.ListWorkersResponse:
         """List all registered workers.
 
         Returns health status for all workers in the controller, including
@@ -323,7 +289,7 @@ class ControllerServiceImpl:
             ListWorkersResponse with worker health statuses
         """
         workers = [
-            cluster_pb2.WorkerHealthStatus(
+            cluster_pb2.Controller.WorkerHealthStatus(
                 worker_id=w.worker_id,
                 healthy=w.healthy,
                 consecutive_failures=w.consecutive_failures,
@@ -332,15 +298,15 @@ class ControllerServiceImpl:
             )
             for w in self._state.list_all_workers()
         ]
-        return cluster_pb2.ListWorkersResponse(workers=workers)
+        return cluster_pb2.Controller.ListWorkersResponse(workers=workers)
 
     # Endpoint registry methods
 
     def register_endpoint(
         self,
-        request: cluster_pb2.RegisterEndpointRequest,
+        request: cluster_pb2.Controller.RegisterEndpointRequest,
         ctx: Any,
-    ) -> cluster_pb2.RegisterEndpointResponse:
+    ) -> cluster_pb2.Controller.RegisterEndpointResponse:
         """Register a service endpoint.
 
         Validates that the job exists and is RUNNING before registering.
@@ -380,11 +346,11 @@ class ControllerServiceImpl:
             job_id=job.job_id,
             details=f"{request.name} at {request.address}",
         )
-        return cluster_pb2.RegisterEndpointResponse(endpoint_id=endpoint_id)
+        return cluster_pb2.Controller.RegisterEndpointResponse(endpoint_id=endpoint_id)
 
     def unregister_endpoint(
         self,
-        request: cluster_pb2.UnregisterEndpointRequest,
+        request: cluster_pb2.Controller.UnregisterEndpointRequest,
         ctx: Any,
     ) -> cluster_pb2.Empty:
         """Unregister a service endpoint.
@@ -410,9 +376,9 @@ class ControllerServiceImpl:
 
     def lookup_endpoint(
         self,
-        request: cluster_pb2.LookupEndpointRequest,
+        request: cluster_pb2.Controller.LookupEndpointRequest,
         ctx: Any,
-    ) -> cluster_pb2.LookupEndpointResponse:
+    ) -> cluster_pb2.Controller.LookupEndpointResponse:
         """Look up a service endpoint by name.
 
         Returns the first endpoint matching the name in the given namespace.
@@ -428,11 +394,11 @@ class ControllerServiceImpl:
         namespace = request.namespace or "<local>"
         endpoints = self._state.lookup_endpoints(request.name, namespace)
         if not endpoints:
-            return cluster_pb2.LookupEndpointResponse()
+            return cluster_pb2.Controller.LookupEndpointResponse()
 
         e = endpoints[0]
-        return cluster_pb2.LookupEndpointResponse(
-            endpoint=cluster_pb2.Endpoint(
+        return cluster_pb2.Controller.LookupEndpointResponse(
+            endpoint=cluster_pb2.Controller.Endpoint(
                 endpoint_id=e.endpoint_id,
                 name=e.name,
                 address=e.address,
@@ -444,9 +410,9 @@ class ControllerServiceImpl:
 
     def list_endpoints(
         self,
-        request: cluster_pb2.ListEndpointsRequest,
+        request: cluster_pb2.Controller.ListEndpointsRequest,
         ctx: Any,
-    ) -> cluster_pb2.ListEndpointsResponse:
+    ) -> cluster_pb2.Controller.ListEndpointsResponse:
         """List endpoints by name prefix.
 
         Returns all endpoints matching the prefix in the given namespace.
@@ -461,9 +427,9 @@ class ControllerServiceImpl:
         """
         namespace = request.namespace or "<local>"
         endpoints = self._state.list_endpoints_by_prefix(request.prefix, namespace)
-        return cluster_pb2.ListEndpointsResponse(
+        return cluster_pb2.Controller.ListEndpointsResponse(
             endpoints=[
-                cluster_pb2.Endpoint(
+                cluster_pb2.Controller.Endpoint(
                     endpoint_id=e.endpoint_id,
                     name=e.name,
                     address=e.address,

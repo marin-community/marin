@@ -129,7 +129,7 @@ class JobManager:
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
 
-    def submit_job(self, request: cluster_pb2.RunJobRequest) -> str:
+    def submit_job(self, request: cluster_pb2.Worker.RunJobRequest) -> str:
         """Submit job for execution.
 
         Returns job_id immediately, execution happens in background.
@@ -255,6 +255,7 @@ class JobManager:
                 resources=job.request.resources if job.request.HasField("resources") else None,
                 timeout_seconds=job.request.timeout_seconds or None,
                 ports=job.ports,
+                mounts=[(str(job.workdir), "/workdir", "rw")],
             )
 
             # Create and start container with retry on port binding failures
@@ -318,6 +319,15 @@ class JobManager:
                 # Check container status
                 status = self._runtime.inspect(container_id)
                 if not status.running:
+                    # Read result file only if container succeeded
+                    if status.exit_code == 0 and job.workdir:
+                        result_path = job.workdir / "_result.pkl"
+                        if result_path.exists():
+                            try:
+                                job.result = result_path.read_bytes()
+                            except Exception as e:
+                                job.logs.add("error", f"Failed to read result file: {e}")
+
                     # Container has stopped
                     if status.error:
                         job.transition_to(
@@ -375,16 +385,22 @@ class JobManager:
         Serializes only the raw callable/args/kwargs tuple rather than the Entrypoint
         dataclass to avoid requiring fluster.cluster.types in the container.
         """
-        # Extract raw components to avoid serializing the Entrypoint class itself
         data = (entrypoint.callable, entrypoint.args, entrypoint.kwargs)
         serialized = cloudpickle.dumps(data)
         encoded = base64.b64encode(serialized).decode()
-        cmd = (
-            "import cloudpickle, base64; "
-            f"fn, args, kwargs = cloudpickle.loads(base64.b64decode('{encoded}')); "
-            "fn(*args, **kwargs)"
-        )
-        return ["python", "-c", cmd]
+
+        # Thunk that executes the function and writes result to file.
+        # Exceptions propagate naturally (container exits non-zero).
+        thunk = f"""
+import cloudpickle
+import base64
+
+fn, args, kwargs = cloudpickle.loads(base64.b64decode('{encoded}'))
+result = fn(*args, **kwargs)
+with open('/workdir/_result.pkl', 'wb') as f:
+    f.write(cloudpickle.dumps(result))
+"""
+        return ["python", "-c", thunk]
 
     def get_job(self, job_id: str) -> Job | None:
         """Get job by ID."""
@@ -441,7 +457,7 @@ class JobManager:
 
         return True
 
-    def get_logs(self, job_id: str, start_line: int = 0) -> list[cluster_pb2.LogEntry]:
+    def get_logs(self, job_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]:
         """Get logs for a job.
 
         Combines build logs (from job.logs) with container logs (from Docker).
@@ -458,7 +474,7 @@ class JobManager:
         if not job:
             return []
 
-        logs: list[cluster_pb2.LogEntry] = []
+        logs: list[cluster_pb2.Worker.LogEntry] = []
 
         # Add build logs from job.logs (these have proper timestamps)
         for log_line in job.logs.lines:

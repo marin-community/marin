@@ -731,7 +731,7 @@ class ControllerDashboard:
     def _api_stats(self, _request: Request) -> JSONResponse:
         """Return aggregated statistics for the dashboard."""
         ctx = FakeRequestContext()
-        jobs_response = self._service.list_jobs(cluster_pb2.ListJobsRequest(), ctx)
+        jobs_response = self._service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), ctx)
         workers = self._state.list_all_workers()
 
         jobs_pending = sum(1 for j in jobs_response.jobs if j.state == cluster_pb2.JOB_STATE_PENDING)

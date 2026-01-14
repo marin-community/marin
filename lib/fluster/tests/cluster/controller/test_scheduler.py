@@ -24,7 +24,7 @@ import time
 import pytest
 
 from fluster import cluster_pb2
-from fluster.cluster.controller.scheduler import ScheduleResult, Scheduler
+from fluster.cluster.controller.scheduler import Scheduler
 from fluster.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
 from fluster.cluster.types import JobId, WorkerId
 
@@ -39,7 +39,7 @@ def make_job_request():
         memory: str = "1g",
         scheduling_timeout_seconds: int = 0,
     ) -> cluster_pb2.LaunchJobRequest:
-        return cluster_pb2.LaunchJobRequest(
+        return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(cpu=cpu, memory=memory),
@@ -168,7 +168,7 @@ def test_scheduler_detects_timed_out_jobs(scheduler, state, make_resource_spec):
 
     # Job that requires 100 CPUs (will never fit) with 1 second timeout
     # Submitted 2 seconds ago, so it should be timed out
-    job_request = cluster_pb2.LaunchJobRequest(
+    job_request = cluster_pb2.Controller.LaunchJobRequest(
         name="impossible-job",
         serialized_entrypoint=b"test",
         resources=cluster_pb2.ResourceSpec(cpu=100, memory="1g"),
@@ -199,7 +199,7 @@ def test_scheduler_no_timeout_when_zero(scheduler, state, make_resource_spec):
     state.add_worker(worker)
 
     # Job that can't fit but has no timeout (0)
-    job_request = cluster_pb2.LaunchJobRequest(
+    job_request = cluster_pb2.Controller.LaunchJobRequest(
         name="no-timeout-job",
         serialized_entrypoint=b"test",
         resources=cluster_pb2.ResourceSpec(cpu=100, memory="1g"),
@@ -296,13 +296,6 @@ def test_scheduler_considers_running_jobs_for_capacity(scheduler, state, make_jo
     result = scheduler.find_assignments(pending_jobs, workers, now_ms)
 
     assert len(result.assignments) == 0
-
-
-def test_schedule_result_dataclass():
-    """Verify ScheduleResult has correct default values."""
-    result = ScheduleResult()
-    assert result.assignments == []
-    assert result.timed_out_jobs == []
 
 
 def test_scheduler_assigns_to_multiple_workers(scheduler, state, make_job_request, make_resource_spec):

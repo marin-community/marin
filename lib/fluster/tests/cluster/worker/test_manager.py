@@ -150,7 +150,7 @@ def create_run_job_request(job_id: str = "test-job-1", ports: list[str] | None =
         memory="4g",
     )
 
-    return cluster_pb2.RunJobRequest(
+    return cluster_pb2.Worker.RunJobRequest(
         job_id=job_id,
         serialized_entrypoint=serialized_entrypoint,
         environment=env_config,

@@ -38,6 +38,7 @@ import click
 import cloudpickle
 from fluster import cluster_pb2
 from fluster.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
+from fluster.cluster.client import RpcClusterClient
 from fluster.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
 from fluster.cluster.types import Entrypoint
 from fluster.cluster.worker.worker import Worker, WorkerConfig
@@ -149,11 +150,11 @@ class LogPoller:
             while not self._stop_event.is_set():
                 try:
                     # Build filter with timestamp for incremental fetching
-                    filter_proto = cluster_pb2.FetchLogsFilter()
+                    filter_proto = cluster_pb2.Worker.FetchLogsFilter()
                     if self._last_timestamp_ms > 0:
                         filter_proto.start_ms = self._last_timestamp_ms
 
-                    request = cluster_pb2.FetchLogsRequest(
+                    request = cluster_pb2.Worker.FetchLogsRequest(
                         job_id=self._job_id,
                         filter=filter_proto,
                     )
@@ -402,7 +403,7 @@ class ClusterContext:
         if namespace:
             env["FLUSTER_NAMESPACE"] = namespace
 
-        request = cluster_pb2.LaunchJobRequest(
+        request = cluster_pb2.Controller.LaunchJobRequest(
             name=name or fn.__name__,
             serialized_entrypoint=serialized,
             resources=cluster_pb2.ResourceSpec(
@@ -422,7 +423,7 @@ class ClusterContext:
 
     def status(self, job_id: str) -> dict:
         """Get job status from controller."""
-        request = cluster_pb2.GetJobStatusRequest(job_id=job_id)
+        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         response = self._controller_client.get_job_status(request)
         # Convert protobuf to dict for compatibility with existing code
         return {
@@ -476,17 +477,17 @@ class ClusterContext:
         )
 
         # Build filter with optional timestamp
-        filter_proto = cluster_pb2.FetchLogsFilter()
+        filter_proto = cluster_pb2.Worker.FetchLogsFilter()
         if since_ms is not None:
             filter_proto.start_ms = since_ms
 
-        request = cluster_pb2.FetchLogsRequest(job_id=job_id, filter=filter_proto)
+        request = cluster_pb2.Worker.FetchLogsRequest(job_id=job_id, filter=filter_proto)
         response = worker_client.fetch_logs(request)
         return list(response.logs)
 
     def kill(self, job_id: str) -> None:
         """Kill a job via controller."""
-        request = cluster_pb2.TerminateJobRequest(job_id=job_id)
+        request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
         self._controller_client.terminate_job(request)
 
     @property
@@ -496,6 +497,13 @@ class ClusterContext:
     @property
     def worker_url(self) -> str:
         return f"http://127.0.0.1:{self._worker_port}"
+
+    def get_client(self) -> RpcClusterClient:
+        """Get an RpcClusterClient for this cluster."""
+        return RpcClusterClient(
+            controller_address=self.controller_url,
+            bundle_blob=self._get_bundle_blob(),
+        )
 
 
 # =============================================================================
@@ -573,7 +581,7 @@ def example_actor_job_workflow(cluster: ClusterContext):
         print(f"Registering endpoint: calculator at {endpoint_address}")
         try:
             controller_client = ControllerServiceClientSync(address=controller_url)
-            request = cluster_pb2.RegisterEndpointRequest(
+            request = cluster_pb2.Controller.RegisterEndpointRequest(
                 name="calculator",
                 address=endpoint_address,
                 job_id=job_id,
@@ -665,6 +673,30 @@ def example_actor_job_workflow(cluster: ClusterContext):
 
     print("\nActor job workflow complete!")
     print("Note: The actor job will continue running until the cluster shuts down.")
+
+
+def example_worker_pool(cluster: ClusterContext):
+    """Demonstrate WorkerPool for task dispatch."""
+    from fluster.worker_pool import WorkerPool, WorkerPoolConfig
+
+    print("\n=== Example: Worker Pool ===\n")
+
+    client = cluster.get_client()
+    config = WorkerPoolConfig(
+        num_workers=2,
+        resources=cluster_pb2.ResourceSpec(cpu=1, memory="512m"),
+    )
+
+    def square(x):
+        return x * x
+
+    with WorkerPool(client, config) as pool:
+        print(f"WorkerPool started with {pool.size} workers")
+        futures = pool.map(square, [1, 2, 3, 4, 5])
+        results = [f.result() for f in futures]
+        print(f"Results: {results}")
+
+    print("\nWorkerPool example complete!")
 
 
 # =============================================================================
@@ -951,6 +983,7 @@ def main(wait: bool, mode: str):
                 print("ACTOR SYSTEM EXAMPLES")
                 print("=" * 60)
                 example_actor_job_workflow(cluster)
+                example_worker_pool(cluster)
 
             # Run cluster job examples
             if mode in ["all", "jobs"]:

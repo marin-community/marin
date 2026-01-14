@@ -67,8 +67,8 @@ class LogLine(BaseModel):
     def now(cls, source: str, data: str) -> "LogLine":
         return cls(timestamp=datetime.now(timezone.utc), source=source, data=data)
 
-    def to_proto(self) -> cluster_pb2.LogEntry:
-        return cluster_pb2.LogEntry(
+    def to_proto(self) -> cluster_pb2.Worker.LogEntry:
+        return cluster_pb2.Worker.LogEntry(
             timestamp_ms=int(self.timestamp.timestamp() * 1000),
             source=self.source,
             data=self.data,
@@ -89,7 +89,7 @@ class Job:
     """Internal job tracking state."""
 
     job_id: str
-    request: cluster_pb2.RunJobRequest
+    request: cluster_pb2.Worker.RunJobRequest
     status: JobState = cluster_pb2.JOB_STATE_PENDING
     exit_code: int | None = None
     error: str | None = None
@@ -120,6 +120,8 @@ class Job:
 
     # Structured logs (build logs stored here, container logs fetched from Docker)
     logs: JobLogs = field(default_factory=JobLogs)
+
+    result: bytes | None = None  # cloudpickle serialized return value from container
 
     def transition_to(
         self,

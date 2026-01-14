@@ -46,9 +46,9 @@ class WorkerServiceImpl:
 
     def run_job(
         self,
-        request: cluster_pb2.RunJobRequest,
+        request: cluster_pb2.Worker.RunJobRequest,
         _ctx: RequestContext,
-    ) -> cluster_pb2.RunJobResponse:
+    ) -> cluster_pb2.Worker.RunJobResponse:
         """Submit job for execution."""
         job_id = self._manager.submit_job(request)
         job = self._manager.get_job(job_id)
@@ -56,27 +56,31 @@ class WorkerServiceImpl:
         if not job:
             raise ConnectError(Code.INTERNAL, f"Job {job_id} not found after submission")
 
-        return cluster_pb2.RunJobResponse(
+        return cluster_pb2.Worker.RunJobResponse(
             job_id=job_id,
             state=job.to_proto().state,
         )
 
     def get_job_status(
         self,
-        request: cluster_pb2.GetStatusRequest,
+        request: cluster_pb2.Worker.GetJobStatusRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.JobStatus:
         """Get job status."""
         job = self._manager.get_job(request.job_id)
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
-        return job.to_proto()
+
+        status = job.to_proto()
+        if request.include_result and job.result:
+            status.serialized_result = job.result
+        return status
 
     def list_jobs(
         self,
-        _request: cluster_pb2.ListJobsRequest,
+        _request: cluster_pb2.Worker.ListJobsRequest,
         _ctx: RequestContext,
-    ) -> cluster_pb2.ListJobsResponse:
+    ) -> cluster_pb2.Worker.ListJobsResponse:
         """List jobs.
 
         Note: namespace filtering is not implemented in this stage as jobs
@@ -84,15 +88,15 @@ class WorkerServiceImpl:
         as "list all jobs".
         """
         jobs = self._manager.list_jobs()
-        return cluster_pb2.ListJobsResponse(
+        return cluster_pb2.Worker.ListJobsResponse(
             jobs=[job.to_proto() for job in jobs],
         )
 
     def fetch_logs(
         self,
-        request: cluster_pb2.FetchLogsRequest,
+        request: cluster_pb2.Worker.FetchLogsRequest,
         _ctx: RequestContext,
-    ) -> cluster_pb2.FetchLogsResponse:
+    ) -> cluster_pb2.Worker.FetchLogsResponse:
         """Fetch job logs with filtering.
 
         Supports:
@@ -127,11 +131,11 @@ class WorkerServiceImpl:
             if request.filter.max_lines and len(result) >= request.filter.max_lines:
                 break
 
-        return cluster_pb2.FetchLogsResponse(logs=result)
+        return cluster_pb2.Worker.FetchLogsResponse(logs=result)
 
     def kill_job(
         self,
-        request: cluster_pb2.KillJobRequest,
+        request: cluster_pb2.Worker.KillJobRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.Empty:
         """Kill running job."""
@@ -157,12 +161,12 @@ class WorkerServiceImpl:
         self,
         _request: cluster_pb2.Empty,
         _ctx: RequestContext,
-    ) -> cluster_pb2.HealthResponse:
+    ) -> cluster_pb2.Worker.HealthResponse:
         """Worker health status."""
         jobs = self._manager.list_jobs()
         running = sum(1 for j in jobs if j.status == cluster_pb2.JOB_STATE_RUNNING)
 
-        return cluster_pb2.HealthResponse(
+        return cluster_pb2.Worker.HealthResponse(
             healthy=True,
             uptime_ms=int((time.time() - self._start_time) * 1000),
             running_jobs=running,

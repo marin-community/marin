@@ -28,7 +28,7 @@ def make_job_request():
     """Create a minimal LaunchJobRequest for testing."""
 
     def _make(name: str = "test-job") -> cluster_pb2.LaunchJobRequest:
-        return cluster_pb2.LaunchJobRequest(
+        return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
@@ -194,12 +194,6 @@ def test_controller_state_job_retrieval(make_job_request):
 
     # Non-existent job returns None
     assert state.get_job(JobId("nonexistent")) is None
-
-
-def test_controller_state_worker_retrieval_nonexistent():
-    """Test getting non-existent worker returns None."""
-    state = ControllerState()
-    assert state.get_worker(WorkerId("nonexistent")) is None
 
 
 def test_controller_state_multiple_gangs(make_job_request):

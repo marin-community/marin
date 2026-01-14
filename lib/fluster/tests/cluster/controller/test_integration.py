@@ -35,23 +35,23 @@ class MockWorkerStub:
 
     def __init__(self):
         self.job_statuses: dict[str, cluster_pb2.JobStatus] = {}
-        self.run_job_calls: list[cluster_pb2.RunJobRequest] = []
+        self.run_job_calls: list[cluster_pb2.Worker.RunJobRequest] = []
         self.healthy = True
 
-    def run_job(self, request: cluster_pb2.RunJobRequest) -> cluster_pb2.RunJobResponse:
+    def run_job(self, request: cluster_pb2.Worker.RunJobRequest) -> cluster_pb2.Worker.RunJobResponse:
         self.run_job_calls.append(request)
-        return cluster_pb2.RunJobResponse(job_id=request.job_id, state=cluster_pb2.JOB_STATE_RUNNING)
+        return cluster_pb2.Worker.RunJobResponse(job_id=request.job_id, state=cluster_pb2.JOB_STATE_RUNNING)
 
-    def get_job_status(self, request: cluster_pb2.GetStatusRequest) -> cluster_pb2.JobStatus:
+    def get_job_status(self, request: cluster_pb2.Worker.GetJobStatusRequest) -> cluster_pb2.JobStatus:
         return self.job_statuses.get(request.job_id, cluster_pb2.JobStatus())
 
-    def list_jobs(self, request: cluster_pb2.ListJobsRequest) -> cluster_pb2.ListJobsResponse:
-        return cluster_pb2.ListJobsResponse(jobs=list(self.job_statuses.values()))
+    def list_jobs(self, request: cluster_pb2.Worker.ListJobsRequest) -> cluster_pb2.Worker.ListJobsResponse:
+        return cluster_pb2.Worker.ListJobsResponse(jobs=list(self.job_statuses.values()))
 
-    def health_check(self, request: cluster_pb2.Empty) -> cluster_pb2.HealthResponse:
+    def health_check(self, request: cluster_pb2.Empty) -> cluster_pb2.Worker.HealthResponse:
         if not self.healthy:
             raise ConnectionError("Worker unavailable")
-        return cluster_pb2.HealthResponse(healthy=True)
+        return cluster_pb2.Worker.HealthResponse(healthy=True)
 
     def set_job_completed(self, job_id: str, state: int, exit_code: int = 0, error: str = ""):
         self.job_statuses[job_id] = cluster_pb2.JobStatus(
@@ -84,8 +84,8 @@ class MockWorkerStubFactory:
 def make_job_request():
     """Create a minimal LaunchJobRequest for testing."""
 
-    def _make(name: str = "test-job", cpu: int = 1) -> cluster_pb2.LaunchJobRequest:
-        return cluster_pb2.LaunchJobRequest(
+    def _make(name: str = "test-job", cpu: int = 1) -> cluster_pb2.Controller.LaunchJobRequest:
+        return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(cpu=cpu, memory="1g"),
@@ -369,7 +369,7 @@ def test_ports_forwarded_from_launch_to_run_request(controller_with_workers):
     controller, stub_factory = controller_with_workers(["w1"])
 
     # Submit job with port requests
-    request = cluster_pb2.LaunchJobRequest(
+    request = cluster_pb2.Controller.LaunchJobRequest(
         name="port-test-job",
         serialized_entrypoint=b"test",
         resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),

@@ -51,7 +51,7 @@ def client(service):
 
 @pytest.fixture
 def job_request():
-    return cluster_pb2.LaunchJobRequest(
+    return cluster_pb2.Controller.LaunchJobRequest(
         name="test-job",
         serialized_entrypoint=b"test",
         resources=cluster_pb2.ResourceSpec(cpu=2, memory="4g"),

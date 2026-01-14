@@ -89,7 +89,7 @@ def create_run_job_request(bundle_path: str, job_id: str):
     """Create a RunJobRequest for testing."""
     entrypoint = create_test_entrypoint()
 
-    return cluster_pb2.RunJobRequest(
+    return cluster_pb2.Worker.RunJobRequest(
         job_id=job_id,
         serialized_entrypoint=cloudpickle.dumps(entrypoint),
         bundle_gcs_path=bundle_path,
@@ -371,9 +371,9 @@ class TestWorkerServiceIntegration:
         time.sleep(2)
 
         # Fetch last 10 lines
-        log_request = cluster_pb2.FetchLogsRequest(
+        log_request = cluster_pb2.Worker.FetchLogsRequest(
             job_id="logs-test",
-            filter=cluster_pb2.FetchLogsFilter(start_line=-10),
+            filter=cluster_pb2.Worker.FetchLogsFilter(start_line=-10),
         )
 
         response = real_service.fetch_logs(log_request, ctx)

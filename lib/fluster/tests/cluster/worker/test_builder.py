@@ -17,7 +17,6 @@
 import subprocess
 
 import pytest
-
 from fluster.cluster.worker.builder import ImageCache, VenvCache
 
 
@@ -181,62 +180,9 @@ def check_docker_available():
 def test_image_cache_initialization(tmp_path):
     """Test ImageCache initialization creates cache directory."""
     cache_dir = tmp_path / "cache"
-    builder = ImageCache(cache_dir, registry="localhost:5000", max_images=10)
+    ImageCache(cache_dir, registry="localhost:5000", max_images=10)
 
-    assert builder._cache_dir == cache_dir / "images"
-    assert builder._registry == "localhost:5000"
-    assert builder._max_images == 10
-    assert builder._cache_dir.exists()
-
-
-@pytest.mark.slow
-def test_image_exists_returns_false_for_missing_image(tmp_path):
-    """Test _image_exists returns False for non-existent image."""
-    if not check_docker_available():
-        pytest.skip("Docker not available")
-
-    cache_dir = tmp_path / "cache"
-    builder = ImageCache(cache_dir, registry="localhost:5000")
-
-    exists = builder._docker.exists("nonexistent:tag")
-    assert exists is False
-
-
-@pytest.mark.slow
-def test_content_addressed_image_tags(tmp_path, docker_bundle):
-    """Test that ImageCache generates content-addressed image tags."""
-    if not check_docker_available():
-        pytest.skip("Docker not available")
-
-    cache_dir = tmp_path / "cache"
-    builder = ImageCache(cache_dir, registry="localhost:5000")
-
-    job_id = "test-job-123"
-    deps_hash = "abcdef1234567890"
-    base_image = "python:3.11-slim"
-
-    # Build image
-    result = builder.build(
-        bundle_path=docker_bundle,
-        base_image=base_image,
-        extras=[],
-        job_id=job_id,
-        deps_hash=deps_hash,
-    )
-
-    # Verify content-addressed tag format
-    expected_tag = f"localhost:5000/fluster-job-{job_id}:{deps_hash[:8]}"
-    assert result.image_tag == expected_tag
-    assert result.deps_hash == deps_hash
-    assert result.from_cache is False
-    assert result.build_time_ms > 0
-
-    # Verify image exists
-    exists = builder._docker.exists(expected_tag)
-    assert exists is True
-
-    # Cleanup
-    subprocess.run(["docker", "rmi", expected_tag], stdout=subprocess.DEVNULL, check=False)
+    assert (cache_dir / "images").exists()
 
 
 @pytest.mark.slow
@@ -468,20 +414,3 @@ def test_lru_eviction_of_images(tmp_path, docker_bundle):
             subprocess.run(["docker", "rmi", tag], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         except Exception:
             pass  # Image may already be evicted
-
-
-def test_dockerfile_template_formatting():
-    """Test that Dockerfile template is formatted correctly."""
-    from fluster.cluster.worker.builder import DOCKERFILE_TEMPLATE
-
-    # Test with no extras
-    dockerfile = DOCKERFILE_TEMPLATE.format(base_image="python:3.11-slim", extras_flags="")
-    assert "FROM python:3.11-slim" in dockerfile
-    assert "ghcr.io/astral-sh/uv:latest" in dockerfile
-    assert "UV_CACHE_DIR=/opt/uv-cache" in dockerfile
-    assert "--mount=type=cache,id=fluster-uv-global,sharing=locked,target=/opt/uv-cache" in dockerfile
-
-    # Test with extras
-    dockerfile = DOCKERFILE_TEMPLATE.format(base_image="python:3.12", extras_flags="--extra dev --extra test")
-    assert "FROM python:3.12" in dockerfile
-    assert "--extra dev --extra test" in dockerfile

@@ -59,23 +59,23 @@ class WorkerClient(Protocol):
 
     def run_job(
         self,
-        request: cluster_pb2.RunJobRequest,
-    ) -> cluster_pb2.RunJobResponse: ...
+        request: cluster_pb2.Worker.RunJobRequest,
+    ) -> cluster_pb2.Worker.RunJobResponse: ...
 
     def get_job_status(
         self,
-        request: cluster_pb2.GetStatusRequest,
+        request: cluster_pb2.Worker.GetJobStatusRequest,
     ) -> cluster_pb2.JobStatus: ...
 
     def list_jobs(
         self,
-        request: cluster_pb2.ListJobsRequest,
-    ) -> cluster_pb2.ListJobsResponse: ...
+        request: cluster_pb2.Worker.ListJobsRequest,
+    ) -> cluster_pb2.Worker.ListJobsResponse: ...
 
     def health_check(
         self,
         request: cluster_pb2.Empty,
-    ) -> cluster_pb2.HealthResponse: ...
+    ) -> cluster_pb2.Worker.HealthResponse: ...
 
 
 class WorkerStubFactory(Protocol):
@@ -354,7 +354,7 @@ class Controller:
         """
         try:
             stub = self._stub_factory.get_stub(worker.address)
-            request = cluster_pb2.RunJobRequest(
+            request = cluster_pb2.Worker.RunJobRequest(
                 job_id=str(job.job_id),
                 serialized_entrypoint=job.request.serialized_entrypoint,
                 environment=cluster_pb2.EnvironmentConfig(
@@ -428,31 +428,28 @@ class Controller:
             result = self._process_heartbeat(worker, response)
             self._apply_heartbeat_result(worker, result, now_ms)
 
-    def _send_heartbeat(self, address: str) -> cluster_pb2.HeartbeatResponse | None:
+    def _send_heartbeat(self, address: str) -> cluster_pb2.Worker.ListJobsResponse | None:
         """Send heartbeat to a worker and get job status.
 
         Args:
             address: Worker address in "host:port" format
 
         Returns:
-            HeartbeatResponse with job statuses, or None on failure
+            ListJobsResponse with job statuses, or None on failure
         """
         try:
             stub = self._stub_factory.get_stub(address)
             stub.health_check(cluster_pb2.Empty())
 
-            jobs_response = stub.list_jobs(cluster_pb2.ListJobsRequest())
-            return cluster_pb2.HeartbeatResponse(
-                jobs=list(jobs_response.jobs),
-                timestamp_ms=int(time.time() * 1000),
-            )
+            jobs_response = stub.list_jobs(cluster_pb2.Worker.ListJobsRequest())
+            return jobs_response
         except Exception:
             return None
 
     def _process_heartbeat(
         self,
         worker: ControllerWorker,
-        response: cluster_pb2.HeartbeatResponse | None,
+        response: cluster_pb2.Worker.ListJobsResponse | None,
     ) -> HeartbeatResult:
         """Process heartbeat response and return what changed."""
         if response is None:
@@ -548,8 +545,8 @@ class Controller:
 
     def launch_job(
         self,
-        request: cluster_pb2.LaunchJobRequest,
-    ) -> cluster_pb2.LaunchJobResponse:
+        request: cluster_pb2.Controller.LaunchJobRequest,
+    ) -> cluster_pb2.Controller.LaunchJobResponse:
         """Submit a job to the controller.
 
         Creates a new job, adds it to the queue, and wakes the scheduler
@@ -566,7 +563,7 @@ class Controller:
     def get_job_status(
         self,
         job_id: str,
-    ) -> cluster_pb2.GetJobStatusResponse:
+    ) -> cluster_pb2.Controller.GetJobStatusResponse:
         """Get the status of a job.
 
         Args:
@@ -575,13 +572,13 @@ class Controller:
         Returns:
             GetJobStatusResponse with current job status
         """
-        request = cluster_pb2.GetJobStatusRequest(job_id=job_id)
+        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         return self._service.get_job_status(request, None)
 
     def register_worker(
         self,
-        request: cluster_pb2.RegisterWorkerRequest,
-    ) -> cluster_pb2.RegisterWorkerResponse:
+        request: cluster_pb2.Controller.RegisterWorkerRequest,
+    ) -> cluster_pb2.Controller.RegisterWorkerResponse:
         """Register a worker with the controller.
 
         Adds the worker to the registry and wakes the scheduler to
@@ -609,7 +606,7 @@ class Controller:
         Returns:
             Empty response
         """
-        request = cluster_pb2.TerminateJobRequest(job_id=job_id)
+        request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
         return self._service.terminate_job(request, None)
 
     # Properties

@@ -60,7 +60,7 @@ class ControllerJob:
     """
 
     job_id: JobId
-    request: cluster_pb2.LaunchJobRequest
+    request: cluster_pb2.Controller.LaunchJobRequest
     state: cluster_pb2.JobState = cluster_pb2.JOB_STATE_PENDING
     worker_id: WorkerId | None = None
 
@@ -372,9 +372,6 @@ class ControllerState:
 
     def remove_from_queue(self, job_id: JobId) -> None:
         """Remove a specific job from the queue.
-
-        O(n) operation, but queue size is bounded in practice.
-
         Args:
             job_id: Job ID to remove from the queue
         """

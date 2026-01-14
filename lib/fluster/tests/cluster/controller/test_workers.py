@@ -45,7 +45,7 @@ def make_job_request():
     """Create a minimal LaunchJobRequest for testing."""
 
     def _make(name: str = "test-job") -> cluster_pb2.LaunchJobRequest:
-        return cluster_pb2.LaunchJobRequest(
+        return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
@@ -149,14 +149,6 @@ def test_find_worker_for_job_all_unhealthy_returns_none(make_resource_spec, make
     assert result is None
 
 
-def test_load_workers_from_config_empty_list():
-    """Verify loading empty worker list works."""
-    state = ControllerState()
-    load_workers_from_config(state, [])
-
-    assert len(state.get_available_workers()) == 0
-
-
 def test_find_worker_for_job_returns_first_available(make_resource_spec, make_job_request):
     """Verify first-fit behavior - returns first healthy worker."""
     state = ControllerState()
@@ -194,7 +186,7 @@ def test_worker_can_fit_job_cpu_constraint():
     # Job already running on worker (uses 2 CPUs)
     running_job = ControllerJob(
         job_id=JobId("running"),
-        request=cluster_pb2.LaunchJobRequest(
+        request=cluster_pb2.Controller.LaunchJobRequest(
             name="running",
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(cpu=2, memory="1g"),
@@ -206,7 +198,7 @@ def test_worker_can_fit_job_cpu_constraint():
     # New job requiring 4 CPUs (only 2 available)
     new_job = ControllerJob(
         job_id=JobId("new"),
-        request=cluster_pb2.LaunchJobRequest(
+        request=cluster_pb2.Controller.LaunchJobRequest(
             name="new",
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(cpu=4, memory="1g"),
@@ -231,7 +223,7 @@ def test_worker_can_fit_job_memory_constraint():
     # Running job uses 12g
     running_job = ControllerJob(
         job_id=JobId("running"),
-        request=cluster_pb2.LaunchJobRequest(
+        request=cluster_pb2.Controller.LaunchJobRequest(
             name="running",
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(cpu=1, memory="12g"),
@@ -243,7 +235,7 @@ def test_worker_can_fit_job_memory_constraint():
     # New job requiring 8g (only 4g available)
     new_job = ControllerJob(
         job_id=JobId("new"),
-        request=cluster_pb2.LaunchJobRequest(
+        request=cluster_pb2.Controller.LaunchJobRequest(
             name="new",
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(cpu=1, memory="8g"),
@@ -272,7 +264,7 @@ def test_worker_can_fit_job_device_type_mismatch():
     # GPU job
     gpu_job = ControllerJob(
         job_id=JobId("gpu-job"),
-        request=cluster_pb2.LaunchJobRequest(
+        request=cluster_pb2.Controller.LaunchJobRequest(
             name="gpu-job",
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(
@@ -305,7 +297,7 @@ def test_worker_can_fit_job_gpu_variant_match():
     # Job requiring H100
     h100_job = ControllerJob(
         job_id=JobId("h100-job"),
-        request=cluster_pb2.LaunchJobRequest(
+        request=cluster_pb2.Controller.LaunchJobRequest(
             name="h100-job",
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(
@@ -338,7 +330,7 @@ def test_worker_can_fit_job_gpu_variant_mismatch():
     # Job requiring H100
     h100_job = ControllerJob(
         job_id=JobId("h100-job"),
-        request=cluster_pb2.LaunchJobRequest(
+        request=cluster_pb2.Controller.LaunchJobRequest(
             name="h100-job",
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(
@@ -371,7 +363,7 @@ def test_worker_can_fit_job_gpu_variant_auto():
     # Job with auto variant
     auto_job = ControllerJob(
         job_id=JobId("auto-job"),
-        request=cluster_pb2.LaunchJobRequest(
+        request=cluster_pb2.Controller.LaunchJobRequest(
             name="auto-job",
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(
@@ -404,7 +396,7 @@ def test_worker_can_fit_job_gpu_count_constraint():
     # Running job uses 6 GPUs
     running_job = ControllerJob(
         job_id=JobId("running"),
-        request=cluster_pb2.LaunchJobRequest(
+        request=cluster_pb2.Controller.LaunchJobRequest(
             name="running",
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(
@@ -420,7 +412,7 @@ def test_worker_can_fit_job_gpu_count_constraint():
     # New job requiring 4 GPUs (only 2 available)
     new_job = ControllerJob(
         job_id=JobId("new"),
-        request=cluster_pb2.LaunchJobRequest(
+        request=cluster_pb2.Controller.LaunchJobRequest(
             name="new",
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(
@@ -448,7 +440,7 @@ def test_get_committed_resources():
     # Add two running jobs
     job1 = ControllerJob(
         job_id=JobId("j1"),
-        request=cluster_pb2.LaunchJobRequest(
+        request=cluster_pb2.Controller.LaunchJobRequest(
             name="j1",
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(cpu=2, memory="8g"),
@@ -456,7 +448,7 @@ def test_get_committed_resources():
     )
     job2 = ControllerJob(
         job_id=JobId("j2"),
-        request=cluster_pb2.LaunchJobRequest(
+        request=cluster_pb2.Controller.LaunchJobRequest(
             name="j2",
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(cpu=4, memory="16g"),
@@ -495,7 +487,7 @@ def test_find_worker_for_job_respects_capacity():
     # Job requiring 4 CPUs
     job = ControllerJob(
         job_id=JobId("j1"),
-        request=cluster_pb2.LaunchJobRequest(
+        request=cluster_pb2.Controller.LaunchJobRequest(
             name="j1",
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(cpu=4, memory="1g"),

@@ -31,3 +31,13 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fluster"]
+
+[tool.pytest.ini_options]
+timeout = 60
+addopts = "--durations=10"
+markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
+filterwarnings = ["ignore::DeprecationWarning"]
+log_level = "INFO"
+log_format = "%(asctime)s %(levelname)s %(message)s"
+log_date_format = "%Y-%m-%d %H:%M:%S"
+log_cli_level = "INFO"

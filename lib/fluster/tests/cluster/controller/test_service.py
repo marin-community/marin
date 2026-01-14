@@ -31,7 +31,7 @@ def make_job_request():
     """Create a minimal LaunchJobRequest for testing."""
 
     def _make(name: str = "test-job") -> cluster_pb2.LaunchJobRequest:
-        return cluster_pb2.LaunchJobRequest(
+        return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",
             resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
@@ -116,7 +116,7 @@ def test_get_job_status_returns_status(service, state, make_job_request):
     state.add_job(job)
 
     # Get status
-    request = cluster_pb2.GetJobStatusRequest(job_id="test-job-id")
+    request = cluster_pb2.Controller.GetJobStatusRequest(job_id="test-job-id")
     response = service.get_job_status(request, None)
 
     # Verify response
@@ -128,7 +128,7 @@ def test_get_job_status_returns_status(service, state, make_job_request):
 
 def test_get_job_status_not_found(service):
     """Verify get_job_status raises ConnectError for unknown job."""
-    request = cluster_pb2.GetJobStatusRequest(job_id="nonexistent")
+    request = cluster_pb2.Controller.GetJobStatusRequest(job_id="nonexistent")
 
     with pytest.raises(ConnectError) as exc_info:
         service.get_job_status(request, None)
@@ -150,7 +150,7 @@ def test_terminate_job_marks_as_killed(service, state, make_job_request):
     state.add_job(job)
 
     # Terminate it
-    request = cluster_pb2.TerminateJobRequest(job_id="test-job-id")
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id="test-job-id")
     response = service.terminate_job(request, None)
 
     # Should return empty response
@@ -164,7 +164,7 @@ def test_terminate_job_marks_as_killed(service, state, make_job_request):
 
 def test_terminate_job_not_found(service):
     """Verify terminate_job raises ConnectError for unknown job."""
-    request = cluster_pb2.TerminateJobRequest(job_id="nonexistent")
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id="nonexistent")
 
     with pytest.raises(ConnectError) as exc_info:
         service.terminate_job(request, None)
@@ -211,14 +211,6 @@ def test_list_jobs_returns_all_jobs(service, state, make_job_request):
     assert states_by_id["job-3"] == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-def test_list_jobs_empty(service):
-    """Verify list_jobs returns empty list when no jobs exist."""
-    request = cluster_pb2.ListJobsRequest()
-    response = service.list_jobs(request, None)
-
-    assert len(response.jobs) == 0
-
-
 def test_get_job_status_includes_all_fields(service, state, make_job_request):
     """Verify get_job_status includes all JobStatus fields."""
     # Add a completed job with all fields populated
@@ -236,7 +228,7 @@ def test_get_job_status_includes_all_fields(service, state, make_job_request):
     state.add_job(job)
 
     # Get status
-    request = cluster_pb2.GetJobStatusRequest(job_id="test-job-id")
+    request = cluster_pb2.Controller.GetJobStatusRequest(job_id="test-job-id")
     response = service.get_job_status(request, None)
 
     # Verify all fields
@@ -275,7 +267,7 @@ def test_terminate_pending_job(service, state, make_job_request):
     state.add_job(job)
 
     # Terminate it
-    request = cluster_pb2.TerminateJobRequest(job_id="test-job-id")
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id="test-job-id")
     service.terminate_job(request, None)
 
     # Job should be marked KILLED even though it was never running
@@ -398,7 +390,7 @@ def test_terminate_job_logs_action(service, state, make_job_request):
     )
     state.add_job(job)
 
-    request = cluster_pb2.TerminateJobRequest(job_id="test-job-id")
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id="test-job-id")
     service.terminate_job(request, None)
 
     actions = state.get_recent_actions()

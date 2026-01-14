@@ -12,11 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-syntax = "proto3";
+edition = "2023";
 
 package fluster.cluster;
-
-option py_generic_services = true;
 
 // ============================================================================
 // SHARED TYPES
@@ -72,9 +70,9 @@ message JobStatus {
 
   // Worker ID (populated by controller, not worker)
   string worker_id = 11;
+  string worker_address = 12;  // host:port for direct worker connection
+  bytes serialized_result = 13;  // cloudpickle serialized return value (if requested)
 }
-
-
 
 // ============================================================================
 // RESOURCE SPECIFICATION
@@ -139,206 +137,207 @@ message EnvironmentConfig {
 }
 
 // ============================================================================
-// CONTROLLER MESSAGES (Job Management & Endpoint Registry)
+// CONTROLLER SERVICE MESSAGES
 // ============================================================================
 
-message LaunchJobRequest {
-  string name = 1;
-  bytes serialized_entrypoint = 2;   // cloudpickle(Entrypoint)
-  ResourceSpec resources = 3;         // Full resource specification
-  EnvironmentConfig environment = 4;  // Environment configuration
+message Controller {
+  // --- Job Lifecycle ---
+  message LaunchJobRequest {
+    string name = 1;
+    bytes serialized_entrypoint = 2;   // cloudpickle(Entrypoint)
+    ResourceSpec resources = 3;         // Full resource specification
+    EnvironmentConfig environment = 4;  // Environment configuration
 
-  // Bundle information - either provide gcs_path OR blob (not both)
-  // TODO -- make this oneof bundle_source or bundle_gcs
-  // OR STOP OVEROPTIMIZING AND JUST SEND THE BLOB RUSSELL
-  string bundle_gcs_path = 5;        // gs://bucket/path/bundle.zip
-  string bundle_hash = 6;            // SHA256 hash for caching
-  bytes bundle_blob = 7;             // Direct bundle upload (controller writes to bundle_dir)
+    // Bundle information - either provide gcs_path OR blob (not both)
+    string bundle_gcs_path = 5;        // gs://bucket/path/bundle.zip
+    string bundle_hash = 6;            // SHA256 hash for caching
+    bytes bundle_blob = 7;             // Direct bundle upload (controller writes to bundle_dir)
 
-  // Scheduling timeout - job fails with UNSCHEDULABLE if not scheduled within this time
-  // 0 means no timeout (wait forever)
-  int32 scheduling_timeout_seconds = 8;
+    // Scheduling timeout - job fails with UNSCHEDULABLE if not scheduled within this time
+    // 0 means no timeout (wait forever)
+    int32 scheduling_timeout_seconds = 8;
 
-  // Named ports to allocate (e.g., ["http", "grpc", "actor"])
-  // Worker allocates ports and injects FLUSTER_PORT_<NAME> env vars into the container
-  repeated string ports = 9;
-}
+    // Named ports to allocate (e.g., ["http", "grpc", "actor"])
+    // Worker allocates ports and injects FLUSTER_PORT_<NAME> env vars into the container
+    repeated string ports = 9;
+  }
 
-message LaunchJobResponse {
-  string job_id = 1;
-}
+  message LaunchJobResponse {
+    string job_id = 1;
+  }
 
-message ListJobsRequest {
-  string namespace = 1;
-}
+  message GetJobStatusRequest {
+    string job_id = 1;
+    bool include_result = 2;  // If true, include serialized_result in response
+  }
 
-message GetJobStatusRequest {
-  string job_id = 1;
-}
+  message GetJobStatusResponse {
+    JobStatus job = 1;
+  }
 
-message GetJobStatusResponse {
-  JobStatus job = 1;
-}
+  message TerminateJobRequest {
+    string job_id = 1;
+  }
 
-message TerminateJobRequest {
-  string job_id = 1;
-}
+  message ListJobsRequest {
+    string namespace = 1;
+  }
 
-message ListJobsResponse {
-  repeated JobStatus jobs = 1;
-}
+  message ListJobsResponse {
+    repeated JobStatus jobs = 1;
+  }
 
-// Endpoint Registry (Generic service discovery - NOT actor-specific)
+  // --- Worker Management ---
+  message WorkerInfo {
+    string worker_id = 1;
+    string address = 2;              // host:port for WorkerService
+    ResourceSpec resources = 3;      // Worker capabilities
+    int64 registered_at_ms = 4;
+  }
 
-message Endpoint {
-  string endpoint_id = 1;
-  string name = 2;
-  string address = 3;              // host:port
-  string job_id = 4;
-  string namespace = 5;
-  map<string, string> metadata = 6;
-}
+  message RegisterWorkerRequest {
+    string worker_id = 1;
+    string address = 2;
+    ResourceSpec resources = 3;
+  }
 
-message RegisterEndpointRequest {
-  string name = 1;
-  string address = 2;
-  string job_id = 3;
-  string namespace = 4;
-  map<string, string> metadata = 5;
-}
+  message RegisterWorkerResponse {
+    bool accepted = 1;
+    string controller_address = 2;   // For callbacks
+  }
 
-message RegisterEndpointResponse {
-  string endpoint_id = 1;
-}
+  message WorkerHealthStatus {
+    string worker_id = 1;
+    bool healthy = 2;
+    int32 consecutive_failures = 3;
+    int64 last_heartbeat_ms = 4;
+    repeated string running_job_ids = 5;
+  }
 
-message UnregisterEndpointRequest {
-  string endpoint_id = 1;
-}
+  message ListWorkersRequest {}
 
-message LookupEndpointRequest {
-  string name = 1;
-  string namespace = 2;
-}
+  message ListWorkersResponse {
+    repeated WorkerHealthStatus workers = 1;
+  }
 
-message LookupEndpointResponse {
-  Endpoint endpoint = 1;
-}
+  // --- Endpoint Registry ---
+  message Endpoint {
+    string endpoint_id = 1;
+    string name = 2;
+    string address = 3;              // host:port
+    string job_id = 4;
+    string namespace = 5;
+    map<string, string> metadata = 6;
+  }
 
-message ListEndpointsRequest {
-  string prefix = 1;
-  string namespace = 2;
-}
+  message RegisterEndpointRequest {
+    string name = 1;
+    string address = 2;
+    string job_id = 3;
+    string namespace = 4;
+    map<string, string> metadata = 5;
+  }
 
-message ListEndpointsResponse {
-  repeated Endpoint endpoints = 1;
-}
+  message RegisterEndpointResponse {
+    string endpoint_id = 1;
+  }
 
-// Worker Registration and Heartbeat
+  message UnregisterEndpointRequest {
+    string endpoint_id = 1;
+  }
 
-message WorkerInfo {
-  string worker_id = 1;
-  string address = 2;              // host:port for WorkerService
-  ResourceSpec resources = 3;      // Worker capabilities
-  int64 registered_at_ms = 4;
-}
+  message LookupEndpointRequest {
+    string name = 1;
+    string namespace = 2;
+  }
 
-message RegisterWorkerRequest {
-  string worker_id = 1;
-  string address = 2;
-  ResourceSpec resources = 3;
-}
+  message LookupEndpointResponse {
+    Endpoint endpoint = 1;
+  }
 
-message RegisterWorkerResponse {
-  bool accepted = 1;
-  string controller_address = 2;   // For callbacks
-}
+  message ListEndpointsRequest {
+    string prefix = 1;
+    string namespace = 2;
+  }
 
-message HeartbeatRequest {
-  string worker_id = 1;
-  int64 since_ms = 2;              // Return jobs modified since this timestamp
-}
-
-message HeartbeatResponse {
-  repeated JobStatus jobs = 1;     // Jobs running/completed since since_ms
-  int64 timestamp_ms = 2;
-}
-
-message WorkerHealthStatus {
-  string worker_id = 1;
-  bool healthy = 2;
-  int32 consecutive_failures = 3;
-  int64 last_heartbeat_ms = 4;
-  repeated string running_job_ids = 5;
-}
-
-message ListWorkersRequest {}
-
-message ListWorkersResponse {
-  repeated WorkerHealthStatus workers = 1;
+  message ListEndpointsResponse {
+    repeated Endpoint endpoints = 1;
+  }
 }
 
 // ============================================================================
-// WORKER MESSAGES (Job Execution)
+// WORKER SERVICE MESSAGES
 // ============================================================================
 
-message RunJobRequest {
-  string job_id = 1;
+message Worker {
+  message RunJobRequest {
+    string job_id = 1;
 
-  // Serialized Python objects and workspace bundle for execution
-  bytes serialized_entrypoint = 2;   // cloudpickle(Entrypoint)
-  EnvironmentConfig environment = 3;  // Environment configuration
-  string bundle_gcs_path = 4;        // gs://bucket/path/bundle.zip
+    // Serialized Python objects and workspace bundle for execution
+    bytes serialized_entrypoint = 2;   // cloudpickle(Entrypoint)
+    EnvironmentConfig environment = 3;  // Environment configuration
+    string bundle_gcs_path = 4;        // gs://bucket/path/bundle.zip
 
-  // Resource specification
-  ResourceSpec resources = 6;
+    // Resource specification
+    ResourceSpec resources = 6;
 
-  int32 timeout_seconds = 8;
+    int32 timeout_seconds = 8;
 
-  // Port requests
-  repeated string ports = 9;
-}
+    // Port requests
+    repeated string ports = 9;
+  }
 
-message RunJobResponse {
-  string job_id = 1;
-  JobState state = 2;
-}
+  message RunJobResponse {
+    string job_id = 1;
+    JobState state = 2;
+  }
 
-message GetStatusRequest {
-  string job_id = 1;
-}
+  message GetJobStatusRequest {
+    string job_id = 1;
+    bool include_result = 2;
+  }
 
-message LogEntry {
-  int64 timestamp_ms = 1;
-  string source = 2;  // "stdout", "stderr", or "build"
-  string data = 3;    // Log line content
-}
+  message ListJobsRequest {
+    string namespace = 1;
+  }
 
-message FetchLogsFilter {
-  string regex = 1;
-  int64 start_line = 2;
-  int64 start_ms = 3;
-  int64 end_ms = 4;
-  int64 max_lines = 5;
-}
+  message ListJobsResponse {
+    repeated JobStatus jobs = 1;
+  }
 
-message FetchLogsRequest {
-  string job_id = 1;
-  FetchLogsFilter filter = 2;
-}
+  message LogEntry {
+    int64 timestamp_ms = 1;
+    string source = 2;  // "stdout", "stderr", or "build"
+    string data = 3;    // Log line content
+  }
 
-message FetchLogsResponse {
-  repeated LogEntry logs = 1;
-}
+  message FetchLogsFilter {
+    string regex = 1;
+    int64 start_line = 2;
+    int64 start_ms = 3;
+    int64 end_ms = 4;
+    int64 max_lines = 5;
+  }
 
-message KillJobRequest {
-  string job_id = 1;
-  int32 term_timeout_ms = 2; // Time to wait for graceful termination before SIGKILL
-}
+  message FetchLogsRequest {
+    string job_id = 1;
+    FetchLogsFilter filter = 2;
+  }
 
-message HealthResponse {
-  bool healthy = 1;
-  int64 uptime_ms = 2;
-  int32 running_jobs = 3;
+  message FetchLogsResponse {
+    repeated LogEntry logs = 1;
+  }
+
+  message KillJobRequest {
+    string job_id = 1;
+    int32 term_timeout_ms = 2; // Time to wait for graceful termination before SIGKILL
+  }
+
+  message HealthResponse {
+    bool healthy = 1;
+    int64 uptime_ms = 2;
+    int32 running_jobs = 3;
+  }
 }
 
 // ============================================================================
@@ -347,28 +346,27 @@ message HealthResponse {
 
 service ControllerService {
   // Job lifecycle
-  rpc LaunchJob(LaunchJobRequest) returns (LaunchJobResponse);
-  rpc GetJobStatus(GetJobStatusRequest) returns (GetJobStatusResponse);
-  rpc TerminateJob(TerminateJobRequest) returns (Empty);
-  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  rpc LaunchJob(Controller.LaunchJobRequest) returns (Controller.LaunchJobResponse);
+  rpc GetJobStatus(Controller.GetJobStatusRequest) returns (Controller.GetJobStatusResponse);
+  rpc TerminateJob(Controller.TerminateJobRequest) returns (Empty);
+  rpc ListJobs(Controller.ListJobsRequest) returns (Controller.ListJobsResponse);
 
-  // Worker management
-  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
-  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
-  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+  // Worker management (controller polls workers internally via Worker.HealthCheck)
+  rpc RegisterWorker(Controller.RegisterWorkerRequest) returns (Controller.RegisterWorkerResponse);
+  rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
 
   // Endpoint registry (generic service discovery)
-  rpc RegisterEndpoint(RegisterEndpointRequest) returns (RegisterEndpointResponse);
-  rpc UnregisterEndpoint(UnregisterEndpointRequest) returns (Empty);
-  rpc LookupEndpoint(LookupEndpointRequest) returns (LookupEndpointResponse);
-  rpc ListEndpoints(ListEndpointsRequest) returns (ListEndpointsResponse);
+  rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
+  rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (Empty);
+  rpc LookupEndpoint(Controller.LookupEndpointRequest) returns (Controller.LookupEndpointResponse);
+  rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
 }
 
 service WorkerService {
-  rpc RunJob(RunJobRequest) returns (RunJobResponse);
-  rpc GetJobStatus(GetStatusRequest) returns (JobStatus);
-  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
-  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
-  rpc KillJob(KillJobRequest) returns (Empty);
-  rpc HealthCheck(Empty) returns (HealthResponse);
+  rpc RunJob(Worker.RunJobRequest) returns (Worker.RunJobResponse);
+  rpc GetJobStatus(Worker.GetJobStatusRequest) returns (JobStatus);
+  rpc ListJobs(Worker.ListJobsRequest) returns (Worker.ListJobsResponse);
+  rpc FetchLogs(Worker.FetchLogsRequest) returns (Worker.FetchLogsResponse);
+  rpc KillJob(Worker.KillJobRequest) returns (Empty);
+  rpc HealthCheck(Empty) returns (Worker.HealthResponse);
 }

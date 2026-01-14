@@ -154,7 +154,7 @@ def create_run_job_request(job_id: str = "test-job-1", ports: list[str] | None =
         memory="4g",
     )
 
-    return cluster_pb2.RunJobRequest(
+    return cluster_pb2.Worker.RunJobRequest(
         job_id=job_id,
         serialized_entrypoint=serialized_entrypoint,
         environment=env_config,
@@ -288,19 +288,16 @@ def test_get_job_success(client, service):
     request = create_run_job_request(job_id="job-details", ports=["http", "grpc"])
     service.run_job(request, Mock())
 
-    # Set some details
+    # Wait for job to complete (mock runtime returns running=False immediately)
     job = service._manager.get_job("job-details")
-    job.status = cluster_pb2.JOB_STATE_RUNNING
-    job.started_at_ms = 1000
-    job.exit_code = 0
+    job.thread.join(timeout=5.0)
 
     response = client.get("/api/jobs/job-details")
     assert response.status_code == 200
     data = response.json()
 
     assert data["job_id"] == "job-details"
-    assert data["status"] == "running"
-    assert data["started_at"] == 1000
+    assert data["status"] == "succeeded"  # Job completes immediately with mock runtime
     assert data["exit_code"] == 0
     assert "http" in data["ports"]
     assert "grpc" in data["ports"]
@@ -487,7 +484,7 @@ def test_run_job_with_ports(service, request_context):
 
 def test_get_job_status_not_found(service, request_context):
     """Test get_job_status raises NOT_FOUND for nonexistent job."""
-    status_request = cluster_pb2.GetStatusRequest(job_id="nonexistent")
+    status_request = cluster_pb2.Worker.GetJobStatusRequest(job_id="nonexistent")
 
     with pytest.raises(ConnectError) as exc_info:
         service.get_job_status(status_request, request_context)
@@ -505,7 +502,7 @@ def test_get_job_status_completed_job(service, request_context):
     job = service._manager.get_job("job-completed")
     job.thread.join(timeout=5.0)
 
-    status_request = cluster_pb2.GetStatusRequest(job_id="job-completed")
+    status_request = cluster_pb2.Worker.GetJobStatusRequest(job_id="job-completed")
     status = service.get_job_status(status_request, request_context)
 
     assert status.job_id == "job-completed"
@@ -525,8 +522,8 @@ def test_fetch_logs_tail_with_negative_start_line(service, request_context):
     for i in range(10):
         job.logs.add("stdout", f"Log line {i}")
 
-    log_filter = cluster_pb2.FetchLogsFilter(start_line=-3)
-    logs_request = cluster_pb2.FetchLogsRequest(job_id="job-logs-tail", filter=log_filter)
+    log_filter = cluster_pb2.Worker.FetchLogsFilter(start_line=-3)
+    logs_request = cluster_pb2.Worker.FetchLogsRequest(job_id="job-logs-tail", filter=log_filter)
     response = service.fetch_logs(logs_request, request_context)
 
     assert len(response.logs) == 3
@@ -547,8 +544,8 @@ def test_fetch_logs_with_regex_filter(service, request_context):
     job.logs.add("stdout", "ERROR: another error")
     job.logs.add("stdout", "DEBUG: details")
 
-    log_filter = cluster_pb2.FetchLogsFilter(regex="ERROR")
-    logs_request = cluster_pb2.FetchLogsRequest(job_id="job-logs-regex", filter=log_filter)
+    log_filter = cluster_pb2.Worker.FetchLogsFilter(regex="ERROR")
+    logs_request = cluster_pb2.Worker.FetchLogsRequest(job_id="job-logs-regex", filter=log_filter)
     response = service.fetch_logs(logs_request, request_context)
 
     assert len(response.logs) == 2
@@ -571,8 +568,8 @@ def test_fetch_logs_combined_filters(service, request_context):
     job.logs.add("stdout", "ERROR: fifth error")
 
     # Use regex to filter ERRORs, then limit to 2
-    log_filter = cluster_pb2.FetchLogsFilter(regex="ERROR", max_lines=2)
-    logs_request = cluster_pb2.FetchLogsRequest(job_id="job-logs-combined", filter=log_filter)
+    log_filter = cluster_pb2.Worker.FetchLogsFilter(regex="ERROR", max_lines=2)
+    logs_request = cluster_pb2.Worker.FetchLogsRequest(job_id="job-logs-combined", filter=log_filter)
     response = service.fetch_logs(logs_request, request_context)
 
     assert len(response.logs) == 2
@@ -582,7 +579,7 @@ def test_fetch_logs_combined_filters(service, request_context):
 
 def test_kill_job_not_found(service, request_context):
     """Test kill_job raises NOT_FOUND for nonexistent job."""
-    kill_request = cluster_pb2.KillJobRequest(job_id="nonexistent")
+    kill_request = cluster_pb2.Worker.KillJobRequest(job_id="nonexistent")
 
     with pytest.raises(ConnectError) as exc_info:
         service.kill_job(kill_request, request_context)
@@ -601,7 +598,7 @@ def test_kill_job_already_completed(service, request_context):
     job.thread.join(timeout=5.0)
 
     # Try to kill completed job
-    kill_request = cluster_pb2.KillJobRequest(job_id="job-completed")
+    kill_request = cluster_pb2.Worker.KillJobRequest(job_id="job-completed")
 
     with pytest.raises(ConnectError) as exc_info:
         service.kill_job(kill_request, request_context)
@@ -628,7 +625,7 @@ def test_kill_job_with_custom_timeout(service, request_context):
     job.status = cluster_pb2.JOB_STATE_RUNNING
     job.container_id = "container123"
 
-    kill_request = cluster_pb2.KillJobRequest(job_id="job-kill", term_timeout_ms=100)
+    kill_request = cluster_pb2.Worker.KillJobRequest(job_id="job-kill", term_timeout_ms=100)
     response = service.kill_job(kill_request, request_context)
 
     # Verify API response and that should_stop was set

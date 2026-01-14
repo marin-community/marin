@@ -199,8 +199,8 @@ class Worker:
     # Delegate key service methods
     def submit_job(
         self,
-        request: cluster_pb2.RunJobRequest,
-    ) -> cluster_pb2.RunJobResponse:
+        request: cluster_pb2.Worker.RunJobRequest,
+    ) -> cluster_pb2.Worker.RunJobResponse:
         """Submit a job."""
         return self._service.run_job(request, None)  # type: ignore[arg-type]
 
@@ -209,12 +209,12 @@ class Worker:
         job_id: str,
     ) -> cluster_pb2.JobStatus:
         """Get job status."""
-        request = cluster_pb2.GetStatusRequest(job_id=job_id)
+        request = cluster_pb2.Worker.GetJobStatusRequest(job_id=job_id)
         return self._service.get_job_status(request, None)  # type: ignore[arg-type]
 
-    def list_jobs(self) -> cluster_pb2.ListJobsResponse:
+    def list_jobs(self) -> cluster_pb2.Worker.ListJobsResponse:
         """List all jobs."""
-        return self._service.list_jobs(cluster_pb2.ListJobsRequest(), None)  # type: ignore[arg-type]
+        return self._service.list_jobs(cluster_pb2.Worker.ListJobsRequest(), None)  # type: ignore[arg-type]
 
     # Properties
     @property
