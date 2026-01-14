@@ -94,7 +94,7 @@ nemotron_code_dolmino_mix = lm_mixture_data_config(
 
 # Wikipedia resiliparse custom fork step (data already exists at hardcoded path)
 @step(name="documents/wikipedia-resiliparse-custom-fork", fn=process_wiki_dump)
-def wikipedia_resiliparse_custom_fork_step(ctx: StepContext):
+def wikipedia_resiliparse_custom_fork(ctx: StepContext):
     return WikiExtractionConfig(
         input_path="gs://marin-us-central2/raw/wikipedia-a7dad0/20241201",
         revision=versioned("20241201"),
@@ -109,17 +109,11 @@ def wikipedia_resiliparse_custom_fork_step(ctx: StepContext):
         digit_threshold=versioned(50),
         word_threshold=versioned(70),
         special_char_threshold=versioned(50),
-    )
-
-wikipedia_resiliparse_custom_fork = (
-    wikipedia_resiliparse_custom_fork_step()
-    .with_output_path("documents/wikipedia-resiliparse-custom-fork-2569de")
-    .cd("20241201")
-)
+    ).with_output_path("documents/wikipedia-resiliparse-custom-fork-2569de").cd("20241201")
 
 # ar5iv resiliparse custom fork step (data already exists at hardcoded path)
 @step(name="documents/ar5iv/ar5iv-04-2024-no-problem", fn=process_ar5iv_dump)
-def ar5iv_no_problem_resiliparse_custom_fork_step(ctx: StepContext):
+def ar5iv_no_problem_resiliparse_custom_fork(ctx: StepContext):
     return Ar5ivExtractionConfig(
         input_path="gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem-49c4e3/202404",
         revision="042024",
@@ -131,9 +125,7 @@ def ar5iv_no_problem_resiliparse_custom_fork_step(ctx: StepContext):
             skip_elements=ARXIV_BLACKLISTED_SELECTORS,
         ),
         remove_reference_section=versioned(True),
-    )
-
-ar5iv_no_problem_resiliparse_custom_fork = ar5iv_no_problem_resiliparse_custom_fork_step().with_output_path("documents/ar5iv/ar5iv-04-2024-no-problem-3971f")
+    ).with_output_path("documents/ar5iv/ar5iv-04-2024-no-problem-3971f")
 
 # Create the medu science QA dataset
 # MMLU Science QA tokenization
@@ -146,14 +138,14 @@ medu_mmlu_science_qa_tokenized = default_tokenize(
 # Wikipedia tokenization
 md_wiki_tokenized = default_tokenize(
     name="wikipedia",
-    dataset=wikipedia_resiliparse_custom_fork,
+    dataset=wikipedia_resiliparse_custom_fork(),
     tokenizer=llama3_tokenizer,
 ).with_output_path("tokenized/wikipedia-6980f2")
 
 # Arxiv tokenization
 md_arxiv_tokenized = default_tokenize(
     name="arxiv-no-problem",
-    dataset=ar5iv_no_problem_resiliparse_custom_fork,
+    dataset=ar5iv_no_problem_resiliparse_custom_fork(),
     tokenizer=llama3_tokenizer,
 ).with_output_path("tokenized/arxiv-no-problem-a3e054")
 

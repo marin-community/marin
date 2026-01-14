@@ -518,7 +518,7 @@ def run_plantcad_evaluation(config: DnaEvalConfig) -> dict:
 # Experiment setup
 # -----------------------------------------------------------------------------
 @step(name="plantcad-eval", fn=run_plantcad_evaluation)
-def evaluation_step_creator(ctx: StepContext):
+def evaluation_step(ctx: StepContext):
     checkpoint_path = "hf://plantcad/marin_exp1729__pcv1_600m_c512__checkpoints/local_store/checkpoints/plantcad-train-600m-r16-a1bc43/hf/step-26782"
     return DnaEvalConfig(
         checkpoint_path=versioned(checkpoint_path),
@@ -526,11 +526,8 @@ def evaluation_step_creator(ctx: StepContext):
     )
 
 
-evaluation_step = evaluation_step_creator()
-
-
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    executor_main(steps=[evaluation_step])
+    executor_main(steps=[evaluation_step()])

@@ -24,7 +24,7 @@ from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_dat
 
 # Common Pile v0.1 filtered dataset download steps
 @step(name="raw/common_pile/arxiv_abstracts_filtered", fn=download_hf)
-def arxiv_abstracts_filtered_creator(ctx: StepContext):
+def arxiv_abstracts_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/arxiv_abstracts_filtered",
         revision="f1d7a9a",
@@ -32,10 +32,8 @@ def arxiv_abstracts_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-arxiv_abstracts_filtered = arxiv_abstracts_filtered_creator()
-
 @step(name="raw/common_pile/arxiv_papers_filtered", fn=download_hf)
-def arxiv_papers_filtered_creator(ctx: StepContext):
+def arxiv_papers_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/arxiv_papers_filtered",
         revision="033cf7f",
@@ -43,10 +41,8 @@ def arxiv_papers_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-arxiv_papers_filtered = arxiv_papers_filtered_creator()
-
 @step(name="raw/common_pile/biodiversity_heritage_library_filtered", fn=download_hf)
-def biodiversity_heritage_library_filtered_creator(ctx: StepContext):
+def biodiversity_heritage_library_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/biodiversity_heritage_library_filtered",
         revision="0486ed6",
@@ -54,10 +50,8 @@ def biodiversity_heritage_library_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-biodiversity_heritage_library_filtered = biodiversity_heritage_library_filtered_creator()
-
 @step(name="raw/common_pile/caselaw_access_project_filtered", fn=download_hf)
-def caselaw_access_project_filtered_creator(ctx: StepContext):
+def caselaw_access_project_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/caselaw_access_project_filtered",
         revision="50e1961",
@@ -65,10 +59,8 @@ def caselaw_access_project_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-caselaw_access_project_filtered = caselaw_access_project_filtered_creator()
-
 @step(name="raw/common_pile/cccc_filtered", fn=download_hf)
-def cccc_filtered_creator(ctx: StepContext):
+def cccc_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/cccc_filtered",
         revision="03a3de5",
@@ -76,10 +68,8 @@ def cccc_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-cccc_filtered = cccc_filtered_creator()
-
 @step(name="raw/common_pile/data_provenance_initiative_filtered", fn=download_hf)
-def data_provenance_initiative_filtered_creator(ctx: StepContext):
+def data_provenance_initiative_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/data_provenance_initiative_filtered",
         revision="8f5afcf",
@@ -87,10 +77,8 @@ def data_provenance_initiative_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-data_provenance_initiative_filtered = data_provenance_initiative_filtered_creator()
-
 @step(name="raw/common_pile/doab_filtered", fn=download_hf)
-def doab_filtered_creator(ctx: StepContext):
+def doab_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/doab_filtered",
         revision="defb24c",
@@ -98,10 +86,8 @@ def doab_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-doab_filtered = doab_filtered_creator()
-
 @step(name="raw/common_pile/foodista_filtered", fn=download_hf)
-def foodista_filtered_creator(ctx: StepContext):
+def foodista_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/foodista_filtered",
         revision="bf2c7aa",
@@ -109,10 +95,8 @@ def foodista_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-foodista_filtered = foodista_filtered_creator()
-
 @step(name="raw/common_pile/github_archive_filtered", fn=download_hf)
-def github_archive_filtered_creator(ctx: StepContext):
+def github_archive_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/github_archive_filtered",
         revision="52282fe",
@@ -120,10 +104,8 @@ def github_archive_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-github_archive_filtered = github_archive_filtered_creator()
-
 @step(name="raw/common_pile/library_of_congress_filtered", fn=download_hf)
-def library_of_congress_filtered_creator(ctx: StepContext):
+def library_of_congress_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/library_of_congress_filtered",
         revision="56725c7",
@@ -131,10 +113,8 @@ def library_of_congress_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-library_of_congress_filtered = library_of_congress_filtered_creator()
-
 @step(name="raw/common_pile/libretexts_filtered", fn=download_hf)
-def libretexts_filtered_creator(ctx: StepContext):
+def libretexts_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/libretexts_filtered",
         revision="70388bc",
@@ -142,10 +122,8 @@ def libretexts_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-libretexts_filtered = libretexts_filtered_creator()
-
 @step(name="raw/common_pile/news_filtered", fn=download_hf)
-def news_filtered_creator(ctx: StepContext):
+def news_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/news_filtered",
         revision="59aaa8f",
@@ -153,10 +131,8 @@ def news_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-news_filtered = news_filtered_creator()
-
 @step(name="raw/common_pile/oercommons_filtered", fn=download_hf)
-def oercommons_filtered_creator(ctx: StepContext):
+def oercommons_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/oercommons_filtered",
         revision="506b615",
@@ -164,10 +140,8 @@ def oercommons_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-oercommons_filtered = oercommons_filtered_creator()
-
 @step(name="raw/common_pile/peS2o_filtered", fn=download_hf)
-def peS2o_filtered_creator(ctx: StepContext):
+def peS2o_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/peS2o_filtered",
         revision="2977475",
@@ -175,10 +149,8 @@ def peS2o_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-peS2o_filtered = peS2o_filtered_creator()
-
 @step(name="raw/common_pile/pre_1929_books_filtered", fn=download_hf)
-def pre_1929_books_filtered_creator(ctx: StepContext):
+def pre_1929_books_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/pre_1929_books_filtered",
         revision="23f9d96",
@@ -186,10 +158,8 @@ def pre_1929_books_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-pre_1929_books_filtered = pre_1929_books_filtered_creator()
-
 @step(name="raw/common_pile/pressbooks_filtered", fn=download_hf)
-def pressbooks_filtered_creator(ctx: StepContext):
+def pressbooks_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/pressbooks_filtered",
         revision="1a1d3b5",
@@ -197,10 +167,8 @@ def pressbooks_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-pressbooks_filtered = pressbooks_filtered_creator()
-
 @step(name="raw/common_pile/project_gutenberg_filtered", fn=download_hf)
-def project_gutenberg_filtered_creator(ctx: StepContext):
+def project_gutenberg_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/project_gutenberg_filtered",
         revision="3cdf687",
@@ -208,10 +176,8 @@ def project_gutenberg_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-project_gutenberg_filtered = project_gutenberg_filtered_creator()
-
 @step(name="raw/common_pile/public_domain_review_filtered", fn=download_hf)
-def public_domain_review_filtered_creator(ctx: StepContext):
+def public_domain_review_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/public_domain_review_filtered",
         revision="efc7f21",
@@ -219,10 +185,8 @@ def public_domain_review_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-public_domain_review_filtered = public_domain_review_filtered_creator()
-
 @step(name="raw/common_pile/pubmed_filtered", fn=download_hf)
-def pubmed_filtered_creator(ctx: StepContext):
+def pubmed_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/pubmed_filtered",
         revision="c156f05",
@@ -230,10 +194,8 @@ def pubmed_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-pubmed_filtered = pubmed_filtered_creator()
-
 @step(name="raw/common_pile/python_enhancement_proposals_filtered", fn=download_hf)
-def python_enhancement_proposals_filtered_creator(ctx: StepContext):
+def python_enhancement_proposals_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/python_enhancement_proposals_filtered",
         revision="5821709",
@@ -241,10 +203,8 @@ def python_enhancement_proposals_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-python_enhancement_proposals_filtered = python_enhancement_proposals_filtered_creator()
-
 @step(name="raw/common_pile/regulations_filtered", fn=download_hf)
-def regulations_filtered_creator(ctx: StepContext):
+def regulations_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/regulations_filtered",
         revision="3327364",
@@ -252,10 +212,8 @@ def regulations_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-regulations_filtered = regulations_filtered_creator()
-
 @step(name="raw/common_pile/stackexchange_filtered", fn=download_hf)
-def stackexchange_filtered_creator(ctx: StepContext):
+def stackexchange_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/stackexchange_filtered",
         revision="c0ac737",
@@ -263,10 +221,8 @@ def stackexchange_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-stackexchange_filtered = stackexchange_filtered_creator()
-
 @step(name="raw/common_pile/stackv2_edu_filtered", fn=download_hf)
-def stackv2_edu_filtered_creator(ctx: StepContext):
+def stackv2_edu_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/stackv2_edu_filtered",
         revision="c354dbe",
@@ -274,10 +230,8 @@ def stackv2_edu_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-stackv2_edu_filtered = stackv2_edu_filtered_creator()
-
 @step(name="raw/common_pile/stackv2_html_filtered", fn=download_hf)
-def stackv2_html_filtered_creator(ctx: StepContext):
+def stackv2_html_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/stackv2_html_filtered",
         revision="92c9fa8",
@@ -285,10 +239,8 @@ def stackv2_html_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-stackv2_html_filtered = stackv2_html_filtered_creator()
-
 @step(name="raw/common_pile/stackv2", fn=download_hf)
-def stackv2_creator(ctx: StepContext):
+def stackv2(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/stackv2",
         revision="d0e3266",
@@ -296,10 +248,8 @@ def stackv2_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-stackv2 = stackv2_creator()
-
 @step(name="raw/common_pile/ubuntu_irc_filtered", fn=download_hf)
-def ubuntu_irc_filtered_creator(ctx: StepContext):
+def ubuntu_irc_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/ubuntu_irc_filtered",
         revision="84f88c9",
@@ -307,10 +257,8 @@ def ubuntu_irc_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-ubuntu_irc_filtered = ubuntu_irc_filtered_creator()
-
 @step(name="raw/common_pile/uk_hansard_filtered", fn=download_hf)
-def uk_hansard_filtered_creator(ctx: StepContext):
+def uk_hansard_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/uk_hansard_filtered",
         revision="c88adc4",
@@ -318,10 +266,8 @@ def uk_hansard_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-uk_hansard_filtered = uk_hansard_filtered_creator()
-
 @step(name="raw/common_pile/usgpo_filtered", fn=download_hf)
-def usgpo_filtered_creator(ctx: StepContext):
+def usgpo_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/usgpo_filtered",
         revision="b150cc2",
@@ -329,10 +275,8 @@ def usgpo_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-usgpo_filtered = usgpo_filtered_creator()
-
 @step(name="raw/common_pile/uspto_filtered", fn=download_hf)
-def uspto_filtered_creator(ctx: StepContext):
+def uspto_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/uspto_filtered",
         revision="13894c5",
@@ -340,10 +284,8 @@ def uspto_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-uspto_filtered = uspto_filtered_creator()
-
 @step(name="raw/common_pile/wikimedia_filtered", fn=download_hf)
-def wikimedia_filtered_creator(ctx: StepContext):
+def wikimedia_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/wikimedia_filtered",
         revision="0641bb8",
@@ -351,10 +293,8 @@ def wikimedia_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-wikimedia_filtered = wikimedia_filtered_creator()
-
 @step(name="raw/common_pile/wikiteam_filtered", fn=download_hf)
-def wikiteam_filtered_creator(ctx: StepContext):
+def wikiteam_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/wikiteam_filtered",
         revision="f4ed055",
@@ -362,10 +302,8 @@ def wikiteam_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-wikiteam_filtered = wikiteam_filtered_creator()
-
 @step(name="raw/common_pile/youtube_filtered", fn=download_hf)
-def youtube_filtered_creator(ctx: StepContext):
+def youtube_filtered(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="common-pile/youtube_filtered",
         revision="dff8c8a",
@@ -373,41 +311,39 @@ def youtube_filtered_creator(ctx: StepContext):
         wait_for_completion=True,
     )
 
-youtube_filtered = youtube_filtered_creator()
-
 # Map dataset names to their corresponding raw download steps
 COMMON_PILE_DATASETS: dict[str, TokenizerStep] = {
-    "arxiv_abstracts": arxiv_abstracts_filtered,
-    "arxiv_papers": arxiv_papers_filtered,
-    "biodiversity_heritage_library": biodiversity_heritage_library_filtered,
-    "caselaw_access_project": caselaw_access_project_filtered,
-    "cccc": cccc_filtered,
-    "data_provenance_initiative": data_provenance_initiative_filtered,
-    "doab": doab_filtered,
-    "foodista": foodista_filtered,
-    "github_archive": github_archive_filtered,
-    "library_of_congress": library_of_congress_filtered,
-    "libretexts": libretexts_filtered,
-    "news": news_filtered,
-    "oercommons": oercommons_filtered,
-    "peS2o": peS2o_filtered,
-    "pre_1929_books": pre_1929_books_filtered,
-    "pressbooks": pressbooks_filtered,
-    "project_gutenberg": project_gutenberg_filtered,
-    "public_domain_review": public_domain_review_filtered,
-    "pubmed": pubmed_filtered,
-    "python_enhancement_proposals": python_enhancement_proposals_filtered,
-    "regulations": regulations_filtered,
-    "stackexchange": stackexchange_filtered,
-    "stackv2_edu": stackv2_edu_filtered,
-    "stackv2_html": stackv2_html_filtered,
-    "ubuntu_irc": ubuntu_irc_filtered,
-    "uk_hansard": uk_hansard_filtered,
-    "usgpo": usgpo_filtered,
-    "uspto": uspto_filtered,
-    "wikimedia": wikimedia_filtered,
-    "wikiteam": wikiteam_filtered,
-    "youtube": youtube_filtered,
+    "arxiv_abstracts": arxiv_abstracts_filtered(),
+    "arxiv_papers": arxiv_papers_filtered(),
+    "biodiversity_heritage_library": biodiversity_heritage_library_filtered(),
+    "caselaw_access_project": caselaw_access_project_filtered(),
+    "cccc": cccc_filtered(),
+    "data_provenance_initiative": data_provenance_initiative_filtered(),
+    "doab": doab_filtered(),
+    "foodista": foodista_filtered(),
+    "github_archive": github_archive_filtered(),
+    "library_of_congress": library_of_congress_filtered(),
+    "libretexts": libretexts_filtered(),
+    "news": news_filtered(),
+    "oercommons": oercommons_filtered(),
+    "peS2o": peS2o_filtered(),
+    "pre_1929_books": pre_1929_books_filtered(),
+    "pressbooks": pressbooks_filtered(),
+    "project_gutenberg": project_gutenberg_filtered(),
+    "public_domain_review": public_domain_review_filtered(),
+    "pubmed": pubmed_filtered(),
+    "python_enhancement_proposals": python_enhancement_proposals_filtered(),
+    "regulations": regulations_filtered(),
+    "stackexchange": stackexchange_filtered(),
+    "stackv2_edu": stackv2_edu_filtered(),
+    "stackv2_html": stackv2_html_filtered(),
+    "ubuntu_irc": ubuntu_irc_filtered(),
+    "uk_hansard": uk_hansard_filtered(),
+    "usgpo": usgpo_filtered(),
+    "uspto": uspto_filtered(),
+    "wikimedia": wikimedia_filtered(),
+    "wikiteam": wikiteam_filtered(),
+    "youtube": youtube_filtered(),
 }
 
 # Effective token counts for the main training stage (in teratokens)

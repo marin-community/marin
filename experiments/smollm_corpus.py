@@ -33,8 +33,6 @@ def smollm_cosmopedia(ctx: StepContext):
         wait_for_completion=True,
     )
 
-smollm_cosmopedia = smollm_cosmopedia()
-
 @step(name="raw/smollm_corpus/fineweb-edu-dedup", fn=download_hf)
 def smollm_fineweb_edu(ctx: StepContext):
     return DownloadConfig(
@@ -44,8 +42,6 @@ def smollm_fineweb_edu(ctx: StepContext):
         gcs_output_path=ctx.output,
         wait_for_completion=True,
     )
-
-smollm_fineweb_edu = smollm_fineweb_edu()
 
 @step(name="raw/smollm_corpus/python-edu", fn=download_hf)
 def smollm_python_edu(ctx: StepContext):
@@ -57,14 +53,12 @@ def smollm_python_edu(ctx: StepContext):
         wait_for_completion=True,
     )
 
-smollm_python_edu = smollm_python_edu()
-
 
 if __name__ == "__main__":
     executor_main(
         steps=[
-            smollm_cosmopedia,
-            smollm_fineweb_edu,
-            smollm_python_edu,
+            smollm_cosmopedia(),
+            smollm_fineweb_edu(),
+            smollm_python_edu(),
         ]
     )

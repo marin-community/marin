@@ -80,7 +80,7 @@ n = 100
 
 
 @step(name="hello_world/data", fn=generate_data, description=f"Generate data from 0 to {n}-1.")
-def data_step(ctx: StepContext):
+def data(ctx: StepContext):
     return GenerateDataConfig(
         n=n,
         output_path=ctx.output,
@@ -88,20 +88,16 @@ def data_step(ctx: StepContext):
 
 
 @step(name="hello_world/stats", fn=compute_stats, description="Compute stats of the generated data.")
-def stats_step(ctx: StepContext):
-    data = ctx.require(data_step())
+def stats(ctx: StepContext):
+    data_output = ctx.require(data())
     return ComputeStatsConfig(
-        input_path=data,
+        input_path=data_output,
         output_path=ctx.output,
     )
 
 
-# Create the step objects
-data = data_step()
-stats = stats_step()
-
 if __name__ == "__main__":
     executor_main(
-        steps=[data, stats],
+        steps=[data(), stats()],
         description="Simple experiment to compute stats of some numbers.",
     )

@@ -30,7 +30,7 @@ from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
 @step(name="raw/fineweb2_hq", fn=download_hf)
-def fineweb2_raw_creator(ctx: StepContext):
+def fineweb2_raw(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="epfml/FineWeb2-HQ",
         gcs_output_path=ctx.output,
@@ -39,12 +39,9 @@ def fineweb2_raw_creator(ctx: StepContext):
     )
 
 
-fineweb2_raw = fineweb2_raw_creator().with_output_path("raw/fineweb2-hq")
-
-
 def _get_fineweb2_split_paths(split):
     patterns = FINEWEB2_DATASETS[split]
-    fineweb2_split_paths = [fineweb2_raw / pattern for pattern in patterns]
+    fineweb2_split_paths = [fineweb2_raw().with_output_path("raw/fineweb2-hq") / pattern for pattern in patterns]
     return fineweb2_split_paths
 
 
@@ -54,7 +51,7 @@ def _create_tokenize_step(split, base_path, tokenizer):
     fineweb2_split_paths = _get_fineweb2_split_paths(split)
 
     @step(name=fineweb2_split_output_path, fn=tokenize)
-    def tokenize_step_creator(ctx: StepContext):
+    def tokenize_step(ctx: StepContext):
         return TokenizeConfig(
             train_paths=fineweb2_split_paths,
             validation_paths=versioned([]),
@@ -62,7 +59,7 @@ def _create_tokenize_step(split, base_path, tokenizer):
             tokenizer=versioned(tokenizer),
         )
 
-    return tokenize_step_creator()
+    return tokenize_step()
 
 
 def tokenize_fineweb2hq_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, TokenizerStep]:

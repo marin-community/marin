@@ -58,7 +58,7 @@ The script follows the pattern from eval_datasets.py but focuses only on the dec
 # the one in eval_datasets.py is the wrong flattened version
 # for some reason that doesn't have test splits
 @step(name="raw/cais/mmlu_raw", fn=download_hf, override_output_path="raw/cais/mmlu_raw")
-def mmlu_raw_step(ctx: StepContext):
+def mmlu_raw(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="cais/mmlu",
         revision=versioned("c30699e"),
@@ -67,15 +67,14 @@ def mmlu_raw_step(ctx: StepContext):
         hf_urls_glob=["**/*.parquet", "*.md"],
     )
 
-mmlu_raw = mmlu_raw_step()
 # Convert gsm8k to dolma format
 @step(name="decontamination/gsm8k-dolma", fn=hf_dataset_to_jsonl)
-def gsm8k_convert_dolma_step(ctx: StepContext):
+def gsm8k_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="gsm8k/main",
         subsets=["*"],
         splits=["test"],
-        input_path=ctx.require(gsm8k_raw),
+        input_path=ctx.require(gsm8k_raw()),
         hf_path="gsm8k/main",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -83,16 +82,14 @@ def gsm8k_convert_dolma_step(ctx: StepContext):
         answer_text_key="answer",
     )
 
-gsm8k_convert_dolma = gsm8k_convert_dolma_step()
-
 # Convert math dataset to dolma format
 @step(name="decontamination/math-dolma", fn=hf_dataset_to_jsonl)
-def math_convert_dolma_step(ctx: StepContext):
+def math_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="hendrycks/math",
         subsets=["*"],
         splits=["test"],
-        input_path=ctx.require(math_raw),
+        input_path=ctx.require(math_raw()),
         hf_path="hendrycks/math",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -100,17 +97,15 @@ def math_convert_dolma_step(ctx: StepContext):
         answer_text_key="solution",
     )
 
-math_convert_dolma = math_convert_dolma_step()
-
 # Convert truthful_qa to dolma format
 # columns are: question (string), best_answer (string), correct_answers (List[string])
 @step(name="decontamination/truthful_qa-dolma", fn=hf_dataset_to_jsonl)
-def truthful_qa_convert_dolma_step(ctx: StepContext):
+def truthful_qa_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="truthful_qa/truthful_qa",
         subsets=["generation"],
         splits=["validation"],
-        input_path=ctx.require(truthful_qa_raw),
+        input_path=ctx.require(truthful_qa_raw()),
         hf_path="truthful_qa/truthful_qa",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -119,16 +114,14 @@ def truthful_qa_convert_dolma_step(ctx: StepContext):
         options_key="correct_answers",
     )
 
-truthful_qa_convert_dolma = truthful_qa_convert_dolma_step()
-
 # Convert bbh to dolma format
 @step(name="decontamination/bbh-dolma", fn=hf_dataset_to_jsonl)
-def bbh_convert_dolma_step(ctx: StepContext):
+def bbh_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="SaylorTwift/bbh",
         subsets=["*"],
         splits=["test"],
-        input_path=ctx.require(bbh_raw),
+        input_path=ctx.require(bbh_raw()),
         hf_path="SaylorTwift/bbh",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -136,16 +129,14 @@ def bbh_convert_dolma_step(ctx: StepContext):
         answer_text_key="target",
     )
 
-bbh_convert_dolma = bbh_convert_dolma_step()
-
 
 @step(name="decontamination/mmlu", fn=hf_dataset_to_jsonl)
-def mmlu_convert_dolma_step(ctx: StepContext):
+def mmlu_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="cais/mmlu",
         subsets=["*"],
         splits=["test"],
-        input_path=ctx.require(mmlu_raw),
+        input_path=ctx.require(mmlu_raw()),
         hf_path="cais/mmlu",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -156,16 +147,14 @@ def mmlu_convert_dolma_step(ctx: StepContext):
         exclude_subsets=["auxiliary_train"],
     )
 
-mmlu_convert_dolma = mmlu_convert_dolma_step()
-
 # Convert humaneval to dolma format
 @step(name="decontamination/humaneval", fn=hf_dataset_to_jsonl)
-def humaneval_convert_dolma_step(ctx: StepContext):
+def humaneval_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="openai/openai_humaneval",
         subsets=["*"],
         splits=["test"],
-        input_path=ctx.require(humaneval_raw),
+        input_path=ctx.require(humaneval_raw()),
         hf_path="openai/openai_humaneval",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -173,11 +162,9 @@ def humaneval_convert_dolma_step(ctx: StepContext):
         answer_text_key="canonical_solution",
     )
 
-humaneval_convert_dolma = humaneval_convert_dolma_step()
-
 # Convert instruction_following to dolma format (load remotely, no answers)
 @step(name="decontamination/instruction_following", fn=hf_dataset_to_jsonl)
-def instruction_following_convert_dolma_step(ctx: StepContext):
+def instruction_following_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="wis-k/instruction-following-eval",
         subsets=["*"],
@@ -191,11 +178,9 @@ def instruction_following_convert_dolma_step(ctx: StepContext):
         answer_text_ignore=True,
     )
 
-instruction_following_convert_dolma = instruction_following_convert_dolma_step()
-
 # Convert gpqa to dolma format (load from HF hub, single split)
 @step(name="decontamination/gpqa", fn=hf_dataset_to_jsonl)
-def gpqa_convert_dolma_step(ctx: StepContext):
+def gpqa_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="Idavidrein/gpqa",
         subsets=["gpqa_main", "gpqa_extended", "gpqa_diamond"],
@@ -209,16 +194,14 @@ def gpqa_convert_dolma_step(ctx: StepContext):
         options_keys=["Correct Answer", "Incorrect Answer 1", "Incorrect Answer 2", "Incorrect Answer 3"],
     )
 
-gpqa_convert_dolma = gpqa_convert_dolma_step()
-
 
 @step(name="decontamination/mmlu_pro", fn=hf_dataset_to_jsonl)
-def mmlu_pro_convert_dolma_step(ctx: StepContext):
+def mmlu_pro_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="TIGER-Lab/MMLU-Pro",
         subsets=["*"],
         splits=["test"],
-        input_path=ctx.require(mmlu_pro_raw),
+        input_path=ctx.require(mmlu_pro_raw()),
         hf_path="TIGER-Lab/MMLU-Pro",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -228,16 +211,14 @@ def mmlu_pro_convert_dolma_step(ctx: StepContext):
         answer_labels=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"],
     )
 
-mmlu_pro_convert_dolma = mmlu_pro_convert_dolma_step()
-
 # Convert musr to dolma format
 @step(name="decontamination/musr", fn=hf_dataset_to_jsonl)
-def musr_convert_dolma_step(ctx: StepContext):
+def musr_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="WillHeld/MuSRDecontam",
         subsets=[""],
         splits=["test"],
-        input_path=ctx.require(musr_raw),
+        input_path=ctx.require(musr_raw()),
         hf_path="WillHeld/MuSRDecontam",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -247,16 +228,14 @@ def musr_convert_dolma_step(ctx: StepContext):
         answer_text_key="answer_choice",
     )
 
-musr_convert_dolma = musr_convert_dolma_step()
-
 # Convert HellaSwag to dolma format
 @step(name="decontamination/hellaswag", fn=hf_dataset_to_jsonl)
-def hellaswag_convert_dolma_step(ctx: StepContext):
+def hellaswag_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="Rowan/hellaswag",
         subsets=["*"],
         splits=["test"],
-        input_path=ctx.require(hellaswag_raw),
+        input_path=ctx.require(hellaswag_raw()),
         hf_path="Rowan/hellaswag",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -264,16 +243,14 @@ def hellaswag_convert_dolma_step(ctx: StepContext):
         answer_text_ignore=True,
     )
 
-hellaswag_convert_dolma = hellaswag_convert_dolma_step()
-
 # Convert AI2-ARC to dolma format
 @step(name="decontamination/ai2_arc", fn=hf_dataset_to_jsonl)
-def ai2_arc_convert_dolma_step(ctx: StepContext):
+def ai2_arc_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="allenai/ai2_arc",
         subsets=["*"],
         splits=["test"],
-        input_path=ctx.require(ai2_arc_raw),
+        input_path=ctx.require(ai2_arc_raw()),
         hf_path="allenai/ai2_arc",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -284,16 +261,14 @@ def ai2_arc_convert_dolma_step(ctx: StepContext):
         answer_text_ignore=True,
     )
 
-ai2_arc_convert_dolma = ai2_arc_convert_dolma_step()
-
 # Convert BoolQ to dolma format
 @step(name="decontamination/boolq", fn=hf_dataset_to_jsonl)
-def boolq_convert_dolma_step(ctx: StepContext):
+def boolq_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="google/boolq",
         subsets=["*"],
         splits=["validation"],
-        input_path=ctx.require(boolq_raw),
+        input_path=ctx.require(boolq_raw()),
         hf_path="google/boolq",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -301,16 +276,14 @@ def boolq_convert_dolma_step(ctx: StepContext):
         answer_text_ignore=True,
     )
 
-boolq_convert_dolma = boolq_convert_dolma_step()
-
 # Insert Tau Commonsense QA conversion step
 @step(name="decontamination/commonsense_qa", fn=hf_dataset_to_jsonl)
-def commonsense_qa_convert_dolma_step(ctx: StepContext):
+def commonsense_qa_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="tau/commonsense_qa",
         subsets=["*"],
         splits=["validation"],
-        input_path=ctx.require(commonsense_qa_raw),
+        input_path=ctx.require(commonsense_qa_raw()),
         hf_path="tau/commonsense_qa",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -321,16 +294,14 @@ def commonsense_qa_convert_dolma_step(ctx: StepContext):
         answer_text_ignore=True,
     )
 
-commonsense_qa_convert_dolma = commonsense_qa_convert_dolma_step()
-
 # Convert Lambada OpenAI to dolma format
 @step(name="decontamination/lambada_openai", fn=hf_dataset_to_jsonl)
-def lambada_openai_convert_dolma_step(ctx: StepContext):
+def lambada_openai_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="EleutherAI/lambada_openai",
         subsets=["*"],
         splits=["test"],
-        input_path=ctx.require(lambada_openai_raw),
+        input_path=ctx.require(lambada_openai_raw()),
         hf_path="EleutherAI/lambada_openai",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -338,16 +309,14 @@ def lambada_openai_convert_dolma_step(ctx: StepContext):
         answer_text_ignore=True,
     )
 
-lambada_openai_convert_dolma = lambada_openai_convert_dolma_step()
-
 # Convert AllenAI OpenBookQA to dolma format
 @step(name="decontamination/openbookqa", fn=hf_dataset_to_jsonl)
-def openbookqa_convert_dolma_step(ctx: StepContext):
+def openbookqa_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="allenai/openbookqa",
         subsets=["*"],
         splits=["test"],
-        input_path=ctx.require(openbookqa_raw),
+        input_path=ctx.require(openbookqa_raw()),
         hf_path="allenai/openbookqa",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -358,16 +327,14 @@ def openbookqa_convert_dolma_step(ctx: StepContext):
         answer_text_ignore=True,
     )
 
-openbookqa_convert_dolma = openbookqa_convert_dolma_step()
-
 # Convert PIQA to dolma format
 @step(name="decontamination/piqa", fn=hf_dataset_to_jsonl)
-def piqa_convert_dolma_step(ctx: StepContext):
+def piqa_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="baber/piqa",
         subsets=["*"],
         splits=["test"],
-        input_path=ctx.require(piqa_raw),
+        input_path=ctx.require(piqa_raw()),
         hf_path="baber/piqa",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -378,16 +345,14 @@ def piqa_convert_dolma_step(ctx: StepContext):
         answer_text_ignore=True,
     )
 
-piqa_convert_dolma = piqa_convert_dolma_step()
-
 # Convert Winograd WSC to dolma format
 @step(name="decontamination/winograd_wsc", fn=hf_dataset_to_jsonl)
-def winograd_wsc_convert_dolma_step(ctx: StepContext):
+def winograd_wsc_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="marcov/winograd_wsc_wsc273_promptsource",
         subsets=["*"],
         splits=["test"],
-        input_path=ctx.require(winograd_wsc_raw),
+        input_path=ctx.require(winograd_wsc_raw()),
         hf_path="marcov/winograd_wsc_wsc273_promptsource",
         output_path=ctx.output,
         output_format=OutputFormatOptions("decontamination"),
@@ -398,72 +363,70 @@ def winograd_wsc_convert_dolma_step(ctx: StepContext):
         answer_text_ignore=True,
     )
 
-winograd_wsc_convert_dolma = winograd_wsc_convert_dolma_step()
-
 ############################################################
 
 # List of evaluation dataset conversion steps for train-test overlap detection
 EVAL_DATASET_STEPS: list[ExecutorStep] = [
-    gsm8k_convert_dolma,
-    math_convert_dolma,
-    truthful_qa_convert_dolma,
-    bbh_convert_dolma,
-    mmlu_convert_dolma,
-    humaneval_convert_dolma,
-    instruction_following_convert_dolma,
-    gpqa_convert_dolma,
-    musr_convert_dolma,
-    mmlu_pro_convert_dolma,
-    hellaswag_convert_dolma,
-    ai2_arc_convert_dolma,
-    boolq_convert_dolma,
-    commonsense_qa_convert_dolma,
-    lambada_openai_convert_dolma,
-    openbookqa_convert_dolma,
-    piqa_convert_dolma,
-    winograd_wsc_convert_dolma,
+    gsm8k_convert_dolma(),
+    math_convert_dolma(),
+    truthful_qa_convert_dolma(),
+    bbh_convert_dolma(),
+    mmlu_convert_dolma(),
+    humaneval_convert_dolma(),
+    instruction_following_convert_dolma(),
+    gpqa_convert_dolma(),
+    musr_convert_dolma(),
+    mmlu_pro_convert_dolma(),
+    hellaswag_convert_dolma(),
+    ai2_arc_convert_dolma(),
+    boolq_convert_dolma(),
+    commonsense_qa_convert_dolma(),
+    lambada_openai_convert_dolma(),
+    openbookqa_convert_dolma(),
+    piqa_convert_dolma(),
+    winograd_wsc_convert_dolma(),
 ]
 
 if __name__ == "__main__":
     executor_main(
         steps=[
-            mmlu_raw,
-            mmlu_convert_dolma,
-            gsm8k_raw,
-            math_raw,
-            truthful_qa_raw,
-            bbh_raw,
-            mmlu_raw,
-            humaneval_raw,
-            gpqa_raw,
-            instruction_following_raw,
-            musr_raw,
-            mmlu_pro_raw,
-            boolq_raw,
-            ai2_arc_raw,
-            hellaswag_raw,
-            piqa_raw,
-            winograd_wsc_raw,
-            commonsense_qa_raw,
-            lambada_openai_raw,
-            openbookqa_raw,
-            gsm8k_convert_dolma,
-            math_convert_dolma,
-            truthful_qa_convert_dolma,
-            bbh_convert_dolma,
-            mmlu_convert_dolma,
-            humaneval_convert_dolma,
-            instruction_following_convert_dolma,
-            gpqa_convert_dolma,
-            musr_convert_dolma,
-            mmlu_pro_convert_dolma,
-            hellaswag_convert_dolma,
-            ai2_arc_convert_dolma,
-            boolq_convert_dolma,
-            commonsense_qa_convert_dolma,
-            lambada_openai_convert_dolma,
-            openbookqa_convert_dolma,
-            piqa_convert_dolma,
-            winograd_wsc_convert_dolma,
+            mmlu_raw(),
+            mmlu_convert_dolma(),
+            gsm8k_raw(),
+            math_raw(),
+            truthful_qa_raw(),
+            bbh_raw(),
+            mmlu_raw(),
+            humaneval_raw(),
+            gpqa_raw(),
+            instruction_following_raw(),
+            musr_raw(),
+            mmlu_pro_raw(),
+            boolq_raw(),
+            ai2_arc_raw(),
+            hellaswag_raw(),
+            piqa_raw(),
+            winograd_wsc_raw(),
+            commonsense_qa_raw(),
+            lambada_openai_raw(),
+            openbookqa_raw(),
+            gsm8k_convert_dolma(),
+            math_convert_dolma(),
+            truthful_qa_convert_dolma(),
+            bbh_convert_dolma(),
+            mmlu_convert_dolma(),
+            humaneval_convert_dolma(),
+            instruction_following_convert_dolma(),
+            gpqa_convert_dolma(),
+            musr_convert_dolma(),
+            mmlu_pro_convert_dolma(),
+            hellaswag_convert_dolma(),
+            ai2_arc_convert_dolma(),
+            boolq_convert_dolma(),
+            commonsense_qa_convert_dolma(),
+            lambada_openai_convert_dolma(),
+            openbookqa_convert_dolma(),
+            piqa_convert_dolma(),
+            winograd_wsc_convert_dolma(),
         ]
     )

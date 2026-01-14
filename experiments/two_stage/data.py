@@ -30,7 +30,7 @@ flan_tokenized = dolma_components["dolma/flan"]
 slimpajama_tokenized = tokenized["slimpajama_6b"]
 
 @step(name="raw/latxa_corpus", fn=download_hf)
-def latxa_corpus_step(ctx: StepContext):
+def latxa_corpus(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="HiTZ/latxa-corpus-v1.1",
         revision="02dc515",
@@ -38,11 +38,9 @@ def latxa_corpus_step(ctx: StepContext):
         wait_for_completion=True,
     )
 
-latxa_corpus = latxa_corpus_step()
-
 latxa_corpus_tokenized = default_tokenize(
     name="latxa_corpus",
-    dataset=latxa_corpus,
+    dataset=latxa_corpus(),
     tokenizer=llama3_tokenizer,
 )
 

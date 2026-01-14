@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 @step(name="raw_fineweb_edu_small_2", fn=download_hf)
-def raw_fineweb_edu_small_2_creator(ctx: StepContext):
+def raw_fineweb_edu_small_2(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision="3c452cb",
@@ -38,11 +38,8 @@ def raw_fineweb_edu_small_2_creator(ctx: StepContext):
     )
 
 
-fineweb_edu_small_2 = raw_fineweb_edu_small_2_creator()
-
-
 @step(name="raw_fineweb_edu_small_1", fn=download_hf)
-def raw_fineweb_edu_small_1_creator(ctx: StepContext):
+def raw_fineweb_edu_small_1(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision="3c452cb",
@@ -50,19 +47,13 @@ def raw_fineweb_edu_small_1_creator(ctx: StepContext):
     )
 
 
-fineweb_edu_small_1 = raw_fineweb_edu_small_1_creator()
-
-
 @step(name="raw_fineweb_edu_small_10bt", fn=download_hf)
-def raw_fineweb_edu_small_10bt_creator(ctx: StepContext):
+def raw_fineweb_edu_small_10bt(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision="3c452cb",
         hf_urls_glob=["sample/10BT/*.parquet"],
     )
-
-
-fineweb_edu_small_10bt = raw_fineweb_edu_small_10bt_creator()
 
 
 def run_dedup(config: DedupeConfig) -> str:
@@ -75,8 +66,8 @@ def run_dedup(config: DedupeConfig) -> str:
 
 
 @step(name="dedup_raw_fineweb_edu_small_1", fn=run_dedup)
-def dedup_fineweb_edu_small_1_creator(ctx: StepContext):
-    dataset = ctx.require(fineweb_edu_small_1)
+def dedup_fineweb_edu_small_1(ctx: StepContext):
+    dataset = ctx.require(raw_fineweb_edu_small_1())
     input_path = dataset.cd("sample/10BT")
 
     return DedupeConfig(
@@ -84,14 +75,11 @@ def dedup_fineweb_edu_small_1_creator(ctx: StepContext):
         mode=DedupMode.EXACT_PARAGRAPH_DEDUPLICATE,
         processes=7,
     )
-
-
-dedup_fineweb_edu_small_1 = dedup_fineweb_edu_small_1_creator()
 
 
 @step(name="dedup_raw_fineweb_edu_small_2", fn=run_dedup)
-def dedup_fineweb_edu_small_2_creator(ctx: StepContext):
-    dataset = ctx.require(fineweb_edu_small_2)
+def dedup_fineweb_edu_small_2(ctx: StepContext):
+    dataset = ctx.require(raw_fineweb_edu_small_2())
     input_path = dataset.cd("sample/10BT")
 
     return DedupeConfig(
@@ -101,12 +89,9 @@ def dedup_fineweb_edu_small_2_creator(ctx: StepContext):
     )
 
 
-dedup_fineweb_edu_small_2 = dedup_fineweb_edu_small_2_creator()
-
-
 @step(name="dedup_raw_fineweb_edu_small_10bt", fn=run_dedup)
-def dedup_fineweb_edu_small_10bt_creator(ctx: StepContext):
-    dataset = ctx.require(fineweb_edu_small_10bt)
+def dedup_fineweb_edu_small_10bt(ctx: StepContext):
+    dataset = ctx.require(raw_fineweb_edu_small_10bt())
     input_path = dataset.cd("sample/10BT")
 
     return DedupeConfig(
@@ -116,13 +101,10 @@ def dedup_fineweb_edu_small_10bt_creator(ctx: StepContext):
     )
 
 
-dedup_fineweb_edu_small_10bt = dedup_fineweb_edu_small_10bt_creator()
-
-
 STEPS = [
-    dedup_fineweb_edu_small_1,
-    dedup_fineweb_edu_small_2,
-    dedup_fineweb_edu_small_10bt,
+    dedup_fineweb_edu_small_1(),
+    dedup_fineweb_edu_small_2(),
+    dedup_fineweb_edu_small_10bt(),
 ]
 
 if __name__ == "__main__":

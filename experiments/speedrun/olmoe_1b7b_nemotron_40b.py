@@ -204,7 +204,7 @@ def nemotron_only_speedrun(
         wandb_run_id = train_step  # resolved to the actual output path by the executor
 
     @step(name=f"speedrun/{name}-speedrun_results", fn=speedrun_results)
-    def results_step_creator(ctx: StepContext):
+    def results_step(ctx: StepContext):
         train_step_ref = ctx.require(train_step)
         return SpeedrunResultsConfig(
             wandb_run_id=wandb_run_id,
@@ -214,9 +214,7 @@ def nemotron_only_speedrun(
             output_path=train_step_ref / "speedrun_results.json",
         )
 
-    results_step = results_step_creator()
-
-    return [train_step, results_step]
+    return [train_step, results_step()]
 
 
 def make_speedrun_config(

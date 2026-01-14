@@ -24,15 +24,13 @@ Downloads the following datasets
 ############################################################
 # download mmlu dataset
 @step(name="raw/cais/mmlu", fn=download_hf)
-def mmlu_download_step_fn(ctx: StepContext):
+def mmlu_download_step(ctx: StepContext):
     return DownloadConfig(
         hf_dataset_id="cais/mmlu",
         revision=versioned("c30699e"),
         gcs_output_path=ctx.output,
         wait_for_completion=True,
-    )
-
-mmlu_download_step = mmlu_download_step_fn().with_output_path("raw/cais/mmlu").cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
+    ).with_output_path("raw/cais/mmlu").cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
 
 
 """
@@ -45,7 +43,7 @@ Converts raw to JSON for:
 
 # This creates a JSON file representing the auxiliary training data subset of MMLU
 @step(name="evaluation/mmlu-eval-aux", fn=hf_dataset_to_jsonl)
-def mmlu_convert_eval_aux_fn(ctx: StepContext):
+def mmlu_convert_eval_aux(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="cais/mmlu",
         subsets=["all"],
@@ -60,11 +58,9 @@ def mmlu_convert_eval_aux_fn(ctx: StepContext):
         answer_labels=["A", "B", "C", "D"],
     )
 
-mmlu_convert_eval_aux = mmlu_convert_eval_aux_fn()
-
 # This creates one file per subject from MMLU, excluding the all and auxiliary training subsets
 @step(name="evaluation/mmlu-eval-subject", fn=hf_dataset_to_jsonl)
-def mmlu_convert_eval_subject_fn(ctx: StepContext):
+def mmlu_convert_eval_subject(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="cais/mmlu",
         subsets=["*"],
@@ -80,13 +76,11 @@ def mmlu_convert_eval_subject_fn(ctx: StepContext):
         exclude_subsets=["all", "auxiliary_train"],
     )
 
-mmlu_convert_eval_subject = mmlu_convert_eval_subject_fn()
-
 ############################################################
 # Convert mmlu to dolma format (i.e. JSON with "text" field)
 # This is used as input to the decontamination pipeline so documents with MMLU content are removed
 @step(name="decontamination/mmlu-dolma", fn=hf_dataset_to_jsonl)
-def mmlu_convert_dolma_fn(ctx: StepContext):
+def mmlu_convert_dolma(ctx: StepContext):
     return DatasetConversionConfig(
         dataset_name="cais/mmlu",
         subsets=["all"],
@@ -101,16 +95,14 @@ def mmlu_convert_dolma_fn(ctx: StepContext):
         answer_labels=["A", "B", "C", "D"],
     )
 
-mmlu_convert_dolma = mmlu_convert_dolma_fn()
-
 ############################################################
 
 if __name__ == "__main__":
     executor_main(
         steps=[
-            mmlu_download_step,
-            mmlu_convert_eval_aux,
-            mmlu_convert_eval_subject,
-            mmlu_convert_dolma,
+            mmlu_download_step(),
+            mmlu_convert_eval_aux(),
+            mmlu_convert_eval_subject(),
+            mmlu_convert_dolma(),
         ]
     )

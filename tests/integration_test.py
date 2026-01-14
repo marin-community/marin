@@ -53,7 +53,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # Transform HTML to text
 
     @step(name=os.path.join(prefix, "hq-transformed"), fn=html_to_md)
-    def transform_hq_data_step_creator(ctx: StepContext):
+    def transform_hq_data_step(ctx: StepContext):
         return SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "pos"),
             output_path=ctx.output,
@@ -61,10 +61,8 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             config=ResiliparseConfig(),
         )
 
-    transform_hq_data_step = transform_hq_data_step_creator()
-
     @step(name=os.path.join(prefix, "lq-transformed"), fn=html_to_md)
-    def transform_lq_data_step_creator(ctx: StepContext):
+    def transform_lq_data_step(ctx: StepContext):
         return SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "neg"),
             output_path=ctx.output,
@@ -72,13 +70,11 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             config=ResiliparseConfig(),
         )
 
-    transform_lq_data_step = transform_lq_data_step_creator()
-
     # ############################################################
     # Train quality classifier
 
     @step(name=os.path.join(prefix, "quality-classifier"), fn=train)
-    def train_quality_step_creator(ctx: StepContext):
+    def train_quality_step(ctx: StepContext):
         return TrainFasttextClassifierConfig(
             datasets=[
                 DatasetConfig(
@@ -103,13 +99,11 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             },
         )
 
-    train_quality_step = train_quality_step_creator()
-
     ############################################################
     # Run inference with quality classifier
 
     @step(name=os.path.join(prefix, "hq-inference"), fn=run_inference)
-    def inference_hq_step_creator(ctx: StepContext):
+    def inference_hq_step(ctx: StepContext):
         return InferenceConfig(
             input_path=ctx.require(transform_hq_data_step),
             output_path=ctx.output,
@@ -118,10 +112,8 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             attribute_name="quickstart-fasttext-quality-hq",
         )
 
-    inference_hq_step = inference_hq_step_creator()
-
     @step(name=os.path.join(prefix, "lq-inference"), fn=run_inference)
-    def inference_lq_step_creator(ctx: StepContext):
+    def inference_lq_step(ctx: StepContext):
         return InferenceConfig(
             input_path=ctx.require(transform_lq_data_step),
             output_path=ctx.output,
@@ -129,8 +121,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-lq",
         )
-
-    inference_lq_step = inference_lq_step_creator()
 
     ############################################################
     # Deduplicate
@@ -156,7 +146,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     pod_config = ResourceConfig.with_cpu()
 
     @step(name=os.path.join(prefix, "train"), fn=run_levanter_train_lm)
-    def train_step_creator(ctx: StepContext):
+    def train_step(ctx: StepContext):
         return TrainLmOnPodConfig(
             output_path=ctx.output,
             resources=pod_config,
@@ -176,22 +166,20 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             ),
         )
 
-    train_step = train_step_creator()
-
     ##### Evaluate
 
     # evaluate_step = evaluate_helm_on_step(train_step, ["mmlu"], max_eval_instances=10)
 
     return [
-        transform_hq_data_step,
-        transform_lq_data_step,
-        train_quality_step,
-        inference_hq_step,
-        inference_lq_step,
+        transform_hq_data_step(),
+        transform_lq_data_step(),
+        train_quality_step(),
+        inference_hq_step(),
+        inference_lq_step(),
         # dedupe_step,
         # consolidate_step,
         tokenize_step,
-        train_step,
+        train_step(),
         # evaluate_step,
     ]
 

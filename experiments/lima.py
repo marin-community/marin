@@ -35,7 +35,7 @@ from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 
 @step(name="raw/lima", fn=download_hf)
-def lima_creator(ctx: StepContext):
+def lima(ctx: StepContext):
     return HfDownloadConfig(
         hf_dataset_id=versioned("GAIR/lima"),
         revision=versioned("68958e9"),
@@ -43,9 +43,6 @@ def lima_creator(ctx: StepContext):
         hf_urls_glob=["*.jsonl"],
         wait_for_completion=True,
     )
-
-
-lima = lima_creator().with_output_path("raw/lima-68958e9").cd("68958e9")
 
 
 @dataclass
@@ -82,11 +79,8 @@ def convert_lima_conversations(config: LimaConversationsToTextConfig):
 
 
 @step(name="raw/lima_text", fn=convert_lima_conversations)
-def lima_text_creator(ctx: StepContext):
-    return LimaConversationsToTextConfig(raw_lima=ctx.require(lima))
-
-
-lima_text = lima_text_creator().with_output_path("raw/lima_text-68958e9/68958e9")
+def lima_text(ctx: StepContext):
+    return LimaConversationsToTextConfig(raw_lima=ctx.require(lima()))
 
 
 def lima_tokenized(tokenizer: str = llama3_tokenizer, is_validation: bool = True) -> dict[str, TokenizerStep]:
@@ -94,7 +88,7 @@ def lima_tokenized(tokenizer: str = llama3_tokenizer, is_validation: bool = True
 
     return default_tokenize(
         name="lima_text",
-        dataset=lima_text.cd("train.jsonl"),
+        dataset=lima_text().with_output_path("raw/lima_text-68958e9/68958e9").cd("train.jsonl"),
         tokenizer=tokenizer,
         is_validation=is_validation,
     )

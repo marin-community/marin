@@ -209,8 +209,7 @@ def distributional_eval_sets(tokenizer):
                 prompt_key="transcript",
             )
 
-        json = json_step()
-        tokenized_json = default_tokenize(f"tokenized/md3-{split}", json, tokenizer, is_validation=True)
+        tokenized_json = default_tokenize(f"tokenized/md3-{split}", json_step(), tokenizer, is_validation=True)
         tokenized_domains[f"md3/{split}"] = tokenized_json
 
     if CAN_ACCESS_ICE:
@@ -240,8 +239,7 @@ def distributional_eval_sets(tokenizer):
                     prompt_key="text",
                 )
 
-            json = json_step()
-            tokenized_json = default_tokenize(f"tokenized/ICE-{split}", json, tokenizer, is_validation=True)
+            tokenized_json = default_tokenize(f"tokenized/ICE-{split}", json_step(), tokenizer, is_validation=True)
             tokenized_domains[f"ICE/{split}"] = tokenized_json
 
     @step(name="raw/WillHeld/paloma_subreddits", fn=download_hf)
@@ -270,8 +268,7 @@ def distributional_eval_sets(tokenizer):
                 prompt_key="text",
             )
 
-        json = json_step()
-        tokenized_json = default_tokenize(f"tokenized/paloma_subreddits-{subset}", json, tokenizer, is_validation=True)
+        tokenized_json = default_tokenize(f"tokenized/paloma_subreddits-{subset}", json_step(), tokenizer, is_validation=True)
         tokenized_domains[f"paloma_subreddits/{subset}"] = tokenized_json
 
     @step(name="raw/WillHeld/paloma_programming_languages", fn=download_hf)
@@ -300,9 +297,8 @@ def distributional_eval_sets(tokenizer):
                 prompt_key="text",
             )
 
-        json = json_step()
         tokenized_json = default_tokenize(
-            f"tokenized/paloma_programming_languages-{subset}", json, tokenizer, is_validation=True
+            f"tokenized/paloma_programming_languages-{subset}", json_step(), tokenizer, is_validation=True
         )
         tokenized_domains[f"paloma_programming_languages/{subset}"] = tokenized_json
 

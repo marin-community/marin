@@ -36,7 +36,7 @@ slimpajama_6b_model = default_train(
 )
 
 @step(name=os.path.join("tokenized", "SlimPajama-627B"), fn=tokenize)
-def slimpajama_tokenized_creator(ctx: StepContext):
+def slimpajama_tokenized(ctx: StepContext):
     return TokenizeConfig(
         train_paths=[downloads["slimpajama"].cd("train")],
         validation_paths=[downloads["slimpajama"].cd("validation")],
@@ -44,8 +44,7 @@ def slimpajama_tokenized_creator(ctx: StepContext):
         tokenizer=versioned(llama3_tokenizer),
     )
 
-slimpajama_tokenized = slimpajama_tokenized_creator()
-slimpajama_config = lm_data_config(slimpajama_tokenized, permutation_type="linear")
+slimpajama_config = lm_data_config(slimpajama_tokenized(), permutation_type="linear")
 slimpajama_model = default_train(
     name="SlimPajama-627B-1.4b",
     tokenized=slimpajama_config,
