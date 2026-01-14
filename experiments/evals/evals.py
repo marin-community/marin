@@ -23,9 +23,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import (
     ExecutorStep,
-    InputName,
-    output_path_of,
-    this_output_path,
+    StepRef,
     versioned,
 )
 
@@ -72,7 +70,7 @@ def evaluate_lm_evaluation_harness(
             evaluator="lm_evaluation_harness",
             model_name=model_name,
             model_path=model_path,
-            evaluation_path=this_output_path(),
+            evaluation_path=StepRef(_step=None),
             evals=evals,
             max_eval_instances=max_eval_instances,
             launch_with_ray=True,
@@ -97,29 +95,28 @@ def _infer_model_name_for_path(model_path: str) -> str:
     return "_".join(model_path.split("/")[-2:])
 
 
-def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[str, InputName | str]:
+def extract_model_name_and_path(step: ExecutorStep | StepRef | str) -> tuple[str, StepRef | str]:
     """
     Extract the model name and path from a step.
     """
     if isinstance(step, ExecutorStep):
-        model_step_path = output_path_of(step, "hf" if "gcsfuse" not in step.name else "")
+        model_step_path = step / ("hf" if "gcsfuse" not in step.name else "")
         name = step.name
-    elif isinstance(step, InputName):
-        # `InputName.hardcoded(...)` has `step.step is None`; treat it as a direct path.
-        if step.step is None:
-            if step.name is None:
-                raise ValueError("Invalid InputName: both `step` and `name` are None.")
-            model_step_path = step.name
-            name = _infer_model_name_for_path(step.name)
+    elif isinstance(step, StepRef):
+        if step._step is None:
+            # Hardcoded path
+            if step._subpath is None:
+                raise ValueError("Invalid StepRef: both _step and _subpath are None.")
+            model_step_path = step._subpath
+            name = _infer_model_name_for_path(step._subpath)
         else:
-            # If `name` is already set, the InputName refers to a specific subpath under the step's output.
-            # Otherwise default to the HF export directory (except for gcsfuse mounts).
+            # Reference to a step
             model_step_path = (
                 step
-                if step.name is not None
-                else output_path_of(step.step, "hf" if "gcsfuse" not in step.step.name else "")
+                if step._subpath is not None
+                else step._step / ("hf" if "gcsfuse" not in step._step.name else "")
             )
-            name = step.step.name
+            name = step._step.name
     elif isinstance(step, str):
         model_step_path = step
         name = _infer_model_name_for_path(step)
@@ -149,7 +146,7 @@ def evaluate_levanter_lm_evaluation_harness(
             evaluator="levanter_lm_evaluation_harness",
             model_name=None,  # imputed automatically
             model_path=model_path,  # type: ignore
-            evaluation_path=this_output_path(),
+            evaluation_path=StepRef(_step=None),
             evals=versioned(evals),
             discover_latest_checkpoint=discover_latest_checkpoint,
             max_eval_instances=versioned(max_eval_instances),
@@ -160,7 +157,7 @@ def evaluate_levanter_lm_evaluation_harness(
 
 
 def default_eval(
-    step: ExecutorStep | InputName | str,
+    step: ExecutorStep | StepRef | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v4-8"),
     evals: list[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
@@ -171,7 +168,7 @@ def default_eval(
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness on a step.
 
     Args:
-        step (ExecutorStep | InputName): step to evaluate.
+        step (ExecutorStep | StepRef): step to evaluate.
         evals (list[EvalTaskConfig]): List of evals to run- defaults to a set of CORE_TASKS defined in task_configs.py
         max_eval_instances (int): Maximum number of evaluation instances to run.
     """
@@ -199,7 +196,7 @@ def default_eval(
 
 
 def default_base_eval(
-    step: ExecutorStep | InputName | str,
+    step: ExecutorStep | StepRef | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
@@ -259,7 +256,7 @@ def default_base_eval(
 
 
 def default_sft_eval(
-    step: ExecutorStep | InputName | str,
+    step: ExecutorStep | StepRef | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
@@ -338,7 +335,7 @@ def default_sft_eval(
 
 
 def default_key_evals(
-    step: ExecutorStep | InputName | str,
+    step: ExecutorStep | StepRef | str,
     resource_config: ResourceConfig,
     model_name: str | None = None,
     max_eval_instances: int | None = None,

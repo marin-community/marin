@@ -25,7 +25,7 @@ import os.path
 from experiments.llama import llama3_tokenizer
 from experiments.multilingual_fineweb2_hq.constants import FINEWEB2_DATASETS
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
@@ -34,7 +34,7 @@ fineweb2_raw = ExecutorStep(
     fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="epfml/FineWeb2-HQ",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         revision="c0c06e94fd3a44ae9e802b2b0fc533817601eb5e",
         wait_for_completion=True,
     ),
@@ -43,7 +43,7 @@ fineweb2_raw = ExecutorStep(
 
 def _get_fineweb2_split_paths(split):
     patterns = FINEWEB2_DATASETS[split]
-    fineweb2_split_paths = [output_path_of(fineweb2_raw, pattern) for pattern in patterns]
+    fineweb2_split_paths = [fineweb2_raw / pattern for pattern in patterns]
     return fineweb2_split_paths
 
 
@@ -63,7 +63,7 @@ def tokenize_fineweb2hq_steps(*, base_path="tokenized/", tokenizer=llama3_tokeni
             config=TokenizeConfig(
                 train_paths=fineweb2_split_paths,
                 validation_paths=versioned([]),
-                cache_path=this_output_path(),
+                cache_path=StepRef(_step=None),
                 tokenizer=versioned(tokenizer),
             ),
         )

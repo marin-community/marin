@@ -18,8 +18,7 @@ from dataclasses import dataclass, field
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
     ExecutorStep,
-    output_path_of,
-    this_output_path,
+    StepRef,
     versioned,
 )
 from marin.processing.classification.config.inference_config import RuntimeConfig
@@ -49,7 +48,7 @@ class ExperimentConfig:
 
 def get_model_path(model_path: str | ExecutorStep):
     if isinstance(model_path, ExecutorStep):
-        return output_path_of(model_path, "model.bin")
+        return model_path / "model.bin"
     return versioned(model_path)
 
 
@@ -73,7 +72,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             fn=run_inference,
             config=InferenceConfig(
                 input_path=input_data_path,
-                output_path=this_output_path(input_basename),
+                output_path=StepRef(_step=None, _cd=input_basename),
                 model_name=get_model_path(config.quality_classifier_model_path),
                 model_type="fasttext",
                 attribute_name=versioned(f"{config.experiment_name}-quality"),
@@ -90,11 +89,11 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             fn=consolidate,
             config=ConsolidateConfig(
                 input_path=input_data_path,
-                output_path=this_output_path(input_basename),
+                output_path=StepRef(_step=None, _cd=input_basename),
                 filters=[
                     FilterConfig(
                         type=versioned("classify"),
-                        attribute_path=output_path_of(inference_step, input_basename),
+                        attribute_path=inference_step / input_basename,
                         name=versioned(f"{config.experiment_name}-quality"),
                         label="__label__hq",
                         lower_threshold=versioned(None),
@@ -107,7 +106,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
 
         tokenize_step = default_tokenize(
             name=f"quality_filtering/{config.experiment_name}/{input_data_source}",
-            dataset=output_path_of(consolidate_step),
+            dataset=consolidate_step,
             tokenizer=llama3_tokenizer,
         )
 

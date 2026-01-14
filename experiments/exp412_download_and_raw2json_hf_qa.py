@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
 from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
 
 """
@@ -28,7 +28,7 @@ mmlu_download_step = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="cais/mmlu",
         revision=versioned("c30699e"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/cais/mmlu",
@@ -53,7 +53,7 @@ mmlu_convert_eval_aux = ExecutorStep(
         splits=["auxiliary_train"],
         input_path=mmlu_download_step,
         hf_path="cais/mmlu",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="question",
         options_key="choices",
@@ -72,7 +72,7 @@ mmlu_convert_eval_subject = ExecutorStep(
         splits=["dev", "validation"],
         input_path=mmlu_download_step,
         hf_path="cais/mmlu",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="question",
         options_key="choices",
@@ -93,7 +93,7 @@ mmlu_convert_dolma = ExecutorStep(
         splits=["dev", "test", "validation"],
         input_path=mmlu_download_step,
         hf_path="cais/mmlu",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("decontamination"),
         prompt_key="question",
         options_key="choices",

@@ -17,7 +17,7 @@
 import os.path
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, StepRef, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
@@ -30,7 +30,7 @@ downloads = {
             config=DownloadConfig(
                 hf_dataset_id="allenai/dolmino-mix-1124",
                 revision="bb54cab",
-                gcs_output_path=this_output_path(),
+                gcs_output_path=StepRef(_step=None),
                 wait_for_completion=True,
             ),
         )
@@ -99,7 +99,7 @@ def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep
             config=TokenizeConfig(
                 train_paths=dolmino_split_paths,
                 validation_paths=versioned([]),
-                cache_path=this_output_path(),
+                cache_path=StepRef(_step=None),
                 tokenizer=versioned(tokenizer),
             ),
         )
@@ -139,7 +139,7 @@ def tokenize_dolmino_math(tokenizer: str | None = None):
         config=TokenizeConfig(
             train_paths=_all_dolmino_math_files,
             validation_paths=versioned([]),
-            cache_path=this_output_path(),
+            cache_path=StepRef(_step=None),
             tokenizer=versioned(tokenizer),
         ),
     ).with_output_path("tokenized/dolmino/all_math-9d507c")

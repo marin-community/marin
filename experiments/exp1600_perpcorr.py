@@ -32,7 +32,7 @@ from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from marin.evaluation.log_probs import default_lm_log_probs
-from marin.execution.executor import executor_main, output_path_of
+from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 
 # Import shared components from exp1600_uncheatable_evals
@@ -74,7 +74,7 @@ def build_steps():
             f"steps={train_steps}",
         ]
         model_config = isoflop_step.config.train_config.model
-        checkpoint_path = output_path_of(isoflop_step)
+        checkpoint_path = isoflop_step
         steps.append(
             default_lm_log_probs(
                 checkpoint=checkpoint_path,
@@ -116,7 +116,7 @@ def build_steps():
         ]
         steps.append(
             default_lm_log_probs(
-                checkpoint=output_path_of(model_instance),
+                checkpoint=model_instance,
                 model=hf_model_config,
                 data=eval_data,
                 resource_config=ResourceConfig.with_tpu("v5p-8"),
@@ -130,7 +130,7 @@ def build_steps():
         steps.append(
             evaluate_levanter_lm_evaluation_harness(
                 model_name=f"{directory_friendly_name}-mmlu-5shot-sl",
-                model_path=output_path_of(model_instance),
+                model_path=model_instance,
                 evals=EVAL_TASKS,
                 resource_config=ResourceConfig.with_tpu("v5p-8"),
                 # wandb_tags=[f"M={model_config.model_name}", "eval=mmlu-5shot-sl"],

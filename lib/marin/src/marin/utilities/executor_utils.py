@@ -21,12 +21,12 @@ Helpful functions for the executor
 import logging
 import re
 
-from marin.execution.executor import InputName
+from marin.execution.executor import StepRef
 
 logger = logging.getLogger("ray")  # Initialize logger
 
 
-def ckpt_path_to_step_name(path: str | InputName) -> str:
+def ckpt_path_to_step_name(path: str | StepRef) -> str:
     """
     Converts a path pointing to a levanter or huggingface checkpoint into a name we can use as an id for an analysis
     step or similar. For instance, if the path is "checkpoints/{run_name}/checkpoints/step-{train_step_number}",
@@ -34,9 +34,9 @@ def ckpt_path_to_step_name(path: str | InputName) -> str:
 
     If it's "meta-llama/Meta-Llama-3.1-8B" it should just be "Meta-Llama-3.1-8B"
 
-    This method works with both strings and InputNames.
+    This method works with both strings and StepRefs.
 
-    If an input name, it expect the InputName's name to be something like "checkpoints/step-{train_step_number}"
+    If a StepRef, it expect the StepRef's _subpath to be something like "checkpoints/step-{train_step_number}"
     """
 
     def _get_step(path: str) -> str:
@@ -72,17 +72,17 @@ def ckpt_path_to_step_name(path: str | InputName) -> str:
         components = path.split("/")
         name = components[-3].split("/")[-1]
         step = _get_step(components[-1])
-    elif isinstance(path, InputName):
-        name = path.step.name
+    elif isinstance(path, StepRef):
+        name = path._step.name
         name = name.split("/")[-1]
-        if path.name:
-            components = path.name.split("/")
+        if path._subpath:
+            components = path._subpath.split("/")
             if not components[-1]:
                 components = components[:-1]
             if components[-1].startswith("step-"):
                 step = _get_step(components[-1])
             elif len(components) >= 2 and components[-2] == "checkpoints":
-                raise ValueError(f"Invalid path: {path.name}")
+                raise ValueError(f"Invalid path: {path._subpath}")
             else:
                 return components[-1]
         else:

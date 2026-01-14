@@ -17,7 +17,7 @@ from experiments.defaults import default_download, default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution import versioned
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.executor import ExecutorStep, StepRef
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.transform.common_pile.filter_by_extension import (
     FilterByMetadataExtensionConfig,
@@ -32,7 +32,7 @@ finemath = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="HuggingFaceTB/finemath",
         revision=finemath_commit_hash,
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
 )
@@ -52,7 +52,7 @@ stackv2_edu_filtered_python = ExecutorStep(
     fn=filter_dataset_by_metadata_extension,
     config=FilterByMetadataExtensionConfig(
         input_path=stackv2_edu_filtered,
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         allowed_extensions=STACKV2_EDU_PYTHON_EXTENSIONS,
         input_glob="stack-edu-*.json.gz",
     ),
@@ -166,7 +166,7 @@ lavita_pubmed = ExecutorStep(
     name="documents/lavita_pubmed",
     fn=convert_lavita_split_to_dolma,
     config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="pubmed-qa", split="train"
+        input_path=lavita_medical_qa_datasets, output_path=StepRef(_step=None), subset="pubmed-qa", split="train"
     ),
 )
 
@@ -174,7 +174,7 @@ lavita_medmcqa = ExecutorStep(
     name="documents/lavita_medmcqa",
     fn=convert_lavita_split_to_dolma,
     config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="medmcqa", split="train"
+        input_path=lavita_medical_qa_datasets, output_path=StepRef(_step=None), subset="medmcqa", split="train"
     ),
 )
 
@@ -183,7 +183,7 @@ lavita_allprocessed = ExecutorStep(
     fn=convert_lavita_split_to_dolma,
     config=LavitaToDolmaConfig(
         input_path=lavita_medical_qa_datasets,
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         subset="all-processed",
         split="train",
     ),
@@ -193,7 +193,7 @@ lavita_pubmed_validation = ExecutorStep(
     name="documents/lavita_pubmed_validation",
     fn=convert_lavita_split_to_dolma,
     config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="pubmed-qa", split="validation"
+        input_path=lavita_medical_qa_datasets, output_path=StepRef(_step=None), subset="pubmed-qa", split="validation"
     ),
 )
 
@@ -201,7 +201,7 @@ lavita_medmcqa_validation = ExecutorStep(
     name="documents/lavita_medmcqa_validation",
     fn=convert_lavita_split_to_dolma,
     config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="medmcqa", split="validation"
+        input_path=lavita_medical_qa_datasets, output_path=StepRef(_step=None), subset="medmcqa", split="validation"
     ),
 )
 

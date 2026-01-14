@@ -27,7 +27,7 @@ from fsspec.implementations.local import LocalFileSystem
 from huggingface_hub import create_commit, upload_folder
 from tqdm_loggable.auto import tqdm
 
-from marin.execution import ExecutorStep, InputName
+from marin.execution import ExecutorStep, StepRef
 from marin.utilities.fn_utils import with_retries
 from marin.utils import fsspec_glob
 
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class UploadToHfConfig:
-    input_path: str | InputName
+    input_path: str | StepRef
     repo_id: str
     repo_type: str = "dataset"
     token: str | None = None
@@ -53,7 +53,7 @@ class UploadToHfConfig:
 
 
 def upload_dir_to_hf(
-    input_path: str | InputName | ExecutorStep,
+    input_path: str | StepRef,
     repo_id: str,
     repo_type: str = "dataset",
     token: str | None = None,
@@ -80,8 +80,8 @@ def upload_dir_to_hf(
         ExecutorStep
     """
     if not certificate_path:
-        if isinstance(input_path, InputName) or isinstance(input_path, ExecutorStep):
-            certificate_path = f"metadata/hf_uploads/{input_path.name}"
+        if isinstance(input_path, StepRef):
+            certificate_path = f"metadata/hf_uploads/{input_path._subpath}"
         else:
             # This will drop the scheme (e.g., 'gs') and keep the path
             parsed = urlparse(input_path)

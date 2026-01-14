@@ -34,12 +34,11 @@ from levanter.main.export_lm_to_hf import ConvertLmConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
+from marin.execution import StepRef
 from marin.execution.executor import (
     ExecutorStep,
-    InputName,
     VersionedValue,
     ensure_versioned,
-    this_output_path,
 )
 from marin.training.training import _add_default_env_variables, _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
@@ -53,11 +52,11 @@ class ConvertCheckpointStepConfig:
     Configuration for converting a single Levanter checkpoint into HuggingFace format.
     """
 
-    checkpoint_path: str | InputName | VersionedValue[str]
+    checkpoint_path: str | StepRef | VersionedValue[str]
     trainer: TrainerConfig
     model: LmConfig
     resources: ResourceConfig = dataclasses.field(default_factory=ResourceConfig.with_cpu)
-    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore[arg-type]
+    output_path: str = dataclasses.field(default_factory=lambda: StepRef(_step=None))  # type: ignore[arg-type]
     upload_to_hf: bool | str | RepoRef = False
     tokenizer: str | None = None
     override_vocab_size: int | None = None
@@ -126,7 +125,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
 
 def convert_checkpoint_to_hf_step(
     name: str,
-    checkpoint_path: InputName | str,
+    checkpoint_path: StepRef | str,
     *,
     trainer: TrainerConfig,
     model: LmConfig,
@@ -146,8 +145,8 @@ def convert_checkpoint_to_hf_step(
 
     Args:
         name: Step name. Commonly prefixed with ``hf/`` to keep outputs organized.
-        checkpoint_path: Path (or InputName) pointing to a Levanter checkpoint directory, e.g.
-            ``train_step.cd("checkpoints/ckpt-210388")``.
+        checkpoint_path: Path (or StepRef) pointing to a Levanter checkpoint directory, e.g.
+            ``train_step / "checkpoints/ckpt-210388"``.
         trainer: TrainerConfig that matches the topology the checkpoint was saved with.
         model: Model configuration that produced the checkpoint.
         resources: Hardware resources to use when running the conversion. Defaults to CPU-only execution.
@@ -163,8 +162,8 @@ def convert_checkpoint_to_hf_step(
         discover_latest: If True, resolves ``checkpoint_path`` to the most recent checkpoint in that directory.
     """
 
-    checkpoint_value: InputName | VersionedValue[str]
-    if isinstance(checkpoint_path, InputName):
+    checkpoint_value: StepRef | VersionedValue[str]
+    if isinstance(checkpoint_path, StepRef):
         checkpoint_value = checkpoint_path
     else:
         checkpoint_value = ensure_versioned(checkpoint_path)

@@ -22,7 +22,7 @@ logic for all 15 splits.
 import os.path
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, this_output_path, versioned, InputName
+from marin.execution.executor import ExecutorStep, StepRef, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
@@ -34,7 +34,7 @@ downloads = {
         config=DownloadConfig(
             hf_dataset_id="allenai/dolma",
             revision="7f48140",
-            gcs_output_path=this_output_path(),
+            gcs_output_path=StepRef(_step=None),
             wait_for_completion=True,
         ),
         override_output_path="raw/dolma",
@@ -43,7 +43,7 @@ downloads = {
 
 
 # For dolma 1.7, we hardcode the path since it was added before versioning
-_DOLMA_V1_7_PATH = InputName.hardcoded("raw/dolma/v1.7")
+_DOLMA_V1_7_PATH = StepRef.hardcoded("raw/dolma/v1.7")
 
 
 # Sampling proportion comes from https://huggingface.co/datasets/allenai/dolma
@@ -124,7 +124,7 @@ def tokenize_dolma(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
             config=TokenizeConfig(
                 train_paths=[_DOLMA_V1_7_PATH / file for file in files],
                 validation_paths=versioned([]),
-                cache_path=this_output_path(),
+                cache_path=StepRef(_step=None),
                 tokenizer=versioned(tokenizer),
             ),
         )

@@ -42,7 +42,7 @@ Notes
 import logging
 from dataclasses import dataclass
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, StepRef
 from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 
 from experiments.midtraining_datasets import finemath_3_plus
@@ -99,7 +99,7 @@ DATASET_CONFIGS = [
 def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
     dedupe_config = DeconConfig(
         input_path=dataset_config.path,
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         decontaminate_source=EVAL_DATASET_STEPS,
         attribute_name="ngram_overlap",
         false_positive_rate=1e-20,

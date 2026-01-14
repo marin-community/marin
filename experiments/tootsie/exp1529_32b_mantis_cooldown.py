@@ -45,7 +45,7 @@ from experiments.midtraining_datasets import (
 )
 from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_components
 from fray.cluster import ResourceConfig
-from marin.execution import executor_main, output_path_of
+from marin.execution import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 PHASE_3_START = 160_000
@@ -135,7 +135,7 @@ mantis_cooldown_mixture = lm_varying_mixture_data_config(
 
 DECAY_FRACTION = (PHASE_3_END - PHASE_3_START) / PHASE_3_END
 
-qwen_phase2_checkpoint_for_phase3 = marin_32b_qwen.cd(f"checkpoints/step-{PHASE_3_START}").nonblocking()
+qwen_phase2_checkpoint_for_phase3 = (marin_32b_qwen / f"checkpoints/step-{PHASE_3_START}").nonblocking()
 
 mantis_train_config = dataclasses.replace(
     qwen_32b_warmstart_train,
@@ -194,7 +194,7 @@ for model, revision in baselines:
     model_instance = download_model_step(ModelConfig(hf_repo_id=model, hf_revision=revision))
     baseline_evals.extend(
         default_base_eval(
-            output_path_of(model_instance),
+            model_instance,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
             run_generation_evals=False,
             discover_latest_checkpoint=False,

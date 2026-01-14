@@ -25,9 +25,8 @@ from levanter.trainer import TrainerConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
+    StepRef,
     executor_main,
-    output_path_of,
-    this_output_path,
     versioned,
 )
 from marin.processing.classification.dataset_utils import DatasetConfig
@@ -56,7 +55,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         fn=html_to_md,
         config=SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "pos"),
-            output_path=this_output_path(),
+            output_path=StepRef(_step=None),
             extract_method=versioned("resiliparse"),
             config=ResiliparseConfig(),
         ),
@@ -67,7 +66,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         fn=html_to_md,
         config=SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "neg"),
-            output_path=this_output_path(),
+            output_path=StepRef(_step=None),
             extract_method=versioned("resiliparse"),
             config=ResiliparseConfig(),
         ),
@@ -82,17 +81,17 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=TrainFasttextClassifierConfig(
             datasets=[
                 DatasetConfig(
-                    input_doc_path=output_path_of(transform_hq_data_step),
+                    input_doc_path=transform_hq_data_step,
                     label="hq",
                     sampling_rate=1.0,
                 ),
                 DatasetConfig(
-                    input_doc_path=output_path_of(transform_lq_data_step),
+                    input_doc_path=transform_lq_data_step,
                     label="lq",
                     sampling_rate=1.0,
                 ),
             ],
-            output_path=this_output_path(),
+            output_path=StepRef(_step=None),
             fasttext_args={
                 "lr": 0.001,
                 "minCount": 1,
@@ -111,9 +110,9 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         name=os.path.join(prefix, "hq-inference"),
         fn=run_inference,
         config=InferenceConfig(
-            input_path=output_path_of(transform_hq_data_step),
-            output_path=this_output_path(),
-            model_name=output_path_of(train_quality_step),
+            input_path=transform_hq_data_step,
+            output_path=StepRef(_step=None),
+            model_name=train_quality_step,
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-hq",
         ),
@@ -123,9 +122,9 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         name=os.path.join(prefix, "lq-inference"),
         fn=run_inference,
         config=InferenceConfig(
-            input_path=output_path_of(transform_lq_data_step),
-            output_path=this_output_path(),
-            model_name=output_path_of(train_quality_step),
+            input_path=transform_lq_data_step,
+            output_path=StepRef(_step=None),
+            model_name=train_quality_step,
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-lq",
         ),
@@ -140,7 +139,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     tokenize_step = default_tokenize(
         name=os.path.join(prefix, "tokenized"),
-        dataset=output_path_of(transform_hq_data_step),
+        dataset=transform_hq_data_step,
         tokenizer=tokenizer,
     )
 
@@ -158,7 +157,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         name=os.path.join(prefix, "train"),
         fn=run_levanter_train_lm,
         config=TrainLmOnPodConfig(
-            output_path=this_output_path(),
+            output_path=StepRef(_step=None),
             resources=pod_config,
             env_vars=train_env_vars,
             train_config=TrainLmConfig(

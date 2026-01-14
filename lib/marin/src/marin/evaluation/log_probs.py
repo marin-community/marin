@@ -31,7 +31,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.executor import ExecutorStep, InputName, this_output_path
+from marin.execution.executor import ExecutorStep, StepRef
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 
@@ -47,7 +47,7 @@ class EvalLmConfig:
     datasets: LMMixtureDatasetConfig
     resource_config: ResourceConfig
     per_device_batch_size: int = 4
-    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
+    output_path: str = dataclasses.field(default_factory=lambda: StepRef(_step=None))  # type: ignore
     checkpoint_is_hf: bool = False
     """Whether the checkpoint is in HF format."""
 
@@ -61,7 +61,7 @@ class EvalLmConfig:
 
 
 def default_lm_log_probs(
-    checkpoint: str | InputName,
+    checkpoint: str | StepRef,
     model: LmConfig,
     data: LMMixtureDatasetConfig,
     resource_config: ResourceConfig,

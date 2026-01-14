@@ -30,7 +30,7 @@ executor_main([download_step])
 from dataclasses import dataclass
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, StepRef, versioned
 from marin.utils import get_directory_friendly_name
 
 
@@ -52,7 +52,7 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
         config=DownloadConfig(
             hf_dataset_id=model_config.hf_repo_id,
             revision=versioned(model_config.hf_revision),
-            gcs_output_path=this_output_path(),
+            gcs_output_path=StepRef(_step=None),
             wait_for_completion=True,
             hf_repo_type_prefix="",
         ),

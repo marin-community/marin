@@ -27,7 +27,7 @@ from typing import Any
 
 import fsspec
 import requests
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, ensure_versioned, this_output_path
+from marin.execution import ExecutorStep, StepRef, VersionedValue, ensure_versioned
 from marin.utils import fsspec_mkdirs
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
@@ -99,7 +99,7 @@ class UncheatableEvalDataset:
 class UncheatableEvalDownloadConfig:
     """Configuration for downloading and normalizing Uncheatable Eval dumps."""
 
-    output_path: str | VersionedValue[str] = THIS_OUTPUT_PATH
+    output_path: str | VersionedValue[str] = StepRef(_step=None)
     repo_owner: str | VersionedValue[str] = "Jellyfish042"
     repo_name: str | VersionedValue[str] = "uncheatable_eval"
     data_path: str | VersionedValue[str] = "data"
@@ -378,7 +378,7 @@ def make_uncheatable_eval_step(
     """Create an :class:`ExecutorStep` that downloads the latest Uncheatable Eval dumps."""
 
     config = UncheatableEvalDownloadConfig(
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         repo_owner=ensure_versioned(repo_owner),
         repo_name=ensure_versioned(repo_name),
         data_path=ensure_versioned(data_path),

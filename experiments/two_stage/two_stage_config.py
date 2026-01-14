@@ -30,7 +30,7 @@ from experiments.evals.task_configs import convert_to_levanter_task_config
 from experiments.two_stage.data import data_dict
 from experiments.two_stage.models import model_dict
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.executor import ExecutorStep, StepRef
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig, lm_varying_mixture_data_config
 from fray.cluster import ResourceConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
@@ -352,7 +352,7 @@ class TwoStageConfig:
         return TrainLmOnPodConfig(
             train_config=self.build_train_lm_config(),
             resources=self.build_pod_config(),
-            output_path=this_output_path(),
+            output_path=StepRef(_step=None),
         )
 
     def __hash__(self):

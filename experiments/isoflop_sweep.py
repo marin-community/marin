@@ -39,7 +39,7 @@ from experiments.pretraining_datasets.simple import downloads
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, InputName, executor_main
+from marin.execution.executor import ExecutorStep, StepRef, executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
 DEFAULT_BUDGETS = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
@@ -119,7 +119,7 @@ def pick_v5p_type(
 class IsoFlopSweepConfig:
     """Configuration for generating ISOFlop sweep steps."""
 
-    tokenized_dataset: InputName | str
+    tokenized_dataset: StepRef | str
     tokenizer: str = "stanford-crfm/marin-tokenizer"
     budgets: list[float] = dataclasses.field(default_factory=lambda: DEFAULT_BUDGETS)
     seq_len: int = 4096
@@ -338,7 +338,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
 
 
 def generate_isoflop_sweep(
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
     experiment_name: str,
     **kwargs,
 ) -> list[ExecutorStep]:

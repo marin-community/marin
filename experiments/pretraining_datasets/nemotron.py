@@ -17,7 +17,7 @@
 import os.path
 
 from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, StepRef, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
@@ -27,12 +27,12 @@ downloads = {
         name="raw/nemotro-cc",
         fn=download_nemotron_cc,
         config=NemotronIngressConfig(
-            output_path=this_output_path(),
+            output_path=StepRef(_step=None),
         ),
     )
 }
 
-_nemotron_cc_path = output_path_of(downloads["nemotron_cc"], "contrib/Nemotron/Nemotron-CC/data-jsonl/")
+_nemotron_cc_path = downloads["nemotron_cc"] / "contrib/Nemotron/Nemotron-CC/data-jsonl/"
 
 NEMOTRON_DATASETS = {
     "hq_actual": ["quality=high/kind=actual/**/*.jsonl.gz"],
@@ -90,7 +90,7 @@ def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerSte
             config=TokenizeConfig(
                 train_paths=nemotron_split_paths,
                 validation_paths=versioned([]),
-                cache_path=this_output_path(),
+                cache_path=StepRef(_step=None),
                 tokenizer=versioned(tokenizer),
             ),
         )

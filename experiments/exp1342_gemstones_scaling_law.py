@@ -26,10 +26,10 @@ Usage:
 Example:
 ```
 from gemstones import gemstone_768x45
-from marin.execution.executor import executor_main, output_path_of
+from marin.execution.executor import executor_main
 
 executor_main([gemstone_768x45])
-model_path = output_path_of(gemstone_768x45)
+model_path = gemstone_768x45  # Use step directly or step / "subpath"
 ```
 """
 
@@ -47,7 +47,7 @@ from experiments.models import ModelConfig, download_model_step
 from fray.cluster import ResourceConfig
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.log_probs import default_lm_log_probs
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
 
@@ -186,7 +186,7 @@ def distributional_eval_sets(tokenizer):
         config=DownloadConfig(
             hf_dataset_id="WillHeld/MD3",
             revision=versioned("7c74e59"),
-            gcs_output_path=this_output_path(),
+            gcs_output_path=StepRef(_step=None),
             wait_for_completion=True,
             hf_urls_glob=["**/*.parquet"],
         ),
@@ -204,7 +204,7 @@ def distributional_eval_sets(tokenizer):
                 splits=[split],
                 input_path=md3_raw,
                 hf_path="WillHeld/MD3",
-                output_path=this_output_path(),
+                output_path=StepRef(_step=None),
                 output_format=OutputFormatOptions("decontamination"),
                 prompt_key="transcript",
             ),
@@ -219,7 +219,7 @@ def distributional_eval_sets(tokenizer):
             config=DownloadConfig(
                 hf_dataset_id="WillHeld/ICE_Cleaned",
                 revision=versioned("4c09dd9"),
-                gcs_output_path=this_output_path(),
+                gcs_output_path=StepRef(_step=None),
                 wait_for_completion=True,
                 hf_urls_glob=["**/*.parquet"],
             ),
@@ -236,7 +236,7 @@ def distributional_eval_sets(tokenizer):
                     splits=[split],
                     input_path=ice_raw,
                     hf_path="WillHeld/ICE_Cleaned",
-                    output_path=this_output_path(),
+                    output_path=StepRef(_step=None),
                     output_format=OutputFormatOptions("decontamination"),
                     prompt_key="text",
                 ),
@@ -250,7 +250,7 @@ def distributional_eval_sets(tokenizer):
         config=DownloadConfig(
             hf_dataset_id="WillHeld/paloma_subreddits",
             revision=versioned("9561a2b"),
-            gcs_output_path=this_output_path(),
+            gcs_output_path=StepRef(_step=None),
             wait_for_completion=True,
             hf_urls_glob=["**/*.parquet", "README.md"],
         ),
@@ -267,7 +267,7 @@ def distributional_eval_sets(tokenizer):
                 splits=["train"],
                 input_path=subreddits_raw,
                 hf_path="WillHeld/paloma_subreddits",
-                output_path=this_output_path(),
+                output_path=StepRef(_step=None),
                 output_format=OutputFormatOptions("decontamination"),
                 prompt_key="text",
             ),
@@ -281,7 +281,7 @@ def distributional_eval_sets(tokenizer):
         config=DownloadConfig(
             hf_dataset_id="WillHeld/paloma_programming_languages",
             revision=versioned("6c08b5f"),
-            gcs_output_path=this_output_path(),
+            gcs_output_path=StepRef(_step=None),
             wait_for_completion=True,
             hf_urls_glob=["**/*.parquet", "README.md"],
         ),
@@ -298,7 +298,7 @@ def distributional_eval_sets(tokenizer):
                 splits=["train"],
                 input_path=pls_raw,
                 hf_path="WillHeld/paloma_programming_languages",
-                output_path=this_output_path(),
+                output_path=StepRef(_step=None),
                 output_format=OutputFormatOptions("decontamination"),
                 prompt_key="text",
             ),
@@ -350,7 +350,7 @@ if __name__ == "__main__":
                 gemstone_model = gemstone_splits["cooldown"][config]
 
                 eval_step = default_lm_log_probs(
-                    output_path_of(gemstone_model),
+                    gemstone_model,
                     model_config,
                     evaluation_mixture,
                     checkpoint_is_hf=True,
@@ -378,7 +378,7 @@ if __name__ == "__main__":
             f"{model}@{revision}"
         )
         eval_step = default_lm_log_probs(
-            output_path_of(model_instance),
+            model_instance,
             model_config,
             local_evaluation_mixture,
             checkpoint_is_hf=True,

@@ -37,8 +37,7 @@ from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
-    output_path_of,
-    this_output_path,
+    StepRef,
     versioned,
 )
 from marin.transform.conversation.transform_preference_data import (
@@ -109,7 +108,7 @@ def download_preference_dataset_step(dataset: PreferenceDatasetConfig) -> Execut
         config=DownloadConfig(
             hf_dataset_id=dataset.hf_dataset_id,
             revision=versioned(dataset.revision),
-            gcs_output_path=this_output_path(),
+            gcs_output_path=StepRef(_step=None),
             wait_for_completion=True,
         ),
         override_output_path=f"raw/{dataset_name}-{dataset.revision}",
@@ -140,7 +139,7 @@ def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, down
     """
     adapter_name = dataset_cfg.adapter_name if dataset_cfg.adapter_name is not None else dataset_cfg.hf_dataset_id
     dataset_name = get_directory_friendly_dataset_name(adapter_name)
-    download_data_path = output_path_of(download_step)
+    download_data_path = download_step
 
     config_str = f"{dataset_name}-\
         {dataset_cfg.revision}\
@@ -153,7 +152,7 @@ def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, down
         fn=transform_hf_preference_dataset,
         config=TransformPreferenceDatasetConfig(
             input_path=download_data_path,
-            output_path=this_output_path(),
+            output_path=StepRef(_step=None),
             shard_size=versioned(5000),
             metadata_columns=versioned(dataset_cfg.metadata_columns),
             filetype=dataset_cfg.filetype,

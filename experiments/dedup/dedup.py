@@ -23,7 +23,7 @@ Usage:
 import logging
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, InputName, executor_main
+from marin.execution.executor import ExecutorStep, StepRef, executor_main
 from marin.processing.classification.deduplication.pipeline import DedupeConfig, DedupMode, deduplicate
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ def run_dedup(config: DedupeConfig) -> str:
     return config.output_path
 
 
-def build_dedup_step(dataset: InputName, max_parallelism: int) -> ExecutorStep:
+def build_dedup_step(dataset: StepRef, max_parallelism: int) -> ExecutorStep:
     """
     Builds a deduplication step for the given dataset.
 

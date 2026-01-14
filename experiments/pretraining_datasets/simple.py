@@ -24,7 +24,7 @@ import os.path
 from levanter.data.text import TextLmDatasetFormat
 from levanter.store.cache import CacheOptions
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, StepRef, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 from experiments.llama import llama3_tokenizer
@@ -47,7 +47,7 @@ def _tokenize_simple(
     config = TokenizeConfig(
         train_paths=[raw_dataset],
         validation_paths=versioned([]),
-        cache_path=this_output_path(),
+        cache_path=StepRef(_step=None),
         tokenizer=versioned(tokenizer),
         format=text_format,
     )
@@ -75,7 +75,7 @@ downloads = {
         config=DownloadConfig(
             hf_dataset_id="HuggingFaceFW/fineweb",
             revision="cd85054",
-            gcs_output_path=this_output_path(),
+            gcs_output_path=StepRef(_step=None),
             wait_for_completion=True,
         ),
         override_output_path="raw/fineweb",
@@ -87,7 +87,7 @@ downloads = {
             config=DownloadConfig(
                 hf_dataset_id="HuggingFaceFW/fineweb-edu",
                 revision="3c452cb",
-                gcs_output_path=this_output_path(),
+                gcs_output_path=StepRef(_step=None),
                 wait_for_completion=True,
             ),
             override_output_path="raw/fineweb-edu-c2beb4",
@@ -100,7 +100,7 @@ downloads = {
             config=DownloadConfig(
                 hf_dataset_id="cerebras/SlimPajama-627B",
                 revision="2d0accd",
-                gcs_output_path=this_output_path(),
+                gcs_output_path=StepRef(_step=None),
                 wait_for_completion=True,
             ),
             override_output_path="raw/SlimPajama-627B-262830",
@@ -113,7 +113,7 @@ downloads = {
             config=DownloadConfig(
                 hf_dataset_id="DKYoon/SlimPajama-6B",
                 revision="b5f90f4",
-                gcs_output_path=this_output_path(),
+                gcs_output_path=StepRef(_step=None),
                 wait_for_completion=True,
             ),
             override_output_path="raw/SlimPajama-6B-be35b7",
@@ -126,7 +126,7 @@ downloads = {
             config=DownloadConfig(
                 hf_dataset_id="allenai/dolma3_mix-150B-1025",
                 revision="15d04ee",
-                gcs_output_path=this_output_path(),
+                gcs_output_path=StepRef(_step=None),
                 wait_for_completion=True,
                 append_sha_to_path=True,
             ),
@@ -139,7 +139,7 @@ downloads = {
         config=DownloadConfig(
             hf_dataset_id="mlfoundations/dclm-baseline-1.0",
             revision="a3b142c",
-            gcs_output_path=this_output_path(),
+            gcs_output_path=StepRef(_step=None),
             wait_for_completion=True,
         ),
         override_output_path="raw/dclm_WRONG_20250211/",
@@ -151,7 +151,7 @@ downloads = {
             config=DownloadConfig(
                 hf_dataset_id="mlfoundations/dclm-baseline-1.0",
                 revision="a3b142c",
-                gcs_output_path=this_output_path(),
+                gcs_output_path=StepRef(_step=None),
                 wait_for_completion=True,
             ),
             override_output_path="raw/dclm",
@@ -164,7 +164,7 @@ downloads = {
             config=DownloadConfig(
                 hf_dataset_id="bigcode/the-stack-dedup",
                 revision="17cad72",
-                gcs_output_path=this_output_path(),
+                gcs_output_path=StepRef(_step=None),
                 wait_for_completion=True,
             ),
             override_output_path="raw/the-stack-dedup-4ba450",
@@ -177,7 +177,7 @@ downloads = {
             config=DownloadConfig(
                 hf_dataset_id="EleutherAI/proof-pile-2",
                 revision="901a927",
-                gcs_output_path=this_output_path(),
+                gcs_output_path=StepRef(_step=None),
                 wait_for_completion=True,
             ),
             override_output_path="raw/proof-pile-2-f1b1d8",
@@ -190,7 +190,7 @@ downloads = {
             config=DownloadConfig(
                 hf_dataset_id="vietgpt/the_pile_openwebtext2",
                 revision="1de27c6",
-                gcs_output_path=this_output_path(),
+                gcs_output_path=StepRef(_step=None),
                 wait_for_completion=True,
             ),
             override_output_path="raw/the_pile_openwebtext2",
@@ -204,7 +204,7 @@ downloads = {
         config=DownloadConfig(
             hf_dataset_id="bigcode/starcoderdata",
             revision="9fc30b5",
-            gcs_output_path=this_output_path(),
+            gcs_output_path=StepRef(_step=None),
             wait_for_completion=True,
         ),
         override_output_path="raw/starcoderdata-720c8c",

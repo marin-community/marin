@@ -20,7 +20,7 @@ import pytest
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, TreeCache
-from marin.execution import InputName
+from marin.execution import StepRef
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig, tokenize
 
 # Dummy values for other required TokenizeConfig fields
@@ -76,12 +76,12 @@ def test_train_paths_variants(train_paths, should_error, expected_error_path):
 @pytest.mark.parametrize(
     "input_name, should_error",
     [
-        (InputName.hardcoded("gs://bucket/data/train/file.jsonl"), False),
-        (InputName.hardcoded("gs://bucket/data/test/file.jsonl"), True),
-        (InputName.hardcoded("gs://bucket/data/validation/file.jsonl"), True),
-        (InputName.hardcoded("gs://bucket/data/latest_updates/file.jsonl"), False),
-        (InputName.hardcoded("gs://bucket/data/train/file_test.jsonl"), True),
-        (InputName.hardcoded("gs://bucket/data/train/file_validation.jsonl"), True),
+        (StepRef.hardcoded("gs://bucket/data/train/file.jsonl"), False),
+        (StepRef.hardcoded("gs://bucket/data/test/file.jsonl"), True),
+        (StepRef.hardcoded("gs://bucket/data/validation/file.jsonl"), True),
+        (StepRef.hardcoded("gs://bucket/data/latest_updates/file.jsonl"), False),
+        (StepRef.hardcoded("gs://bucket/data/train/file_test.jsonl"), True),
+        (StepRef.hardcoded("gs://bucket/data/train/file_validation.jsonl"), True),
     ],
 )
 def test_inputname_variants(input_name, should_error):
@@ -94,7 +94,7 @@ def test_inputname_variants(input_name, should_error):
                 tokenizer=DUMMY_TOKENIZER,
             )
         assert "contains a forbidden pattern ('test' or 'validation')" in str(excinfo.value)
-        assert input_name.name in str(excinfo.value)
+        assert input_name._subpath in str(excinfo.value)
     else:
         try:
             TokenizeConfig(
@@ -105,7 +105,7 @@ def test_inputname_variants(input_name, should_error):
             )
         except ValueError as e:
             if "contains a forbidden pattern" in str(e):
-                pytest.fail("Unexpected ValueError for valid InputName")
+                pytest.fail("Unexpected ValueError for valid StepRef")
 
 
 def test_mixed_paths_one_invalid_inputname():
@@ -113,7 +113,7 @@ def test_mixed_paths_one_invalid_inputname():
         TokenizeConfig(
             train_paths=[
                 "gs://bucket/data/train/file1.jsonl",
-                InputName.hardcoded("gs://bucket/data/test/file2.jsonl"),
+                StepRef.hardcoded("gs://bucket/data/test/file2.jsonl"),
                 "gs://bucket/data/train/file3.jsonl",
             ],
             validation_paths=DUMMY_VALIDATION_PATHS,

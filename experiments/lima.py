@@ -25,7 +25,7 @@ from marin.download.huggingface.download_hf import download_hf
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
-    this_output_path,
+    StepRef,
     versioned,
 )
 from marin.processing.tokenize.data_configs import TokenizerStep
@@ -41,7 +41,7 @@ lima = (
         config=HfDownloadConfig(
             hf_dataset_id=versioned("GAIR/lima"),
             revision=versioned("68958e9"),
-            gcs_output_path=this_output_path(),
+            gcs_output_path=StepRef(_step=None),
             hf_urls_glob=["*.jsonl"],
             wait_for_completion=True,
         ),

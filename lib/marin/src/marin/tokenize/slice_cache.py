@@ -41,7 +41,7 @@ from levanter.store import SerialCacheWriter, TreeCache
 from tqdm_loggable.auto import tqdm
 from transformers import AutoTokenizer
 
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
+from marin.execution import ExecutorStep, StepRef
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 logger = logging.getLogger(__name__)
@@ -53,12 +53,12 @@ class SliceCacheConfig(TokenizeConfigBase):
 
     input_config: LmDatasetSourceConfigBase
     num_tokens: int
-    cache_path: str = THIS_OUTPUT_PATH
+    cache_path: str = StepRef(_step=None)
     tokenizer: str = "stanford-crfm/marin-tokenizer"
     seed: int = 42
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | StepRef | None, *, include_raw_paths=True
     ) -> LMDatasetSourceConfig:
         humanfriendly_tokens = humanfriendly.format_size(self.num_tokens)[0:-1].replace(" ", "").replace("byte", "")
         out = _patch_source_config(

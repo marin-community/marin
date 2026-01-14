@@ -33,7 +33,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import fsspec
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, StepRef
 from marin.utils import fsspec_glob
 from zephyr import Backend, Dataset, load_file, load_jsonl
 
@@ -417,7 +417,7 @@ def build_aggregate_total_step(
     """
     cfg = AggregateConfig(
         attributes_base_path=attributes_base_path,
-        output_path=output_path or this_output_path(),
+        output_path=output_path or StepRef(_step=None),
         ngram_size=ngram_size,
         eval_dataset_steps=eval_dataset_steps or EVAL_DATASET_STEPS,
     )

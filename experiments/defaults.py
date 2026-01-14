@@ -56,11 +56,10 @@ from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
-    InputName,
+    StepRef,
     VersionedValue,
     ensure_versioned,
     get_executor_step,
-    this_output_path,
     unwrap_versioned_value,
 )
 from marin.processing.tokenize import (
@@ -87,7 +86,7 @@ def default_download(
     revision: str,
     override_output_path: str | None = None,
     **kwargs: Any,
-) -> InputName:
+) -> StepRef:
     """
     Download a HuggingFace dataset and upload it to a specified path with default configuration.
 
@@ -110,19 +109,19 @@ def default_download(
         config=DownloadConfig(
             hf_dataset_id=hf_dataset_id,
             revision=revision,
-            gcs_output_path=this_output_path(),
+            gcs_output_path=StepRef(_step=None),
             wait_for_completion=True,
             **kwargs,
         ),
         override_output_path=override_output_path,
     )
 
-    return step.as_input_name()
+    return step.ref
 
 
 def default_tokenize(
     name: str,
-    dataset: InputName | ExecutorStep | str | HfDatasetSpec,
+    dataset: StepRef | ExecutorStep | str | HfDatasetSpec,
     tokenizer: str,
     format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
     *,
@@ -135,7 +134,7 @@ def default_tokenize(
     Args:
         name: The name of the tokenized dataset. This is used to form the output path for the executor step.
             `tokenized/` will be prepended to the name.
-        dataset:  The dataset to tokenize. This can be an InputName, ExecutorStep, a string as a
+        dataset:  The dataset to tokenize. This can be a StepRef, ExecutorStep, a string as a
             path to the dataset or a HuggingFace dataset ID, or ``HfDatasetSpec`` to specify a
             dataset with a particular subset name.
         tokenizer: string HuggingFace tokenizer name. Should be the same as you intend to use in the tokenizer
@@ -155,7 +154,7 @@ def default_tokenize(
         config = HfTokenizeConfig(
             id=dataset.id,
             name=dataset.name,
-            cache_path=this_output_path(),
+            cache_path=StepRef(_step=None),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
@@ -163,7 +162,7 @@ def default_tokenize(
     elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
         config = HfTokenizeConfig(
             id=dataset,
-            cache_path=this_output_path(),
+            cache_path=StepRef(_step=None),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
@@ -172,7 +171,7 @@ def default_tokenize(
         config = TokenizeConfig(
             train_paths=[dataset] if not is_validation else [],
             validation_paths=[dataset] if is_validation else [],
-            cache_path=this_output_path(),
+            cache_path=StepRef(_step=None),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
@@ -199,7 +198,7 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
 
 def simulated_epoching_train(
     name: str,
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     target_budget: int,
@@ -213,7 +212,7 @@ def simulated_epoching_train(
 
     Args:
         name:  The name of the training run. Will form the basis of the output path for the executor step.
-        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        tokenized:  The tokenized data to train on. This can be a StepRef, ExecutorStep, or LMMixtureDatasetConfig.
         model_config: Levanter LmConfig for the model to train.
         train_config: SimpleTrainConfig for the training run.
         target_budget: Target token budget to simulate.
@@ -248,7 +247,7 @@ def simulated_epoching_train(
 
 def default_train(
     name: str,
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     tags: Sequence[str] = (),
@@ -261,7 +260,7 @@ def default_train(
 
     Args:
         name:  The name of the training run. Will form the basis of the output path for the executor step.
-        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        tokenized:  The tokenized data to train on. This can be a StepRef, ExecutorStep, or LMMixtureDatasetConfig.
         model_config: Levanter LmConfig for the model to train.
         train_config: SimpleTrainConfig for the training run.
         tags: Any additional tags to add to the Wandb tracker.
@@ -412,7 +411,7 @@ def default_train(
     config = TrainLmOnPodConfig(
         train_config=inner_config,
         resources=pod_config,
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
     )
 
     model_config = unwrap_versioned_value(model_config)
@@ -434,7 +433,7 @@ def default_train(
 
 def default_sft(
     name: str,
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
     model_config: LlamaConfig,
     sft_config: SimpleSFTConfig,
     tags: Sequence[str] = (),
@@ -448,7 +447,7 @@ def default_sft(
     Args:
         name: The name of the training run, forms the basis of the output path.
         tokenized: The tokenized data to train on:
-                  - For single dataset: an InputName or ExecutorStep for a tokenized dataset.
+                  - For single dataset: a StepRef or ExecutorStep for a tokenized dataset.
                   - For mixture: a LMMixtureDatasetConfig with multiple datasets.
         model_config: Levanter LlamaConfig for the model architecture to train.
         sft_config: Configuration for the SFT training process.
@@ -564,7 +563,7 @@ def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
     )
 
 
-def _impute_checkpoint_step(checkpoint_path: str | InputName) -> int:
+def _impute_checkpoint_step(checkpoint_path: str | StepRef) -> int:
     """
     Extracts the checkpoint step from a checkpoint path.
     Args:
@@ -573,8 +572,10 @@ def _impute_checkpoint_step(checkpoint_path: str | InputName) -> int:
     Returns:
 
     """
-    if isinstance(checkpoint_path, InputName):
-        checkpoint_path = checkpoint_path.name
+    if isinstance(checkpoint_path, StepRef):
+        if checkpoint_path._step is None:
+            raise ValueError("Cannot extract checkpoint step from output reference")
+        checkpoint_path = checkpoint_path._step.name
     imputed_checkpoint_steps = checkpoint_path.index("step-")
     imputed_checkpoint_step = int(checkpoint_path[imputed_checkpoint_steps + len("step-") :])
     return imputed_checkpoint_step
@@ -592,7 +593,7 @@ def _get_vocab_size(pretraining_data):
 
 
 def _prepare_data_config(
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
     use_default_validation: bool,
 ) -> LMMixtureDatasetConfig:
     """
@@ -609,7 +610,7 @@ def _prepare_data_config(
     else:
         validation_sets = {}
 
-    if isinstance(tokenized, InputName | ExecutorStep):
+    if isinstance(tokenized, StepRef | ExecutorStep):
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=validation_sets,
@@ -623,7 +624,7 @@ def _prepare_data_config(
     return pretraining_data
 
 
-def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig) -> str:
+def _get_tokenizer_for_train(tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig) -> str:
     match tokenized:
         case LMMixtureDatasetConfig(tokenizer=tokenizer):
             pass
@@ -631,7 +632,7 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
             tokenizer = config.tokenizer
         case ExecutorStep(config=HfTokenizeConfig(tokenizer=tokenizer)):
             pass
-        case InputName(step=ExecutorStep(config)) if isinstance(config, TokenizeConfigBase):
+        case StepRef(_step=ExecutorStep(config=config)) if isinstance(config, TokenizeConfigBase):
             tokenizer = config.tokenizer
         case _:
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
@@ -640,8 +641,8 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
 
 
 def default_scaling_law_pred(
-    ladder_runs: Sequence[ExecutorStep | InputName | str],
-    pred_run: ExecutorStep | InputName | str | None = None,
+    ladder_runs: Sequence[ExecutorStep | StepRef | str],
+    pred_run: ExecutorStep | StepRef | str | None = None,
     task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb",),
     task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] | None = None,
 ):

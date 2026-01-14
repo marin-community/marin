@@ -29,7 +29,7 @@ from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from levanter.infra.cli_helpers import load_config
-from marin.execution.executor import ExecutorStep, InputName, executor_main, output_path_of
+from marin.execution.executor import ExecutorStep, StepRef, executor_main
 from marin.processing.tokenize import lm_data_config, lm_mixture_data_config
 from marin.speedrun.speedrun import Author, SpeedrunConfig, SpeedrunResultsConfig, speedrun_results
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
@@ -142,7 +142,7 @@ def nemotron_only_speedrun(
     run_tags = ["speedrun"] + (tags or [])
     train_config = dataclasses.replace(config.train_config, data_seed=42)
 
-    if isinstance(config.tokenized_dataset, (InputName, ExecutorStep)):
+    if isinstance(config.tokenized_dataset, (StepRef, ExecutorStep)):
         pretraining_data = lm_data_config(
             training_set=config.tokenized_dataset,
             validation_sets=[],
@@ -212,7 +212,7 @@ def nemotron_only_speedrun(
             wandb_entity=wandb_entity,
             wandb_project=wandb_project,
             speedrun_config=config,
-            output_path=output_path_of(train_step, "speedrun_results.json"),
+            output_path=train_step / "speedrun_results.json",
         ),
     )
 

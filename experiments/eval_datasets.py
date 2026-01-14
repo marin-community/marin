@@ -15,7 +15,7 @@
 import dataclasses
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
 from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
 
 from experiments.defaults import default_download
@@ -57,7 +57,7 @@ mmlu_raw = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="cais/mmlu",
         revision=versioned("c30699e"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
@@ -161,7 +161,7 @@ mbpp_raw = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="google-research-datasets/mbpp",
         revision=versioned("4bb6404"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
@@ -209,7 +209,7 @@ mmlu_aux_eval = ExecutorStep(
         splits=["auxiliary_train"],
         input_path=mmlu_raw,
         hf_path="cais/mmlu",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="question",
         options_key="choices",
@@ -228,7 +228,7 @@ mmlu_subject_eval = ExecutorStep(
         splits=["dev", "validation"],
         input_path=mmlu_raw,
         hf_path="cais/mmlu",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="question",
         options_key="choices",
@@ -248,7 +248,7 @@ boolq_eval = ExecutorStep(
         splits=["train", "validation"],
         input_path=boolq_raw,
         hf_path="google/boolq",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="question",
         answer_label_key="answer",
@@ -267,7 +267,7 @@ piqa_eval = ExecutorStep(
         splits=["train", "validation"],
         input_path=piqa_raw,
         hf_path="ybisk/piqa",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="goal",
         options_keys=["sol1", "sol2"],
@@ -286,7 +286,7 @@ winogrande_eval = ExecutorStep(
         splits=["train", "validation"],
         input_path=winogrande_raw,
         hf_path="allenai/winogrande",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="sentence",
         options_keys=["option1", "option2"],
@@ -305,7 +305,7 @@ arc_easy_eval = ExecutorStep(
         splits=["train", "validation"],
         input_path=arc_raw,
         hf_path="allenai/ai2_arc",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="question",
         options_key="choices.text",
@@ -324,7 +324,7 @@ arc_challenge_eval = ExecutorStep(
         splits=["train", "validation"],
         input_path=arc_raw,
         hf_path="allenai/ai2_arc",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="question",
         options_key="choices.text",
@@ -343,7 +343,7 @@ openbookqa_eval = ExecutorStep(
         splits=["train", "validation"],
         input_path=openbookqa_raw,
         hf_path="allenai/openbookqa",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="question_stem",
         options_key="choices.text",
@@ -362,7 +362,7 @@ hellaswag_eval = ExecutorStep(
         splits=["train", "validation"],
         input_path=hellaswag_raw,
         hf_path="Rowan/hellaswag",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="ctx",
         options_key="endings",
@@ -381,7 +381,7 @@ mmlu_pro_eval = ExecutorStep(
         splits=["test", "validation"],
         input_path=mmlu_pro_raw,
         hf_path="TIGER-Lab/MMLU-Pro",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="question",
         options_key="options",
@@ -400,7 +400,7 @@ humaneval_eval = ExecutorStep(
         splits=["test"],
         input_path=humaneval_raw,
         hf_path="openai/openai_humaneval",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="prompt",
         answer_text_key="canonical_solution",
@@ -417,7 +417,7 @@ mbpp_eval = ExecutorStep(
         splits=["train", "test", "validation"],
         input_path=mbpp_raw,
         hf_path="google-research-datasets/mbpp",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("evaluation"),
         prompt_key="text",
         answer_text_key="code",
@@ -451,7 +451,7 @@ mmlu_convert_dolma = ExecutorStep(
         splits=["dev", "test", "validation"],
         input_path=mmlu_raw,
         hf_path="cais/mmlu",
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         output_format=OutputFormatOptions("decontamination"),
         prompt_key="question",
         options_key="choices",
@@ -466,7 +466,7 @@ lingoly = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="ambean/lingOly",
         revision=versioned("6aff4c2"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
 )
@@ -478,7 +478,7 @@ gsm8k_raw = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="openai/gsm8k",
         revision=versioned("e53f048"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
@@ -492,7 +492,7 @@ math_raw = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="EleutherAI/hendrycks_math",
         revision=versioned("21a5633"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
@@ -506,7 +506,7 @@ truthful_qa_raw = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="truthfulqa/truthful_qa",
         revision=versioned("741b827"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
@@ -520,7 +520,7 @@ bbh_raw = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="SaylorTwift/bbh",
         revision=versioned("b5306be"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],
     ),
@@ -534,7 +534,7 @@ gpqa_raw = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="Idavidrein/gpqa",
         revision=versioned("90b8e5b"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
         hf_urls_glob=["**/*.csv", "*.csv"],
     ),
@@ -548,7 +548,7 @@ instruction_following_raw = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="wis-k/instruction-following-eval",
         revision=versioned("5a5661c"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
         hf_urls_glob=["**/*.jsonl", "*.jsonl"],
     ),
@@ -562,7 +562,7 @@ musr_raw = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="WillHeld/MuSRDecontam",
         revision=versioned("39b4f56"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.parquet"],
     ),
@@ -576,7 +576,7 @@ winograd_wsc_raw = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="marcov/winograd_wsc_wsc273_promptsource",
         revision=versioned("63befd8"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.parquet"],
     ),
@@ -590,7 +590,7 @@ commonsense_qa_raw = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="tau/commonsense_qa",
         revision=versioned("94630fe"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.parquet"],
     ),
@@ -604,7 +604,7 @@ lambada_openai_raw = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="EleutherAI/lambada_openai",
         revision=versioned("879e19a"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
         hf_urls_glob=["**/*.jsonl", "*.jsonl"],
     ),
@@ -618,7 +618,7 @@ piqa_baber_raw = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="baber/piqa",
         revision=versioned("142f6d7"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.parquet"],
     ),

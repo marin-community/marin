@@ -22,7 +22,7 @@ from experiments.llama import llama3_tokenizer
 from experiments.exp1342_gemstones_scaling_law import distributional_eval_sets
 from experiments.isoflop_sweep import MARIN_SCALING_SUITES
 from experiments.models import ModelConfig, download_model_step
-from marin.execution.executor import executor_main, output_path_of, versioned
+from marin.execution.executor import executor_main, versioned
 from marin.evaluation.log_probs import default_lm_log_probs
 
 # This is painfully slow to run in dry run mode
@@ -45,14 +45,14 @@ def create_eval_steps() -> list:
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
-            model_path=output_path_of(model),
+            model_path=model,
             evals=tasks,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
         )
         steps.append(step)
 
         logprobs_step = default_lm_log_probs(
-            output_path_of(model).cd("checkpoints"),
+            model.cd("checkpoints"),
             metadata[-1],
             dist_eval,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
@@ -67,14 +67,14 @@ def create_eval_steps() -> list:
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
-            model_path=output_path_of(model),
+            model_path=model,
             evals=tasks,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
         )
         steps.append(step)
 
         logprobs_step = default_lm_log_probs(
-            output_path_of(model).cd("checkpoints"),
+            model.cd("checkpoints"),
             metadata[-1],
             dist_eval,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
@@ -89,14 +89,14 @@ def create_eval_steps() -> list:
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
-            model_path=output_path_of(model),
+            model_path=model,
             evals=tasks,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
         )
         steps.append(step)
 
     logprobs_step = default_lm_log_probs(
-        output_path_of(model).cd("checkpoints"),
+        model.cd("checkpoints"),
         metadata[-1],
         dist_eval,
         resource_config=ResourceConfig.with_tpu("v5p-8"),
@@ -126,7 +126,7 @@ def create_eval_steps() -> list:
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=f"{model}@{revision}",
-            model_path=output_path_of(model_instance),
+            model_path=model_instance,
             evals=tasks,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
         )

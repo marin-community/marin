@@ -23,7 +23,7 @@ from experiments.defaults import default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config, llama_300m, llama_300m_train_config
 from experiments.pretraining_datasets.simple import downloads, tokenized
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, lm_mixture_data_config, tokenize
 
 slimpajama_6b_tokenized = tokenized["slimpajama_6b"]
@@ -41,7 +41,7 @@ slimpajama_tokenized = ExecutorStep(
     config=TokenizeConfig(
         train_paths=[downloads["slimpajama"].cd("train")],
         validation_paths=[downloads["slimpajama"].cd("validation")],
-        cache_path=this_output_path(),
+        cache_path=StepRef(_step=None),
         tokenizer=versioned(llama3_tokenizer),
     ),
 )

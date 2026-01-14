@@ -35,7 +35,7 @@ from fray.cluster import ResourceConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from marin.download.uncheatable_eval.download import make_uncheatable_eval_step
 from marin.evaluation.log_probs import default_lm_log_probs
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of
+from marin.execution.executor import ExecutorStep, executor_main
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep, mixture_for_evaluation
 
@@ -146,7 +146,7 @@ def build_steps() -> list[ExecutorStep]:
         directory_friendly_name = get_directory_friendly_name(model_config.model_name)
         steps.append(
             default_lm_log_probs(
-                checkpoint=output_path_of(model_instance),
+                checkpoint=model_instance,
                 model=hf_model_config,
                 data=eval_data,
                 resource_config=ResourceConfig.with_tpu("v5p-8"),

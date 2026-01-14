@@ -31,8 +31,7 @@ from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
-    output_path_of,
-    this_output_path,
+    StepRef,
     versioned,
 )
 from marin.processing.classification.config.inference_config import RuntimeConfig
@@ -76,7 +75,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             fn=run_inference,
             config=InferenceConfig(
                 input_path=input_data_path,
-                output_path=this_output_path(input_basename),
+                output_path=StepRef(_step=None) / input_basename,
                 model_type="compression",  # Use our new compression classifier
                 model_name=None,  # This doesn't matter for compression
                 attribute_name=versioned("compression_ratio"),
@@ -94,11 +93,11 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
             fn=consolidate,
             config=ConsolidateConfig(
                 input_path=input_data_path,
-                output_path=this_output_path(input_basename),
+                output_path=StepRef(_step=None) / input_basename,
                 filters=[
                     FilterConfig(
                         type=versioned("classify"),
-                        attribute_path=output_path_of(compression_step, input_basename),
+                        attribute_path=compression_step / input_basename,
                         name=versioned("compression_ratio"),
                         lower_threshold=versioned(0.6),  # Lower bound
                         upper_threshold=versioned(0.9),  # Upper bound
@@ -110,7 +109,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
 
         tokenize_step = default_tokenize(
             name=f"compression_filtering/{config.experiment_name}/{input_data_source}",
-            dataset=output_path_of(consolidate_step),
+            dataset=consolidate_step,
             tokenizer=llama3_tokenizer,
         )
 

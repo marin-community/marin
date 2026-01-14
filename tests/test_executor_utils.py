@@ -16,12 +16,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from marin.execution.executor import InputName
+from marin.execution.executor import StepRef
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 
-def make_input_name(name, step_name) -> InputName:
-    return InputName(name=name, step=SimpleNamespace(name=step_name))  # type: ignore
+def make_input_name(name, step_name) -> StepRef:
+    return StepRef(_subpath=name, _step=SimpleNamespace(name=step_name))  # type: ignore
 
 
 def test_ckpt_path_with_valid_string_path():

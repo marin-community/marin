@@ -33,7 +33,7 @@ from marin.download.huggingface.download_hf import (
     DownloadConfig as HfDownloadConfig,
     download_hf as hf_download_logic,
 )
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName, ensure_versioned
+from marin.execution import ExecutorStep, StepRef, ensure_versioned
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ class PretokenizedCacheDownloadConfig(TokenizeConfigBase):
     tags: list[str] = dataclasses.field(default_factory=list)  # Tags for Levanter's LMDatasetSourceConfig
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | StepRef | None, *, include_raw_paths=True
     ) -> LMDatasetSourceConfig:
         """
         Returns a Levanter LMDatasetSourceConfig that points to the downloaded cache.
@@ -106,7 +106,7 @@ def download_pretokenized_cache(
         PretokenizedCacheDownloadConfig pointing to the downloaded data.
     """
     config = PretokenizedCacheDownloadConfig(
-        cache_path=THIS_OUTPUT_PATH,  # ExecutorStep will resolve this to the actual output path
+        cache_path=StepRef(_step=None),  # ExecutorStep will resolve this to the actual output path
         tokenizer=ensure_versioned(tokenizer),
         hf_repo_id=ensure_versioned(hf_repo_id),  # type: ignore[call-arg]
         hf_revision=ensure_versioned(hf_revision),  # type: ignore[call-arg]

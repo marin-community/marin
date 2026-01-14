@@ -26,7 +26,7 @@ from levanter.trainer import TrainerConfig
 from transformers import AutoConfig
 from levanter.utils.mesh import MeshConfig
 
-from marin.execution.executor import ExecutorStep, OutputName
+from marin.execution.executor import ExecutorStep, StepRef
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
@@ -151,7 +151,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
         num_train_steps=config.num_train_steps,
         steps_per_eval=config.steps_per_eval,
         checkpointer=CheckpointerConfig(
-            base_path=OutputName("checkpoints"),
+            base_path=StepRef(_step=None, _subpath="checkpoints"),
             save_interval=datetime.timedelta(seconds=config.checkpointer_save_interval),
         ),
         mesh=MeshConfig(
@@ -171,7 +171,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
 
     rollout_storage = RolloutStorageConfig(
         storage_type=StorageType.FILE,
-        path=OutputName("rollouts"),
+        path=StepRef(_step=None, _subpath="rollouts"),
     )
     weight_transfer = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,

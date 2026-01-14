@@ -59,8 +59,7 @@ from experiments.llama import llama3_tokenizer
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
-    output_path_of,
-    this_output_path,
+    StepRef,
     versioned,
 )
 from marin.transform.conversation.conversation_to_dolma import (
@@ -591,7 +590,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
         config=TransformSFTDatasetConfig(
             source=versioned(dataset_cfg.hf_dataset_id),
             revision=versioned(dataset_cfg.revision),
-            output_path=this_output_path(),
+            output_path=StepRef(_step=None),
             metadata_columns=versioned(dataset_cfg.metadata_columns),
             adapter=versioned(adapter),
             subsets=versioned(dataset_cfg.subsets),
@@ -622,7 +621,7 @@ def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = N
 tulu_3_in_dolma = ExecutorStep(
     name="dolma/tulu_3_in_dolma",
     fn=convert_conversation_to_dolma,
-    config=ConversationToDolmaConfig(output_path_of(get_instruction_dataset("allenai/tulu-3-sft-mixture"))),
+    config=ConversationToDolmaConfig(get_instruction_dataset("allenai/tulu-3-sft-mixture")),
 )
 
 

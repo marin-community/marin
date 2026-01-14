@@ -42,7 +42,7 @@ from levanter.store.cache import consolidate_shard_caches
 from zephyr import Backend, Dataset
 from zephyr.readers import load_file
 
-from marin.execution.executor import ExecutorStep, InputName, VersionedValue
+from marin.execution.executor import ExecutorStep, StepRef, VersionedValue
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ class TokenizeConfigBase(abc.ABC):
 
     @abc.abstractmethod
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | StepRef | None, *, include_raw_paths=True
     ) -> LMDatasetSourceConfig:
         """
         Create a Levanter dataset source config from this config and the actual output path.
@@ -93,13 +93,13 @@ class TokenizeConfig(TokenizeConfigBase):
     """
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | StepRef | None, *, include_raw_paths=True
     ) -> LMDatasetSourceConfig:
         """
         For use in Levanter training runs with mixtures of datasets.
 
         Args:
-            actual_output_path: The actual output path to use for the cache. Since we often pass in an InputName,
+            actual_output_path: The actual output path to use for the cache. Since we often pass in a StepRef,
                 we need to resolve it to a string.
 
             include_raw_paths: if false, don't include paths to raw data in Levanter's config. This means we'll be able
@@ -118,8 +118,8 @@ class TokenizeConfig(TokenizeConfigBase):
         if not self.train_paths and not self.validation_paths:
             raise ValueError("At least one of train_paths or validation_paths must be specified")
 
-        assert not isinstance(self.train_paths, str | InputName)
-        assert not isinstance(self.validation_paths, str | InputName)
+        assert not isinstance(self.train_paths, str | StepRef)
+        assert not isinstance(self.validation_paths, str | StepRef)
 
         if isinstance(self.train_paths, Sequence):
             assert "/" not in self.train_paths, "don't use the entire fs for train paths!"
@@ -149,7 +149,7 @@ class HfTokenizeConfig(TokenizeConfigBase):
     """Number of samples to tokenize. If None, tokenize all samples."""
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | StepRef | None, *, include_raw_paths=True
     ) -> LMDatasetSourceConfig:
         return HfDatasetSourceConfig(
             id=self.id,
@@ -160,27 +160,27 @@ class HfTokenizeConfig(TokenizeConfigBase):
         )
 
 
-def _validate_train_urls(train_paths: list[str | InputName], warn):
+def _validate_train_urls(train_paths: list[str | StepRef], warn):
     """
-    Validates the training data URLs or InputName attributes to ensure they do not contain forbidden patterns.
+    Validates the training data URLs or StepRef attributes to ensure they do not contain forbidden patterns.
     Raises a ValueError if a forbidden pattern is found.
     """
     for item in train_paths:
         url_or_name_to_check: str = ""
         if isinstance(item, str):
             url_or_name_to_check = item
-        elif isinstance(item, InputName):
-            url_or_name_to_check = item.name or ""
+        elif isinstance(item, StepRef):
+            url_or_name_to_check = item._subpath or ""
 
         # \b doesn't work because of underscores
         if re.search(r"[^a-zA-Z]test[^a-zA-Z]", url_or_name_to_check) or re.search(r"validation", url_or_name_to_check):
             if warn:
                 logger.warning(
-                    f"Warning: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
+                    f"Warning: Training data URL or StepRef '{url_or_name_to_check}' contains a forbidden pattern "
                 )
             else:
                 raise ValueError(
-                    f"Error: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
+                    f"Error: Training data URL or StepRef '{url_or_name_to_check}' contains a forbidden pattern "
                     "('test' or 'validation'). "
                     "Please ensure training data does not include test or validation sets."
                 )
@@ -213,7 +213,7 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
 
     if len(input_paths) == 0:
         return []
-    elif any(isinstance(x, InputName | ExecutorStep) for x in input_paths):
+    elif any(isinstance(x, StepRef | ExecutorStep) for x in input_paths):
         return input_paths
 
     out = _get_files_by_extensions(input_paths, ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet", "json"])

@@ -34,7 +34,7 @@ Tags: <tags>
 Reference Issue: https://github.com/marin-community/marin/issues/822
 """
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 from marin.transform.stackexchange.transform_stackexchange import (
     StackExchangeExtractionConfig,
@@ -46,7 +46,7 @@ stackexchange_text_resiliparse_custom_fork = ExecutorStep(
     fn=process_stackexchange_dump,
     config=StackExchangeExtractionConfig(
         input_path=versioned("gs://marin-us-central2/documents/stackexchange/v2024-04-02/md-complete"),
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
         extract_method="resiliparse",
         extract_config=ResiliparseConfig(
             links=False,

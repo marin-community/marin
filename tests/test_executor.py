@@ -27,11 +27,9 @@ from marin.execution import THIS_OUTPUT_PATH
 from marin.execution.executor import (
     Executor,
     ExecutorStep,
-    InputName,
+    StepRef,
     _get_info_path,
     collect_dependencies_and_version,
-    output_path_of,
-    this_output_path,
     versioned,
 )
 from marin.execution.executor_step_status import (
@@ -90,8 +88,8 @@ def test_executor():
         name="b",
         fn=fn,
         config=MyConfig(
-            input_path=output_path_of(a, "sub"),
-            output_path=this_output_path(),
+            input_path=a / "sub",
+            output_path=StepRef(_step=None),
             n=versioned(3),
             m=4,
         ),
@@ -186,7 +184,7 @@ def test_force_run_failed():
         fn=fn,
         config=MyConfig(
             input_path=path,
-            output_path=this_output_path(),
+            output_path=StepRef(_step=None),
             n=1,
             m=1,
         ),
@@ -196,8 +194,8 @@ def test_force_run_failed():
         name="a",
         fn=fn_pass,
         config=MyConfig(
-            input_path=output_path_of(b, "sub"),
-            output_path=this_output_path(),
+            input_path=b / "sub",
+            output_path=StepRef(_step=None),
             n=2,
             m=2,
         ),
@@ -254,7 +252,7 @@ def test_status_actor_one_executor_waiting_for_another():
                 f.write(str(number + config.number))
 
         a = ExecutorStep(name="a", fn=fn, config=Config(versioned(1), file.name, 2, ""))
-        b = ExecutorStep(name="b", fn=fn, config=Config(versioned(2), file.name, 0, output_path_of(a)))
+        b = ExecutorStep(name="b", fn=fn, config=Config(versioned(2), file.name, 0, a))
 
         with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
             executor1 = create_executor(temp_dir)
@@ -326,7 +324,7 @@ def test_parallelism():
         time.sleep(run_time)
 
     bs = [
-        ExecutorStep(name=f"b{i}", fn=fn, config=MyConfig(input_path="/", output_path=this_output_path(), n=1, m=1))
+        ExecutorStep(name=f"b{i}", fn=fn, config=MyConfig(input_path="/", output_path=StepRef(_step=None), n=1, m=1))
         for i in range(parallelism)
     ]
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
@@ -365,14 +363,14 @@ def test_versioning():
                 name="a",
                 fn=fn,
                 config=MyConfig(
-                    input_path=versioned(a_input_path), output_path=this_output_path(), n=versioned(a_n), m=a_m
+                    input_path=versioned(a_input_path), output_path=StepRef(_step=None), n=versioned(a_n), m=a_m
                 ),
             )
             b = ExecutorStep(
                 name="b",
                 fn=fn,
                 config=MyConfig(
-                    input_path=output_path_of(a, name), output_path=this_output_path(), n=versioned(b_n), m=b_m
+                    input_path=a / name, output_path=StepRef(_step=None), n=versioned(b_n), m=b_m
                 ),
             )
             executor = create_executor(temp_dir)
@@ -413,8 +411,8 @@ def test_dedup_version():
             name="b",
             fn=fn,
             config=MyConfig(
-                input_path=output_path_of(a, "sub"),
-                output_path=this_output_path(),
+                input_path=a / "sub",
+                output_path=StepRef(_step=None),
                 n=versioned(3),
                 m=4,
             ),
@@ -447,8 +445,8 @@ def test_run_only_some_steps():
         name="b",
         fn=fn,
         config=MyConfig(
-            input_path=output_path_of(a, "sub"),
-            output_path=this_output_path(),
+            input_path=a / "sub",
+            output_path=StepRef(_step=None),
             n=versioned(3),
             m=4,
         ),
@@ -504,7 +502,7 @@ def test_collect_deps_skip_vs_block():
     parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=1))
 
     # ----- skip parent -------------------------------------------------
-    inp_skip = InputName(step=parent, name="ckpt.pt").nonblocking()
+    inp_skip = StepRef(_step=parent, _subpath="ckpt.pt").nonblocking()
     computed_deps = collect_dependencies_and_version(inp_skip)
     deps = computed_deps.dependencies
     ver = computed_deps.version
@@ -515,7 +513,7 @@ def test_collect_deps_skip_vs_block():
     assert ver == {"": "DEP[0]/ckpt.pt"}
 
     # ----- require parent (default) ------------------------------------
-    inp_block = InputName(step=parent, name="ckpt.pt")  # no .skip_parent()
+    inp_block = StepRef(_step=parent, _subpath="ckpt.pt")  # no .skip_parent()
     computed_deps = collect_dependencies_and_version(inp_block)
     deps = computed_deps.dependencies
     ver = computed_deps.version

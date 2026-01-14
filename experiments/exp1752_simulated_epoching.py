@@ -28,7 +28,7 @@ from experiments.llama import llama3_tokenizer, llama_1_4b
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, InputName, executor_main
+from marin.execution.executor import ExecutorStep, StepRef, executor_main
 
 TPU_TYPE = "v5p-8"
 TAG = ["exp1752", "simulated_epoching"]
@@ -56,7 +56,7 @@ training_config = SimpleTrainConfig(
 
 def simulated_scaling_law_suite(
     sweep_name: str,
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
     *,
     widths: Sequence[int] = (512, 768, 1024, 1536, 2048),
     base_model_config: LlamaConfig = llama_1_4b,

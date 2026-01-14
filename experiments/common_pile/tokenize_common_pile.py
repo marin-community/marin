@@ -19,7 +19,7 @@ from levanter.data.dataset import PermType
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import ExecutorStep, StepRef, executor_main
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 
 # Common Pile v0.1 filtered dataset download steps
@@ -29,7 +29,7 @@ arxiv_abstracts_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/arxiv_abstracts_filtered",
         revision="f1d7a9a",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/arxiv_abstracts_filtered-f1d7a9a",
@@ -41,7 +41,7 @@ arxiv_papers_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/arxiv_papers_filtered",
         revision="033cf7f",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/arxiv_papers_filtered-033cf7f",
@@ -53,7 +53,7 @@ biodiversity_heritage_library_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/biodiversity_heritage_library_filtered",
         revision="0486ed6",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/biodiversity_heritage_library_filtered-0486ed6",
@@ -65,7 +65,7 @@ caselaw_access_project_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/caselaw_access_project_filtered",
         revision="50e1961",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/caselaw_access_project_filtered-50e1961",
@@ -77,7 +77,7 @@ cccc_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/cccc_filtered",
         revision="03a3de5",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/cccc_filtered-03a3de5",
@@ -89,7 +89,7 @@ data_provenance_initiative_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/data_provenance_initiative_filtered",
         revision="8f5afcf",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/data_provenance_initiative_filtered-8f5afcf",
@@ -101,7 +101,7 @@ doab_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/doab_filtered",
         revision="defb24c",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/doab_filtered-defb24c",
@@ -113,7 +113,7 @@ foodista_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/foodista_filtered",
         revision="bf2c7aa",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/foodista_filtered-bf2c7aa",
@@ -125,7 +125,7 @@ github_archive_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/github_archive_filtered",
         revision="52282fe",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/github_archive_filtered-52282fe",
@@ -137,7 +137,7 @@ library_of_congress_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/library_of_congress_filtered",
         revision="56725c7",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/library_of_congress_filtered-56725c7",
@@ -149,7 +149,7 @@ libretexts_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/libretexts_filtered",
         revision="70388bc",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/libretexts_filtered-70388bc",
@@ -161,7 +161,7 @@ news_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/news_filtered",
         revision="59aaa8f",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/news_filtered-59aaa8f",
@@ -173,7 +173,7 @@ oercommons_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/oercommons_filtered",
         revision="506b615",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/oercommons_filtered-506b615",
@@ -185,7 +185,7 @@ peS2o_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/peS2o_filtered",
         revision="2977475",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/peS2o_filtered-2977475",
@@ -197,7 +197,7 @@ pre_1929_books_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/pre_1929_books_filtered",
         revision="23f9d96",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/pre_1929_books_filtered-23f9d96",
@@ -209,7 +209,7 @@ pressbooks_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/pressbooks_filtered",
         revision="1a1d3b5",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/pressbooks_filtered-1a1d3b5",
@@ -221,7 +221,7 @@ project_gutenberg_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/project_gutenberg_filtered",
         revision="3cdf687",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/project_gutenberg_filtered-3cdf687",
@@ -233,7 +233,7 @@ public_domain_review_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/public_domain_review_filtered",
         revision="efc7f21",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/public_domain_review_filtered-efc7f21",
@@ -245,7 +245,7 @@ pubmed_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/pubmed_filtered",
         revision="c156f05",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/pubmed_filtered-c156f05",
@@ -257,7 +257,7 @@ python_enhancement_proposals_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/python_enhancement_proposals_filtered",
         revision="5821709",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/python_enhancement_proposals_filtered-5821709",
@@ -269,7 +269,7 @@ regulations_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/regulations_filtered",
         revision="3327364",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/regulations_filtered-3327364",
@@ -281,7 +281,7 @@ stackexchange_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/stackexchange_filtered",
         revision="c0ac737",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/stackexchange_filtered-c0ac737",
@@ -293,7 +293,7 @@ stackv2_edu_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/stackv2_edu_filtered",
         revision="c354dbe",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/stackv2_edu_filtered-c354dbe",
@@ -305,7 +305,7 @@ stackv2_html_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/stackv2_html_filtered",
         revision="92c9fa8",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/stackv2_html_filtered-92c9fa8",
@@ -317,7 +317,7 @@ stackv2 = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/stackv2",
         revision="d0e3266",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/stackv2-d0e3266",
@@ -329,7 +329,7 @@ ubuntu_irc_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/ubuntu_irc_filtered",
         revision="84f88c9",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/ubuntu_irc_filtered-84f88c9",
@@ -341,7 +341,7 @@ uk_hansard_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/uk_hansard_filtered",
         revision="c88adc4",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/uk_hansard_filtered-c88adc4",
@@ -353,7 +353,7 @@ usgpo_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/usgpo_filtered",
         revision="b150cc2",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/usgpo_filtered-b150cc2",
@@ -365,7 +365,7 @@ uspto_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/uspto_filtered",
         revision="13894c5",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/uspto_filtered-13894c5",
@@ -377,7 +377,7 @@ wikimedia_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/wikimedia_filtered",
         revision="0641bb8",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/wikimedia_filtered-0641bb8",
@@ -389,7 +389,7 @@ wikiteam_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/wikiteam_filtered",
         revision="f4ed055",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/wikiteam_filtered-f4ed055",
@@ -401,7 +401,7 @@ youtube_filtered = ExecutorStep(
     config=DownloadConfig(
         hf_dataset_id="common-pile/youtube_filtered",
         revision="dff8c8a",
-        gcs_output_path=this_output_path(),
+        gcs_output_path=StepRef(_step=None),
         wait_for_completion=True,
     ),
     override_output_path="raw/common_pile/youtube_filtered-dff8c8a",

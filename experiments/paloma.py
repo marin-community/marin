@@ -24,7 +24,7 @@ from marin.download.huggingface.download_hf import DownloadConfig as HfDownloadC
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 
@@ -59,7 +59,7 @@ paloma = (
         config=HfDownloadConfig(
             hf_dataset_id=versioned("allenai/paloma"),
             revision=versioned("65cd6fc"),
-            gcs_output_path=this_output_path(),
+            gcs_output_path=StepRef(_step=None),
             wait_for_completion=True,
             append_sha_to_path=True,
         ),

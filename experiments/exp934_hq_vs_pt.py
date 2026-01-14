@@ -31,7 +31,7 @@ Metrics: Paloma Loss, Tulu3 Validation Loss, MMLU Accuracy
 # HQ = High Quality
 
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
@@ -99,7 +99,7 @@ wikipedia_resiliparse_custom_fork = (
         config=WikiExtractionConfig(
             input_path="gs://marin-us-central2/raw/wikipedia-a7dad0/20241201",
             revision=versioned("20241201"),
-            output_path=this_output_path(),
+            output_path=StepRef(_step=None),
             extract_method="resiliparse",
             extract_config=ResiliparseConfig(
                 links=False,
@@ -123,7 +123,7 @@ ar5iv_no_problem_resiliparse_custom_fork = ExecutorStep(
     config=Ar5ivExtractionConfig(
         input_path="gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem-49c4e3/202404",
         revision="042024",
-        output_path=this_output_path("resiliparse-custom-fork"),
+        output_path=StepRef(_step=None) / "resiliparse-custom-fork",
         extract_method=versioned("resiliparse"),
         extract_config=ResiliparseConfig(
             links=versioned(False),

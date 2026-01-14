@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 import fsspec
 
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, StepRef
 
 logger = logging.getLogger("ray")
 
@@ -84,7 +84,7 @@ data = ExecutorStep(
     fn=generate_data,
     config=GenerateDataConfig(
         n=n,
-        output_path=this_output_path(),
+        output_path=StepRef(_step=None),
     ),
 )
 
@@ -93,8 +93,8 @@ stats = ExecutorStep(
     description="Compute stats of the generated data.",
     fn=compute_stats,
     config=ComputeStatsConfig(
-        input_path=output_path_of(data),
-        output_path=this_output_path(),
+        input_path=data,
+        output_path=StepRef(_step=None),
     ),
 )
 
