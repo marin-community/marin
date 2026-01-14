@@ -654,3 +654,126 @@ def test_fray_port_mapping_not_set_when_no_ports(job_manager, mock_runtime):
 
     # FRAY_PORT_MAPPING should not be set when there are no ports
     assert "FRAY_PORT_MAPPING" not in config.env
+
+
+def test_job_failure_error_appears_in_logs(job_manager, mock_bundle_cache):
+    """Test that job failure errors appear in logs (not just job.error).
+
+    This ensures that log polling can see error messages, not just the job status API.
+    """
+    mock_bundle_cache.get_bundle = Mock(side_effect=Exception("Bundle download failed"))
+
+    request = create_run_job_request()
+    job_id = job_manager.submit_job(request)
+
+    job = job_manager.get_job(job_id)
+    job.thread.join(timeout=15.0)
+
+    final_job = job_manager.get_job(job_id)
+    assert final_job.status == cluster_pb2.JOB_STATE_FAILED
+
+    # Verify error appears in both job.error AND job.logs
+    assert "Bundle download failed" in final_job.error
+
+    # Get logs and verify error is present
+    logs = job_manager.get_logs(job_id)
+    error_logs = [log for log in logs if log.source == "error"]
+    assert len(error_logs) >= 1
+    assert any("Bundle download failed" in log.data for log in error_logs)
+
+
+def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_image_cache):
+    """Test that job retries with new ports when port binding fails."""
+    # Create runtime that fails with "address already in use" on first attempt
+    runtime = Mock(spec=DockerRuntime)
+    runtime.create_container = Mock(return_value="container123")
+
+    # First attempt fails with port in use, second succeeds
+    call_count = [0]
+
+    def start_side_effect(container_id):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise RuntimeError("failed to bind host port: address already in use")
+        return None
+
+    runtime.start_container = Mock(side_effect=start_side_effect)
+    runtime.remove = Mock()
+
+    # After successful start, container runs then completes
+    inspect_call_count = [0]
+
+    def inspect_side_effect(container_id):
+        inspect_call_count[0] += 1
+        if inspect_call_count[0] == 1:
+            return ContainerStatus(running=True)
+        return ContainerStatus(running=False, exit_code=0)
+
+    runtime.inspect = Mock(side_effect=inspect_side_effect)
+    runtime.get_stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
+    runtime.get_logs = Mock(return_value=[])
+
+    port_allocator = PortAllocator(port_range=(50000, 50100))
+    job_manager = JobManager(
+        bundle_cache=mock_bundle_cache,
+        venv_cache=mock_venv_cache,
+        image_cache=mock_image_cache,
+        runtime=runtime,
+        port_allocator=port_allocator,
+        max_concurrent_jobs=5,
+    )
+
+    request = create_run_job_request(ports=["actor"])
+    job_id = job_manager.submit_job(request)
+
+    job = job_manager.get_job(job_id)
+    job.thread.join(timeout=15.0)
+
+    # Job should succeed after retry
+    final_job = job_manager.get_job(job_id)
+    assert final_job.status == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    # start_container should have been called twice
+    assert runtime.start_container.call_count == 2
+
+    # remove should have been called once (to clean up failed container)
+    assert runtime.remove.call_count == 1
+
+    # Logs should contain retry message
+    logs = job_manager.get_logs(job_id)
+    build_logs = [log for log in logs if log.source == "build"]
+    assert any("Port conflict" in log.data for log in build_logs)
+
+
+def test_port_retry_exhausted(mock_bundle_cache, mock_venv_cache, mock_image_cache):
+    """Test that job fails after max port retries are exhausted."""
+    runtime = Mock(spec=DockerRuntime)
+    runtime.create_container = Mock(return_value="container123")
+    # All attempts fail
+    runtime.start_container = Mock(side_effect=RuntimeError("failed to bind host port: address already in use"))
+    runtime.remove = Mock()
+    runtime.get_logs = Mock(return_value=[])
+
+    port_allocator = PortAllocator(port_range=(50000, 50100))
+    job_manager = JobManager(
+        bundle_cache=mock_bundle_cache,
+        venv_cache=mock_venv_cache,
+        image_cache=mock_image_cache,
+        runtime=runtime,
+        port_allocator=port_allocator,
+        max_concurrent_jobs=5,
+    )
+
+    request = create_run_job_request(ports=["actor"])
+    job_id = job_manager.submit_job(request)
+
+    job = job_manager.get_job(job_id)
+    job.thread.join(timeout=15.0)
+
+    # Job should fail after exhausting retries
+    final_job = job_manager.get_job(job_id)
+    assert final_job.status == cluster_pb2.JOB_STATE_FAILED
+    assert "address already in use" in final_job.error
+
+    # start_container should have been called 3 times (max retries)
+    assert runtime.start_container.call_count == 3

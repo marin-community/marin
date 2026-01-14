@@ -370,6 +370,7 @@ class ClusterContext:
         memory: str = "1g",
         scheduling_timeout_seconds: int = 0,
         namespace: str | None = None,
+        ports: list[str] | None = None,
         **kwargs,
     ) -> str:
         """Submit a job to the cluster.
@@ -384,6 +385,7 @@ class ClusterContext:
             memory: Memory to request (e.g., "1g", "512m")
             scheduling_timeout_seconds: How long to wait for scheduling before marking UNSCHEDULABLE
             namespace: Namespace for actor isolation (defaults to "<local>")
+            ports: List of port names to allocate (e.g., ["actor", "metrics"])
             **kwargs: Keyword arguments for fn
 
         Returns:
@@ -413,6 +415,7 @@ class ClusterContext:
             ),
             bundle_blob=self._get_bundle_blob(),
             scheduling_timeout_seconds=scheduling_timeout_seconds,
+            ports=ports or [],
         )
         response = self._controller_client.launch_job(request)
         return response.job_id
@@ -518,7 +521,6 @@ def example_actor_job_workflow(cluster: ClusterContext):
     def actor_job_entrypoint():
         """Job entrypoint that starts an ActorServer and registers with controller."""
         import os
-        import socket
         import time
 
         from fluster import cluster_pb2
@@ -529,8 +531,11 @@ def example_actor_job_workflow(cluster: ClusterContext):
         job_id = os.environ["FLUSTER_JOB_ID"]
         namespace = os.environ["FLUSTER_NAMESPACE"]
         controller_url = os.environ["FLUSTER_CONTROLLER_ADDRESS"]
+        # Port allocated by the cluster and mapped to host via Docker -p flag
+        allocated_port = int(os.environ["FLUSTER_PORT_ACTOR"])
 
         print(f"Actor job starting: job_id={job_id}, namespace={namespace}")
+        print(f"Using allocated port: {allocated_port}")
 
         # Define our actor class inline (could also be imported)
         class Calculator:
@@ -552,19 +557,18 @@ def example_actor_job_workflow(cluster: ClusterContext):
             def get_history(self) -> list[str]:
                 return self._history
 
-        # Start the ActorServer
+        # Start the ActorServer on the allocated port
         # Use 0.0.0.0 to bind to all interfaces (necessary inside Docker)
-        # Use port=0 to let the OS pick a free port
-        server = ActorServer(host="0.0.0.0", port=0)
+        # The port is mapped to the host via Docker -p flag
+        server = ActorServer(host="0.0.0.0", port=allocated_port)
         server.register("calculator", Calculator())
         port = server.serve_background()
         print(f"ActorServer started on port {port}")
 
         # Register the endpoint with the controller using Connect RPC
-        # The controller will now track this endpoint and make it discoverable
-        hostname = socket.gethostname()
-        host_ip = socket.gethostbyname(hostname)
-        endpoint_address = f"{host_ip}:{port}"
+        # Use localhost since the port is mapped from host to container via Docker -p
+        # Clients on the host will connect to localhost:<port>
+        endpoint_address = f"localhost:{port}"
 
         print(f"Registering endpoint: calculator at {endpoint_address}")
         try:
@@ -590,6 +594,7 @@ def example_actor_job_workflow(cluster: ClusterContext):
             time.sleep(1)
 
     # Step 2: Submit the actor job to the cluster
+    # Request a port named "actor" which will be allocated and mapped by Docker
     print("Submitting actor job to cluster...")
     job_id = cluster.submit(
         actor_job_entrypoint,
@@ -597,6 +602,7 @@ def example_actor_job_workflow(cluster: ClusterContext):
         cpu=1,
         memory="512m",
         namespace="<local>",
+        ports=["actor"],
     )
     print(f"Job submitted: {job_id}")
 

@@ -107,6 +107,8 @@ class ControllerServiceImpl:
                 environment=request.environment,
                 bundle_gcs_path=f"file://{bundle_path}",
                 bundle_hash=request.bundle_hash,
+                ports=list(request.ports),
+                scheduling_timeout_seconds=request.scheduling_timeout_seconds,
             )
 
         job = ControllerJob(

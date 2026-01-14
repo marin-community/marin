@@ -257,10 +257,43 @@ class JobManager:
                 ports=job.ports,
             )
 
-            # Create and start container
-            container_id = self._runtime.create_container(config)
-            job.container_id = container_id
-            self._runtime.start_container(container_id)
+            # Create and start container with retry on port binding failures
+            container_id = None
+            max_port_retries = 3
+            for attempt in range(max_port_retries):
+                try:
+                    container_id = self._runtime.create_container(config)
+                    job.container_id = container_id
+                    self._runtime.start_container(container_id)
+                    break
+                except RuntimeError as e:
+                    if "address already in use" in str(e) and attempt < max_port_retries - 1:
+                        job.logs.add("build", f"Port conflict, retrying with new ports (attempt {attempt + 2})")
+                        # Release current ports and allocate new ones
+                        self._port_allocator.release(list(job.ports.values()))
+                        port_names = list(job.ports.keys())
+                        new_ports = self._port_allocator.allocate(len(port_names))
+                        job.ports = dict(zip(port_names, new_ports, strict=True))
+
+                        # Update config with new ports
+                        config.ports = job.ports
+                        for name, port in job.ports.items():
+                            config.env[f"FLUSTER_PORT_{name.upper()}"] = str(port)
+                        if job.ports:
+                            config.env["FRAY_PORT_MAPPING"] = ",".join(f"{n}:{p}" for n, p in job.ports.items())
+
+                        # Try to remove failed container if it was created
+                        if container_id:
+                            try:
+                                self._runtime.remove(container_id)
+                            except RuntimeError:
+                                pass
+                            container_id = None
+                    else:
+                        raise
+
+            # container_id is guaranteed to be set here (loop breaks on success, raises on failure)
+            assert container_id is not None
 
             # Phase 4: Poll loop - check status and collect stats
             timeout = config.timeout_seconds
@@ -321,6 +354,7 @@ class JobManager:
                 time.sleep(5.0)
 
         except Exception as e:
+            job.logs.add("error", f"Job failed: {e!r}")
             job.transition_to(cluster_pb2.JOB_STATE_FAILED, error=repr(e))
         finally:
             # Release semaphore

@@ -206,8 +206,6 @@ class DockerRuntime:
         cmd = [
             "docker",
             "create",
-            "--network",
-            "host",
             "--add-host=host.docker.internal:host-gateway",
             "--security-opt",
             "no-new-privileges",
