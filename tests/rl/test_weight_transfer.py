@@ -140,6 +140,17 @@ def weight_transfer_config(transfer_mode):
         yield config
 
 
+@pytest.fixture(autouse=True)
+def job_context():
+    """Ensure a shared job context for all tests."""
+    from fray.job.context import create_job_ctx, fray_default_job_ctx
+
+    # Use threadpool context for tests to avoid Ray overhead unless needed
+    ctx = create_job_ctx("threadpool")
+    with fray_default_job_ctx(ctx):
+        yield ctx
+
+
 def test_multiple_weight_updates(weight_transfer_config, sample_params):
     """Test multiple sequential weight updates."""
     server, client = create_test_weight_transfer_pair(weight_transfer_config)
