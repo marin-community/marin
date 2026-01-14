@@ -79,9 +79,10 @@ class SamplingParams:
     """Parameters for sampling rollouts from an environment."""
 
     temperature: float = 1.0
+    top_k: int | None = None
     n_prompts: int = 8
     n_generations_per_prompt: int = 4
-    max_tokens: int = 256
+    max_output_tokens: int = 512
     stop_tokens: list[int] | None = None
 
 
@@ -121,6 +122,9 @@ class CurriculumConfig:
     lessons: dict[str, LessonConfig]
     """Dictionary mapping lesson names to lesson configurations."""
 
+    max_seq_len: int
+    """Maximum total sequence length (prompt + response) for training batches."""
+
     eval_frequency: int = 100
     """How often to run full evaluation across all lessons (in rollout worker steps)."""
 
@@ -146,9 +150,9 @@ class CurriculumConfig:
     """How often to checkpoint curriculum state (in training steps)."""
 
     @property
-    def max_tokens(self) -> int:
-        """Maximum tokens across all lessons in the curriculum."""
-        return max(lesson.sampling_params.max_tokens for lesson in self.lessons.values())
+    def max_output_tokens(self) -> int:
+        """Maximum output tokens across all lessons in the curriculum."""
+        return max(lesson.sampling_params.max_output_tokens for lesson in self.lessons.values())
 
 
 def _validate_dependencies(lesson_configs: dict[str, LessonConfig]):
@@ -606,12 +610,13 @@ class Curriculum:
 
 def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
     job_ctx = get_default_job_ctx()
-    actor = job_ctx.create_actor(Curriculum, actor_name=config.actor_name, actor_args=(config,), preemptible=False)
+    actor = job_ctx.create_actor(Curriculum, config, name=config.actor_name, get_if_exists=True, preemptible=False)
 
     # Auto-restore from checkpoint if path provided
     if checkpoint_path:
         try:
-            actor.restore_checkpoint.call(checkpoint_path)
+            future = actor.restore_checkpoint.remote(checkpoint_path)
+            job_ctx.get(future)
         except Exception as e:
             logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")
 
