@@ -85,6 +85,16 @@ class SamplingParams:
     max_output_tokens: int = 512
     stop_tokens: list[int] | None = None
 
+    def __post_init__(self):
+        if self.temperature < 1e-4:
+            logger.warning(
+                "SamplingParams.temperature is very low (%f). Greedy decoding is generally "
+                "not useful for RL training as it limits exploration.",
+                self.temperature,
+            )
+        if self.top_k == 1:
+            logger.warning("SamplingParams.top_k is 1. Greedy decoding is generally not useful for RL training.")
+
 
 @dataclass
 class LessonConfig:
