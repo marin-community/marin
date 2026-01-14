@@ -26,8 +26,8 @@ You probably don't need to run this script unless you're adding a new dataset or
 
 from experiments.exp524_tokenizers import fineweb_edu_llama3_tokenized
 from experiments.speedrun.prebuilt_caches import fineweb_edu_10B_repo_id, fineweb_edu_10M_repo_id
+from experiments.steps import upload_dir_to_hf
 from marin.execution import executor_main
-from marin.export import upload_dir_to_hf
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.tokenize.slice_cache import slice_cache
 

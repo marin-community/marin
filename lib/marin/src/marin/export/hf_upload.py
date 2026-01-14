@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Library code for uploading directories to Hugging Face Hub.
+
+This module contains pure processing functions that work with concrete paths.
+For step wrappers that handle StepRef, see experiments/steps/hf_upload.py
+"""
+
 import dataclasses
 import functools
 import io
@@ -19,7 +26,6 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
-from urllib.parse import urlparse
 
 import fsspec
 import humanfriendly
@@ -27,7 +33,6 @@ from fsspec.implementations.local import LocalFileSystem
 from huggingface_hub import create_commit, upload_folder
 from tqdm_loggable.auto import tqdm
 
-from marin.execution import ExecutorStep, StepRef, step, StepContext
 from marin.utilities.fn_utils import with_retries
 from marin.utils import fsspec_glob
 
@@ -36,81 +41,37 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class UploadToHfConfig:
-    input_path: str | StepRef
+    """Configuration for uploading a directory to Hugging Face Hub."""
+
+    input_path: str
+    """Path to the directory to upload (can be a GCS path or other fsspec path)."""
+
     repo_id: str
+    """The repo id to upload to (e.g. "username/repo_name")."""
+
     repo_type: str = "dataset"
+    """The type of repo to upload to (e.g. "dataset", "model", etc.)."""
+
     token: str | None = None
+    """The token to use for authentication (if not provided, uses the default token)."""
+
     revision: str | None = None
+    """The branch to upload to (if not provided, uses the default branch)."""
 
     upload_kwargs: dict[str, str] = dataclasses.field(default_factory=dict)
-    """Will be passed to huggingface_hub.upload_folder"""
+    """Additional kwargs passed to huggingface_hub.upload_folder."""
+
     private: bool = False
+    """Whether to create a private repo if it doesn't exist."""
+
     commit_batch_size: str = "1GiB"
+    """Maximum size of files to batch in a single commit."""
+
     small_file_limit: str = "5 MiB"
-    """
-    The size limit for small files. Files larger than this will be uploaded using lfs.
-    """
+    """Files smaller than this will be uploaded directly, larger files use LFS."""
 
 
-def upload_dir_to_hf(
-    input_path: str | StepRef,
-    repo_id: str,
-    repo_type: str = "dataset",
-    token: str | None = None,
-    certificate_path: str | None = None,
-    private: bool = False,
-    revision: str | None = None,
-    commit_batch_size: str = "1GiB",
-    **upload_kwargs: str,
-) -> ExecutorStep:
-    """
-    Uploads a path (possibly a GCS path) to a Hugging Face repo.
-    For local paths, it will use the huggingface_hub.upload_folder function. For GCS (or other fsspec paths),
-    it will stream the files using preupload_lfs_files and/or upload_folder
-
-    Args:
-        input_path: path to upload (can be a GCS path)
-        repo_id: the repo id to upload to (e.g. "username/repo_name")
-        repo_type: the type of repo to upload to (e.g. "dataset", "model", etc.)
-        token: the token to use for authentication (if not provided, it will use the default token)
-        revision: the branch to upload to (if not provided, it will use the default branch)
-        certificate_path: where to store the certificate that we uploaded to HF (needed for executor idempotency).
-             If not provided, a reasonable default will be used. Should be a path relative to the executor prefix.
-    Returns:
-        ExecutorStep
-    """
-    if not certificate_path:
-        if isinstance(input_path, StepRef):
-            certificate_path = f"metadata/hf_uploads/{input_path._subpath}"
-        else:
-            # This will drop the scheme (e.g., 'gs') and keep the path
-            parsed = urlparse(input_path)
-            path = parsed.path.lstrip("/")
-            certificate_path = f"metadata/hf_uploads/{path}"
-
-    @step(name=certificate_path, fn=_actually_upload_to_hf)
-    def _upload(ctx: StepContext):
-        # If input_path is a StepRef (from another step), we need to require it
-        if isinstance(input_path, StepRef):
-            actual_input = ctx.require(input_path)
-        else:
-            actual_input = input_path
-
-        return UploadToHfConfig(
-            input_path=actual_input,
-            repo_id=repo_id,
-            repo_type=repo_type,
-            token=token,
-            revision=revision,
-            private=private,
-            commit_batch_size=commit_batch_size,
-            upload_kwargs=upload_kwargs,
-        )
-
-    return _upload()
-
-
-def _actually_upload_to_hf(config: UploadToHfConfig):
+def upload_to_hf(config: UploadToHfConfig):
     from huggingface_hub import CommitOperationAdd, upload_folder
     from huggingface_hub.hf_api import HfApi
     from huggingface_hub.utils import RepositoryNotFoundError
@@ -268,7 +229,7 @@ if __name__ == "__main__":
         with open(os.path.join(tmpdir, "test.txt"), "w") as f:
             f.write("Hello, world!")
 
-        _actually_upload_to_hf(
+        upload_to_hf(
             UploadToHfConfig(
                 tmpdir,
                 repo_id="dlwh/test_uploading_local",
@@ -280,7 +241,7 @@ if __name__ == "__main__":
     with fsspec.open("memory://foo/bar/test.txt", "w") as f:
         f.write("Hello, world!!!!!\nadad :-)")
 
-    _actually_upload_to_hf(
+    upload_to_hf(
         UploadToHfConfig(
             "memory://foo/", repo_id="dlwh/test_uploading_fsspec", repo_type="dataset", small_file_limit="0B"
         )

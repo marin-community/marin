@@ -12,7 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from marin.export.hf_upload import UploadToHfConfig, _actually_upload_to_hf, upload_dir_to_hf
+"""
+Export utilities for uploading artifacts to external services.
+
+This module contains library functions for uploading to Hugging Face Hub
+and converting Levanter checkpoints. For step wrappers that integrate
+with the executor, see experiments.steps.
+"""
+
+from marin.export.hf_upload import UploadToHfConfig, upload_to_hf
 from marin.export.levanter_checkpoint import (
     ConvertCheckpointStepConfig,
     convert_checkpoint_to_hf,

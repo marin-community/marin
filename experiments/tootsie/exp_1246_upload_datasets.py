@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from experiments.steps import upload_dir_to_hf
 from marin.execution.executor import executor_main
-from marin.export.hf_upload import upload_dir_to_hf
 
 medu_exported = upload_dir_to_hf(
     "gs://marin-us-east1/documents/medu-mmlu-science-llama8b-qa-whole-1a419d",
