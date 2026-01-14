@@ -92,6 +92,17 @@ class JobContext(Protocol):
         """
         ...
 
+    def cancel(self, ref: Any) -> bool:
+        """Cancel a pending or running task.
+
+        Args:
+            ref: Reference to the task to cancel
+
+        Returns:
+            True if cancellation was requested successfully
+        """
+        ...
+
     def create_actor(
         self,
         actor_class: type,
@@ -243,6 +254,10 @@ class SyncContext:
         """All futures are immediately ready."""
         return futures[:num_returns], futures[num_returns:]
 
+    def cancel(self, ref: Any) -> bool:
+        """No-op for sync context (execution is immediate)."""
+        return True
+
     def create_actor(
         self,
         actor_class: type,
@@ -337,6 +352,14 @@ class ThreadContext:
         # Map back to wrapped futures
         return [raw_to_wrapped[f] for f in done_list], [raw_to_wrapped[f] for f in pending_list]
 
+    def cancel(self, ref: Any) -> bool:
+        """Cancel a future. Only works if the task hasn't started yet."""
+        if isinstance(ref, GeneratorFuture):
+            return ref._future.cancel()
+        if isinstance(ref, Future):
+            return ref.cancel()
+        return False
+
     def create_actor(
         self,
         actor_class: type,
@@ -401,6 +424,11 @@ class RayContext:
         # driver node, especially for the data futures.
         ready, pending = ray.wait(futures, num_returns=num_returns, fetch_local=False)
         return list(ready), list(pending)
+
+    def cancel(self, ref: Any) -> bool:
+        """Cancel a Ray task."""
+        ray.cancel(ref, force=True)
+        return True
 
     def create_actor(
         self,

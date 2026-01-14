@@ -17,9 +17,13 @@
 import gzip
 import io
 import json
+import threading
+import time
 
+import pytest
 import ray
 from fray.job import create_job_ctx
+from zephyr import Backend, Dataset
 from zephyr.backends import format_shard_path
 from zephyr.writers import write_jsonl_file
 
@@ -146,3 +150,30 @@ def test_write_jsonl_infers_compression_from_zst_extension(tmp_path):
             assert len(lines) == 2
             assert json.loads(lines[0]) == {"id": 1, "text": "hello"}
             assert json.loads(lines[1]) == {"id": 2, "text": "world"}
+
+
+def test_backend_cancels_tasks_on_failure():
+    """Test that tasks are cancelled when one fails."""
+    completed_tasks = []
+    lock = threading.Lock()
+
+    def task(job):
+        task_id = job["id"]
+        if task_id == 0:
+            raise RuntimeError("Task 0 failed")
+        time.sleep(0.3)
+        with lock:
+            completed_tasks.append(task_id)
+        return {"id": task_id}
+
+    jobs = [{"id": i} for i in range(4)]
+
+    with pytest.raises(RuntimeError):
+        list(Backend.execute(Dataset.from_list(jobs).map(task)))
+
+    # Wait a bit to ensure any orphaned tasks would have completed
+    time.sleep(0.5)
+
+    # No tasks should have completed after the failure
+    with lock:
+        assert len(completed_tasks) == 0, f"Tasks {completed_tasks} completed after failure"

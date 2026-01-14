@@ -359,6 +359,15 @@ class Backend:
 
         yield from tqdm(materialize_all(), desc=desc, unit="shards", total=len(shards))
 
+    def _cancel_pending_tasks(self, refs: list) -> None:
+        """Cancel pending task references on failure."""
+        logger.info(f"Attempting to cancel {len(refs)} pending tasks.")
+        for ref in refs:
+            try:
+                self.context.cancel(ref)
+            except Exception as e:
+                logger.warning(f"Failed to cancel task: {e}")
+
     def _run_tasks(
         self,
         contexts: list[StageContext],
@@ -386,25 +395,30 @@ class Backend:
             ctx = queued.pop(0)
             active_gens.append((self.context.run(run_stage, ctx, operations), ctx))
 
-        # Process results
-        while active_gens or queued:
-            gen_objs = [g for g, _ in active_gens]
-            ready, _ = self.context.wait(gen_objs, num_returns=1)
+        try:
+            # Process results
+            while active_gens or queued:
+                gen_objs = [g for g, _ in active_gens]
+                ready, _ = self.context.wait(gen_objs, num_returns=1)
 
-            for ready_gen in ready:
-                # Find matching entry
-                for g, ctx in active_gens:
-                    if g is ready_gen:
-                        try:
-                            header = self.context.get(next(ready_gen))
-                            data_ref = next(ready_gen)
-                            results_by_shard[header.shard_idx].append((header, data_ref))
-                        except StopIteration:
-                            active_gens.remove((g, ctx))
-                            if queued:
-                                next_ctx = queued.pop(0)
-                                active_gens.append((self.context.run(run_stage, next_ctx, operations), next_ctx))
-                        break
+                for ready_gen in ready:
+                    # Find matching entry
+                    for g, ctx in active_gens:
+                        if g is ready_gen:
+                            try:
+                                header = self.context.get(next(ready_gen))
+                                data_ref = next(ready_gen)
+                                results_by_shard[header.shard_idx].append((header, data_ref))
+                            except StopIteration:
+                                active_gens.remove((g, ctx))
+                                if queued:
+                                    next_ctx = queued.pop(0)
+                                    active_gens.append((self.context.run(run_stage, next_ctx, operations), next_ctx))
+                            break
+        except Exception:
+            # Cancel all pending/running tasks before re-raising
+            self._cancel_pending_tasks([g for g, _ in active_gens])
+            raise
 
         return results_by_shard
 
