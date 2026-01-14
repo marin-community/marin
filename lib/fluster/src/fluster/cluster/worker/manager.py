@@ -25,10 +25,23 @@ from pathlib import Path
 import cloudpickle
 
 from fluster import cluster_pb2
-from fluster.cluster.worker.builder import ImageCache, VenvCache
-from fluster.cluster.worker.bundle import BundleCache
+from fluster.cluster.worker.builder import ImageProvider, VenvCache
+from fluster.cluster.worker.bundle import BundleProvider
 from fluster.cluster.worker.docker import ContainerConfig, ContainerRuntime
 from fluster.cluster.worker.worker_types import Job, collect_workdir_size_mb
+
+
+def _rewrite_address_for_container(address: str) -> str:
+    """Rewrite localhost addresses to host.docker.internal for container access.
+
+    Docker containers on Mac/Windows cannot reach host localhost directly.
+    Using host.docker.internal works cross-platform when combined with
+    --add-host=host.docker.internal:host-gateway on Linux.
+    """
+    for localhost in ("127.0.0.1", "localhost", "0.0.0.0"):
+        if localhost in address:
+            return address.replace(localhost, "host.docker.internal")
+    return address
 
 
 class PortAllocator:
@@ -93,9 +106,9 @@ class JobManager:
 
     def __init__(
         self,
-        bundle_cache: BundleCache,
+        bundle_cache: BundleProvider,
         venv_cache: VenvCache,
-        image_cache: ImageCache,
+        image_cache: ImageProvider,
         runtime: ContainerRuntime,
         port_allocator: PortAllocator,
         max_concurrent_jobs: int = 10,
@@ -225,7 +238,7 @@ class JobManager:
                 env["FLUSTER_WORKER_ID"] = self._worker_id
 
             if self._controller_address:
-                env["FLUSTER_CONTROLLER_ADDRESS"] = self._controller_address
+                env["FLUSTER_CONTROLLER_ADDRESS"] = _rewrite_address_for_container(self._controller_address)
 
             # Inject allocated ports
             for name, port in job.ports.items():

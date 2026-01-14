@@ -18,6 +18,7 @@ import hashlib
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from fluster.cluster.worker.docker import DockerImageBuilder
 from fluster.cluster.worker.worker_types import JobLogs
@@ -64,6 +65,22 @@ class BuildResult:
     from_cache: bool
 
 
+class ImageProvider(Protocol):
+    """Protocol for Docker image management. Mock this for testing."""
+
+    def build(
+        self,
+        bundle_path: Path,
+        base_image: str,
+        extras: list[str],
+        job_id: str,
+        deps_hash: str,
+        job_logs: JobLogs | None = None,
+    ) -> BuildResult:
+        """Build Docker image for job. Returns cached image if deps_hash matches."""
+        ...
+
+
 DOCKERFILE_TEMPLATE = """FROM {base_image}
 
 # Install git (required for git-based dependencies) and UV
@@ -83,15 +100,14 @@ WORKDIR /app
 
 # TODO cache dependencies once across jobs just for usefulness
 
-# Layer 1: Dependencies (cached when pyproject.toml/uv.lock unchanged)
-COPY pyproject.toml uv.lock* ./
-RUN --mount=type=cache,id=fluster-uv-global,sharing=locked,target=/opt/uv-cache \\
-    uv sync --frozen --no-install-project {extras_flags}
-
-# Layer 2: Source code + install
+# Copy workspace contents
+# Path dependencies referenced in [tool.uv.sources] must be present before uv sync.
+# We copy everything upfront to support workspaces with local path dependencies.
 COPY . .
+
+# Install all dependencies and project
 RUN --mount=type=cache,id=fluster-uv-global,sharing=locked,target=/opt/uv-cache \\
-    uv sync --frozen --no-editable {extras_flags}
+    uv sync --frozen {extras_flags}
 
 # Use the venv python
 ENV PATH="/app/.venv/bin:$PATH"

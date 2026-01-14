@@ -19,8 +19,17 @@ import threading
 import zipfile
 from collections import defaultdict
 from pathlib import Path
+from typing import Protocol
 
 import fsspec
+
+
+class BundleProvider(Protocol):
+    """Protocol for bundle retrieval. Mock this for testing."""
+
+    def get_bundle(self, gcs_path: str, expected_hash: str | None = None) -> Path:
+        """Download/retrieve bundle and return path to extracted directory."""
+        ...
 
 
 class BundleCache:

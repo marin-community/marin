@@ -158,6 +158,10 @@ message LaunchJobRequest {
   // Scheduling timeout - job fails with UNSCHEDULABLE if not scheduled within this time
   // 0 means no timeout (wait forever)
   int32 scheduling_timeout_seconds = 8;
+
+  // Named ports to allocate (e.g., ["http", "grpc", "actor"])
+  // Worker allocates ports and injects FLUSTER_PORT_<NAME> env vars into the container
+  repeated string ports = 9;
 }
 
 message LaunchJobResponse {

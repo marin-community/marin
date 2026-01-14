@@ -37,10 +37,10 @@ from pathlib import Path
 import uvicorn
 
 from fluster import cluster_pb2
-from fluster.cluster.worker.builder import ImageCache, VenvCache
-from fluster.cluster.worker.bundle import BundleCache
+from fluster.cluster.worker.builder import ImageCache, ImageProvider, VenvCache
+from fluster.cluster.worker.bundle import BundleCache, BundleProvider
 from fluster.cluster.worker.dashboard import WorkerDashboard
-from fluster.cluster.worker.docker import DockerRuntime
+from fluster.cluster.worker.docker import ContainerRuntime, DockerRuntime
 from fluster.cluster.worker.manager import JobManager, PortAllocator
 from fluster.cluster.worker.service import WorkerServiceImpl
 
@@ -98,12 +98,18 @@ class Worker:
         self,
         config: WorkerConfig,
         cache_dir: Path | None = None,
+        bundle_provider: BundleProvider | None = None,
+        image_provider: ImageProvider | None = None,
+        container_runtime: ContainerRuntime | None = None,
     ):
         """Initialize worker components.
 
         Args:
             config: Worker configuration
             cache_dir: Override cache directory from config
+            bundle_provider: Optional bundle provider for testing
+            image_provider: Optional image provider for testing
+            container_runtime: Optional container runtime for testing
         """
         self._config = config
 
@@ -121,15 +127,15 @@ class Worker:
 
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize components bottom-up
-        self._bundle_cache = BundleCache(self._cache_dir, max_bundles=100)
+        # Use overrides if provided, otherwise create defaults
+        self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
         self._venv_cache = VenvCache()
-        self._image_cache = ImageCache(
+        self._image_cache = image_provider or ImageCache(
             self._cache_dir,
             registry=config.registry,
             max_images=50,
         )
-        self._runtime = DockerRuntime()
+        self._runtime = container_runtime or DockerRuntime()
         self._port_allocator = PortAllocator(config.port_range)
 
         self._job_manager = JobManager(

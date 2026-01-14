@@ -31,15 +31,22 @@ Scheduler. It focuses on proto message conversion and error handling.
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from fluster import cluster_pb2
-from fluster.cluster.controller.scheduler import Scheduler
 from fluster.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState, ControllerWorker
 from fluster.cluster.types import JobId, WorkerId, is_job_finished
+
+
+class SchedulerProtocol(Protocol):
+    """Protocol for scheduler operations used by ControllerServiceImpl."""
+
+    def wake(self) -> None:
+        """Signal scheduler to run immediately."""
+        ...
 
 
 class ControllerServiceImpl:
@@ -50,14 +57,14 @@ class ControllerServiceImpl:
 
     Args:
         state: Controller state containing jobs and workers
-        scheduler: Background scheduler for job dispatch
+        scheduler: Background scheduler for job dispatch (any object with wake() method)
         bundle_dir: Directory for storing uploaded bundles (optional)
     """
 
     def __init__(
         self,
         state: ControllerState,
-        scheduler: Scheduler,
+        scheduler: SchedulerProtocol,
         bundle_dir: str | Path | None = None,
     ):
         self._state = state

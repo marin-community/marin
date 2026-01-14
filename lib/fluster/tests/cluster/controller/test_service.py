@@ -21,7 +21,6 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from fluster import cluster_pb2
-from fluster.cluster.controller.scheduler import Scheduler
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerJob, ControllerState
 from fluster.cluster.types import JobId, WorkerId
@@ -58,18 +57,23 @@ def state():
     return ControllerState()
 
 
-@pytest.fixture
-def scheduler(state):
-    """Create a mock scheduler."""
-    # Use a mock dispatch function that always succeeds
-    mock_dispatch = Mock(return_value=True)
-    return Scheduler(state, mock_dispatch)
+class MockSchedulerWake:
+    """Mock object that just tracks wake() calls."""
+
+    def __init__(self):
+        self.wake = Mock()
 
 
 @pytest.fixture
-def service(state, scheduler):
+def mock_scheduler():
+    """Create a mock scheduler with wake() method."""
+    return MockSchedulerWake()
+
+
+@pytest.fixture
+def service(state, mock_scheduler):
     """Create a ControllerServiceImpl for testing."""
-    return ControllerServiceImpl(state, scheduler)
+    return ControllerServiceImpl(state, mock_scheduler)
 
 
 def test_launch_job_returns_job_id(service, make_job_request):
@@ -89,16 +93,13 @@ def test_launch_job_returns_job_id(service, make_job_request):
     assert job.request.name == "test-job"
 
 
-def test_launch_job_wakes_scheduler(service, scheduler, make_job_request):
+def test_launch_job_wakes_scheduler(service, mock_scheduler, make_job_request):
     """Verify launch_job wakes the scheduler."""
-    # Spy on scheduler.wake()
-    scheduler.wake = Mock()
-
     request = make_job_request("test-job")
     service.launch_job(request, None)
 
     # Should have called wake() once
-    scheduler.wake.assert_called_once()
+    mock_scheduler.wake.assert_called_once()
 
 
 def test_get_job_status_returns_status(service, state, make_job_request):

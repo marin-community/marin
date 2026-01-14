@@ -25,7 +25,6 @@ from connectrpc.request import RequestContext
 
 from fluster import cluster_pb2
 from fluster.actor.resolver import ClusterResolver
-from fluster.cluster.controller.scheduler import Scheduler
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState
 from fluster.cluster.types import JobId, Namespace
@@ -90,15 +89,17 @@ class AsyncControllerServiceWrapper:
         return self._service.list_endpoints(request, ctx)
 
 
+class MockSchedulerWake:
+    """Mock object for scheduler wake interface."""
+
+    def wake(self):
+        pass
+
+
 def create_controller_app(state: ControllerState) -> ControllerServiceASGIApplication:
     """Create a minimal controller app with ListEndpoints handler."""
-
-    def mock_dispatch(job, worker):
-        """Mock dispatch function for scheduler (unused in tests)."""
-        return True
-
-    scheduler = Scheduler(state, mock_dispatch, interval_seconds=1.0)
-    service = ControllerServiceImpl(state, scheduler)
+    mock_scheduler = MockSchedulerWake()
+    service = ControllerServiceImpl(state, mock_scheduler)
     async_service = AsyncControllerServiceWrapper(service)
 
     return ControllerServiceASGIApplication(service=async_service)

@@ -108,8 +108,8 @@ class WorkerServiceImpl:
         # Apply additional filters
         result = []
         for entry in logs:
-            # Time range filter
-            if request.filter.start_ms and entry.timestamp_ms < request.filter.start_ms:
+            # Time range filter (start_ms is exclusive for incremental polling)
+            if request.filter.start_ms and entry.timestamp_ms <= request.filter.start_ms:
                 continue
             if request.filter.end_ms and entry.timestamp_ms > request.filter.end_ms:
                 continue

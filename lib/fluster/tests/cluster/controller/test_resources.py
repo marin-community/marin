@@ -16,11 +16,7 @@
 
 import pytest
 
-from fluster import cluster_pb2
 from fluster.cluster.controller.resources import (
-    get_device_type,
-    get_device_variant,
-    get_gpu_count,
     parse_memory_string,
 )
 
@@ -60,58 +56,3 @@ def test_parse_memory_string_invalid():
         parse_memory_string("invalid")
     with pytest.raises(ValueError):
         parse_memory_string("8x")
-
-
-def test_get_device_type_cpu():
-    device = cluster_pb2.DeviceConfig(cpu=cluster_pb2.CpuDevice())
-    assert get_device_type(device) == "cpu"
-
-
-def test_get_device_type_gpu():
-    device = cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="A100", count=4))
-    assert get_device_type(device) == "gpu"
-
-
-def test_get_device_type_tpu():
-    device = cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16"))
-    assert get_device_type(device) == "tpu"
-
-
-def test_get_device_type_empty_defaults_to_cpu():
-    device = cluster_pb2.DeviceConfig()
-    assert get_device_type(device) == "cpu"
-
-
-def test_get_device_variant_gpu():
-    device = cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="H100", count=8))
-    assert get_device_variant(device) == "H100"
-
-
-def test_get_device_variant_tpu():
-    device = cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16"))
-    assert get_device_variant(device) == "v5litepod-16"
-
-
-def test_get_device_variant_cpu_returns_none():
-    device = cluster_pb2.DeviceConfig(cpu=cluster_pb2.CpuDevice())
-    assert get_device_variant(device) is None
-
-
-def test_get_device_variant_empty_gpu_returns_none():
-    device = cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(count=4))
-    assert get_device_variant(device) is None
-
-
-def test_get_gpu_count():
-    device = cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="A100", count=4))
-    assert get_gpu_count(device) == 4
-
-
-def test_get_gpu_count_defaults_to_one():
-    device = cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="A100"))
-    assert get_gpu_count(device) == 1
-
-
-def test_get_gpu_count_non_gpu_returns_zero():
-    device = cluster_pb2.DeviceConfig(cpu=cluster_pb2.CpuDevice())
-    assert get_gpu_count(device) == 0

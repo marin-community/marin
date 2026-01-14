@@ -21,7 +21,6 @@ from starlette.testclient import TestClient
 
 from fluster import cluster_pb2
 from fluster.cluster.controller.dashboard import ControllerDashboard
-from fluster.cluster.controller.scheduler import Scheduler
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
 from fluster.cluster.types import JobId, WorkerId
@@ -32,15 +31,21 @@ def state():
     return ControllerState()
 
 
-@pytest.fixture
-def scheduler(state):
-    mock_dispatch = Mock(return_value=True)
-    return Scheduler(state, mock_dispatch)
+class MockSchedulerWake:
+    """Mock object that just tracks wake() calls."""
+
+    def __init__(self):
+        self.wake = Mock()
 
 
 @pytest.fixture
-def service(state, scheduler):
-    return ControllerServiceImpl(state, scheduler)
+def mock_scheduler():
+    return MockSchedulerWake()
+
+
+@pytest.fixture
+def service(state, mock_scheduler):
+    return ControllerServiceImpl(state, mock_scheduler)
 
 
 @pytest.fixture

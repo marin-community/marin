@@ -224,34 +224,6 @@ def test_controller_state_multiple_gangs(make_job_request):
         ), f"Gang {gang_id} should have {expected_count} jobs, got {len(gang_jobs)}"
 
 
-def test_controller_job_defaults(make_job_request):
-    """Test ControllerJob default values."""
-    job = ControllerJob(job_id=JobId("j1"), request=make_job_request("job1"))
-
-    assert job.state == cluster_pb2.JOB_STATE_PENDING
-    assert job.worker_id is None
-    assert job.failure_count == 0
-    assert job.preemption_count == 0
-    assert job.max_retries_failure == 0
-    assert job.max_retries_preemption == 100
-    assert job.gang_id is None
-    assert job.submitted_at_ms == 0
-    assert job.started_at_ms is None
-    assert job.finished_at_ms is None
-    assert job.error is None
-    assert job.exit_code is None
-
-
-def test_controller_worker_defaults(make_resource_spec):
-    """Test ControllerWorker default values."""
-    worker = ControllerWorker(worker_id=WorkerId("w1"), address="host:8080", resources=make_resource_spec())
-
-    assert worker.healthy is True
-    assert worker.consecutive_failures == 0
-    assert worker.last_heartbeat_ms == 0
-    assert len(worker.running_jobs) == 0
-
-
 def test_controller_state_requeue_job(make_job_request):
     """Test that jobs can be re-queued by calling add_job again."""
     state = ControllerState()

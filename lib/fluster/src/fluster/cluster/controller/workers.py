@@ -113,10 +113,15 @@ def worker_can_fit_job(
     state: ControllerState,
     worker: ControllerWorker,
     job: ControllerJob,
+    additional_jobs: list[ControllerJob] | None = None,
 ) -> bool:
     """Check if worker has sufficient available capacity for job.
 
-    Computes available headroom dynamically from running_jobs:
+    Computes available headroom dynamically from running_jobs plus any
+    additional jobs that have been assigned in the current scheduling round
+    but not yet dispatched.
+
+    Checks:
     1. CPU: job.cpu <= worker.total_cpu - committed_cpu
     2. Memory: job.memory <= worker.total_memory - committed_memory
     3. Device type: exact match (GPU job only on GPU worker)
@@ -127,6 +132,8 @@ def worker_can_fit_job(
         state: Controller state for job lookups
         worker: Worker to check capacity
         job: Job with resource requirements
+        additional_jobs: Jobs assigned this scheduling round but not yet
+                        reflected in worker.running_jobs
 
     Returns:
         True if worker can fit the job
@@ -134,8 +141,16 @@ def worker_can_fit_job(
     job_resources = job.request.resources
     worker_resources = worker.resources
 
-    # Get committed resources dynamically
+    # Get committed resources dynamically from running jobs
     committed_cpu, committed_memory, committed_gpu = get_committed_resources(state, worker)
+
+    # Add resources from jobs assigned this round but not yet dispatched
+    if additional_jobs:
+        for additional_job in additional_jobs:
+            add_resources = additional_job.request.resources
+            committed_cpu += add_resources.cpu
+            committed_memory += parse_memory_string(add_resources.memory)
+            committed_gpu += get_gpu_count(add_resources.device)
 
     # CPU check
     available_cpu = worker_resources.cpu - committed_cpu

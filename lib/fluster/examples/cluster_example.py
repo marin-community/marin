@@ -28,6 +28,7 @@ Usage:
 
 import socket
 import tempfile
+import threading
 import time
 import uuid
 import zipfile
@@ -37,8 +38,8 @@ import click
 import cloudpickle
 from fluster import cluster_pb2
 from fluster.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
-from fluster.cluster.controller.controller import Controller, ControllerConfig
-from fluster.cluster.types import Entrypoint, JobId, WorkerId
+from fluster.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
+from fluster.cluster.types import Entrypoint
 from fluster.cluster.worker.worker import Worker, WorkerConfig
 
 
@@ -54,21 +55,45 @@ MINIMAL_PYPROJECT = """\
 name = "fluster-example"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["cloudpickle"]
+dependencies = [
+    "cloudpickle",
+    "fluster",
+]
+
+[tool.uv.sources]
+fluster = { path = "./fluster" }
 """
 
 
 def create_minimal_workspace(temp_dir: Path) -> Path:
-    """Create a minimal workspace with pyproject.toml and uv.lock."""
+    """Create a minimal workspace with pyproject.toml, uv.lock, and fluster source."""
     workspace = temp_dir / "workspace"
     workspace.mkdir(exist_ok=True)
 
-    # Write minimal pyproject.toml
+    # Write minimal pyproject.toml with fluster dependency
     (workspace / "pyproject.toml").write_text(MINIMAL_PYPROJECT)
 
-    # Generate uv.lock
+    # Copy fluster project into workspace for bundling
+    # This makes the bundle self-contained
+    # __file__ = lib/fluster/examples/cluster_example.py
+    # parent = lib/fluster/examples/
+    # parent.parent = lib/fluster/ (the fluster project root)
+    fluster_project_root = Path(__file__).parent.parent
+    fluster_dest = workspace / "fluster"
+
+    import shutil
     import subprocess
 
+    # Copy only the essential files: pyproject.toml and src/
+    fluster_dest.mkdir(exist_ok=True)
+    shutil.copy2(fluster_project_root / "pyproject.toml", fluster_dest / "pyproject.toml")
+    shutil.copytree(
+        fluster_project_root / "src",
+        fluster_dest / "src",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.egg-info"),
+    )
+
+    # Generate uv.lock with the bundled fluster source
     subprocess.run(
         ["uv", "lock"],
         cwd=workspace,
@@ -85,6 +110,81 @@ def create_workspace_bundle(workspace: Path, output_path: Path) -> None:
         for file in workspace.rglob("*"):
             if file.is_file():
                 zf.write(file, file.relative_to(workspace))
+
+
+class LogPoller:
+    """Background thread that polls for job logs and prints them."""
+
+    def __init__(
+        self,
+        job_id: str,
+        worker_address: str,
+        poll_interval: float = 1.0,
+        prefix: str = "",
+    ):
+        """Initialize log poller.
+
+        Args:
+            job_id: Job ID to poll logs for
+            worker_address: Worker RPC address (e.g., "http://127.0.0.1:8080")
+            poll_interval: How often to poll for new logs (in seconds)
+            prefix: Optional prefix to add to log lines (e.g., "[calculator] ")
+        """
+        self._job_id = job_id
+        self._worker_address = worker_address
+        self._poll_interval = poll_interval
+        self._prefix = prefix
+        self._last_timestamp_ms = 0
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self):
+        """Start polling for logs in background thread."""
+        if self._thread is not None:
+            return  # Already started
+
+        def _poll():
+            client = WorkerServiceClientSync(address=self._worker_address, timeout_ms=5000)
+
+            while not self._stop_event.is_set():
+                try:
+                    # Build filter with timestamp for incremental fetching
+                    filter_proto = cluster_pb2.FetchLogsFilter()
+                    if self._last_timestamp_ms > 0:
+                        filter_proto.start_ms = self._last_timestamp_ms
+
+                    request = cluster_pb2.FetchLogsRequest(
+                        job_id=self._job_id,
+                        filter=filter_proto,
+                    )
+                    response = client.fetch_logs(request)
+
+                    for entry in response.logs:
+                        # Update last seen timestamp
+                        if entry.timestamp_ms > self._last_timestamp_ms:
+                            self._last_timestamp_ms = entry.timestamp_ms
+
+                        # Print log with prefix
+                        print(f"{self._prefix}{entry.data}", flush=True)
+
+                except Exception:
+                    # Ignore errors (job may not exist yet, worker starting, etc.)
+                    pass
+
+                # Wait for next poll interval
+                self._stop_event.wait(self._poll_interval)
+
+        self._thread = threading.Thread(target=_poll, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        """Stop polling thread."""
+        if self._thread is None:
+            return
+
+        self._stop_event.set()
+        self._thread.join(timeout=2.0)
+        self._thread = None
 
 
 class ClusterContext:
@@ -128,6 +228,9 @@ class ClusterContext:
         # Cached bundle
         self._bundle_blob: bytes | None = None
 
+        # Log polling
+        self._log_pollers: dict[str, LogPoller] = {}
+
     def __enter__(self):
         """Start controller and worker."""
         self._temp_dir = tempfile.TemporaryDirectory(prefix="cluster_")
@@ -164,9 +267,7 @@ class ClusterContext:
         )
         self._controller = Controller(
             config=controller_config,
-            dispatch_fn=self._dispatch_job,
-            heartbeat_fn=self._send_heartbeat,
-            on_worker_failed=self._on_worker_failed,
+            worker_stub_factory=DefaultWorkerStubFactory(),
         )
         self._controller.start()
         print(f"Controller server should be at http://127.0.0.1:{self._controller_port}", flush=True)
@@ -193,8 +294,37 @@ class ClusterContext:
         print("Cluster startup complete!", flush=True)
         return self
 
+    def start_log_polling(self, job_id: str, poll_interval: float = 1.0, prefix: str = ""):
+        """Start a background thread that polls for job logs.
+
+        Args:
+            job_id: Job ID to poll logs for
+            poll_interval: How often to poll for new logs (in seconds)
+            prefix: Optional prefix to add to log lines (e.g., "[calculator] ")
+        """
+        if job_id in self._log_pollers:
+            return  # Already polling
+
+        poller = LogPoller(job_id, self.worker_url, poll_interval, prefix)
+        poller.start()
+        self._log_pollers[job_id] = poller
+
+    def stop_log_polling(self, job_id: str):
+        """Stop log polling for a job.
+
+        Args:
+            job_id: Job ID to stop polling for
+        """
+        poller = self._log_pollers.pop(job_id, None)
+        if poller:
+            poller.stop()
+
     def __exit__(self, *args):
         """Stop cluster and cleanup."""
+        # Stop all log polling threads
+        for job_id in list(self._log_pollers.keys()):
+            self.stop_log_polling(job_id)
+
         if self._controller_client:
             self._controller_client.close()
 
@@ -206,58 +336,6 @@ class ClusterContext:
 
         if self._temp_dir:
             self._temp_dir.cleanup()
-
-    def _dispatch_job(self, job, worker) -> bool:
-        """Dispatch job to worker (called by scheduler in its thread)."""
-        try:
-            worker_client = WorkerServiceClientSync(
-                address=f"http://{worker.address}",
-                timeout_ms=10000,
-            )
-            request = cluster_pb2.RunJobRequest(
-                job_id=str(job.job_id),
-                serialized_entrypoint=job.request.serialized_entrypoint,
-                environment=cluster_pb2.EnvironmentConfig(
-                    workspace=job.request.environment.workspace,
-                    env_vars=dict(job.request.environment.env_vars),
-                ),
-                bundle_gcs_path=job.request.bundle_gcs_path,
-                resources=cluster_pb2.ResourceSpec(
-                    cpu=job.request.resources.cpu,
-                    memory=job.request.resources.memory,
-                ),
-            )
-            worker_client.run_job(request)
-            return True
-        except Exception as e:
-            print(f"Dispatch failed: {e}")
-            return False
-
-    def _send_heartbeat(self, address: str):
-        """Send heartbeat to worker (called by heartbeat monitor)."""
-        try:
-            worker_client = WorkerServiceClientSync(
-                address=f"http://{address}",
-                timeout_ms=5000,
-            )
-
-            # Send health check
-            worker_client.health_check(cluster_pb2.Empty())
-
-            # Get job statuses from worker
-            jobs_response = worker_client.list_jobs(cluster_pb2.ListJobsRequest())
-
-            # Convert to heartbeat response format
-            return cluster_pb2.HeartbeatResponse(
-                jobs=jobs_response.jobs,
-                timestamp_ms=int(time.time() * 1000),
-            )
-        except Exception:
-            return None
-
-    def _on_worker_failed(self, worker_id: WorkerId, job_ids: list[JobId]):
-        """Handle worker failure."""
-        print(f"Worker {worker_id} failed with jobs: {job_ids}")
 
     def _register_worker(self):
         """Register worker with controller."""
@@ -370,8 +448,17 @@ class ClusterContext:
 
         raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
 
-    def logs(self, job_id: str) -> list[str]:
-        """Get job logs from worker."""
+    def logs(self, job_id: str, since_ms: int | None = None) -> list[cluster_pb2.LogEntry]:
+        """Get job logs from worker.
+
+        Args:
+            job_id: Job ID
+            since_ms: Only return logs after this timestamp (milliseconds since epoch).
+                     If None, returns all logs.
+
+        Returns:
+            List of LogEntry protos with timestamp_ms, source, and data.
+        """
         # Find the worker that has this job
         status = self.status(job_id)
         worker_id = status.get("workerId")
@@ -384,9 +471,15 @@ class ClusterContext:
             address=f"http://127.0.0.1:{self._worker_port}",
             timeout_ms=10000,
         )
-        request = cluster_pb2.FetchLogsRequest(job_id=job_id)
+
+        # Build filter with optional timestamp
+        filter_proto = cluster_pb2.FetchLogsFilter()
+        if since_ms is not None:
+            filter_proto.start_ms = since_ms
+
+        request = cluster_pb2.FetchLogsRequest(job_id=job_id, filter=filter_proto)
         response = worker_client.fetch_logs(request)
-        return [entry.data for entry in response.logs]
+        return list(response.logs)
 
     def kill(self, job_id: str) -> None:
         """Kill a job via controller."""
@@ -461,7 +554,8 @@ def example_actor_job_workflow(cluster: ClusterContext):
 
         # Start the ActorServer
         # Use 0.0.0.0 to bind to all interfaces (necessary inside Docker)
-        server = ActorServer(host="0.0.0.0", port=8080)
+        # Use port=0 to let the OS pick a free port
+        server = ActorServer(host="0.0.0.0", port=0)
         server.register("calculator", Calculator())
         port = server.serve_background()
         print(f"ActorServer started on port {port}")
@@ -505,6 +599,10 @@ def example_actor_job_workflow(cluster: ClusterContext):
         namespace="<local>",
     )
     print(f"Job submitted: {job_id}")
+
+    # Start log polling in background thread
+    print("Starting log polling...")
+    cluster.start_log_polling(job_id, poll_interval=1.0, prefix="[calculator] ")
 
     # Step 3: Wait for the job to start and endpoint to be registered
     print("Waiting for job to start...")

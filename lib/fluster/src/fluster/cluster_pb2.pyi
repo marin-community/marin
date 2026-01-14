@@ -164,7 +164,7 @@ class EnvironmentConfig(_message.Message):
     def __init__(self, workspace: _Optional[str] = ..., pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class LaunchJobRequest(_message.Message):
-    __slots__ = ("name", "serialized_entrypoint", "resources", "environment", "bundle_gcs_path", "bundle_hash", "bundle_blob", "scheduling_timeout_seconds")
+    __slots__ = ("name", "serialized_entrypoint", "resources", "environment", "bundle_gcs_path", "bundle_hash", "bundle_blob", "scheduling_timeout_seconds", "ports")
     NAME_FIELD_NUMBER: _ClassVar[int]
     SERIALIZED_ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
     RESOURCES_FIELD_NUMBER: _ClassVar[int]
@@ -173,6 +173,7 @@ class LaunchJobRequest(_message.Message):
     BUNDLE_HASH_FIELD_NUMBER: _ClassVar[int]
     BUNDLE_BLOB_FIELD_NUMBER: _ClassVar[int]
     SCHEDULING_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    PORTS_FIELD_NUMBER: _ClassVar[int]
     name: str
     serialized_entrypoint: bytes
     resources: ResourceSpec
@@ -181,7 +182,8 @@ class LaunchJobRequest(_message.Message):
     bundle_hash: str
     bundle_blob: bytes
     scheduling_timeout_seconds: int
-    def __init__(self, name: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout_seconds: _Optional[int] = ...) -> None: ...
+    ports: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, name: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout_seconds: _Optional[int] = ..., ports: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class LaunchJobResponse(_message.Message):
     __slots__ = ("job_id",)
