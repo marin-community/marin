@@ -526,7 +526,292 @@ class ClusterContext:
 
 
 # =============================================================================
-# EXAMPLE FUNCTIONS
+# ACTOR SYSTEM EXAMPLES
+# =============================================================================
+
+
+def example_actor_basic(cluster: ClusterContext):
+    """Demonstrate basic actor pattern with method calls.
+
+    This example shows:
+    - Creating and registering an actor server
+    - Using ActorClient to discover and call actor methods
+    - Passing arguments and returning results
+    """
+    print("\n=== Example: Basic Actor Pattern ===\n")
+
+    from fluster.actor import ActorClient, ActorServer, ClusterResolver
+
+    # Define a simple actor class with methods
+    class Calculator:
+        def __init__(self):
+            self._history = []
+
+        def add(self, a: int, b: int) -> int:
+            result = a + b
+            self._history.append(f"add({a}, {b}) = {result}")
+            print(f"Calculator: {a} + {b} = {result}")
+            return result
+
+        def multiply(self, a: int, b: int) -> int:
+            result = a * b
+            self._history.append(f"multiply({a}, {b}) = {result}")
+            print(f"Calculator: {a} * {b} = {result}")
+            return result
+
+        def get_history(self) -> list[str]:
+            return self._history
+
+    # Start an actor server and register the calculator
+    server = ActorServer(host="127.0.0.1", port=0)
+    server.register("calculator", Calculator())
+    port = server.serve_background()
+    print(f"Started actor server on port {port}")
+
+    # Register the actor endpoint with the controller
+    # In a real cluster, this would be done automatically
+    assert cluster._client is not None
+    response = cluster._client.post(
+        "/fluster.cluster.ControllerService/RegisterEndpoint",
+        headers={"Content-Type": "application/json"},
+        json={
+            "name": "calculator",
+            "address": f"127.0.0.1:{port}",
+            "jobId": cluster._worker_id,  # Use worker ID as job ID for this example
+            "namespace": "<local>",
+            "metadata": {},
+        },
+    )
+    if response.status_code != 200:
+        print(f"Warning: Failed to register endpoint: {response.text}")
+
+    # Create a resolver that uses the controller's endpoint registry
+    resolver = ClusterResolver(cluster.controller_url, namespace="<local>")
+
+    # Create a client and call actor methods
+    client = ActorClient(resolver, "calculator")
+
+    result1 = client.add(10, 20)
+    print(f"Client received: {result1}")
+
+    result2 = client.multiply(5, 7)
+    print(f"Client received: {result2}")
+
+    history = client.get_history()
+    print(f"Operation history: {history}")
+
+
+def example_actor_coordinator(cluster: ClusterContext):
+    """Demonstrate coordinator pattern where workers fetch tasks from a coordinator.
+
+    This example shows:
+    - A coordinator actor that manages a queue of tasks
+    - Worker actors that fetch tasks, process them, and report results
+    - Context injection for actors to communicate with each other
+    """
+    print("\n=== Example: Coordinator Pattern ===\n")
+
+    from fluster.actor import ActorClient, ActorContext, ActorServer, ClusterResolver, current_ctx
+
+    # Coordinator actor manages tasks and collects results
+    class Coordinator:
+        def __init__(self):
+            self._tasks = [{"id": i, "data": i * 10} for i in range(5)]
+            self._results = []
+            self._completed = 0
+
+        def get_next_task(self) -> dict | None:
+            if self._tasks:
+                task = self._tasks.pop(0)
+                print(f"Coordinator: Dispatching task {task['id']}")
+                return task
+            return None
+
+        def report_result(self, task_id: int, result: int) -> None:
+            self._results.append({"task_id": task_id, "result": result})
+            self._completed += 1
+            print(f"Coordinator: Received result for task {task_id}: {result} ({self._completed}/5 complete)")
+
+        def get_summary(self) -> dict:
+            return {"completed": self._completed, "pending": len(self._tasks), "results": self._results}
+
+    # Worker actor fetches tasks from coordinator
+    class Worker:
+        def __init__(self, worker_id: str):
+            self._worker_id = worker_id
+
+        def process_tasks(self) -> int:
+            """Fetch and process tasks from coordinator until queue is empty."""
+            # Get the resolver from context to communicate with coordinator
+            ctx = current_ctx()
+            coordinator = ActorClient(ctx.resolver, "coordinator")
+
+            tasks_processed = 0
+            while True:
+                task = coordinator.get_next_task()
+                if task is None:
+                    print(f"Worker {self._worker_id}: No more tasks")
+                    break
+
+                # Process the task
+                result = task["data"] * 2
+                print(f"Worker {self._worker_id}: Processing task {task['id']}, result = {result}")
+
+                # Report result back to coordinator
+                coordinator.report_result(task["id"], result)
+                tasks_processed += 1
+
+            return tasks_processed
+
+    # Start coordinator
+    coord_server = ActorServer(host="127.0.0.1", port=0)
+    coord_server.register("coordinator", Coordinator())
+    coord_port = coord_server.serve_background()
+    print(f"Started coordinator on port {coord_port}")
+
+    # Register coordinator endpoint
+    assert cluster._client is not None
+    cluster._client.post(
+        "/fluster.cluster.ControllerService/RegisterEndpoint",
+        headers={"Content-Type": "application/json"},
+        json={
+            "name": "coordinator",
+            "address": f"127.0.0.1:{coord_port}",
+            "jobId": cluster._worker_id,
+            "namespace": "<local>",
+            "metadata": {},
+        },
+    )
+
+    # Create resolver and context for workers
+    resolver = ClusterResolver(cluster.controller_url, namespace="<local>")
+    worker_context = ActorContext(cluster=None, resolver=resolver, job_id="worker-demo", namespace="<local>")
+
+    # Start multiple worker servers
+    worker_servers = []
+    for i in range(2):
+        server = ActorServer(host="127.0.0.1", port=0)
+        server.register("worker", Worker(f"worker-{i}"))
+        port = server.serve_background(context=worker_context)
+        worker_servers.append(server)
+        print(f"Started worker-{i} on port {port}")
+
+        assert cluster._client is not None
+        cluster._client.post(
+            "/fluster.cluster.ControllerService/RegisterEndpoint",
+            headers={"Content-Type": "application/json"},
+            json={
+                "name": f"worker-{i}",
+                "address": f"127.0.0.1:{port}",
+                "jobId": cluster._worker_id,
+                "namespace": "<local>",
+                "metadata": {},
+            },
+        )
+
+    # Tell workers to start processing
+    print("\nStarting task processing...")
+    for i in range(2):
+        client = ActorClient(resolver, f"worker-{i}")
+        count = client.process_tasks()
+        print(f"Worker-{i} processed {count} tasks")
+
+    # Check coordinator summary
+    coord_client = ActorClient(resolver, "coordinator")
+    summary = coord_client.get_summary()
+    print(f"\nCoordinator summary: {summary}")
+
+
+def example_actor_pool(cluster: ClusterContext):
+    """Demonstrate ActorPool for load-balanced and broadcast calls.
+
+    This example shows:
+    - Round-robin load balancing across multiple actor instances
+    - Broadcasting calls to all instances simultaneously
+    - Collecting results from broadcast operations
+    """
+    print("\n=== Example: Actor Pool Pattern ===\n")
+
+    from fluster.actor import ActorPool, ActorServer, ClusterResolver
+
+    # Inference actor simulates a model serving endpoint
+    class InferenceServer:
+        def __init__(self, server_id: str):
+            self._server_id = server_id
+            self._request_count = 0
+            self._weights_version = 0
+
+        def predict(self, data: list[float]) -> dict:
+            self._request_count += 1
+            result = sum(data) * 1.5
+            print(f"Server {self._server_id}: prediction = {result:.2f} (request #{self._request_count})")
+            return {"server_id": self._server_id, "result": result, "weights_version": self._weights_version}
+
+        def update_weights(self, version: int) -> None:
+            self._weights_version = version
+            print(f"Server {self._server_id}: Updated weights to version {version}")
+
+        def get_stats(self) -> dict:
+            return {
+                "server_id": self._server_id,
+                "request_count": self._request_count,
+                "weights_version": self._weights_version,
+            }
+
+    # Start multiple inference servers
+    servers = []
+    for i in range(3):
+        server = ActorServer(host="127.0.0.1", port=0)
+        server.register("inference", InferenceServer(f"server-{i}"))
+        port = server.serve_background()
+        servers.append(server)
+        print(f"Started inference server-{i} on port {port}")
+
+        # Register endpoint
+        assert cluster._client is not None
+        cluster._client.post(
+            "/fluster.cluster.ControllerService/RegisterEndpoint",
+            headers={"Content-Type": "application/json"},
+            json={
+                "name": "inference",
+                "address": f"127.0.0.1:{port}",
+                "jobId": cluster._worker_id,
+                "namespace": "<local>",
+                "metadata": {"server_id": f"server-{i}"},
+            },
+        )
+
+    # Create a pool that discovers all inference servers
+    resolver = ClusterResolver(cluster.controller_url, namespace="<local>")
+    pool = ActorPool(resolver, "inference")
+    print(f"\nPool discovered {pool.size} inference servers")
+
+    # Demonstrate round-robin load balancing
+    print("\n--- Round-robin calls ---")
+    for i in range(6):
+        result = pool.call().predict([1.0, 2.0, 3.0])
+        print(f"  Request {i}: served by {result['server_id']}")
+
+    # Demonstrate broadcast to all servers
+    print("\n--- Broadcast: Update weights ---")
+    broadcast = pool.broadcast().update_weights(42)
+    results = broadcast.wait_all()
+    print(f"  Broadcast completed: {len(results)} servers updated")
+    for r in results:
+        if not r.success:
+            print(f"  Failed: {r.endpoint.url}")
+
+    # Get stats from all servers using broadcast
+    print("\n--- Broadcast: Get stats ---")
+    broadcast = pool.broadcast().get_stats()
+    results = broadcast.wait_all()
+    for r in results:
+        if r.success:
+            print(f"  {r.value}")
+
+
+# =============================================================================
+# CLUSTER JOB EXAMPLES
 # =============================================================================
 
 
@@ -762,12 +1047,26 @@ def example_small_job_skips_queue(cluster: ClusterContext):
 @click.option(
     "--wait/--no-wait", default=False, help="Wait for Ctrl+C after examples complete (for dashboard exploration)"
 )
-def main(wait: bool):
-    """Run all examples with a single shared cluster."""
+@click.option(
+    "--mode",
+    type=click.Choice(["all", "actors", "jobs"], case_sensitive=False),
+    default="all",
+    help="Which examples to run: all (default), actors (actor system only), or jobs (cluster jobs only)",
+)
+def main(wait: bool, mode: str):
+    """Run cluster and actor examples.
+
+    This example demonstrates the full Fluster system including:
+    - Cluster controller and worker for job scheduling
+    - Actor system for distributed RPC between services
+    - Various patterns: coordinator, pool, load-balancing, broadcast
+    """
     print("=" * 60)
-    print("Fluster Cluster Example")
+    print("Fluster Cluster & Actor System Example")
     print("=" * 60)
-    print("\nNote: This example requires Docker to be running.")
+
+    if mode in ["all", "jobs"]:
+        print("\nNote: Job examples require Docker to be running.")
 
     try:
         with ClusterContext(max_concurrent_jobs=3) as cluster:
@@ -776,14 +1075,28 @@ def main(wait: bool):
             if wait:
                 print("\nPress Ctrl+C to stop.\n", flush=True)
 
-            print("About to run examples...", flush=True)
-            example_basic(cluster)
-            example_with_args(cluster)
-            example_concurrent(cluster)
-            example_kill(cluster)
-            example_resource_serialization(cluster)
-            example_scheduling_timeout(cluster)
-            example_small_job_skips_queue(cluster)
+            # Run actor examples
+            if mode in ["all", "actors"]:
+                print("\n" + "=" * 60)
+                print("ACTOR SYSTEM EXAMPLES")
+                print("=" * 60)
+                example_actor_basic(cluster)
+                example_actor_coordinator(cluster)
+                example_actor_pool(cluster)
+
+            # Run cluster job examples
+            if mode in ["all", "jobs"]:
+                print("\n" + "=" * 60)
+                print("CLUSTER JOB EXAMPLES")
+                print("=" * 60)
+                print("About to run job examples...", flush=True)
+                example_basic(cluster)
+                example_with_args(cluster)
+                example_concurrent(cluster)
+                example_kill(cluster)
+                example_resource_serialization(cluster)
+                example_scheduling_timeout(cluster)
+                example_small_job_skips_queue(cluster)
 
             print("\n" + "=" * 60)
             print("All examples completed!")
@@ -799,7 +1112,8 @@ def main(wait: bool):
         print("\nShutting down...")
     except Exception as e:
         print(f"\nError: {e}")
-        print("\nMake sure Docker is running and try again.")
+        if mode in ["all", "jobs"]:
+            print("\nMake sure Docker is running and try again.")
         raise
 
 

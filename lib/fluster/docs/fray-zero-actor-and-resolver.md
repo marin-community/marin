@@ -1770,10 +1770,48 @@ Then add handlers in `ActorServer`. This is deferred until the core path works.
 
 **Goal**: Add examples to `cluster_example.py` demonstrating actor patterns.
 
-See the existing example code in the document above. Key patterns:
-- Coordinator actor (workers fetch tasks, report results)
-- Inference pool (round-robin, broadcast)
-- Context injection (actors calling other actors)
+**Implemented**: ✅
+
+Added three comprehensive examples to `examples/cluster_example.py`:
+
+### 1. Basic Actor Pattern (`example_actor_basic`)
+Demonstrates:
+- Creating and registering an actor server
+- Registering endpoints with the controller
+- Using ActorClient with ClusterResolver for discovery
+- Calling actor methods with arguments and return values
+
+Example actor: Calculator with add(), multiply(), and get_history() methods.
+
+### 2. Coordinator Pattern (`example_actor_coordinator`)
+Demonstrates:
+- Coordinator actor managing a task queue
+- Worker actors fetching tasks from coordinator
+- Context injection via `current_ctx()` for actor-to-actor communication
+- Workers using ActorClient to communicate with coordinator
+
+Shows the pull-based task distribution pattern where workers fetch tasks, process them, and report results back.
+
+### 3. Actor Pool Pattern (`example_actor_pool`)
+Demonstrates:
+- ActorPool for load-balanced calls across multiple instances
+- Round-robin distribution for inference requests
+- Broadcast operations (update_weights) to all instances
+- Collecting results from broadcast with `wait_all()`
+
+Example: Multiple inference servers that can be called via round-robin or broadcast.
+
+### CLI Updates
+Added `--mode` option to cluster_example.py:
+- `--mode actors`: Run only actor examples (no Docker required)
+- `--mode jobs`: Run only cluster job examples (requires Docker)
+- `--mode all`: Run all examples (default)
+
+**Run examples**:
+```bash
+cd lib/fluster
+uv run python examples/cluster_example.py --mode actors
+```
 
 ---
 
