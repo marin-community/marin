@@ -48,10 +48,42 @@ message HealthResponse {
   bool healthy = 1;
 }
 
+// ============ Introspection ============
+// Methods for debugging and discovering actors
+
+message ListMethodsRequest {
+  string actor_name = 1;
+}
+
+message MethodInfo {
+  string name = 1;
+  string signature = 2;
+  string docstring = 3;
+}
+
+message ListMethodsResponse {
+  repeated MethodInfo methods = 1;
+}
+
+message ListActorsRequest {}
+
+message ActorInfo {
+  string name = 1;
+  string actor_id = 2;
+  int64 registered_at_ms = 3;
+  map<string, string> metadata = 4;
+}
+
+message ListActorsResponse {
+  repeated ActorInfo actors = 1;
+}
+
 // ============ Actor Service ============
 // Each ActorServer exposes this service
 
 service ActorService {
   rpc Call(ActorCall) returns (ActorResponse);
   rpc HealthCheck(Empty) returns (HealthResponse);
+  rpc ListMethods(ListMethodsRequest) returns (ListMethodsResponse);
+  rpc ListActors(ListActorsRequest) returns (ListActorsResponse);
 }

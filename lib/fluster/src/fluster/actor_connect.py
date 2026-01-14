@@ -22,6 +22,12 @@ class ActorService(Protocol):
     async def health_check(self, request: actor__pb2.Empty, ctx: RequestContext) -> actor__pb2.HealthResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def list_methods(self, request: actor__pb2.ListMethodsRequest, ctx: RequestContext) -> actor__pb2.ListMethodsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def list_actors(self, request: actor__pb2.ListActorsRequest, ctx: RequestContext) -> actor__pb2.ListActorsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class ActorServiceASGIApplication(ConnectASGIApplication[ActorService]):
     def __init__(self, service: ActorService | AsyncGenerator[ActorService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
@@ -47,6 +53,26 @@ class ActorServiceASGIApplication(ConnectASGIApplication[ActorService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.health_check,
+                ),
+                "/fluster.actor.ActorService/ListMethods": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ListMethods",
+                        service_name="fluster.actor.ActorService",
+                        input=actor__pb2.ListMethodsRequest,
+                        output=actor__pb2.ListMethodsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.list_methods,
+                ),
+                "/fluster.actor.ActorService/ListActors": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ListActors",
+                        service_name="fluster.actor.ActorService",
+                        input=actor__pb2.ListActorsRequest,
+                        output=actor__pb2.ListActorsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.list_actors,
                 ),
             },
             interceptors=interceptors,
@@ -100,11 +126,55 @@ class ActorServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def list_methods(
+        self,
+        request: actor__pb2.ListMethodsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> actor__pb2.ListMethodsResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListMethods",
+                service_name="fluster.actor.ActorService",
+                input=actor__pb2.ListMethodsRequest,
+                output=actor__pb2.ListMethodsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def list_actors(
+        self,
+        request: actor__pb2.ListActorsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> actor__pb2.ListActorsResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListActors",
+                service_name="fluster.actor.ActorService",
+                input=actor__pb2.ListActorsRequest,
+                output=actor__pb2.ListActorsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 class ActorServiceSync(Protocol):
     def call(self, request: actor__pb2.ActorCall, ctx: RequestContext) -> actor__pb2.ActorResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def health_check(self, request: actor__pb2.Empty, ctx: RequestContext) -> actor__pb2.HealthResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def list_methods(self, request: actor__pb2.ListMethodsRequest, ctx: RequestContext) -> actor__pb2.ListMethodsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def list_actors(self, request: actor__pb2.ListActorsRequest, ctx: RequestContext) -> actor__pb2.ListActorsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -131,6 +201,26 @@ class ActorServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.health_check,
+                ),
+                "/fluster.actor.ActorService/ListMethods": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ListMethods",
+                        service_name="fluster.actor.ActorService",
+                        input=actor__pb2.ListMethodsRequest,
+                        output=actor__pb2.ListMethodsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.list_methods,
+                ),
+                "/fluster.actor.ActorService/ListActors": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ListActors",
+                        service_name="fluster.actor.ActorService",
+                        input=actor__pb2.ListActorsRequest,
+                        output=actor__pb2.ListActorsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.list_actors,
                 ),
             },
             interceptors=interceptors,
@@ -178,6 +268,46 @@ class ActorServiceClientSync(ConnectClientSync):
                 service_name="fluster.actor.ActorService",
                 input=actor__pb2.Empty,
                 output=actor__pb2.HealthResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def list_methods(
+        self,
+        request: actor__pb2.ListMethodsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> actor__pb2.ListMethodsResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListMethods",
+                service_name="fluster.actor.ActorService",
+                input=actor__pb2.ListMethodsRequest,
+                output=actor__pb2.ListMethodsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def list_actors(
+        self,
+        request: actor__pb2.ListActorsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> actor__pb2.ListActorsResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListActors",
+                service_name="fluster.actor.ActorService",
+                input=actor__pb2.ListActorsRequest,
+                output=actor__pb2.ListActorsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

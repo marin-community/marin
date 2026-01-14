@@ -1,7 +1,8 @@
+from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from google.protobuf import service as _service
-from collections.abc import Mapping as _Mapping
+from collections.abc import Iterable as _Iterable, Mapping as _Mapping
 from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
@@ -45,6 +46,57 @@ class HealthResponse(_message.Message):
     HEALTHY_FIELD_NUMBER: _ClassVar[int]
     healthy: bool
     def __init__(self, healthy: _Optional[bool] = ...) -> None: ...
+
+class ListMethodsRequest(_message.Message):
+    __slots__ = ("actor_name",)
+    ACTOR_NAME_FIELD_NUMBER: _ClassVar[int]
+    actor_name: str
+    def __init__(self, actor_name: _Optional[str] = ...) -> None: ...
+
+class MethodInfo(_message.Message):
+    __slots__ = ("name", "signature", "docstring")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    SIGNATURE_FIELD_NUMBER: _ClassVar[int]
+    DOCSTRING_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    signature: str
+    docstring: str
+    def __init__(self, name: _Optional[str] = ..., signature: _Optional[str] = ..., docstring: _Optional[str] = ...) -> None: ...
+
+class ListMethodsResponse(_message.Message):
+    __slots__ = ("methods",)
+    METHODS_FIELD_NUMBER: _ClassVar[int]
+    methods: _containers.RepeatedCompositeFieldContainer[MethodInfo]
+    def __init__(self, methods: _Optional[_Iterable[_Union[MethodInfo, _Mapping]]] = ...) -> None: ...
+
+class ListActorsRequest(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class ActorInfo(_message.Message):
+    __slots__ = ("name", "actor_id", "registered_at_ms", "metadata")
+    class MetadataEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    ACTOR_ID_FIELD_NUMBER: _ClassVar[int]
+    REGISTERED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    actor_id: str
+    registered_at_ms: int
+    metadata: _containers.ScalarMap[str, str]
+    def __init__(self, name: _Optional[str] = ..., actor_id: _Optional[str] = ..., registered_at_ms: _Optional[int] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+
+class ListActorsResponse(_message.Message):
+    __slots__ = ("actors",)
+    ACTORS_FIELD_NUMBER: _ClassVar[int]
+    actors: _containers.RepeatedCompositeFieldContainer[ActorInfo]
+    def __init__(self, actors: _Optional[_Iterable[_Union[ActorInfo, _Mapping]]] = ...) -> None: ...
 
 class ActorService(_service.service): ...
 

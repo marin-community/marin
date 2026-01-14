@@ -14,6 +14,7 @@
 
 """Actor server implementation for hosting actor instances."""
 
+import inspect
 import socket
 import threading
 import time
@@ -129,6 +130,57 @@ class ActorServer:
     async def health_check(self, request: actor_pb2.Empty, ctx: RequestContext) -> actor_pb2.HealthResponse:
         """Handle health check."""
         return actor_pb2.HealthResponse(healthy=True)
+
+    async def list_methods(
+        self, request: actor_pb2.ListMethodsRequest, ctx: RequestContext
+    ) -> actor_pb2.ListMethodsResponse:
+        """List all methods available on an actor.
+
+        Returns method names, signatures, and docstrings for debugging.
+        """
+        actor_name = request.actor_name or next(iter(self._actors), "")
+        actor = self._actors.get(actor_name)
+        if not actor:
+            return actor_pb2.ListMethodsResponse()
+
+        methods = []
+        for name, method in actor.methods.items():
+            try:
+                sig = str(inspect.signature(method))
+            except (ValueError, TypeError):
+                sig = "()"
+
+            docstring = inspect.getdoc(method) or ""
+
+            methods.append(
+                actor_pb2.MethodInfo(
+                    name=name,
+                    signature=sig,
+                    docstring=docstring,
+                )
+            )
+
+        return actor_pb2.ListMethodsResponse(methods=methods)
+
+    async def list_actors(
+        self, request: actor_pb2.ListActorsRequest, ctx: RequestContext
+    ) -> actor_pb2.ListActorsResponse:
+        """List all actors registered with this server.
+
+        Returns actor names, IDs, and registration timestamps for debugging.
+        """
+        actors = []
+        for actor in self._actors.values():
+            actors.append(
+                actor_pb2.ActorInfo(
+                    name=actor.name,
+                    actor_id=actor.actor_id,
+                    registered_at_ms=actor.registered_at_ms,
+                    metadata={},
+                )
+            )
+
+        return actor_pb2.ListActorsResponse(actors=actors)
 
     def _create_app(self) -> ActorServiceASGIApplication:
         """Create the Connect RPC ASGI application for the server."""

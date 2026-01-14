@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0b\x61\x63tor.proto\x12\rfluster.actor\"\xa1\x01\n\tActorCall\x12\x1f\n\x0bmethod_name\x18\x01 \x01(\tR\nmethodName\x12\x1d\n\nactor_name\x18\x02 \x01(\tR\tactorName\x12\'\n\x0fserialized_args\x18\x03 \x01(\x0cR\x0eserializedArgs\x12+\n\x11serialized_kwargs\x18\x04 \x01(\x0cR\x10serializedKwargs\"y\n\rActorResponse\x12+\n\x10serialized_value\x18\x01 \x01(\x0cH\x00R\x0fserializedValue\x12\x31\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x19.fluster.actor.ActorErrorH\x00R\x05\x65rrorB\x08\n\x06result\"x\n\nActorError\x12\x1d\n\nerror_type\x18\x01 \x01(\tR\terrorType\x12\x18\n\x07message\x18\x02 \x01(\tR\x07message\x12\x31\n\x14serialized_exception\x18\x03 \x01(\x0cR\x13serializedException\"\x07\n\x05\x45mpty\"*\n\x0eHealthResponse\x12\x18\n\x07healthy\x18\x01 \x01(\x08R\x07healthy2\x92\x01\n\x0c\x41\x63torService\x12>\n\x04\x43\x61ll\x12\x18.fluster.actor.ActorCall\x1a\x1c.fluster.actor.ActorResponse\x12\x42\n\x0bHealthCheck\x12\x14.fluster.actor.Empty\x1a\x1d.fluster.actor.HealthResponseBw\n\x11\x63om.fluster.actorB\nActorProtoP\x01\x90\x01\x01\xa2\x02\x03\x46\x41X\xaa\x02\rFluster.Actor\xca\x02\rFluster\\Actor\xe2\x02\x19\x46luster\\Actor\\GPBMetadata\xea\x02\x0e\x46luster::Actorb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0b\x61\x63tor.proto\x12\rfluster.actor\"\xa1\x01\n\tActorCall\x12\x1f\n\x0bmethod_name\x18\x01 \x01(\tR\nmethodName\x12\x1d\n\nactor_name\x18\x02 \x01(\tR\tactorName\x12\'\n\x0fserialized_args\x18\x03 \x01(\x0cR\x0eserializedArgs\x12+\n\x11serialized_kwargs\x18\x04 \x01(\x0cR\x10serializedKwargs\"y\n\rActorResponse\x12+\n\x10serialized_value\x18\x01 \x01(\x0cH\x00R\x0fserializedValue\x12\x31\n\x05\x65rror\x18\x02 \x01(\x0b\x32\x19.fluster.actor.ActorErrorH\x00R\x05\x65rrorB\x08\n\x06result\"x\n\nActorError\x12\x1d\n\nerror_type\x18\x01 \x01(\tR\terrorType\x12\x18\n\x07message\x18\x02 \x01(\tR\x07message\x12\x31\n\x14serialized_exception\x18\x03 \x01(\x0cR\x13serializedException\"\x07\n\x05\x45mpty\"*\n\x0eHealthResponse\x12\x18\n\x07healthy\x18\x01 \x01(\x08R\x07healthy\"3\n\x12ListMethodsRequest\x12\x1d\n\nactor_name\x18\x01 \x01(\tR\tactorName\"\\\n\nMethodInfo\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n\tsignature\x18\x02 \x01(\tR\tsignature\x12\x1c\n\tdocstring\x18\x03 \x01(\tR\tdocstring\"J\n\x13ListMethodsResponse\x12\x33\n\x07methods\x18\x01 \x03(\x0b\x32\x19.fluster.actor.MethodInfoR\x07methods\"\x13\n\x11ListActorsRequest\"\xe5\x01\n\tActorInfo\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n\x08\x61\x63tor_id\x18\x02 \x01(\tR\x07\x61\x63torId\x12(\n\x10registered_at_ms\x18\x03 \x01(\x03R\x0eregisteredAtMs\x12\x42\n\x08metadata\x18\x04 \x03(\x0b\x32&.fluster.actor.ActorInfo.MetadataEntryR\x08metadata\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"F\n\x12ListActorsResponse\x12\x30\n\x06\x61\x63tors\x18\x01 \x03(\x0b\x32\x18.fluster.actor.ActorInfoR\x06\x61\x63tors2\xbb\x02\n\x0c\x41\x63torService\x12>\n\x04\x43\x61ll\x12\x18.fluster.actor.ActorCall\x1a\x1c.fluster.actor.ActorResponse\x12\x42\n\x0bHealthCheck\x12\x14.fluster.actor.Empty\x1a\x1d.fluster.actor.HealthResponse\x12T\n\x0bListMethods\x12!.fluster.actor.ListMethodsRequest\x1a\".fluster.actor.ListMethodsResponse\x12Q\n\nListActors\x12 .fluster.actor.ListActorsRequest\x1a!.fluster.actor.ListActorsResponseBw\n\x11\x63om.fluster.actorB\nActorProtoP\x01\x90\x01\x01\xa2\x02\x03\x46\x41X\xaa\x02\rFluster.Actor\xca\x02\rFluster\\Actor\xe2\x02\x19\x46luster\\Actor\\GPBMetadata\xea\x02\x0e\x46luster::Actorb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,6 +32,8 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'actor_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\021com.fluster.actorB\nActorProtoP\001\220\001\001\242\002\003FAX\252\002\rFluster.Actor\312\002\rFluster\\Actor\342\002\031Fluster\\Actor\\GPBMetadata\352\002\016Fluster::Actor'
+  _globals['_ACTORINFO_METADATAENTRY']._loaded_options = None
+  _globals['_ACTORINFO_METADATAENTRY']._serialized_options = b'8\001'
   _globals['_ACTORCALL']._serialized_start=31
   _globals['_ACTORCALL']._serialized_end=192
   _globals['_ACTORRESPONSE']._serialized_start=194
@@ -42,7 +44,21 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_EMPTY']._serialized_end=446
   _globals['_HEALTHRESPONSE']._serialized_start=448
   _globals['_HEALTHRESPONSE']._serialized_end=490
-  _globals['_ACTORSERVICE']._serialized_start=493
-  _globals['_ACTORSERVICE']._serialized_end=639
+  _globals['_LISTMETHODSREQUEST']._serialized_start=492
+  _globals['_LISTMETHODSREQUEST']._serialized_end=543
+  _globals['_METHODINFO']._serialized_start=545
+  _globals['_METHODINFO']._serialized_end=637
+  _globals['_LISTMETHODSRESPONSE']._serialized_start=639
+  _globals['_LISTMETHODSRESPONSE']._serialized_end=713
+  _globals['_LISTACTORSREQUEST']._serialized_start=715
+  _globals['_LISTACTORSREQUEST']._serialized_end=734
+  _globals['_ACTORINFO']._serialized_start=737
+  _globals['_ACTORINFO']._serialized_end=966
+  _globals['_ACTORINFO_METADATAENTRY']._serialized_start=907
+  _globals['_ACTORINFO_METADATAENTRY']._serialized_end=966
+  _globals['_LISTACTORSRESPONSE']._serialized_start=968
+  _globals['_LISTACTORSRESPONSE']._serialized_end=1038
+  _globals['_ACTORSERVICE']._serialized_start=1041
+  _globals['_ACTORSERVICE']._serialized_end=1356
 _builder.BuildServices(DESCRIPTOR, 'actor_pb2', _globals)
 # @@protoc_insertion_point(module_scope)
