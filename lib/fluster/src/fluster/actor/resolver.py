@@ -16,7 +16,7 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol as TypingProtocol
 
 from fluster import cluster_pb2
 from fluster.cluster.types import Namespace
@@ -50,7 +50,7 @@ class ResolveResult:
         return self.endpoints[0]
 
 
-class Resolver(Protocol):
+class Resolver(TypingProtocol):
     """Protocol for actor name resolution."""
 
     def resolve(self, name: str, namespace: Namespace | None = None) -> ResolveResult: ...
@@ -145,5 +145,132 @@ class ClusterResolver:
             for ep in resp.endpoints
             if ep.name == name
         ]
+
+        return ResolveResult(name=name, namespace=ns, endpoints=endpoints)
+
+
+class GcsApi(TypingProtocol):
+    """Protocol for GCS Compute API operations."""
+
+    def list_instances(self, project: str, zone: str) -> list[dict]:
+        """List VM instances with metadata."""
+        ...
+
+
+class RealGcsApi:
+    """Real GCS API using google-cloud-compute."""
+
+    def list_instances(self, project: str, zone: str) -> list[dict]:
+        from google.cloud import compute_v1
+
+        client = compute_v1.InstancesClient()
+        instances = []
+        for instance in client.list(project=project, zone=zone):
+            metadata = {}
+            if instance.metadata and instance.metadata.items:
+                for item in instance.metadata.items:
+                    metadata[item.key] = item.value
+
+            internal_ip = None
+            if instance.network_interfaces:
+                internal_ip = instance.network_interfaces[0].network_i_p
+
+            instances.append(
+                {
+                    "name": instance.name,
+                    "internal_ip": internal_ip,
+                    "metadata": metadata,
+                    "status": instance.status,
+                }
+            )
+        return instances
+
+
+class MockGcsApi:
+    """Mock GCS API for testing."""
+
+    def __init__(self, instances: list[dict] | None = None):
+        self._instances = instances or []
+
+    def set_instances(self, instances: list[dict]) -> None:
+        self._instances = instances
+
+    def list_instances(self, project: str, zone: str) -> list[dict]:
+        return self._instances
+
+
+class GcsResolver:
+    """Resolver using GCS VM instance metadata tags.
+
+    Discovers actor endpoints by querying GCP VM instance metadata. Instances must
+    have metadata tags in the format:
+    - `fluster_actor_<name>`: port number for the actor
+    - `fluster_namespace`: namespace for isolation (defaults to "<local>")
+
+    Only RUNNING instances are considered for resolution.
+
+    Args:
+        project: GCP project ID
+        zone: GCP zone (e.g., "us-central1-a")
+        namespace: Namespace for actor isolation (defaults to FLUSTER_NAMESPACE env var)
+        api: GcsApi implementation (defaults to RealGcsApi)
+    """
+
+    ACTOR_PREFIX = "fluster_actor_"
+    NAMESPACE_KEY = "fluster_namespace"
+
+    def __init__(
+        self,
+        project: str,
+        zone: str,
+        namespace: Namespace | None = None,
+        api: GcsApi | None = None,
+    ):
+        self._project = project
+        self._zone = zone
+        self._api = api or RealGcsApi()
+        self._namespace = namespace or Namespace(os.environ.get("FLUSTER_NAMESPACE", "<local>"))
+
+    @property
+    def default_namespace(self) -> Namespace:
+        return self._namespace
+
+    def resolve(self, name: str, namespace: Namespace | None = None) -> ResolveResult:
+        """Resolve actor name to endpoints via GCS instance metadata.
+
+        Args:
+            name: Actor name to resolve
+            namespace: Override default namespace
+
+        Returns:
+            ResolveResult with matching endpoints from RUNNING instances
+        """
+        ns = namespace or self._namespace
+        endpoints = []
+
+        instances = self._api.list_instances(self._project, self._zone)
+
+        for instance in instances:
+            if instance.get("status") != "RUNNING":
+                continue
+
+            metadata = instance.get("metadata", {})
+            instance_ns = metadata.get(self.NAMESPACE_KEY, "<local>")
+
+            if instance_ns != str(ns):
+                continue
+
+            actor_key = f"{self.ACTOR_PREFIX}{name}"
+            if actor_key in metadata:
+                port = metadata[actor_key]
+                ip = instance.get("internal_ip")
+                if ip:
+                    endpoints.append(
+                        ResolvedEndpoint(
+                            url=f"http://{ip}:{port}",
+                            actor_id=f"gcs-{instance['name']}-{name}",
+                            metadata={"instance": instance["name"]},
+                        )
+                    )
 
         return ResolveResult(name=name, namespace=ns, endpoints=endpoints)
