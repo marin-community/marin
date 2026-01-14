@@ -562,10 +562,9 @@ def _size_presets() -> dict[str, HackableTransformerConfig]:
 
 
 def _muon_presets() -> dict[str, MuonConfig]:
-    # LRs sqrt-scaled from batch 128 baseline to current batch sizes
     return {
-        "130m": MuonConfig(  # batch 132, sqrt(132/128) = 1.015
-            learning_rate=0.0162,
+        "130m": MuonConfig(
+            learning_rate=0.016,
             adam_lr=0.0032,
             weight_decay=0.1,
             min_lr_ratio=0,
@@ -579,9 +578,9 @@ def _muon_presets() -> dict[str, MuonConfig]:
             lr_schedule="linear",
             decay=0.8,
         ),
-        "300m": MuonConfig(  # batch 92, sqrt(92/128) = 0.848
-            learning_rate=0.0068,
-            adam_lr=0.0020,
+        "300m": MuonConfig(
+            learning_rate=0.008,
+            adam_lr=0.0024,
             weight_decay=0.1,
             min_lr_ratio=0,
             warmup=0,
@@ -594,9 +593,9 @@ def _muon_presets() -> dict[str, MuonConfig]:
             lr_schedule="linear",
             decay=0.8,
         ),
-        "520m": MuonConfig(  # batch 52, sqrt(52/128) = 0.637
-            learning_rate=0.0051,
-            adam_lr=0.0015,
+        "520m": MuonConfig(
+            learning_rate=0.008,
+            adam_lr=0.0024,
             weight_decay=0.1,
             min_lr_ratio=0,
             warmup=0,
@@ -609,9 +608,9 @@ def _muon_presets() -> dict[str, MuonConfig]:
             lr_schedule="linear",
             decay=1,
         ),
-        "1_2b": MuonConfig(  # batch 44, sqrt(44/128) = 0.586
-            learning_rate=0.0023,
-            adam_lr=0.0007,
+        "1_2b": MuonConfig(
+            learning_rate=0.004,
+            adam_lr=0.0012,
             weight_decay=0.1,
             min_lr_ratio=0,
             warmup=0,
@@ -637,10 +636,10 @@ def _resource_presets(use_gpu: bool = False):
         }
 
     return {
-        "130m": ResourceConfig.with_tpu("v5p-8"),
-        "300m": ResourceConfig.with_tpu("v5p-8"),
-        "520m": ResourceConfig.with_tpu("v5p-8"),
-        "1_2b": ResourceConfig.with_tpu("v5p-8"),
+        "130m": ResourceConfig.with_tpu("v5p-32"),
+        "300m": ResourceConfig.with_tpu("v5p-32"),
+        "520m": ResourceConfig.with_tpu("v5p-32"),
+        "1_2b": ResourceConfig.with_tpu("v5p-32"),
     }
 
 
@@ -673,7 +672,7 @@ def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]
         profiler=True,
     )
 
-    run_name = f"hacktx_{size}_gdn_{seq_len}_flash_ch_{model_cfg.gdn_chunk_size}_seg_{model_cfg.gdn_segment_size}_fp32_b_{batch}_lr_scaled"
+    run_name = f"hacktx_{size}_gdn_{seq_len}_flash_ch_{model_cfg.gdn_chunk_size}_seg_{model_cfg.gdn_segment_size}_fp32_b_{batch}_v5p32"
     desc = f"Hackable Transformer ({size}) w/ hybrid Gated DeltaNet and standard attention layers (Muon)"
     cfg = SpeedrunConfig(author=AUTHOR, description=desc, model_config=model_cfg, train_config=train)
     return run_name, cfg
@@ -695,10 +694,8 @@ if __name__ == "__main__":
         _cls.__module__ = _IMPORT_PATH
     ###
 
-    # sizes = ["130m"]
-    # sizes = ["1_2b"]
-    sizes = ["300m", "520m", "1_2b"]
-    # sizes = ["130m", "300m", "520m", "1_2b"]
+
+    sizes = ["130m", "300m", "520m", "1_2b"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
     sink = False
     steps = []

@@ -3825,6 +3825,7 @@ dev = [
     { name = "types-pyyaml" },
     { name = "types-requests" },
     { name = "types-six" },
+    { name = "watchdog" },
 ]
 docs = [
     { name = "mkdocs" },
@@ -3961,6 +3962,7 @@ dev = [
     { name = "types-pyyaml" },
     { name = "types-requests" },
     { name = "types-six" },
+    { name = "watchdog", specifier = ">=3.0.0" },
 ]
 docs = [
     { name = "mkdocs", specifier = ">=1.5.0" },
