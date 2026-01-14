@@ -152,7 +152,11 @@ eval = [
 ]
 
 cuda12 = ["jax[cuda12]==0.8.0", "torch>=2.7.0"]
-vllm = ["jax[tpu]==0.8.0", "vllm-tpu==0.12.0", "torch==2.9.0"]
+vllm = [
+    "jax[tpu]==0.8.0",
+    "vllm-tpu==0.13.2.post6",
+    "torch==2.9.0",
+]
 
 [[tool.uv.index]]
 name = "marin-resiliparse"
