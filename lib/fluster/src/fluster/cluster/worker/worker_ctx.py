@@ -142,6 +142,8 @@ class WorkerContext:
             runtime=runtime,
             port_allocator=port_allocator,
             max_concurrent_jobs=self.max_concurrent_jobs,
+            controller_address=None,  # No controller in standalone mode
+            worker_id="standalone",  # Standalone worker ID
         )
 
         service = WorkerServiceImpl(manager)

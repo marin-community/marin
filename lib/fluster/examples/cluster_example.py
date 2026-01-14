@@ -26,7 +26,6 @@ Usage:
 # TODO, consider having like a post-mortem view of the cluster state
 # means cluster state should be serializable, cluster dashboard would always be a mapping over the state
 
-import base64
 import socket
 import tempfile
 import threading
@@ -37,9 +36,9 @@ from pathlib import Path
 
 import click
 import cloudpickle
-import httpx
 import uvicorn
 from fluster import cluster_pb2
+from fluster.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
 from fluster.cluster.controller.dashboard import ControllerDashboard
 from fluster.cluster.controller.heartbeat import HeartbeatMonitor
 from fluster.cluster.controller.scheduler import Scheduler
@@ -144,8 +143,8 @@ class ClusterContext:
         self._worker_dashboard: WorkerDashboard | None = None
         self._worker_thread: threading.Thread | None = None
 
-        # HTTP client for RPC calls
-        self._client: httpx.Client | None = None
+        # RPC client for controller calls
+        self._controller_client: ControllerServiceClientSync | None = None
 
         # Cached bundle
         self._bundle_blob: bytes | None = None
@@ -178,6 +177,8 @@ class ClusterContext:
             runtime=runtime,
             port_allocator=port_allocator,
             max_concurrent_jobs=self._max_concurrent_jobs,
+            controller_address=f"http://127.0.0.1:{self._controller_port}",
+            worker_id=None,  # Set during registration
         )
 
         self._worker_service = WorkerServiceImpl(self._job_manager)
@@ -240,13 +241,13 @@ class ClusterContext:
         self._heartbeat_monitor.start()
         print("Heartbeat monitor started", flush=True)
 
-        # Create HTTP client
-        print("Creating HTTP client...", flush=True)
-        self._client = httpx.Client(
-            base_url=f"http://127.0.0.1:{self._controller_port}",
-            timeout=30.0,
+        # Create RPC client
+        print("Creating RPC client...", flush=True)
+        self._controller_client = ControllerServiceClientSync(
+            address=f"http://127.0.0.1:{self._controller_port}",
+            timeout_ms=30000,
         )
-        print("HTTP client created", flush=True)
+        print("RPC client created", flush=True)
 
         # Register worker with controller
         self._worker_id = f"worker-{uuid.uuid4().hex[:8]}"
@@ -262,8 +263,8 @@ class ClusterContext:
 
     def __exit__(self, *args):
         """Stop cluster and cleanup."""
-        if self._client:
-            self._client.close()
+        if self._controller_client:
+            self._controller_client.close()
 
         if self._heartbeat_monitor:
             self._heartbeat_monitor.stop()
@@ -301,25 +302,25 @@ class ClusterContext:
     def _dispatch_job(self, job, worker) -> bool:
         """Dispatch job to worker (called by scheduler in its thread)."""
         try:
-            response = httpx.post(
-                f"http://{worker.address}/fluster.cluster.WorkerService/RunJob",
-                headers={"Content-Type": "application/json"},
-                json={
-                    "jobId": str(job.job_id),
-                    "serializedEntrypoint": base64.b64encode(job.request.serialized_entrypoint).decode(),
-                    "environment": {
-                        "workspace": job.request.environment.workspace,
-                        "envVars": dict(job.request.environment.env_vars),
-                    },
-                    "bundleGcsPath": job.request.bundle_gcs_path,
-                    "resources": {
-                        "cpu": job.request.resources.cpu,
-                        "memory": job.request.resources.memory,
-                    },
-                },
-                timeout=10.0,
+            worker_client = WorkerServiceClientSync(
+                address=f"http://{worker.address}",
+                timeout_ms=10000,
             )
-            return response.status_code == 200
+            request = cluster_pb2.RunJobRequest(
+                job_id=str(job.job_id),
+                serialized_entrypoint=job.request.serialized_entrypoint,
+                environment=cluster_pb2.EnvironmentConfig(
+                    workspace=job.request.environment.workspace,
+                    env_vars=dict(job.request.environment.env_vars),
+                ),
+                bundle_gcs_path=job.request.bundle_gcs_path,
+                resources=cluster_pb2.ResourceSpec(
+                    cpu=job.request.resources.cpu,
+                    memory=job.request.resources.memory,
+                ),
+            )
+            worker_client.run_job(request)
+            return True
         except Exception as e:
             print(f"Dispatch failed: {e}")
             return False
@@ -327,52 +328,24 @@ class ClusterContext:
     def _send_heartbeat(self, address: str):
         """Send heartbeat to worker (called by heartbeat monitor)."""
         try:
-            response = httpx.post(
-                f"http://{address}/fluster.cluster.WorkerService/HealthCheck",
-                headers={"Content-Type": "application/json"},
-                json={},
-                timeout=5.0,
+            worker_client = WorkerServiceClientSync(
+                address=f"http://{address}",
+                timeout_ms=5000,
             )
-            if response.status_code == 200:
-                # Get job statuses from worker
-                jobs_response = httpx.post(
-                    f"http://{address}/fluster.cluster.WorkerService/ListJobs",
-                    headers={"Content-Type": "application/json"},
-                    json={},
-                    timeout=5.0,
-                )
-                if jobs_response.status_code == 200:
-                    jobs_data = jobs_response.json().get("jobs", [])
-                    # Convert to proto-like response
-                    return cluster_pb2.HeartbeatResponse(
-                        jobs=[
-                            cluster_pb2.JobStatus(
-                                job_id=j.get("jobId", ""),
-                                state=self._parse_job_state(j.get("state", "")),
-                                exit_code=j.get("exitCode", 0),
-                                error=j.get("error", ""),
-                            )
-                            for j in jobs_data
-                        ],
-                        timestamp_ms=int(time.time() * 1000),
-                    )
-            return None
+
+            # Send health check
+            worker_client.health_check(cluster_pb2.Empty())
+
+            # Get job statuses from worker
+            jobs_response = worker_client.list_jobs(cluster_pb2.ListJobsRequest())
+
+            # Convert to heartbeat response format
+            return cluster_pb2.HeartbeatResponse(
+                jobs=jobs_response.jobs,
+                timestamp_ms=int(time.time() * 1000),
+            )
         except Exception:
             return None
-
-    def _parse_job_state(self, state_str: str) -> int:
-        """Parse job state string to proto enum."""
-        state_map = {
-            "JOB_STATE_PENDING": cluster_pb2.JOB_STATE_PENDING,
-            "JOB_STATE_BUILDING": cluster_pb2.JOB_STATE_BUILDING,
-            "JOB_STATE_RUNNING": cluster_pb2.JOB_STATE_RUNNING,
-            "JOB_STATE_SUCCEEDED": cluster_pb2.JOB_STATE_SUCCEEDED,
-            "JOB_STATE_FAILED": cluster_pb2.JOB_STATE_FAILED,
-            "JOB_STATE_KILLED": cluster_pb2.JOB_STATE_KILLED,
-            "JOB_STATE_WORKER_FAILED": cluster_pb2.JOB_STATE_WORKER_FAILED,
-            "JOB_STATE_UNSCHEDULABLE": cluster_pb2.JOB_STATE_UNSCHEDULABLE,
-        }
-        return state_map.get(state_str, cluster_pb2.JOB_STATE_UNSPECIFIED)
 
     def _on_worker_failed(self, worker_id: WorkerId, job_ids: list[JobId]):
         """Handle worker failure."""
@@ -380,17 +353,17 @@ class ClusterContext:
 
     def _register_worker(self):
         """Register worker with controller."""
-        response = self._client.post(
-            "/fluster.cluster.ControllerService/RegisterWorker",
-            headers={"Content-Type": "application/json"},
-            json={
-                "workerId": self._worker_id,
-                "address": f"127.0.0.1:{self._worker_port}",
-                "resources": {"cpu": 4, "memory": "16g"},
-            },
+        request = cluster_pb2.RegisterWorkerRequest(
+            worker_id=self._worker_id,
+            address=f"127.0.0.1:{self._worker_port}",
+            resources=cluster_pb2.ResourceSpec(
+                cpu=4,
+                memory="16g",
+            ),
         )
-        if response.status_code != 200:
-            raise RuntimeError(f"Failed to register worker: {response.text}")
+        self._controller_client.register_worker(request)
+        # Set worker_id on JobManager so it can inject FLUSTER_WORKER_ID
+        self._job_manager._worker_id = self._worker_id
 
     def _get_bundle_blob(self) -> bytes:
         """Get workspace bundle (cached)."""
@@ -412,6 +385,7 @@ class ClusterContext:
         cpu: int = 1,
         memory: str = "1g",
         scheduling_timeout_seconds: int = 0,
+        namespace: str | None = None,
         **kwargs,
     ) -> str:
         """Submit a job to the cluster.
@@ -425,6 +399,7 @@ class ClusterContext:
             cpu: Number of CPUs to request
             memory: Memory to request (e.g., "1g", "512m")
             scheduling_timeout_seconds: How long to wait for scheduling before marking UNSCHEDULABLE
+            namespace: Namespace for actor isolation (defaults to "<local>")
             **kwargs: Keyword arguments for fn
 
         Returns:
@@ -433,37 +408,43 @@ class ClusterContext:
         entrypoint = Entrypoint(callable=fn, args=args, kwargs=kwargs)
         serialized = cloudpickle.dumps(entrypoint)
 
-        response = self._client.post(
-            "/fluster.cluster.ControllerService/LaunchJob",
-            headers={"Content-Type": "application/json"},
-            json={
-                "name": name or fn.__name__,
-                "serializedEntrypoint": base64.b64encode(serialized).decode(),
-                "resources": {"cpu": cpu, "memory": memory},
-                "environment": {
-                    "workspace": "/app",
-                    "envVars": env_vars or {},
-                },
-                "bundleBlob": base64.b64encode(self._get_bundle_blob()).decode(),
-                "schedulingTimeoutSeconds": scheduling_timeout_seconds,
-            },
+        # Build environment with user-provided vars
+        # Worker will auto-inject system FLUSTER_* variables
+        env = env_vars or {}
+
+        # Add namespace as environment variable (actor-level concern, not cluster-level)
+        if namespace:
+            env["FLUSTER_NAMESPACE"] = namespace
+
+        request = cluster_pb2.LaunchJobRequest(
+            name=name or fn.__name__,
+            serialized_entrypoint=serialized,
+            resources=cluster_pb2.ResourceSpec(
+                cpu=cpu,
+                memory=memory,
+            ),
+            environment=cluster_pb2.EnvironmentConfig(
+                workspace="/app",
+                env_vars=env,
+            ),
+            bundle_blob=self._get_bundle_blob(),
+            scheduling_timeout_seconds=scheduling_timeout_seconds,
         )
-
-        if response.status_code != 200:
-            raise RuntimeError(f"Failed to submit job: {response.text}")
-
-        return response.json()["jobId"]
+        response = self._controller_client.launch_job(request)
+        return response.job_id
 
     def status(self, job_id: str) -> dict:
         """Get job status from controller."""
-        response = self._client.post(
-            "/fluster.cluster.ControllerService/GetJobStatus",
-            headers={"Content-Type": "application/json"},
-            json={"jobId": job_id},
-        )
-        if response.status_code != 200:
-            raise RuntimeError(f"Failed to get status: {response.text}")
-        return response.json()["job"]
+        request = cluster_pb2.GetJobStatusRequest(job_id=job_id)
+        response = self._controller_client.get_job_status(request)
+        # Convert protobuf to dict for compatibility with existing code
+        return {
+            "jobId": response.job.job_id,
+            "state": cluster_pb2.JobState.Name(response.job.state),
+            "exitCode": response.job.exit_code,
+            "error": response.job.error,
+            "workerId": response.job.worker_id,
+        }
 
     def wait(self, job_id: str, timeout: float = 300.0, poll_interval: float = 0.5) -> dict:
         """Wait for job to complete."""
@@ -493,28 +474,18 @@ class ClusterContext:
             return []
 
         # For now, query worker directly (in a real cluster, would route through controller)
-        response = httpx.post(
-            f"http://127.0.0.1:{self._worker_port}/fluster.cluster.WorkerService/FetchLogs",
-            headers={"Content-Type": "application/json"},
-            json={"jobId": job_id},
-            timeout=10.0,
+        worker_client = WorkerServiceClientSync(
+            address=f"http://127.0.0.1:{self._worker_port}",
+            timeout_ms=10000,
         )
-
-        if response.status_code != 200:
-            return []
-
-        logs_data = response.json().get("logs", [])
-        return [entry.get("data", "") for entry in logs_data]
+        request = cluster_pb2.FetchLogsRequest(job_id=job_id)
+        response = worker_client.fetch_logs(request)
+        return [entry.data for entry in response.logs]
 
     def kill(self, job_id: str) -> None:
         """Kill a job via controller."""
-        response = self._client.post(
-            "/fluster.cluster.ControllerService/TerminateJob",
-            headers={"Content-Type": "application/json"},
-            json={"jobId": job_id},
-        )
-        if response.status_code != 200:
-            raise RuntimeError(f"Failed to kill job: {response.text}")
+        request = cluster_pb2.TerminateJobRequest(job_id=job_id)
+        self._controller_client.terminate_job(request)
 
     @property
     def controller_url(self) -> str:
@@ -530,284 +501,173 @@ class ClusterContext:
 # =============================================================================
 
 
-def example_actor_basic(cluster: ClusterContext):
-    """Demonstrate basic actor pattern with method calls.
+def example_actor_job_workflow(cluster: ClusterContext):
+    """Demonstrate real actor job workflow with cluster integration.
 
-    This example shows:
-    - Creating and registering an actor server
-    - Using ActorClient to discover and call actor methods
-    - Passing arguments and returning results
+    This example shows the complete end-to-end workflow:
+    1. Submit a job that runs an ActorServer
+    2. The job registers its actor endpoint with the controller
+    3. A client uses ClusterResolver to discover and call the actor
+    4. The actor can access cluster context via current_ctx()
+
+    This is the recommended pattern for production actor deployments.
     """
-    print("\n=== Example: Basic Actor Pattern ===\n")
+    print("\n=== Example: Real Actor Job Workflow ===\n")
 
-    from fluster.actor import ActorClient, ActorServer, ClusterResolver
+    # Step 1: Define an actor job entrypoint
+    # This function will run inside a cluster job and start an ActorServer
+    def actor_job_entrypoint():
+        """Job entrypoint that starts an ActorServer and registers with controller."""
+        import os
+        import socket
+        import time
 
-    # Define a simple actor class with methods
-    class Calculator:
-        def __init__(self):
-            self._history = []
+        from fluster import cluster_pb2
+        from fluster.actor import ActorServer
+        from fluster.cluster_connect import ControllerServiceClientSync
 
-        def add(self, a: int, b: int) -> int:
-            result = a + b
-            self._history.append(f"add({a}, {b}) = {result}")
-            print(f"Calculator: {a} + {b} = {result}")
-            return result
+        # Get environment variables injected by the cluster
+        job_id = os.environ["FLUSTER_JOB_ID"]
+        namespace = os.environ["FLUSTER_NAMESPACE"]
+        controller_url = os.environ["FLUSTER_CONTROLLER_ADDRESS"]
 
-        def multiply(self, a: int, b: int) -> int:
-            result = a * b
-            self._history.append(f"multiply({a}, {b}) = {result}")
-            print(f"Calculator: {a} * {b} = {result}")
-            return result
+        print(f"Actor job starting: job_id={job_id}, namespace={namespace}")
 
-        def get_history(self) -> list[str]:
-            return self._history
+        # Define our actor class inline (could also be imported)
+        class Calculator:
+            def __init__(self):
+                self._history = []
 
-    # Start an actor server and register the calculator
-    server = ActorServer(host="127.0.0.1", port=0)
-    server.register("calculator", Calculator())
-    port = server.serve_background()
-    print(f"Started actor server on port {port}")
+            def add(self, a: int, b: int) -> int:
+                result = a + b
+                self._history.append(f"add({a}, {b}) = {result}")
+                print(f"Calculator.add({a}, {b}) = {result}")
+                return result
 
-    # Register the actor endpoint with the controller
-    # In a real cluster, this would be done automatically
-    assert cluster._client is not None
-    response = cluster._client.post(
-        "/fluster.cluster.ControllerService/RegisterEndpoint",
-        headers={"Content-Type": "application/json"},
-        json={
-            "name": "calculator",
-            "address": f"127.0.0.1:{port}",
-            "jobId": cluster._worker_id,  # Use worker ID as job ID for this example
-            "namespace": "<local>",
-            "metadata": {},
-        },
+            def multiply(self, a: int, b: int) -> int:
+                result = a * b
+                self._history.append(f"multiply({a}, {b}) = {result}")
+                print(f"Calculator.multiply({a}, {b}) = {result}")
+                return result
+
+            def get_history(self) -> list[str]:
+                return self._history
+
+        # Start the ActorServer
+        # Use 0.0.0.0 to bind to all interfaces (necessary inside Docker)
+        server = ActorServer(host="0.0.0.0", port=8080)
+        server.register("calculator", Calculator())
+        port = server.serve_background()
+        print(f"ActorServer started on port {port}")
+
+        # Register the endpoint with the controller using Connect RPC
+        # The controller will now track this endpoint and make it discoverable
+        hostname = socket.gethostname()
+        host_ip = socket.gethostbyname(hostname)
+        endpoint_address = f"{host_ip}:{port}"
+
+        print(f"Registering endpoint: calculator at {endpoint_address}")
+        try:
+            controller_client = ControllerServiceClientSync(address=controller_url)
+            request = cluster_pb2.RegisterEndpointRequest(
+                name="calculator",
+                address=endpoint_address,
+                job_id=job_id,
+                namespace=namespace,
+                metadata={"version": "1.0"},
+            )
+            response = controller_client.register_endpoint(request)
+            print(f"Endpoint registered successfully: {response.endpoint_id}")
+        except Exception as e:
+            print(f"Error registering endpoint: {e}")
+            import traceback
+
+            traceback.print_exc()
+
+        # Keep the job running to serve requests
+        print("Actor server ready, waiting for requests...")
+        while True:
+            time.sleep(1)
+
+    # Step 2: Submit the actor job to the cluster
+    print("Submitting actor job to cluster...")
+    job_id = cluster.submit(
+        actor_job_entrypoint,
+        name="calculator-actor",
+        cpu=1,
+        memory="512m",
+        namespace="<local>",
     )
-    if response.status_code != 200:
-        print(f"Warning: Failed to register endpoint: {response.text}")
+    print(f"Job submitted: {job_id}")
 
-    # Create a resolver that uses the controller's endpoint registry
+    # Step 3: Wait for the job to start and endpoint to be registered
+    print("Waiting for job to start...")
+    max_wait = 30
+    start_time = time.time()
+    job_running = False
+
+    while time.time() - start_time < max_wait:
+        status = cluster.status(job_id)
+        state = status.get("state", "")
+        print(f"  Job state: {state}")
+
+        if state == "JOB_STATE_RUNNING":
+            job_running = True
+            print("Job is running!")
+            break
+
+        if state in ["JOB_STATE_FAILED", "JOB_STATE_KILLED"]:
+            print(f"Job failed: {status.get('error', 'Unknown error')}")
+            logs = cluster.logs(job_id)
+            if logs:
+                print("Job logs:")
+                for log in logs:
+                    print(f"  {log}")
+            return
+
+        time.sleep(1)
+
+    if not job_running:
+        print("Job did not start in time")
+        return
+
+    # Give the actor server time to register
+    print("Waiting for endpoint registration...")
+    time.sleep(3)
+
+    # Step 4: Use ClusterResolver to discover the actor
+    from fluster.actor import ActorClient, ClusterResolver
+
+    print("\nResolving actor via ClusterResolver...")
     resolver = ClusterResolver(cluster.controller_url, namespace="<local>")
-
-    # Create a client and call actor methods
     client = ActorClient(resolver, "calculator")
 
+    # Step 5: Call the actor methods
+    print("\nCalling actor methods...")
     result1 = client.add(10, 20)
-    print(f"Client received: {result1}")
+    print(f"Client received: add(10, 20) = {result1}")
 
     result2 = client.multiply(5, 7)
-    print(f"Client received: {result2}")
+    print(f"Client received: multiply(5, 7) = {result2}")
 
     history = client.get_history()
     print(f"Operation history: {history}")
 
-
-def example_actor_coordinator(cluster: ClusterContext):
-    """Demonstrate coordinator pattern where workers fetch tasks from a coordinator.
-
-    This example shows:
-    - A coordinator actor that manages a queue of tasks
-    - Worker actors that fetch tasks, process them, and report results
-    - Context injection for actors to communicate with each other
-    """
-    print("\n=== Example: Coordinator Pattern ===\n")
-
-    from fluster.actor import ActorClient, ActorContext, ActorServer, ClusterResolver, current_ctx
-
-    # Coordinator actor manages tasks and collects results
-    class Coordinator:
-        def __init__(self):
-            self._tasks = [{"id": i, "data": i * 10} for i in range(5)]
-            self._results = []
-            self._completed = 0
-
-        def get_next_task(self) -> dict | None:
-            if self._tasks:
-                task = self._tasks.pop(0)
-                print(f"Coordinator: Dispatching task {task['id']}")
-                return task
-            return None
-
-        def report_result(self, task_id: int, result: int) -> None:
-            self._results.append({"task_id": task_id, "result": result})
-            self._completed += 1
-            print(f"Coordinator: Received result for task {task_id}: {result} ({self._completed}/5 complete)")
-
-        def get_summary(self) -> dict:
-            return {"completed": self._completed, "pending": len(self._tasks), "results": self._results}
-
-    # Worker actor fetches tasks from coordinator
-    class Worker:
-        def __init__(self, worker_id: str):
-            self._worker_id = worker_id
-
-        def process_tasks(self) -> int:
-            """Fetch and process tasks from coordinator until queue is empty."""
-            # Get the resolver from context to communicate with coordinator
-            ctx = current_ctx()
-            coordinator = ActorClient(ctx.resolver, "coordinator")
-
-            tasks_processed = 0
-            while True:
-                task = coordinator.get_next_task()
-                if task is None:
-                    print(f"Worker {self._worker_id}: No more tasks")
-                    break
-
-                # Process the task
-                result = task["data"] * 2
-                print(f"Worker {self._worker_id}: Processing task {task['id']}, result = {result}")
-
-                # Report result back to coordinator
-                coordinator.report_result(task["id"], result)
-                tasks_processed += 1
-
-            return tasks_processed
-
-    # Start coordinator
-    coord_server = ActorServer(host="127.0.0.1", port=0)
-    coord_server.register("coordinator", Coordinator())
-    coord_port = coord_server.serve_background()
-    print(f"Started coordinator on port {coord_port}")
-
-    # Register coordinator endpoint
-    assert cluster._client is not None
-    cluster._client.post(
-        "/fluster.cluster.ControllerService/RegisterEndpoint",
-        headers={"Content-Type": "application/json"},
-        json={
-            "name": "coordinator",
-            "address": f"127.0.0.1:{coord_port}",
-            "jobId": cluster._worker_id,
-            "namespace": "<local>",
-            "metadata": {},
-        },
-    )
-
-    # Create resolver and context for workers
-    resolver = ClusterResolver(cluster.controller_url, namespace="<local>")
-    worker_context = ActorContext(cluster=None, resolver=resolver, job_id="worker-demo", namespace="<local>")
-
-    # Start multiple worker servers
-    worker_servers = []
-    for i in range(2):
-        server = ActorServer(host="127.0.0.1", port=0)
-        server.register("worker", Worker(f"worker-{i}"))
-        port = server.serve_background(context=worker_context)
-        worker_servers.append(server)
-        print(f"Started worker-{i} on port {port}")
-
-        assert cluster._client is not None
-        cluster._client.post(
-            "/fluster.cluster.ControllerService/RegisterEndpoint",
-            headers={"Content-Type": "application/json"},
-            json={
-                "name": f"worker-{i}",
-                "address": f"127.0.0.1:{port}",
-                "jobId": cluster._worker_id,
-                "namespace": "<local>",
-                "metadata": {},
-            },
-        )
-
-    # Tell workers to start processing
-    print("\nStarting task processing...")
-    for i in range(2):
-        client = ActorClient(resolver, f"worker-{i}")
-        count = client.process_tasks()
-        print(f"Worker-{i} processed {count} tasks")
-
-    # Check coordinator summary
-    coord_client = ActorClient(resolver, "coordinator")
-    summary = coord_client.get_summary()
-    print(f"\nCoordinator summary: {summary}")
+    print("\nActor job workflow complete!")
+    print("Note: The actor job will continue running until the cluster shuts down.")
 
 
-def example_actor_pool(cluster: ClusterContext):
-    """Demonstrate ActorPool for load-balanced and broadcast calls.
-
-    This example shows:
-    - Round-robin load balancing across multiple actor instances
-    - Broadcasting calls to all instances simultaneously
-    - Collecting results from broadcast operations
-    """
-    print("\n=== Example: Actor Pool Pattern ===\n")
-
-    from fluster.actor import ActorPool, ActorServer, ClusterResolver
-
-    # Inference actor simulates a model serving endpoint
-    class InferenceServer:
-        def __init__(self, server_id: str):
-            self._server_id = server_id
-            self._request_count = 0
-            self._weights_version = 0
-
-        def predict(self, data: list[float]) -> dict:
-            self._request_count += 1
-            result = sum(data) * 1.5
-            print(f"Server {self._server_id}: prediction = {result:.2f} (request #{self._request_count})")
-            return {"server_id": self._server_id, "result": result, "weights_version": self._weights_version}
-
-        def update_weights(self, version: int) -> None:
-            self._weights_version = version
-            print(f"Server {self._server_id}: Updated weights to version {version}")
-
-        def get_stats(self) -> dict:
-            return {
-                "server_id": self._server_id,
-                "request_count": self._request_count,
-                "weights_version": self._weights_version,
-            }
-
-    # Start multiple inference servers
-    servers = []
-    for i in range(3):
-        server = ActorServer(host="127.0.0.1", port=0)
-        server.register("inference", InferenceServer(f"server-{i}"))
-        port = server.serve_background()
-        servers.append(server)
-        print(f"Started inference server-{i} on port {port}")
-
-        # Register endpoint
-        assert cluster._client is not None
-        cluster._client.post(
-            "/fluster.cluster.ControllerService/RegisterEndpoint",
-            headers={"Content-Type": "application/json"},
-            json={
-                "name": "inference",
-                "address": f"127.0.0.1:{port}",
-                "jobId": cluster._worker_id,
-                "namespace": "<local>",
-                "metadata": {"server_id": f"server-{i}"},
-            },
-        )
-
-    # Create a pool that discovers all inference servers
-    resolver = ClusterResolver(cluster.controller_url, namespace="<local>")
-    pool = ActorPool(resolver, "inference")
-    print(f"\nPool discovered {pool.size} inference servers")
-
-    # Demonstrate round-robin load balancing
-    print("\n--- Round-robin calls ---")
-    for i in range(6):
-        result = pool.call().predict([1.0, 2.0, 3.0])
-        print(f"  Request {i}: served by {result['server_id']}")
-
-    # Demonstrate broadcast to all servers
-    print("\n--- Broadcast: Update weights ---")
-    broadcast = pool.broadcast().update_weights(42)
-    results = broadcast.wait_all()
-    print(f"  Broadcast completed: {len(results)} servers updated")
-    for r in results:
-        if not r.success:
-            print(f"  Failed: {r.endpoint.url}")
-
-    # Get stats from all servers using broadcast
-    print("\n--- Broadcast: Get stats ---")
-    broadcast = pool.broadcast().get_stats()
-    results = broadcast.wait_all()
-    for r in results:
-        if r.success:
-            print(f"  {r.value}")
+# =============================================================================
+# DEPRECATED ACTOR EXAMPLES - REMOVED
+# =============================================================================
+# The old actor examples (example_actor_basic, example_actor_coordinator,
+# example_actor_pool) used a standalone actor pattern that required a system
+# job hack (_system_job_id). This pattern is no longer supported and the
+# examples have been removed.
+#
+# Use example_actor_job_workflow() instead for the recommended pattern where
+# actors run as cluster jobs and register with the controller properly.
+# =============================================================================
 
 
 # =============================================================================
@@ -1080,9 +940,7 @@ def main(wait: bool, mode: str):
                 print("\n" + "=" * 60)
                 print("ACTOR SYSTEM EXAMPLES")
                 print("=" * 60)
-                example_actor_basic(cluster)
-                example_actor_coordinator(cluster)
-                example_actor_pool(cluster)
+                example_actor_job_workflow(cluster)
 
             # Run cluster job examples
             if mode in ["all", "jobs"]:

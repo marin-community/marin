@@ -99,6 +99,8 @@ class JobManager:
         runtime: ContainerRuntime,
         port_allocator: PortAllocator,
         max_concurrent_jobs: int = 10,
+        controller_address: str | None = None,
+        worker_id: str | None = None,
     ):
         self._bundle_cache = bundle_cache
         self._venv_cache = venv_cache
@@ -106,6 +108,8 @@ class JobManager:
         self._runtime = runtime
         self._port_allocator = port_allocator
         self._max_concurrent_jobs = max_concurrent_jobs
+        self._controller_address = controller_address
+        self._worker_id = worker_id
         self._semaphore = threading.Semaphore(max_concurrent_jobs)
         # TODO: Jobs are never removed from this dict, causing unbounded memory growth.
         # Need to implement LRU eviction for completed jobs similar to BundleCache/VenvCache.
@@ -117,10 +121,15 @@ class JobManager:
 
         Returns job_id immediately, execution happens in background.
 
-        Note: FLUSTER_* and FRAY_* environment variables are reserved and will be overwritten:
-        - FLUSTER_JOB_ID: Set to the job ID
-        - FLUSTER_PORT_<NAME>: Set to allocated port numbers (e.g., FLUSTER_PORT_HTTP)
-        - FRAY_PORT_MAPPING: Comma-separated port mappings (e.g., "web:8080,api:8081")
+        Fluster auto-injects system environment variables (these override user-provided values):
+        - FLUSTER_JOB_ID: The job's unique identifier
+        - FLUSTER_WORKER_ID: ID of the worker running this job
+        - FLUSTER_CONTROLLER_ADDRESS: Controller URL for endpoint registration
+        - FLUSTER_PORT_<NAME>: Allocated port numbers (e.g., FLUSTER_PORT_HTTP)
+        - FRAY_PORT_MAPPING: All port mappings as "name:port,name:port"
+
+        User-provided environment variables (including FLUSTER_NAMESPACE for actors) are
+        passed through from the RunJobRequest.environment.env_vars.
         """
         job_id = request.job_id or str(uuid.uuid4())
 
@@ -206,13 +215,22 @@ class JobManager:
             entrypoint = cloudpickle.loads(job.request.serialized_entrypoint)
             command = self._build_command(entrypoint)
 
-            # Build environment from EnvironmentConfig
+            # Build environment from user-provided vars + EnvironmentConfig
             env = dict(env_config.env_vars)
+
+            # Auto-inject Fluster system variables (these override user-provided values)
             env["FLUSTER_JOB_ID"] = job.job_id
+
+            if self._worker_id:
+                env["FLUSTER_WORKER_ID"] = self._worker_id
+
+            if self._controller_address:
+                env["FLUSTER_CONTROLLER_ADDRESS"] = self._controller_address
+
+            # Inject allocated ports
             for name, port in job.ports.items():
                 env[f"FLUSTER_PORT_{name.upper()}"] = str(port)
 
-            # Add FRAY_PORT_MAPPING for communicating all port mappings as a single variable
             if job.ports:
                 port_mapping = ",".join(f"{name}:{port}" for name, port in job.ports.items())
                 env["FRAY_PORT_MAPPING"] = port_mapping

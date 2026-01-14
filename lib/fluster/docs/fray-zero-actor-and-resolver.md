@@ -483,7 +483,6 @@ class ActorServer:
 from typing import Any
 
 import cloudpickle
-import httpx
 
 from fluster import actor_pb2
 
@@ -518,14 +517,7 @@ class _RpcMethod:
             serialized_kwargs=cloudpickle.dumps(kwargs),
         )
 
-        response = httpx.post(
-            f"{self._client._url}/fluster.actor.ActorService/Call",
-            content=call.SerializeToString(),
-            headers={"Content-Type": "application/proto"},
-            timeout=self._client._timeout,
-        )
-        response.raise_for_status()
-
+        ...
         resp = actor_pb2.ActorResponse()
         resp.ParseFromString(response.content)
 
