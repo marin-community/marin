@@ -53,7 +53,6 @@ from marin.scaling_laws import (
     IsoFlopRecord,
     ScalingRecipe,
     fit_scaling_laws,
-    generate_training_configs,
     pick_v5p_type,
     round_flops_to_bucket,
 )
@@ -257,10 +256,13 @@ class Marin2025Recipe:
     # --- Constraints ---
     max_learning_rate: float = 0.01
     min_batch_size: int = 8
+    max_batch_size: int = 8192
+    # max_params scales with sqrt(budget) above 3e20, with floor of 12B and ceiling of 1T
+    base_max_params: float = 12e9
+    base_max_params_budget: float = 3e20
+    global_max_params: float = 1e12
 
-    # --- Search bounds for isoflop sweeps ---
-    min_hidden_pow: int = 9
-    max_hidden_pow: int = 12
+    # --- Search step sizes for isoflop sweeps ---
     small_budget_step_size: int = 128
     large_budget_step_size: int = 256
     budget_step_threshold: float = 9e18
@@ -286,6 +288,15 @@ class Marin2025Recipe:
         if budget > self.budget_step_threshold:
             return self.large_budget_step_size
         return self.small_budget_step_size
+
+    def _max_params_for_budget(self, budget: float) -> float:
+        """Compute max_params as a function of budget.
+
+        Returns base_max_params for budgets <= base_max_params_budget,
+        then scales with sqrt(budget) for larger budgets, capped at global_max_params.
+        """
+        scaling = self.base_max_params * math.sqrt(budget / self.base_max_params_budget)
+        return min(max(self.base_max_params, scaling), self.global_max_params)
 
     def _build_model_config_from_hidden_size(self, hidden_size: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
         """Build model config from hidden_size directly."""
@@ -333,12 +344,14 @@ class Marin2025Recipe:
         budget: float,
         seq_len: int = DEFAULT_SEQ_LEN,
     ) -> Iterator[LlamaConfig]:
-        """Yield candidate model architectures for the given FLOP budget."""
-        step_size = self._get_step_size(budget)
-        min_hidden = 2**self.min_hidden_pow
-        max_hidden = 2**self.max_hidden_pow
+        """Yield candidate model architectures for the given FLOP budget.
 
-        for hidden_size in range(min_hidden, max_hidden + 1, step_size):
+        Uses wide bounds (2**9 to 2**17) and relies on batch size filtering
+        in build_candidate_config to select valid configurations.
+        """
+        step_size = self._get_step_size(budget)
+
+        for hidden_size in range(2**9, 2**17, step_size):
             yield self._build_model_config_from_hidden_size(hidden_size, seq_len)
 
     def build_candidate_config(
@@ -366,8 +379,8 @@ class Marin2025Recipe:
             batch_size //= 2
             lr = self._compute_learning_rate(batch_size, hidden_size)
 
-        # Return None if batch_size is below minimum
-        if batch_size < self.min_batch_size:
+        # Return None if batch_size is outside valid range
+        if batch_size < self.min_batch_size or batch_size > self.max_batch_size:
             return None
 
         # Compute train_steps to achieve target tokens
@@ -400,6 +413,24 @@ class Marin2025Recipe:
             tokens=actual_tokens,
             flops_budget=flops_budget,
         )
+
+    def candidates_for_budget(
+        self,
+        budget: float,
+        seq_len: int = DEFAULT_SEQ_LEN,
+    ) -> Iterator[CandidateConfig]:
+        """Yield valid candidate training configs for the given FLOP budget."""
+        max_params = self._max_params_for_budget(budget)
+        for model_config in self.build_model_configs(budget, seq_len):
+            # Skip models that exceed budget-dependent max_params
+            params = model_config.total_trainable_params(self.vocab_size)
+            if params > max_params:
+                continue
+            flops_per_token = model_config.flops_per_token(self.vocab_size, seq_len)
+            tokens = budget / (3 * flops_per_token)
+            candidate = self.build_candidate_config(model_config, tokens, budget, seq_len)
+            if candidate is not None:
+                yield candidate
 
 
 MARIN_2025_RECIPE = Marin2025Recipe()
@@ -530,9 +561,6 @@ def create_isoflop_sweep_steps(
 ) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
     """Create ExecutorSteps for an ISOFlop sweep.
 
-    This function creates ExecutorSteps directly in experiment code, using
-    `generate_training_configs()` from the library to compute configs.
-
     Args:
         tokenized: Tokenized dataset to train on.
         experiment_name: Name suffix for the experiment (e.g., 'nemo', 'dclm').
@@ -546,12 +574,7 @@ def create_isoflop_sweep_steps(
         - steps: Training and evaluation ExecutorSteps for the sweep.
         - candidates: CandidateConfig for each training run with full config details.
     """
-    # Generate complete training configs from the library
-    candidates = generate_training_configs(
-        budgets=budgets,
-        recipe=recipe,
-        seq_len=seq_len,
-    )
+    candidates = [c for budget in budgets for c in recipe.candidates_for_budget(budget, seq_len)]
 
     # Base config for training runs (values overridden per-candidate)
     base_train_config = SimpleTrainConfig(

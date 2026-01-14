@@ -25,7 +25,6 @@ from marin.scaling_laws.isoflop_analysis import (
     ScalingFit,
     ScalingRecipe,
     fit_scaling_laws,
-    generate_training_configs,
     predict_optimal_config,
     round_flops_to_bucket,
 )
@@ -57,7 +56,6 @@ __all__ = [
     "create_isoflop_plot",
     "create_scaling_plot",
     "fit_scaling_laws",
-    "generate_training_configs",
     "pick_v5p_type",
     "predict_optimal_config",
     "round_flops_to_bucket",
