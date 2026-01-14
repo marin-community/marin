@@ -17,18 +17,18 @@ Step wrappers for marin library functions.
 
 This module contains step definitions that wrap library processing functions
 from lib/marin. The library functions work with concrete types (strings),
-while these step wrappers handle StepRef resolution and executor integration.
+while these step wrappers handle dependency resolution and executor integration.
 
 Usage:
-    from experiments.steps import upload_dir_to_hf
+    from experiments.steps import upload_dir_to_hf, upload_path_to_hf
 
-    # With a plain string path:
-    step = upload_dir_to_hf("gs://bucket/path", repo_id="user/repo")
+    # Upload a step's output:
+    step = upload_dir_to_hf(name="my-upload", input_step=my_previous_step, repo_id="user/repo")
 
-    # With an ExecutorStep (dependency):
-    step = upload_dir_to_hf(my_previous_step, repo_id="user/repo")
+    # Upload a raw GCS/local path:
+    step = upload_path_to_hf(name="my-upload", input_path="gs://bucket/path", repo_id="user/repo")
 """
 
-from experiments.steps.hf_upload import upload_dir_to_hf
+from experiments.steps.hf_upload import upload_dir_to_hf, upload_path_to_hf
 
-__all__ = ["upload_dir_to_hf"]
+__all__ = ["upload_dir_to_hf", "upload_path_to_hf"]

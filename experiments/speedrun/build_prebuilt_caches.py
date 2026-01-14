@@ -38,7 +38,9 @@ fineweb_edu_subcache_10B_created = slice_cache(
     input_config=step_to_lm_mixture_component(fineweb_edu_llama3_tokenized, include_raw_paths=True),
     num_tokens=10_000_000_000,
 )
-uploaded_cert_10B = upload_dir_to_hf(fineweb_edu_subcache_10B_created, repo_id=fineweb_edu_10B_repo_id)
+uploaded_cert_10B = upload_dir_to_hf(
+    name="fineweb-edu-10B", input_step=fineweb_edu_subcache_10B_created, repo_id=fineweb_edu_10B_repo_id
+)
 
 fineweb_edu_subcache_10M_created = slice_cache(
     output_path="tokenized/subcache/fineweb-edu-10M",
@@ -46,7 +48,9 @@ fineweb_edu_subcache_10M_created = slice_cache(
     num_tokens=10_000_000,
 )
 
-uploaded_cert_10M = upload_dir_to_hf(fineweb_edu_subcache_10M_created, repo_id=fineweb_edu_10M_repo_id)
+uploaded_cert_10M = upload_dir_to_hf(
+    name="fineweb-edu-10M", input_step=fineweb_edu_subcache_10M_created, repo_id=fineweb_edu_10M_repo_id
+)
 
 
 if __name__ == "__main__":

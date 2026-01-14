@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from experiments.steps import upload_dir_to_hf
+from experiments.steps import upload_path_to_hf
 from marin.execution.executor import executor_main
 
-medu_exported = upload_dir_to_hf(
-    "gs://marin-us-east1/documents/medu-mmlu-science-llama8b-qa-whole-1a419d",
-    "marin-community/medu-science-qa",
-    "dataset",
+medu_exported = upload_path_to_hf(
+    name="medu-science-qa",
+    input_path="gs://marin-us-east1/documents/medu-mmlu-science-llama8b-qa-whole-1a419d",
+    repo_id="marin-community/medu-science-qa",
+    repo_type="dataset",
 )
 
 if __name__ == "__main__":

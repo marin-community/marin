@@ -16,85 +16,91 @@
 Step wrappers for uploading to Hugging Face Hub.
 
 This module provides step definitions that wrap the library functions in
-marin.export.hf_upload. It handles StepRef resolution for executor integration.
+marin.export.hf_upload.
 """
 
-from urllib.parse import urlparse
-
-from marin.execution import ExecutorStep, StepContext, StepRef, step
+from marin.execution import ExecutorStep, StepContext, step
 from marin.export.hf_upload import UploadToHfConfig, upload_to_hf
 
 
+@step(name="metadata/hf_uploads/{name}", fn=upload_to_hf)
 def upload_dir_to_hf(
-    input_path: str | StepRef | ExecutorStep,
+    ctx: StepContext,
+    name: str,
+    input_step: ExecutorStep,
     repo_id: str,
     repo_type: str = "dataset",
     token: str | None = None,
-    certificate_path: str | None = None,
     private: bool = False,
     revision: str | None = None,
     commit_batch_size: str = "1GiB",
     **upload_kwargs: str,
-) -> ExecutorStep:
+):
     """
-    Create a step that uploads a directory to a Hugging Face repo.
-
-    This is a step wrapper that handles StepRef resolution. The actual upload
-    logic is in marin.export.hf_upload.upload_to_hf.
-
-    For local paths, it will use the huggingface_hub.upload_folder function.
-    For GCS (or other fsspec paths), it will stream the files using
-    preupload_lfs_files and/or upload_folder.
+    Create a step that uploads a step's output to a Hugging Face repo.
 
     Args:
-        input_path: Path to upload. Can be:
-            - A string path (local or GCS)
-            - A StepRef from another step
-            - An ExecutorStep (will be converted to StepRef)
+        ctx: Step context (automatically provided by @step decorator)
+        name: Name for this upload step (used in output path)
+        input_step: The step whose output to upload
         repo_id: The repo id to upload to (e.g. "username/repo_name")
-        repo_type: The type of repo to upload to (e.g. "dataset", "model", etc.)
-        token: The token to use for authentication (if not provided, uses default)
-        certificate_path: Where to store the upload certificate (for idempotency).
-            If not provided, a reasonable default will be used.
+        repo_type: The type of repo ("dataset", "model", etc.)
+        token: Auth token (if not provided, uses default)
         private: Whether to create a private repo if it doesn't exist
-        revision: The branch to upload to (if not provided, uses default branch)
+        revision: Branch to upload to (if not provided, uses default)
         commit_batch_size: Maximum size of files to batch in a single commit
-        **upload_kwargs: Additional kwargs passed to huggingface_hub.upload_folder
-
-    Returns:
-        ExecutorStep that performs the upload
+        **upload_kwargs: Additional kwargs for huggingface_hub.upload_folder
     """
-    # Convert ExecutorStep to StepRef
-    if isinstance(input_path, ExecutorStep):
-        input_path = StepRef(_step=input_path)
+    return UploadToHfConfig(
+        input_path=ctx.require(input_step),
+        repo_id=repo_id,
+        repo_type=repo_type,
+        token=token,
+        revision=revision,
+        private=private,
+        commit_batch_size=commit_batch_size,
+        upload_kwargs=upload_kwargs,
+    )
 
-    # Generate certificate path if not provided
-    if not certificate_path:
-        if isinstance(input_path, StepRef):
-            certificate_path = f"metadata/hf_uploads/{input_path._subpath or 'output'}"
-        else:
-            # This will drop the scheme (e.g., 'gs') and keep the path
-            parsed = urlparse(input_path)
-            path = parsed.path.lstrip("/")
-            certificate_path = f"metadata/hf_uploads/{path}"
 
-    @step(name=certificate_path, fn=upload_to_hf)
-    def _upload(ctx: StepContext):
-        # Resolve input_path if it's a StepRef
-        if isinstance(input_path, StepRef):
-            actual_input = ctx.require(input_path)
-        else:
-            actual_input = input_path
+@step(name="metadata/hf_uploads/{name}", fn=upload_to_hf)
+def upload_path_to_hf(
+    ctx: StepContext,
+    name: str,
+    input_path: str,
+    repo_id: str,
+    repo_type: str = "dataset",
+    token: str | None = None,
+    private: bool = False,
+    revision: str | None = None,
+    commit_batch_size: str = "1GiB",
+    **upload_kwargs: str,
+):
+    """
+    Create a step that uploads a raw path (GCS, local) to a Hugging Face repo.
 
-        return UploadToHfConfig(
-            input_path=actual_input,
-            repo_id=repo_id,
-            repo_type=repo_type,
-            token=token,
-            revision=revision,
-            private=private,
-            commit_batch_size=commit_batch_size,
-            upload_kwargs=upload_kwargs,
-        )
+    Use this for uploading existing paths that aren't step outputs.
+    For uploading step outputs, use upload_dir_to_hf instead.
 
-    return _upload()
+    Args:
+        ctx: Step context (automatically provided by @step decorator)
+        name: Name for this upload step (used in output path)
+        input_path: The GCS/local path to upload
+        repo_id: The repo id to upload to (e.g. "username/repo_name")
+        repo_type: The type of repo ("dataset", "model", etc.)
+        token: Auth token (if not provided, uses default)
+        private: Whether to create a private repo if it doesn't exist
+        revision: Branch to upload to (if not provided, uses default)
+        commit_batch_size: Maximum size of files to batch in a single commit
+        **upload_kwargs: Additional kwargs for huggingface_hub.upload_folder
+    """
+    return UploadToHfConfig(
+        input_path=input_path,
+        repo_id=repo_id,
+        repo_type=repo_type,
+        token=token,
+        revision=revision,
+        private=private,
+        commit_batch_size=commit_batch_size,
+        upload_kwargs=upload_kwargs,
+    )
