@@ -35,11 +35,11 @@ from pathlib import Path
 
 import click
 from fluster import cluster_pb2
-from fluster.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
 from fluster.cluster.client import RpcClusterClient
 from fluster.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
 from fluster.cluster.types import Entrypoint
 from fluster.cluster.worker.worker import Worker, WorkerConfig
+from fluster.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
 
 # The fluster project root (lib/fluster/) - used as workspace for the example
 FLUSTER_ROOT = Path(__file__).parent.parent
@@ -605,24 +605,6 @@ def example_worker_pool(cluster: ClusterContext):
         print(f"Results: {results}")
 
     print("\nWorkerPool example complete!")
-
-
-# =============================================================================
-# DEPRECATED ACTOR EXAMPLES - REMOVED
-# =============================================================================
-# The old actor examples (example_actor_basic, example_actor_coordinator,
-# example_actor_pool) used a standalone actor pattern that required a system
-# job hack (_system_job_id). This pattern is no longer supported and the
-# examples have been removed.
-#
-# Use example_actor_job_workflow() instead for the recommended pattern where
-# actors run as cluster jobs and register with the controller properly.
-# =============================================================================
-
-
-# =============================================================================
-# CLUSTER JOB EXAMPLES
-# =============================================================================
 
 
 def example_basic(cluster: ClusterContext):

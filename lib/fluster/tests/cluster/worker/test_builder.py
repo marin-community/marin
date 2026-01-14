@@ -377,29 +377,37 @@ packages = ["src/test_app"]
 def test_lru_eviction_of_images(tmp_path, docker_bundle):
     """Test LRU eviction removes old images when over limit."""
     import time
+    import uuid
 
     if not check_docker_available():
         pytest.skip("Docker not available")
 
+    # Use a unique registry prefix to isolate this test's images from other runs.
+    # The eviction pattern matches {registry}/fluster-job-*, so unique registry = isolation.
+    test_id = uuid.uuid4().hex[:8]
+    test_registry = f"lru-test-{test_id}"
+
     cache_dir = tmp_path / "cache"
-    builder = ImageCache(cache_dir, registry="localhost:5000", max_images=2)
+    builder = ImageCache(cache_dir, registry=test_registry, max_images=2)
 
     base_image = "python:3.11-slim"
     images_built = []
 
     # Build 3 images to trigger eviction
+    # Use 1 second sleep to ensure different Docker timestamps (Docker has second granularity)
     for i in range(3):
         result = builder.build(
             bundle_path=docker_bundle,
             base_image=base_image,
             extras=[],
-            job_id=f"eviction-test-{i}",
-            deps_hash=f"evict{i:016d}",
+            job_id=f"job-{i}",
+            deps_hash=f"deps{i:016d}",
         )
         images_built.append(result.image_tag)
 
-        # Small delay to ensure different creation times
-        time.sleep(0.1)
+        # Docker timestamps have second granularity, so we need 1+ second delay
+        if i < 2:
+            time.sleep(1.1)
 
     # After building 3 images with max_images=2, oldest should be evicted
     # Note: _evict_old_images is called after each build, but only when count > max_images
