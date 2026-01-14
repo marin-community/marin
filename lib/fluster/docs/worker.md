@@ -70,7 +70,7 @@ Jobs that run actor servers use `FLUSTER_PORT_ACTOR` to bind their server and `F
 ┌──────────────────────────────────────────────────────────┐
 │                        Worker                             │
 │                                                           │
-│   JobManager ──► Docker ──► Container                    │
+│   Job State ──► Docker ──► Container                     │
 │                                  │                        │
 │                                  ▼                        │
 │                           Job Entrypoint                  │
@@ -83,7 +83,7 @@ Jobs that run actor servers use `FLUSTER_PORT_ACTOR` to bind their server and `F
 ```
 
 - The **Controller** dispatches jobs and polls for status updates
-- The **JobManager** orchestrates the full job lifecycle
+- The **Worker** orchestrates the full job lifecycle directly
 - **Docker** provides container isolation
 - **Job Entrypoint** is user code that may optionally start an **ActorServer**
 
@@ -101,8 +101,7 @@ Jobs that run actor servers use `FLUSTER_PORT_ACTOR` to bind their server and `F
 
 | File | Purpose |
 |------|---------|
-| `worker.py` | Main `Worker` class, configuration, startup |
-| `manager.py` | `JobManager` lifecycle orchestration, port allocation |
+| `worker.py` | Main `Worker` class with job lifecycle management, port allocation, configuration |
 | `service.py` | RPC method implementations |
 | `docker.py` | Container runtime interface |
 | `builder.py` | Image building |

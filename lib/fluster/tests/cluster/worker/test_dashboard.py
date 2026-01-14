@@ -31,8 +31,8 @@ from fluster.cluster.worker.builder import BuildResult, ImageCache, VenvCache
 from fluster.cluster.worker.bundle import BundleCache
 from fluster.cluster.worker.dashboard import WorkerDashboard
 from fluster.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime
-from fluster.cluster.worker.manager import JobManager, PortAllocator
 from fluster.cluster.worker.service import WorkerServiceImpl
+from fluster.cluster.worker.worker import Worker, WorkerConfig
 from fluster.cluster_connect import WorkerServiceClient
 
 # ============================================================================
@@ -102,16 +102,18 @@ def mock_runtime():
 
 
 @pytest.fixture
-def job_manager(mock_bundle_cache, mock_venv_cache, mock_image_cache, mock_runtime):
-    """Create JobManager with mocked dependencies."""
-    port_allocator = PortAllocator(port_range=(50000, 50100))
-    return JobManager(
-        bundle_cache=mock_bundle_cache,
-        venv_cache=mock_venv_cache,
-        image_cache=mock_image_cache,
-        runtime=mock_runtime,
-        port_allocator=port_allocator,
+def worker(mock_bundle_cache, mock_venv_cache, mock_image_cache, mock_runtime):
+    """Create Worker with mocked dependencies."""
+    config = WorkerConfig(
+        port=0,
         max_concurrent_jobs=5,
+        port_range=(50000, 50100),
+    )
+    return Worker(
+        config,
+        bundle_provider=mock_bundle_cache,
+        image_provider=mock_image_cache,
+        container_runtime=mock_runtime,
     )
 
 
@@ -166,9 +168,9 @@ def create_run_job_request(job_id: str = "test-job-1", ports: list[str] | None =
 
 
 @pytest.fixture
-def service(job_manager):
+def service(worker):
     """Create WorkerServiceImpl."""
-    return WorkerServiceImpl(manager=job_manager)
+    return WorkerServiceImpl(provider=worker)
 
 
 @pytest.fixture
@@ -223,7 +225,7 @@ def test_stats_with_jobs(client, service):
         service.run_job(request, Mock())
 
     # Wait for all job threads to complete (mock makes them finish immediately)
-    jobs = service._manager.list_jobs()
+    jobs = service._provider.list_jobs()
     for job in jobs:
         if job.thread:
             job.thread.join(timeout=5.0)
@@ -289,7 +291,7 @@ def test_get_job_success(client, service):
     service.run_job(request, Mock())
 
     # Wait for job to complete (mock runtime returns running=False immediately)
-    job = service._manager.get_job("job-details")
+    job = service._provider.get_job("job-details")
     job.thread.join(timeout=5.0)
 
     response = client.get("/api/jobs/job-details")
@@ -314,7 +316,7 @@ def test_get_logs_with_tail_parameter(client, service):
     service.run_job(request, Mock())
 
     # Add logs directly to job.logs (since we no longer use file-based logging)
-    job = service._manager.get_job("job-tail")
+    job = service._provider.get_job("job-tail")
     for i in range(100):
         job.logs.add("stdout", f"Log line {i}")
 
@@ -335,7 +337,7 @@ def test_get_logs_with_source_filter(client, service):
     service.run_job(request, Mock())
 
     # Stop the job thread so it doesn't add more logs
-    job = service._manager.get_job("job-source-filter")
+    job = service._provider.get_job("job-source-filter")
     time.sleep(0.05)
     job.should_stop = True
     if job.thread:
@@ -375,7 +377,7 @@ def test_list_jobs_includes_resource_and_build_metrics(client, service):
     service.run_job(request, Mock())
 
     # Set some resource and build metrics
-    job = service._manager.get_job("job-with-metrics")
+    job = service._provider.get_job("job-with-metrics")
     job.current_memory_mb = 256
     job.peak_memory_mb = 512
     job.current_cpu_percent = 45
@@ -404,7 +406,7 @@ def test_get_job_includes_nested_resources_and_build(client, service):
     service.run_job(request, Mock())
 
     # Set some resource and build metrics
-    job = service._manager.get_job("job-nested-metrics")
+    job = service._provider.get_job("job-nested-metrics")
     job.current_memory_mb = 128
     job.peak_memory_mb = 256
     job.current_cpu_percent = 30
@@ -476,7 +478,7 @@ def test_run_job_with_ports(service, request_context):
     assert response.job_id == "job-with-ports"
 
     # Verify ports were allocated
-    job = service._manager.get_job("job-with-ports")
+    job = service._provider.get_job("job-with-ports")
     assert len(job.ports) == 2
     assert "http" in job.ports
     assert "grpc" in job.ports
@@ -499,7 +501,7 @@ def test_get_job_status_completed_job(service, request_context):
     service.run_job(request, request_context)
 
     # Wait for job to complete
-    job = service._manager.get_job("job-completed")
+    job = service._provider.get_job("job-completed")
     job.thread.join(timeout=5.0)
 
     status_request = cluster_pb2.Worker.GetJobStatusRequest(job_id="job-completed")
@@ -518,7 +520,7 @@ def test_fetch_logs_tail_with_negative_start_line(service, request_context):
     service.run_job(request, request_context)
 
     # Add logs directly to job.logs
-    job = service._manager.get_job("job-logs-tail")
+    job = service._provider.get_job("job-logs-tail")
     for i in range(10):
         job.logs.add("stdout", f"Log line {i}")
 
@@ -538,7 +540,7 @@ def test_fetch_logs_with_regex_filter(service, request_context):
     service.run_job(request, request_context)
 
     # Add logs with different patterns
-    job = service._manager.get_job("job-logs-regex")
+    job = service._provider.get_job("job-logs-regex")
     job.logs.add("stdout", "ERROR: something bad")
     job.logs.add("stdout", "INFO: normal log")
     job.logs.add("stdout", "ERROR: another error")
@@ -559,7 +561,7 @@ def test_fetch_logs_combined_filters(service, request_context):
     service.run_job(request, request_context)
 
     # Add logs
-    job = service._manager.get_job("job-logs-combined")
+    job = service._provider.get_job("job-logs-combined")
     job.logs.add("stdout", "ERROR: first error")
     job.logs.add("stdout", "INFO: normal")
     job.logs.add("stdout", "ERROR: second error")
@@ -594,7 +596,7 @@ def test_kill_job_already_completed(service, request_context):
     service.run_job(request, request_context)
 
     # Wait for job to complete
-    job = service._manager.get_job("job-completed")
+    job = service._provider.get_job("job-completed")
     job.thread.join(timeout=5.0)
 
     # Try to kill completed job
@@ -617,7 +619,7 @@ def test_kill_job_with_custom_timeout(service, request_context):
     service.run_job(request, request_context)
 
     # Wait for job thread to finish (mock makes it complete immediately)
-    job = service._manager.get_job("job-kill")
+    job = service._provider.get_job("job-kill")
     if job.thread:
         job.thread.join(timeout=5.0)
 
@@ -632,7 +634,7 @@ def test_kill_job_with_custom_timeout(service, request_context):
     assert isinstance(response, cluster_pb2.Empty)
     assert job.should_stop is True
     # The runtime.kill should have been called (may be called twice: SIGTERM then SIGKILL)
-    assert service._manager._runtime.kill.called
+    assert service._provider._runtime.kill.called
 
 
 # ============================================================================

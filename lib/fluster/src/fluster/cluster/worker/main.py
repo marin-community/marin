@@ -24,12 +24,7 @@ from pathlib import Path
 
 import click
 
-from fluster.cluster.worker.bundle import BundleCache
-from fluster.cluster.worker.builder import ImageCache, VenvCache
-from fluster.cluster.worker.dashboard import WorkerDashboard
-from fluster.cluster.worker.docker import DockerRuntime
-from fluster.cluster.worker.manager import JobManager, PortAllocator
-from fluster.cluster.worker.service import WorkerServiceImpl
+from fluster.cluster.worker.worker import Worker, WorkerConfig
 
 
 @click.group()
@@ -45,8 +40,6 @@ def cli():
 @click.option("--registry", required=True, help="Docker registry for built images")
 @click.option("--max-concurrent-jobs", default=10, type=int, help="Max concurrent jobs")
 @click.option("--port-range", default="30000-40000", help="Port range for job ports (start-end)")
-@click.option("--max-bundles", default=100, type=int, help="Max cached bundles")
-@click.option("--max-images", default=50, type=int, help="Max cached Docker images")
 def serve(
     host: str,
     port: int,
@@ -54,38 +47,26 @@ def serve(
     registry: str,
     max_concurrent_jobs: int,
     port_range: str,
-    max_bundles: int,
-    max_images: int,
 ):
     """Start the Fluster worker service."""
-    cache_path = Path(cache_dir).expanduser()
-
     port_start, port_end = map(int, port_range.split("-"))
 
-    # Initialize components
-    bundle_cache = BundleCache(cache_path, max_bundles=max_bundles)
-    venv_cache = VenvCache()
-    image_cache = ImageCache(cache_path, registry=registry, max_images=max_images)
-    runtime = DockerRuntime()
-    port_allocator = PortAllocator((port_start, port_end))
-
-    manager = JobManager(
-        bundle_cache=bundle_cache,
-        venv_cache=venv_cache,
-        image_cache=image_cache,
-        runtime=runtime,
-        port_allocator=port_allocator,
+    config = WorkerConfig(
+        host=host,
+        port=port,
+        cache_dir=Path(cache_dir).expanduser(),
+        registry=registry,
         max_concurrent_jobs=max_concurrent_jobs,
+        port_range=(port_start, port_end),
     )
 
-    service = WorkerServiceImpl(manager)
-    dashboard = WorkerDashboard(service, host, port)
+    worker = Worker(config)
 
     click.echo(f"Starting Fluster worker on {host}:{port}")
     click.echo(f"  Registry: {registry}")
-    click.echo(f"  Cache dir: {cache_path}")
+    click.echo(f"  Cache dir: {config.cache_dir}")
     click.echo(f"  Max concurrent jobs: {max_concurrent_jobs}")
-    dashboard.run()
+    worker._run_server()
 
 
 @cli.command()

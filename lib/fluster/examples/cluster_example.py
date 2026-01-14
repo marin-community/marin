@@ -247,6 +247,7 @@ class ClusterContext:
 
         # --- Start Worker First (so it's ready when controller dispatches) ---
         print("Starting worker components...")
+        self._worker_id = f"worker-{uuid.uuid4().hex[:8]}"
         worker_config = WorkerConfig(
             host="127.0.0.1",
             port=self._worker_port,
@@ -254,6 +255,7 @@ class ClusterContext:
             registry=self._registry,
             max_concurrent_jobs=self._max_concurrent_jobs,
             controller_address=f"http://127.0.0.1:{self._controller_port}",
+            worker_id=self._worker_id,
         )
         self._worker = Worker(worker_config, cache_dir=cache_path)
         self._worker.start()
@@ -282,11 +284,8 @@ class ClusterContext:
         print("RPC client created", flush=True)
 
         # Register worker with controller
-        self._worker_id = f"worker-{uuid.uuid4().hex[:8]}"
         print(f"Registering worker {self._worker_id}...", flush=True)
         self._register_worker()
-        # Set worker_id on JobManager so it can inject FLUSTER_WORKER_ID
-        self._worker.job_manager._worker_id = self._worker_id
         print("Worker registered", flush=True)
 
         print(f"Controller: http://127.0.0.1:{self._controller_port}", flush=True)

@@ -20,12 +20,27 @@ Provides job execution, status, logs, and health monitoring endpoints.
 
 import re
 import time
+from typing import Protocol
+
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from fluster import cluster_pb2
-from fluster.cluster.worker.manager import JobManager
+from fluster.cluster.worker.worker_types import Job
+
+
+class JobProvider(Protocol):
+    """Protocol for job management operations.
+
+    Implemented by Worker to provide job lifecycle management.
+    """
+
+    def submit_job(self, request: cluster_pb2.Worker.RunJobRequest) -> str: ...
+    def get_job(self, job_id: str) -> Job | None: ...
+    def list_jobs(self) -> list[Job]: ...
+    def kill_job(self, job_id: str, term_timeout_ms: int = 5000) -> bool: ...
+    def get_logs(self, job_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]: ...
 
 
 class WorkerServiceImpl:
@@ -40,8 +55,8 @@ class WorkerServiceImpl:
     - health_check: Worker health status
     """
 
-    def __init__(self, manager: JobManager):
-        self._manager = manager
+    def __init__(self, provider: JobProvider):
+        self._provider = provider
         self._start_time = time.time()
 
     def run_job(
@@ -50,8 +65,8 @@ class WorkerServiceImpl:
         _ctx: RequestContext,
     ) -> cluster_pb2.Worker.RunJobResponse:
         """Submit job for execution."""
-        job_id = self._manager.submit_job(request)
-        job = self._manager.get_job(job_id)
+        job_id = self._provider.submit_job(request)
+        job = self._provider.get_job(job_id)
 
         if not job:
             raise ConnectError(Code.INTERNAL, f"Job {job_id} not found after submission")
@@ -67,7 +82,7 @@ class WorkerServiceImpl:
         _ctx: RequestContext,
     ) -> cluster_pb2.JobStatus:
         """Get job status."""
-        job = self._manager.get_job(request.job_id)
+        job = self._provider.get_job(request.job_id)
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
@@ -87,7 +102,7 @@ class WorkerServiceImpl:
         are stored without namespace information. Empty string is treated
         as "list all jobs".
         """
-        jobs = self._manager.list_jobs()
+        jobs = self._provider.list_jobs()
         return cluster_pb2.Worker.ListJobsResponse(
             jobs=[job.to_proto() for job in jobs],
         )
@@ -107,7 +122,7 @@ class WorkerServiceImpl:
         """
         # Get logs with start_line handling (negative = tail)
         start_line = request.filter.start_line if request.filter.start_line else 0
-        logs = self._manager.get_logs(request.job_id, start_line=start_line)
+        logs = self._provider.get_logs(request.job_id, start_line=start_line)
 
         # Apply additional filters
         result = []
@@ -140,11 +155,11 @@ class WorkerServiceImpl:
     ) -> cluster_pb2.Empty:
         """Kill running job."""
         # Check if job exists first
-        job = self._manager.get_job(request.job_id)
+        job = self._provider.get_job(request.job_id)
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        success = self._manager.kill_job(
+        success = self._provider.kill_job(
             request.job_id,
             term_timeout_ms=request.term_timeout_ms or 5000,
         )
@@ -163,7 +178,7 @@ class WorkerServiceImpl:
         _ctx: RequestContext,
     ) -> cluster_pb2.Worker.HealthResponse:
         """Worker health status."""
-        jobs = self._manager.list_jobs()
+        jobs = self._provider.list_jobs()
         running = sum(1 for j in jobs if j.status == cluster_pb2.JOB_STATE_RUNNING)
 
         return cluster_pb2.Worker.HealthResponse(

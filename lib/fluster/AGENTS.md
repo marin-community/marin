@@ -33,3 +33,14 @@ These tests have negative value - they make our code more brittle. Test
 _behavior_ instead. You can use mocks as needed to isolate environments (e.g.
 mock around a remote API). Prefer "fakes" -- e.g. create a real database but
 with fake data -- when reasonable.
+
+## Protocols and Testing
+
+Non-trivial public classes should define a protocol which represents their
+_important_ interface characteristics. Use this protocol in type hints for
+when the class is used instead of the concrete class.
+
+Test to this protocol, not the concrete class: the protocol should describe the
+interesting behavior of the class, but not betray the implementation details.
+
+(You may of course _instantiate_ the concrete class for testing.)
