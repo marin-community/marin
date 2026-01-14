@@ -12,41 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Math-focused RL environment mirroring post-training reward logic."""
-
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
-from collections.abc import Callable, Iterable
 
-import datasets
 import jax
 import numpy as np
 
-from marin.rl.math_utils import (
-    grade_answer,
-    last_boxed_only_string,
-    latex_to_text,
-    normalize_answer,
-    validate_format,
+from marin.rl.environments.tinker_environments.math_env import (
+    MathEnv as TinkerMathEnvBase,
+    _get_hendrycks_math_test,
+    _get_hendrycks_math_train,
 )
+from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer, normalize_answer
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.math_utils import last_boxed_only_string
 from marin.rl.types import Rollout, RolloutGroup
+
 from .base import MarinEnv
 
 logger = logging.getLogger(__name__)
 
 
-TRAIN_DATA_SOURCE = "di-zhang-fdu/MATH12000"
-EVAL_DATA_SOURCE = "HuggingFaceH4/MATH-500"
-
-
-@dataclass(slots=True)
-class MathEnvExample:
-    """Single math example with cleaned prompt/answer."""
+@dataclass
+class DataExample:
+    """Single data example with transformations for debugging."""
 
     raw_prompt: str
     raw_answer: str
@@ -56,64 +49,42 @@ class MathEnvExample:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-LoadDatasetFn = Callable[..., Any]
-
-
 class MathEnv(MarinEnv):
-    """Math environment for RL training and evaluation."""
-
-    INSTRUCTION: str = (
-        "Return the final answer in <answer> </answer> tags using standard math notation. "
-        "e.g. <answer>42</answer>, or <answer>1/23</answer>."
-    )
+    """Math environment using Tinker's grading and prompt format."""
 
     def __init__(
         self,
-        train_source: str = TRAIN_DATA_SOURCE,
-        eval_source: str = EVAL_DATA_SOURCE,
-        *,
+        tokenizer=None,
         max_train_examples: int | None = None,
         max_eval_examples: int | None = None,
         seed: int | None = None,
-        trust_remote_code: bool = True,
-        datasets_loader: LoadDatasetFn | None = None,
-        train_dataset: Iterable[dict[str, Any]] | None = None,
-        eval_dataset: Iterable[dict[str, Any]] | None = None,
+        format_coef: float = 0.1,
+        train_dataset: list[dict[str, Any]] | None = None,
+        eval_dataset: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Initialize the math environment.
-
-        Args:
-            train_source: Hugging Face dataset path for training split.
-            eval_source: Hugging Face dataset path for evaluation split.
-            max_train_examples: Optional limit on cached train examples.
-            max_eval_examples: Optional limit on cached eval examples.
-            seed: Seed for deterministic sampling.
-            trust_remote_code: Forwarded to HF dataset loader when used.
-            datasets_loader: Injection hook for tests; defaults to datasets.load_dataset.
-            train_dataset: Optional iterable of pre-loaded train examples.
-            eval_dataset: Optional iterable of pre-loaded eval examples.
-        """
-
-        self.train_source = train_source
-        self.eval_source = eval_source
+        self.tokenizer = tokenizer
         self.max_train_examples = max_train_examples
         self.max_eval_examples = max_eval_examples
-        self._trust_remote_code = trust_remote_code
-        self._datasets_loader = datasets_loader or datasets.load_dataset
+        self.format_coef = format_coef
         self._rng = np.random.default_rng(seed)
 
-        self.train_examples = self._prepare_split(
-            split_name="train",
-            examples_iter=train_dataset,
-            source=train_source,
-            limit=max_train_examples,
-        )
-        self.eval_examples = self._prepare_split(
-            split_name="test",
-            examples_iter=eval_dataset,
-            source=eval_source,
-            limit=max_eval_examples,
-        )
+        # Get few-shot prefix from TinkerMathEnvBase
+        self.fewshot_prefix = TinkerMathEnvBase.standard_fewshot_prefix()
+
+        # Use provided datasets or load defaults
+        if train_dataset is not None:
+            self.train_examples = self._prepare_split(train_dataset, "train", max_train_examples)
+        else:
+            self.train_examples = list(self.training_data())
+            if max_train_examples is not None:
+                self.train_examples = self.train_examples[:max_train_examples]
+
+        if eval_dataset is not None:
+            self.eval_examples = self._prepare_split(eval_dataset, "test", max_eval_examples)
+        else:
+            self.eval_examples = list(self.eval_data())
+            if max_eval_examples is not None:
+                self.eval_examples = self.eval_examples[:max_eval_examples]
 
         logger.info(
             "Initialized MathEnv with %d train examples and %d eval examples.",
@@ -121,73 +92,47 @@ class MathEnv(MarinEnv):
             len(self.eval_examples),
         )
 
-    # ------------------------------------------------------------------
-    # Dataset preparation helpers
-    # ------------------------------------------------------------------
-    def add_instruction(self, math_problem: str) -> str:
-        """Append the standard instruction to a math problem."""
-
-        return f"{math_problem}\n\n{self.INSTRUCTION}"
-
-    def clean_example(self, raw_prompt: str, raw_answer: str, example_id: str) -> MathEnvExample | None:
-        """Normalize prompt/answer pair.
-
-        Returns None if processed answer could not be computed.
-        """
-
-        boxed_answer = last_boxed_only_string(raw_answer)
-        cleaned_answer = normalize_answer(boxed_answer) if boxed_answer else normalize_answer(raw_answer)
-        if cleaned_answer is None:
-            return None
-
-        processed_prompt = self.add_instruction(latex_to_text(raw_prompt))
-
-        return MathEnvExample(
-            raw_prompt=raw_prompt,
-            raw_answer=raw_answer,
-            processed_prompt=processed_prompt,
-            processed_answer=cleaned_answer,
-            example_id=example_id,
-        )
-
     def _prepare_split(
         self,
-        *,
+        dataset: list[dict[str, Any]],
         split_name: str,
-        examples_iter: Iterable[dict[str, Any]] | None,
-        source: str,
         limit: int | None,
-    ) -> list[MathEnvExample]:
-        """Load and clean dataset split."""
-
-        if examples_iter is None:
-            dataset_dict = self._datasets_loader(source, trust_remote_code=self._trust_remote_code)
-            if isinstance(dataset_dict, dict):
-                dataset = dataset_dict.get(split_name) or dataset_dict.get("train")
-            else:
-                dataset = dataset_dict  # type: ignore[assignment]
-        else:
-            dataset = examples_iter
-
-        cleaned_examples: list[MathEnvExample] = []
-        total = 0
+    ) -> list[DataExample]:
+        """Process a dataset split into DataExample objects."""
+        examples = []
         for idx, item in enumerate(dataset):
             example_id = f"{split_name}_{idx}"
             example = self.clean_example(item["problem"], item["solution"], example_id)
-            if example is None:
-                continue
-
-            example.metadata.update({"split": split_name, "source_index": idx, "source_dataset": source})
-            cleaned_examples.append(example)
-            total += 1
-            if limit is not None and total >= limit:
+            examples.append(example)
+            if limit is not None and len(examples) >= limit:
                 break
+        return examples
 
-        return cleaned_examples
+    @classmethod
+    def question_suffix(cls) -> str:
+        """Use Tinker's question suffix format."""
+        return TinkerMathEnvBase.question_suffix()
 
-    # ------------------------------------------------------------------
-    # RL Environment interface
-    # ------------------------------------------------------------------
+    def add_instruction(self, math_problem: str) -> str:
+        """Add the standard instruction to a math problem."""
+        return f"{math_problem}{self.question_suffix()}"
+
+    def check_format(self, sample_str: str) -> bool:
+        """Check if the response follows the boxed format."""
+        try:
+            _ = extract_boxed(sample_str)
+            return True
+        except ValueError:
+            return False
+
+    def check_answer(self, sample_str: str, ground_truth: str) -> bool:
+        """Grade the answer using Tinker's grading."""
+        try:
+            answer = extract_boxed(sample_str)
+        except ValueError:
+            return False
+        return grade_answer(answer, ground_truth)
+
     def sample(
         self,
         inference_ctx: BaseInferenceContext,
@@ -197,7 +142,9 @@ class MathEnv(MarinEnv):
         prng_key,
         mode: str = "train",
         max_tokens: int | None = None,
+        top_k: int | None = None,
         stop: list[str] | None = None,
+        system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample prompts, evaluate responses, and create rollouts."""
 
@@ -209,14 +156,26 @@ class MathEnv(MarinEnv):
             raise ValueError(f"No examples available for mode '{mode}'")
 
         n_to_sample = min(n_examples, len(available_examples))
-        seed = jax.random.randint(prng_key, (), 0, 1_000_000).item()
+        if isinstance(prng_key, int):
+            seed = prng_key
+        else:
+            seed = jax.random.randint(prng_key, (), 0, 1_000_000).item()
         rng = np.random.default_rng(seed)
         indices = rng.choice(len(available_examples), size=n_to_sample, replace=False)
         sampled_examples = [available_examples[int(idx)] for idx in indices]
 
-        prompts = [example.processed_prompt for example in sampled_examples]
+        # Build message lists with few-shot examples for each prompt
+        prompts = [
+            [*self.fewshot_prefix, {"role": "user", "content": example.processed_prompt}] for example in sampled_examples
+        ]
         completions = inference_ctx.batch_completions(
-            prompts=prompts, temperature=temperature, n=n_generations, max_tokens=max_tokens, stop=stop
+            prompts=prompts,
+            temperature=temperature,
+            n=n_generations,
+            max_tokens=max_tokens,
+            top_k=top_k,
+            stop=stop,
+            system_prompt=None,  # No system prompt - use few-shot examples instead
         )
 
         rollout_groups: list[RolloutGroup] = []
@@ -225,18 +184,17 @@ class MathEnv(MarinEnv):
         format_sum = 0.0
         correct_sum = 0.0
         response_token_count = 0
+        truncated_count = 0
 
         for example, completion in zip(sampled_examples, completions, strict=True):
             group_rollouts: list[Rollout] = []
 
             for choice in completion.choices:
-                (
-                    reward,
-                    fmt_score,
-                    correct_score,
-                    token_reward,
-                ) = self._score_choice(
-                    example=example, response_text=choice.message.content, tokenizer=inference_ctx.tokenizer
+                reward, fmt_score, correct_score = self._score_choice(
+                    example=example,
+                    response_text=choice.message.content,
+                    finish_reason=choice.finish_reason,
+                    tokenizer=inference_ctx.tokenizer,
                 )
 
                 rollout = inference_ctx.create_rollout_from_choice(
@@ -244,16 +202,22 @@ class MathEnv(MarinEnv):
                     choice=choice,
                     env_name="math",
                     env_example_id=example.example_id,
-                    reward=token_reward,
+                    reward=reward,
+                    correctness_reward=correct_score,
+                    temperature=temperature,
+                    top_k=top_k,
+                    system_prompt=system_prompt,
                 )
 
                 group_rollouts.append(rollout)
-
                 total_choices += 1
                 reward_sum += reward
                 format_sum += fmt_score
                 correct_sum += correct_score
                 response_token_count += rollout.response_tokens.size
+
+                if choice.finish_reason == "length":
+                    truncated_count += 1
 
             if group_rollouts:
                 rollout_groups.append(RolloutGroup(rollouts=group_rollouts))
@@ -269,44 +233,32 @@ class MathEnv(MarinEnv):
             f"{prefix}_mean_response_tokens": response_token_count / total_choices,
             f"{prefix}_total_responses": float(total_choices),
             f"{prefix}_sampled_examples": float(len(sampled_examples)),
+            f"{prefix}_truncated_percentage": float(truncated_count) / total_choices,
         }
 
         return rollout_groups, metrics
 
-    def _score_choice(self, example: MathEnvExample, response_text: str, tokenizer) -> tuple[float, float, float, float]:
-        """Score a single generated response text.
-
-        Returns (reward, format_score, correct_score, token_reward_value).
-        """
+    def _score_choice(
+        self, example: DataExample, response_text: str, finish_reason: str, tokenizer
+    ) -> tuple[float, float, float]:
+        """Score a single generated response text using MathEnv logic."""
 
         decoded_response = response_text.strip()
-        validation = validate_format(decoded_response + ">")
+
+        # Penalize truncated responses
+        parse_success = finish_reason != "length"
+
+        # Check format
+        format_valid = float(parse_success and self.check_format(decoded_response))
 
         true_answer = example.processed_answer.strip()
-        weak_correct = 1.0 if true_answer and true_answer in decoded_response else 0.0
 
-        if validation["is_valid"]:
-            grade = grade_answer(validation["answer"], true_answer)
-        else:
-            tokens = decoded_response.split()
-            grade = grade_answer(tokens[-1], true_answer) if tokens else 0.0
+        # Grade using Tinker's grading
+        correct_answer = float(self.check_answer(decoded_response, true_answer))
 
-        reward = 0.3 * weak_correct + 0.1 * float(validation["is_valid"]) + 0.8 * float(grade)
+        reward = self.format_coef * (format_valid - 1) + correct_answer
 
-        return reward, float(validation["is_valid"]), float(grade), reward
-
-    # ------------------------------------------------------------------
-    # Dataset inspection helpers
-    # ------------------------------------------------------------------
-    def training_data(self) -> Iterator[MathEnvExample]:
-        """Stream cleaned training examples for debugging."""
-
-        yield from self.train_examples
-
-    def eval_data(self) -> Iterator[MathEnvExample]:
-        """Stream cleaned evaluation examples for debugging."""
-
-        yield from self.eval_examples
+        return reward, format_valid, correct_answer
 
     def get_eval_examples(self, n_examples: int) -> list[dict[str, Any]]:
         """Sample evaluation examples deterministically."""
@@ -325,3 +277,40 @@ class MathEnv(MarinEnv):
             }
             for idx in indices
         ]
+
+    def clean_example(self, raw_prompt: str, raw_answer: str, example_id: str) -> DataExample:
+        """Clean and process a single example."""
+        # Show the transformation pipeline
+        boxed_answer = last_boxed_only_string(raw_answer)
+        # Use Tinker's normalize_answer instead of our own
+        cleaned_answer = normalize_answer(boxed_answer) if boxed_answer else normalize_answer(raw_answer)
+
+        # Just add instruction suffix - chat template will be applied by inference context
+        processed_prompt = self.add_instruction(raw_prompt)
+
+        return DataExample(
+            raw_prompt=raw_prompt,
+            raw_answer=raw_answer,
+            processed_prompt=processed_prompt,
+            processed_answer=cleaned_answer,
+            example_id=example_id,
+        )
+
+    def training_data(self) -> Iterator[DataExample]:
+        train_dataset = _get_hendrycks_math_train()
+
+        for idx, item in enumerate(train_dataset):
+            raw_prompt = item["problem"]
+            raw_answer = item["solution"]
+            example_id = f"train_{idx}"
+
+            yield self.clean_example(raw_prompt, raw_answer, example_id)
+
+    def eval_data(self) -> Iterator[DataExample]:
+        test_dataset = _get_hendrycks_math_test()
+
+        for idx, item in enumerate(test_dataset):
+            raw_prompt = item["problem"]
+            raw_answer = item["solution"]
+            example_id = f"test_{idx}"
+            yield self.clean_example(raw_prompt, raw_answer, example_id)

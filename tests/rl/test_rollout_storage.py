@@ -55,6 +55,9 @@ def create_test_rollout(idx: int) -> Rollout:
         response_logprobs=response_logprobs,
         token_rewards=token_rewards,
         episode_reward=episode_reward,
+        temperature=1.0,
+        top_k=None,
+        is_truncated=False,
         metadata=RolloutMetadata(
             worker_id="test_worker",
             timestamp=time.time(),
