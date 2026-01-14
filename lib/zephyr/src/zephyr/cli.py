@@ -60,10 +60,15 @@ def run_local(
     Raises:
         SystemExit: If script execution fails
     """
+    ray_options = config.ray_options.copy()
+    if "memory" not in ray_options:
+        if config.memory:
+            ray_options["memory"] = humanfriendly.parse_size(config.memory, binary=True)
+
     job_ctx = create_job_ctx(
         context_type=config.backend,
         max_workers=config.max_parallelism,
-        **config.ray_options,
+        **ray_options,
     )
     _job_context.set(job_ctx)
     sys.argv = [script_path, *script_args]

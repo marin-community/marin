@@ -476,6 +476,7 @@ def get_default_job_ctx() -> JobContext:
 
 def create_job_ctx(
     context_type: Literal["ray", "threadpool", "sync", "auto"] = "auto",
+    *,
     max_workers: int = 1,
     **ray_options,
 ) -> JobContext:
