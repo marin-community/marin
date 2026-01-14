@@ -191,6 +191,57 @@ class Olmo3Config(HFCompatConfig):
             glu=True,
         )
 
+    def total_trainable_params(self, vocab_size: int) -> int:
+        """Calculate total trainable parameters for OLMo3 model.
+
+        OLMo3 has:
+        - Post-norm architecture (norm after attention/MLP, before residual)
+        - QK normalization (per-head normalization of Q and K)
+        - SwiGLU MLP (gate, up, down projections)
+
+        Args:
+            vocab_size: Size of the vocabulary
+
+        Returns:
+            int: Total number of trainable parameters
+        """
+        head_size = self.actual_head_size
+
+        # Attention parameters
+        q_proj = self.hidden_dim * head_size * self.num_heads
+        k_proj = self.hidden_dim * head_size * self.num_kv_heads
+        v_proj = self.hidden_dim * head_size * self.num_kv_heads
+        o_proj = head_size * self.num_heads * self.hidden_dim
+        attn_params = q_proj + k_proj + v_proj + o_proj
+
+        # MLP parameters (SwiGLU: gate, up, down)
+        mlp_params = 3 * self.hidden_dim * self.intermediate_dim
+
+        # Layer norm parameters (RMSNorm has only weight, no bias)
+        # Post-attention norm + Post-feedforward norm
+        layer_norm_params = 2 * self.hidden_dim
+
+        # QK norm parameters (applied per-head)
+        # Q norm shape: (num_kv_heads, num_q_per_kv, head_size)
+        # K norm shape: (num_kv_heads, head_size)
+        q_norm_params = self.num_heads * head_size
+        k_norm_params = self.num_kv_heads * head_size
+        qk_norm_params = q_norm_params + k_norm_params
+
+        # Per layer total
+        per_layer = attn_params + mlp_params + layer_norm_params + qk_norm_params
+
+        # Transformer total (includes final layer norm)
+        transformer_params = self.num_layers * per_layer + self.hidden_dim
+
+        # Token embeddings
+        embedding_params = vocab_size * self.hidden_dim
+
+        # LM head (0 if tied to embeddings)
+        lm_head_params = 0 if self.tie_word_embeddings else embedding_params
+
+        return transformer_params + embedding_params + lm_head_params
+
     def attention_config(self) -> AttentionConfig:
         return AttentionConfig(
             Embed=self.Embed,
