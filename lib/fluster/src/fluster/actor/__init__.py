@@ -15,6 +15,7 @@
 """Actor system for distributed RPC."""
 
 from fluster.actor.client import ActorClient
+from fluster.actor.pool import ActorPool, BroadcastFuture, CallResult
 from fluster.actor.resolver import (
     ClusterResolver,
     FixedResolver,
@@ -29,7 +30,10 @@ __all__ = [
     "ActorClient",
     "ActorContext",
     "ActorId",
+    "ActorPool",
     "ActorServer",
+    "BroadcastFuture",
+    "CallResult",
     "ClusterResolver",
     "FixedResolver",
     "ResolveResult",
