@@ -337,7 +337,6 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
     def recurse(obj: Any, prefix: str):
         new_prefix = prefix + "." if prefix else ""
 
-        # NEW: Handle StepRef
         if isinstance(obj, StepRef):
             if obj._step is not None:
                 index = len(dependencies) + len(pseudo_dependencies)
@@ -350,15 +349,21 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
                 # Output reference or hardcoded path
                 version[prefix] = obj._subpath
 
-        # LEGACY: Handle InputName/ExecutorStep (for migration period)
-        elif isinstance(obj, ExecutorStep):
-            obj = StepRef(_step=obj)
-            recurse(obj, prefix)
-        elif isinstance(obj, InputName):
-            ref = StepRef(obj.step, obj.name, obj.block_on_step)
-            recurse(ref, prefix)
+        elif isinstance(obj, VersionedValue):
+            version[prefix] = obj.value
+        elif is_dataclass(obj):
+            for field in fields(obj):
+                value = getattr(obj, field.name)
+                recurse(value, new_prefix + field.name)
+        elif isinstance(obj, list):
+            for i, x in enumerate(obj):
+                recurse(x, new_prefix + f"[{i}]")
+        elif isinstance(obj, dict):
+            for i, x in obj.items():
+                recurse(x, new_prefix + i)
 
-        # ... rest of existing logic for dataclasses, lists, dicts
+    recurse(obj, "")
+    return _Dependencies(dependencies, pseudo_dependencies, version)
 ```
 
 ### Phase 2: Helper Function Migration
@@ -506,38 +511,67 @@ download_step = download_fineweb()
 tokenize_step = tokenize_fineweb()
 ```
 
-### Phase 5: Deprecation and Cleanup
+### Phase 5: Refactor Step-Creating Library Functions
 
-#### 5.1 Deprecate Old Types
+Some lib/marin functions create ExecutorSteps internally. These should be refactored to move step creation to experiments/*.
 
+**Example: hf_upload.py**
+
+Before:
 ```python
-# In executor.py
-import warnings
+# lib/marin/src/marin/export/hf_upload.py
+def upload_dir_to_hf(
+    input_path: str | InputName | ExecutorStep,
+    repo_id: str,
+    certificate_path: str | None = None,
+    ...
+) -> ExecutorStep:
+    if not certificate_path:
+        if isinstance(input_path, InputName) or isinstance(input_path, ExecutorStep):
+            certificate_path = f"metadata/hf_uploads/{input_path.name}"
+        else:
+            parsed = urlparse(input_path)
+            certificate_path = f"metadata/hf_uploads/{parsed.path.lstrip('/')}"
 
-class InputName:
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "InputName is deprecated. Use StepRef instead.",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        # ... existing implementation for backwards compat
-
-class OutputName:
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "OutputName is deprecated. Use ctx.output instead.",
-            DeprecationWarning,
-            stacklevel=2
-        )
+    return ExecutorStep(
+        name=certificate_path,
+        fn=_actually_upload_to_hf,
+        config=UploadToHfConfig(input_path=input_path, repo_id=repo_id, ...),
+    )
 ```
 
-#### 5.2 Remove Old Patterns
+After:
+```python
+# lib/marin/src/marin/export/hf_upload.py
+# Just the config and function - no ExecutorStep creation
+@dataclass
+class UploadToHfConfig:
+    input_path: StepRef | str  # StepRef for step outputs, str for hardcoded paths
+    repo_id: str
+    repo_type: str = "dataset"
+    ...
 
-After migration:
-1. Remove `InputName`, `OutputName` classes
-2. Remove `output_path_of()`, `this_output_path()` functions
-3. Remove all isinstance checks
+def upload_to_hf(config: UploadToHfConfig):
+    """The actual upload logic - receives resolved config."""
+    ...
+
+# experiments/some_experiment.py
+@step(name="metadata/hf_uploads/my-dataset")
+def upload_my_dataset(ctx: StepContext):
+    data = ctx.require(dataset_step)
+    return UploadToHfConfig(input_path=data, repo_id="org/my-dataset")
+
+upload_step = upload_my_dataset()
+```
+
+The key insight: the certificate_path computation was just generating a step name. In the new design, callers control the step name directly via `@step(name=...)`.
+
+### Phase 6: Remove Old Types
+
+Remove all old types immediately (no deprecation period):
+1. Delete `InputName`, `OutputName` classes from executor.py
+2. Delete `output_path_of()`, `this_output_path()` helper functions
+3. Remove all isinstance checks from codebase
 4. Update documentation
 
 ---
