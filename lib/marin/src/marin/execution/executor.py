@@ -129,6 +129,7 @@ from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
 )
+from marin.execution.step_ref import StepContext, StepRef
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
@@ -285,13 +286,11 @@ class ExecutorStep(Generic[ConfigT]):
 
     The `config` is a dataclass object that recursively might have special
     values of the following form:
-    - `InputName(step, name)`: a dependency on another `step`, resolve to the step.output_path / name
-    - `OutputName(name)`: resolves to the output_path / name
+    - `StepRef(step, subpath)`: a dependency on another `step`, resolves to step.output_path / subpath
+    - `StepRef(None, subpath)`: resolves to this step's output_path / subpath
     - `VersionedValue(value)`: a value that should be part of the version
     The `config` is instantiated by replacing these special values with the
     actual paths during execution.
-
-    Note: `step: ExecutorStep` is interpreted as `InputName(step, None)`.
     """
 
     name: str
@@ -309,13 +308,12 @@ class ExecutorStep(Generic[ConfigT]):
     resources: ResourceConfig | None = None
     """Resource requirements for this step (GPU, TPU, CPU). If None, defaults to CPU."""
 
-    def cd(self, name: str) -> "InputName":
-        """Refer to the `name` under `self`'s output_path."""
-        return InputName(self, name=name)
+    _context: StepContext | None = None
+    """Context from @step decorator. Contains dependency tracking info."""
 
-    def __truediv__(self, other: str) -> "InputName":
-        """Alias for `cd`. That looks more Pythonic."""
-        return InputName(self, name=other)
+    def __truediv__(self, subpath: str) -> StepRef:
+        """Navigate to subpath: step / "data" / "train" """
+        return StepRef(_step=self, _subpath=subpath)
 
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
@@ -325,98 +323,31 @@ class ExecutorStep(Generic[ConfigT]):
         """Return a copy of the step with the given output_path."""
         return replace(self, override_output_path=output_path)
 
-    def as_input_name(self) -> "InputName":
-        return InputName(step=self, name=None)
+    @property
+    def ref(self) -> StepRef:
+        """Get a StepRef to this step's output."""
+        return StepRef(_step=self)
 
 
-@dataclass(frozen=True)
-class InputName:
-    """To be interpreted as a previous `step`'s output_path joined with `name`."""
-
-    step: ExecutorStep | None
-    name: str | None
-    block_on_step: bool = True
+def get_executor_step(run: ExecutorStep | StepRef) -> ExecutorStep:
     """
-    If False, the step that uses this InputName
-    will not block (or attempt to execute) `step`. We use this for
-    documenting dependencies in the config, but where that step might not have technically finished...
-
-    For instance, we sometimes use training checkpoints before the training step has finished.
-
-    These "pseudo-dependencies" still impact the hash of the step, but they don't block execution.
-    """
-
-    def cd(self, name: str) -> "InputName":
-        return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
-
-    def __truediv__(self, other: str) -> "InputName":
-        """Alias for `cd` that looks more Pythonic."""
-        return self.cd(other)
-
-    @staticmethod
-    def hardcoded(path: str) -> "InputName":
-        """
-        Sometimes we want to specify a path that is not part of the pipeline but is still relative to the prefix.
-        Try to use this sparingly.
-        """
-        return InputName(None, name=path)
-
-    def nonblocking(self) -> "InputName":
-        """
-        the step will not block on (or attempt to execute) the parent step.
-
-         (Note that if another step depends on the parent step, it will still block on it.)
-        """
-        return dataclasses.replace(self, block_on_step=False)
-
-
-def get_executor_step(run: ExecutorStep | InputName) -> ExecutorStep:
-    """
-    Helper function to extract the ExecutorStep from an InputName or ExecutorStep.
+    Helper function to extract the ExecutorStep from a StepRef or ExecutorStep.
 
     Args:
-        run (ExecutorStep | InputName): The input to extract the step from.
+        run: The input to extract the step from.
 
     Returns:
         ExecutorStep: The extracted step.
     """
     if isinstance(run, ExecutorStep):
         return run
-    elif isinstance(run, InputName):
-        step = run.step
+    elif isinstance(run, StepRef):
+        step = run._step
         if step is None:
-            raise ValueError(f"Hardcoded path {run.name} is not part of the pipeline")
+            raise ValueError(f"Hardcoded path {run._subpath} is not part of the pipeline")
         return step
     else:
         raise ValueError(f"Unexpected type {type(run)} for run: {run}")
-
-
-def output_path_of(step: ExecutorStep, name: str | None = None) -> InputName:
-    return InputName(step=step, name=name)
-
-
-if TYPE_CHECKING:
-
-    class OutputName(str):
-        """Type-checking stub treated as a string so defaults like THIS_OUTPUT_PATH fit `str`."""
-
-        name: str | None
-
-else:
-
-    @dataclass(frozen=True)
-    class OutputName:
-        """To be interpreted as part of this step's output_path joined with `name`."""
-
-        name: str | None
-
-
-def this_output_path(name: str | None = None):
-    return OutputName(name=name)
-
-
-# constant so we can use it in fields of dataclasses
-THIS_OUTPUT_PATH = OutputName(None)
 
 
 @dataclass(frozen=True)
@@ -429,9 +360,8 @@ class VersionedValue(Generic[T_co]):
 def versioned(value: T_co) -> VersionedValue[T_co]:
     if isinstance(value, VersionedValue):
         raise ValueError("Can't nest VersionedValue")
-    elif isinstance(value, InputName):
-        # TODO: We have also run into Versioned([InputName(...), ...])
-        raise ValueError("Can't version an InputName")
+    elif isinstance(value, StepRef):
+        raise ValueError("Can't version a StepRef - step references are always included in versioning")
 
     return VersionedValue(value)
 
@@ -448,14 +378,14 @@ def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
     Unwrap the value if it is a VersionedValue, otherwise return the value as is.
 
     Recurses into dataclasses, dicts and lists to unwrap any nested VersionedValue instances.
-    This method cannot handle InputName, OutputName, or ExecutorStep instances inside VersionedValue as
+    This method cannot handle StepRef or ExecutorStep instances inside VersionedValue as
     their values depend on execution results.
     """
 
     def recurse(obj: Any):
         if isinstance(obj, VersionedValue):
             return recurse(obj.value)
-        if isinstance(obj, OutputName | InputName | ExecutorStep):
+        if isinstance(obj, StepRef | ExecutorStep):
             raise ValueError(f"Cannot unwrap VersionedValue containing {type(obj)}: {obj}")
         if is_dataclass(obj):
             result = {}
@@ -489,7 +419,7 @@ class ExecutorStepInfo:
     """Rendered string of `step.fn`."""
 
     config: dataclass
-    """`step.config`, but concretized (no more `InputName`, `OutputName`, or `VersionedValue`)."""
+    """`step.config`, but concretized (no more `StepRef` or `VersionedValue`)."""
 
     description: str | None
     """`step.description`."""
@@ -579,22 +509,23 @@ def collect_dependencies_and_version(obj: Any) -> _Dependencies:
     def recurse(obj: Any, prefix: str):
         new_prefix = prefix + "." if prefix else ""
 
+        # Convert ExecutorStep to StepRef for uniform handling
         if isinstance(obj, ExecutorStep):
-            obj = output_path_of(obj, None)
+            obj = StepRef(_step=obj)
 
         if isinstance(obj, VersionedValue):
             version[prefix] = obj.value
-        elif isinstance(obj, InputName):
-            # Put string i for the i-th dependency
-            if obj.step is not None:
+        elif isinstance(obj, StepRef):
+            if obj._step is not None:
                 index = len(dependencies) + len(pseudo_dependencies)
-                if not obj.block_on_step:
-                    pseudo_dependencies.append(obj.step)
+                if obj._blocking:
+                    dependencies.append(obj._step)
                 else:
-                    dependencies.append(obj.step)
-                version[prefix] = dependency_index_str(index) + ("/" + obj.name if obj.name else "")
+                    pseudo_dependencies.append(obj._step)
+                version[prefix] = dependency_index_str(index) + ("/" + obj._subpath if obj._subpath else "")
             else:
-                version[prefix] = obj.name
+                # Output reference or hardcoded path
+                version[prefix] = obj._subpath
         elif is_dataclass(obj):
             # Recurse through dataclasses
             for field in fields(obj):
@@ -620,30 +551,38 @@ def instantiate_config(
     config: dataclass, output_path: str, output_paths: dict[ExecutorStep, str], prefix: str
 ) -> dataclass:
     """
-    Return a "real" config where all the special values (e.g., `InputName`,
-    `OutputName`, and `VersionedValue`) have been replaced with
-    the actual paths that they represent.
+    Return a "real" config where all the special values (e.g., `StepRef`
+    and `VersionedValue`) have been replaced with the actual paths that they represent.
     `output_path`: represents the output path of the current step.
     `output_paths`: a dict from `ExecutorStep` to their output paths.
     """
-
-    def join_path(output_path: str, name: str | None) -> str:
-        return os.path.join(output_path, name) if name else output_path
 
     def recurse(obj: Any):
         if obj is None:
             return None
 
+        # Convert ExecutorStep to StepRef for uniform handling
         if isinstance(obj, ExecutorStep):
-            obj = output_path_of(obj)
+            obj = StepRef(_step=obj)
 
-        if isinstance(obj, InputName):
-            if obj.step is None:
-                return _make_prefix_absolute_path(prefix, obj.name)
+        if isinstance(obj, StepRef):
+            if obj._step is None:
+                # Output reference or hardcoded path
+                if obj._subpath is None:
+                    return output_path
+                elif obj._subpath.startswith("/") or "://" in obj._subpath:
+                    # Absolute or URL path - use as-is
+                    return obj._subpath
+                else:
+                    # Relative path - could be hardcoded or output subpath
+                    # Check if it looks like a hardcoded path (has path separators or special chars)
+                    return _make_prefix_absolute_path(prefix, obj._subpath)
             else:
-                return join_path(output_paths[obj.step], obj.name)
-        elif isinstance(obj, OutputName):
-            return join_path(output_path, obj.name)
+                # Reference to another step's output
+                base = output_paths[obj._step]
+                if obj._subpath:
+                    return os.path.join(base, obj._subpath)
+                return base
         elif isinstance(obj, VersionedValue):
             return obj.value
         elif is_dataclass(obj):
@@ -702,7 +641,7 @@ class Executor:
 
     def run(
         self,
-        steps: list[ExecutorStep | InputName],
+        steps: list[ExecutorStep | StepRef],
         *,
         dry_run: bool = False,
         run_only: list[str] | None = None,
@@ -722,8 +661,8 @@ class Executor:
         # Gather all the steps, compute versions and output paths for all of them.
         logger.info(f"### Inspecting the {len(steps)} provided steps ###")
         for step in steps:
-            if isinstance(step, InputName):  # Interpret InputName as the underlying step
-                step = step.step
+            if isinstance(step, StepRef):  # Interpret StepRef as the underlying step
+                step = step._step
             if step is not None:
                 self.compute_version(step, is_pseudo_dep=False)
 
