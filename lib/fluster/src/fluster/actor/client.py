@@ -20,21 +20,37 @@ import cloudpickle
 import httpx
 
 from fluster import actor_pb2
+from fluster.actor.resolver import Resolver, ResolveResult
 
 
 class ActorClient:
-    """Simple actor client with hardcoded URL (Stage 1)."""
+    """Actor client with resolver-based discovery."""
 
-    def __init__(self, url: str, actor_name: str = ""):
+    def __init__(
+        self,
+        resolver: Resolver,
+        name: str,
+        timeout: float = 30.0,
+    ):
         """Initialize the actor client.
 
         Args:
-            url: Direct URL to actor server (e.g., "http://localhost:8080")
-            actor_name: Name of actor on the server
+            resolver: Resolver instance for endpoint discovery
+            name: Name of the actor to invoke
+            timeout: Request timeout in seconds
         """
-        self._url = url.rstrip("/")
-        self._actor_name = actor_name
-        self._timeout = 30.0
+        self._resolver = resolver
+        self._name = name
+        self._timeout = timeout
+        self._cached_result: ResolveResult | None = None
+
+    def _resolve(self) -> ResolveResult:
+        if self._cached_result is None or self._cached_result.is_empty:
+            self._cached_result = self._resolver.resolve(self._name)
+        return self._cached_result
+
+    def _invalidate_cache(self) -> None:
+        self._cached_result = None
 
     def __getattr__(self, method_name: str) -> "_RpcMethod":
         return _RpcMethod(self, method_name)
@@ -49,20 +65,30 @@ class _RpcMethod:
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Execute the RPC call."""
+        result = self._client._resolve()
+        if result.is_empty:
+            raise RuntimeError(f"No endpoints found for actor '{self._client._name}'")
+
+        endpoint = result.first()
+
         call = actor_pb2.ActorCall(
             method_name=self._method_name,
-            actor_name=self._client._actor_name,
+            actor_name=self._client._name,
             serialized_args=cloudpickle.dumps(args),
             serialized_kwargs=cloudpickle.dumps(kwargs),
         )
 
-        response = httpx.post(
-            f"{self._client._url}/fluster.actor.ActorService/Call",
-            content=call.SerializeToString(),
-            headers={"Content-Type": "application/proto"},
-            timeout=self._client._timeout,
-        )
-        response.raise_for_status()
+        try:
+            response = httpx.post(
+                f"{endpoint.url}/fluster.actor.ActorService/Call",
+                content=call.SerializeToString(),
+                headers={"Content-Type": "application/proto"},
+                timeout=self._client._timeout,
+            )
+            response.raise_for_status()
+        except httpx.RequestError:
+            self._client._invalidate_cache()
+            raise
 
         resp = actor_pb2.ActorResponse()
         resp.ParseFromString(response.content)

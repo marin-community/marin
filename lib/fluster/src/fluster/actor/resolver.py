@@ -14,9 +14,13 @@
 
 """Resolver types and implementations for actor discovery."""
 
+import os
 from dataclasses import dataclass, field
 from typing import Protocol
 
+import httpx
+
+from fluster import cluster_pb2
 from fluster.cluster.types import Namespace
 
 
@@ -80,4 +84,72 @@ class FixedResolver:
         ns = namespace or self._namespace
         urls = self._endpoints.get(name, [])
         endpoints = [ResolvedEndpoint(url=url, actor_id=f"fixed-{name}-{i}") for i, url in enumerate(urls)]
+        return ResolveResult(name=name, namespace=ns, endpoints=endpoints)
+
+
+class ClusterResolver:
+    """Resolver backed by the cluster controller's endpoint registry.
+
+    Queries the controller's ListEndpoints RPC to discover actor endpoints
+    registered by running jobs. Respects namespace boundaries for isolation.
+
+    Args:
+        controller_address: Controller URL (e.g., "http://localhost:8080")
+        namespace: Namespace for actor isolation (defaults to FLUSTER_NAMESPACE env var)
+        timeout: HTTP request timeout in seconds
+    """
+
+    def __init__(
+        self,
+        controller_address: str,
+        namespace: Namespace | None = None,
+        timeout: float = 5.0,
+    ):
+        self._address = controller_address.rstrip("/")
+        self._timeout = timeout
+        self._namespace = namespace or Namespace(os.environ.get("FLUSTER_NAMESPACE", "<local>"))
+
+    @property
+    def default_namespace(self) -> Namespace:
+        return self._namespace
+
+    def resolve(self, name: str, namespace: Namespace | None = None) -> ResolveResult:
+        """Resolve actor name to endpoints via controller.
+
+        Args:
+            name: Actor name to resolve
+            namespace: Override default namespace
+
+        Returns:
+            ResolveResult with matching endpoints
+        """
+        ns = namespace or self._namespace
+
+        request = cluster_pb2.ListEndpointsRequest(
+            prefix=name,
+            namespace=str(ns),
+        )
+
+        response = httpx.post(
+            f"{self._address}/fluster.cluster.ControllerService/ListEndpoints",
+            content=request.SerializeToString(),
+            headers={"Content-Type": "application/proto"},
+            timeout=self._timeout,
+        )
+        response.raise_for_status()
+
+        resp = cluster_pb2.ListEndpointsResponse()
+        resp.ParseFromString(response.content)
+
+        # Filter to exact name matches (controller uses prefix matching)
+        endpoints = [
+            ResolvedEndpoint(
+                url=f"http://{ep.address}",
+                actor_id=ep.endpoint_id,
+                metadata=dict(ep.metadata),
+            )
+            for ep in resp.endpoints
+            if ep.name == name
+        ]
+
         return ResolveResult(name=name, namespace=ns, endpoints=endpoints)

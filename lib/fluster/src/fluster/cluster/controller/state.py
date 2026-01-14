@@ -17,8 +17,9 @@
 This module provides the in-memory state management for the controller, including:
 - ControllerJob: Controller's view of a job with retry tracking and gang info
 - ControllerWorker: Controller's view of a worker with health and capacity
+- ControllerEndpoint: An endpoint registered with the controller for service discovery
 - ActionLogEntry: Record of a controller action for the dashboard
-- ControllerState: Thread-safe state container for jobs, workers, and the queue
+- ControllerState: Thread-safe state container for jobs, workers, endpoints, and the queue
 
 All state mutations are protected by a reentrant lock (RLock) to support
 concurrent access from the scheduler, heartbeat monitor, and RPC handlers.
@@ -113,6 +114,33 @@ class ControllerWorker:
 
 
 @dataclass
+class ControllerEndpoint:
+    """An endpoint registered with the controller.
+
+    Endpoints are associated with jobs and used for service discovery.
+    When a job transitions to a terminal state, all its endpoints are
+    automatically removed.
+
+    Args:
+        endpoint_id: Unique endpoint identifier
+        name: Service name for discovery
+        address: Network address (host:port)
+        job_id: Job that registered this endpoint
+        namespace: Namespace for isolation
+        metadata: Additional key-value metadata
+        registered_at_ms: Timestamp when endpoint was registered
+    """
+
+    endpoint_id: str
+    name: str
+    address: str
+    job_id: JobId
+    namespace: str
+    metadata: dict[str, str] = field(default_factory=dict)
+    registered_at_ms: int = 0
+
+
+@dataclass
 class ActionLogEntry:
     """Record of a controller action for the dashboard.
 
@@ -137,13 +165,17 @@ class ActionLogEntry:
 class ControllerState:
     """Thread-safe controller state.
 
-    Manages in-memory state for jobs, workers, job queue, and gang tracking.
+    Manages in-memory state for jobs, workers, endpoints, job queue, and gang tracking.
     All mutations go through methods that acquire the lock to ensure consistency
     during concurrent access from multiple threads (scheduler, heartbeat monitor,
     RPC handlers).
 
     The job queue is FIFO by default, with pop_next_pending() automatically
     skipping jobs that are no longer in PENDING state.
+
+    Endpoints are associated with jobs and automatically removed when jobs
+    transition to terminal states. Lookup and list operations filter to only
+    return endpoints for jobs in RUNNING state.
     """
 
     def __init__(self):
@@ -153,6 +185,8 @@ class ControllerState:
         self._queue: deque[JobId] = deque()  # FIFO queue of job IDs
         self._gangs: dict[str, set[JobId]] = {}  # gang_id -> job_ids
         self._actions: deque[ActionLogEntry] = deque(maxlen=100)  # Recent actions log
+        self._endpoints: dict[str, ControllerEndpoint] = {}  # endpoint_id -> endpoint
+        self._endpoints_by_job: dict[JobId, set[str]] = {}  # job_id -> endpoint_ids
 
     def add_job(self, job: ControllerJob) -> None:
         """Add a job to the controller state and queue.
@@ -346,3 +380,102 @@ class ControllerState:
         """
         with self._lock:
             self._queue = deque(jid for jid in self._queue if jid != job_id)
+
+    def add_endpoint(self, endpoint: ControllerEndpoint) -> None:
+        """Add an endpoint to the controller registry.
+
+        Endpoints are tracked both by ID and by job. When a job terminates,
+        all its endpoints can be quickly removed.
+
+        Args:
+            endpoint: Endpoint to register
+        """
+        with self._lock:
+            self._endpoints[endpoint.endpoint_id] = endpoint
+            self._endpoints_by_job.setdefault(endpoint.job_id, set()).add(endpoint.endpoint_id)
+
+    def remove_endpoint(self, endpoint_id: str) -> ControllerEndpoint | None:
+        """Remove an endpoint from the registry.
+
+        Args:
+            endpoint_id: Endpoint ID to remove
+
+        Returns:
+            Removed endpoint if found, None otherwise
+        """
+        with self._lock:
+            endpoint = self._endpoints.pop(endpoint_id, None)
+            if endpoint:
+                job_endpoints = self._endpoints_by_job.get(endpoint.job_id)
+                if job_endpoints:
+                    job_endpoints.discard(endpoint_id)
+            return endpoint
+
+    def lookup_endpoints(self, name: str, namespace: str) -> list[ControllerEndpoint]:
+        """Find endpoints by exact name match.
+
+        Only returns endpoints for jobs in RUNNING state. Endpoints for
+        jobs that have terminated or are not yet running are filtered out.
+
+        Args:
+            name: Service name to look up
+            namespace: Namespace to search in
+
+        Returns:
+            List of matching endpoints (may be empty)
+        """
+        with self._lock:
+            results = []
+            for ep in self._endpoints.values():
+                if ep.name != name or ep.namespace != namespace:
+                    continue
+                # Only return endpoints for running jobs
+                job = self._jobs.get(ep.job_id)
+                if job and job.state == cluster_pb2.JOB_STATE_RUNNING:
+                    results.append(ep)
+            return results
+
+    def list_endpoints_by_prefix(self, prefix: str, namespace: str) -> list[ControllerEndpoint]:
+        """List endpoints matching a name prefix.
+
+        Only returns endpoints for jobs in RUNNING state.
+
+        Args:
+            prefix: Service name prefix to match
+            namespace: Namespace to search in
+
+        Returns:
+            List of matching endpoints (may be empty)
+        """
+        with self._lock:
+            results = []
+            for ep in self._endpoints.values():
+                if not ep.name.startswith(prefix) or ep.namespace != namespace:
+                    continue
+                job = self._jobs.get(ep.job_id)
+                if job and job.state == cluster_pb2.JOB_STATE_RUNNING:
+                    results.append(ep)
+            return results
+
+    def remove_endpoints_for_job(self, job_id: JobId) -> list[ControllerEndpoint]:
+        """Remove all endpoints for a job.
+
+        Called when a job transitions to a terminal state to clean up
+        all service discovery entries.
+
+        Args:
+            job_id: Job ID whose endpoints should be removed
+
+        Returns:
+            List of removed endpoints
+        """
+        with self._lock:
+            endpoint_ids = list(self._endpoints_by_job.get(job_id, []))
+            removed = []
+            for eid in endpoint_ids:
+                ep = self.remove_endpoint(eid)
+                if ep:
+                    removed.append(ep)
+            # Clean up the job mapping
+            self._endpoints_by_job.pop(job_id, None)
+            return removed

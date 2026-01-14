@@ -38,7 +38,7 @@ from connectrpc.errors import ConnectError
 
 from fluster import cluster_pb2
 from fluster.cluster.controller.scheduler import Scheduler
-from fluster.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
+from fluster.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState, ControllerWorker
 from fluster.cluster.types import JobId, WorkerId, is_job_finished
 
 
@@ -325,36 +325,143 @@ class ControllerServiceImpl:
         ]
         return cluster_pb2.ListWorkersResponse(workers=workers)
 
-    # Endpoint registry methods - not implemented in v0
+    # Endpoint registry methods
 
     def register_endpoint(
         self,
         request: cluster_pb2.RegisterEndpointRequest,
         ctx: Any,
     ) -> cluster_pb2.RegisterEndpointResponse:
-        """Register a service endpoint. Not implemented in v0."""
-        raise ConnectError(Code.UNIMPLEMENTED, "Endpoint registry not implemented in v0")
+        """Register a service endpoint.
+
+        Validates that the job exists and is RUNNING before registering.
+        Endpoints are automatically removed when jobs terminate.
+
+        Args:
+            request: Endpoint registration request
+            ctx: Request context (unused)
+
+        Returns:
+            RegisterEndpointResponse with assigned endpoint_id
+
+        Raises:
+            ConnectError: If job is not found or not running
+        """
+        endpoint_id = str(uuid.uuid4())
+
+        # Validate job exists and is running
+        job = self._state.get_job(JobId(request.job_id))
+        if not job:
+            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+        if job.state != cluster_pb2.JOB_STATE_RUNNING:
+            raise ConnectError(Code.FAILED_PRECONDITION, f"Job {request.job_id} is not running")
+
+        endpoint = ControllerEndpoint(
+            endpoint_id=endpoint_id,
+            name=request.name,
+            address=request.address,
+            job_id=JobId(request.job_id),
+            namespace=request.namespace or "<local>",
+            metadata=dict(request.metadata),
+            registered_at_ms=int(time.time() * 1000),
+        )
+        self._state.add_endpoint(endpoint)
+        self._state.log_action(
+            "endpoint_registered",
+            job_id=job.job_id,
+            details=f"{request.name} at {request.address}",
+        )
+        return cluster_pb2.RegisterEndpointResponse(endpoint_id=endpoint_id)
 
     def unregister_endpoint(
         self,
         request: cluster_pb2.UnregisterEndpointRequest,
         ctx: Any,
     ) -> cluster_pb2.Empty:
-        """Unregister a service endpoint. Not implemented in v0."""
-        raise ConnectError(Code.UNIMPLEMENTED, "Endpoint registry not implemented in v0")
+        """Unregister a service endpoint.
+
+        Removes an endpoint from the registry. This is idempotent - no error
+        if the endpoint doesn't exist.
+
+        Args:
+            request: Endpoint unregistration request
+            ctx: Request context (unused)
+
+        Returns:
+            Empty response
+        """
+        endpoint = self._state.remove_endpoint(request.endpoint_id)
+        if endpoint:
+            self._state.log_action(
+                "endpoint_unregistered",
+                job_id=endpoint.job_id,
+                details=endpoint.name,
+            )
+        return cluster_pb2.Empty()
 
     def lookup_endpoint(
         self,
         request: cluster_pb2.LookupEndpointRequest,
         ctx: Any,
     ) -> cluster_pb2.LookupEndpointResponse:
-        """Look up a service endpoint. Not implemented in v0."""
-        raise ConnectError(Code.UNIMPLEMENTED, "Endpoint registry not implemented in v0")
+        """Look up a service endpoint by name.
+
+        Returns the first endpoint matching the name in the given namespace.
+        Only endpoints for RUNNING jobs are returned.
+
+        Args:
+            request: Lookup request with name and namespace
+            ctx: Request context (unused)
+
+        Returns:
+            LookupEndpointResponse with first matching endpoint (empty if not found)
+        """
+        namespace = request.namespace or "<local>"
+        endpoints = self._state.lookup_endpoints(request.name, namespace)
+        if not endpoints:
+            return cluster_pb2.LookupEndpointResponse()
+
+        e = endpoints[0]
+        return cluster_pb2.LookupEndpointResponse(
+            endpoint=cluster_pb2.Endpoint(
+                endpoint_id=e.endpoint_id,
+                name=e.name,
+                address=e.address,
+                job_id=e.job_id,
+                namespace=e.namespace,
+                metadata=e.metadata,
+            )
+        )
 
     def list_endpoints(
         self,
         request: cluster_pb2.ListEndpointsRequest,
         ctx: Any,
     ) -> cluster_pb2.ListEndpointsResponse:
-        """List service endpoints. Not implemented in v0."""
-        raise ConnectError(Code.UNIMPLEMENTED, "Endpoint registry not implemented in v0")
+        """List endpoints by name prefix.
+
+        Returns all endpoints matching the prefix in the given namespace.
+        Only endpoints for RUNNING jobs are returned.
+
+        Args:
+            request: List request with prefix and namespace
+            ctx: Request context (unused)
+
+        Returns:
+            ListEndpointsResponse with matching endpoints
+        """
+        namespace = request.namespace or "<local>"
+        endpoints = self._state.list_endpoints_by_prefix(request.prefix, namespace)
+        return cluster_pb2.ListEndpointsResponse(
+            endpoints=[
+                cluster_pb2.Endpoint(
+                    endpoint_id=e.endpoint_id,
+                    name=e.name,
+                    address=e.address,
+                    job_id=e.job_id,
+                    namespace=e.namespace,
+                    metadata=e.metadata,
+                )
+                for e in endpoints
+            ]
+        )

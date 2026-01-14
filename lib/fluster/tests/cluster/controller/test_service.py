@@ -374,25 +374,6 @@ def test_list_workers_returns_all(service, state, make_resource_spec):
     assert workers_by_id["w2"].healthy is True
 
 
-def test_register_endpoint_unimplemented(service):
-    """Verify endpoint registry methods return UNIMPLEMENTED."""
-    with pytest.raises(ConnectError) as exc_info:
-        service.register_endpoint(cluster_pb2.RegisterEndpointRequest(), None)
-    assert exc_info.value.code == Code.UNIMPLEMENTED
-
-    with pytest.raises(ConnectError) as exc_info:
-        service.unregister_endpoint(cluster_pb2.UnregisterEndpointRequest(), None)
-    assert exc_info.value.code == Code.UNIMPLEMENTED
-
-    with pytest.raises(ConnectError) as exc_info:
-        service.lookup_endpoint(cluster_pb2.LookupEndpointRequest(), None)
-    assert exc_info.value.code == Code.UNIMPLEMENTED
-
-    with pytest.raises(ConnectError) as exc_info:
-        service.list_endpoints(cluster_pb2.ListEndpointsRequest(), None)
-    assert exc_info.value.code == Code.UNIMPLEMENTED
-
-
 def test_launch_job_logs_action(service, state, make_job_request):
     """Verify launch_job logs an action."""
     request = make_job_request("test-job")
