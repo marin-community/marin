@@ -28,6 +28,7 @@ before training larger models.
 """
 
 import logging
+import math
 import os
 
 from levanter.models.llama import LlamaConfig
@@ -437,6 +438,214 @@ def build_regmix_60m_proxy_config() -> tuple[str, SpeedrunConfig]:
     return "regmix_60m_proxy_1B_muonh_1", config
 
 
+# =============================================================================
+# Batch Size Sweep for OLMo3 30M Proxy
+# =============================================================================
+#
+# Sweep batch sizes to find the fastest training configuration.
+# Learning rates are scaled using sqrt(batch_size / base_batch_size).
+# Base config: batch_size=128, learning_rate=0.02, adam_lr=0.008
+
+BASE_BATCH_SIZE = 128
+BASE_LEARNING_RATE = 0.02
+BASE_ADAM_LR = 0.008
+
+
+def build_olmo3_proxy_batch_sweep(batch_size: int) -> tuple[str, SpeedrunConfig]:
+    """
+    Build OLMo3 30M proxy config with specified batch size.
+
+    Learning rates are scaled using sqrt scaling:
+        lr = base_lr * sqrt(batch_size / base_batch_size)
+    """
+    model_config = olmo3_30m_proxy
+
+    # Token budget: 3B tokens
+    total_tokens = 3_000_000_000
+    seq_len = model_config.max_seq_len
+
+    num_train_steps = get_num_train_steps(total_tokens, batch_size, seq_len)
+
+    # Scale learning rates with sqrt(batch_size)
+    lr_scale = math.sqrt(batch_size / BASE_BATCH_SIZE)
+    learning_rate = BASE_LEARNING_RATE * lr_scale
+    adam_lr = BASE_ADAM_LR * lr_scale
+
+    # Scale warmup proportionally to fewer steps (keep ~same fraction of training)
+    # Base: 1000 warmup for 11,444 steps (~8.7%)
+    warmup_steps = max(100, int(1000 * BASE_BATCH_SIZE / batch_size))
+
+    muon_config = MuonHConfig(
+        learning_rate=learning_rate,
+        adam_lr=adam_lr,
+        min_lr_ratio=0,
+        momentum=0.95,
+        beta1=0.9,
+        beta2=0.98,
+        epsilon=1e-15,
+        muon_epsilon=1e-5,
+        max_grad_norm=1,
+        warmup=warmup_steps,
+    )
+
+    train_config = SimpleTrainConfig(
+        resources=ResourceConfig.with_tpu("v5p-8"),
+        train_batch_size=batch_size,
+        num_train_steps=num_train_steps,
+        learning_rate=muon_config.learning_rate,
+        optimizer_config=muon_config,
+        steps_per_eval=max(100, num_train_steps // 10),  # ~10 evals per run
+    )
+
+    # Print config info
+    params = compute_olmo3_params(model_config, llama3_tokenizer_vocab_size)
+    logger.info(f"OLMo3 30M proxy config (batch_size={batch_size}):")
+    logger.info(f"  Total parameters: {params['total']:,}")
+    logger.info(f"  Training steps: {num_train_steps:,}")
+    logger.info(f"  Learning rate: {learning_rate:.4f} (scaled {lr_scale:.2f}x)")
+    logger.info(f"  Adam LR: {adam_lr:.4f}")
+    logger.info(f"  Warmup steps: {warmup_steps}")
+
+    config = SpeedrunConfig(
+        author=AUTHOR,
+        description=f"OLMo3 ~30M proxy batch sweep (bs={batch_size}, lr={learning_rate:.4f})",
+        model_config=model_config,
+        train_config=train_config,
+    )
+
+    return f"olmo3_30m_proxy_bs{batch_size}", config
+
+
+def build_regmix_1m_batch_sweep(batch_size: int) -> tuple[str, SpeedrunConfig]:
+    """
+    Build RegMix 1M proxy config with specified batch size.
+
+    Learning rates are scaled using sqrt scaling:
+        lr = base_lr * sqrt(batch_size / base_batch_size)
+    """
+    model_config = regmix_1m_proxy
+
+    # Token budget: 1B tokens
+    total_tokens = 1_000_000_000
+    seq_len = model_config.max_seq_len
+
+    num_train_steps = get_num_train_steps(total_tokens, batch_size, seq_len)
+
+    # Scale learning rates with sqrt(batch_size)
+    lr_scale = math.sqrt(batch_size / BASE_BATCH_SIZE)
+    learning_rate = BASE_LEARNING_RATE * lr_scale
+    adam_lr = BASE_ADAM_LR * lr_scale
+
+    # Scale warmup proportionally to fewer steps
+    # Base: 500 warmup for 3,814 steps (~13%)
+    warmup_steps = max(50, int(500 * BASE_BATCH_SIZE / batch_size))
+
+    muon_config = MuonHConfig(
+        learning_rate=learning_rate,
+        adam_lr=adam_lr,
+        min_lr_ratio=0,
+        momentum=0.95,
+        beta1=0.9,
+        beta2=0.98,
+        epsilon=1e-15,
+        muon_epsilon=1e-5,
+        max_grad_norm=1,
+        warmup=warmup_steps,
+    )
+
+    train_config = SimpleTrainConfig(
+        resources=ResourceConfig.with_tpu("v5p-8"),
+        train_batch_size=batch_size,
+        num_train_steps=num_train_steps,
+        learning_rate=muon_config.learning_rate,
+        optimizer_config=muon_config,
+        steps_per_eval=max(100, num_train_steps // 10),  # ~10 evals per run
+    )
+
+    # Print config info
+    non_emb_params = compute_llama_non_embedding_params(model_config)
+    logger.info(f"RegMix 1M proxy config (batch_size={batch_size}):")
+    logger.info(f"  Non-embedding parameters: {non_emb_params:,}")
+    logger.info(f"  Training steps: {num_train_steps:,}")
+    logger.info(f"  Learning rate: {learning_rate:.4f} (scaled {lr_scale:.2f}x)")
+    logger.info(f"  Adam LR: {adam_lr:.4f}")
+    logger.info(f"  Warmup steps: {warmup_steps}")
+
+    config = SpeedrunConfig(
+        author=AUTHOR,
+        description=f"RegMix ~1M proxy batch sweep (bs={batch_size}, lr={learning_rate:.4f})",
+        model_config=model_config,
+        train_config=train_config,
+    )
+
+    return f"regmix_1m_proxy_bs{batch_size}", config
+
+
+def build_regmix_60m_batch_sweep(batch_size: int) -> tuple[str, SpeedrunConfig]:
+    """
+    Build RegMix 60M proxy config with specified batch size.
+
+    Learning rates are scaled using sqrt scaling:
+        lr = base_lr * sqrt(batch_size / base_batch_size)
+    """
+    model_config = regmix_60m_proxy
+
+    # Token budget: 1B tokens
+    total_tokens = 1_000_000_000
+    seq_len = model_config.max_seq_len
+
+    num_train_steps = get_num_train_steps(total_tokens, batch_size, seq_len)
+
+    # Scale learning rates with sqrt(batch_size)
+    lr_scale = math.sqrt(batch_size / BASE_BATCH_SIZE)
+    learning_rate = BASE_LEARNING_RATE * lr_scale
+    adam_lr = BASE_ADAM_LR * lr_scale
+
+    # Scale warmup proportionally to fewer steps
+    # Base: 1000 warmup for 3,814 steps (~26%)
+    warmup_steps = max(100, int(1000 * BASE_BATCH_SIZE / batch_size))
+
+    muon_config = MuonHConfig(
+        learning_rate=learning_rate,
+        adam_lr=adam_lr,
+        min_lr_ratio=0,
+        momentum=0.95,
+        beta1=0.9,
+        beta2=0.98,
+        epsilon=1e-15,
+        muon_epsilon=1e-5,
+        max_grad_norm=1,
+        warmup=warmup_steps,
+    )
+
+    train_config = SimpleTrainConfig(
+        resources=ResourceConfig.with_tpu("v5p-8"),
+        train_batch_size=batch_size,
+        num_train_steps=num_train_steps,
+        learning_rate=muon_config.learning_rate,
+        optimizer_config=muon_config,
+        steps_per_eval=max(100, num_train_steps // 10),  # ~10 evals per run
+    )
+
+    # Print config info
+    non_emb_params = compute_llama_non_embedding_params(model_config)
+    logger.info(f"RegMix 60M proxy config (batch_size={batch_size}):")
+    logger.info(f"  Non-embedding parameters: {non_emb_params:,}")
+    logger.info(f"  Training steps: {num_train_steps:,}")
+    logger.info(f"  Learning rate: {learning_rate:.4f} (scaled {lr_scale:.2f}x)")
+    logger.info(f"  Adam LR: {adam_lr:.4f}")
+    logger.info(f"  Warmup steps: {warmup_steps}")
+
+    config = SpeedrunConfig(
+        author=AUTHOR,
+        description=f"RegMix ~60M proxy batch sweep (bs={batch_size}, lr={learning_rate:.4f})",
+        model_config=model_config,
+        train_config=train_config,
+    )
+
+    return f"regmix_60m_proxy_bs{batch_size}", config
+
+
 def main():
     if os.getenv("CI", None) is not None:
         logger.info("Skipping experiment execution on CI environment.")
@@ -475,5 +684,104 @@ def main():
     )
 
 
+def main_batch_sweep():
+    """Run batch size sweep for all proxy models to find optimal throughput."""
+    if os.getenv("CI", None) is not None:
+        logger.info("Skipping experiment execution on CI environment.")
+        return
+
+    batch_sizes = [64, 80, 176]
+
+    print("\n" + "=" * 80)
+    print("Proxy Model Batch Size Sweep")
+    print("=" * 80)
+    print(f"Base config: bs=128, lr={BASE_LEARNING_RATE}, adam_lr={BASE_ADAM_LR}")
+    print("LR scaling: sqrt(batch_size / 128)")
+    print()
+
+    # Print OLMo3 sweep configurations
+    print("OLMo3 30M (3B tokens):")
+    for bs in batch_sizes:
+        lr_scale = math.sqrt(bs / BASE_BATCH_SIZE)
+        lr = BASE_LEARNING_RATE * lr_scale
+        adam_lr = BASE_ADAM_LR * lr_scale
+        steps = 3_000_000_000 // (bs * 2048)
+        warmup = max(100, int(1000 * BASE_BATCH_SIZE / bs))
+        print(f"  bs={bs:4d}: lr={lr:.4f}, adam_lr={adam_lr:.4f}, steps={steps:,}, warmup={warmup}")
+
+    print()
+
+    # Print RegMix 1M sweep configurations
+    print("RegMix 1M (1B tokens):")
+    for bs in batch_sizes:
+        lr_scale = math.sqrt(bs / BASE_BATCH_SIZE)
+        lr = BASE_LEARNING_RATE * lr_scale
+        adam_lr = BASE_ADAM_LR * lr_scale
+        steps = 1_000_000_000 // (bs * 2048)
+        warmup = max(50, int(500 * BASE_BATCH_SIZE / bs))
+        print(f"  bs={bs:4d}: lr={lr:.4f}, adam_lr={adam_lr:.4f}, steps={steps:,}, warmup={warmup}")
+
+    print()
+
+    # Print RegMix 60M sweep configurations
+    print("RegMix 60M (1B tokens):")
+    for bs in batch_sizes:
+        lr_scale = math.sqrt(bs / BASE_BATCH_SIZE)
+        lr = BASE_LEARNING_RATE * lr_scale
+        adam_lr = BASE_ADAM_LR * lr_scale
+        steps = 1_000_000_000 // (bs * 2048)
+        warmup = max(100, int(1000 * BASE_BATCH_SIZE / bs))
+        print(f"  bs={bs:4d}: lr={lr:.4f}, adam_lr={adam_lr:.4f}, steps={steps:,}, warmup={warmup}")
+
+    print()
+
+    # Build and run sweep for all models
+    steps = []
+
+    # OLMo3 30M sweep
+    for bs in batch_sizes:
+        name, config = build_olmo3_proxy_batch_sweep(bs)
+        config.print_run_info()
+        steps.extend(default_speedrun(name, config))
+
+    # RegMix 1M sweep
+    for bs in batch_sizes:
+        name, config = build_regmix_1m_batch_sweep(bs)
+        config.print_run_info()
+        steps.extend(default_speedrun(name, config))
+
+    # RegMix 60M sweep
+    for bs in batch_sizes:
+        name, config = build_regmix_60m_batch_sweep(bs)
+        config.print_run_info()
+        steps.extend(default_speedrun(name, config))
+
+    executor_main(
+        steps=steps,
+        description="Proxy model batch size sweep (OLMo3 30M, RegMix 1M, RegMix 60M)"
+    )
+
+
+def _parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(description="Proxy/swarm model training for data mixture optimization.")
+    parser.add_argument(
+        "--mode",
+        choices=["default", "batch_sweep"],
+        default="default",
+        help="Run mode: 'default' runs standard configs, 'batch_sweep' runs batch size sweep (default: default).",
+    )
+    return parser.parse_known_args()
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+
+    args, remaining = _parse_args()
+    # Pass remaining args to executor_main
+    sys.argv = [sys.argv[0], *remaining]
+
+    if args.mode == "batch_sweep":
+        main_batch_sweep()
+    else:
+        main()
