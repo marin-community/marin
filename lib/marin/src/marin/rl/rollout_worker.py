@@ -427,7 +427,7 @@ class RolloutWorker:
             logger.info("Initializing policy model from initial checkpoint")
             self._policy_model = initial_model
         elif self.config.inference_type == "vllm":
-            
+
             self._policy_model = None
 
     def stop(self):
