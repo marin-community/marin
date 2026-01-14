@@ -27,8 +27,20 @@ Usage:
 
     # Upload a raw GCS/local path:
     step = upload_path_to_hf(name="my-upload", input_path="gs://bucket/path", repo_id="user/repo")
+
+    # Convert a checkpoint to HuggingFace format:
+    step = convert_checkpoint_to_hf_step(name="hf/my-model", checkpoint_path="gs://...", ...)
 """
 
 from experiments.steps.hf_upload import upload_dir_to_hf, upload_path_to_hf
+from experiments.steps.levanter_checkpoint import (
+    convert_checkpoint_from_step,
+    convert_checkpoint_to_hf_step,
+)
 
-__all__ = ["upload_dir_to_hf", "upload_path_to_hf"]
+__all__ = [
+    "convert_checkpoint_from_step",
+    "convert_checkpoint_to_hf_step",
+    "upload_dir_to_hf",
+    "upload_path_to_hf",
+]

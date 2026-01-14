@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Library code for converting Levanter checkpoints to HuggingFace format.
+
+This module contains pure processing functions that work with concrete paths.
+For step wrappers that handle dependencies, see experiments/steps/levanter_checkpoint.py
+"""
+
 import dataclasses
 import logging
 from dataclasses import dataclass
@@ -34,12 +41,6 @@ from levanter.main.export_lm_to_hf import ConvertLmConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution import StepContext, StepRef, step
-from marin.execution.executor import (
-    ExecutorStep,
-    VersionedValue,
-    ensure_versioned,
-)
 from marin.training.training import _add_default_env_variables, _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 
@@ -48,32 +49,54 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ConvertCheckpointStepConfig:
-    """
-    Configuration for converting a single Levanter checkpoint into HuggingFace format.
-    """
+    """Configuration for converting a Levanter checkpoint into HuggingFace format."""
 
-    checkpoint_path: str | StepRef | VersionedValue[str]
+    checkpoint_path: str
+    """Path to the Levanter checkpoint directory."""
+
     trainer: TrainerConfig
+    """TrainerConfig matching the topology the checkpoint was saved with."""
+
     model: LmConfig
+    """Model configuration that produced the checkpoint."""
+
+    output_path: str
+    """Output directory for the HuggingFace checkpoint."""
+
     resources: ResourceConfig = dataclasses.field(default_factory=ResourceConfig.with_cpu)
-    output_path: str = dataclasses.field(default_factory=lambda: StepRef(_step=None))  # type: ignore[arg-type]
+    """Hardware resources for conversion."""
+
     upload_to_hf: bool | str | RepoRef = False
+    """Optional HuggingFace repo reference (bool, repo-id string, or RepoRef)."""
+
     tokenizer: str | None = None
+    """Optional tokenizer override."""
+
     override_vocab_size: int | None = None
+    """If provided, resizes the vocabulary before exporting."""
+
     config_overrides: dict[str, Any] | None = None
+    """Optional dict merged into the HF config prior to saving."""
+
     save_tokenizer: bool = True
+    """Whether to emit tokenizer files alongside the model weights."""
+
     use_cpu: bool = False
+    """Force conversion to run on CPU instead of the configured device mesh."""
+
     discover_latest: bool = False
+    """If True, resolves checkpoint_path to the most recent checkpoint in that directory."""
 
 
 def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
     """
-    Executor entry point that shells into Levanter's export_lm_to_hf utility.
-    """
+    Convert a Levanter checkpoint to HuggingFace format.
 
+    This is the library function that performs the actual conversion.
+    """
     default_launch_config = levanter.infra.cli_helpers.load_config()
 
-    checkpoint_path = config.checkpoint_path  # type: ignore[assignment]
+    checkpoint_path = config.checkpoint_path
     if config.discover_latest:
         discovered = discover_latest_checkpoint(checkpoint_path)
         if not discovered:
@@ -84,7 +107,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
 
     convert_config = ConvertLmConfig(
         trainer=config.trainer,
-        checkpoint_path=checkpoint_path,  # type: ignore[arg-type]
+        checkpoint_path=checkpoint_path,
         output_dir=config.output_path,
         upload_to_hf=config.upload_to_hf,
         model=config.model,
@@ -121,76 +144,3 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
     cluster = current_cluster()
     job_id = cluster.launch(job_request)
     cluster.wait(job_id, raise_on_failure=True)
-
-
-def convert_checkpoint_to_hf_step(
-    name: str,
-    checkpoint_path: StepRef | str,
-    *,
-    trainer: TrainerConfig,
-    model: LmConfig,
-    resources: ResourceConfig | None = None,
-    upload_to_hf: bool | str | RepoRef = False,
-    tokenizer: str | None = None,
-    override_vocab_size: int | None = None,
-    config_overrides: dict[str, Any] | None = None,
-    save_tokenizer: bool = True,
-    use_cpu: bool = False,
-    override_output_path: str | None = None,
-    pip_dependency_groups: list[str] | None = None,
-    discover_latest: bool = False,
-) -> ExecutorStep:
-    """
-    Creates an ExecutorStep that materializes a HuggingFace checkpoint from a saved Levanter checkpoint.
-
-    Args:
-        name: Step name. Commonly prefixed with ``hf/`` to keep outputs organized.
-        checkpoint_path: Path (or StepRef) pointing to a Levanter checkpoint directory, e.g.
-            ``train_step / "checkpoints/ckpt-210388"``.
-        trainer: TrainerConfig that matches the topology the checkpoint was saved with.
-        model: Model configuration that produced the checkpoint.
-        resources: Hardware resources to use when running the conversion. Defaults to CPU-only execution.
-        upload_to_hf: Optional HuggingFace repo reference (bool, repo-id string, or RepoRef).
-        tokenizer: Optional tokenizer override. Defaults to the tokenizer specified by ``model``.
-        override_vocab_size: If provided, resizes the vocabulary before exporting.
-        config_overrides: Optional dict merged into the HF config prior to saving.
-        save_tokenizer: Whether to emit tokenizer files alongside the model weights.
-        use_cpu: Force conversion to run on CPU instead of the configured device mesh. When False, CPU mode is enabled
-            automatically if the provided resources do not expose an accelerator.
-        override_output_path: Explicit output path override. Useful when aligning with pre-existing directories.
-        pip_dependency_groups: Optional executor dependency groups.
-        discover_latest: If True, resolves ``checkpoint_path`` to the most recent checkpoint in that directory.
-    """
-
-    @step(name=name, fn=convert_checkpoint_to_hf)
-    def _convert(ctx: StepContext):
-        # Properly resolve checkpoint_path dependency if it's a StepRef
-        if isinstance(checkpoint_path, (StepRef, ExecutorStep)):
-            resolved_checkpoint = ctx.require(checkpoint_path)
-        else:
-            resolved_checkpoint = checkpoint_path
-
-        checkpoint_value: StepRef | VersionedValue[str]
-        if isinstance(resolved_checkpoint, StepRef):
-            checkpoint_value = resolved_checkpoint
-        else:
-            checkpoint_value = ensure_versioned(resolved_checkpoint)
-
-        config = ConvertCheckpointStepConfig(
-            checkpoint_path=checkpoint_value,
-            trainer=trainer,
-            model=model,
-            resources=resources or ResourceConfig.with_cpu(),
-            output_path=override_output_path or ctx.output,
-            upload_to_hf=upload_to_hf,
-            tokenizer=tokenizer,
-            override_vocab_size=override_vocab_size,
-            config_overrides=config_overrides,
-            save_tokenizer=save_tokenizer,
-            use_cpu=use_cpu,
-            discover_latest=discover_latest,
-        )
-
-        return config
-
-    return _convert()
