@@ -28,7 +28,6 @@ Usage:
 
 import socket
 import tempfile
-import threading
 import time
 import uuid
 import zipfile
@@ -36,21 +35,11 @@ from pathlib import Path
 
 import click
 import cloudpickle
-import uvicorn
 from fluster import cluster_pb2
 from fluster.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
-from fluster.cluster.controller.dashboard import ControllerDashboard
-from fluster.cluster.controller.heartbeat import HeartbeatMonitor
-from fluster.cluster.controller.scheduler import Scheduler
-from fluster.cluster.controller.service import ControllerServiceImpl
-from fluster.cluster.controller.state import ControllerState
+from fluster.cluster.controller.controller import Controller, ControllerConfig
 from fluster.cluster.types import Entrypoint, JobId, WorkerId
-from fluster.cluster.worker.builder import ImageCache, VenvCache
-from fluster.cluster.worker.bundle import BundleCache
-from fluster.cluster.worker.dashboard import WorkerDashboard
-from fluster.cluster.worker.docker import DockerRuntime
-from fluster.cluster.worker.manager import JobManager, PortAllocator
-from fluster.cluster.worker.service import WorkerServiceImpl
+from fluster.cluster.worker.worker import Worker, WorkerConfig
 
 
 def find_free_port() -> int:
@@ -129,19 +118,9 @@ class ClusterContext:
         self._workspace: Path | None = None
         self._worker_id: str | None = None
 
-        # Controller components
-        self._state: ControllerState | None = None
-        self._scheduler: Scheduler | None = None
-        self._heartbeat_monitor: HeartbeatMonitor | None = None
-        self._controller_service: ControllerServiceImpl | None = None
-        self._controller_dashboard: ControllerDashboard | None = None
-        self._controller_thread: threading.Thread | None = None
-
-        # Worker components
-        self._job_manager: JobManager | None = None
-        self._worker_service: WorkerServiceImpl | None = None
-        self._worker_dashboard: WorkerDashboard | None = None
-        self._worker_thread: threading.Thread | None = None
+        # Controller and Worker
+        self._controller: Controller | None = None
+        self._worker: Worker | None = None
 
         # RPC client for controller calls
         self._controller_client: ControllerServiceClientSync | None = None
@@ -164,82 +143,33 @@ class ClusterContext:
 
         # --- Start Worker First (so it's ready when controller dispatches) ---
         print("Starting worker components...")
-        bundle_cache = BundleCache(cache_path, max_bundles=100)
-        venv_cache = VenvCache()
-        image_cache = ImageCache(cache_path, registry=self._registry, max_images=50)
-        runtime = DockerRuntime()
-        port_allocator = PortAllocator((30000, 40000))
-
-        self._job_manager = JobManager(
-            bundle_cache=bundle_cache,
-            venv_cache=venv_cache,
-            image_cache=image_cache,
-            runtime=runtime,
-            port_allocator=port_allocator,
-            max_concurrent_jobs=self._max_concurrent_jobs,
-            controller_address=f"http://127.0.0.1:{self._controller_port}",
-            worker_id=None,  # Set during registration
-        )
-
-        self._worker_service = WorkerServiceImpl(self._job_manager)
-        self._worker_dashboard = WorkerDashboard(
-            self._worker_service,
+        worker_config = WorkerConfig(
             host="127.0.0.1",
             port=self._worker_port,
+            cache_dir=cache_path,
+            registry=self._registry,
+            max_concurrent_jobs=self._max_concurrent_jobs,
+            controller_address=f"http://127.0.0.1:{self._controller_port}",
         )
-
-        # Start worker in thread
-        print("Starting worker server thread...")
-        self._worker_thread = threading.Thread(
-            target=self._run_worker,
-            daemon=True,
-        )
-        self._worker_thread.start()
-        time.sleep(1.0)  # Wait for server startup
+        self._worker = Worker(worker_config, cache_dir=cache_path)
+        self._worker.start()
         print(f"Worker server should be at http://127.0.0.1:{self._worker_port}")
 
         # --- Start Controller ---
         print("Starting controller components...")
-        self._state = ControllerState()
-        self._scheduler = Scheduler(
-            self._state,
-            self._dispatch_job,
-            interval_seconds=0.5,
-        )
-        self._heartbeat_monitor = HeartbeatMonitor(
-            self._state,
-            self._send_heartbeat,
-            self._on_worker_failed,
-            interval_seconds=2.0,
-        )
-        self._controller_service = ControllerServiceImpl(
-            self._state,
-            self._scheduler,
-            bundle_dir=self._bundle_dir,
-        )
-        self._controller_dashboard = ControllerDashboard(
-            self._controller_service,
+        controller_config = ControllerConfig(
             host="127.0.0.1",
             port=self._controller_port,
+            bundle_dir=self._bundle_dir,
         )
-
-        # Start controller in thread
-        print("Starting controller server thread...", flush=True)
-        self._controller_thread = threading.Thread(
-            target=self._run_controller,
-            daemon=True,
+        self._controller = Controller(
+            config=controller_config,
+            dispatch_fn=self._dispatch_job,
+            heartbeat_fn=self._send_heartbeat,
+            on_worker_failed=self._on_worker_failed,
         )
-        self._controller_thread.start()
-        print("Controller thread started, waiting...", flush=True)
-        time.sleep(1.0)
+        self._controller.start()
         print(f"Controller server should be at http://127.0.0.1:{self._controller_port}", flush=True)
-
-        # Start scheduler and heartbeat monitor
-        print("Starting scheduler and heartbeat monitor...", flush=True)
-        self._scheduler.start()
-        print("Scheduler started", flush=True)
-        self._heartbeat_monitor.start()
-        print("Heartbeat monitor started", flush=True)
 
         # Create RPC client
         print("Creating RPC client...", flush=True)
@@ -253,6 +183,8 @@ class ClusterContext:
         self._worker_id = f"worker-{uuid.uuid4().hex[:8]}"
         print(f"Registering worker {self._worker_id}...", flush=True)
         self._register_worker()
+        # Set worker_id on JobManager so it can inject FLUSTER_WORKER_ID
+        self._worker.job_manager._worker_id = self._worker_id
         print("Worker registered", flush=True)
 
         print(f"Controller: http://127.0.0.1:{self._controller_port}", flush=True)
@@ -266,38 +198,14 @@ class ClusterContext:
         if self._controller_client:
             self._controller_client.close()
 
-        if self._heartbeat_monitor:
-            self._heartbeat_monitor.stop()
+        if self._controller:
+            self._controller.stop()
 
-        if self._scheduler:
-            self._scheduler.stop()
+        if self._worker:
+            self._worker.stop()
 
         if self._temp_dir:
             self._temp_dir.cleanup()
-
-    def _run_worker(self):
-        """Run worker server (blocking, for thread)."""
-        try:
-            uvicorn.run(
-                self._worker_dashboard._app,
-                host="127.0.0.1",
-                port=self._worker_port,
-                log_level="error",
-            )
-        except Exception as e:
-            print(f"Worker server error: {e}")
-
-    def _run_controller(self):
-        """Run controller server (blocking, for thread)."""
-        try:
-            uvicorn.run(
-                self._controller_dashboard._app,
-                host="127.0.0.1",
-                port=self._controller_port,
-                log_level="error",
-            )
-        except Exception as e:
-            print(f"Controller server error: {e}")
 
     def _dispatch_job(self, job, worker) -> bool:
         """Dispatch job to worker (called by scheduler in its thread)."""
@@ -362,8 +270,6 @@ class ClusterContext:
             ),
         )
         self._controller_client.register_worker(request)
-        # Set worker_id on JobManager so it can inject FLUSTER_WORKER_ID
-        self._job_manager._worker_id = self._worker_id
 
     def _get_bundle_blob(self) -> bytes:
         """Get workspace bundle (cached)."""

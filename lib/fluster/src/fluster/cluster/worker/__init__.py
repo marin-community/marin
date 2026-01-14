@@ -13,3 +13,7 @@
 # limitations under the License.
 
 """Fluster worker implementation."""
+
+from fluster.cluster.worker.worker import Worker, WorkerConfig
+
+__all__ = ["Worker", "WorkerConfig"]
