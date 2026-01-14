@@ -33,7 +33,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import fsspec
-from marin.execution.executor import ExecutorStep, executor_main, StepRef
+from marin.execution.executor import ExecutorStep, executor_main, StepRef, step, StepContext
 from marin.utils import fsspec_glob
 from zephyr import Backend, Dataset, load_file, load_jsonl
 
@@ -398,35 +398,33 @@ def run_aggregate_total(config: AggregateConfig) -> str:
     return config.output_path
 
 
+@step(
+    name="train_test_overlap/aggregate_total",
+    fn=run_aggregate_total,
+    description="Aggregate overlap across all training datasets with individual and union views",
+)
 def build_aggregate_total_step(
+    ctx: StepContext,
     attributes_base_path: str = "gs://marin-us-central2/train_test_overlap/",
-    output_path: str | None = None,
     ngram_size: int = 15,
     eval_dataset_steps: list[ExecutorStep] | None = None,
-) -> ExecutorStep:
+):
     """Create an ExecutorStep for aggregating train-test overlap.
 
     Args:
+        ctx: Step context provided by the decorator
         attributes_base_path: Base path containing attribute files
-        output_path: Where to write results. If None, uses this_output_path()
         ngram_size: N-gram size to process
         eval_dataset_steps: Evaluation dataset steps. If None, uses EVAL_DATASET_STEPS
 
     Returns:
-        ExecutorStep that can be integrated into a pipeline
+        AggregateConfig with resolved dependencies
     """
-    cfg = AggregateConfig(
+    return AggregateConfig(
         attributes_base_path=attributes_base_path,
-        output_path=output_path or StepRef(_step=None),
+        output_path=ctx.output,
         ngram_size=ngram_size,
-        eval_dataset_steps=eval_dataset_steps or EVAL_DATASET_STEPS,
-    )
-
-    return ExecutorStep(
-        name="train_test_overlap/aggregate_total",
-        fn=run_aggregate_total,
-        config=cfg,
-        description="Aggregate overlap across all training datasets with individual and union views",
+        eval_dataset_steps=[ctx.require(s) for s in (eval_dataset_steps or EVAL_DATASET_STEPS)],
     )
 
 

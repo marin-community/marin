@@ -23,7 +23,7 @@ from experiments.defaults import default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config, llama_300m, llama_300m_train_config
 from experiments.pretraining_datasets.simple import downloads, tokenized
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
-from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
+from marin.execution import step, StepContext, StepRef, executor_main, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, lm_mixture_data_config, tokenize
 
 slimpajama_6b_tokenized = tokenized["slimpajama_6b"]
@@ -35,16 +35,16 @@ slimpajama_6b_model = default_train(
     train_config=llama_300m_train_config,
 )
 
-slimpajama_tokenized = ExecutorStep(
-    name=os.path.join("tokenized", "SlimPajama-627B"),
-    fn=tokenize,
-    config=TokenizeConfig(
+@step(name=os.path.join("tokenized", "SlimPajama-627B"), fn=tokenize)
+def slimpajama_tokenized_creator(ctx: StepContext):
+    return TokenizeConfig(
         train_paths=[downloads["slimpajama"].cd("train")],
         validation_paths=[downloads["slimpajama"].cd("validation")],
-        cache_path=StepRef(_step=None),
+        cache_path=ctx.output,
         tokenizer=versioned(llama3_tokenizer),
-    ),
-)
+    )
+
+slimpajama_tokenized = slimpajama_tokenized_creator()
 slimpajama_config = lm_data_config(slimpajama_tokenized, permutation_type="linear")
 slimpajama_model = default_train(
     name="SlimPajama-627B-1.4b",

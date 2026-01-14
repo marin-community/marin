@@ -29,7 +29,7 @@ from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from levanter.infra.cli_helpers import load_config
-from marin.execution.executor import ExecutorStep, StepRef, executor_main
+from marin.execution import step, StepContext, ExecutorStep, executor_main
 from marin.processing.tokenize import lm_data_config, lm_mixture_data_config
 from marin.speedrun.speedrun import Author, SpeedrunConfig, SpeedrunResultsConfig, speedrun_results
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
@@ -203,18 +203,18 @@ def nemotron_only_speedrun(
     else:
         wandb_run_id = train_step  # resolved to the actual output path by the executor
 
-    results_step = ExecutorStep(
-        name=f"speedrun/{name}-speedrun_results",
-        description=f"compute and store metrics and stats for the speedrun {name}.",
-        fn=speedrun_results,
-        config=SpeedrunResultsConfig(
+    @step(name=f"speedrun/{name}-speedrun_results", fn=speedrun_results)
+    def results_step_creator(ctx: StepContext):
+        train_step_ref = ctx.require(train_step)
+        return SpeedrunResultsConfig(
             wandb_run_id=wandb_run_id,
             wandb_entity=wandb_entity,
             wandb_project=wandb_project,
             speedrun_config=config,
-            output_path=train_step / "speedrun_results.json",
-        ),
-    )
+            output_path=train_step_ref / "speedrun_results.json",
+        )
+
+    results_step = results_step_creator()
 
     return [train_step, results_step]
 

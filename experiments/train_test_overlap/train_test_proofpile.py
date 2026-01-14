@@ -25,7 +25,7 @@ Usage:
 
 import logging
 
-from marin.execution.executor import ExecutorStep, executor_main, StepRef
+from marin.execution.executor import ExecutorStep, executor_main, StepRef, step, StepContext
 from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 
 from experiments.pretraining_datasets.simple import tokenized
@@ -50,24 +50,18 @@ def run_train_test_overlap(config: DeconConfig) -> str:
     return config.output_path
 
 
-def build_proofpile_step() -> ExecutorStep:
-    dedupe_config = DeconConfig(
-        input_path=tokenized["proofpile_2"],
-        output_path=StepRef(_step=None),
-        decontaminate_source=EVAL_DATASET_STEPS,
+@step(name="tmp/train_test_overlap/proofpile", fn=run_train_test_overlap, description="Run dedupe train-test overlap on Proofpile")
+def build_proofpile_step(ctx: StepContext):
+    return DeconConfig(
+        input_path=ctx.require(tokenized["proofpile_2"]),
+        output_path=ctx.output,
+        decontaminate_source=[ctx.require(s) for s in EVAL_DATASET_STEPS],
         attribute_name="ngram_overlap",
         false_positive_rate=1e-20,
         ngram=DEFAULT_NGRAM_CONFIG,
         processes=1024,
         mode=DeconMode.TRAIN_TEST_OVERLAP,
         text_field="text",
-    )
-
-    return ExecutorStep(
-        name="tmp/train_test_overlap/proofpile",
-        fn=run_train_test_overlap,
-        config=dedupe_config,
-        description="Run dedupe train-test overlap on Proofpile",
     )
 
 

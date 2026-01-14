@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 import fsspec
 
-from marin.execution.executor import ExecutorStep, executor_main, StepRef
+from marin.execution import step, StepContext, StepRef, executor_main
 
 logger = logging.getLogger("ray")
 
@@ -78,25 +78,27 @@ def compute_stats(config: ComputeStatsConfig):
 
 n = 100
 
-data = ExecutorStep(
-    name="hello_world/data",
-    description=f"Generate data from 0 to {n}-1.",
-    fn=generate_data,
-    config=GenerateDataConfig(
-        n=n,
-        output_path=StepRef(_step=None),
-    ),
-)
 
-stats = ExecutorStep(
-    name="hello_world/stats",
-    description="Compute stats of the generated data.",
-    fn=compute_stats,
-    config=ComputeStatsConfig(
+@step(name="hello_world/data", fn=generate_data, description=f"Generate data from 0 to {n}-1.")
+def data_step(ctx: StepContext):
+    return GenerateDataConfig(
+        n=n,
+        output_path=ctx.output,
+    )
+
+
+@step(name="hello_world/stats", fn=compute_stats, description="Compute stats of the generated data.")
+def stats_step(ctx: StepContext):
+    data = ctx.require(data_step())
+    return ComputeStatsConfig(
         input_path=data,
-        output_path=StepRef(_step=None),
-    ),
-)
+        output_path=ctx.output,
+    )
+
+
+# Create the step objects
+data = data_step()
+stats = stats_step()
 
 if __name__ == "__main__":
     executor_main(

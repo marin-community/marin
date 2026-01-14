@@ -23,7 +23,7 @@ from experiments.defaults import default_validation_sets
 from experiments.posttrain.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
 from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b
 from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
-from marin.execution.executor import ExecutorStep, executor_main, versioned
+from marin.execution import step, StepContext, executor_main, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 
 # We compare the models in CHECKPOINTS to Meta's Llama 3.1 8B  base model.
@@ -58,20 +58,19 @@ all_steps = []
 
 for checkpoint in CHECKPOINTS:
     name = _path_to_step_name(checkpoint)
-    all_steps.append(
-        ExecutorStep(
-            name=name,
-            fn=visualize_lm_log_probs,
-            config=VizLmConfig(
-                checkpoint_path=checkpoint,
-                model=llama_8b,
-                datasets=tulu_3_in_dolma,
-                num_docs_per_dataset=32,
-                comparison_model_path=COMPARISON_MODEL,
-                comparison_is_hf=True,
-            ),
+
+    @step(name=name, fn=visualize_lm_log_probs)
+    def viz_compare_step(ctx: StepContext, ckpt=checkpoint):
+        return VizLmConfig(
+            checkpoint_path=ckpt,
+            model=llama_8b,
+            datasets=tulu_3_in_dolma,
+            num_docs_per_dataset=32,
+            comparison_model_path=COMPARISON_MODEL,
+            comparison_is_hf=True,
         )
-    )
+
+    all_steps.append(viz_compare_step())
 
 if __name__ == "__main__":
     executor_main(

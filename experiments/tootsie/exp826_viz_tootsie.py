@@ -31,7 +31,7 @@ from experiments.defaults import default_validation_sets
 from experiments.llama import llama_8b_old_rotary
 from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b
 from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
-from marin.execution.executor import ExecutorStep, executor_main, versioned
+from marin.execution import step, StepContext, executor_main, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 
 COMPARISON_MODEL = "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/checkpoints/step-730000/"
@@ -59,19 +59,18 @@ all_steps = []
 
 for checkpoint in CHECKPOINTS:
     name = path_to_step_name(checkpoint)
-    all_steps.append(
-        ExecutorStep(
-            name=name,
-            fn=visualize_lm_log_probs,
-            config=VizLmConfig(
-                checkpoint_path=checkpoint,
-                model=llama_8b,
-                datasets=eval_set_mixture,
-                num_docs_per_dataset=32,
-                comparison_model_path=COMPARISON_MODEL if checkpoint != COMPARISON_MODEL else None,
-            ),
+
+    @step(name=name, fn=visualize_lm_log_probs)
+    def viz_step(ctx: StepContext, ckpt=checkpoint):
+        return VizLmConfig(
+            checkpoint_path=ckpt,
+            model=llama_8b,
+            datasets=eval_set_mixture,
+            num_docs_per_dataset=32,
+            comparison_model_path=COMPARISON_MODEL if ckpt != COMPARISON_MODEL else None,
         )
-    )
+
+    all_steps.append(viz_step())
 
 
 PHASE_1_CONFIG = llama_8b_old_rotary
@@ -85,19 +84,18 @@ PHASE_1_CHECKPOINTS = [
 
 for checkpoint in PHASE_1_CHECKPOINTS:
     name = path_to_step_name(checkpoint)
-    all_steps.append(
-        ExecutorStep(
-            name=name,
-            fn=visualize_lm_log_probs,
-            config=VizLmConfig(
-                checkpoint_path=checkpoint,
-                model=PHASE_1_CONFIG,
-                datasets=eval_set_mixture,
-                num_docs_per_dataset=32,
-                comparison_model_path=PHASE_1_BASE if checkpoint != PHASE_1_BASE else None,
-            ),
+
+    @step(name=name, fn=visualize_lm_log_probs)
+    def viz_phase1_step(ctx: StepContext, ckpt=checkpoint):
+        return VizLmConfig(
+            checkpoint_path=ckpt,
+            model=PHASE_1_CONFIG,
+            datasets=eval_set_mixture,
+            num_docs_per_dataset=32,
+            comparison_model_path=PHASE_1_BASE if ckpt != PHASE_1_BASE else None,
         )
-    )
+
+    all_steps.append(viz_phase1_step())
 
 
 if __name__ == "__main__":

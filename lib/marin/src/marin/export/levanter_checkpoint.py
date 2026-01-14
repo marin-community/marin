@@ -34,7 +34,7 @@ from levanter.main.export_lm_to_hf import ConvertLmConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution import StepRef
+from marin.execution import StepContext, StepRef, step
 from marin.execution.executor import (
     ExecutorStep,
     VersionedValue,
@@ -162,30 +162,35 @@ def convert_checkpoint_to_hf_step(
         discover_latest: If True, resolves ``checkpoint_path`` to the most recent checkpoint in that directory.
     """
 
-    checkpoint_value: StepRef | VersionedValue[str]
-    if isinstance(checkpoint_path, StepRef):
-        checkpoint_value = checkpoint_path
-    else:
-        checkpoint_value = ensure_versioned(checkpoint_path)
+    @step(name=name, fn=convert_checkpoint_to_hf)
+    def _convert(ctx: StepContext):
+        # Properly resolve checkpoint_path dependency if it's a StepRef
+        if isinstance(checkpoint_path, (StepRef, ExecutorStep)):
+            resolved_checkpoint = ctx.require(checkpoint_path)
+        else:
+            resolved_checkpoint = checkpoint_path
 
-    config = ConvertCheckpointStepConfig(
-        checkpoint_path=checkpoint_value,
-        trainer=trainer,
-        model=model,
-        resources=resources or ResourceConfig.with_cpu(),
-        upload_to_hf=upload_to_hf,
-        tokenizer=tokenizer,
-        override_vocab_size=override_vocab_size,
-        config_overrides=config_overrides,
-        save_tokenizer=save_tokenizer,
-        use_cpu=use_cpu,
-        discover_latest=discover_latest,
-    )
+        checkpoint_value: StepRef | VersionedValue[str]
+        if isinstance(resolved_checkpoint, StepRef):
+            checkpoint_value = resolved_checkpoint
+        else:
+            checkpoint_value = ensure_versioned(resolved_checkpoint)
 
-    return ExecutorStep(
-        name=name,
-        fn=convert_checkpoint_to_hf,
-        config=config,
-        override_output_path=override_output_path,
-        pip_dependency_groups=pip_dependency_groups,
-    )
+        config = ConvertCheckpointStepConfig(
+            checkpoint_path=checkpoint_value,
+            trainer=trainer,
+            model=model,
+            resources=resources or ResourceConfig.with_cpu(),
+            output_path=override_output_path or ctx.output,
+            upload_to_hf=upload_to_hf,
+            tokenizer=tokenizer,
+            override_vocab_size=override_vocab_size,
+            config_overrides=config_overrides,
+            save_tokenizer=save_tokenizer,
+            use_cpu=use_cpu,
+            discover_latest=discover_latest,
+        )
+
+        return config
+
+    return _convert()

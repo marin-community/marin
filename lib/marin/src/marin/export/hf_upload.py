@@ -27,7 +27,7 @@ from fsspec.implementations.local import LocalFileSystem
 from huggingface_hub import create_commit, upload_folder
 from tqdm_loggable.auto import tqdm
 
-from marin.execution import ExecutorStep, StepRef
+from marin.execution import ExecutorStep, StepRef, step, StepContext
 from marin.utilities.fn_utils import with_retries
 from marin.utils import fsspec_glob
 
@@ -88,11 +88,16 @@ def upload_dir_to_hf(
             path = parsed.path.lstrip("/")
             certificate_path = f"metadata/hf_uploads/{path}"
 
-    return ExecutorStep(
-        name=certificate_path,
-        fn=_actually_upload_to_hf,
-        config=UploadToHfConfig(
-            input_path=input_path,
+    @step(name=certificate_path, fn=_actually_upload_to_hf)
+    def _upload(ctx: StepContext):
+        # If input_path is a StepRef (from another step), we need to require it
+        if isinstance(input_path, StepRef):
+            actual_input = ctx.require(input_path)
+        else:
+            actual_input = input_path
+
+        return UploadToHfConfig(
+            input_path=actual_input,
             repo_id=repo_id,
             repo_type=repo_type,
             token=token,
@@ -100,8 +105,9 @@ def upload_dir_to_hf(
             private=private,
             commit_batch_size=commit_batch_size,
             upload_kwargs=upload_kwargs,
-        ),
-    )
+        )
+
+    return _upload()
 
 
 def _actually_upload_to_hf(config: UploadToHfConfig):

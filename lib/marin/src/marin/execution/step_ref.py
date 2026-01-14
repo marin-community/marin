@@ -186,6 +186,7 @@ def step(
     description: str | None = None,
     resources: ResourceConfig | None = None,
     pip_dependency_groups: list[str] | None = None,
+    override_output_path: str | None = None,
 ):
     """
     Decorator to define an executor step.
@@ -208,6 +209,7 @@ def step(
         description: Human-readable description
         resources: GPU/TPU/CPU requirements
         pip_dependency_groups: Extra pip dependencies
+        override_output_path: Explicit output path (overrides automatic path generation)
     """
 
     def decorator(config_fn: Callable[[StepContext], ConfigT]) -> Callable[..., ExecutorStep[ConfigT]]:
@@ -225,6 +227,7 @@ def step(
                 description=description,
                 resources=resources,
                 pip_dependency_groups=pip_dependency_groups,
+                override_output_path=override_output_path,
                 _context=ctx,
             )
             ctx._step = step_obj

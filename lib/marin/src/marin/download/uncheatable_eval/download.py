@@ -27,7 +27,14 @@ from typing import Any
 
 import fsspec
 import requests
-from marin.execution import ExecutorStep, StepRef, VersionedValue, ensure_versioned
+from marin.execution import (
+    ExecutorStep,
+    StepContext,
+    StepRef,
+    VersionedValue,
+    ensure_versioned,
+    step,
+)
 from marin.utils import fsspec_mkdirs
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
@@ -99,7 +106,7 @@ class UncheatableEvalDataset:
 class UncheatableEvalDownloadConfig:
     """Configuration for downloading and normalizing Uncheatable Eval dumps."""
 
-    output_path: str | VersionedValue[str] = StepRef(_step=None)
+    output_path: str | VersionedValue[str] = ""
     repo_owner: str | VersionedValue[str] = "Jellyfish042"
     repo_name: str | VersionedValue[str] = "uncheatable_eval"
     data_path: str | VersionedValue[str] = "data"
@@ -377,23 +384,21 @@ def make_uncheatable_eval_step(
 ) -> ExecutorStep[UncheatableEvalDownloadConfig]:
     """Create an :class:`ExecutorStep` that downloads the latest Uncheatable Eval dumps."""
 
-    config = UncheatableEvalDownloadConfig(
-        output_path=StepRef(_step=None),
-        repo_owner=ensure_versioned(repo_owner),
-        repo_name=ensure_versioned(repo_name),
-        data_path=ensure_versioned(data_path),
-        branch=ensure_versioned(branch),
-        max_concurrent_downloads=max_concurrent_downloads,
-        request_timeout=request_timeout,
-        github_token=github_token,
-        skip_existing=skip_existing,
-    )
+    @step(name=name, fn=download_latest_uncheatable_eval)
+    def step_creator(ctx: StepContext):
+        return UncheatableEvalDownloadConfig(
+            output_path=ctx.output,
+            repo_owner=ensure_versioned(repo_owner),
+            repo_name=ensure_versioned(repo_name),
+            data_path=ensure_versioned(data_path),
+            branch=ensure_versioned(branch),
+            max_concurrent_downloads=max_concurrent_downloads,
+            request_timeout=request_timeout,
+            github_token=github_token,
+            skip_existing=skip_existing,
+        )
 
-    return ExecutorStep(
-        name=name,
-        fn=download_latest_uncheatable_eval,
-        config=config,
-    )
+    return step_creator()
 
 
 __all__ = [

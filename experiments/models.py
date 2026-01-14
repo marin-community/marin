@@ -30,7 +30,7 @@ executor_main([download_step])
 from dataclasses import dataclass
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, StepRef, versioned
+from marin.execution.executor import ExecutorStep, StepContext, step, versioned
 from marin.utils import get_directory_friendly_name
 
 
@@ -46,22 +46,22 @@ MODEL_OUTPUT_SUBDIR = "models"
 def download_model_step(model_config: ModelConfig) -> ExecutorStep:
     model_name = get_directory_friendly_name(model_config.hf_repo_id)
     model_revision = get_directory_friendly_name(model_config.hf_revision)
-    download_step = ExecutorStep(
+
+    @step(
         name=f"{MODEL_OUTPUT_SUBDIR}/{model_name}--{model_revision}",
         fn=download_hf,
-        config=DownloadConfig(
-            hf_dataset_id=model_config.hf_repo_id,
-            revision=versioned(model_config.hf_revision),
-            gcs_output_path=StepRef(_step=None),
-            wait_for_completion=True,
-            hf_repo_type_prefix="",
-        ),
-        # must override because it because if we don't then it will end in a hash
-        # if it ends in a hash, then we cannot determine the local path
         override_output_path=f"{MODEL_OUTPUT_SUBDIR}/{model_name}--{model_revision}",
     )
+    def _download(ctx: StepContext):
+        return DownloadConfig(
+            hf_dataset_id=model_config.hf_repo_id,
+            revision=versioned(model_config.hf_revision),
+            gcs_output_path=ctx.output,
+            wait_for_completion=True,
+            hf_repo_type_prefix="",
+        )
 
-    return download_step
+    return _download()
 
 
 smollm2_1_7b_instruct = download_model_step(

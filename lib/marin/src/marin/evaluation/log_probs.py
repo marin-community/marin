@@ -31,7 +31,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.executor import ExecutorStep, StepRef
+from marin.execution import step, ExecutorStep, StepContext, StepRef
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 
@@ -47,7 +47,7 @@ class EvalLmConfig:
     datasets: LMMixtureDatasetConfig
     resource_config: ResourceConfig
     per_device_batch_size: int = 4
-    output_path: str = dataclasses.field(default_factory=lambda: StepRef(_step=None))  # type: ignore
+    output_path: str = ""
     checkpoint_is_hf: bool = False
     """Whether the checkpoint is in HF format."""
 
@@ -83,12 +83,18 @@ def default_lm_log_probs(
     if not name:
         name = ckpt_path_to_step_name(checkpoint)
     executor_name = f"analysis/log_probs/{name}"
-    return ExecutorStep(
-        name=executor_name,
-        fn=evaluate_lm_log_probs,
-        config=EvalLmConfig(
+
+    @step(name=executor_name, fn=evaluate_lm_log_probs)
+    def _step(ctx: StepContext):
+        # If checkpoint could be a StepRef, require it
+        if isinstance(checkpoint, (StepRef, ExecutorStep)):
+            resolved_checkpoint = ctx.require(checkpoint)
+        else:
+            resolved_checkpoint = checkpoint
+
+        return EvalLmConfig(
             name=name,
-            checkpoint_path=checkpoint,  # type: ignore
+            checkpoint_path=resolved_checkpoint,  # type: ignore
             model=model,
             datasets=data,
             log_entropy=True,
@@ -97,8 +103,10 @@ def default_lm_log_probs(
             per_device_batch_size=per_device_batch_size,
             max_samples_per_dataset=max_samples_per_dataset,
             wandb_tags=wandb_tags,
-        ),
-    )
+            output_path=ctx.output,
+        )
+
+    return _step()
 
 
 def do_eval_lm(config: LevanterEvalLmConfig) -> None:

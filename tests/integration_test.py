@@ -22,11 +22,13 @@ from fray.cluster import ResourceConfig, create_cluster, set_current_cluster
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
-from marin.execution.executor import (
+from marin.execution import (
     ExecutorMainConfig,
     ExecutorStep,
+    StepContext,
     StepRef,
     executor_main,
+    step,
     versioned,
 )
 from marin.processing.classification.dataset_utils import DatasetConfig
@@ -50,48 +52,47 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # ############################################################
     # Transform HTML to text
 
-    transform_hq_data_step = ExecutorStep(
-        name=os.path.join(prefix, "hq-transformed"),
-        fn=html_to_md,
-        config=SimpleHtmlToMdConfig(
+    @step(name=os.path.join(prefix, "hq-transformed"), fn=html_to_md)
+    def transform_hq_data_step_creator(ctx: StepContext):
+        return SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "pos"),
-            output_path=StepRef(_step=None),
+            output_path=ctx.output,
             extract_method=versioned("resiliparse"),
             config=ResiliparseConfig(),
-        ),
-    )
+        )
 
-    transform_lq_data_step = ExecutorStep(
-        name=os.path.join(prefix, "lq-transformed"),
-        fn=html_to_md,
-        config=SimpleHtmlToMdConfig(
+    transform_hq_data_step = transform_hq_data_step_creator()
+
+    @step(name=os.path.join(prefix, "lq-transformed"), fn=html_to_md)
+    def transform_lq_data_step_creator(ctx: StepContext):
+        return SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "neg"),
-            output_path=StepRef(_step=None),
+            output_path=ctx.output,
             extract_method=versioned("resiliparse"),
             config=ResiliparseConfig(),
-        ),
-    )
+        )
+
+    transform_lq_data_step = transform_lq_data_step_creator()
 
     # ############################################################
     # Train quality classifier
 
-    train_quality_step = ExecutorStep(
-        name=os.path.join(prefix, "quality-classifier"),
-        fn=train,
-        config=TrainFasttextClassifierConfig(
+    @step(name=os.path.join(prefix, "quality-classifier"), fn=train)
+    def train_quality_step_creator(ctx: StepContext):
+        return TrainFasttextClassifierConfig(
             datasets=[
                 DatasetConfig(
-                    input_doc_path=transform_hq_data_step,
+                    input_doc_path=ctx.require(transform_hq_data_step),
                     label="hq",
                     sampling_rate=1.0,
                 ),
                 DatasetConfig(
-                    input_doc_path=transform_lq_data_step,
+                    input_doc_path=ctx.require(transform_lq_data_step),
                     label="lq",
                     sampling_rate=1.0,
                 ),
             ],
-            output_path=StepRef(_step=None),
+            output_path=ctx.output,
             fasttext_args={
                 "lr": 0.001,
                 "minCount": 1,
@@ -100,35 +101,36 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 "dim": 50,
                 "thread": 1,
             },
-        ),
-    )
+        )
+
+    train_quality_step = train_quality_step_creator()
 
     ############################################################
     # Run inference with quality classifier
 
-    inference_hq_step = ExecutorStep(
-        name=os.path.join(prefix, "hq-inference"),
-        fn=run_inference,
-        config=InferenceConfig(
-            input_path=transform_hq_data_step,
-            output_path=StepRef(_step=None),
-            model_name=train_quality_step,
+    @step(name=os.path.join(prefix, "hq-inference"), fn=run_inference)
+    def inference_hq_step_creator(ctx: StepContext):
+        return InferenceConfig(
+            input_path=ctx.require(transform_hq_data_step),
+            output_path=ctx.output,
+            model_name=ctx.require(train_quality_step),
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-hq",
-        ),
-    )
+        )
 
-    inference_lq_step = ExecutorStep(
-        name=os.path.join(prefix, "lq-inference"),
-        fn=run_inference,
-        config=InferenceConfig(
-            input_path=transform_lq_data_step,
-            output_path=StepRef(_step=None),
-            model_name=train_quality_step,
+    inference_hq_step = inference_hq_step_creator()
+
+    @step(name=os.path.join(prefix, "lq-inference"), fn=run_inference)
+    def inference_lq_step_creator(ctx: StepContext):
+        return InferenceConfig(
+            input_path=ctx.require(transform_lq_data_step),
+            output_path=ctx.output,
+            model_name=ctx.require(train_quality_step),
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-lq",
-        ),
-    )
+        )
+
+    inference_lq_step = inference_lq_step_creator()
 
     ############################################################
     # Deduplicate
@@ -153,15 +155,14 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     pod_config = ResourceConfig.with_cpu()
 
-    train_step = ExecutorStep(
-        name=os.path.join(prefix, "train"),
-        fn=run_levanter_train_lm,
-        config=TrainLmOnPodConfig(
-            output_path=StepRef(_step=None),
+    @step(name=os.path.join(prefix, "train"), fn=run_levanter_train_lm)
+    def train_step_creator(ctx: StepContext):
+        return TrainLmOnPodConfig(
+            output_path=ctx.output,
             resources=pod_config,
             env_vars=train_env_vars,
             train_config=TrainLmConfig(
-                data=lm_data_config(tokenize_step, permutation_type="linear"),
+                data=lm_data_config(ctx.require(tokenize_step), permutation_type="linear"),
                 hf_save_steps=1,
                 model=Gpt2Config(
                     num_layers=2,
@@ -173,8 +174,9 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                     train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False
                 ),
             ),
-        ),
-    )
+        )
+
+    train_step = train_step_creator()
 
     ##### Evaluate
 

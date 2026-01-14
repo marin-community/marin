@@ -47,7 +47,8 @@ from experiments.models import ModelConfig, download_model_step
 from fray.cluster import ResourceConfig
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.log_probs import default_lm_log_probs
-from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
+from marin.execution.executor import executor_main, versioned
+from marin.execution import step, StepContext, StepRef
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
 
@@ -180,129 +181,126 @@ def get_all_revisions(repo_id):
 
 def distributional_eval_sets(tokenizer):
     eval_sets = default_validation_sets(tokenizer=versioned(tokenizer))
-    md3_raw = ExecutorStep(
-        name="raw/WillHeld/MD3",
-        fn=download_hf,
-        config=DownloadConfig(
+
+    @step(name="raw/WillHeld/MD3", fn=download_hf)
+    def md3_raw_step(ctx: StepContext):
+        return DownloadConfig(
             hf_dataset_id="WillHeld/MD3",
             revision=versioned("7c74e59"),
-            gcs_output_path=StepRef(_step=None),
+            gcs_output_path=ctx.output,
             wait_for_completion=True,
             hf_urls_glob=["**/*.parquet"],
-        ),
-        override_output_path="raw/WillHeld/MD3-Trunc",
-    ).cd("7c74e59/huggingface.co/datasets/WillHeld/MD3/resolve/7c74e59")
+        )
+
+    md3_raw = md3_raw_step().with_output_path("raw/WillHeld/MD3-Trunc").cd("7c74e59/huggingface.co/datasets/WillHeld/MD3/resolve/7c74e59")
 
     tokenized_domains = {}
     for split in get_dataset_split_names("WillHeld/MD3"):
-        json = ExecutorStep(
-            name=f"hf_dataset_to_jsonl/md3/{split}",
-            fn=hf_dataset_to_jsonl,
-            config=DatasetConversionConfig(
+        @step(name=f"hf_dataset_to_jsonl/md3/{split}", fn=hf_dataset_to_jsonl)
+        def json_step(ctx: StepContext, md3_raw=md3_raw, split=split):
+            return DatasetConversionConfig(
                 dataset_name="WillHeld/MD3",
                 subsets=["*"],
                 splits=[split],
-                input_path=md3_raw,
+                input_path=ctx.require(md3_raw),
                 hf_path="WillHeld/MD3",
-                output_path=StepRef(_step=None),
+                output_path=ctx.output,
                 output_format=OutputFormatOptions("decontamination"),
                 prompt_key="transcript",
-            ),
-        )
+            )
+
+        json = json_step()
         tokenized_json = default_tokenize(f"tokenized/md3-{split}", json, tokenizer, is_validation=True)
         tokenized_domains[f"md3/{split}"] = tokenized_json
 
     if CAN_ACCESS_ICE:
-        ice_raw = ExecutorStep(
-            name="raw/WillHeld/ICE",
-            fn=download_hf,
-            config=DownloadConfig(
+        @step(name="raw/WillHeld/ICE", fn=download_hf)
+        def ice_raw_step(ctx: StepContext):
+            return DownloadConfig(
                 hf_dataset_id="WillHeld/ICE_Cleaned",
                 revision=versioned("4c09dd9"),
-                gcs_output_path=StepRef(_step=None),
+                gcs_output_path=ctx.output,
                 wait_for_completion=True,
                 hf_urls_glob=["**/*.parquet"],
-            ),
-            override_output_path="raw/WillHeld/ICE_Cleaned",
-        ).cd("4c09dd9/huggingface.co/datasets/WillHeld/ICE_Cleaned/resolve/4c09dd9")
+            )
+
+        ice_raw = ice_raw_step().with_output_path("raw/WillHeld/ICE_Cleaned").cd("4c09dd9/huggingface.co/datasets/WillHeld/ICE_Cleaned/resolve/4c09dd9")
 
         for split in get_dataset_split_names("WillHeld/ICE_Cleaned"):
-            json = ExecutorStep(
-                name=f"hf_dataset_to_jsonl/ICE/{split}",
-                fn=hf_dataset_to_jsonl,
-                config=DatasetConversionConfig(
+            @step(name=f"hf_dataset_to_jsonl/ICE/{split}", fn=hf_dataset_to_jsonl)
+            def json_step(ctx: StepContext, ice_raw=ice_raw, split=split):
+                return DatasetConversionConfig(
                     dataset_name="WillHeld/ICE_Cleaned",
                     subsets=["*"],
                     splits=[split],
-                    input_path=ice_raw,
+                    input_path=ctx.require(ice_raw),
                     hf_path="WillHeld/ICE_Cleaned",
-                    output_path=StepRef(_step=None),
+                    output_path=ctx.output,
                     output_format=OutputFormatOptions("decontamination"),
                     prompt_key="text",
-                ),
-            )
+                )
+
+            json = json_step()
             tokenized_json = default_tokenize(f"tokenized/ICE-{split}", json, tokenizer, is_validation=True)
             tokenized_domains[f"ICE/{split}"] = tokenized_json
 
-    subreddits_raw = ExecutorStep(
-        name="raw/WillHeld/paloma_subreddits",
-        fn=download_hf,
-        config=DownloadConfig(
+    @step(name="raw/WillHeld/paloma_subreddits", fn=download_hf)
+    def subreddits_raw_step(ctx: StepContext):
+        return DownloadConfig(
             hf_dataset_id="WillHeld/paloma_subreddits",
             revision=versioned("9561a2b"),
-            gcs_output_path=StepRef(_step=None),
+            gcs_output_path=ctx.output,
             wait_for_completion=True,
             hf_urls_glob=["**/*.parquet", "README.md"],
-        ),
-        override_output_path="raw/WillHeld/paloma_subreddits",
-    ).cd("9561a2b/huggingface.co/datasets/WillHeld/paloma_subreddits/resolve/9561a2b")
+        )
+
+    subreddits_raw = subreddits_raw_step().with_output_path("raw/WillHeld/paloma_subreddits").cd("9561a2b/huggingface.co/datasets/WillHeld/paloma_subreddits/resolve/9561a2b")
 
     for subset in get_dataset_config_names("WillHeld/paloma_subreddits"):
-        json = ExecutorStep(
-            name=f"hf_dataset_to_jsonl/paloma_subreddits/{subset}",
-            fn=hf_dataset_to_jsonl,
-            config=DatasetConversionConfig(
+        @step(name=f"hf_dataset_to_jsonl/paloma_subreddits/{subset}", fn=hf_dataset_to_jsonl)
+        def json_step(ctx: StepContext, subreddits_raw=subreddits_raw, subset=subset):
+            return DatasetConversionConfig(
                 dataset_name="WillHeld/paloma_subreddits",
                 subsets=[subset],
                 splits=["train"],
-                input_path=subreddits_raw,
+                input_path=ctx.require(subreddits_raw),
                 hf_path="WillHeld/paloma_subreddits",
-                output_path=StepRef(_step=None),
+                output_path=ctx.output,
                 output_format=OutputFormatOptions("decontamination"),
                 prompt_key="text",
-            ),
-        )
+            )
+
+        json = json_step()
         tokenized_json = default_tokenize(f"tokenized/paloma_subreddits-{subset}", json, tokenizer, is_validation=True)
         tokenized_domains[f"paloma_subreddits/{subset}"] = tokenized_json
 
-    pls_raw = ExecutorStep(
-        name="raw/WillHeld/paloma_programming_languages",
-        fn=download_hf,
-        config=DownloadConfig(
+    @step(name="raw/WillHeld/paloma_programming_languages", fn=download_hf)
+    def pls_raw_step(ctx: StepContext):
+        return DownloadConfig(
             hf_dataset_id="WillHeld/paloma_programming_languages",
             revision=versioned("6c08b5f"),
-            gcs_output_path=StepRef(_step=None),
+            gcs_output_path=ctx.output,
             wait_for_completion=True,
             hf_urls_glob=["**/*.parquet", "README.md"],
-        ),
-        override_output_path="raw/WillHeld/paloma_programming_languages",
-    ).cd("6c08b5f/huggingface.co/datasets/WillHeld/paloma_programming_languages/resolve/6c08b5f")
+        )
+
+    pls_raw = pls_raw_step().with_output_path("raw/WillHeld/paloma_programming_languages").cd("6c08b5f/huggingface.co/datasets/WillHeld/paloma_programming_languages/resolve/6c08b5f")
 
     for subset in get_dataset_config_names("WillHeld/paloma_programming_languages"):
-        json = ExecutorStep(
-            name=f"hf_dataset_to_jsonl/paloma_programming_languages/{subset}",
-            fn=hf_dataset_to_jsonl,
-            config=DatasetConversionConfig(
+        @step(name=f"hf_dataset_to_jsonl/paloma_programming_languages/{subset}", fn=hf_dataset_to_jsonl)
+        def json_step(ctx: StepContext, pls_raw=pls_raw, subset=subset):
+            return DatasetConversionConfig(
                 dataset_name="WillHeld/paloma_programming_languages",
                 subsets=[subset],
                 splits=["train"],
-                input_path=pls_raw,
+                input_path=ctx.require(pls_raw),
                 hf_path="WillHeld/paloma_programming_languages",
-                output_path=StepRef(_step=None),
+                output_path=ctx.output,
                 output_format=OutputFormatOptions("decontamination"),
                 prompt_key="text",
-            ),
-        )
+            )
+
+        json = json_step()
         tokenized_json = default_tokenize(
             f"tokenized/paloma_programming_languages-{subset}", json, tokenizer, is_validation=True
         )

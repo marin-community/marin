@@ -31,7 +31,8 @@ Metrics: Paloma Loss, Tulu3 Validation Loss, MMLU Accuracy
 # HQ = High Quality
 
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
+from marin.execution.executor import executor_main, versioned
+from marin.execution import step, StepContext, StepRef
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
@@ -92,38 +93,37 @@ nemotron_code_dolmino_mix = lm_mixture_data_config(
 # 4. Full mix with everything
 
 # Wikipedia resiliparse custom fork step (data already exists at hardcoded path)
-wikipedia_resiliparse_custom_fork = (
-    ExecutorStep(
-        name="documents/wikipedia-resiliparse-custom-fork",
-        fn=process_wiki_dump,
-        config=WikiExtractionConfig(
-            input_path="gs://marin-us-central2/raw/wikipedia-a7dad0/20241201",
-            revision=versioned("20241201"),
-            output_path=StepRef(_step=None),
-            extract_method="resiliparse",
-            extract_config=ResiliparseConfig(
-                links=False,
-                skip_elements=WIKI_BLACKLISTED_SELECTORS,
-                markdownify_config=HtmlToMarkdownConfig(include_images=False, include_links=False),
-            ),
-            remove_reference_section=versioned(True),
-            digit_threshold=versioned(50),
-            word_threshold=versioned(70),
-            special_char_threshold=versioned(50),
+@step(name="documents/wikipedia-resiliparse-custom-fork", fn=process_wiki_dump)
+def wikipedia_resiliparse_custom_fork_step(ctx: StepContext):
+    return WikiExtractionConfig(
+        input_path="gs://marin-us-central2/raw/wikipedia-a7dad0/20241201",
+        revision=versioned("20241201"),
+        output_path=ctx.output,
+        extract_method="resiliparse",
+        extract_config=ResiliparseConfig(
+            links=False,
+            skip_elements=WIKI_BLACKLISTED_SELECTORS,
+            markdownify_config=HtmlToMarkdownConfig(include_images=False, include_links=False),
         ),
+        remove_reference_section=versioned(True),
+        digit_threshold=versioned(50),
+        word_threshold=versioned(70),
+        special_char_threshold=versioned(50),
     )
+
+wikipedia_resiliparse_custom_fork = (
+    wikipedia_resiliparse_custom_fork_step()
     .with_output_path("documents/wikipedia-resiliparse-custom-fork-2569de")
     .cd("20241201")
 )
 
 # ar5iv resiliparse custom fork step (data already exists at hardcoded path)
-ar5iv_no_problem_resiliparse_custom_fork = ExecutorStep(
-    name="documents/ar5iv/ar5iv-04-2024-no-problem",
-    fn=process_ar5iv_dump,
-    config=Ar5ivExtractionConfig(
+@step(name="documents/ar5iv/ar5iv-04-2024-no-problem", fn=process_ar5iv_dump)
+def ar5iv_no_problem_resiliparse_custom_fork_step(ctx: StepContext):
+    return Ar5ivExtractionConfig(
         input_path="gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem-49c4e3/202404",
         revision="042024",
-        output_path=StepRef(_step=None) / "resiliparse-custom-fork",
+        output_path=ctx.output / "resiliparse-custom-fork",
         extract_method=versioned("resiliparse"),
         extract_config=ResiliparseConfig(
             links=versioned(False),
@@ -131,8 +131,9 @@ ar5iv_no_problem_resiliparse_custom_fork = ExecutorStep(
             skip_elements=ARXIV_BLACKLISTED_SELECTORS,
         ),
         remove_reference_section=versioned(True),
-    ),
-).with_output_path("documents/ar5iv/ar5iv-04-2024-no-problem-3971f")
+    )
+
+ar5iv_no_problem_resiliparse_custom_fork = ar5iv_no_problem_resiliparse_custom_fork_step().with_output_path("documents/ar5iv/ar5iv-04-2024-no-problem-3971f")
 
 # Create the medu science QA dataset
 # MMLU Science QA tokenization

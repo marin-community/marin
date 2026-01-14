@@ -31,7 +31,7 @@ import fsspec
 from fray.cluster import ResourceConfig
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
-from marin.execution.executor import ExecutorStep, StepRef
+from marin.execution import ExecutorStep, StepRef, step, StepContext
 from marin.processing.tokenize import add_validation_sets_to_mixture, lm_data_config
 from marin.speedrun.paloma_local_download import speedrun_paloma_tokenized
 from marin.training.training import TrainLmOnPodConfig
@@ -411,17 +411,22 @@ def default_speedrun(
 
     assert wandb_run_id is not None, "Could not extract wandb run ID from train step"
 
-    results_step = ExecutorStep(
-        name=f"speedrun/{name}-speedrun_results",
-        description=f"compute and store metrics and stats for the speedrun {name}.",
-        fn=speedrun_results,
-        config=SpeedrunResultsConfig(
+    @step(name=f"speedrun/{name}-speedrun_results", fn=speedrun_results)
+    def _results_step(ctx: StepContext):
+        # Resolve train_step if it's a StepRef/ExecutorStep
+        if isinstance(train_step, (StepRef, ExecutorStep)):
+            resolved_train_step = ctx.require(train_step)
+        else:
+            resolved_train_step = train_step
+
+        return SpeedrunResultsConfig(
             wandb_run_id=wandb_run_id,
             wandb_entity=wandb_entity,
             wandb_project=wandb_project,
             speedrun_config=config,
-            output_path=train_step / "speedrun_results.json",
-        ),
-    )
+            output_path=resolved_train_step / "speedrun_results.json",
+        )
+
+    results_step = _results_step()
 
     return [train_step, results_step]

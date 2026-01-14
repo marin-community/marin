@@ -42,7 +42,7 @@ from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from marin.execution import ExecutorStep
+from marin.execution import StepContext, step
 from marin.execution.executor import executor_main
 from marin.rl.environments.base import EnvConfig, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
@@ -277,7 +277,7 @@ def evaluate_environment(
     output_path: str,
     model_config: LmConfig | None = None,
     tpu_type: str | None = None,  # "v5litepod-128"
-) -> ExecutorStep:
+):
     """Create an executor step for evaluating a model on an environment.
 
     Args:
@@ -296,21 +296,17 @@ def evaluate_environment(
     # Get model identifier from checkpoint path for naming
     model_identifier = checkpoint.split("/")[-1] if "/" in checkpoint else checkpoint
 
-    config = EnvironmentEvalConfig(
-        checkpoint=checkpoint,
-        env_config=env_config,
-        model_config=model_config,
-        output_path=output_path,
-        tpu_type=tpu_type,
-    )
+    @step(name=f"evaluate-{env_name}-{model_identifier}-{env_id}", fn=_run_evaluation)
+    def step_creator(ctx: StepContext):
+        return EnvironmentEvalConfig(
+            checkpoint=checkpoint,
+            env_config=env_config,
+            model_config=model_config,
+            output_path=ctx.output,
+            tpu_type=tpu_type,
+        )
 
-    return ExecutorStep(
-        name=f"evaluate-{env_name}-{model_identifier}-{env_id}",
-        fn=_run_evaluation,
-        config=config,
-        description=f"Evaluate model on {env_name}",
-        pip_dependency_groups=["rl"],
-    )
+    return step_creator()
 
 
 if __name__ == "__main__":

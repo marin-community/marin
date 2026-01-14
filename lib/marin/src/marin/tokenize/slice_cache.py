@@ -41,7 +41,7 @@ from levanter.store import SerialCacheWriter, TreeCache
 from tqdm_loggable.auto import tqdm
 from transformers import AutoTokenizer
 
-from marin.execution import ExecutorStep, StepRef
+from marin.execution import ExecutorStep, StepContext, StepRef, step
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class SliceCacheConfig(TokenizeConfigBase):
 
     input_config: LmDatasetSourceConfigBase
     num_tokens: int
-    cache_path: str = StepRef(_step=None)
+    cache_path: str
     tokenizer: str = "stanford-crfm/marin-tokenizer"
     seed: int = 42
 
@@ -224,7 +224,7 @@ def slice_cache(
     num_tokens: int,
     seed: int = 42,
     tokenizer_spec: str = "stanford-crfm/marin-tokenizer",
-) -> ExecutorStep[SliceCacheConfig]:
+) -> ExecutorStep:
     """High-level function to slice a Levanter cache.
 
     This is the main entry point for slicing a cache.
@@ -239,13 +239,14 @@ def slice_cache(
         The configuration for the sliced cache
     """
 
-    return ExecutorStep(
-        name=output_path,
-        fn=_slice_cache_in_ray,
-        config=SliceCacheConfig(
+    @step(name=output_path, fn=_slice_cache_in_ray)
+    def _step(ctx: StepContext):
+        return SliceCacheConfig(
             input_config=input_config,
             num_tokens=num_tokens,
             seed=seed,
             tokenizer=tokenizer_spec,
-        ),
-    )
+            cache_path=ctx.output,
+        )
+
+    return _step()

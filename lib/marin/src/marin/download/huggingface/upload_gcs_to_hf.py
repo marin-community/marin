@@ -26,14 +26,10 @@ Usage as a script:
   python upload_gcs_to_hf.py --repo-id="organization/model-name" [--dry-run] [--directory="gs://bucket/path"]
 
 Usage as an ExecutorStep:
-  upload_step = ExecutorStep(
-      name="upload_model_to_hf",
-      fn=upload_gcs_to_hf,
-      config=UploadConfig(
-          hf_repo_id="organization/model-name",
-          gcs_directories=["gs://bucket/path/to/model"],
-          dry_run=False
-      )
+  upload_step = upload_gcs_to_hf_step(
+      hf_repo_id="organization/model-name",
+      gcs_directories=["gs://bucket/path/to/model"],
+      dry_run=False
   )
 """
 
@@ -48,6 +44,8 @@ from dataclasses import dataclass, field
 from google.cloud import storage
 from google.cloud.storage import transfer_manager
 from huggingface_hub import HfApi, create_repo
+
+from marin.execution import ExecutorStep, StepContext, StepRef, step
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -339,6 +337,34 @@ def upload_gcs_to_hf(cfg: UploadConfig) -> None:
         logger.warning("1. The paths are correct")
         logger.warning("2. You have permissions to access these buckets")
         logger.warning("3. There are step directories in these locations")
+
+
+def upload_gcs_to_hf_step(
+    hf_repo_id: str,
+    gcs_directories: list[str] | None = None,
+    dry_run: bool = False,
+) -> ExecutorStep:
+    """
+    Factory function to create an ExecutorStep for uploading GCS content to Hugging Face.
+
+    Args:
+        hf_repo_id: Target Hugging Face repository ID (e.g., "username/model-name")
+        gcs_directories: List of GCS directories to process. If None, uses DEFAULT_GCS_DIRS
+        dry_run: If True, only lists checkpoints without uploading
+
+    Returns:
+        ExecutorStep: An executor step that performs the upload
+    """
+
+    @step(name="upload_gcs_to_hf", fn=upload_gcs_to_hf)
+    def _step(ctx: StepContext):
+        return UploadConfig(
+            hf_repo_id=hf_repo_id,
+            gcs_directories=gcs_directories or [],
+            dry_run=dry_run,
+        )
+
+    return _step()
 
 
 def main():

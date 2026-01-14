@@ -56,10 +56,12 @@ from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
+    StepContext,
     StepRef,
     VersionedValue,
     ensure_versioned,
     get_executor_step,
+    step,
     unwrap_versioned_value,
 )
 from marin.processing.tokenize import (
@@ -102,21 +104,22 @@ def default_download(
     The final output data will reside in '{output_path}/{revision}'.
     """
 
-    step = ExecutorStep(
+    @step(
         name=name,
-        description=f"Download {hf_dataset_id} revision {revision}",
         fn=download_hf,
-        config=DownloadConfig(
-            hf_dataset_id=hf_dataset_id,
-            revision=revision,
-            gcs_output_path=StepRef(_step=None),
-            wait_for_completion=True,
-            **kwargs,
-        ),
+        description=f"Download {hf_dataset_id} revision {revision}",
         override_output_path=override_output_path,
     )
+    def _download(ctx: StepContext):
+        return DownloadConfig(
+            hf_dataset_id=hf_dataset_id,
+            revision=revision,
+            gcs_output_path=ctx.output,
+            wait_for_completion=True,
+            **kwargs,
+        )
 
-    return step.ref
+    return _download().ref
 
 
 def default_tokenize(
@@ -149,40 +152,49 @@ def default_tokenize(
         An ExecutorStep that represents the tokenized dataset.
     """
 
-    # sniff out if it's a HuggingFace dataset
-    if isinstance(dataset, HfDatasetSpec):
-        config = HfTokenizeConfig(
-            id=dataset.id,
-            name=dataset.name,
-            cache_path=StepRef(_step=None),
-            tokenizer=ensure_versioned(tokenizer),
-            format=format,
-            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
-        )
-    elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
-        config = HfTokenizeConfig(
-            id=dataset,
-            cache_path=StepRef(_step=None),
-            tokenizer=ensure_versioned(tokenizer),
-            format=format,
-            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
-        )
-    else:
-        config = TokenizeConfig(
-            train_paths=[dataset] if not is_validation else [],
-            validation_paths=[dataset] if is_validation else [],
-            cache_path=StepRef(_step=None),
-            tokenizer=ensure_versioned(tokenizer),
-            format=format,
-            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
-        )
-
-    return ExecutorStep(
+    @step(
         name=os.path.join("tokenized", name),
-        description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
-        config=config,
+        description=f"Tokenize raw text using the {tokenizer} tokenizer.",
     )
+    def _tokenize(ctx: StepContext):
+        # If dataset is a StepRef or ExecutorStep, need to require it
+        if isinstance(dataset, (StepRef, ExecutorStep)):
+            resolved_dataset = ctx.require(dataset)
+        else:
+            resolved_dataset = dataset
+
+        # sniff out if it's a HuggingFace dataset
+        if isinstance(dataset, HfDatasetSpec):
+            config = HfTokenizeConfig(
+                id=dataset.id,
+                name=dataset.name,
+                cache_path=ctx.output,
+                tokenizer=ensure_versioned(tokenizer),
+                format=format,
+                sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            )
+        elif isinstance(resolved_dataset, str) and resolved_dataset.count("/") == 1 and not fsspec_utils.exists(resolved_dataset):
+            config = HfTokenizeConfig(
+                id=resolved_dataset,
+                cache_path=ctx.output,
+                tokenizer=ensure_versioned(tokenizer),
+                format=format,
+                sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            )
+        else:
+            config = TokenizeConfig(
+                train_paths=[resolved_dataset] if not is_validation else [],
+                validation_paths=[resolved_dataset] if is_validation else [],
+                cache_path=ctx.output,
+                tokenizer=ensure_versioned(tokenizer),
+                format=format,
+                sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            )
+
+        return config
+
+    return _tokenize()
 
 
 @lru_cache  # LRU to make the executor happier
@@ -407,28 +419,28 @@ def default_train(
     # Create the pod config
     pod_config = train_config.resources
 
-    # Create the full config
-    config = TrainLmOnPodConfig(
-        train_config=inner_config,
-        resources=pod_config,
-        output_path=StepRef(_step=None),
-    )
+    model_config_unwrapped = unwrap_versioned_value(model_config)
 
-    model_config = unwrap_versioned_value(model_config)
-
-    return ExecutorStep(
+    @step(
         name=os.path.join("checkpoints", name),
+        fn=run_levanter_train_lm,
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
+            f"Train a {compute_num_parameters(model_config_unwrapped, vocab_size):,} parameter model for "
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
             f"{train_length} (train_seq_len) "
             f"= {total_examples * train_length} tokens."
         ),
-        fn=run_levanter_train_lm,
-        config=config,
         override_output_path=override_output_path,
     )
+    def _train(ctx: StepContext):
+        return TrainLmOnPodConfig(
+            train_config=inner_config,
+            resources=pod_config,
+            output_path=ctx.output,
+        )
+
+    return _train()
 
 
 def default_sft(
@@ -665,14 +677,14 @@ def default_scaling_law_pred(
     else:
         name = "projection"
 
-    return ExecutorStep(
-        name=f"""scaling_laws/{name}""",
-        fn=run_scaling_law_analysis,
-        config=ScalingLawConfig(
+    @step(name=f"""scaling_laws/{name}""", fn=run_scaling_law_analysis)
+    def _scaling_law(ctx: StepContext):
+        return ScalingLawConfig(
             name=name,
             ladder_model_steps=ladder_steps_or_ids,
             pred_model_step=pred_run_or_id,
             task_losses=task_losses,
             task_accuracies=task_accuracies,
-        ),
-    )
+        )
+
+    return _scaling_law()

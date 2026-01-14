@@ -23,6 +23,7 @@ from threading import Thread
 
 import pytest
 from draccus.utils import Dataclass
+from marin.execution import step, StepContext
 from marin.execution.executor import (
     Executor,
     ExecutorStep,
@@ -81,18 +82,22 @@ def test_executor():
     def fn(config: MyConfig | None):
         append_log(log, config)
 
-    a = ExecutorStep(name="a", fn=fn, config=None)
+    @step(name="a", fn=fn)
+    def a_creator(ctx: StepContext):
+        return None
 
-    b = ExecutorStep(
-        name="b",
-        fn=fn,
-        config=MyConfig(
-            input_path=a / "sub",
-            output_path=StepRef(_step=None),
+    a = a_creator()
+
+    @step(name="b", fn=fn)
+    def b_creator(ctx: StepContext):
+        return MyConfig(
+            input_path=ctx.require(a) / "sub",
+            output_path=ctx.output,
             n=versioned(3),
             m=4,
-        ),
-    )
+        )
+
+    b = b_creator()
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
@@ -178,27 +183,27 @@ def test_force_run_failed():
     def fn_pass(config: MyConfig | None):
         append_log(log, config)
 
-    b = ExecutorStep(
-        name="b",
-        fn=fn,
-        config=MyConfig(
+    @step(name="b", fn=fn)
+    def b_creator(ctx: StepContext):
+        return MyConfig(
             input_path=path,
-            output_path=StepRef(_step=None),
+            output_path=ctx.output,
             n=1,
             m=1,
-        ),
-    )
+        )
 
-    a = ExecutorStep(
-        name="a",
-        fn=fn_pass,
-        config=MyConfig(
-            input_path=b / "sub",
-            output_path=StepRef(_step=None),
+    b = b_creator()
+
+    @step(name="a", fn=fn_pass)
+    def a_creator(ctx: StepContext):
+        return MyConfig(
+            input_path=ctx.require(b) / "sub",
+            output_path=ctx.output,
             n=2,
             m=2,
-        ),
-    )
+        )
+
+    a = a_creator()
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor_initial = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
@@ -250,8 +255,17 @@ def test_status_actor_one_executor_waiting_for_another():
             with open(config.path, "w") as f:
                 f.write(str(number + config.number))
 
-        a = ExecutorStep(name="a", fn=fn, config=Config(versioned(1), file.name, 2, ""))
-        b = ExecutorStep(name="b", fn=fn, config=Config(versioned(2), file.name, 0, a))
+        @step(name="a", fn=fn)
+        def a_creator(ctx: StepContext):
+            return Config(versioned(1), file.name, 2, "")
+
+        a = a_creator()
+
+        @step(name="b", fn=fn)
+        def b_creator(ctx: StepContext):
+            return Config(versioned(2), file.name, 0, ctx.require(a))
+
+        b = b_creator()
 
         with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
             executor1 = create_executor(temp_dir)
@@ -287,11 +301,17 @@ def test_status_actor_multiple_steps_race_condition():
                 f.write("1")
 
         with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+            @step(name="step", fn=fn)
+            def step_creator(ctx: StepContext):
+                return Config(output_path)
+
+            the_step = step_creator()
+
             executor_refs = []
             for _ in range(10):
                 executor = create_executor(temp_dir)
                 thread = Thread(
-                    target=executor.run, args=([ExecutorStep(name="step", fn=fn, config=Config(output_path))],)
+                    target=executor.run, args=([the_step],)
                 )
                 thread.start()
                 executor_refs.append(thread)
@@ -322,10 +342,13 @@ def test_parallelism():
         append_log(log, config)
         time.sleep(run_time)
 
-    bs = [
-        ExecutorStep(name=f"b{i}", fn=fn, config=MyConfig(input_path="/", output_path=StepRef(_step=None), n=1, m=1))
-        for i in range(parallelism)
-    ]
+    bs = []
+    for i in range(parallelism):
+        @step(name=f"b{i}", fn=fn)
+        def b_creator(ctx: StepContext):
+            return MyConfig(input_path="/", output_path=ctx.output, n=1, m=1)
+
+        bs.append(b_creator())
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
         start_time = time.time()
@@ -358,20 +381,22 @@ def test_versioning():
 
         def get_output_path(a_input_path: str, a_n: int, a_m: int, name: str, b_n: int, b_m: int):
             """Make steps [a -> b] with the given arguments, and return the output_path of `b`."""
-            a = ExecutorStep(
-                name="a",
-                fn=fn,
-                config=MyConfig(
-                    input_path=versioned(a_input_path), output_path=StepRef(_step=None), n=versioned(a_n), m=a_m
-                ),
-            )
-            b = ExecutorStep(
-                name="b",
-                fn=fn,
-                config=MyConfig(
-                    input_path=a / name, output_path=StepRef(_step=None), n=versioned(b_n), m=b_m
-                ),
-            )
+            @step(name="a", fn=fn)
+            def a_creator(ctx: StepContext):
+                return MyConfig(
+                    input_path=versioned(a_input_path), output_path=ctx.output, n=versioned(a_n), m=a_m
+                )
+
+            a = a_creator()
+
+            @step(name="b", fn=fn)
+            def b_creator(ctx: StepContext):
+                return MyConfig(
+                    input_path=ctx.require(a) / name, output_path=ctx.output, n=versioned(b_n), m=b_m
+                )
+
+            b = b_creator()
+
             executor = create_executor(temp_dir)
             executor.run(steps=[b])
             output_path = executor.output_paths[b]
@@ -405,17 +430,22 @@ def test_dedup_version():
         pass
 
     def create_step():
-        a = ExecutorStep(name="a", fn=fn, config=None)
-        b = ExecutorStep(
-            name="b",
-            fn=fn,
-            config=MyConfig(
-                input_path=a / "sub",
-                output_path=StepRef(_step=None),
+        @step(name="a", fn=fn)
+        def a_creator(ctx: StepContext):
+            return None
+
+        a = a_creator()
+
+        @step(name="b", fn=fn)
+        def b_creator(ctx: StepContext):
+            return MyConfig(
+                input_path=ctx.require(a) / "sub",
+                output_path=ctx.output,
                 n=versioned(3),
                 m=4,
-            ),
-        )
+            )
+
+        b = b_creator()
         return b
 
     b1 = create_step()
@@ -438,18 +468,28 @@ def test_run_only_some_steps():
     class CConfig:
         m: 10
 
-    a = ExecutorStep(name="a", fn=fn, config=None)
-    c = ExecutorStep(name="c", fn=fn, config=CConfig(m=10))
-    b = ExecutorStep(
-        name="b",
-        fn=fn,
-        config=MyConfig(
-            input_path=a / "sub",
-            output_path=StepRef(_step=None),
+    @step(name="a", fn=fn)
+    def a_creator(ctx: StepContext):
+        return None
+
+    a = a_creator()
+
+    @step(name="c", fn=fn)
+    def c_creator(ctx: StepContext):
+        return CConfig(m=10)
+
+    c = c_creator()
+
+    @step(name="b", fn=fn)
+    def b_creator(ctx: StepContext):
+        return MyConfig(
+            input_path=ctx.require(a) / "sub",
+            output_path=ctx.output,
             n=versioned(3),
             m=4,
-        ),
-    )
+        )
+
+    b = b_creator()
 
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         executor = create_executor(temp_dir)
@@ -476,7 +516,7 @@ def test_run_only_some_steps():
 class DummyCfg:
     x: int = 0
     input_path: str | None = None
-    output_path: StepRef = field(default_factory=lambda: StepRef(_step=None))
+    output_path: StepRef | None = None
 
 
 def dummy_fn(cfg: DummyCfg):
@@ -498,7 +538,11 @@ def shouldnt_run_fn(cfg: DummyCfg):
 
 
 def test_collect_deps_skip_vs_block():
-    parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=1))
+    @step(name="parent", fn=dummy_fn)
+    def parent_creator(ctx: StepContext):
+        return DummyCfg(x=1, output_path=ctx.output)
+
+    parent = parent_creator()
 
     # ----- skip parent -------------------------------------------------
     inp_skip = StepRef(_step=parent, _subpath="ckpt.pt").nonblocking()
@@ -534,13 +578,17 @@ def test_parent_version_bubbles_into_skip_child():
     """
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
         # First parent/child pair (parent.x = 1)
-        parent1 = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=versioned(1)))
-        child1_cfg = DummyCfg(0, input_path=parent1.cd("dummy").nonblocking())
-        child1 = ExecutorStep(
-            name="child",
-            fn=dummy_fn,
-            config=child1_cfg,
-        )
+        @step(name="parent", fn=dummy_fn)
+        def parent1_creator(ctx: StepContext):
+            return DummyCfg(x=versioned(1), output_path=ctx.output)
+
+        parent1 = parent1_creator()
+
+        @step(name="child", fn=dummy_fn)
+        def child1_creator(ctx: StepContext):
+            return DummyCfg(x=0, input_path=ctx.require(parent1).cd("dummy").nonblocking(), output_path=ctx.output)
+
+        child1 = child1_creator()
 
         executor = create_executor(temp_dir)
         executor.run(steps=[child1])
@@ -548,12 +596,18 @@ def test_parent_version_bubbles_into_skip_child():
         executor = create_executor(temp_dir)
 
         # Second pair - identical except parent.x = 2
-        parent2 = ExecutorStep(name="parent2", fn=dummy_fn, config=DummyCfg(x=versioned(2)))
-        child2 = ExecutorStep(
-            name="child",
-            fn=dummy_fn,
-            config=DummyCfg(x=0, input_path=parent2.cd("dummy").nonblocking()),
-        )
+        @step(name="parent2", fn=dummy_fn)
+        def parent2_creator(ctx: StepContext):
+            return DummyCfg(x=versioned(2), output_path=ctx.output)
+
+        parent2 = parent2_creator()
+
+        @step(name="child", fn=dummy_fn)
+        def child2_creator(ctx: StepContext):
+            return DummyCfg(x=0, input_path=ctx.require(parent2).cd("dummy").nonblocking(), output_path=ctx.output)
+
+        child2 = child2_creator()
+
         executor.run(steps=[child2])
         version2 = executor.version_strs[child2]
 
@@ -566,12 +620,17 @@ def test_parent_doesnt_run_on_skip_parent():
     Parent should not run if child is a skip-parent.
     """
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
-        parent = ExecutorStep(name="parent", fn=shouldnt_run_fn, config=DummyCfg(x=1))
-        child = ExecutorStep(
-            name="child",
-            fn=dummy_fn,
-            config=DummyCfg(input_path=parent.cd("dummy").nonblocking()),
-        )
+        @step(name="parent", fn=shouldnt_run_fn)
+        def parent_creator(ctx: StepContext):
+            return DummyCfg(x=1, output_path=ctx.output)
+
+        parent = parent_creator()
+
+        @step(name="child", fn=dummy_fn)
+        def child_creator(ctx: StepContext):
+            return DummyCfg(input_path=ctx.require(parent).cd("dummy").nonblocking(), output_path=ctx.output)
+
+        child = child_creator()
 
         executor = create_executor(temp_dir)
         executor.run(steps=[child])
@@ -582,12 +641,17 @@ def test_skippable_parent_will_run_if_asked():
     Parent should run if child is a skip-parent and we ask it to.
     """
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
-        parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=1))
-        child = ExecutorStep(
-            name="child",
-            fn=dummy_fn,
-            config=DummyCfg(input_path=parent.cd("dummy").nonblocking()),
-        )
+        @step(name="parent", fn=dummy_fn)
+        def parent_creator(ctx: StepContext):
+            return DummyCfg(x=1, output_path=ctx.output)
+
+        parent = parent_creator()
+
+        @step(name="child", fn=dummy_fn)
+        def child_creator(ctx: StepContext):
+            return DummyCfg(input_path=ctx.require(parent).cd("dummy").nonblocking(), output_path=ctx.output)
+
+        child = child_creator()
 
         executor = create_executor(temp_dir)
         executor.run(steps=[child], run_only=["parent"])
@@ -601,18 +665,23 @@ def test_parent_will_run_if_some_child_is_not_skippable():
     Parent should run if child is a skip-parent and we ask it to.
     """
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
-        parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=1))
-        child = ExecutorStep(
-            name="child",
-            fn=dummy_fn,
-            config=DummyCfg(input_path=parent.cd("dummy").nonblocking()),
-        )
+        @step(name="parent", fn=dummy_fn)
+        def parent_creator(ctx: StepContext):
+            return DummyCfg(x=1, output_path=ctx.output)
 
-        child2 = ExecutorStep(
-            name="child2",
-            fn=dummy_fn,
-            config=DummyCfg(input_path=parent.cd("dummy")),  # no skip
-        )
+        parent = parent_creator()
+
+        @step(name="child", fn=dummy_fn)
+        def child_creator(ctx: StepContext):
+            return DummyCfg(input_path=ctx.require(parent).cd("dummy").nonblocking(), output_path=ctx.output)
+
+        child = child_creator()
+
+        @step(name="child2", fn=dummy_fn)
+        def child2_creator(ctx: StepContext):
+            return DummyCfg(input_path=ctx.require(parent).cd("dummy"), output_path=ctx.output)  # no skip
+
+        child2 = child2_creator()
 
         executor = create_executor(temp_dir)
         executor.run(steps=[child, child2])

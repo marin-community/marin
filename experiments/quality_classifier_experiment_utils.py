@@ -16,9 +16,11 @@ import os
 from dataclasses import dataclass, field
 
 from marin.core.runtime import TaskConfig
-from marin.execution.executor import (
+from marin.execution import (
     ExecutorStep,
+    StepContext,
     StepRef,
+    step,
     versioned,
 )
 from marin.processing.classification.config.inference_config import RuntimeConfig
@@ -52,6 +54,71 @@ def get_model_path(model_path: str | ExecutorStep):
     return versioned(model_path)
 
 
+def create_inference_step(
+    experiment_name: str,
+    quality_classifier_model_path: str | ExecutorStep,
+    input_data_source: str,
+    input_data_path: str,
+) -> ExecutorStep:
+    """Create an inference step for quality filtering."""
+    input_basename = os.path.basename(os.path.normpath(input_data_path))
+
+    @step(
+        name=f"attributes/quality_filtering/{experiment_name}/{input_data_source}",
+        fn=run_inference,
+        pip_dependency_groups=["filelock"],
+    )
+    def _inference_step(ctx: StepContext):
+        return InferenceConfig(
+            input_path=input_data_path,
+            output_path=ctx.output / input_basename,
+            model_name=get_model_path(quality_classifier_model_path),
+            model_type="fasttext",
+            attribute_name=versioned(f"{experiment_name}-quality"),
+            runtime=RuntimeConfig(
+                memory_limit_gb=12,
+            ),
+            task=TaskConfig(max_in_flight=500),
+        )
+
+    return _inference_step()
+
+
+def create_consolidate_step(
+    experiment_name: str,
+    input_data_source: str,
+    input_data_path: str,
+    keep_fraction: float,
+    inference_step: ExecutorStep,
+) -> ExecutorStep:
+    """Create a consolidate step for quality filtering."""
+    input_basename = os.path.basename(os.path.normpath(input_data_path))
+
+    @step(
+        name=f"documents/quality_filtering/{experiment_name}/{input_data_source}",
+        fn=consolidate,
+        pip_dependency_groups=["ddsketch"],
+    )
+    def _consolidate_step(ctx: StepContext):
+        inference_ref = ctx.require(inference_step)
+        return ConsolidateConfig(
+            input_path=input_data_path,
+            output_path=ctx.output / input_basename,
+            filters=[
+                FilterConfig(
+                    type=versioned("classify"),
+                    attribute_path=inference_ref / input_basename,
+                    name=versioned(f"{experiment_name}-quality"),
+                    label="__label__hq",
+                    lower_threshold=versioned(None),
+                    keep_fraction=versioned(keep_fraction),
+                ),
+            ],
+        )
+
+    return _consolidate_step()
+
+
 def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     """Create the steps for a single experiment.
 
@@ -65,45 +132,24 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
     tokenized: dict[str, ExecutorStep] = {}
     weights: dict[str, float] = {}
     for input_data_source, input_data_path in config.input_data_source_to_path.items():
-        # Get the basename of the input directory
-        input_basename = os.path.basename(os.path.normpath(input_data_path))
-        inference_step = ExecutorStep(
-            name=f"attributes/quality_filtering/{config.experiment_name}/{input_data_source}",
-            fn=run_inference,
-            config=InferenceConfig(
-                input_path=input_data_path,
-                output_path=StepRef(_step=None, _cd=input_basename),
-                model_name=get_model_path(config.quality_classifier_model_path),
-                model_type="fasttext",
-                attribute_name=versioned(f"{config.experiment_name}-quality"),
-                runtime=RuntimeConfig(
-                    memory_limit_gb=12,
-                ),
-                task=TaskConfig(max_in_flight=500),
-            ),
-            pip_dependency_groups=["filelock"],
+        # Create the inference step using the factory function
+        inference_step = create_inference_step(
+            experiment_name=config.experiment_name,
+            quality_classifier_model_path=config.quality_classifier_model_path,
+            input_data_source=input_data_source,
+            input_data_path=input_data_path,
         )
 
-        consolidate_step = ExecutorStep(
-            name=f"documents/quality_filtering/{config.experiment_name}/{input_data_source}",
-            fn=consolidate,
-            config=ConsolidateConfig(
-                input_path=input_data_path,
-                output_path=StepRef(_step=None, _cd=input_basename),
-                filters=[
-                    FilterConfig(
-                        type=versioned("classify"),
-                        attribute_path=inference_step / input_basename,
-                        name=versioned(f"{config.experiment_name}-quality"),
-                        label="__label__hq",
-                        lower_threshold=versioned(None),
-                        keep_fraction=versioned(config.keep_fraction),
-                    ),
-                ],
-            ),
-            pip_dependency_groups=["ddsketch"],
+        # Create the consolidate step using the factory function
+        consolidate_step = create_consolidate_step(
+            experiment_name=config.experiment_name,
+            input_data_source=input_data_source,
+            input_data_path=input_data_path,
+            keep_fraction=config.keep_fraction,
+            inference_step=inference_step,
         )
 
+        # Create the tokenize step
         tokenize_step = default_tokenize(
             name=f"quality_filtering/{config.experiment_name}/{input_data_source}",
             dataset=consolidate_step,

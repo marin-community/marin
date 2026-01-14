@@ -37,7 +37,7 @@ executor_main([upload_step])
 from dataclasses import dataclass, field
 
 from marin.download.huggingface.upload_gcs_to_hf import UploadConfig, upload_gcs_to_hf
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution import step, StepContext, executor_main
 
 
 @dataclass(frozen=True)
@@ -49,20 +49,21 @@ class ModelUploadConfig:
     dry_run: bool = False
 
 
-def upload_model_to_hf_step(model_config: ModelUploadConfig) -> ExecutorStep:
-    """Create an ExecutorStep to upload model checkpoints to Hugging Face."""
-    upload_step = ExecutorStep(
+def upload_model_to_hf_step(model_config: ModelUploadConfig):
+    """Create a step to upload model checkpoints to Hugging Face."""
+    @step(
         name=f"upload_to_hf_{model_config.hf_repo_id.replace('/', '_')}",
         fn=upload_gcs_to_hf,
-        config=UploadConfig(
+    )
+    def upload_step(ctx: StepContext):
+        return UploadConfig(
             hf_repo_id=model_config.hf_repo_id,
             gcs_directories=model_config.gcs_directories,
             dry_run=model_config.dry_run,
             wait_for_completion=True,
-        ),
-    )
+        )
 
-    return upload_step
+    return upload_step()
 
 
 # Predefined upload steps organized by region

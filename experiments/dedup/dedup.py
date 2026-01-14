@@ -23,41 +23,46 @@ Usage:
 import logging
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, StepRef, executor_main
+from marin.execution import step, StepContext, StepRef, executor_main
 from marin.processing.classification.deduplication.pipeline import DedupeConfig, DedupMode, deduplicate
 
 logger = logging.getLogger(__name__)
 
 
-fineweb_edu_small_2 = ExecutorStep(
-    name="raw_fineweb_edu_small_2",
-    fn=download_hf,
-    config=DownloadConfig(
+@step(name="raw_fineweb_edu_small_2", fn=download_hf)
+def raw_fineweb_edu_small_2_creator(ctx: StepContext):
+    return DownloadConfig(
         hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision="3c452cb",
         hf_urls_glob=["sample/10BT/000_00000.parquet", "sample/10BT/001_00000.parquet"],
-    ),
-)
+    )
 
-fineweb_edu_small_1 = ExecutorStep(
-    name="raw_fineweb_edu_small_1",
-    fn=download_hf,
-    config=DownloadConfig(
+
+fineweb_edu_small_2 = raw_fineweb_edu_small_2_creator()
+
+
+@step(name="raw_fineweb_edu_small_1", fn=download_hf)
+def raw_fineweb_edu_small_1_creator(ctx: StepContext):
+    return DownloadConfig(
         hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision="3c452cb",
         hf_urls_glob=["sample/10BT/000_00000.parquet"],
-    ),
-)
+    )
 
-fineweb_edu_small_10bt = ExecutorStep(
-    name="raw_fineweb_edu_small_10bt",
-    fn=download_hf,
-    config=DownloadConfig(
+
+fineweb_edu_small_1 = raw_fineweb_edu_small_1_creator()
+
+
+@step(name="raw_fineweb_edu_small_10bt", fn=download_hf)
+def raw_fineweb_edu_small_10bt_creator(ctx: StepContext):
+    return DownloadConfig(
         hf_dataset_id="HuggingFaceFW/fineweb-edu",
         revision="3c452cb",
         hf_urls_glob=["sample/10BT/*.parquet"],
-    ),
-)
+    )
+
+
+fineweb_edu_small_10bt = raw_fineweb_edu_small_10bt_creator()
 
 
 def run_dedup(config: DedupeConfig) -> str:
@@ -69,34 +74,55 @@ def run_dedup(config: DedupeConfig) -> str:
     return config.output_path
 
 
-def build_dedup_step(dataset: StepRef, max_parallelism: int) -> ExecutorStep:
-    """
-    Builds a deduplication step for the given dataset.
-
-    Args:
-        dataset: The input dataset to deduplicate.
-        max_parallelism: Maximum parallelism for Zephyr tasks.
-    """
+@step(name="dedup_raw_fineweb_edu_small_1", fn=run_dedup)
+def dedup_fineweb_edu_small_1_creator(ctx: StepContext):
+    dataset = ctx.require(fineweb_edu_small_1)
     input_path = dataset.cd("sample/10BT")
 
-    config = DedupeConfig(
+    return DedupeConfig(
         input_path=input_path,
         mode=DedupMode.EXACT_PARAGRAPH_DEDUPLICATE,
-        processes=max_parallelism,
+        processes=7,
     )
 
-    return ExecutorStep(
-        name=f"dedup_{dataset.name}",
-        fn=run_dedup,
-        config=config,
-        description=f"Run dedupe on {dataset.name}",
+
+dedup_fineweb_edu_small_1 = dedup_fineweb_edu_small_1_creator()
+
+
+@step(name="dedup_raw_fineweb_edu_small_2", fn=run_dedup)
+def dedup_fineweb_edu_small_2_creator(ctx: StepContext):
+    dataset = ctx.require(fineweb_edu_small_2)
+    input_path = dataset.cd("sample/10BT")
+
+    return DedupeConfig(
+        input_path=input_path,
+        mode=DedupMode.EXACT_PARAGRAPH_DEDUPLICATE,
+        processes=7,
     )
+
+
+dedup_fineweb_edu_small_2 = dedup_fineweb_edu_small_2_creator()
+
+
+@step(name="dedup_raw_fineweb_edu_small_10bt", fn=run_dedup)
+def dedup_fineweb_edu_small_10bt_creator(ctx: StepContext):
+    dataset = ctx.require(fineweb_edu_small_10bt)
+    input_path = dataset.cd("sample/10BT")
+
+    return DedupeConfig(
+        input_path=input_path,
+        mode=DedupMode.EXACT_PARAGRAPH_DEDUPLICATE,
+        processes=1024,
+    )
+
+
+dedup_fineweb_edu_small_10bt = dedup_fineweb_edu_small_10bt_creator()
 
 
 STEPS = [
-    build_dedup_step(fineweb_edu_small_1, max_parallelism=7),
-    build_dedup_step(fineweb_edu_small_2, max_parallelism=7),
-    build_dedup_step(fineweb_edu_small_10bt, max_parallelism=1024),
+    dedup_fineweb_edu_small_1,
+    dedup_fineweb_edu_small_2,
+    dedup_fineweb_edu_small_10bt,
 ]
 
 if __name__ == "__main__":

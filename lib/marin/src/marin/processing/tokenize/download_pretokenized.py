@@ -33,7 +33,7 @@ from marin.download.huggingface.download_hf import (
     DownloadConfig as HfDownloadConfig,
     download_hf as hf_download_logic,
 )
-from marin.execution import ExecutorStep, StepRef, ensure_versioned
+from marin.execution import ExecutorStep, StepContext, StepRef, ensure_versioned, step
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
 logger = logging.getLogger(__name__)
@@ -105,22 +105,23 @@ def download_pretokenized_cache(
         An ExecutorStep that, when run, will download the cache and output a
         PretokenizedCacheDownloadConfig pointing to the downloaded data.
     """
-    config = PretokenizedCacheDownloadConfig(
-        cache_path=StepRef(_step=None),  # ExecutorStep will resolve this to the actual output path
-        tokenizer=ensure_versioned(tokenizer),
-        hf_repo_id=ensure_versioned(hf_repo_id),  # type: ignore[call-arg]
-        hf_revision=ensure_versioned(hf_revision),  # type: ignore[call-arg]
-        hf_repo_type_prefix="datasets",  # Default for Hugging Face datasets
-        hf_token=hf_token,
-        tags=tags or [],
-        format=format,
-    )
-
-    return ExecutorStep(
+    @step(
         name=os.path.join("tokenized", "subcache", output_cache_path_name),
         fn=_actually_download_pretokenized_cache,
-        config=config,
     )
+    def _step(ctx: StepContext) -> PretokenizedCacheDownloadConfig:
+        return PretokenizedCacheDownloadConfig(
+            cache_path=ctx.output,
+            tokenizer=ensure_versioned(tokenizer),
+            hf_repo_id=ensure_versioned(hf_repo_id),  # type: ignore[call-arg]
+            hf_revision=ensure_versioned(hf_revision),  # type: ignore[call-arg]
+            hf_repo_type_prefix="datasets",  # Default for Hugging Face datasets
+            hf_token=hf_token,
+            tags=tags or [],
+            format=format,
+        )
+
+    return _step()
 
 
 def _actually_download_pretokenized_cache(

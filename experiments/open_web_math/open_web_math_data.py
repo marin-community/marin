@@ -18,21 +18,21 @@ Downloads the open-web-math dataset
 """
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
+from marin.execution import step, StepContext, executor_main, versioned
 
 ############################################################
 # download open-web-math dataset
-open_web_math_raw = ExecutorStep(
-    name="raw/open-web-math",
-    fn=download_hf,
-    config=DownloadConfig(
+@step(name="raw/open-web-math", fn=download_hf)
+def open_web_math_raw_creator(ctx: StepContext):
+    return DownloadConfig(
         hf_dataset_id="open-web-math/open-web-math",
         revision=versioned("fde8ef8"),
-        gcs_output_path=StepRef(_step=None),
+        gcs_output_path=ctx.output,
         wait_for_completion=False,
-    ),
-    override_output_path="raw/open-web-math-fde8ef8",
-)
+    )
+
+
+open_web_math_raw = open_web_math_raw_creator(override_output_path="raw/open-web-math-fde8ef8")
 
 ############################################################
 

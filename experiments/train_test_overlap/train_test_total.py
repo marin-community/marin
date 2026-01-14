@@ -42,7 +42,7 @@ Notes
 import logging
 from dataclasses import dataclass
 
-from marin.execution.executor import ExecutorStep, executor_main, StepRef
+from marin.execution.executor import ExecutorStep, executor_main, StepRef, step, StepContext
 from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 
 from experiments.midtraining_datasets import finemath_3_plus
@@ -97,24 +97,25 @@ DATASET_CONFIGS = [
 
 
 def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
-    dedupe_config = DeconConfig(
-        input_path=dataset_config.path,
-        output_path=StepRef(_step=None),
-        decontaminate_source=EVAL_DATASET_STEPS,
-        attribute_name="ngram_overlap",
-        false_positive_rate=1e-20,
-        ngram=DEFAULT_NGRAM_CONFIG,
-        processes=1024,
-        mode=DeconMode.TRAIN_TEST_OVERLAP,
-        text_field=dataset_config.text_field,
-    )
-
-    return ExecutorStep(
+    @step(
         name=f"train_test_overlap/dolma/total/{dataset_config.name}",
         fn=run_train_test_overlap,
-        config=dedupe_config,
         description=f"Run dedupe train-test overlap on {dataset_config.name}",
     )
+    def step_creator(ctx: StepContext):
+        return DeconConfig(
+            input_path=ctx.require(dataset_config.path),
+            output_path=ctx.output,
+            decontaminate_source=[ctx.require(s) for s in EVAL_DATASET_STEPS],
+            attribute_name="ngram_overlap",
+            false_positive_rate=1e-20,
+            ngram=DEFAULT_NGRAM_CONFIG,
+            processes=1024,
+            mode=DeconMode.TRAIN_TEST_OVERLAP,
+            text_field=dataset_config.text_field,
+        )
+
+    return step_creator()
 
 
 STEPS = [build_step(config) for config in DATASET_CONFIGS]

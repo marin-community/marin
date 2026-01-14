@@ -56,6 +56,7 @@ from typing import Any
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
+from marin.execution import step, StepContext
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -556,7 +557,8 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     return dataset_name
 
 
-def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorStep:
+@step(name="documents", fn=transform_hf_dataset)
+def transform_dataset_step(ctx: StepContext, dataset_cfg: InstructionDatasetConfig):
     """ExecutorStep that preprocesses the input dataset into a canonicalized format for SFT training."""
     adapter = dataset_cfg.adapter
     output_name = dataset_cfg.name if dataset_cfg.name is not None else dataset_cfg.hf_dataset_id
@@ -584,23 +586,16 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
         -{adapter_signature_str}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
-    transform_step = ExecutorStep(
-        name=f"documents/{output_name}",
-        fn=transform_hf_dataset,
-        config=TransformSFTDatasetConfig(
-            source=versioned(dataset_cfg.hf_dataset_id),
-            revision=versioned(dataset_cfg.revision),
-            output_path=StepRef(_step=None),
-            metadata_columns=versioned(dataset_cfg.metadata_columns),
-            adapter=versioned(adapter),
-            subsets=versioned(dataset_cfg.subsets),
-            splits=versioned(dataset_cfg.splits),
-            max_parallelism=dataset_cfg.max_parallelism,
-        ),
-        override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
+    return TransformSFTDatasetConfig(
+        source=versioned(dataset_cfg.hf_dataset_id),
+        revision=versioned(dataset_cfg.revision),
+        output_path=ctx.output,
+        metadata_columns=versioned(dataset_cfg.metadata_columns),
+        adapter=versioned(adapter),
+        subsets=versioned(dataset_cfg.subsets),
+        splits=versioned(dataset_cfg.splits),
+        max_parallelism=dataset_cfg.max_parallelism,
     )
-
-    return transform_step
 
 
 def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = None) -> ExecutorStep:
@@ -618,11 +613,11 @@ def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = N
     return transform_dataset_step(config)
 
 
-tulu_3_in_dolma = ExecutorStep(
-    name="dolma/tulu_3_in_dolma",
-    fn=convert_conversation_to_dolma,
-    config=ConversationToDolmaConfig(get_instruction_dataset("allenai/tulu-3-sft-mixture")),
-)
+@step(name="dolma/tulu_3_in_dolma", fn=convert_conversation_to_dolma)
+def _tulu_3_in_dolma_step(ctx: StepContext):
+    return ConversationToDolmaConfig(ctx.require(get_instruction_dataset("allenai/tulu-3-sft-mixture")))
+
+tulu_3_in_dolma = _tulu_3_in_dolma_step()
 
 
 # levanter treats validation and  training as separate so we tokenize twice. Not ideal, but fine here.

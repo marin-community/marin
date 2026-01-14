@@ -22,10 +22,10 @@ from dataclasses import dataclass
 
 from marin.download.huggingface.download_hf import DownloadConfig as HfDownloadConfig
 from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import (
-    ExecutorStep,
+from marin.execution import (
+    step,
+    StepContext,
     executor_main,
-    StepRef,
     versioned,
 )
 from marin.processing.tokenize.data_configs import TokenizerStep
@@ -34,21 +34,18 @@ from zephyr import Backend, Dataset, load_jsonl
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 
-lima = (
-    ExecutorStep(
-        name="raw/lima",
-        fn=download_hf,
-        config=HfDownloadConfig(
-            hf_dataset_id=versioned("GAIR/lima"),
-            revision=versioned("68958e9"),
-            gcs_output_path=StepRef(_step=None),
-            hf_urls_glob=["*.jsonl"],
-            wait_for_completion=True,
-        ),
+@step(name="raw/lima", fn=download_hf)
+def lima_creator(ctx: StepContext):
+    return HfDownloadConfig(
+        hf_dataset_id=versioned("GAIR/lima"),
+        revision=versioned("68958e9"),
+        gcs_output_path=ctx.output,
+        hf_urls_glob=["*.jsonl"],
+        wait_for_completion=True,
     )
-    .with_output_path("raw/lima-68958e9")
-    .cd("68958e9")
-)
+
+
+lima = lima_creator().with_output_path("raw/lima-68958e9").cd("68958e9")
 
 
 @dataclass
@@ -84,11 +81,12 @@ def convert_lima_conversations(config: LimaConversationsToTextConfig):
     Backend.execute(pipeline)
 
 
-lima_text = ExecutorStep(
-    name="raw/lima_text",
-    fn=convert_lima_conversations,
-    config=LimaConversationsToTextConfig(raw_lima=lima),
-).with_output_path("raw/lima_text-68958e9/68958e9")
+@step(name="raw/lima_text", fn=convert_lima_conversations)
+def lima_text_creator(ctx: StepContext):
+    return LimaConversationsToTextConfig(raw_lima=ctx.require(lima))
+
+
+lima_text = lima_text_creator().with_output_path("raw/lima_text-68958e9/68958e9")
 
 
 def lima_tokenized(tokenizer: str = llama3_tokenizer, is_validation: bool = True) -> dict[str, TokenizerStep]:

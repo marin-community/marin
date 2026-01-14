@@ -18,19 +18,19 @@ import os.path
 
 from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 from marin.execution.executor import ExecutorStep, StepRef, versioned
+from marin.execution import step, StepContext
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
 # Raw dataset download step
-downloads = {
-    "nemotron_cc": ExecutorStep(
-        name="raw/nemotro-cc",
-        fn=download_nemotron_cc,
-        config=NemotronIngressConfig(
-            output_path=StepRef(_step=None),
-        ),
+@step(name="raw/nemotro-cc", fn=download_nemotron_cc)
+def _nemotron_cc_download(ctx: StepContext):
+    return NemotronIngressConfig(
+        output_path=ctx.output,
     )
-}
+
+
+downloads = {"nemotron_cc": _nemotron_cc_download()}
 
 _nemotron_cc_path = downloads["nemotron_cc"] / "contrib/Nemotron/Nemotron-CC/data-jsonl/"
 
@@ -84,24 +84,25 @@ def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerSte
     for split in NEMOTRON_DATASETS:
         nemotron_split_output_path = os.path.join("tokenized", "nemotron_cc", split)
         nemotron_split_paths = _get_nemotron_split_paths(split)
-        step = ExecutorStep(
-            name=nemotron_split_output_path,
-            fn=tokenize,
-            config=TokenizeConfig(
-                train_paths=nemotron_split_paths,
+
+        @step(name=nemotron_split_output_path, fn=tokenize)
+        def tokenize_nemotron_split(ctx: StepContext, paths=nemotron_split_paths, tok=tokenizer):
+            return TokenizeConfig(
+                train_paths=paths,
                 validation_paths=versioned([]),
-                cache_path=StepRef(_step=None),
-                tokenizer=versioned(tokenizer),
-            ),
-        )
+                cache_path=ctx.output,
+                tokenizer=versioned(tok),
+            )
+
+        result = tokenize_nemotron_split()
 
         # Check if we need to use override path for llama3
         from experiments.llama import llama3_tokenizer as _llama3_tokenizer
 
         if tokenizer == _llama3_tokenizer and split in NEMOTRON_LLAMA3_OVERRIDES:
-            step = step.with_output_path(NEMOTRON_LLAMA3_OVERRIDES[split])
+            result = result.with_output_path(NEMOTRON_LLAMA3_OVERRIDES[split])
 
-        nemotron_steps[os.path.join("nemotron_cc", split)] = step
+        nemotron_steps[os.path.join("nemotron_cc", split)] = result
 
     assert nemotron_steps.keys() == NEMOTRON_WEIGHTS.keys()
     return nemotron_steps

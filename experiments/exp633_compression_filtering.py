@@ -29,11 +29,10 @@ from dataclasses import dataclass, field
 
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
-    ExecutorStep,
     executor_main,
-    StepRef,
     versioned,
 )
+from marin.execution import step, StepContext, StepRef
 from marin.processing.classification.config.inference_config import RuntimeConfig
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import InferenceConfig, run_inference
@@ -58,24 +57,26 @@ class ExperimentConfig:
     )
 
 
-def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
+def create_steps(config: ExperimentConfig):
     """Create the steps for a single experiment with compression ratio filtering."""
     assert config.experiment_name is not None
 
     steps = []
-    tokenized: dict[str, ExecutorStep] = {}
+    tokenized = {}
     weights: dict[str, float] = {}
 
     for input_data_source, input_data_path in config.input_data_source_to_path.items():
         input_basename = os.path.basename(os.path.normpath(input_data_path))
 
         # Calculate compression ratios
-        compression_step = ExecutorStep(
+        @step(
             name=f"attributes/compression_filtering/{config.experiment_name}/{input_data_source}",
             fn=run_inference,
-            config=InferenceConfig(
+        )
+        def compression_step_fn(ctx: StepContext, input_data_path=input_data_path, input_basename=input_basename):
+            return InferenceConfig(
                 input_path=input_data_path,
-                output_path=StepRef(_step=None) / input_basename,
+                output_path=ctx.output / input_basename,
                 model_type="compression",  # Use our new compression classifier
                 model_name=None,  # This doesn't matter for compression
                 attribute_name=versioned("compression_ratio"),
@@ -83,29 +84,31 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                     memory_limit_gb=12,
                 ),
                 task=TaskConfig(max_in_flight=500),
-            ),
-            pip_dependency_groups=["lz4", "filelock"],
-        )
+            )
+
+        compression_step = compression_step_fn().with_pip_dependency_groups(["lz4", "filelock"])
 
         # Filter based on compression ratios
-        consolidate_step = ExecutorStep(
+        @step(
             name=f"documents/compression_filtering/{config.experiment_name}/{input_data_source}",
             fn=consolidate,
-            config=ConsolidateConfig(
+        )
+        def consolidate_step_fn(ctx: StepContext, input_data_path=input_data_path, input_basename=input_basename, compression_step=compression_step):
+            return ConsolidateConfig(
                 input_path=input_data_path,
-                output_path=StepRef(_step=None) / input_basename,
+                output_path=ctx.output / input_basename,
                 filters=[
                     FilterConfig(
                         type=versioned("classify"),
-                        attribute_path=compression_step / input_basename,
+                        attribute_path=ctx.require(compression_step) / input_basename,
                         name=versioned("compression_ratio"),
                         lower_threshold=versioned(0.6),  # Lower bound
                         upper_threshold=versioned(0.9),  # Upper bound
                     ),
                 ],
-            ),
-            pip_dependency_groups=["ddsketch", "lz4"],
-        )
+            )
+
+        consolidate_step = consolidate_step_fn().with_pip_dependency_groups(["ddsketch", "lz4"])
 
         tokenize_step = default_tokenize(
             name=f"compression_filtering/{config.experiment_name}/{input_data_source}",

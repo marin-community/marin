@@ -26,7 +26,7 @@ from levanter.trainer import TrainerConfig
 from transformers import AutoConfig
 from levanter.utils.mesh import MeshConfig
 
-from marin.execution.executor import ExecutorStep, StepRef
+from marin.execution import step, StepContext, ExecutorStep, StepRef
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
@@ -125,119 +125,122 @@ def get_stop_tokens(model_type: str) -> list[str]:
 
 
 def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumConfig) -> ExecutorStep:
-    hf_config = AutoConfig.from_pretrained(config.model_config.name)
-    model_config_cls = config.model_config.config_class.from_hf_config(hf_config)
-
-    model_config = dataclasses.replace(
-        model_config_cls,
-        max_seq_len=config.max_input_tokens + config.max_output_tokens,
-        tokenizer=config.model_config.tokenizer,
-        attn_backend=AttentionBackend.SPLASH,
-    )
-
-    tags = [*config.tags, config.model_config.name.split("/")[-1]]
-
-    trainer_config = TrainerConfig(
-        tracker=WandbConfig(
-            project=config.project_name,
-            name=name,
-            tags=tags,
-        ),
-        log_xla_hlo=False,
-        log_jaxprs=False,
-        mp=jmp.get_policy("p=f32,c=bfloat16"),
-        train_batch_size=config.train_batch_size,
-        per_device_parallelism=config.per_device_parallelism,
-        num_train_steps=config.num_train_steps,
-        steps_per_eval=config.steps_per_eval,
-        checkpointer=CheckpointerConfig(
-            base_path=StepRef(_step=None, _subpath="checkpoints"),
-            save_interval=datetime.timedelta(seconds=config.checkpointer_save_interval),
-        ),
-        mesh=MeshConfig(
-            axes={"context": 1, "model": 1},
-            shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
-        ),
-        ray=RayConfig(auto_start_cluster=False),
-    )
-
-    opt_config = AdamConfig(
-        learning_rate=config.learning_rate,
-        weight_decay=config.weight_decay,
-        warmup=config.warmup,
-        lr_schedule=config.lr_schedule,
-        max_grad_norm=config.max_grad_norm,
-    )
-
-    rollout_storage = RolloutStorageConfig(
-        storage_type=StorageType.FILE,
-        path=StepRef(_step=None, _subpath="rollouts"),
-    )
-    weight_transfer = WeightTransferConfig(
-        mode=WeightTransferMode.ARROW_FLIGHT,
-        sync_interval_steps=config.weight_transfer_sync_interval_steps,
-        max_weight_transfer_wait_time=config.max_weight_transfer_wait_time,
-        coordinator_name=f"weight_transfer_coordinator_{name}",
-    )
-
-    # Create RLJobConfig using the unified interface
-    job_config = RLJobConfig(
-        model=model_config,
-        trainer=trainer_config,
-        train_params=TrainParams(
-            optimizer=opt_config,
-            rl_loss=config.rl_loss,
-            replay_buffer=ReplayBufferConfig(
-                capacity=config.replay_buffer_capacity,
-                alpha=config.replay_buffer_alpha,
-                max_samples=config.replay_buffer_max_samples,
-                max_rollout_step_delay=config.max_rollout_step_delay,
-            ),
-        ),
-        curriculum=curriculum,
-        tokenizer=config.model_config.tokenizer,
-        inference_type="vllm",
-        inference_config=vLLMInferenceContextConfig(
-            model_name=config.model_config.name,
-            max_model_len=config.max_input_tokens + config.max_output_tokens,
-            tensor_parallel_size=config.inference_tensor_parallel_size,
-            gpu_memory_utilization=config.inference_gpu_memory_utilization,
-            sampling_params=SamplingParams(
-                temperature=1.0,
-                n=config.inference_n,
-                max_tokens=config.max_output_tokens,
-                stop=get_stop_tokens(config.model_config.type),
-                include_stop_str_in_output=True,
-                logprobs=1,
-                top_k=config.inference_top_k,
-            ),
-        ),
-        initial_checkpoint=config.model_config.checkpoint,
-        rollout_storage=rollout_storage,
-        weight_transfer=weight_transfer,
-        run_id=name,
-        log_freq=1,
-        run_config=RunConfig(
-            train_tpu_type=config.train_tpu_type,
-            num_train_slices=config.num_train_slices,
-            num_rollout_workers=config.num_rollout_workers,
-            inference_tpu_type=config.inference_tpu_type,
-        ),
-        inflight_weight_updates=config.inflight_weight_updates,
-        rollout_tracker=RolloutTrackerConfig(
-            project=config.project_name,
-            name=f"{name}-rollout",
-            tags=[*config.tags, "rollout", config.model_config.name.split("/")[-1]],
-        ),
-        pip_dependency_groups=(
-            config.model_config.pip_dependency_groups if config.model_config.pip_dependency_groups else ["vllm", "math"]
-        ),
-    )
-
-    return ExecutorStep(
+    @step(
         name=f"rl_testing/{name}",
         description=f"Async RL training: {name}",
         fn=RLJob.make_step_fn(),
-        config=job_config,
         pip_dependency_groups=["vllm", "math"],
     )
+    def _step(ctx: StepContext):
+        hf_config = AutoConfig.from_pretrained(config.model_config.name)
+        model_config_cls = config.model_config.config_class.from_hf_config(hf_config)
+
+        model_config = dataclasses.replace(
+            model_config_cls,
+            max_seq_len=config.max_input_tokens + config.max_output_tokens,
+            tokenizer=config.model_config.tokenizer,
+            attn_backend=AttentionBackend.SPLASH,
+        )
+
+        tags = [*config.tags, config.model_config.name.split("/")[-1]]
+
+        trainer_config = TrainerConfig(
+            tracker=WandbConfig(
+                project=config.project_name,
+                name=name,
+                tags=tags,
+            ),
+            log_xla_hlo=False,
+            log_jaxprs=False,
+            mp=jmp.get_policy("p=f32,c=bfloat16"),
+            train_batch_size=config.train_batch_size,
+            per_device_parallelism=config.per_device_parallelism,
+            num_train_steps=config.num_train_steps,
+            steps_per_eval=config.steps_per_eval,
+            checkpointer=CheckpointerConfig(
+                base_path=f"{ctx.output}/checkpoints",
+                save_interval=datetime.timedelta(seconds=config.checkpointer_save_interval),
+            ),
+            mesh=MeshConfig(
+                axes={"context": 1, "model": 1},
+                shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
+            ),
+            ray=RayConfig(auto_start_cluster=False),
+        )
+
+        opt_config = AdamConfig(
+            learning_rate=config.learning_rate,
+            weight_decay=config.weight_decay,
+            warmup=config.warmup,
+            lr_schedule=config.lr_schedule,
+            max_grad_norm=config.max_grad_norm,
+        )
+
+        rollout_storage = RolloutStorageConfig(
+            storage_type=StorageType.FILE,
+            path=f"{ctx.output}/rollouts",
+        )
+        weight_transfer = WeightTransferConfig(
+            mode=WeightTransferMode.ARROW_FLIGHT,
+            sync_interval_steps=config.weight_transfer_sync_interval_steps,
+            max_weight_transfer_wait_time=config.max_weight_transfer_wait_time,
+            coordinator_name=f"weight_transfer_coordinator_{name}",
+        )
+
+        # Create RLJobConfig using the unified interface
+        job_config = RLJobConfig(
+            model=model_config,
+            trainer=trainer_config,
+            train_params=TrainParams(
+                optimizer=opt_config,
+                rl_loss=config.rl_loss,
+                replay_buffer=ReplayBufferConfig(
+                    capacity=config.replay_buffer_capacity,
+                    alpha=config.replay_buffer_alpha,
+                    max_samples=config.replay_buffer_max_samples,
+                    max_rollout_step_delay=config.max_rollout_step_delay,
+                ),
+            ),
+            curriculum=curriculum,
+            tokenizer=config.model_config.tokenizer,
+            inference_type="vllm",
+            inference_config=vLLMInferenceContextConfig(
+                model_name=config.model_config.name,
+                max_model_len=config.max_input_tokens + config.max_output_tokens,
+                tensor_parallel_size=config.inference_tensor_parallel_size,
+                gpu_memory_utilization=config.inference_gpu_memory_utilization,
+                sampling_params=SamplingParams(
+                    temperature=1.0,
+                    n=config.inference_n,
+                    max_tokens=config.max_output_tokens,
+                    stop=get_stop_tokens(config.model_config.type),
+                    include_stop_str_in_output=True,
+                    logprobs=1,
+                    top_k=config.inference_top_k,
+                ),
+            ),
+            initial_checkpoint=config.model_config.checkpoint,
+            rollout_storage=rollout_storage,
+            weight_transfer=weight_transfer,
+            run_id=name,
+            log_freq=1,
+            run_config=RunConfig(
+                train_tpu_type=config.train_tpu_type,
+                num_train_slices=config.num_train_slices,
+                num_rollout_workers=config.num_rollout_workers,
+                inference_tpu_type=config.inference_tpu_type,
+            ),
+            inflight_weight_updates=config.inflight_weight_updates,
+            rollout_tracker=RolloutTrackerConfig(
+                project=config.project_name,
+                name=f"{name}-rollout",
+                tags=[*config.tags, "rollout", config.model_config.name.split("/")[-1]],
+            ),
+            pip_dependency_groups=(
+                config.model_config.pip_dependency_groups if config.model_config.pip_dependency_groups else ["vllm", "math"]
+            ),
+        )
+
+        return job_config
+
+    return _step()

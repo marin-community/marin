@@ -34,19 +34,19 @@ Tags: <tags>
 Reference Issue: https://github.com/marin-community/marin/issues/822
 """
 
-from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
+from marin.execution.executor import executor_main, versioned
+from marin.execution import step, StepContext, StepRef
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 from marin.transform.stackexchange.transform_stackexchange import (
     StackExchangeExtractionConfig,
     process_stackexchange_dump,
 )
 
-stackexchange_text_resiliparse_custom_fork = ExecutorStep(
-    name="documents/stackexchange-resiliparse-custom-fork",
-    fn=process_stackexchange_dump,
-    config=StackExchangeExtractionConfig(
+@step(name="documents/stackexchange-resiliparse-custom-fork", fn=process_stackexchange_dump)
+def stackexchange_text_resiliparse_custom_fork_step(ctx: StepContext):
+    return StackExchangeExtractionConfig(
         input_path=versioned("gs://marin-us-central2/documents/stackexchange/v2024-04-02/md-complete"),
-        output_path=StepRef(_step=None),
+        output_path=ctx.output,
         extract_method="resiliparse",
         extract_config=ResiliparseConfig(
             links=False,
@@ -55,8 +55,9 @@ stackexchange_text_resiliparse_custom_fork = ExecutorStep(
                 include_links=False,
             ),
         ),
-    ),
-).with_output_path("documents/stackexchange-resiliparse-custom-fork-ab41ad")
+    )
+
+stackexchange_text_resiliparse_custom_fork = stackexchange_text_resiliparse_custom_fork_step().with_output_path("documents/stackexchange-resiliparse-custom-fork-ab41ad")
 
 
 if __name__ == "__main__":
