@@ -17,10 +17,10 @@
 from typing import Any
 
 import cloudpickle
-import httpx
 
 from fluster import actor_pb2
 from fluster.actor.resolver import Resolver, ResolveResult
+from fluster.actor_connect import ActorServiceClientSync
 
 
 class ActorClient:
@@ -43,6 +43,8 @@ class ActorClient:
         self._name = name
         self._timeout = timeout
         self._cached_result: ResolveResult | None = None
+        self._client: ActorServiceClientSync | None = None
+        self._client_url: str | None = None
 
     def _resolve(self) -> ResolveResult:
         if self._cached_result is None or self._cached_result.is_empty:
@@ -51,6 +53,18 @@ class ActorClient:
 
     def _invalidate_cache(self) -> None:
         self._cached_result = None
+        self._client = None
+        self._client_url = None
+
+    def _get_client(self, url: str) -> ActorServiceClientSync:
+        """Get or create a client for the given URL."""
+        if self._client is None or self._client_url != url:
+            self._client = ActorServiceClientSync(
+                address=url,
+                timeout_ms=int(self._timeout * 1000),
+            )
+            self._client_url = url
+        return self._client
 
     def __getattr__(self, method_name: str) -> "_RpcMethod":
         return _RpcMethod(self, method_name)
@@ -79,19 +93,11 @@ class _RpcMethod:
         )
 
         try:
-            response = httpx.post(
-                f"{endpoint.url}/fluster.actor.ActorService/Call",
-                content=call.SerializeToString(),
-                headers={"Content-Type": "application/proto"},
-                timeout=self._client._timeout,
-            )
-            response.raise_for_status()
-        except httpx.RequestError:
+            client = self._client._get_client(endpoint.url)
+            resp = client.call(call)
+        except Exception:
             self._client._invalidate_cache()
             raise
-
-        resp = actor_pb2.ActorResponse()
-        resp.ParseFromString(response.content)
 
         if resp.HasField("error"):
             if resp.error.serialized_exception:

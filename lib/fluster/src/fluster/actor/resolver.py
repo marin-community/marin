@@ -18,10 +18,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Protocol
 
-import httpx
-
 from fluster import cluster_pb2
 from fluster.cluster.types import Namespace
+from fluster.cluster_connect import ControllerServiceClientSync
 
 
 @dataclass
@@ -108,6 +107,10 @@ class ClusterResolver:
         self._address = controller_address.rstrip("/")
         self._timeout = timeout
         self._namespace = namespace or Namespace(os.environ.get("FLUSTER_NAMESPACE", "<local>"))
+        self._client = ControllerServiceClientSync(
+            address=self._address,
+            timeout_ms=int(timeout * 1000),
+        )
 
     @property
     def default_namespace(self) -> Namespace:
@@ -130,16 +133,7 @@ class ClusterResolver:
             namespace=str(ns),
         )
 
-        response = httpx.post(
-            f"{self._address}/fluster.cluster.ControllerService/ListEndpoints",
-            content=request.SerializeToString(),
-            headers={"Content-Type": "application/proto"},
-            timeout=self._timeout,
-        )
-        response.raise_for_status()
-
-        resp = cluster_pb2.ListEndpointsResponse()
-        resp.ParseFromString(response.content)
+        resp = self._client.list_endpoints(request)
 
         # Filter to exact name matches (controller uses prefix matching)
         endpoints = [

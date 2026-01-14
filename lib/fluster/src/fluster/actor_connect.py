@@ -12,7 +12,7 @@ from connectrpc.interceptor import Interceptor, InterceptorSync
 from connectrpc.method import IdempotencyLevel, MethodInfo
 from connectrpc.request import Headers, RequestContext
 from connectrpc.server import ConnectASGIApplication, ConnectWSGIApplication, Endpoint, EndpointSync
-import actor_pb2 as actor__pb2
+from fluster import actor_pb2 as actor__pb2
 
 
 class ActorService(Protocol):

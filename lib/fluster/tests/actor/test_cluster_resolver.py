@@ -20,9 +20,8 @@ import time
 
 import pytest
 import uvicorn
-from starlette.applications import Starlette
-from starlette.responses import Response
-from starlette.routing import Route
+
+from connectrpc.request import RequestContext
 
 from fluster import cluster_pb2
 from fluster.actor.resolver import ClusterResolver
@@ -30,9 +29,68 @@ from fluster.cluster.controller.scheduler import Scheduler
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState
 from fluster.cluster.types import JobId, Namespace
+from fluster.cluster_connect import ControllerServiceASGIApplication
 
 
-def create_controller_app(state: ControllerState) -> Starlette:
+class AsyncControllerServiceWrapper:
+    """Async wrapper around synchronous ControllerServiceImpl for testing."""
+
+    def __init__(self, sync_service: ControllerServiceImpl):
+        self._service = sync_service
+
+    async def launch_job(
+        self, request: cluster_pb2.LaunchJobRequest, ctx: RequestContext
+    ) -> cluster_pb2.LaunchJobResponse:
+        return self._service.launch_job(request, ctx)
+
+    async def get_job_status(
+        self, request: cluster_pb2.GetJobStatusRequest, ctx: RequestContext
+    ) -> cluster_pb2.GetJobStatusResponse:
+        return self._service.get_job_status(request, ctx)
+
+    async def terminate_job(self, request: cluster_pb2.TerminateJobRequest, ctx: RequestContext) -> cluster_pb2.Empty:
+        return self._service.terminate_job(request, ctx)
+
+    async def list_jobs(self, request: cluster_pb2.ListJobsRequest, ctx: RequestContext) -> cluster_pb2.ListJobsResponse:
+        return self._service.list_jobs(request, ctx)
+
+    async def register_worker(
+        self, request: cluster_pb2.RegisterWorkerRequest, ctx: RequestContext
+    ) -> cluster_pb2.RegisterWorkerResponse:
+        return self._service.register_worker(request, ctx)
+
+    async def heartbeat(
+        self, request: cluster_pb2.HeartbeatRequest, ctx: RequestContext
+    ) -> cluster_pb2.HeartbeatResponse:
+        return self._service.heartbeat(request, ctx)
+
+    async def list_workers(
+        self, request: cluster_pb2.ListWorkersRequest, ctx: RequestContext
+    ) -> cluster_pb2.ListWorkersResponse:
+        return self._service.list_workers(request, ctx)
+
+    async def register_endpoint(
+        self, request: cluster_pb2.RegisterEndpointRequest, ctx: RequestContext
+    ) -> cluster_pb2.RegisterEndpointResponse:
+        return self._service.register_endpoint(request, ctx)
+
+    async def unregister_endpoint(
+        self, request: cluster_pb2.UnregisterEndpointRequest, ctx: RequestContext
+    ) -> cluster_pb2.Empty:
+        return self._service.unregister_endpoint(request, ctx)
+
+    async def lookup_endpoint(
+        self, request: cluster_pb2.LookupEndpointRequest, ctx: RequestContext
+    ) -> cluster_pb2.LookupEndpointResponse:
+        return self._service.lookup_endpoint(request, ctx)
+
+    async def list_endpoints(
+        self, request: cluster_pb2.ListEndpointsRequest, ctx: RequestContext
+    ) -> cluster_pb2.ListEndpointsResponse:
+        return self._service.list_endpoints(request, ctx)
+
+
+def create_controller_app(state: ControllerState) -> ControllerServiceASGIApplication:
     """Create a minimal controller app with ListEndpoints handler."""
 
     def mock_dispatch(job, worker):
@@ -41,19 +99,9 @@ def create_controller_app(state: ControllerState) -> Starlette:
 
     scheduler = Scheduler(state, mock_dispatch, interval_seconds=1.0)
     service = ControllerServiceImpl(state, scheduler)
+    async_service = AsyncControllerServiceWrapper(service)
 
-    async def list_endpoints_handler(request):
-        body = await request.body()
-        req = cluster_pb2.ListEndpointsRequest()
-        req.ParseFromString(body)
-        resp = service.list_endpoints(req, None)
-        return Response(resp.SerializeToString(), media_type="application/proto")
-
-    return Starlette(
-        routes=[
-            Route("/fluster.cluster.ControllerService/ListEndpoints", list_endpoints_handler, methods=["POST"]),
-        ]
-    )
+    return ControllerServiceASGIApplication(service=async_service)
 
 
 @pytest.fixture

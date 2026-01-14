@@ -24,11 +24,11 @@ from typing import Any
 
 import cloudpickle
 import uvicorn
-from starlette.applications import Starlette
-from starlette.responses import Response
-from starlette.routing import Route
 
+from fluster import actor_pb2
 from fluster.actor.types import ActorContext, ActorId, _set_actor_context
+from fluster.actor_connect import ActorServiceASGIApplication
+from connectrpc.request import RequestContext
 
 
 @dataclass
@@ -56,7 +56,7 @@ class ActorServer:
         self._port = port
         self._actors: dict[str, RegisteredActor] = {}
         self._context: ActorContext | None = None
-        self._app: Starlette | None = None
+        self._app: ActorServiceASGIApplication | None = None
         self._actual_port: int | None = None
 
     @property
@@ -85,72 +85,54 @@ class ActorServer:
         )
         return actor_id
 
-    def _create_app(self) -> Starlette:
-        """Create the Starlette application for the server."""
+    async def call(self, request: actor_pb2.ActorCall, ctx: RequestContext) -> actor_pb2.ActorResponse:
+        """Handle actor RPC call."""
+        # Find actor
+        actor_name = request.actor_name or next(iter(self._actors), "")
+        actor = self._actors.get(actor_name)
+        if not actor:
+            error = actor_pb2.ActorError(
+                error_type="NotFound",
+                message=f"Actor '{actor_name}' not found",
+            )
+            return actor_pb2.ActorResponse(error=error)
 
-        async def call_handler(request):
-            from fluster import actor_pb2
+        method = actor.methods.get(request.method_name)
+        if not method:
+            error = actor_pb2.ActorError(
+                error_type="NotFound",
+                message=f"Method '{request.method_name}' not found",
+            )
+            return actor_pb2.ActorResponse(error=error)
 
-            # Parse request
-            body = await request.body()
-            call = actor_pb2.ActorCall()
-            call.ParseFromString(body)
+        try:
+            args = cloudpickle.loads(request.serialized_args) if request.serialized_args else ()
+            kwargs = cloudpickle.loads(request.serialized_kwargs) if request.serialized_kwargs else {}
 
-            # Find actor
-            actor_name = call.actor_name or next(iter(self._actors), "")
-            actor = self._actors.get(actor_name)
-            if not actor:
-                error = actor_pb2.ActorError(
-                    error_type="NotFound",
-                    message=f"Actor '{actor_name}' not found",
-                )
-                resp = actor_pb2.ActorResponse(error=error)
-                return Response(resp.SerializeToString(), media_type="application/proto")
-
-            method = actor.methods.get(call.method_name)
-            if not method:
-                error = actor_pb2.ActorError(
-                    error_type="NotFound",
-                    message=f"Method '{call.method_name}' not found",
-                )
-                resp = actor_pb2.ActorResponse(error=error)
-                return Response(resp.SerializeToString(), media_type="application/proto")
-
+            # Set context for this call
+            _set_actor_context(self._context)
             try:
-                args = cloudpickle.loads(call.serialized_args) if call.serialized_args else ()
-                kwargs = cloudpickle.loads(call.serialized_kwargs) if call.serialized_kwargs else {}
+                result = method(*args, **kwargs)
+            finally:
+                _set_actor_context(None)
 
-                # Set context for this call
-                _set_actor_context(self._context)
-                try:
-                    result = method(*args, **kwargs)
-                finally:
-                    _set_actor_context(None)
+            return actor_pb2.ActorResponse(serialized_value=cloudpickle.dumps(result))
 
-                resp = actor_pb2.ActorResponse(serialized_value=cloudpickle.dumps(result))
-                return Response(resp.SerializeToString(), media_type="application/proto")
+        except Exception as e:
+            error = actor_pb2.ActorError(
+                error_type=type(e).__name__,
+                message=str(e),
+                serialized_exception=cloudpickle.dumps(e),
+            )
+            return actor_pb2.ActorResponse(error=error)
 
-            except Exception as e:
-                error = actor_pb2.ActorError(
-                    error_type=type(e).__name__,
-                    message=str(e),
-                    serialized_exception=cloudpickle.dumps(e),
-                )
-                resp = actor_pb2.ActorResponse(error=error)
-                return Response(resp.SerializeToString(), media_type="application/proto")
+    async def health_check(self, request: actor_pb2.Empty, ctx: RequestContext) -> actor_pb2.HealthResponse:
+        """Handle health check."""
+        return actor_pb2.HealthResponse(healthy=True)
 
-        async def health_handler(request):
-            from fluster import actor_pb2
-
-            resp = actor_pb2.HealthResponse(healthy=True)
-            return Response(resp.SerializeToString(), media_type="application/proto")
-
-        return Starlette(
-            routes=[
-                Route("/fluster.actor.ActorService/Call", call_handler, methods=["POST"]),
-                Route("/fluster.actor.ActorService/HealthCheck", health_handler, methods=["POST"]),
-            ]
-        )
+    def _create_app(self) -> ActorServiceASGIApplication:
+        """Create the Connect RPC ASGI application for the server."""
+        return ActorServiceASGIApplication(service=self)
 
     def serve_background(self, context: ActorContext | None = None) -> int:
         """Start server in background thread.
