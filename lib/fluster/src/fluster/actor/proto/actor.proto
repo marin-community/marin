@@ -24,8 +24,9 @@ option py_generic_services = true;
 
 message ActorCall {
   string method_name = 1;
-  bytes serialized_args = 2;    // cloudpickle(args)
-  bytes serialized_kwargs = 3;  // cloudpickle(kwargs)
+  string actor_name = 2;        // Which actor on this server
+  bytes serialized_args = 3;    // cloudpickle(args)
+  bytes serialized_kwargs = 4;  // cloudpickle(kwargs)
 }
 
 message ActorResponse {

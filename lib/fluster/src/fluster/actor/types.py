@@ -17,18 +17,33 @@
 This module contains actor-specific types that depend on the cluster layer.
 """
 
-import os
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, NewType
+from typing import TYPE_CHECKING, Any, NewType
 
 if TYPE_CHECKING:
     from fluster.actor.resolver import Resolver
-    from fluster.cluster.client import Cluster
     from fluster.cluster.types import JobId, Namespace
 
 
 # Type aliases
 ActorId = NewType("ActorId", str)
+
+# Context variable for actor context injection
+_actor_context: ContextVar["ActorContext | None"] = ContextVar("actor_context", default=None)
+
+
+def current_ctx() -> "ActorContext":
+    """Get the current ActorContext. Raises if not in an actor call."""
+    ctx = _actor_context.get()
+    if ctx is None:
+        raise RuntimeError("current_ctx() called outside of actor method")
+    return ctx
+
+
+def _set_actor_context(ctx: "ActorContext | None") -> None:
+    """Internal: set the actor context for the current call."""
+    _actor_context.set(ctx)
 
 
 @dataclass
@@ -61,48 +76,15 @@ class ActorContext:
     Enables actors to call other actors and access cluster services.
 
     Args:
-        cluster: Cluster client for job management
-        resolver: Resolver for actor discovery
+        cluster: Cluster client for job management (or None for Stage 1)
+        resolver: Resolver for actor discovery (or None for Stage 1)
         job_id: Current job ID
         namespace: Current namespace
     """
 
-    cluster: "Cluster"
-    resolver: "Resolver"
-    job_id: "JobId"
-    namespace: "Namespace"
+    cluster: Any
+    resolver: "Resolver | None"
+    job_id: str
+    namespace: str
 
-    @classmethod
-    def from_environment(cls) -> "ActorContext":
-        """Create context from FLUSTER_* environment variables.
-
-        Environment variables:
-        - FLUSTER_CLUSTER_ADDRESS: Controller address
-        - FLUSTER_JOB_ID: Current job ID
-        - FLUSTER_NAMESPACE: Actor namespace
-
-        Returns:
-            ActorContext constructed from environment
-
-        Raises:
-            ValueError: If FLUSTER_CLUSTER_ADDRESS is not set
-        """
-        from fluster.actor.resolver import ClusterResolver
-        from fluster.cluster.client import Cluster
-        from fluster.cluster.types import JobId, Namespace
-
-        address = os.environ.get("FLUSTER_CLUSTER_ADDRESS")
-        if not address:
-            raise ValueError("FLUSTER_CLUSTER_ADDRESS not set")
-
-        cluster = Cluster(address)
-        resolver = ClusterResolver(cluster)
-        job_id = JobId(os.environ.get("FLUSTER_JOB_ID", ""))
-        namespace = Namespace(os.environ.get("FLUSTER_NAMESPACE", "default"))
-
-        return cls(
-            cluster=cluster,
-            resolver=resolver,
-            job_id=job_id,
-            namespace=namespace,
-        )
+    # TODO: Stage 2+: from_environment() will be implemented when ClusterResolver exists
