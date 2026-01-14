@@ -23,6 +23,7 @@ from marin.rl.environments.inference_ctx.vllm import InferenceMode, vLLMInferenc
 logger = logging.getLogger(__name__)
 
 
+# Allow vLLM to serialize custom types needed for async inference
 os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
 
