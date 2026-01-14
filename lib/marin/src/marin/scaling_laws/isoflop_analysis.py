@@ -26,12 +26,11 @@ Key types:
 Key functions:
 - fit_scaling_laws(records): Fit scaling laws from typed records
 - predict_optimal_config(): Predict optimal training config for a target budget
-- generate_training_configs(): Generate training configs for an isoflop sweep
 """
 
 import logging
 import math
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import NamedTuple, Protocol
 
@@ -174,13 +173,8 @@ class ScalingRecipe(Protocol):
     """Protocol defining the interface for scaling law recipes.
 
     Concrete implementations (e.g., Marin2025Recipe) should implement these
-    model-specific methods. Orchestration logic (generating training configs,
-    predicting optimal configs) is handled by library functions that use
-    these core methods.
-
-    The recipe owns the vocab_size, which is derived from the tokenizer choice.
-    This ensures consistency and simplifies the API by not requiring vocab_size
-    to be threaded through every function call.
+    model-specific methods. The recipe owns the vocab_size, which is derived
+    from the tokenizer choice.
     """
 
     name: str
@@ -193,32 +187,17 @@ class ScalingRecipe(Protocol):
         """Estimate memory usage in bytes for training a candidate configuration."""
         ...
 
-    def build_model_configs(
+    def candidates_for_budget(
         self,
         budget: float,
         seq_len: int = DEFAULT_SEQ_LEN,
-    ) -> Iterator[ModelConfiguration]:
-        """Yield candidate model architectures for the given FLOP budget.
+    ) -> Iterator[CandidateConfig]:
+        """Yield valid candidate training configs for the given FLOP budget.
 
-        A typical implementation will iterate over hidden sizes (the primary
-        architectural knob) and yield model configs for each feasible size.
-        """
-        ...
-
-    def build_candidate_config(
-        self,
-        model_config: ModelConfiguration,
-        tokens: float,
-        flops_budget: float,
-        seq_len: int = DEFAULT_SEQ_LEN,
-    ) -> CandidateConfig | None:
-        """Build complete training config for a model and token count.
-
-        Solves for batch_size, computes optimizer hyperparameters (learning rate,
-        beta2, etc.), and returns a complete CandidateConfig.
-
-        Returns None if the configuration is invalid (e.g., batch_size < minimum
-        after learning rate constraints are applied).
+        This is the main entry point for generating training configurations.
+        Implementations should iterate over model architectures and yield
+        complete CandidateConfig objects with model, optimizer, batch size,
+        and training steps all configured.
         """
         ...
 
@@ -275,55 +254,6 @@ def round_flops_to_bucket(flops: float, base: float = 1.1) -> float:
 
     k = math.log(flops) / math.log(base)
     return base ** round(k)
-
-
-# ---------------- Training Config Generation ----------------
-
-
-def generate_training_configs(
-    budgets: Sequence[float],
-    recipe: ScalingRecipe,
-    seq_len: int = DEFAULT_SEQ_LEN,
-) -> list[CandidateConfig]:
-    """Generate training configurations for an isoflop sweep.
-
-    For each FLOP budget:
-    1. Gets candidate model architectures from the recipe
-    2. Computes tokens needed to achieve the budget: tokens = budget / (3 * flops_per_token)
-    3. Builds complete training configs via recipe.build_candidate_config()
-    4. Filters out invalid configs (where build_candidate_config returns None)
-
-    Args:
-        budgets: Sequence of FLOP budgets to generate configs for.
-        recipe: ScalingRecipe with architecture/hyperparameter settings.
-        seq_len: Sequence length for training.
-
-    Returns:
-        List of CandidateConfig, each containing model_config, optimizer_config,
-        batch_size, train_steps, tokens, and flops_budget.
-
-    Example:
-        >>> from marin.scaling_laws import generate_training_configs, DEFAULT_BUDGETS
-        >>> configs = generate_training_configs(budgets=DEFAULT_BUDGETS, recipe=recipe)
-        >>> for cfg in configs:
-        ...     print(f"N={cfg.model_config.total_trainable_params(recipe.vocab_size):.1e}")
-        ...     print(f"batch_size={cfg.batch_size}, steps={cfg.train_steps}")
-        ...     print(f"lr={cfg.optimizer_config.learning_rate}")
-    """
-    results: list[CandidateConfig] = []
-
-    for budget in budgets:
-        for model_config in recipe.build_model_configs(budget, seq_len):
-            # Compute tokens directly from budget
-            flops_per_token = model_config.flops_per_token(recipe.vocab_size, seq_len)
-            tokens = budget / (3 * flops_per_token)
-
-            # Build complete training config (returns None if invalid)
-            candidate = recipe.build_candidate_config(model_config, tokens, budget, seq_len)
-            if candidate is not None:
-                results.append(candidate)
-
-    return results
 
 
 def robust_quad_logx(x: jnp.ndarray, y: jnp.ndarray, delta: float = 1.0) -> tuple[float, float, float]:
@@ -499,14 +429,7 @@ def predict_optimal_config(
 
     logger.info(f"Predicted optimal tokens for {target_flops:.2e} FLOPs: {optimal_tokens:.2e}")
 
-    # Build candidates using the new API
-    candidates: list[CandidateConfig] = []
-    for model_config in recipe.build_model_configs(target_flops, seq_len):
-        flops_per_token = model_config.flops_per_token(recipe.vocab_size, seq_len)
-        tokens = target_flops / (3 * flops_per_token)
-        candidate = recipe.build_candidate_config(model_config, tokens, target_flops, seq_len)
-        if candidate is not None:
-            candidates.append(candidate)
+    candidates = list(recipe.candidates_for_budget(target_flops, seq_len))
 
     if not candidates:
         logger.warning(f"No valid candidates found for budget {target_flops:.2e}")

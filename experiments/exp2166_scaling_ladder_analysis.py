@@ -23,14 +23,25 @@ The scaling ladder:
 3. Optionally trains compute-optimal models at larger target budgets
 """
 
+import dataclasses
 import json
 import logging
 import os
+from dataclasses import dataclass
+from datetime import timedelta
 
 import fsspec
+import jmp
 from fray.cluster import ResourceConfig
+from haliax.partitioning import ResourceAxis
+from levanter.checkpoint import CheckpointerConfig
+from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
+from levanter.main import train_lm
+from levanter.tracker.wandb import WandbConfig
+from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 
-from experiments.defaults import default_train, default_validation_sets
+from experiments.defaults import default_validation_sets
 from experiments.isoflop_sweep import (
     IsoFlopAnalysisConfig,
     MARIN_2025_RECIPE,
@@ -38,11 +49,12 @@ from experiments.isoflop_sweep import (
     nemotron_mix,
     run_isoflop_analysis_step,
 )
-from experiments.simple_train_config import SimpleTrainConfig
+from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.processing.tokenize import add_validation_sets_to_mixture
+from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.scaling_laws import ScalingFit, predict_optimal_config
 from marin.scaling_laws.tpu_utils import pick_v5p_type
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 logger = logging.getLogger(__name__)
 
@@ -50,27 +62,42 @@ logger = logging.getLogger(__name__)
 nemotron_training, _ = MARIN_SCALING_SUITES["nemotron"]
 
 # --- Configuration ---
-TARGET_BUDGETS: list[float] = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
+TARGET_BUDGETS: list[float] = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20, 1e21, 1e22, 1e23, 1e24]
 EXPERIMENT_NAME = "exp2166-scaling-ladder-nemotron-validation"
 LABEL = "nemo-wider-depth-adapt"
-TOKENIZER = "stanford-crfm/marin-tokenizer"
 SEQ_LEN = 4096
 
-# Add validation sets to the training mixture
-nemotron_mix_with_validation = add_validation_sets_to_mixture(nemotron_mix, default_validation_sets(tokenizer=TOKENIZER))
+
+@dataclass(frozen=True)
+class OptimalTrainingConfig:
+    """Config for training a compute-optimal model based on scaling law analysis."""
+
+    analysis_output_path: str
+    """Path to the analysis output containing scaling fits."""
+
+    target_budget: float
+    """Target compute budget in FLOPs."""
+
+    label: str
+    """Dataset/experiment label to use for scaling fit lookup."""
+
+    output_path: str
+    """Output path for checkpoints and logs."""
+
+    tokenized: LMMixtureDatasetConfig
+    """Tokenized dataset for training. Executor will resolve InputName and unwrap VersionedValue."""
+
+    validation_configs: dict[str, LMDatasetSourceConfig] | None = None
+    """Validation set configs. Passed through config so executor resolves InputName paths."""
 
 
-def run_optimal_training(
-    analysis_output_path: str,
-    target_budget: float,
-    label: str,
-) -> ExecutorStep:
-    """Create an ExecutorStep for compute-optimal training at the given budget.
+def run_optimal_training(config: OptimalTrainingConfig) -> None:
+    """Run compute-optimal training at the given budget.
 
-    Loads scaling fits from the analysis output, predicts the optimal config,
-    and returns an ExecutorStep using default_train.
+    Reads scaling fits from analysis output, predicts optimal config,
+    builds training config, and runs training directly.
     """
-    result_path = os.path.join(analysis_output_path, "isoflop_analysis_result.json")
+    result_path = os.path.join(config.analysis_output_path, "isoflop_analysis_result.json")
     fs, _, _ = fsspec.get_fs_token_paths(result_path)
 
     with fs.open(result_path, "r") as f:
@@ -84,47 +111,91 @@ def run_optimal_training(
 
     candidate = predict_optimal_config(
         scaling_fits=scaling_fits,
-        target_flops=target_budget,
-        label=label,
+        target_flops=config.target_budget,
+        label=config.label,
         recipe=MARIN_2025_RECIPE,
         seq_len=SEQ_LEN,
     )
 
     if candidate is None:
-        raise RuntimeError(f"Could not find optimal config for budget {target_budget:.2e} and label '{label}'")
+        raise RuntimeError(
+            f"Could not find optimal config for budget {config.target_budget:.2e} and label '{config.label}'"
+        )
 
     params = candidate.model_config.total_trainable_params(MARIN_2025_RECIPE.vocab_size)
     logger.info(
-        f"Training with optimal config for {target_budget:.2e} FLOPs:\n"
+        f"Training with optimal config for {config.target_budget:.2e} FLOPs:\n"
         f"  params={params:.2e}\n"
         f"  tokens={candidate.tokens:.2e}"
     )
 
     estimated_memory = MARIN_2025_RECIPE.estimate_memory_bytes(candidate, SEQ_LEN)
     tpu_type = pick_v5p_type(estimated_memory)
+    logger.info(f"Estimated memory: {estimated_memory / 1e9:.2f} GB, TPU type: {tpu_type}")
 
-    train_config = SimpleTrainConfig(
-        resources=ResourceConfig.with_tpu(tpu_type),
-        train_batch_size=candidate.batch_size,
-        num_train_steps=candidate.train_steps,
-        learning_rate=candidate.optimizer_config.learning_rate,
-        optimizer_config=candidate.optimizer_config,
+    # Build TrainLmConfig directly (like old run_scaling_ladder_rung)
+    # config.tokenized is already processed by executor's instantiate_config
+    data = config.tokenized
+    if config.validation_configs:
+        # Merge validation configs into the data mixture with weight 0
+        new_configs = {
+            **data.configs,
+            **{name: cfg for name, cfg in config.validation_configs.items() if name not in data.configs},
+        }
+        if isinstance(data.train_weights, dict):
+            new_weights = {
+                **data.train_weights,
+                **{name: 0.0 for name in config.validation_configs if name not in data.train_weights},
+            }
+        else:
+            # Varying weights case
+            new_weights = [
+                (step_idx, {**weights, **{name: 0.0 for name in config.validation_configs if name not in weights}})
+                for step_idx, weights in data.train_weights
+            ]
+        data = dataclasses.replace(data, configs=new_configs, train_weights=new_weights)
+
+    inner_config = train_lm.TrainLmConfig(
+        data=data,
+        trainer=TrainerConfig(
+            tracker=WandbConfig(
+                project="marin",
+                tags=[
+                    "optimal-training",
+                    f"FLOPs={config.target_budget:.1e}",
+                    f"label={config.label}",
+                    f"N={params:.1e}",
+                ],
+            ),
+            mp=jmp.get_policy("p=f32,c=bfloat16"),
+            train_batch_size=candidate.batch_size,
+            num_train_steps=candidate.train_steps,
+            steps_per_eval=1000,
+            checkpointer=CheckpointerConfig(
+                save_interval=timedelta(minutes=10),
+                keep=[dict(every=5000)],
+            ),
+            mesh=MeshConfig(
+                compute_mapping={
+                    "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                    "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                }
+            ),
+            allow_nondivisible_batch_size=True,
+        ),
         train_seq_len=SEQ_LEN,
+        model=candidate.model_config,
+        optimizer=candidate.optimizer_config,
     )
 
-    return default_train(
-        name=f"{EXPERIMENT_NAME}-optimal-{target_budget:.0e}",
-        tokenized=nemotron_mix_with_validation,
-        model_config=candidate.model_config,
-        train_config=train_config,
-        tags=[
-            "optimal-training",
-            f"FLOPs={target_budget:.1e}",
-            f"label={label}",
-            f"N={params:.1e}",
-        ],
-        use_default_validation=False,  # Already added above
+    pod_config = TrainLmOnPodConfig(
+        train_config=inner_config,
+        resources=ResourceConfig.with_tpu(tpu_type),
+        output_path=config.output_path,
     )
+
+    logger.info(f"Launching training with resources: {pod_config.resources}")
+    run_levanter_train_lm(pod_config)
 
 
 # --- Step 1: IsoFLOP Analysis ---
@@ -139,18 +210,29 @@ analysis_step = ExecutorStep(
     ),
 )
 
+# --- Create validation configs ---
+# Convert validation TokenizerSteps to LMDatasetSourceConfig at module import time.
+# This way instantiate_config resolves InputName paths before run_optimal_training runs.
+validation_steps = default_validation_sets(tokenizer=llama3_tokenizer)
+validation_configs = {
+    name: step_to_lm_mixture_component(step, include_raw_paths=False) for name, step in validation_steps.items()
+}
+
 # --- Step 2: Optimal Training Runs ---
 # Train compute-optimal models at each target budget
 optimal_runs: list[ExecutorStep] = []
 for budget in TARGET_BUDGETS:
     step = ExecutorStep(
         name=f"{EXPERIMENT_NAME}-optimal-{budget:.0e}",
-        fn=lambda b=budget: run_optimal_training(
+        fn=run_optimal_training,
+        config=OptimalTrainingConfig(
             analysis_output_path=analysis_step.as_input_name(),
-            target_budget=b,
+            target_budget=budget,
             label=LABEL,
+            output_path=this_output_path(),
+            tokenized=nemotron_mix,
+            validation_configs=validation_configs,
         ),
-        config=None,
     )
     optimal_runs.append(step)
 

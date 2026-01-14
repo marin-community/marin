@@ -24,7 +24,6 @@ from marin.scaling_laws.isoflop_analysis import (
     DEFAULT_SEQ_LEN,
     CandidateConfig,
     fit_scaling_laws,
-    generate_training_configs,
     robust_quad_logx,
 )
 
@@ -93,7 +92,7 @@ def test_robust_quad_logx_fits_quadratic():
 
 # --- Snapshot test for config generation ---
 
-# Snapshot of expected output for generate_training_configs with budget=3e18 training FLOPs.
+# Snapshot of expected output for candidates_for_budget with budget=3e18 training FLOPs.
 EXPECTED_ISOFLOP_CONFIGS_3E18 = [
     {"batch_size": 32, "train_steps": 32844, "flops_budget": 3e18},
     {"batch_size": 16, "train_steps": 46274, "flops_budget": 3e18},
@@ -103,22 +102,18 @@ EXPECTED_ISOFLOP_CONFIGS_3E18 = [
 ]
 
 
-def test_generate_training_configs_snapshot():
-    """Snapshot test: verify generate_training_configs produces expected configs.
+def test_candidates_for_budget_snapshot():
+    """Snapshot test: verify candidates_for_budget produces expected configs.
 
     This ensures reproducibility of the config generation algorithm.
     """
     recipe = Marin2025Recipe()
-    result = generate_training_configs(
-        budgets=(3e18,),
-        recipe=recipe,
-    )
+    result = list(recipe.candidates_for_budget(budget=3e18))
 
     assert len(result) == len(EXPECTED_ISOFLOP_CONFIGS_3E18)
 
     for i, (candidate, expected) in enumerate(zip(result, EXPECTED_ISOFLOP_CONFIGS_3E18, strict=True)):
         assert isinstance(candidate, CandidateConfig)
-        # batch_size and train_steps are now directly on the candidate
         assert candidate.batch_size == expected["batch_size"], f"Config {i}: batch_size mismatch"
         assert candidate.train_steps == expected["train_steps"], f"Config {i}: train_steps mismatch"
         assert candidate.flops_budget == expected["flops_budget"], f"Config {i}: flops_budget mismatch"
