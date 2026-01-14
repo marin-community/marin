@@ -30,17 +30,36 @@ Usage:
 
     # Convert a checkpoint to HuggingFace format:
     step = convert_checkpoint_to_hf_step(name="hf/my-model", checkpoint_path="gs://...", ...)
+
+    # Download a pretokenized cache from HuggingFace:
+    step = download_pretokenized_cache(output_cache_path_name="my-cache", hf_repo_id="user/repo", tokenizer="...")
 """
 
+from experiments.steps.download_pretokenized import download_pretokenized_cache
 from experiments.steps.hf_upload import upload_dir_to_hf, upload_path_to_hf
 from experiments.steps.levanter_checkpoint import (
     convert_checkpoint_from_step,
     convert_checkpoint_to_hf_step,
 )
+from experiments.steps.log_probs import default_lm_log_probs, log_probs_from_path, log_probs_step
+from experiments.steps.slice_cache import slice_cache
+from experiments.steps.tokenize import (
+    tokenize_from_paths,
+    tokenize_from_step,
+    tokenize_hf_dataset,
+)
 
 __all__ = [
     "convert_checkpoint_from_step",
     "convert_checkpoint_to_hf_step",
+    "default_lm_log_probs",
+    "download_pretokenized_cache",
+    "log_probs_from_path",
+    "log_probs_step",
+    "slice_cache",
+    "tokenize_from_paths",
+    "tokenize_from_step",
+    "tokenize_hf_dataset",
     "upload_dir_to_hf",
     "upload_path_to_hf",
 ]

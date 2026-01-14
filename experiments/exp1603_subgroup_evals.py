@@ -22,8 +22,8 @@ from experiments.llama import llama3_tokenizer
 from experiments.exp1342_gemstones_scaling_law import distributional_eval_sets
 from experiments.isoflop_sweep import MARIN_SCALING_SUITES
 from experiments.models import ModelConfig, download_model_step
+from experiments.steps import default_lm_log_probs
 from marin.execution.executor import executor_main, versioned
-from marin.evaluation.log_probs import default_lm_log_probs
 
 # This is painfully slow to run in dry run mode
 # nodryrun

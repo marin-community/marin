@@ -44,9 +44,9 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter
 
 from experiments.defaults import default_tokenize, default_validation_sets
 from experiments.models import ModelConfig, download_model_step
+from experiments.steps import default_lm_log_probs
 from fray.cluster import ResourceConfig
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import executor_main, versioned
 from marin.execution import step, StepContext, StepRef
 from marin.processing.tokenize.data_configs import mixture_for_evaluation

@@ -28,10 +28,10 @@ from experiments.isoflop_sweep import generate_isoflop_sweep
 from experiments.llama import llama3_tokenizer
 from experiments.models import ModelConfig as HFModelConfig, download_model_step
 from experiments.paloma import paloma_tokenized
+from experiments.steps import default_lm_log_probs
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 

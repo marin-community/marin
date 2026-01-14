@@ -26,15 +26,14 @@ You probably don't need to run this script unless you're adding a new dataset or
 
 from experiments.exp524_tokenizers import fineweb_edu_llama3_tokenized
 from experiments.speedrun.prebuilt_caches import fineweb_edu_10B_repo_id, fineweb_edu_10M_repo_id
-from experiments.steps import upload_dir_to_hf
+from experiments.steps import slice_cache, upload_dir_to_hf
 from marin.execution import executor_main
 from marin.processing.tokenize import step_to_lm_mixture_component
-from marin.tokenize.slice_cache import slice_cache
 
 base_cache = fineweb_edu_llama3_tokenized
 
 fineweb_edu_subcache_10B_created = slice_cache(
-    output_path="tokenized/subcache/fineweb-edu-10B",
+    name="tokenized/subcache/fineweb-edu-10B",
     input_config=step_to_lm_mixture_component(fineweb_edu_llama3_tokenized, include_raw_paths=True),
     num_tokens=10_000_000_000,
 )
@@ -43,7 +42,7 @@ uploaded_cert_10B = upload_dir_to_hf(
 )
 
 fineweb_edu_subcache_10M_created = slice_cache(
-    output_path="tokenized/subcache/fineweb-edu-10M",
+    name="tokenized/subcache/fineweb-edu-10M",
     input_config=step_to_lm_mixture_component(fineweb_edu_llama3_tokenized, include_raw_paths=True),
     num_tokens=10_000_000,
 )

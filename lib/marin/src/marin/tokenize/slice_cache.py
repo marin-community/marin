@@ -13,11 +13,14 @@
 # limitations under the License.
 
 """
-Step to read a Levanter cache and produce a subsample of that cache. We mostly use this in Speedrun
-to create smaller caches that can be downloaded directly from Hugging Face.
+Library code for reading a Levanter cache and producing a subsample of that cache.
 
-slice_cache will take a Levanter cache and produce a subsample of that cache by sampling documents randomly
-from the cache (without replacement) until the desired number of tokens is reached.
+We mostly use this in Speedrun to create smaller caches that can be downloaded directly from Hugging Face.
+
+The slice_cache operation will take a Levanter cache and produce a subsample of that cache by sampling
+documents randomly from the cache (without replacement) until the desired number of tokens is reached.
+
+For step wrappers that integrate with the executor, see experiments.steps.slice_cache.
 """
 
 # TODO: this is painfully slow. Should figure out what's going on
@@ -27,6 +30,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import fsspec
 import humanfriendly
@@ -41,8 +45,10 @@ from levanter.store import SerialCacheWriter, TreeCache
 from tqdm_loggable.auto import tqdm
 from transformers import AutoTokenizer
 
-from marin.execution import ExecutorStep, StepContext, StepRef, step
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
+
+if TYPE_CHECKING:
+    from marin.execution import StepRef
 
 logger = logging.getLogger(__name__)
 
@@ -213,40 +219,10 @@ def _patch_source_config(
 
 
 def _slice_cache_in_ray(cfg: SliceCacheConfig):
+    """Entry point for Ray execution of slice_cache.
+
+    This function sets up logging and calls the main implementation.
+    """
     logging.basicConfig(level=logging.INFO)
     logger.info(f"Starting slice cache with config: {cfg}")
     return _do_slice_cache(cfg)
-
-
-def slice_cache(
-    output_path: str,
-    input_config: LmDatasetSourceConfigBase,
-    num_tokens: int,
-    seed: int = 42,
-    tokenizer_spec: str = "stanford-crfm/marin-tokenizer",
-) -> ExecutorStep:
-    """High-level function to slice a Levanter cache.
-
-    This is the main entry point for slicing a cache.
-
-    Args:
-        input_config: The input cache configuration.
-        tokenizer_spec: The tokenizer specification.
-        num_tokens: The number of tokens to slice.
-        seed: The random seed for shuffling the dataset.
-
-    Returns:
-        The configuration for the sliced cache
-    """
-
-    @step(name=output_path, fn=_slice_cache_in_ray)
-    def _step(ctx: StepContext):
-        return SliceCacheConfig(
-            input_config=input_config,
-            num_tokens=num_tokens,
-            seed=seed,
-            tokenizer=tokenizer_spec,
-            cache_path=ctx.output,
-        )
-
-    return _step()
