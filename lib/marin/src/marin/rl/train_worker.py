@@ -253,6 +253,9 @@ class TrainWorker:
             )
 
         self.reference_model = _load_model()
+        # Load a separate copy for training - the reference model must remain frozen
+        # for KL divergence computation and cannot share arrays with the training model
+        self._initial_train_model = _load_model()
 
     def _wait_for_initial_rollouts(self, max_wait_time: float = 1200.0, poll_interval: float = 5.0) -> bool:
         """Wait for initial rollouts from step -1 to be received.
@@ -300,7 +303,7 @@ class TrainWorker:
             self.replay_loader,
         ):
             _, training_key = jrandom.split(jrandom.PRNGKey(config.trainer.seed), 2)
-            state = trainer.initial_state(training_key, model=self.reference_model)
+            state = trainer.initial_state(training_key, model=self._initial_train_model)
 
             # Always transfer initial weights to rollout workers before we attempt to start training
             self.transfer_server.serve_weights(-1, state.model)
