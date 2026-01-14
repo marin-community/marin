@@ -64,7 +64,7 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
 PER_DEVICE_PARALLELISM = 2  # 1 sample per device (memory-safe for VLM with large images)
-GRADIENT_ACCUMULATION_STEPS = 2  # Accumulate 4 micro-batches
+GRADIENT_ACCUMULATION_STEPS = 4  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
 # ============================================================================
@@ -191,7 +191,7 @@ train_config = SimpleVlmTrainConfig(
 # 5. CREATE TRAINING STEP
 # ============================================================================
 vlm_training = default_train_vlm(
-    name="vlm-demo8-qwen3-1.7b",
+    name="vlm-demo13-qwen2-1.7b",
     data_config=data_config,
     model_config=vlm_config,
     train_config=train_config,

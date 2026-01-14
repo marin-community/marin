@@ -491,33 +491,54 @@ class LlavaOnevisionModel(eqx.Module):
         # When disable_vision_sharding is True, run with empty axis mapping to avoid
         # tensor parallelism AllReduce overhead. This is beneficial when the vision
         # encoder is frozen since we don't need gradient synchronization.
+        # We also include the projector in this block to avoid AllReduce for projection.
         if self.config.disable_vision_sharding:
             with hax.axis_mapping({}):
                 image_outputs = self.vision_tower(pixel_values_flat, output_hidden_states=True, key=k_vision)
+                if image_outputs.hidden_states is None:
+                    raise ValueError("Vision tower must return hidden states when output_hidden_states=True")
+
+                # Select features from specified layer(s)
+                if isinstance(vision_feature_layer, int):
+                    selected_image_feature = image_outputs.hidden_states[vision_feature_layer]
+                else:
+                    # Concatenate features from multiple layers
+                    hs_pool = [image_outputs.hidden_states[layer_idx] for layer_idx in vision_feature_layer]
+                    selected_image_feature = hax.concatenate(self.config.VisionEmbed, hs_pool)
+
+                # Apply feature selection strategy: "default" skips first token (CLS), "full" keeps all
+                if vision_feature_select_strategy == "default":
+                    # Skip first token (CLS token) - slice from num_patches 1 onwards
+                    patch_axis = selected_image_feature.resolve_axis("num_patches")
+                    selected_image_feature = hax.slice(
+                        selected_image_feature, {"num_patches": 1}, {"num_patches": patch_axis.size - 1}
+                    )
+
+                # Project to text embedding space (also without sharding)
+                image_features = self.multi_modal_projector(selected_image_feature, key=k_proj)
         else:
             image_outputs = self.vision_tower(pixel_values_flat, output_hidden_states=True, key=k_vision)
-        if image_outputs.hidden_states is None:
-            raise ValueError("Vision tower must return hidden states when output_hidden_states=True")
+            if image_outputs.hidden_states is None:
+                raise ValueError("Vision tower must return hidden states when output_hidden_states=True")
 
-        # Select features from specified layer(s)
-        if isinstance(vision_feature_layer, int):
-            selected_image_feature = image_outputs.hidden_states[vision_feature_layer]
-        else:
-            # Concatenate features from multiple layers
-            hs_pool = [image_outputs.hidden_states[layer_idx] for layer_idx in vision_feature_layer]
-            selected_image_feature = hax.concatenate(self.config.VisionEmbed, hs_pool)
+            # Select features from specified layer(s)
+            if isinstance(vision_feature_layer, int):
+                selected_image_feature = image_outputs.hidden_states[vision_feature_layer]
+            else:
+                # Concatenate features from multiple layers
+                hs_pool = [image_outputs.hidden_states[layer_idx] for layer_idx in vision_feature_layer]
+                selected_image_feature = hax.concatenate(self.config.VisionEmbed, hs_pool)
 
-        # Apply feature selection strategy: "default" skips first token (CLS), "full" keeps all
-        if vision_feature_select_strategy == "default":
-            # Skip first token (CLS token) - slice from num_patches 1 onwards
-            patch_axis = selected_image_feature.resolve_axis("num_patches")
-            selected_image_feature = hax.slice(
-                selected_image_feature, {"num_patches": 1}, {"num_patches": patch_axis.size - 1}
-            )
+            # Apply feature selection strategy: "default" skips first token (CLS), "full" keeps all
+            if vision_feature_select_strategy == "default":
+                # Skip first token (CLS token) - slice from num_patches 1 onwards
+                patch_axis = selected_image_feature.resolve_axis("num_patches")
+                selected_image_feature = hax.slice(
+                    selected_image_feature, {"num_patches": 1}, {"num_patches": patch_axis.size - 1}
+                )
 
-        # Project to text embedding space
-        # selected_image_feature shape: (vision_batch, num_patches, embed)
-        image_features = self.multi_modal_projector(selected_image_feature, key=k_proj)
+            # Project to text embedding space
+            image_features = self.multi_modal_projector(selected_image_feature, key=k_proj)
 
         # Rename "num_patches" axis to "features_per_patch" to avoid collision after unflatten
         # siglip outputs (vision_batch, num_patches, embed) where num_patches = patches per image
