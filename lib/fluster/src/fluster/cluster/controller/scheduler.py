@@ -113,44 +113,94 @@ class Scheduler:
             self._schedule_pending_jobs()
 
     def _schedule_pending_jobs(self) -> None:
-        """Try to schedule all pending jobs.
+        """Try to schedule all pending jobs with resource-aware matching.
 
-        For each pending job in the queue:
-        1. Find an available worker
-        2. If no worker available, re-queue the job and stop (don't busy-loop)
-        3. Call dispatch_fn to dispatch the job
-        4. On success: update job state to RUNNING and assign to worker
-        5. On failure: mark worker unhealthy and re-queue the job
+        New algorithm that prevents head-of-line blocking:
+        1. Peek all pending jobs (don't pop) to iterate in FIFO order
+        2. For each job:
+           a. Check scheduling timeout - if expired, mark UNSCHEDULABLE
+           b. Find a worker that can fit the job (capacity checked dynamically)
+           c. If found: dispatch, remove from queue, add to worker.running_jobs
+           d. If not found: skip to next job (DON'T block queue)
 
-        Jobs are processed one at a time in FIFO order. If we can't find a
-        worker for a job, we stop trying to avoid spinning on the queue when
-        no capacity is available.
+        This allows smaller jobs to be scheduled even when large jobs at the
+        front of the queue are waiting for capacity.
         """
-        while True:
-            job = self._state.pop_next_pending()
-            if not job:
-                # No more pending jobs
-                break
+        now_ms = int(time.time() * 1000)
+        pending_jobs = self._state.peek_pending_jobs()
 
+        for job in pending_jobs:
+            # Check scheduling timeout
+            if self._is_job_timed_out(job, now_ms):
+                self._mark_unschedulable(job, now_ms)
+                continue
+
+            # Try to find a worker that can fit this job
             worker = find_worker_for_job(self._state, job)
             if not worker:
-                # No worker available - re-queue and stop trying
-                # Re-queuing puts it at the back of the queue, which is correct
-                # since we couldn't schedule it this round
-                self._state.add_job(job)
-                break
+                # No worker can fit this job right now - skip, don't block
+                logger.debug(f"No worker available for job {job.job_id}, skipping")
+                continue
 
             # Attempt to dispatch
             success = self._dispatch_fn(job, worker)
             if success:
-                # Update job state to running
-                job.state = cluster_pb2.JOB_STATE_RUNNING
-                job.worker_id = worker.worker_id
-                job.started_at_ms = int(time.time() * 1000)
-                worker.running_jobs.add(job.job_id)
-                logger.info(f"Dispatched job {job.job_id} to worker {worker.worker_id}")
+                self._handle_successful_dispatch(job, worker, now_ms)
             else:
-                # Dispatch failed - mark worker unhealthy and re-queue job
-                worker.healthy = False
-                self._state.add_job(job)
-                logger.warning(f"Failed to dispatch to {worker.worker_id}, re-queuing job {job.job_id}")
+                self._handle_failed_dispatch(job, worker)
+
+    def _is_job_timed_out(self, job: ControllerJob, now_ms: int) -> bool:
+        """Check if job has exceeded its scheduling timeout."""
+        timeout_seconds = job.request.scheduling_timeout_seconds
+        if timeout_seconds <= 0:
+            return False  # No timeout configured
+
+        pending_duration_ms = now_ms - job.submitted_at_ms
+        timeout_ms = timeout_seconds * 1000
+        return pending_duration_ms > timeout_ms
+
+    def _mark_unschedulable(self, job: ControllerJob, now_ms: int) -> None:
+        """Mark job as unschedulable and remove from queue."""
+        logger.warning(
+            f"Job {job.job_id} exceeded scheduling timeout "
+            f"({job.request.scheduling_timeout_seconds}s), marking as UNSCHEDULABLE"
+        )
+        job.state = cluster_pb2.JOB_STATE_UNSCHEDULABLE
+        job.finished_at_ms = now_ms
+        job.error = f"Scheduling timeout exceeded ({job.request.scheduling_timeout_seconds}s)"
+        self._state.remove_from_queue(job.job_id)
+        self._state.log_action(
+            "job_unschedulable",
+            job_id=job.job_id,
+            details=f"timeout={job.request.scheduling_timeout_seconds}s",
+        )
+
+    def _handle_successful_dispatch(self, job: ControllerJob, worker: ControllerWorker, now_ms: int) -> None:
+        """Update state after successful dispatch."""
+        # Update job state
+        job.state = cluster_pb2.JOB_STATE_RUNNING
+        job.worker_id = worker.worker_id
+        job.started_at_ms = now_ms
+
+        # Update worker state - this is what get_committed_resources uses
+        worker.running_jobs.add(job.job_id)
+
+        # Remove from queue
+        self._state.remove_from_queue(job.job_id)
+
+        logger.info(f"Dispatched job {job.job_id} to worker {worker.worker_id}")
+        self._state.log_action(
+            "job_dispatched",
+            job_id=job.job_id,
+            worker_id=worker.worker_id,
+        )
+
+    def _handle_failed_dispatch(self, job: ControllerJob, worker: ControllerWorker) -> None:
+        """Handle dispatch failure - mark worker unhealthy, keep job in queue."""
+        worker.healthy = False
+        logger.warning(f"Failed to dispatch job {job.job_id} to {worker.worker_id}, " "marking worker unhealthy")
+        self._state.log_action(
+            "dispatch_failed",
+            job_id=job.job_id,
+            worker_id=worker.worker_id,
+        )

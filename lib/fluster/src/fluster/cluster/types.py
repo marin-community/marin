@@ -44,6 +44,7 @@ def is_job_finished(state: int) -> bool:
         cluster_pb2.JOB_STATE_FAILED,
         cluster_pb2.JOB_STATE_KILLED,
         cluster_pb2.JOB_STATE_WORKER_FAILED,
+        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
     )
 
 

@@ -18,6 +18,7 @@ class JobState(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     JOB_STATE_FAILED: _ClassVar[JobState]
     JOB_STATE_KILLED: _ClassVar[JobState]
     JOB_STATE_WORKER_FAILED: _ClassVar[JobState]
+    JOB_STATE_UNSCHEDULABLE: _ClassVar[JobState]
 JOB_STATE_UNSPECIFIED: JobState
 JOB_STATE_PENDING: JobState
 JOB_STATE_BUILDING: JobState
@@ -26,6 +27,7 @@ JOB_STATE_SUCCEEDED: JobState
 JOB_STATE_FAILED: JobState
 JOB_STATE_KILLED: JobState
 JOB_STATE_WORKER_FAILED: JobState
+JOB_STATE_UNSCHEDULABLE: JobState
 
 class Empty(_message.Message):
     __slots__ = ()
@@ -162,7 +164,7 @@ class EnvironmentConfig(_message.Message):
     def __init__(self, workspace: _Optional[str] = ..., pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class LaunchJobRequest(_message.Message):
-    __slots__ = ("name", "serialized_entrypoint", "resources", "environment", "bundle_gcs_path", "bundle_hash", "bundle_blob")
+    __slots__ = ("name", "serialized_entrypoint", "resources", "environment", "bundle_gcs_path", "bundle_hash", "bundle_blob", "scheduling_timeout_seconds")
     NAME_FIELD_NUMBER: _ClassVar[int]
     SERIALIZED_ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
     RESOURCES_FIELD_NUMBER: _ClassVar[int]
@@ -170,6 +172,7 @@ class LaunchJobRequest(_message.Message):
     BUNDLE_GCS_PATH_FIELD_NUMBER: _ClassVar[int]
     BUNDLE_HASH_FIELD_NUMBER: _ClassVar[int]
     BUNDLE_BLOB_FIELD_NUMBER: _ClassVar[int]
+    SCHEDULING_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
     name: str
     serialized_entrypoint: bytes
     resources: ResourceSpec
@@ -177,7 +180,8 @@ class LaunchJobRequest(_message.Message):
     bundle_gcs_path: str
     bundle_hash: str
     bundle_blob: bytes
-    def __init__(self, name: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ...) -> None: ...
+    scheduling_timeout_seconds: int
+    def __init__(self, name: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout_seconds: _Optional[int] = ...) -> None: ...
 
 class LaunchJobResponse(_message.Message):
     __slots__ = ("job_id",)

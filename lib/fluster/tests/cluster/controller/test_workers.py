@@ -20,7 +20,13 @@ import pytest
 
 from fluster import cluster_pb2
 from fluster.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
-from fluster.cluster.controller.workers import WorkerConfig, find_worker_for_job, load_workers_from_config
+from fluster.cluster.controller.workers import (
+    WorkerConfig,
+    find_worker_for_job,
+    get_committed_resources,
+    load_workers_from_config,
+    worker_can_fit_job,
+)
 from fluster.cluster.types import JobId, WorkerId
 
 
@@ -166,3 +172,336 @@ def test_find_worker_for_job_returns_first_available(make_resource_spec, make_jo
     result = find_worker_for_job(state, job)
     assert result is not None
     assert result.worker_id in {f"w{i}" for i in range(5)}
+
+
+# =============================================================================
+# Resource Matching Tests
+# =============================================================================
+
+
+def test_worker_can_fit_job_cpu_constraint():
+    """Job requiring more CPU than available should not fit."""
+    state = ControllerState()
+
+    # Worker with 4 CPUs total, running a job using 2 CPUs
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="addr",
+        resources=cluster_pb2.ResourceSpec(cpu=4, memory="32g"),
+    )
+    state.add_worker(worker)
+
+    # Job already running on worker (uses 2 CPUs)
+    running_job = ControllerJob(
+        job_id=JobId("running"),
+        request=cluster_pb2.LaunchJobRequest(
+            name="running",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(cpu=2, memory="1g"),
+        ),
+    )
+    state._jobs[running_job.job_id] = running_job
+    worker.running_jobs.add(running_job.job_id)
+
+    # New job requiring 4 CPUs (only 2 available)
+    new_job = ControllerJob(
+        job_id=JobId("new"),
+        request=cluster_pb2.LaunchJobRequest(
+            name="new",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(cpu=4, memory="1g"),
+        ),
+    )
+
+    assert not worker_can_fit_job(state, worker, new_job)
+
+
+def test_worker_can_fit_job_memory_constraint():
+    """Job requiring more memory than available should not fit."""
+    state = ControllerState()
+
+    # Worker with 16g memory, 12g already committed
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="addr",
+        resources=cluster_pb2.ResourceSpec(cpu=8, memory="16g"),
+    )
+    state.add_worker(worker)
+
+    # Running job uses 12g
+    running_job = ControllerJob(
+        job_id=JobId("running"),
+        request=cluster_pb2.LaunchJobRequest(
+            name="running",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(cpu=1, memory="12g"),
+        ),
+    )
+    state._jobs[running_job.job_id] = running_job
+    worker.running_jobs.add(running_job.job_id)
+
+    # New job requiring 8g (only 4g available)
+    new_job = ControllerJob(
+        job_id=JobId("new"),
+        request=cluster_pb2.LaunchJobRequest(
+            name="new",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(cpu=1, memory="8g"),
+        ),
+    )
+
+    assert not worker_can_fit_job(state, worker, new_job)
+
+
+def test_worker_can_fit_job_device_type_mismatch():
+    """GPU job should not fit on CPU-only worker."""
+    state = ControllerState()
+
+    # CPU-only worker
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="addr",
+        resources=cluster_pb2.ResourceSpec(
+            cpu=8,
+            memory="32g",
+            device=cluster_pb2.DeviceConfig(cpu=cluster_pb2.CpuDevice()),
+        ),
+    )
+    state.add_worker(worker)
+
+    # GPU job
+    gpu_job = ControllerJob(
+        job_id=JobId("gpu-job"),
+        request=cluster_pb2.LaunchJobRequest(
+            name="gpu-job",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(
+                cpu=1,
+                memory="8g",
+                device=cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="A100", count=1)),
+            ),
+        ),
+    )
+
+    assert not worker_can_fit_job(state, worker, gpu_job)
+
+
+def test_worker_can_fit_job_gpu_variant_match():
+    """Job specifying GPU variant should match worker with same variant."""
+    state = ControllerState()
+
+    # H100 GPU worker
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="addr",
+        resources=cluster_pb2.ResourceSpec(
+            cpu=32,
+            memory="256g",
+            device=cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="H100", count=8)),
+        ),
+    )
+    state.add_worker(worker)
+
+    # Job requiring H100
+    h100_job = ControllerJob(
+        job_id=JobId("h100-job"),
+        request=cluster_pb2.LaunchJobRequest(
+            name="h100-job",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(
+                cpu=4,
+                memory="32g",
+                device=cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="H100", count=2)),
+            ),
+        ),
+    )
+
+    assert worker_can_fit_job(state, worker, h100_job)
+
+
+def test_worker_can_fit_job_gpu_variant_mismatch():
+    """Job specifying specific variant should not match different variant."""
+    state = ControllerState()
+
+    # A100 GPU worker
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="addr",
+        resources=cluster_pb2.ResourceSpec(
+            cpu=32,
+            memory="256g",
+            device=cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="A100", count=8)),
+        ),
+    )
+    state.add_worker(worker)
+
+    # Job requiring H100
+    h100_job = ControllerJob(
+        job_id=JobId("h100-job"),
+        request=cluster_pb2.LaunchJobRequest(
+            name="h100-job",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(
+                cpu=4,
+                memory="32g",
+                device=cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="H100", count=2)),
+            ),
+        ),
+    )
+
+    assert not worker_can_fit_job(state, worker, h100_job)
+
+
+def test_worker_can_fit_job_gpu_variant_auto():
+    """Job with variant='auto' should match any GPU worker."""
+    state = ControllerState()
+
+    # A100 GPU worker
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="addr",
+        resources=cluster_pb2.ResourceSpec(
+            cpu=32,
+            memory="256g",
+            device=cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="A100", count=8)),
+        ),
+    )
+    state.add_worker(worker)
+
+    # Job with auto variant
+    auto_job = ControllerJob(
+        job_id=JobId("auto-job"),
+        request=cluster_pb2.LaunchJobRequest(
+            name="auto-job",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(
+                cpu=4,
+                memory="32g",
+                device=cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="auto", count=1)),
+            ),
+        ),
+    )
+
+    assert worker_can_fit_job(state, worker, auto_job)
+
+
+def test_worker_can_fit_job_gpu_count_constraint():
+    """Job requiring more GPUs than available should not fit."""
+    state = ControllerState()
+
+    # Worker with 8 GPUs, 6 already in use
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="addr",
+        resources=cluster_pb2.ResourceSpec(
+            cpu=32,
+            memory="256g",
+            device=cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="A100", count=8)),
+        ),
+    )
+    state.add_worker(worker)
+
+    # Running job uses 6 GPUs
+    running_job = ControllerJob(
+        job_id=JobId("running"),
+        request=cluster_pb2.LaunchJobRequest(
+            name="running",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(
+                cpu=4,
+                memory="32g",
+                device=cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="A100", count=6)),
+            ),
+        ),
+    )
+    state._jobs[running_job.job_id] = running_job
+    worker.running_jobs.add(running_job.job_id)
+
+    # New job requiring 4 GPUs (only 2 available)
+    new_job = ControllerJob(
+        job_id=JobId("new"),
+        request=cluster_pb2.LaunchJobRequest(
+            name="new",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(
+                cpu=4,
+                memory="32g",
+                device=cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(variant="A100", count=4)),
+            ),
+        ),
+    )
+
+    assert not worker_can_fit_job(state, worker, new_job)
+
+
+def test_get_committed_resources():
+    """Verify committed resources are computed from running jobs."""
+    state = ControllerState()
+
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="addr",
+        resources=cluster_pb2.ResourceSpec(cpu=16, memory="64g"),
+    )
+    state.add_worker(worker)
+
+    # Add two running jobs
+    job1 = ControllerJob(
+        job_id=JobId("j1"),
+        request=cluster_pb2.LaunchJobRequest(
+            name="j1",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(cpu=2, memory="8g"),
+        ),
+    )
+    job2 = ControllerJob(
+        job_id=JobId("j2"),
+        request=cluster_pb2.LaunchJobRequest(
+            name="j2",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(cpu=4, memory="16g"),
+        ),
+    )
+    state._jobs[job1.job_id] = job1
+    state._jobs[job2.job_id] = job2
+    worker.running_jobs.add(job1.job_id)
+    worker.running_jobs.add(job2.job_id)
+
+    cpu, memory, _gpu = get_committed_resources(state, worker)
+    assert cpu == 6  # 2 + 4
+    assert memory == 24 * 1024**3  # 8g + 16g
+
+
+def test_find_worker_for_job_respects_capacity():
+    """Verify find_worker_for_job skips workers without capacity."""
+    state = ControllerState()
+
+    # Worker 1: only 2 CPUs total
+    worker1 = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="addr1",
+        resources=cluster_pb2.ResourceSpec(cpu=2, memory="16g"),
+    )
+    state.add_worker(worker1)
+
+    # Worker 2: has 8 CPUs
+    worker2 = ControllerWorker(
+        worker_id=WorkerId("w2"),
+        address="addr2",
+        resources=cluster_pb2.ResourceSpec(cpu=8, memory="32g"),
+    )
+    state.add_worker(worker2)
+
+    # Job requiring 4 CPUs
+    job = ControllerJob(
+        job_id=JobId("j1"),
+        request=cluster_pb2.LaunchJobRequest(
+            name="j1",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(cpu=4, memory="1g"),
+        ),
+    )
+
+    result = find_worker_for_job(state, job)
+    assert result is not None
+    assert result.worker_id == "w2"  # Should skip w1 (only 2 CPUs)

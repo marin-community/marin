@@ -369,6 +369,8 @@ class ClusterContext:
             "JOB_STATE_SUCCEEDED": cluster_pb2.JOB_STATE_SUCCEEDED,
             "JOB_STATE_FAILED": cluster_pb2.JOB_STATE_FAILED,
             "JOB_STATE_KILLED": cluster_pb2.JOB_STATE_KILLED,
+            "JOB_STATE_WORKER_FAILED": cluster_pb2.JOB_STATE_WORKER_FAILED,
+            "JOB_STATE_UNSCHEDULABLE": cluster_pb2.JOB_STATE_UNSCHEDULABLE,
         }
         return state_map.get(state_str, cluster_pb2.JOB_STATE_UNSPECIFIED)
 
@@ -407,6 +409,9 @@ class ClusterContext:
         name: str | None = None,
         timeout_seconds: int = 0,
         env_vars: dict[str, str] | None = None,
+        cpu: int = 1,
+        memory: str = "1g",
+        scheduling_timeout_seconds: int = 0,
         **kwargs,
     ) -> str:
         """Submit a job to the cluster.
@@ -417,6 +422,9 @@ class ClusterContext:
             name: Job name (defaults to function name)
             timeout_seconds: Job timeout
             env_vars: Environment variables
+            cpu: Number of CPUs to request
+            memory: Memory to request (e.g., "1g", "512m")
+            scheduling_timeout_seconds: How long to wait for scheduling before marking UNSCHEDULABLE
             **kwargs: Keyword arguments for fn
 
         Returns:
@@ -431,12 +439,13 @@ class ClusterContext:
             json={
                 "name": name or fn.__name__,
                 "serializedEntrypoint": base64.b64encode(serialized).decode(),
-                "resources": {"cpu": 1, "memory": "1g"},
+                "resources": {"cpu": cpu, "memory": memory},
                 "environment": {
                     "workspace": "/app",
                     "envVars": env_vars or {},
                 },
                 "bundleBlob": base64.b64encode(self._get_bundle_blob()).decode(),
+                "schedulingTimeoutSeconds": scheduling_timeout_seconds,
             },
         )
 
@@ -459,7 +468,12 @@ class ClusterContext:
     def wait(self, job_id: str, timeout: float = 300.0, poll_interval: float = 0.5) -> dict:
         """Wait for job to complete."""
         start = time.time()
-        terminal_states = {"JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_KILLED"}
+        terminal_states = {
+            "JOB_STATE_SUCCEEDED",
+            "JOB_STATE_FAILED",
+            "JOB_STATE_KILLED",
+            "JOB_STATE_UNSCHEDULABLE",
+        }
 
         while time.time() - start < timeout:
             status = self.status(job_id)
@@ -625,6 +639,125 @@ def example_kill(cluster: ClusterContext):
     print(f"Final state: {status['state']}")
 
 
+def example_resource_serialization(cluster: ClusterContext):
+    """Demonstrate job serialization based on resource constraints.
+
+    The worker has 4 CPUs. We submit jobs requiring 2 CPUs each,
+    so only 2 can run concurrently. The rest must wait in queue.
+    """
+    print("\n=== Example: Resource Serialization ===\n")
+
+    def cpu_bound_job(n):
+        import time as t
+
+        print(f"Job {n}: starting (needs 2 CPUs)")
+        t.sleep(3)
+        print(f"Job {n}: completed")
+        return n
+
+    # Submit 4 jobs, each requiring 2 CPUs (worker has 4 CPUs total)
+    # Only 2 should run at a time
+    job_ids = []
+    for i in range(4):
+        job_id = cluster.submit(cpu_bound_job, i, name=f"cpu-job-{i}", cpu=2, memory="1g")
+        job_ids.append(job_id)
+        print(f"Submitted job {i}: {job_id[:8]}... (requires 2 CPUs)")
+
+    # Check initial states - first 2 should be running, rest pending
+    time.sleep(2)
+    print("\nChecking job states after 2 seconds:")
+    for i, job_id in enumerate(job_ids):
+        status = cluster.status(job_id)
+        print(f"  Job {i}: {status['state']}")
+
+    # Wait for all jobs to complete
+    print("\nWaiting for all jobs to complete...")
+    for i, job_id in enumerate(job_ids):
+        status = cluster.wait(job_id)
+        print(f"Job {i} ({job_id[:8]}...): {status['state']}")
+
+
+def example_scheduling_timeout(cluster: ClusterContext):
+    """Demonstrate scheduling timeout for jobs that can't be scheduled.
+
+    Submit a job requiring more resources than available. With a short
+    scheduling timeout, it should become UNSCHEDULABLE.
+    """
+    print("\n=== Example: Scheduling Timeout ===\n")
+
+    def impossible_job():
+        print("This should never run!")
+        return 0
+
+    # Submit a job requiring 100 CPUs (worker only has 4)
+    # With a 2 second scheduling timeout, it should fail quickly
+    print("Submitting job requiring 100 CPUs (worker has 4)...")
+    print("Setting 2 second scheduling timeout...")
+    job_id = cluster.submit(
+        impossible_job,
+        name="impossible-job",
+        cpu=100,
+        memory="1g",
+        scheduling_timeout_seconds=2,
+    )
+    print(f"Submitted: {job_id[:8]}...")
+
+    # Wait for it to timeout
+    status = cluster.wait(job_id, timeout=10.0)
+    print(f"Final state: {status['state']}")
+    if status.get("error"):
+        print(f"Error: {status['error']}")
+
+
+def example_small_job_skips_queue(cluster: ClusterContext):
+    """Demonstrate that smaller jobs can skip ahead of larger jobs.
+
+    Submit a large job that won't fit, then a small job. The small
+    job should be scheduled even though the large job is ahead in queue.
+    """
+    print("\n=== Example: Small Jobs Skip Large Jobs ===\n")
+
+    def big_job():
+        import time as t
+
+        print("Big job running (this shouldn't happen immediately)")
+        t.sleep(5)
+        return "big"
+
+    def small_job():
+        import time as t
+
+        print("Small job running!")
+        t.sleep(1)
+        return "small"
+
+    # First submit a job that's too big to fit
+    print("Submitting big job (8 CPUs, won't fit on 4-CPU worker)...")
+    big_job_id = cluster.submit(big_job, name="big-job", cpu=8, memory="1g", scheduling_timeout_seconds=0)
+    print(f"Big job: {big_job_id[:8]}...")
+
+    # Then submit a small job that can run
+    print("Submitting small job (1 CPU)...")
+    small_job_id = cluster.submit(small_job, name="small-job", cpu=1, memory="1g")
+    print(f"Small job: {small_job_id[:8]}...")
+
+    # Small job should run even though big job is first in queue
+    time.sleep(2)
+    big_status = cluster.status(big_job_id)
+    small_status = cluster.status(small_job_id)
+    print("\nAfter 2 seconds:")
+    print(f"  Big job: {big_status['state']}")
+    print(f"  Small job: {small_status['state']}")
+
+    # Wait for small job to complete
+    small_result = cluster.wait(small_job_id, timeout=30.0)
+    print(f"\nSmall job completed: {small_result['state']}")
+
+    # Big job should still be pending (never scheduled)
+    big_status = cluster.status(big_job_id)
+    print(f"Big job still: {big_status['state']}")
+
+
 @click.command()
 @click.option(
     "--wait/--no-wait", default=False, help="Wait for Ctrl+C after examples complete (for dashboard exploration)"
@@ -644,37 +777,13 @@ def main(wait: bool):
                 print("\nPress Ctrl+C to stop.\n", flush=True)
 
             print("About to run examples...", flush=True)
-            try:
-                example_basic(cluster)
-            except Exception as e:
-                print(f"example_basic failed: {e}", flush=True)
-                import traceback
-
-                traceback.print_exc()
-
-            try:
-                example_with_args(cluster)
-            except Exception as e:
-                print(f"example_with_args failed: {e}", flush=True)
-                import traceback
-
-                traceback.print_exc()
-
-            try:
-                example_concurrent(cluster)
-            except Exception as e:
-                print(f"example_concurrent failed: {e}", flush=True)
-                import traceback
-
-                traceback.print_exc()
-
-            try:
-                example_kill(cluster)
-            except Exception as e:
-                print(f"example_kill failed: {e}", flush=True)
-                import traceback
-
-                traceback.print_exc()
+            example_basic(cluster)
+            example_with_args(cluster)
+            example_concurrent(cluster)
+            example_kill(cluster)
+            example_resource_serialization(cluster)
+            example_scheduling_timeout(cluster)
+            example_small_job_skips_queue(cluster)
 
             print("\n" + "=" * 60)
             print("All examples completed!")

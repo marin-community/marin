@@ -185,9 +185,7 @@ class ControllerState:
         """Pop next PENDING job from the queue.
 
         Iterates through the queue until finding a job in PENDING state,
-        skipping jobs that have transitioned to other states. This handles
-        the case where jobs are removed from the queue by the scheduler but
-        then marked as running/failed/etc before being re-queued.
+        skipping jobs that have transitioned to other states.
 
         Returns:
             Next pending job, or None if queue is empty or no pending jobs
@@ -319,3 +317,32 @@ class ControllerState:
         with self._lock:
             actions = list(self._actions)
             return actions[-limit:] if limit < len(actions) else actions
+
+    def peek_pending_jobs(self) -> list[ControllerJob]:
+        """Return all PENDING jobs in queue order without removing them.
+
+        Used by the scheduler to iterate through the queue and find schedulable
+        jobs. Unlike pop_next_pending(), this returns all pending jobs so the
+        scheduler can skip jobs that don't fit and continue to the next.
+
+        Returns:
+            List of pending jobs in FIFO order
+        """
+        with self._lock:
+            pending = []
+            for job_id in self._queue:
+                job = self._jobs.get(job_id)
+                if job and job.state == cluster_pb2.JOB_STATE_PENDING:
+                    pending.append(job)
+            return pending
+
+    def remove_from_queue(self, job_id: JobId) -> None:
+        """Remove a specific job from the queue.
+
+        O(n) operation, but queue size is bounded in practice.
+
+        Args:
+            job_id: Job ID to remove from the queue
+        """
+        with self._lock:
+            self._queue = deque(jid for jid in self._queue if jid != job_id)

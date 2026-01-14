@@ -41,10 +41,10 @@ def make_job_request():
 
 @pytest.fixture
 def make_resource_spec():
-    """Create a minimal ResourceSpec for testing."""
+    """Create a ResourceSpec for testing with enough capacity for multiple jobs."""
 
-    def _make() -> cluster_pb2.ResourceSpec:
-        return cluster_pb2.ResourceSpec(cpu=1, memory="1g", disk="10g")
+    def _make(cpu: int = 10, memory: str = "10g") -> cluster_pb2.ResourceSpec:
+        return cluster_pb2.ResourceSpec(cpu=cpu, memory=memory, disk="10g")
 
     return _make
 
@@ -313,3 +313,174 @@ def test_scheduler_periodic_scheduling(make_job_request, make_resource_spec):
 
     # Should have dispatched both jobs via periodic timer
     assert len(dispatched) >= 2
+
+
+# =============================================================================
+# Resource-Aware Scheduling Tests
+# =============================================================================
+
+
+def test_scheduler_skips_jobs_that_dont_fit(make_job_request, make_resource_spec):
+    """Verify scheduler skips jobs that don't fit and continues to next."""
+    state = ControllerState()
+    dispatched = []
+
+    def mock_dispatch(job, worker):
+        dispatched.append(job.job_id)
+        return True
+
+    scheduler = Scheduler(state, mock_dispatch, interval_seconds=0.1)
+
+    # Add worker with 4 CPUs total
+    worker = ControllerWorker(
+        WorkerId("w1"),
+        "addr",
+        cluster_pb2.ResourceSpec(cpu=4, memory="16g"),
+    )
+    state.add_worker(worker)
+
+    # Job 1: needs 8 CPUs (won't fit on 4 CPU worker)
+    big_job_request = cluster_pb2.LaunchJobRequest(
+        name="big-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpec(cpu=8, memory="1g"),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    job1 = ControllerJob(JobId("j1"), request=big_job_request)
+
+    # Job 2: needs 2 CPUs (will fit)
+    small_job_request = cluster_pb2.LaunchJobRequest(
+        name="small-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpec(cpu=2, memory="1g"),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    job2 = ControllerJob(JobId("j2"), request=small_job_request)
+
+    state.add_job(job1)
+    state.add_job(job2)
+
+    scheduler.start()
+    scheduler.wake()
+    time.sleep(0.2)
+    scheduler.stop()
+
+    # Job 2 should be dispatched, job 1 skipped (still pending)
+    assert "j2" in dispatched
+    assert "j1" not in dispatched
+    assert job1.state == cluster_pb2.JOB_STATE_PENDING
+    assert job2.state == cluster_pb2.JOB_STATE_RUNNING
+
+
+def test_scheduler_marks_job_unschedulable_on_timeout(make_resource_spec):
+    """Verify job is marked UNSCHEDULABLE after scheduling timeout."""
+    state = ControllerState()
+
+    def mock_dispatch(job, worker):
+        return True
+
+    scheduler = Scheduler(state, mock_dispatch, interval_seconds=0.05)
+
+    # Worker with 2 CPUs
+    worker = ControllerWorker(WorkerId("w1"), "addr", make_resource_spec(cpu=2))
+    state.add_worker(worker)
+
+    # Job that requires 100 CPUs (will never fit) with 1 second timeout
+    # Set submitted_at_ms to 2 seconds ago so it's already timed out
+    job_request = cluster_pb2.LaunchJobRequest(
+        name="impossible-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpec(cpu=100, memory="1g"),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        scheduling_timeout_seconds=1,
+    )
+    job = ControllerJob(
+        JobId("j1"),
+        request=job_request,
+        submitted_at_ms=int(time.time() * 1000) - 2000,  # Submitted 2s ago
+    )
+    state.add_job(job)
+
+    scheduler.start()
+    scheduler.wake()
+    time.sleep(0.2)
+    scheduler.stop()
+
+    assert job.state == cluster_pb2.JOB_STATE_UNSCHEDULABLE
+    assert "timeout" in job.error.lower()
+
+
+def test_scheduler_no_timeout_when_zero(make_job_request, make_resource_spec):
+    """Verify job with scheduling_timeout_seconds=0 never times out."""
+    state = ControllerState()
+
+    def mock_dispatch(job, worker):
+        return True
+
+    scheduler = Scheduler(state, mock_dispatch, interval_seconds=0.05)
+
+    # Worker with 2 CPUs
+    worker = ControllerWorker(WorkerId("w1"), "addr", make_resource_spec(cpu=2))
+    state.add_worker(worker)
+
+    # Job that can't fit but has no timeout (0)
+    job_request = cluster_pb2.LaunchJobRequest(
+        name="no-timeout-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpec(cpu=100, memory="1g"),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        scheduling_timeout_seconds=0,  # No timeout
+    )
+    job = ControllerJob(
+        JobId("j1"),
+        request=job_request,
+        submitted_at_ms=int(time.time() * 1000) - 10000,  # Submitted 10s ago
+    )
+    state.add_job(job)
+
+    scheduler.start()
+    scheduler.wake()
+    time.sleep(0.2)
+    scheduler.stop()
+
+    # Should still be pending, not unschedulable
+    assert job.state == cluster_pb2.JOB_STATE_PENDING
+
+
+def test_scheduler_serializes_jobs_by_resources(make_resource_spec):
+    """Verify jobs serialize when they exceed worker capacity."""
+    state = ControllerState()
+    dispatch_order = []
+
+    def mock_dispatch(job, worker):
+        dispatch_order.append(job.job_id)
+        return True
+
+    scheduler = Scheduler(state, mock_dispatch, interval_seconds=0.05)
+
+    # Worker with 4 CPUs
+    worker = ControllerWorker(WorkerId("w1"), "addr", make_resource_spec(cpu=4))
+    state.add_worker(worker)
+
+    # Submit 4 jobs, each requiring 2 CPUs
+    # Only 2 should fit at a time, so they should serialize in pairs
+    for i in range(4):
+        job_request = cluster_pb2.LaunchJobRequest(
+            name=f"job-{i}",
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpec(cpu=2, memory="1g"),
+            environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        )
+        job = ControllerJob(JobId(f"j{i}"), request=job_request)
+        state.add_job(job)
+
+    scheduler.start()
+    scheduler.wake()
+    time.sleep(0.2)
+    scheduler.stop()
+
+    # First 2 jobs should be dispatched (using all 4 CPUs)
+    # Remaining 2 jobs should still be pending (no capacity)
+    assert len(dispatch_order) == 2
+    pending_jobs = [j for j in state.list_all_jobs() if j.state == cluster_pb2.JOB_STATE_PENDING]
+    assert len(pending_jobs) == 2
