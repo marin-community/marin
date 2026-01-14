@@ -20,8 +20,6 @@ This module provides:
 - BundleCreator: Helper for creating workspace bundles
 """
 
-import shutil
-import subprocess
 import tempfile
 import time
 import zipfile
@@ -112,119 +110,105 @@ class ClusterClient(Protocol):
         ...
 
 
-MINIMAL_PYPROJECT = """\
-[project]
-name = "fluster-bundle"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = [
-    "cloudpickle",
-    "fluster",
-]
-
-[tool.uv.sources]
-fluster = { path = "./fluster" }
-"""
-
-
 class BundleCreator:
     """Helper for creating workspace bundles.
 
-    Creates minimal workspace bundles with pyproject.toml, uv.lock,
-    and fluster source for job execution.
+    Bundles a user's workspace directory (containing pyproject.toml, uv.lock,
+    and source code) into a zip file for job execution.
+
+    The workspace must already have fluster as a dependency in pyproject.toml.
+    If uv.lock doesn't exist, it will be generated.
     """
 
-    def __init__(self, fluster_root: Path | None = None):
+    def __init__(self, workspace: Path):
         """Initialize bundle creator.
 
         Args:
-            fluster_root: Path to fluster project root. If None, auto-detects
-                from this file's location.
+            workspace: Path to workspace directory containing pyproject.toml
         """
-        if fluster_root is None:
-            # This file is at: lib/fluster/src/fluster/cluster/client.py
-            # Fluster root is: lib/fluster/
-            fluster_root = Path(__file__).parent.parent.parent.parent
-        self._fluster_root = fluster_root
+        self._workspace = workspace
 
-    def create_bundle(self, temp_dir: Path | None = None) -> bytes:
+    def create_bundle(self) -> bytes:
         """Create a workspace bundle.
 
-        Creates a zip file containing:
-        - pyproject.toml with fluster dependency
-        - uv.lock generated from the workspace
-        - fluster source code
-
-        Args:
-            temp_dir: Optional temp directory for workspace. Creates one if None.
+        Creates a zip file containing the workspace directory contents.
+        Excludes common non-essential files like __pycache__, .git, etc.
 
         Returns:
             Bundle as bytes (zip file contents)
         """
-        if temp_dir is None:
-            with tempfile.TemporaryDirectory(prefix="bundle_") as td:
-                return self._create_bundle_in_dir(Path(td))
-        return self._create_bundle_in_dir(temp_dir)
+        with tempfile.TemporaryDirectory(prefix="bundle_") as td:
+            bundle_path = Path(td) / "bundle.zip"
+            with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for file in self._workspace.rglob("*"):
+                    if file.is_file() and not self._should_exclude(file):
+                        zf.write(file, file.relative_to(self._workspace))
+            return bundle_path.read_bytes()
 
-    def _create_bundle_in_dir(self, temp_dir: Path) -> bytes:
-        """Create bundle in the given temp directory."""
-        workspace = temp_dir / "workspace"
-        workspace.mkdir(exist_ok=True)
-
-        # Write minimal pyproject.toml
-        (workspace / "pyproject.toml").write_text(MINIMAL_PYPROJECT)
-
-        # Copy fluster source
-        fluster_dest = workspace / "fluster"
-        fluster_dest.mkdir(exist_ok=True)
-        shutil.copy2(self._fluster_root / "pyproject.toml", fluster_dest / "pyproject.toml")
-        shutil.copytree(
-            self._fluster_root / "src",
-            fluster_dest / "src",
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.egg-info"),
-        )
-
-        # Generate uv.lock
-        subprocess.run(
-            ["uv", "lock"],
-            cwd=workspace,
-            check=True,
-            capture_output=True,
-        )
-
-        # Create zip bundle
-        bundle_path = temp_dir / "bundle.zip"
-        with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for file in workspace.rglob("*"):
-                if file.is_file():
-                    zf.write(file, file.relative_to(workspace))
-
-        return bundle_path.read_bytes()
+    def _should_exclude(self, path: Path) -> bool:
+        """Check if a file should be excluded from the bundle."""
+        exclude_patterns = {
+            "__pycache__",
+            ".git",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            "*.pyc",
+            "*.egg-info",
+            ".venv",
+            "venv",
+            "node_modules",
+        }
+        parts = path.relative_to(self._workspace).parts
+        for part in parts:
+            for pattern in exclude_patterns:
+                if pattern.startswith("*"):
+                    if part.endswith(pattern[1:]):
+                        return True
+                elif part == pattern:
+                    return True
+        return False
 
 
 class RpcClusterClient:
-    """ClusterClient implementation using RPC to controller."""
+    """ClusterClient implementation using RPC to controller.
+
+    Example:
+        client = RpcClusterClient("http://controller:8080", workspace=Path("./my-project"))
+        entrypoint = Entrypoint.from_callable(my_func, arg1, arg2)
+        job_id = client.submit(entrypoint, "my-job", resources)
+    """
 
     def __init__(
         self,
         controller_address: str,
-        bundle_blob: bytes,
+        *,
+        workspace: Path,
         timeout_ms: int = 30000,
     ):
         """Initialize RPC cluster client.
 
         Args:
             controller_address: Controller URL (e.g., "http://localhost:8080")
-            bundle_blob: Workspace bundle bytes (use BundleCreator to create)
+            workspace: Path to workspace directory containing pyproject.toml.
+                This directory will be bundled and sent to workers.
             timeout_ms: RPC timeout in milliseconds
         """
         self._address = controller_address
-        self._bundle_blob = bundle_blob
+        self._workspace = workspace
         self._timeout_ms = timeout_ms
+        self._bundle_blob: bytes | None = None
         self._client = ControllerServiceClientSync(
             address=controller_address,
             timeout_ms=timeout_ms,
         )
+
+    def _get_bundle(self) -> bytes:
+        """Get workspace bundle (lazy creation with caching)."""
+        if self._bundle_blob is None:
+            creator = BundleCreator(self._workspace)
+            self._bundle_blob = creator.create_bundle()
+        return self._bundle_blob
 
     @property
     def controller_address(self) -> str:
@@ -258,7 +242,7 @@ class RpcClusterClient:
             serialized_entrypoint=serialized,
             resources=resources,
             environment=env_config,
-            bundle_blob=self._bundle_blob,
+            bundle_blob=self._get_bundle(),
             ports=ports or [],
         )
         response = self._client.launch_job(request)

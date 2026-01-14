@@ -149,11 +149,19 @@ class Entrypoint:
         callable: Python callable to execute
         args: Positional arguments to pass
         kwargs: Keyword arguments to pass
+
+    Example:
+        entrypoint = Entrypoint.from_callable(my_func, arg1, arg2, key=val)
     """
 
     callable: Callable[..., Any]
     args: tuple = ()
     kwargs: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
+        """Create an Entrypoint from a callable with args/kwargs."""
+        return cls(callable=fn, args=args, kwargs=kwargs)
 
 
 # Helper functions for creating proto messages

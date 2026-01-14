@@ -107,7 +107,7 @@ COPY . .
 
 # Install all dependencies and project
 RUN --mount=type=cache,id=fluster-uv-global,sharing=locked,target=/opt/uv-cache \\
-    uv sync --frozen {extras_flags}
+    uv sync {extras_flags}
 
 # Use the venv python
 ENV PATH="/app/.venv/bin:$PATH"

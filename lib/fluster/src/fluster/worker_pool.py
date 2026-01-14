@@ -20,11 +20,11 @@ pre-existing actors with known methods), WorkerPool creates and manages worker
 jobs that can execute any callable.
 
 Example:
+    from pathlib import Path
     from fluster.worker_pool import WorkerPool, WorkerPoolConfig
-    from fluster.cluster.client import RpcClusterClient, BundleCreator
+    from fluster.cluster.client import RpcClusterClient
 
-    bundle = BundleCreator().create_bundle()
-    client = RpcClusterClient("http://controller:8080", bundle)
+    client = RpcClusterClient("http://controller:8080", workspace=Path("./my-project"))
 
     config = WorkerPoolConfig(
         num_workers=3,

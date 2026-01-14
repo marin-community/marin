@@ -31,11 +31,9 @@ import tempfile
 import threading
 import time
 import uuid
-import zipfile
 from pathlib import Path
 
 import click
-import cloudpickle
 from fluster import cluster_pb2
 from fluster.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
 from fluster.cluster.client import RpcClusterClient
@@ -43,74 +41,15 @@ from fluster.cluster.controller.controller import Controller, ControllerConfig, 
 from fluster.cluster.types import Entrypoint
 from fluster.cluster.worker.worker import Worker, WorkerConfig
 
+# The fluster project root (lib/fluster/) - used as workspace for the example
+FLUSTER_ROOT = Path(__file__).parent.parent
+
 
 def find_free_port() -> int:
     """Find an available port."""
     with socket.socket() as s:
         s.bind(("", 0))
         return s.getsockname()[1]
-
-
-MINIMAL_PYPROJECT = """\
-[project]
-name = "fluster-example"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = [
-    "cloudpickle",
-    "fluster",
-]
-
-[tool.uv.sources]
-fluster = { path = "./fluster" }
-"""
-
-
-def create_minimal_workspace(temp_dir: Path) -> Path:
-    """Create a minimal workspace with pyproject.toml, uv.lock, and fluster source."""
-    workspace = temp_dir / "workspace"
-    workspace.mkdir(exist_ok=True)
-
-    # Write minimal pyproject.toml with fluster dependency
-    (workspace / "pyproject.toml").write_text(MINIMAL_PYPROJECT)
-
-    # Copy fluster project into workspace for bundling
-    # This makes the bundle self-contained
-    # __file__ = lib/fluster/examples/cluster_example.py
-    # parent = lib/fluster/examples/
-    # parent.parent = lib/fluster/ (the fluster project root)
-    fluster_project_root = Path(__file__).parent.parent
-    fluster_dest = workspace / "fluster"
-
-    import shutil
-    import subprocess
-
-    # Copy only the essential files: pyproject.toml and src/
-    fluster_dest.mkdir(exist_ok=True)
-    shutil.copy2(fluster_project_root / "pyproject.toml", fluster_dest / "pyproject.toml")
-    shutil.copytree(
-        fluster_project_root / "src",
-        fluster_dest / "src",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.egg-info"),
-    )
-
-    # Generate uv.lock with the bundled fluster source
-    subprocess.run(
-        ["uv", "lock"],
-        cwd=workspace,
-        check=True,
-        capture_output=True,
-    )
-
-    return workspace
-
-
-def create_workspace_bundle(workspace: Path, output_path: Path) -> None:
-    """Create a zip bundle from workspace directory."""
-    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file in workspace.rglob("*"):
-            if file.is_file():
-                zf.write(file, file.relative_to(workspace))
 
 
 class LogPoller:
@@ -216,7 +155,6 @@ class ClusterContext:
         # Will be initialized in __enter__
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._bundle_dir: Path | None = None
-        self._workspace: Path | None = None
         self._worker_id: str | None = None
 
         # Controller and Worker
@@ -226,8 +164,8 @@ class ClusterContext:
         # RPC client for controller calls
         self._controller_client: ControllerServiceClientSync | None = None
 
-        # Cached bundle
-        self._bundle_blob: bytes | None = None
+        # Cached RpcClusterClient
+        self._rpc_client: RpcClusterClient | None = None
 
         # Log polling
         self._log_pollers: dict[str, LogPoller] = {}
@@ -240,10 +178,6 @@ class ClusterContext:
         self._bundle_dir.mkdir()
         cache_path = temp_path / "cache"
         cache_path.mkdir()
-
-        # Create a minimal workspace with pyproject.toml and uv.lock
-        print("Creating minimal workspace...", flush=True)
-        self._workspace = create_minimal_workspace(temp_path)
 
         # --- Start Worker First (so it's ready when controller dispatches) ---
         print("Starting worker components...")
@@ -349,26 +283,14 @@ class ClusterContext:
         )
         self._controller_client.register_worker(request)
 
-    def _get_bundle_blob(self) -> bytes:
-        """Get workspace bundle (cached)."""
-        if self._bundle_blob is not None:
-            return self._bundle_blob
-
-        bundle_path = Path(self._temp_dir.name) / "workspace.zip"
-        create_workspace_bundle(self._workspace, bundle_path)
-        self._bundle_blob = bundle_path.read_bytes()
-        return self._bundle_blob
-
     def submit(
         self,
         fn,
         *args,
         name: str | None = None,
-        timeout_seconds: int = 0,
         env_vars: dict[str, str] | None = None,
         cpu: int = 1,
         memory: str = "1g",
-        scheduling_timeout_seconds: int = 0,
         namespace: str | None = None,
         ports: list[str] | None = None,
         **kwargs,
@@ -379,11 +301,9 @@ class ClusterContext:
             fn: Callable to execute
             *args: Positional arguments for fn
             name: Job name (defaults to function name)
-            timeout_seconds: Job timeout
             env_vars: Environment variables
             cpu: Number of CPUs to request
             memory: Memory to request (e.g., "1g", "512m")
-            scheduling_timeout_seconds: How long to wait for scheduling before marking UNSCHEDULABLE
             namespace: Namespace for actor isolation (defaults to "<local>")
             ports: List of port names to allocate (e.g., ["actor", "metrics"])
             **kwargs: Keyword arguments for fn
@@ -391,34 +311,21 @@ class ClusterContext:
         Returns:
             Job ID
         """
-        entrypoint = Entrypoint(callable=fn, args=args, kwargs=kwargs)
-        serialized = cloudpickle.dumps(entrypoint)
-
-        # Build environment with user-provided vars
-        # Worker will auto-inject system FLUSTER_* variables
-        env = env_vars or {}
-
-        # Add namespace as environment variable (actor-level concern, not cluster-level)
-        if namespace:
-            env["FLUSTER_NAMESPACE"] = namespace
-
-        request = cluster_pb2.Controller.LaunchJobRequest(
-            name=name or fn.__name__,
-            serialized_entrypoint=serialized,
-            resources=cluster_pb2.ResourceSpec(
-                cpu=cpu,
-                memory=memory,
-            ),
-            environment=cluster_pb2.EnvironmentConfig(
-                workspace="/app",
-                env_vars=env,
-            ),
-            bundle_blob=self._get_bundle_blob(),
-            scheduling_timeout_seconds=scheduling_timeout_seconds,
-            ports=ports or [],
+        entrypoint = Entrypoint.from_callable(fn, *args, **kwargs)
+        environment = cluster_pb2.EnvironmentConfig(
+            workspace="/app",
+            env_vars=env_vars or {},
         )
-        response = self._controller_client.launch_job(request)
-        return response.job_id
+        resources = cluster_pb2.ResourceSpec(cpu=cpu, memory=memory)
+
+        return self.get_client().submit(
+            entrypoint=entrypoint,
+            name=name or fn.__name__,
+            resources=resources,
+            environment=environment,
+            namespace=namespace or "<local>",
+            ports=ports,
+        )
 
     def status(self, job_id: str) -> dict:
         """Get job status from controller."""
@@ -499,10 +406,12 @@ class ClusterContext:
 
     def get_client(self) -> RpcClusterClient:
         """Get an RpcClusterClient for this cluster."""
-        return RpcClusterClient(
-            controller_address=self.controller_url,
-            bundle_blob=self._get_bundle_blob(),
-        )
+        if self._rpc_client is None:
+            self._rpc_client = RpcClusterClient(
+                self.controller_url,
+                workspace=FLUSTER_ROOT,
+            )
+        return self._rpc_client
 
 
 # =============================================================================
