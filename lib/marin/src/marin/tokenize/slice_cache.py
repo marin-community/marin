@@ -30,7 +30,6 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import fsspec
 import humanfriendly
@@ -47,8 +46,6 @@ from transformers import AutoTokenizer
 
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 
-if TYPE_CHECKING:
-    from marin.execution import StepRef
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +61,7 @@ class SliceCacheConfig(TokenizeConfigBase):
     seed: int = 42
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | StepRef | None, *, include_raw_paths=True
+        self, actual_output_path: str | None = None, *, include_raw_paths: bool = True
     ) -> LMDatasetSourceConfig:
         humanfriendly_tokens = humanfriendly.format_size(self.num_tokens)[0:-1].replace(" ", "").replace("byte", "")
         out = _patch_source_config(
