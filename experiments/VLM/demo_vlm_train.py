@@ -32,6 +32,10 @@ Usage:
 
 import os
 
+from huggingface_hub import login
+
+login(token="YOUR_HF_TOKEN_HERE")
+
 from fray.cluster import ResourceConfig
 from levanter.data.image import ConversationDatasetSourceConfig, ImageMixtureDatasetConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
@@ -63,7 +67,7 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - per_device_parallelism: samples processed per device at a time (limited by memory)
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
-PER_DEVICE_PARALLELISM = 2  # 1 sample per device (memory-safe for VLM with large images)
+PER_DEVICE_PARALLELISM = 1  # 1 sample per device (memory-safe for VLM with large images)
 GRADIENT_ACCUMULATION_STEPS = 4  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
@@ -105,10 +109,9 @@ vlm_config = LlavaOnevisionConfig(
     vision_encoder_type="siglip",
     vision_feature_select_strategy="full",
     vision_aspect_ratio="anyres_max_9",
-    # Disable tensor parallelism for vision encoder to reduce AllReduce overhead.
-    # This is recommended when freeze_vision_encoder=True since the vision encoder
-    # doesn't need gradient synchronization.
-    disable_vision_sharding=True,
+    # Set disable_anyres=True to use single resolution (base patch only).
+    # This reduces memory usage and speeds up training but may lose image details.
+    disable_anyres=False,
 )
 
 # ============================================================================
@@ -162,8 +165,8 @@ train_config = SimpleVlmTrainConfig(
     warmup=0.03,  # 3% warmup
     weight_decay=0.0,
 
-    # Mixed precision: params in f32, compute in bfloat16
-    mp="p=f32,c=bfloat16",
+    # Full bfloat16: params and compute both in bfloat16 (saves memory)
+    mp="bfloat16",
 
     # Streaming mode: double the default prefetch for better throughput
     streaming_max_buffered_batches=16,
@@ -188,10 +191,16 @@ train_config = SimpleVlmTrainConfig(
 )
 
 # ============================================================================
-# 5. CREATE TRAINING STEP
+# 5. EXPERIMENT NAME (via environment variable)
+# ============================================================================
+# Can be set via: -e EXP_NAME my-experiment-name
+EXP_NAME = os.environ.get("EXP_NAME", "vlm-demo21-qwen2-1.7b")
+
+# ============================================================================
+# 6. CREATE TRAINING STEP
 # ============================================================================
 vlm_training = default_train_vlm(
-    name="vlm-demo13-qwen2-1.7b",
+    name=EXP_NAME,
     data_config=data_config,
     model_config=vlm_config,
     train_config=train_config,
@@ -199,7 +208,7 @@ vlm_training = default_train_vlm(
 )
 
 # ============================================================================
-# 6. RUN
+# 7. RUN
 # ============================================================================
 if __name__ == "__main__":
     executor_main(steps=[vlm_training])

@@ -425,11 +425,11 @@ class Siglip2Attention(eqx.Module):
             # Create segment_ids to indicate valid vs padding positions for splash attention
             # segment_id=1 for valid, segment_id=0 for padding
             # This avoids explicit_mask which causes issues with splash attention tracing
-            import numpy as np
-
-            segment_ids_np = np.zeros(padded_seq_len, dtype=np.int32)
-            segment_ids_np[:orig_seq_len] = 1
-            segment_ids = hax.named(segment_ids_np, (PaddedSeqAxis,))
+            # Use jnp instead of np for better JIT tracing (avoids host-side allocation)
+            segment_ids_arr = jnp.where(
+                jnp.arange(padded_seq_len) < orig_seq_len, 1, 0
+            ).astype(jnp.int32)
+            segment_ids = hax.named(segment_ids_arr, (PaddedSeqAxis,))
 
             # Create mask with segment_ids (splash attention supports dynamic segment_ids)
             if mask is not None:

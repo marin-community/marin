@@ -507,20 +507,16 @@ def default_train_vlm(
                 keep=[dict(every=steps_per_export)],
             ),
             mesh=MeshConfig(
-                # Disable activation tensor parallelism to reduce AllReduce overhead.
-                # shared_mapping={} removes mlp/heads sharding from COMPUTE (no AllReduce per layer).
-                # param_mapping keeps parameters sharded across devices for memory efficiency.
-                # This gives us: sharded parameters + unsharded activations = FSDP-style training.
-                shared_mapping={},
+                shared_mapping={
+                    "mlp": None,   
+                    "heads": None, 
+                },
                 compute_mapping={
                     "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                 },
-                # Keep parameters sharded to avoid OOM
                 param_mapping={
-                    "embed": ResourceAxis.DATA,
-                    "mlp": ResourceAxis.MODEL,
-                    "heads": ResourceAxis.MODEL,
+                    "embed": ResourceAxis.DATA, 
                 },
             ),
             allow_partial_checkpoint=train_config.allow_partial_checkpoint,

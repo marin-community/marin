@@ -544,14 +544,23 @@ def _extract_anyres_params(
 
     # Try to get max_num_patches from vision_aspect_ratio (LLaVA-specific)
     vision_aspect_ratio = getattr(image_processor, "vision_aspect_ratio", None)
-    if vision_aspect_ratio and isinstance(vision_aspect_ratio, str) and "anyres_max_" in vision_aspect_ratio:
+
+    # Handle disable_anyres case: vision_aspect_ratio="single" means no grid patches
+    if vision_aspect_ratio == "single" or (
+        vision_aspect_ratio and isinstance(vision_aspect_ratio, str) and not vision_aspect_ratio.startswith("anyres")
+    ):
+        max_num_patches = 0  # No grid patches, only base patch
+    elif vision_aspect_ratio and isinstance(vision_aspect_ratio, str) and "anyres_max_" in vision_aspect_ratio:
         try:
             max_num_patches = int(vision_aspect_ratio.split("anyres_max_")[-1])
         except (ValueError, IndexError):
             pass
 
+    # Handle empty grid_pinpoints (shouldn't happen with proper config)
+    if max_num_patches is None and grid_pinpoints is not None and len(grid_pinpoints) == 0:
+        max_num_patches = 0  # No grid patches, only base patch
     # Fallback: compute from grid_pinpoints if available
-    if max_num_patches is None and grid_pinpoints:
+    elif max_num_patches is None and grid_pinpoints:
         max_resolution = max(max(h, w) for h, w in grid_pinpoints)
         max_patches_per_dim = max_resolution // patch_size
         max_num_patches = max_patches_per_dim * max_patches_per_dim  # +1 for base is added in _pad_pixel_values
@@ -674,7 +683,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         self.max_num_patches = max_num_patches
 
         # Pre-compute grid_pinpoints arrays for vectorized _compute_grid_shape
-        if grid_pinpoints is not None:
+        # Note: empty list [] is treated as no grid pinpoints (disable_anyres case)
+        if grid_pinpoints is not None and len(grid_pinpoints) > 0:
             self._grid_h = np.array([p[0] for p in grid_pinpoints], dtype=np.float64)
             self._grid_w = np.array([p[1] for p in grid_pinpoints], dtype=np.float64)
             self._grid_area = self._grid_h * self._grid_w
@@ -1136,7 +1146,9 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
             # Compute unpad_indices only for single-image anyres case
             # Multi-image doesn't use anyres (each image is just 1 base patch)
-            if num_images == 1 and has_image_sizes and self.grid_pinpoints and self.vision_feature_height:
+            # Skip when max_num_patches=0 (disable_anyres mode - only base patch, no grid)
+            use_anyres = self.max_num_patches is None or self.max_num_patches > 0
+            if num_images == 1 and has_image_sizes and self.grid_pinpoints and self.vision_feature_height and use_anyres:
                 assert image_sizes is not None  # Guarded by has_image_sizes
                 orig_height, orig_width = int(image_sizes[0, 0]), int(image_sizes[0, 1])
                 gh, gw = self._compute_grid_shape((orig_height, orig_width))
@@ -1434,10 +1446,17 @@ class ImageTaskConfig(abc.ABC):
     processor: str = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
     max_length: int = 2048
     padding: bool = True
+    image_grid_pinpoints: Optional[List[List[int]]] = None
+    """Override image grid pinpoints for anyres processing.
+    Set to [[image_size, image_size]] to disable anyres (single resolution only)."""
 
     @cached_property
     def the_processor(self) -> ProcessorMixin:
-        return load_processor(self.processor)
+        proc = load_processor(self.processor)
+        # Override image_grid_pinpoints if specified (e.g., for disable_anyres)
+        if self.image_grid_pinpoints is not None and hasattr(proc, "image_processor"):
+            proc.image_processor.image_grid_pinpoints = self.image_grid_pinpoints
+        return proc
 
     @cached_property
     def pad_token_id(self) -> int:
@@ -2751,6 +2770,10 @@ class LlavaOnevisionProcessor(ProcessorMixin):
         return text, max_num_vision_tokens
 
     def _get_number_of_features(self, orig_height: int, orig_width: int, height: int, width: int) -> int:
+        # When not using anyres, only return base features (single resolution mode)
+        if not self.vision_aspect_ratio.startswith("anyres"):
+            return self.num_image_tokens
+
         image_grid_pinpoints = self.image_processor.image_grid_pinpoints
 
         height_best_resolution, width_best_resolution = select_best_resolution(
@@ -2792,11 +2815,13 @@ class LlavaOnevisionProcessor(ProcessorMixin):
         unpadded_features = current_height * current_width
         newline_features = current_height
 
-        max_num_patches = int(self.vision_aspect_ratio.strip("anyres_max_"))
-        ratio = math.sqrt(current_height * current_width / (max_num_patches * patches_height**2))
-        if ratio > 1.1:
-            unpadded_features = int(current_height // ratio) * int(current_width // ratio)
-            newline_features = int(current_height // ratio)
+        # Only apply max_num_patches limit in anyres mode
+        if self.vision_aspect_ratio.startswith("anyres_max_"):
+            max_num_patches = int(self.vision_aspect_ratio.replace("anyres_max_", ""))
+            ratio = math.sqrt(current_height * current_width / (max_num_patches * patches_height**2))
+            if ratio > 1.1:
+                unpadded_features = int(current_height // ratio) * int(current_width // ratio)
+                newline_features = int(current_height // ratio)
 
         return (unpadded_features, newline_features)
 
@@ -2907,6 +2932,17 @@ class LlavaOnevisionProcessor(ProcessorMixin):
             unpad_indices: Array of shape (batch, max_num_features) padded with zeros
         """
         image_grid_pinpoints = self.image_processor.image_grid_pinpoints
+
+        # Handle single resolution mode (no grid patches, only base)
+        # Check both empty grid_pinpoints and vision_aspect_ratio="single"
+        is_single_resolution = (
+            not image_grid_pinpoints
+            or not self.vision_aspect_ratio.startswith("anyres")
+        )
+        if is_single_resolution:
+            # For single resolution, return identity mapping (no reordering needed)
+            batch_size = len(image_sizes)
+            return np.zeros((batch_size, max_num_features), dtype=np.int32)
         patches_height = patches_width = int(math.sqrt(self.num_image_tokens))
 
         batch_indices = []
@@ -3196,10 +3232,8 @@ class ImageDataLoaderIterator(DataLoaderIterator):
         target_num_patches = self.dl.NumPatches.size
 
         # Determine axes for each field
-        if target_num_patches > 1:
-            pixel_axes = (Batch, self.dl.NumPatches, self.dl.Channels, self.dl.Height, self.dl.Width)
-        else:
-            pixel_axes = (Batch, self.dl.Channels, self.dl.Height, self.dl.Width)
+        # Always include NumPatches dimension (even when size=1) for model compatibility
+        pixel_axes = (Batch, self.dl.NumPatches, self.dl.Channels, self.dl.Height, self.dl.Width)
         input_axes = (Batch, self.dl.Pos)
 
         # Cache for local data
@@ -3251,6 +3285,10 @@ class ImageDataLoaderIterator(DataLoaderIterator):
             pv = d["pixel_values"]
             if pv.ndim == 4 and target_num_patches > 1:
                 pv = self._pad_pixel_values_to_num_patches(pv, target_num_patches)
+            elif pv.ndim == 4 and target_num_patches == 1:
+                # When target_num_patches=1 (disable_anyres), keep only the first patch
+                # pixel_values shape: (actual_patches, C, H, W) -> (1, C, H, W)
+                pv = pv[:1]
             return pv.astype(self.dl.pixel_dtype)
 
         pixel_values = make_sharded_array(pixel_shape, pixel_axes, self.dl.pixel_dtype, get_pixel_values)

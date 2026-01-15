@@ -35,6 +35,7 @@ Performance Optimization Flags:
     --freeze_vision_encoder : Freeze vision encoder (only train projector + LLM)
     --per_device_parallelism: Number of examples per device (for gradient accumulation)
     --fsdp_axis             : FSDP sharding axis (default: embed)
+    --disable_anyres        : Disable anyresolution (use single resolution base patch only)
 """
 
 import argparse
@@ -103,7 +104,7 @@ def parse_args():
     parser.add_argument(
         "--max_length",
         type=int,
-        default=8192,
+        default=2048,
         help="Maximum sequence length",
     )
 
@@ -147,7 +148,7 @@ def parse_args():
     parser.add_argument(
         "--train_batch_size",
         type=int,
-        default=8,
+        default=16,
         help="Training batch size",
     )
     parser.add_argument(
@@ -208,13 +209,6 @@ def parse_args():
         "Useful for vision encoder fine-tuning or projector-only training.",
     )
     parser.add_argument(
-        "--disable_vision_sharding",
-        action="store_true",
-        help="Disable tensor parallelism for vision encoder to reduce AllReduce overhead. "
-        "Recommended when --freeze_vision_encoder is set, as the frozen vision encoder "
-        "doesn't need gradient synchronization across devices.",
-    )
-    parser.add_argument(
         "--fsdp_axis",
         type=str,
         default="embed",
@@ -224,6 +218,12 @@ def parse_args():
         "--no_gradient_checkpointing",
         action="store_true",
         help="Disable gradient checkpointing (enabled by default to reduce memory usage)",
+    )
+    parser.add_argument(
+        "--disable_anyres",
+        action="store_true",
+        help="Disable anyresolution image processing (use single resolution base patch only). "
+        "Reduces memory usage and speeds up training but may lose image details.",
     )
 
     # Checkpoint arguments
@@ -381,7 +381,7 @@ def get_model_config(args) -> LlavaOnevisionConfig:
         vision_config=vision_config,
         text_config=text_config,
         gradient_checkpointing=use_gradient_checkpointing,
-        disable_vision_sharding=args.disable_vision_sharding,
+        disable_anyres=args.disable_anyres,
     )
 
     # Log optimization settings
@@ -389,7 +389,7 @@ def get_model_config(args) -> LlavaOnevisionConfig:
     logger.info(f"  Flash attention: {use_flash}")
     if use_flash:
         logger.info(f"  Flash attention block size: {flash_block_size}")
-    logger.info(f"  Disable vision sharding: {args.disable_vision_sharding}")
+    logger.info(f"  Disable anyres: {args.disable_anyres}")
 
     return config
 
@@ -420,6 +420,7 @@ def main():
     logger.info(f"  Per-device parallelism: {args.per_device_parallelism}")
     logger.info(f"  FSDP axis: {args.fsdp_axis}")
     logger.info(f"  Gradient checkpointing: {not args.no_gradient_checkpointing}")
+    logger.info(f"  Disable anyres: {args.disable_anyres}")
     logger.info("-" * 60)
 
     # Helper to format data URLs - don't add file:// if already has a scheme

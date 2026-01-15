@@ -138,8 +138,19 @@ def _compute_max_num_patches(config, first_ex=None):
     Returns:
         Maximum number of grid patches (excluding base)
     """
+    # Handle disable_anyres case: vision_aspect_ratio="single" means no grid patches
+    vision_aspect_ratio = getattr(config.model, "vision_aspect_ratio", "anyres_max_9")
+    if vision_aspect_ratio == "single" or (
+        isinstance(vision_aspect_ratio, str) and not vision_aspect_ratio.startswith("anyres")
+    ):
+        return 0  # No grid patches, only base patch
+
     grid_pinpoints = config.model.image_grid_pinpoints
     patch_size = config.model.vision_config.image_size
+
+    # Handle empty grid_pinpoints case (shouldn't happen with proper config)
+    if grid_pinpoints is not None and len(grid_pinpoints) == 0:
+        return 0  # No grid patches, only base patch
 
     if grid_pinpoints:
         max_resolution = max(max(h, w) for h, w in grid_pinpoints)
@@ -391,6 +402,11 @@ class TrainVLMConfig:
 
 def main(config: TrainVLMConfig):
     """Main training function for VLM."""
+    # Pass image_grid_pinpoints from model config to data config
+    # This must happen BEFORE the_processor is accessed (which is cached)
+    if config.model.image_grid_pinpoints is not None:
+        config.data.image_grid_pinpoints = config.model.image_grid_pinpoints
+
     tokenizer = config.data.the_tokenizer
 
     # Calculate num_train_steps based on epoch if specified
