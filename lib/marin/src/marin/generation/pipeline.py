@@ -15,6 +15,8 @@
 import logging
 from typing import Any
 
+import pyarrow as pa
+
 from marin.generation.llm_generation import BaseLLMProvider, vLLMProvider
 from marin.generation.templates import STEP_BY_STEP_TEMPLATE
 
@@ -25,6 +27,74 @@ try:
 except ImportError:
     logger.warning("vLLM is not installed, so we will not be able to generate text.")
     TokensPrompt = Any
+
+
+def _is_all_null(arr) -> bool:
+    """Check if all values in an array are null/None/NaN.
+
+    Handles Python lists, numpy arrays, and PyArrow arrays.
+    """
+    import numpy as np
+
+    if isinstance(arr, pa.Array):
+        return arr.null_count == len(arr)
+    elif isinstance(arr, pa.ChunkedArray):
+        return arr.null_count == len(arr)
+    elif isinstance(arr, np.ndarray):
+        if arr.dtype == object:
+            return all(v is None for v in arr)
+        elif np.issubdtype(arr.dtype, np.floating):
+            return np.all(np.isnan(arr))
+        else:
+            return False
+    elif isinstance(arr, list):
+        return all(v is None for v in arr)
+    return False
+
+
+def _normalize_batch_schema(batch: dict[str, Any], column_types: dict[str, pa.DataType]) -> dict[str, Any]:
+    """
+    Normalize schema for all columns in a batch based on expected types.
+
+    When PyArrow encounters a batch where all values in a column are null,
+    it may infer the type as float64 instead of the correct type. This causes
+    schema unification errors in Ray Data. This function ensures that columns
+    have their correct types even when all values are null.
+
+    This function ALWAYS converts columns with all-null values to PyArrow arrays
+    with explicit types to ensure consistent schema across all batches.
+
+    Args:
+        batch: The batch of data to normalize.
+        column_types: Dict mapping column names to their expected PyArrow types.
+
+    Returns:
+        The batch with corrected column types.
+    """
+    import numpy as np
+
+    for col, expected_type in column_types.items():
+        if col not in batch:
+            continue
+
+        arr = batch[col]
+
+        # Check if all values are null/None/NaN
+        if _is_all_null(arr):
+            # Get the length of the array
+            if isinstance(arr, (pa.Array, pa.ChunkedArray)):
+                length = len(arr)
+            elif isinstance(arr, np.ndarray):
+                length = len(arr)
+            elif isinstance(arr, list):
+                length = len(arr)
+            else:
+                continue
+
+            # Create a PyArrow array with the correct type and all null values
+            batch[col] = pa.array([None] * length, type=expected_type)
+
+    return batch
 
 
 class TextGeneration:
@@ -102,6 +172,7 @@ class vLLMTextGeneration(TextGeneration):
         save_templated_prompt: bool = False,
         max_doc_tokens: int = 7000,
         generated_text_column_name: str = "generated_text",
+        column_types: dict[str, pa.DataType] | None = None,
     ):
         # Initialize the LLM Provider here for the pipeline since we need the model
         # to be placed in the same placement group as the pipeline
@@ -113,6 +184,7 @@ class vLLMTextGeneration(TextGeneration):
         self.apply_chat_template = apply_chat_template
         self.max_doc_tokens = max_doc_tokens
         self.tokenizer = self.llm.llm.get_tokenizer()
+        self.column_types = column_types or {}
 
     def _truncate_example(self, example: str) -> str:
         example_tokens = self.tokenizer.encode(example)
@@ -163,4 +235,11 @@ class vLLMTextGeneration(TextGeneration):
                     prompts.append(example)
 
         generated_text = self.llm.generate(prompts)
-        return self._update_batch(batch, generated_text, prompts)
+        batch = self._update_batch(batch, generated_text, prompts)
+
+        # Normalize schema for all columns to prevent type mismatches when
+        # batches have all-null values (which PyArrow may infer as float).
+        if self.column_types:
+            batch = _normalize_batch_schema(batch, self.column_types)
+
+        return batch

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import fsspec
+import pyarrow as pa
 import ray
 from fray.cluster import ResourceConfig
 from marin.generation.chunk_utils import ChunkStrategy
@@ -155,6 +156,26 @@ def get_ray_data_write_kwargs(config: TextGenerationInferenceConfig):
     return ray_data_write_kwargs
 
 
+def _get_column_types_from_schema(schema) -> dict[str, pa.DataType]:
+    """Extract column names and their PyArrow types from a schema.
+
+    Args:
+        schema: Either a ray.data.Schema or a PyArrow schema.
+
+    Returns:
+        Dict mapping column names to their PyArrow types.
+    """
+    if hasattr(schema, "base_schema"):
+        # Handle Ray Data Schema wrapper - extract the underlying PyArrow schema
+        arrow_schema = schema.base_schema
+    else:
+        arrow_schema = schema
+    column_types = {}
+    for schema_field in arrow_schema:
+        column_types[schema_field.name] = schema_field.type
+    return column_types
+
+
 @ray.remote
 def _find_finished_ids_for_file(checkpoint_filepath: str, id_column: str | dict[str, str]):
     from marin.processing.classification.dataset_utils import read_dataset
@@ -217,9 +238,15 @@ def run_inference(config: TextGenerationInferenceConfig):
     else:
         ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
 
-    assert (config.template_path or config.template) and not (
-        config.template_path and config.template
-    ), "Must provide either a template or a template path, but not both"
+    # Capture column types from input schema to ensure consistent types when writing.
+    # This prevents schema unification errors when batches have all-null columns
+    # (which PyArrow may infer as float instead of their correct type).
+    input_schema = ds.schema()
+    column_types = _get_column_types_from_schema(input_schema) if input_schema else {}
+
+    assert (config.template_path or config.template) and not (config.template_path and config.template), (
+        "Must provide either a template or a template path, but not both"
+    )
 
     if config.template_path:
         with fsspec.open(config.template_path, "r", compression="infer") as f:
@@ -258,6 +285,7 @@ def run_inference(config: TextGenerationInferenceConfig):
             "apply_chat_template": config.apply_chat_template,
             "max_doc_tokens": config.max_doc_tokens,
             "generated_text_column_name": config.generated_text_column_name,
+            "column_types": column_types,
         },
         **ray_resources_kwarg(config),
     )
