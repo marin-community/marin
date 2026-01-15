@@ -41,7 +41,7 @@ from experiments.steps.levanter_checkpoint import (
     convert_checkpoint_from_step,
     convert_checkpoint_to_hf_step,
 )
-from experiments.steps.log_probs import default_lm_log_probs, log_probs_from_path, log_probs_step
+from experiments.steps.log_probs import default_lm_log_probs, log_probs
 from experiments.steps.slice_cache import slice_cache
 from experiments.steps.tokenize import (
     tokenize_from_paths,
@@ -52,10 +52,9 @@ from experiments.steps.tokenize import (
 __all__ = [
     "convert_checkpoint_from_step",
     "convert_checkpoint_to_hf_step",
-    "default_lm_log_probs",
+    "default_lm_log_probs",  # Backward compatibility alias for log_probs
     "download_pretokenized_cache",
-    "log_probs_from_path",
-    "log_probs_step",
+    "log_probs",
     "slice_cache",
     "tokenize_from_paths",
     "tokenize_from_step",

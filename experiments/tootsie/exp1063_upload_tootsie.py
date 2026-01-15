@@ -36,8 +36,12 @@ executor_main([upload_step])
 
 from dataclasses import dataclass, field
 
-from marin.download.huggingface.upload_gcs_to_hf import UploadConfig, upload_gcs_to_hf
-from marin.execution import step, StepContext, executor_main
+from marin.download.huggingface.upload_gcs_to_hf import UploadConfig
+from marin.download.huggingface.upload_gcs_to_hf import upload_gcs_to_hf as _upload_gcs_to_hf
+from marin.execution import StepRef, deferred, executor_main, step
+
+# Mark library function as deferred
+upload_gcs_to_hf = deferred(_upload_gcs_to_hf)
 
 
 @dataclass(frozen=True)
@@ -49,21 +53,30 @@ class ModelUploadConfig:
     dry_run: bool = False
 
 
-def upload_model_to_hf_step(model_config: ModelUploadConfig):
-    """Create a step to upload model checkpoints to Hugging Face."""
-    @step(
-        name=f"upload_to_hf_{model_config.hf_repo_id.replace('/', '_')}",
-        fn=upload_gcs_to_hf,
-    )
-    def upload_step(ctx: StepContext):
-        return UploadConfig(
-            hf_repo_id=model_config.hf_repo_id,
-            gcs_directories=model_config.gcs_directories,
-            dry_run=model_config.dry_run,
+@step(name="upload_to_hf/{hf_repo_id}")
+def _upload_to_hf_impl(
+    hf_repo_id: str,
+    gcs_directories: list[str],
+    dry_run: bool = False,
+) -> StepRef:
+    """Upload model checkpoints to Hugging Face."""
+    return upload_gcs_to_hf(
+        UploadConfig(
+            hf_repo_id=hf_repo_id,
+            gcs_directories=gcs_directories,
+            dry_run=dry_run,
             wait_for_completion=True,
         )
+    )
 
-    return upload_step()
+
+def upload_model_to_hf_step(model_config: ModelUploadConfig) -> StepRef:
+    """Create a step to upload model checkpoints to Hugging Face."""
+    return _upload_to_hf_impl(
+        hf_repo_id=model_config.hf_repo_id.replace("/", "_"),
+        gcs_directories=model_config.gcs_directories,
+        dry_run=model_config.dry_run,
+    )
 
 
 # Predefined upload steps organized by region
