@@ -46,6 +46,7 @@ import cloudpickle
 import uvicorn
 
 from fluster.rpc import actor_pb2
+from fluster.time_utils import wait_until
 from fluster.rpc.actor_connect import ActorServiceASGIApplication
 from fluster.context import FlusterContext, fluster_ctx_scope, get_fluster_ctx
 from connectrpc.request import RequestContext
@@ -264,17 +265,13 @@ class ActorServer:
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
 
-        # Wait for server to be ready
-        for _ in range(50):
-            try:
-                import httpx
-
-                httpx.get(f"http://{self._host}:{self._actual_port}/", timeout=0.1)
-            except Exception:
-                pass
-            time.sleep(0.1)
-            if server.started:
-                break
+        # Wait for server to be ready with exponential backoff
+        wait_until(
+            lambda: server.started,
+            timeout=5.0,
+            initial_interval=0.05,
+            max_interval=0.5,
+        )
 
         return self._actual_port
 

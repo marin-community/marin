@@ -38,6 +38,8 @@ from typing import Protocol
 
 import uvicorn
 
+from fluster.time_utils import wait_until
+
 from fluster.cluster.controller.dashboard import ControllerDashboard
 from fluster.cluster.controller.retry import handle_job_failure
 from fluster.cluster.controller.scheduler import ScheduleResult, Scheduler
@@ -203,6 +205,7 @@ class Controller:
         self._wake_event = threading.Event()
         self._loop_thread: threading.Thread | None = None
         self._server_thread: threading.Thread | None = None
+        self._server: uvicorn.Server | None = None
 
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
@@ -236,8 +239,13 @@ class Controller:
         )
         self._server_thread.start()
 
-        # Wait for server startup
-        time.sleep(1.0)
+        # Wait for server startup with exponential backoff
+        wait_until(
+            lambda: self._server is not None and self._server.started,
+            timeout=5.0,
+            initial_interval=0.05,
+            max_interval=0.5,
+        )
 
     def stop(self) -> None:
         """Stop all background components gracefully.
@@ -399,12 +407,14 @@ class Controller:
     def _run_server(self) -> None:
         """Run dashboard server (blocking, for thread)."""
         try:
-            uvicorn.run(
+            config = uvicorn.Config(
                 self._dashboard._app,
                 host=self._config.host,
                 port=self._config.port,
                 log_level="error",
             )
+            self._server = uvicorn.Server(config)
+            self._server.run()
         except Exception as e:
             print(f"Controller server error: {e}")
 

@@ -49,6 +49,8 @@ from typing import Any, Generic, TypeVar
 
 import cloudpickle
 
+from fluster.time_utils import ExponentialBackoff, wait_until_with_exception
+
 from fluster.rpc import actor_pb2, cluster_pb2
 from fluster.actor import ActorServer
 from fluster.actor.resolver import Resolver
@@ -223,6 +225,7 @@ class WorkerDispatcher:
         self._timeout = timeout
         self._shutdown = threading.Event()
         self._thread: threading.Thread | None = None
+        self._discover_backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
 
     def start(self) -> None:
         """Start the dispatch thread."""
@@ -257,15 +260,16 @@ class WorkerDispatcher:
                 self._execute_task(task)
 
     def _discover_endpoint(self) -> None:
-        """Poll resolver for endpoint registration."""
+        """Poll resolver for endpoint registration with exponential backoff."""
         result = self._resolver.resolve(self.state.worker_name)
         if not result.is_empty:
             endpoint = result.first()
             self.state.endpoint_url = endpoint.url
             self.state.status = WorkerStatus.IDLE
+            self._discover_backoff.reset()
             print(f"Worker {self.state.worker_id} discovered at {endpoint.url}")
         else:
-            time.sleep(0.1)
+            time.sleep(self._discover_backoff.next_interval())
 
     def _get_task(self) -> PendingTask | None:
         """Try to get a task from the queue."""
@@ -536,7 +540,7 @@ class WorkerPool:
         min_workers: int = 1,
         timeout: float = 60.0,
     ) -> None:
-        """Wait for workers to register.
+        """Wait for workers to register with exponential backoff.
 
         Args:
             min_workers: Minimum number of workers required
@@ -545,13 +549,13 @@ class WorkerPool:
         Raises:
             TimeoutError: If min_workers not available within timeout
         """
-        start = time.time()
-        while time.time() - start < timeout:
-            if self.size >= min_workers:
-                return
-            time.sleep(0.5)
-
-        raise TimeoutError(f"Only {self.size} of {min_workers} workers registered within {timeout}s")
+        wait_until_with_exception(
+            lambda: self.size >= min_workers,
+            timeout=timeout,
+            error_message=f"Only {self.size} of {min_workers} workers registered within {timeout}s",
+            initial_interval=0.05,
+            max_interval=1.0,
+        )
 
     def wait_for_workers(
         self,

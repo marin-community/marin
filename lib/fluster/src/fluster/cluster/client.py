@@ -34,6 +34,7 @@ from typing import Any, Protocol
 import cloudpickle
 
 from fluster.actor.resolver import ClusterResolver, ResolvedEndpoint, Resolver, ResolveResult
+from fluster.time_utils import ExponentialBackoff
 from fluster.cluster.types import Entrypoint, JobId, Namespace, is_job_finished
 from fluster.rpc import cluster_pb2
 from fluster.rpc.cluster_connect import ControllerServiceClientSync
@@ -405,18 +406,24 @@ class RpcClusterClient:
         self,
         job_id: JobId,
         timeout: float = 300.0,
-        poll_interval: float = 0.5,
+        poll_interval: float = 2.0,
     ) -> cluster_pb2.JobStatus:
-        """Wait for job to complete."""
-        start = time.time()
+        """Wait for job to complete with exponential backoff polling."""
+        start = time.monotonic()
+        backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
 
-        while time.time() - start < timeout:
+        while True:
             job_info = self.status(job_id)
             if is_job_finished(job_info.state):
                 return job_info
-            time.sleep(poll_interval)
 
-        raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
+            elapsed = time.monotonic() - start
+            if elapsed >= timeout:
+                raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
+
+            interval = backoff.next_interval()
+            remaining = timeout - elapsed
+            time.sleep(min(interval, remaining))
 
     def terminate(self, job_id: JobId) -> None:
         """Terminate a running job."""
@@ -803,14 +810,14 @@ class LocalClient:
         self,
         job_id: JobId,
         timeout: float = 300.0,
-        poll_interval: float = 0.5,
+        poll_interval: float = 2.0,
     ) -> cluster_pb2.JobStatus:
-        """Wait for job to complete.
+        """Wait for job to complete with exponential backoff polling.
 
         Args:
             job_id: Job ID to wait for
             timeout: Maximum time to wait in seconds
-            poll_interval: Time between status checks
+            poll_interval: Maximum time between status checks
 
         Returns:
             Final JobStatus
@@ -818,15 +825,21 @@ class LocalClient:
         Raises:
             TimeoutError: If job doesn't complete within timeout
         """
-        start = time.time()
+        start = time.monotonic()
+        backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
 
-        while time.time() - start < timeout:
+        while True:
             status = self.status(job_id)
             if is_job_finished(status.state):
                 return status
-            time.sleep(poll_interval)
 
-        raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
+            elapsed = time.monotonic() - start
+            if elapsed >= timeout:
+                raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
+
+            interval = backoff.next_interval()
+            remaining = timeout - elapsed
+            time.sleep(min(interval, remaining))
 
     def terminate(self, job_id: JobId) -> None:
         """Terminate a running job.

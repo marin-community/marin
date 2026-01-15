@@ -39,10 +39,12 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+
 import cloudpickle
 import uvicorn
 
 from fluster.rpc import cluster_pb2
+from fluster.time_utils import wait_until
 from fluster.rpc.cluster_connect import ControllerServiceClientSync
 from fluster.rpc.errors import format_exception_with_traceback
 from fluster.cluster.worker.builder import ImageCache, ImageProvider, VenvCache
@@ -215,6 +217,7 @@ class Worker:
         )
 
         self._server_thread: threading.Thread | None = None
+        self._server: uvicorn.Server | None = None
 
         # Heartbeat/registration thread
         self._heartbeat_thread: threading.Thread | None = None
@@ -229,7 +232,14 @@ class Worker:
             daemon=True,
         )
         self._server_thread.start()
-        time.sleep(1.0)  # Wait for startup
+
+        # Wait for server startup with exponential backoff
+        wait_until(
+            lambda: self._server is not None and self._server.started,
+            timeout=5.0,
+            initial_interval=0.05,
+            max_interval=0.5,
+        )
 
         # Start heartbeat loop if controller configured
         if self._config.controller_address:
@@ -270,12 +280,14 @@ class Worker:
     def _run_server(self) -> None:
         """Run worker server (blocking, for thread)."""
         try:
-            uvicorn.run(
+            config = uvicorn.Config(
                 self._dashboard._app,
                 host=self._config.host,
                 port=self._config.port,
                 log_level="error",
             )
+            self._server = uvicorn.Server(config)
+            self._server.run()
         except Exception as e:
             print(f"Worker server error: {e}")
 
@@ -693,21 +705,21 @@ with open('/workdir/_result.pkl', 'wb') as f:
                 # Send SIGTERM
                 self._runtime.kill(job.container_id, force=False)
 
-                # Wait for graceful shutdown
-                timeout_sec = term_timeout_ms / 1000
-                start_time = time.time()
-                while job.status in (
-                    cluster_pb2.JOB_STATE_RUNNING,
-                    cluster_pb2.JOB_STATE_BUILDING,
-                ):
-                    if (time.time() - start_time) > timeout_sec:
-                        # Force kill
-                        try:
-                            self._runtime.kill(job.container_id, force=True)
-                        except RuntimeError:
-                            pass
-                        break
-                    time.sleep(0.1)
+                # Wait for graceful shutdown with exponential backoff
+                running_states = (cluster_pb2.JOB_STATE_RUNNING, cluster_pb2.JOB_STATE_BUILDING)
+                stopped = wait_until(
+                    lambda: job.status not in running_states,
+                    timeout=term_timeout_ms / 1000,
+                    initial_interval=0.05,
+                    max_interval=0.5,
+                )
+
+                # Force kill if graceful shutdown timed out
+                if not stopped:
+                    try:
+                        self._runtime.kill(job.container_id, force=True)
+                    except RuntimeError:
+                        pass
             except RuntimeError:
                 # Container may have already been removed or stopped
                 pass
