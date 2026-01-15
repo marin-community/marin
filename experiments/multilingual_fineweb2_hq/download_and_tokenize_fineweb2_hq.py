@@ -15,65 +15,59 @@
 """
 Tokenizes the Fineweb2-HQ dataset splits.
 
-This module defines a function that returns tokenization steps for each dataset split available in the
-Fineweb2 dataset.
+Uses JAX-style tracing - steps call other steps naturally.
 """
-
-import os.path
-
 
 from experiments.llama import llama3_tokenizer
 from experiments.multilingual_fineweb2_hq.constants import FINEWEB2_DATASETS
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution import step, StepContext, executor_main, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.processing.tokenize.data_configs import TokenizerStep
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
+from marin.execution import deferred, executor_main, output, step, trace, versioned
+from marin.processing.tokenize import TokenizeConfig
+from marin.processing.tokenize import tokenize as _tokenize
 
-@step(name="raw/fineweb2_hq", fn=download_hf)
-def fineweb2_raw(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="epfml/FineWeb2-HQ",
-        gcs_output_path=ctx.output,
-        revision="c0c06e94fd3a44ae9e802b2b0fc533817601eb5e",
-        wait_for_completion=True,
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
+tokenize = deferred(_tokenize)
+
+
+@step(name="raw/fineweb2_hq")
+def fineweb2_raw():
+    """Download the Fineweb2-HQ dataset from HuggingFace."""
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="epfml/FineWeb2-HQ",
+            gcs_output_path=output(),
+            revision="c0c06e94fd3a44ae9e802b2b0fc533817601eb5e",
+            wait_for_completion=True,
+        )
     )
 
 
-def _get_fineweb2_split_paths(split):
+@step(name="tokenized/fineweb2_hq/{split}")
+def tokenize_fineweb2_split(split: str, tokenizer=llama3_tokenizer):
+    """Tokenize a single Fineweb2-HQ split."""
     patterns = FINEWEB2_DATASETS[split]
-    fineweb2_split_paths = [fineweb2_raw().with_output_path("raw/fineweb2-hq") / pattern for pattern in patterns]
-    return fineweb2_split_paths
+    # Call fineweb2_raw() - returns StepRef, dependency auto-tracked
+    raw = fineweb2_raw()
+    train_paths = [raw / pattern for pattern in patterns]
 
-
-def _create_tokenize_step(split, base_path, tokenizer):
-    """Helper function to create a tokenize step for a single split."""
-    fineweb2_split_output_path = os.path.join(base_path, "fineweb2_hq", split)
-    fineweb2_split_paths = _get_fineweb2_split_paths(split)
-
-    @step(name=fineweb2_split_output_path, fn=tokenize)
-    def tokenize_step(ctx: StepContext):
-        return TokenizeConfig(
-            train_paths=fineweb2_split_paths,
+    return tokenize(
+        TokenizeConfig(
+            train_paths=train_paths,
             validation_paths=versioned([]),
-            cache_path=ctx.output,
+            cache_path=output(),
             tokenizer=versioned(tokenizer),
         )
+    )
 
-    return tokenize_step()
 
-
-def tokenize_fineweb2hq_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, TokenizerStep]:
-    """Return a mapping from dataset key to tokenization step for Fineweb2-HQ.
-
-    Keys follow the pattern "fineweb2_hq/<split>", aligning with mixture naming conventions
-    in other datasets (e.g., "dolma/...", "nemotron_cc/...").
-    """
-    steps: dict[str, TokenizerStep] = {}
-    for split in FINEWEB2_DATASETS.keys():
-        step = _create_tokenize_step(split, base_path, tokenizer)
-        steps[f"fineweb2_hq/{split}"] = step
-    return steps
+def tokenize_fineweb2hq_pipeline(tokenizer=llama3_tokenizer):
+    """Entry point that returns all tokenization steps."""
+    return [tokenize_fineweb2_split(split=split, tokenizer=tokenizer) for split in FINEWEB2_DATASETS.keys()]
 
 
 if __name__ == "__main__":
-    executor_main(steps=list(tokenize_fineweb2hq_steps().values()), description="Tokenize Fineweb2-HQ dataset")
+    # Trace the pipeline to discover all steps
+    steps = trace(tokenize_fineweb2hq_pipeline)
+    executor_main(steps=steps, description="Tokenize Fineweb2-HQ dataset")

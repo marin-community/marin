@@ -27,7 +27,7 @@ upload_to_hf = deferred(_upload_to_hf)
 @step(name="metadata/hf_uploads/{name}")
 def upload_to_hf_step(
     name: str,
-    input_path: StepRef,
+    input_path: StepRef | str,
     repo_id: str,
     repo_type: str = "dataset",
     token: str | None = None,
@@ -59,10 +59,10 @@ def upload_to_hf_step(
             repo_id="my-org/fineweb-tokenized",
         )
 
-        # Upload a hardcoded path
+        # Upload a static path (just pass string directly)
         upload = upload_to_hf_step(
             name="manual_upload",
-            input_path=StepRef.hardcoded("gs://bucket/path"),
+            input_path="gs://bucket/path",
             repo_id="my-org/my-data",
         )
     """
