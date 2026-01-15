@@ -35,7 +35,7 @@ from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
-from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download
+from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download, ModelInfo
 from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
@@ -1323,9 +1323,21 @@ def _patch_hf_hub_download():
 
         huggingface_hub.utils._validators.validate_repo_id = custom_validate_repo_id
 
+        # transformers calls  model_info in _patch_mistral_regex to check if model is a base Mistral model
+        original_model_info = huggingface_hub.hf_api.model_info
+
+        def custom_model_info(repo_id, *args, **kwargs) -> ModelInfo:
+            if _is_url_like(repo_id):
+                # `tags=None` makes is_base_mistral return False, skipping the problematic code path
+                return ModelInfo(id="monkeypatched", tags=None)
+            return original_model_info(repo_id, *args, **kwargs)
+
+        huggingface_hub.hf_api.model_info = custom_model_info
+
         try:
             yield custom_hf_hub_download
         finally:
             # Restore the original implementation
             transformers.utils.hub.hf_hub_download = original_hf_hub_download
             huggingface_hub.utils._validators.validate_repo_id = original_validate_repo_id
+            huggingface_hub.hf_api.model_info = original_model_info
