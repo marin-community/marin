@@ -38,8 +38,9 @@ from connectrpc.code import Code
 
 from connectrpc.errors import ConnectError
 
-from fluster.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState, ControllerWorker
-from fluster.cluster.types import JobId, WorkerId, is_job_finished
+from fluster.cluster.controller.job import Job, TransitionResult
+from fluster.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerWorker
+from fluster.cluster.types import JobId, WorkerId
 from fluster.rpc import cluster_pb2
 from fluster.rpc.errors import rpc_error_handler
 
@@ -138,7 +139,7 @@ class ControllerServiceImpl:
             # Resolve parent_job_id: empty string means no parent
             parent_job_id = JobId(request.parent_job_id) if request.parent_job_id else None
 
-            job = ControllerJob(
+            job = Job(
                 job_id=JobId(job_id),
                 request=request,
                 submitted_at_ms=int(time.time() * 1000),
@@ -189,6 +190,21 @@ class ControllerServiceImpl:
                 worker_id=job.worker_id or "",
                 worker_address=worker_address,
                 parent_job_id=job.parent_job_id or "",
+                current_attempt_id=job.current_attempt_id,
+                failure_count=job.failure_count,
+                preemption_count=job.preemption_count,
+                attempts=[
+                    cluster_pb2.JobAttempt(
+                        attempt_id=a.attempt_id,
+                        worker_id=a.worker_id or "",
+                        state=a.state,
+                        exit_code=a.exit_code or 0,
+                        error=a.error or "",
+                        started_at_ms=a.started_at_ms or 0,
+                        finished_at_ms=a.finished_at_ms or 0,
+                    )
+                    for a in job.attempts
+                ],
             )
         )
 
@@ -223,7 +239,7 @@ class ControllerServiceImpl:
 
         return cluster_pb2.Empty()
 
-    def _terminate_job_tree(self, job: ControllerJob) -> None:
+    def _terminate_job_tree(self, job: Job) -> None:
         """Recursively terminate a job and all its descendants (depth-first).
 
         Children are terminated before the parent to ensure proper cascade.
@@ -234,12 +250,12 @@ class ControllerServiceImpl:
             self._terminate_job_tree(child)
 
         # Now terminate this job if not already in terminal state
-        if is_job_finished(job.state):
+        if job.is_finished():
             return
 
         # TODO: Send kill to worker
-        job.state = cluster_pb2.JOB_STATE_KILLED
-        job.finished_at_ms = int(time.time() * 1000)
+        now_ms = int(time.time() * 1000)
+        job.transition(cluster_pb2.JOB_STATE_KILLED, now_ms, error="Terminated by user")
         self._state.log_action("job_killed", job_id=job.job_id)
 
     def list_jobs(
@@ -394,19 +410,38 @@ class ControllerServiceImpl:
             )
             return cluster_pb2.Controller.ReportJobStateResponse()
 
-        # Update job state
-        job.state = request.state
-        job.exit_code = request.exit_code
-        job.error = request.error or None
-        job.finished_at_ms = request.finished_at_ms
+        # Validate attempt_id matches current attempt
+        if request.attempt_id != job.current_attempt_id:
+            logger.warning(
+                "Received stale job state report: job_id=%s expected_attempt=%d reported_attempt=%d",
+                job_id,
+                job.current_attempt_id,
+                request.attempt_id,
+            )
+            return cluster_pb2.Controller.ReportJobStateResponse()
 
-        # Remove from worker's running jobs
+        # Job handles its own state transition
+        now_ms = request.finished_at_ms or int(time.time() * 1000)
+        result = job.transition(
+            request.state,
+            now_ms,
+            is_worker_failure=False,
+            error=request.error or None,
+            exit_code=request.exit_code,
+        )
+
+        # Controller coordinates external systems based on result
         worker = self._state.get_worker(worker_id)
-        if worker:
-            worker.running_jobs.discard(job_id)
 
-        # Clean up endpoints for finished job
-        if is_job_finished(job.state):
+        if result == TransitionResult.SHOULD_RETRY:
+            # Job will retry - add back to queue
+            self._state.add_to_queue(job)
+            if worker:
+                worker.running_jobs.discard(job_id)
+        elif job.is_finished():
+            # Job finished - clean up
+            if worker:
+                worker.running_jobs.discard(job_id)
             self._state.remove_endpoints_for_job(job_id)
 
         self._state.log_action(

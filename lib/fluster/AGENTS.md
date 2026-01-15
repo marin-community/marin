@@ -51,3 +51,45 @@ Don't use TYPE_CHECKING. Use the real import. If there is a circular dependency:
 
 * Prefer to resolve it with refactoring when sensible
 * Otherwise use a protocol if you simply need the type information
+
+
+## Architecture Notes
+
+### Job vs Attempt
+
+- **Job**: A logical unit of work with a hierarchical `job_id` (e.g., "my-exp/worker-0/task-1")
+- **Attempt**: A single execution of a job, identified by `attempt_id` (0, 1, 2...)
+- Jobs may be retried on failure/preemption; each retry creates a new attempt
+- The controller tracks all attempts for history; workers execute individual attempts
+- `(job_id, attempt_id)` uniquely identifies an execution on the worker side
+
+### Key Environment Variables (injected into job containers)
+
+- `FLUSTER_JOB_ID` - Hierarchical job identifier
+- `FLUSTER_ATTEMPT_ID` - Current attempt number (0-indexed)
+- `FLUSTER_WORKER_ID` - Worker executing the job
+- `FLUSTER_CONTROLLER_ADDRESS` - Controller URL for sub-jobs/actors
+- `FLUSTER_PORT_<NAME>` - Allocated port numbers
+
+## Planning
+
+Prefer _spiral_ plans over _linear_ plans. e.g. when implementing a new feature, make a plan which has step 1 as:
+
+Step 1:
+* Add the minimal changes to the `.proto` file
+* Add the server stub code
+* Add a client wiring
+* Add an end-to-end test
+
+Step 2:
+* Extend proto with additional field
+* Update server code
+* Update client code
+* Update tests
+
+...
+
+That is _each stage of the plan_ should be a independently testable,
+self-contained unit of work. THis is preferable to plans which attempt to make
+all of the changes for one area (e.g. all proto changes, then all server
+changes, etc.)

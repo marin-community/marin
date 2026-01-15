@@ -41,10 +41,10 @@ import uvicorn
 from fluster.time_utils import wait_until
 
 from fluster.cluster.controller.dashboard import ControllerDashboard
-from fluster.cluster.controller.retry import handle_job_failure
+from fluster.cluster.controller.job import Job, TransitionResult
 from fluster.cluster.controller.scheduler import ScheduleResult, Scheduler
 from fluster.cluster.controller.service import ControllerServiceImpl
-from fluster.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
+from fluster.cluster.controller.state import ControllerState, ControllerWorker
 from fluster.rpc import cluster_pb2
 from fluster.rpc.cluster_connect import WorkerServiceClientSync
 
@@ -308,7 +308,7 @@ class Controller:
         for job, worker in result.assignments:
             self._dispatch_job(job, worker, now_ms)
 
-    def _dispatch_job(self, job: ControllerJob, worker: ControllerWorker, now_ms: int) -> None:
+    def _dispatch_job(self, job: Job, worker: ControllerWorker, now_ms: int) -> None:
         """Dispatch a job to a worker via RPC.
 
         All state is set BEFORE the RPC call. The worker reports all state
@@ -316,9 +316,10 @@ class Controller:
 
         On failure: resets state and marks worker unhealthy.
         """
-        # Set all state BEFORE RPC - worker may complete before RPC returns
-        job.worker_id = worker.worker_id
-        job.started_at_ms = now_ms
+        # Job updates its own state BEFORE RPC - worker may complete before RPC returns
+        job.mark_dispatched(worker.worker_id, now_ms)
+
+        # Controller coordinates external systems
         worker.running_jobs.add(job.job_id)
         self._state.remove_from_queue(job.job_id)
 
@@ -326,6 +327,7 @@ class Controller:
             stub = self._stub_factory.get_stub(worker.address)
             request = cluster_pb2.Worker.RunJobRequest(
                 job_id=str(job.job_id),
+                attempt_id=job.current_attempt_id,
                 serialized_entrypoint=job.request.serialized_entrypoint,
                 environment=cluster_pb2.EnvironmentConfig(
                     workspace=job.request.environment.workspace,
@@ -348,12 +350,12 @@ class Controller:
             )
 
         except Exception:
-            # Failure: reset all state changes
-            job.worker_id = None
-            job.started_at_ms = None
-            job.state = cluster_pb2.JOB_STATE_PENDING
+            # Job reverts its own state
+            job.revert_dispatch()
+
+            # Controller coordinates external systems
             worker.running_jobs.discard(job.job_id)
-            self._state.add_to_queue(job)  # Re-add to queue for retry
+            self._state.add_to_queue(job)
             worker.healthy = False
             logger.exception("Failed to dispatch job %s to worker %s", job.job_id, worker.address)
             self._state.log_action(
@@ -362,15 +364,13 @@ class Controller:
                 worker_id=worker.worker_id,
             )
 
-    def _mark_job_unschedulable(self, job: ControllerJob, now_ms: int) -> None:
+    def _mark_job_unschedulable(self, job: Job, now_ms: int) -> None:
         """Mark job as unschedulable and remove from queue."""
         logger.warning(
             f"Job {job.job_id} exceeded scheduling timeout "
             f"({job.request.scheduling_timeout_seconds}s), marking as UNSCHEDULABLE"
         )
-        job.state = cluster_pb2.JOB_STATE_UNSCHEDULABLE
-        job.finished_at_ms = now_ms
-        job.error = f"Scheduling timeout exceeded ({job.request.scheduling_timeout_seconds}s)"
+        job.transition(cluster_pb2.JOB_STATE_UNSCHEDULABLE, now_ms)
         self._state.remove_from_queue(job.job_id)
         self._state.log_action(
             "job_unschedulable",
@@ -402,7 +402,20 @@ class Controller:
 
                 # Retry jobs that were running on the timed-out worker
                 for job_id in list(worker.running_jobs):
-                    handle_job_failure(self._state, job_id, is_worker_failure=True)
+                    job = self._state.get_job(job_id)
+                    if not job:
+                        continue
+
+                    result = job.transition(
+                        cluster_pb2.JOB_STATE_WORKER_FAILED,
+                        now_ms,
+                        is_worker_failure=True,
+                        error=f"Worker {worker.worker_id} timed out",
+                    )
+
+                    if result == TransitionResult.SHOULD_RETRY:
+                        self._state.add_to_queue(job)
+                        worker.running_jobs.discard(job_id)
 
     def _run_server(self) -> None:
         """Run dashboard server (blocking, for thread)."""

@@ -362,6 +362,7 @@ class Worker:
             request = cluster_pb2.Controller.ReportJobStateRequest(
                 worker_id=self._worker_id,
                 job_id=job.job_id,
+                attempt_id=job.attempt_id,
                 state=job.status,
                 exit_code=job.exit_code or 0,
                 error=job.error or "",
@@ -380,6 +381,7 @@ class Worker:
 
         Fluster auto-injects system environment variables (these override user-provided values):
         - FLUSTER_JOB_ID: The job's unique identifier
+        - FLUSTER_ATTEMPT_ID: Which attempt this is (0-indexed)
         - FLUSTER_WORKER_ID: ID of the worker running this job
         - FLUSTER_CONTROLLER_ADDRESS: Controller URL for endpoint registration
         - FLUSTER_BUNDLE_GCS_PATH: Bundle path for sub-job workspace inheritance
@@ -390,20 +392,22 @@ class Worker:
         passed through from the RunJobRequest.environment.env_vars.
         """
         job_id = request.job_id or str(uuid.uuid4())
+        attempt_id = request.attempt_id
 
         # Allocate requested ports
         port_names = list(request.ports)
         allocated_ports = self._port_allocator.allocate(len(port_names)) if port_names else []
         ports = dict(zip(port_names, allocated_ports, strict=True))
 
-        # Create job working directory
+        # Create job working directory with attempt isolation
         # Use safe path component for hierarchical job IDs (e.g., "my-exp/worker-0" -> "my-exp__worker-0")
         safe_job_id = job_id.replace("/", "__")
-        workdir = Path(tempfile.gettempdir()) / "fluster-worker" / "jobs" / safe_job_id
+        workdir = Path(tempfile.gettempdir()) / "fluster-worker" / "jobs" / f"{safe_job_id}_attempt_{attempt_id}"
         workdir.mkdir(parents=True, exist_ok=True)
 
         job = Job(
             job_id=job_id,
+            attempt_id=attempt_id,
             request=request,
             status=cluster_pb2.JOB_STATE_PENDING,
             ports=ports,
@@ -478,6 +482,7 @@ class Worker:
 
             # Auto-inject Fluster system variables (these override user-provided values)
             env["FLUSTER_JOB_ID"] = job.job_id
+            env["FLUSTER_ATTEMPT_ID"] = str(job.attempt_id)
 
             if self._config.worker_id:
                 env["FLUSTER_WORKER_ID"] = self._config.worker_id

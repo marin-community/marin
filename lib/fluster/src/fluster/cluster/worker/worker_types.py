@@ -89,6 +89,7 @@ class Job:
     """Internal job tracking state."""
 
     job_id: str
+    attempt_id: int = 0
     request: cluster_pb2.Worker.RunJobRequest
     status: JobState = cluster_pb2.JOB_STATE_PENDING
     exit_code: int | None = None
@@ -159,6 +160,7 @@ class Job:
             finished_at_ms=self.finished_at_ms or 0,
             ports=self.ports,
             status_message=self.status_message,
+            current_attempt_id=self.attempt_id,
             resource_usage=cluster_pb2.ResourceUsage(
                 memory_mb=self.current_memory_mb,
                 memory_peak_mb=self.peak_memory_mb,

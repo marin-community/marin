@@ -61,7 +61,7 @@ class BuildMetrics(_message.Message):
     def __init__(self, build_started_ms: _Optional[int] = ..., build_finished_ms: _Optional[int] = ..., from_cache: _Optional[bool] = ..., image_tag: _Optional[str] = ...) -> None: ...
 
 class JobStatus(_message.Message):
-    __slots__ = ("job_id", "state", "exit_code", "error", "started_at_ms", "finished_at_ms", "ports", "resource_usage", "status_message", "build_metrics", "worker_id", "worker_address", "serialized_result", "parent_job_id")
+    __slots__ = ("job_id", "state", "exit_code", "error", "started_at_ms", "finished_at_ms", "ports", "resource_usage", "status_message", "build_metrics", "worker_id", "worker_address", "serialized_result", "parent_job_id", "current_attempt_id", "attempts", "failure_count", "preemption_count")
     class PortsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -83,6 +83,10 @@ class JobStatus(_message.Message):
     WORKER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
     SERIALIZED_RESULT_FIELD_NUMBER: _ClassVar[int]
     PARENT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
+    CURRENT_ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    ATTEMPTS_FIELD_NUMBER: _ClassVar[int]
+    FAILURE_COUNT_FIELD_NUMBER: _ClassVar[int]
+    PREEMPTION_COUNT_FIELD_NUMBER: _ClassVar[int]
     job_id: str
     state: JobState
     exit_code: int
@@ -97,7 +101,31 @@ class JobStatus(_message.Message):
     worker_address: str
     serialized_result: bytes
     parent_job_id: str
-    def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., ports: _Optional[_Mapping[str, int]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., status_message: _Optional[str] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., worker_id: _Optional[str] = ..., worker_address: _Optional[str] = ..., serialized_result: _Optional[bytes] = ..., parent_job_id: _Optional[str] = ...) -> None: ...
+    current_attempt_id: int
+    attempts: _containers.RepeatedCompositeFieldContainer[JobAttempt]
+    failure_count: int
+    preemption_count: int
+    def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., ports: _Optional[_Mapping[str, int]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., status_message: _Optional[str] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., worker_id: _Optional[str] = ..., worker_address: _Optional[str] = ..., serialized_result: _Optional[bytes] = ..., parent_job_id: _Optional[str] = ..., current_attempt_id: _Optional[int] = ..., attempts: _Optional[_Iterable[_Union[JobAttempt, _Mapping]]] = ..., failure_count: _Optional[int] = ..., preemption_count: _Optional[int] = ...) -> None: ...
+
+class JobAttempt(_message.Message):
+    __slots__ = ("attempt_id", "worker_id", "state", "exit_code", "error", "started_at_ms", "finished_at_ms", "is_worker_failure")
+    ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    STARTED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    FINISHED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    IS_WORKER_FAILURE_FIELD_NUMBER: _ClassVar[int]
+    attempt_id: int
+    worker_id: str
+    state: JobState
+    exit_code: int
+    error: str
+    started_at_ms: int
+    finished_at_ms: int
+    is_worker_failure: bool
+    def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., is_worker_failure: _Optional[bool] = ...) -> None: ...
 
 class DeviceConfig(_message.Message):
     __slots__ = ("cpu", "gpu", "tpu")
@@ -308,20 +336,22 @@ class Controller(_message.Message):
         workers: _containers.RepeatedCompositeFieldContainer[Controller.WorkerHealthStatus]
         def __init__(self, workers: _Optional[_Iterable[_Union[Controller.WorkerHealthStatus, _Mapping]]] = ...) -> None: ...
     class ReportJobStateRequest(_message.Message):
-        __slots__ = ("worker_id", "job_id", "state", "exit_code", "error", "finished_at_ms")
+        __slots__ = ("worker_id", "job_id", "state", "exit_code", "error", "finished_at_ms", "attempt_id")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
         STATE_FIELD_NUMBER: _ClassVar[int]
         EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
         ERROR_FIELD_NUMBER: _ClassVar[int]
         FINISHED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
         worker_id: str
         job_id: str
         state: JobState
         exit_code: int
         error: str
         finished_at_ms: int
-        def __init__(self, worker_id: _Optional[str] = ..., job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., finished_at_ms: _Optional[int] = ...) -> None: ...
+        attempt_id: int
+        def __init__(self, worker_id: _Optional[str] = ..., job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., finished_at_ms: _Optional[int] = ..., attempt_id: _Optional[int] = ...) -> None: ...
     class ReportJobStateResponse(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
@@ -398,7 +428,7 @@ class Controller(_message.Message):
 class Worker(_message.Message):
     __slots__ = ()
     class RunJobRequest(_message.Message):
-        __slots__ = ("job_id", "serialized_entrypoint", "environment", "bundle_gcs_path", "resources", "timeout_seconds", "ports")
+        __slots__ = ("job_id", "serialized_entrypoint", "environment", "bundle_gcs_path", "resources", "timeout_seconds", "ports", "attempt_id")
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
         SERIALIZED_ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
         ENVIRONMENT_FIELD_NUMBER: _ClassVar[int]
@@ -406,6 +436,7 @@ class Worker(_message.Message):
         RESOURCES_FIELD_NUMBER: _ClassVar[int]
         TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
         PORTS_FIELD_NUMBER: _ClassVar[int]
+        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
         job_id: str
         serialized_entrypoint: bytes
         environment: EnvironmentConfig
@@ -413,7 +444,8 @@ class Worker(_message.Message):
         resources: ResourceSpec
         timeout_seconds: int
         ports: _containers.RepeatedScalarFieldContainer[str]
-        def __init__(self, job_id: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., timeout_seconds: _Optional[int] = ..., ports: _Optional[_Iterable[str]] = ...) -> None: ...
+        attempt_id: int
+        def __init__(self, job_id: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., timeout_seconds: _Optional[int] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ...) -> None: ...
     class RunJobResponse(_message.Message):
         __slots__ = ("job_id", "state")
         JOB_ID_FIELD_NUMBER: _ClassVar[int]

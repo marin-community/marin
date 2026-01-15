@@ -216,7 +216,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   <h2>Endpoints</h2>
   <table id="endpoints-table">
-    <tr><th>Name</th><th>Address</th><th>Job</th><th>Namespace</th></tr>
+    <tr><th>Name</th><th>Address</th><th>Job</th></tr>
   </table>
 
   <h2>Users</h2>
@@ -313,11 +313,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <td>${escapeHtml(e.name)}</td>
             <td>${escapeHtml(e.address)}</td>
             <td>${jobLink}</td>
-            <td>${escapeHtml(e.namespace)}</td>
           </tr>`;
         }).join('');
         document.getElementById('endpoints-table').innerHTML =
-          '<tr><th>Name</th><th>Address</th><th>Job</th><th>Namespace</th></tr>' + endpointsHtml;
+          '<tr><th>Name</th><th>Address</th><th>Job</th></tr>' + endpointsHtml;
       } catch (e) {
         console.error('Failed to refresh:', e);
       }
@@ -717,6 +716,7 @@ class ControllerDashboard:
             Route("/api/actions", self._api_actions),
             Route("/api/workers", self._api_workers),
             Route("/api/jobs", self._api_jobs),
+            Route("/api/jobs/{job_id}/attempts", self._api_job_attempts),
             Route("/api/endpoints", self._api_endpoints),
             Route("/health", self._health),
             # Connect RPC - mount WSGI app wrapped for ASGI
@@ -820,6 +820,10 @@ class ControllerDashboard:
                     "submitted_at_ms": j.submitted_at_ms,
                     "started_at_ms": j.started_at_ms,
                     "finished_at_ms": j.finished_at_ms,
+                    "current_attempt_id": j.current_attempt_id,
+                    "total_attempts": j.total_attempts,
+                    "failure_count": j.failure_count,
+                    "preemption_count": j.preemption_count,
                     "resources": {
                         "cpu": j.request.resources.cpu if j.request.resources else 0,
                         "memory": j.request.resources.memory if j.request.resources else "",
@@ -828,6 +832,43 @@ class ControllerDashboard:
                 for j in jobs
             ]
         )
+
+    def _api_job_attempts(self, request: Request) -> JSONResponse:
+        """Return attempt history for a job."""
+        job_id = request.path_params["job_id"]
+        job = self._state.get_job(JobId(job_id))
+        if not job:
+            return JSONResponse({"error": "Job not found"}, status_code=404)
+
+        attempts = [
+            {
+                "attempt_id": a.attempt_id,
+                "worker_id": str(a.worker_id) if a.worker_id else None,
+                "state": _job_state_name(a.state),
+                "exit_code": a.exit_code,
+                "error": a.error,
+                "started_at_ms": a.started_at_ms,
+                "finished_at_ms": a.finished_at_ms,
+                "is_worker_failure": a.is_worker_failure,
+            }
+            for a in job.attempts
+        ]
+
+        # Add current attempt
+        attempts.append(
+            {
+                "attempt_id": job.current_attempt_id,
+                "worker_id": str(job.worker_id) if job.worker_id else None,
+                "state": _job_state_name(job.state),
+                "exit_code": job.exit_code,
+                "error": job.error,
+                "started_at_ms": job.started_at_ms,
+                "finished_at_ms": job.finished_at_ms,
+                "is_worker_failure": False,
+            }
+        )
+
+        return JSONResponse(attempts)
 
     def _api_endpoints(self, _request: Request) -> JSONResponse:
         """Return all active endpoints for RUNNING jobs."""

@@ -28,6 +28,7 @@ from connectrpc.request import RequestContext
 from fluster.rpc import cluster_pb2
 from fluster.cluster.types import Entrypoint
 from fluster.cluster.worker.builder import BuildResult, VenvCache
+from fluster.cluster.worker.worker_types import Job as WorkerJob
 from fluster.cluster.worker.bundle import BundleCache
 from fluster.cluster.worker.docker import ContainerConfig, ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
 from fluster.cluster.worker.service import WorkerServiceImpl
@@ -147,6 +148,65 @@ def test_default_port_range():
 
     for port in ports:
         assert 30000 <= port < 40000
+
+
+# ============================================================================
+# Worker Job (worker_types) Tests
+# ============================================================================
+
+
+def test_worker_job_to_proto_roundtrip():
+    """Test WorkerJob.to_proto() preserves all fields including attempt_id."""
+    request = cluster_pb2.Worker.RunJobRequest(
+        job_id="test-job",
+        serialized_entrypoint=b"test",
+    )
+
+    job = WorkerJob(
+        job_id="test-job",
+        attempt_id=3,
+        request=request,
+        status=cluster_pb2.JOB_STATE_RUNNING,
+        exit_code=None,
+        error=None,
+        started_at_ms=1000,
+        finished_at_ms=None,
+        ports={"http": 8080, "grpc": 9090},
+        status_message="Building image",
+        current_memory_mb=512,
+        peak_memory_mb=1024,
+        current_cpu_percent=50,
+        process_count=5,
+        disk_mb=100,
+        build_started_ms=500,
+        build_finished_ms=900,
+        build_from_cache=True,
+        image_tag="test:v1",
+    )
+
+    proto = job.to_proto()
+
+    # Core fields
+    assert proto.job_id == "test-job"
+    assert proto.current_attempt_id == 3
+    assert proto.state == cluster_pb2.JOB_STATE_RUNNING
+    assert proto.started_at_ms == 1000
+    assert proto.finished_at_ms == 0
+    assert proto.status_message == "Building image"
+    assert dict(proto.ports) == {"http": 8080, "grpc": 9090}
+
+    # Resource usage
+    assert proto.resource_usage.memory_mb == 512
+    assert proto.resource_usage.memory_peak_mb == 1024
+    assert proto.resource_usage.cpu_percent == 50
+    assert proto.resource_usage.process_count == 5
+    assert proto.resource_usage.disk_mb == 100
+
+    # Build metrics
+    assert proto.build_metrics.build_started_ms == 500
+    assert proto.build_metrics.build_finished_ms == 900
+    assert proto.build_metrics.from_cache is True
+    assert proto.build_metrics.image_tag == "test:v1"
 
 
 # ============================================================================

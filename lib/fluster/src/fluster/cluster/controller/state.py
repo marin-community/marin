@@ -15,7 +15,8 @@
 """Controller core data structures.
 
 This module provides the in-memory state management for the controller, including:
-- ControllerJob: Controller's view of a job with retry tracking and gang info
+- Job: Job with self-contained state transitions (imported from job.py)
+- ControllerJob: Alias for Job (for backwards compatibility)
 - ControllerWorker: Controller's view of a worker with health and capacity
 - ControllerEndpoint: An endpoint registered with the controller for service discovery
 - ActionLogEntry: Record of a controller action for the dashboard
@@ -30,60 +31,12 @@ from collections import deque
 from dataclasses import dataclass, field
 from threading import RLock
 
-from fluster.rpc import cluster_pb2
+from fluster.cluster.controller.job import Job
 from fluster.cluster.types import JobId, WorkerId
+from fluster.rpc import cluster_pb2
 
-
-@dataclass
-class ControllerJob:
-    """Controller's view of a job.
-
-    Tracks job state, retry counts, gang scheduling information, and timestamps.
-    Used by the scheduler to determine which jobs to dispatch and by the
-    heartbeat monitor to update job state based on worker reports.
-
-    Args:
-        job_id: Unique job identifier
-        request: Original job launch request from the client
-        state: Current job state (defaults to PENDING)
-        worker_id: Worker assigned to this job (if any)
-        failure_count: Number of internal failures (job exit code != 0)
-        preemption_count: Number of external failures (worker died)
-        max_retries_failure: Maximum internal failures before giving up
-        max_retries_preemption: Maximum external failures before giving up
-        gang_id: Gang identifier for gang-scheduled jobs (None for solo jobs)
-        parent_job_id: Parent job identifier for hierarchical jobs (None for root jobs)
-        submitted_at_ms: Timestamp when job was submitted
-        started_at_ms: Timestamp when job started running
-        finished_at_ms: Timestamp when job reached terminal state
-        error: Error message if job failed
-        exit_code: Process exit code if job completed
-    """
-
-    job_id: JobId
-    request: cluster_pb2.Controller.LaunchJobRequest
-    state: cluster_pb2.JobState = cluster_pb2.JOB_STATE_PENDING
-    worker_id: WorkerId | None = None
-
-    # Retry tracking
-    failure_count: int = 0
-    preemption_count: int = 0
-    max_retries_failure: int = 0
-    max_retries_preemption: int = 100
-
-    # Gang scheduling
-    gang_id: str | None = None
-
-    # Hierarchical job tracking
-    parent_job_id: JobId | None = None
-
-    # Timestamps
-    submitted_at_ms: int = 0
-    started_at_ms: int | None = None
-    finished_at_ms: int | None = None
-
-    error: str | None = None
-    exit_code: int | None = None
+# Backwards compatibility alias
+ControllerJob = Job
 
 
 @dataclass
@@ -187,7 +140,7 @@ class ControllerState:
 
     def __init__(self):
         self._lock = RLock()
-        self._jobs: dict[JobId, ControllerJob] = {}
+        self._jobs: dict[JobId, Job] = {}
         self._workers: dict[WorkerId, ControllerWorker] = {}
         self._queue: deque[JobId] = deque()  # FIFO queue of job IDs
         self._gangs: dict[str, set[JobId]] = {}  # gang_id -> job_ids
@@ -195,7 +148,7 @@ class ControllerState:
         self._endpoints: dict[str, ControllerEndpoint] = {}  # endpoint_id -> endpoint
         self._endpoints_by_job: dict[JobId, set[str]] = {}  # job_id -> endpoint_ids
 
-    def add_job(self, job: ControllerJob) -> None:
+    def add_job(self, job: Job) -> None:
         """Add a job to the controller state and queue.
 
         The job is added to the jobs dict, appended to the FIFO queue, and
@@ -210,7 +163,7 @@ class ControllerState:
             if job.gang_id:
                 self._gangs.setdefault(job.gang_id, set()).add(job.job_id)
 
-    def get_job(self, job_id: JobId) -> ControllerJob | None:
+    def get_job(self, job_id: JobId) -> Job | None:
         """Get a job by ID.
 
         Args:
@@ -222,7 +175,7 @@ class ControllerState:
         with self._lock:
             return self._jobs.get(job_id)
 
-    def pop_next_pending(self) -> ControllerJob | None:
+    def pop_next_pending(self) -> Job | None:
         """Pop next PENDING job from the queue.
 
         Iterates through the queue until finding a job in PENDING state,
@@ -287,7 +240,7 @@ class ControllerState:
         with self._lock:
             return [w for w in self._workers.values() if w.healthy]
 
-    def list_all_jobs(self) -> list[ControllerJob]:
+    def list_all_jobs(self) -> list[Job]:
         """Get all jobs in the controller.
 
         Returns:
@@ -305,7 +258,7 @@ class ControllerState:
         with self._lock:
             return list(self._workers.values())
 
-    def get_gang_jobs(self, gang_id: str) -> list[ControllerJob]:
+    def get_gang_jobs(self, gang_id: str) -> list[Job]:
         """Get all jobs in a gang.
 
         Args:
@@ -318,7 +271,7 @@ class ControllerState:
             job_ids = self._gangs.get(gang_id, set())
             return [self._jobs[jid] for jid in job_ids if jid in self._jobs]
 
-    def get_children(self, job_id: JobId) -> list[ControllerJob]:
+    def get_children(self, job_id: JobId) -> list[Job]:
         """Get all direct child jobs of a parent job.
 
         Args:
@@ -371,7 +324,7 @@ class ControllerState:
             actions = list(self._actions)
             return actions[-limit:] if limit < len(actions) else actions
 
-    def peek_pending_jobs(self) -> list[ControllerJob]:
+    def peek_pending_jobs(self) -> list[Job]:
         """Return all PENDING jobs in queue order without removing them.
 
         Used by the scheduler to iterate through the queue and find schedulable
@@ -397,7 +350,7 @@ class ControllerState:
         with self._lock:
             self._queue = deque(jid for jid in self._queue if jid != job_id)
 
-    def add_to_queue(self, job: ControllerJob) -> None:
+    def add_to_queue(self, job: Job) -> None:
         """Add a job back to the queue for retry.
 
         Used when dispatch fails and the job needs to be rescheduled.

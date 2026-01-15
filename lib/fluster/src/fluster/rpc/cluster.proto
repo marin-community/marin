@@ -75,6 +75,27 @@ message JobStatus {
 
   // Parent job ID for hierarchical job tracking (empty string if root job)
   string parent_job_id = 14;
+
+  // Attempt tracking
+  int32 current_attempt_id = 15;           // Current/latest attempt number
+  repeated JobAttempt attempts = 16;       // History of previous attempts
+  int32 failure_count = 17;                // Total job failures
+  int32 preemption_count = 18;             // Total preemptions
+}
+
+// Record of a single job execution attempt
+message JobAttempt {
+  int32 attempt_id = 1;           // 0-indexed attempt number
+  string worker_id = 2;           // Worker that executed this attempt
+
+  JobState state = 3;             // Terminal state of this attempt
+  int32 exit_code = 4;
+  string error = 5;
+
+  int64 started_at_ms = 6;
+  int64 finished_at_ms = 7;
+
+  bool is_worker_failure = 8;     // True if preemption/worker death
 }
 
 // ============================================================================
@@ -265,6 +286,7 @@ message Controller {
     int32 exit_code = 4;
     string error = 5;
     int64 finished_at_ms = 6;
+    int32 attempt_id = 7;           // Which attempt completed
   }
 
   message ReportJobStateResponse {}
@@ -332,6 +354,8 @@ message Worker {
 
     // Port requests
     repeated string ports = 9;
+
+    int32 attempt_id = 10;          // Which attempt this is
   }
 
   message RunJobResponse {

@@ -213,6 +213,11 @@ def test_list_jobs_with_data(client, service):
     job_ids = {j["job_id"] for j in jobs}
     assert job_ids == {"job-0", "job-1", "job-2"}
 
+    # Verify attempt_id is included
+    for job in jobs:
+        assert "attempt_id" in job
+        assert job["attempt_id"] >= 0
+
 
 def test_get_job_not_found(client):
     """Test /api/jobs/{job_id} with nonexistent job."""
@@ -235,6 +240,8 @@ def test_get_job_success(client, service):
     data = response.json()
 
     assert data["job_id"] == "job-details"
+    assert "attempt_id" in data
+    assert data["attempt_id"] >= 0
     assert data["status"] == "succeeded"  # Job completes immediately with mock runtime
     assert data["exit_code"] == 0
     assert "http" in data["ports"]

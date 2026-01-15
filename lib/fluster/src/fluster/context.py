@@ -195,12 +195,14 @@ class FlusterContext:
 
     Attributes:
         job_id: Unique identifier for this job (hierarchical: "root/parent/child")
+        attempt_id: Attempt number for this job execution (0-based)
         worker_id: Identifier for the worker executing this job (may be None)
         controller: ClusterController for job/actor operations
         ports: Allocated ports by name (e.g., {"actor": 50001})
     """
 
     job_id: str
+    attempt_id: int = 0
     worker_id: str | None = None
     controller: ClusterController | None = None
     ports: dict[str, int] = field(default_factory=dict)
@@ -331,6 +333,7 @@ def create_context_from_env() -> FlusterContext:
     Used by workers to set up context when executing job entrypoints.
     Reads:
     - FLUSTER_JOB_ID
+    - FLUSTER_ATTEMPT_ID
     - FLUSTER_WORKER_ID
     - FLUSTER_CONTROLLER_ADDRESS
     - FLUSTER_BUNDLE_GCS_PATH (for sub-job workspace inheritance)
@@ -342,6 +345,7 @@ def create_context_from_env() -> FlusterContext:
     import os
 
     job_id = os.environ.get("FLUSTER_JOB_ID", "")
+    attempt_id = int(os.environ.get("FLUSTER_ATTEMPT_ID", "0"))
     worker_id = os.environ.get("FLUSTER_WORKER_ID")
     controller_address = os.environ.get("FLUSTER_CONTROLLER_ADDRESS")
     bundle_gcs_path = os.environ.get("FLUSTER_BUNDLE_GCS_PATH")
@@ -365,6 +369,7 @@ def create_context_from_env() -> FlusterContext:
 
     return FlusterContext(
         job_id=job_id,
+        attempt_id=attempt_id,
         worker_id=worker_id,
         controller=controller,
         ports=ports,

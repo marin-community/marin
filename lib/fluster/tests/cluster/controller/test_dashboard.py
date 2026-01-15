@@ -193,3 +193,99 @@ def test_jobs_state_names_mapped_correctly(client, state, job_request):
 
     for proto_state, expected_name in state_mapping:
         assert job_by_id[f"j-{proto_state}"] == expected_name
+
+
+def test_api_jobs_includes_attempt_info(client, state, job_request):
+    """Jobs API includes attempt tracking fields."""
+    from fluster.cluster.controller.job import JobAttempt
+
+    job = ControllerJob(
+        job_id=JobId("test-job"),
+        request=job_request,
+        state=cluster_pb2.JOB_STATE_RUNNING,
+        current_attempt_id=2,
+        failure_count=1,
+        preemption_count=0,
+        attempts=[
+            JobAttempt(attempt_id=0, state=cluster_pb2.JOB_STATE_FAILED),
+            JobAttempt(attempt_id=1, state=cluster_pb2.JOB_STATE_WORKER_FAILED),
+        ],
+    )
+    state.add_job(job)
+
+    jobs = client.get("/api/jobs").json()
+
+    assert len(jobs) == 1
+    assert jobs[0]["current_attempt_id"] == 2
+    assert jobs[0]["total_attempts"] == 3
+    assert jobs[0]["failure_count"] == 1
+    assert jobs[0]["preemption_count"] == 0
+
+
+def test_api_job_attempts_returns_attempt_history(client, state, job_request):
+    """Job attempts API returns historical attempts plus current."""
+    from fluster.cluster.controller.job import JobAttempt
+
+    job = ControllerJob(
+        job_id=JobId("test-job"),
+        request=job_request,
+        state=cluster_pb2.JOB_STATE_RUNNING,
+        current_attempt_id=2,
+        worker_id=WorkerId("worker2"),
+        started_at_ms=3000,
+        attempts=[
+            JobAttempt(
+                attempt_id=0,
+                worker_id=WorkerId("worker1"),
+                state=cluster_pb2.JOB_STATE_FAILED,
+                started_at_ms=1000,
+                finished_at_ms=2000,
+                exit_code=1,
+                error="Task failed",
+                is_worker_failure=False,
+            ),
+            JobAttempt(
+                attempt_id=1,
+                worker_id=WorkerId("worker1"),
+                state=cluster_pb2.JOB_STATE_WORKER_FAILED,
+                started_at_ms=2100,
+                finished_at_ms=2500,
+                error="Worker died",
+                is_worker_failure=True,
+            ),
+        ],
+    )
+    state.add_job(job)
+
+    attempts = client.get("/api/jobs/test-job/attempts").json()
+
+    assert len(attempts) == 3
+
+    # First attempt
+    assert attempts[0]["attempt_id"] == 0
+    assert attempts[0]["worker_id"] == "worker1"
+    assert attempts[0]["state"] == "failed"
+    assert attempts[0]["exit_code"] == 1
+    assert attempts[0]["error"] == "Task failed"
+    assert attempts[0]["is_worker_failure"] is False
+
+    # Second attempt
+    assert attempts[1]["attempt_id"] == 1
+    assert attempts[1]["worker_id"] == "worker1"
+    assert attempts[1]["state"] == "worker_failed"
+    assert attempts[1]["error"] == "Worker died"
+    assert attempts[1]["is_worker_failure"] is True
+
+    # Current attempt
+    assert attempts[2]["attempt_id"] == 2
+    assert attempts[2]["worker_id"] == "worker2"
+    assert attempts[2]["state"] == "running"
+    assert attempts[2]["is_worker_failure"] is False
+
+
+def test_api_job_attempts_returns_404_for_missing_job(client, state):
+    """Job attempts API returns 404 for non-existent job."""
+    response = client.get("/api/jobs/nonexistent/attempts")
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "Job not found"

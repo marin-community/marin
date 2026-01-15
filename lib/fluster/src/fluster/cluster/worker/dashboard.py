@@ -23,12 +23,12 @@ REST endpoints are implemented by calling the canonical RPC methods and
 converting proto responses to JSON for browser consumption.
 """
 
+import uvicorn
 from starlette.applications import Starlette
+from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
-
-from starlette.middleware.wsgi import WSGIMiddleware
 
 from fluster.rpc import cluster_pb2
 from fluster.rpc.cluster_connect import WorkerServiceWSGIApplication
@@ -83,8 +83,9 @@ DASHBOARD_HTML = """
         const started = j.started_at ? new Date(j.started_at).toLocaleString() : '-';
         const finished = j.finished_at ? new Date(j.finished_at).toLocaleString() : '-';
         const exitCode = j.exit_code !== null && j.exit_code !== undefined ? j.exit_code : '-';
+        const jobDisplay = j.attempt_id > 0 ? `${j.job_id.slice(0, 8)}... (attempt ${j.attempt_id})` : `${j.job_id.slice(0, 8)}...`;
         return `<tr>
-          <td><a href="/job/${j.job_id}" class="job-link" target="_blank">${j.job_id.slice(0, 8)}...</a></td>
+          <td><a href="/job/${j.job_id}" class="job-link" target="_blank">${jobDisplay}</a></td>
           <td class="status-${j.status}">${j.status}</td>
           <td>${exitCode}</td>
           <td>${j.memory_mb || 0}/${j.memory_peak_mb || 0} MB</td>
@@ -172,6 +173,7 @@ JOB_DETAIL_HTML = """
 
       document.getElementById('status').innerHTML = `<span class="status-${job.status}">${job.status}</span>`;
       document.getElementById('details').innerHTML = `
+        <p><b>Attempt:</b> ${job.attempt_id}</p>
         <p><b>Started:</b> ${job.started_at ? new Date(job.started_at).toLocaleString() : '-'}</p>
         <p><b>Finished:</b> ${job.finished_at ? new Date(job.finished_at).toLocaleString() : '-'}</p>
         <p><b>Exit Code:</b> ${job.exit_code !== null ? job.exit_code : '-'}</p>
@@ -237,6 +239,7 @@ class WorkerDashboard:
         self._host = host
         self._port = port
         self._app = self._create_app()
+        self._server: uvicorn.Server | None = None
 
     @property
     def port(self) -> int:
@@ -307,6 +310,7 @@ class WorkerDashboard:
             [
                 {
                     "job_id": j.job_id,
+                    "attempt_id": j.current_attempt_id,
                     "status": self._status_name(j.state),
                     "started_at": j.started_at_ms,
                     "finished_at": j.finished_at_ms,
@@ -341,6 +345,7 @@ class WorkerDashboard:
         return JSONResponse(
             {
                 "job_id": job.job_id,
+                "attempt_id": job.current_attempt_id,
                 "status": self._status_name(job.state),
                 "started_at": job.started_at_ms,
                 "finished_at": job.finished_at_ms,
@@ -433,5 +438,5 @@ class WorkerDashboard:
 
     async def shutdown(self) -> None:
         """Shutdown the async server gracefully."""
-        if hasattr(self, "_server") and self._server:
+        if self._server:
             self._server.should_exit = True
