@@ -23,8 +23,7 @@ import os.path
 
 from marin.download.huggingface.download_hf import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf as _download_hf
-from marin.execution.executor import ExecutorStep, versioned
-from marin.execution import step, deferred, output
+from marin.execution import StepRef, deferred, output, step, versioned
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize import tokenize as _tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
@@ -112,6 +111,17 @@ DOLMA_LLAMA3_OVERRIDES = {
 }
 
 
+@step(name="tokenized/dolma/{dataset}")
+def _tokenize_dolma_split(dataset: str, file_list: list[str], tok: str) -> StepRef:
+    """Tokenize a single Dolma split."""
+    return tokenize(TokenizeConfig(
+        train_paths=[_DOLMA_V1_7_PATH + "/" + file for file in file_list],
+        validation_paths=versioned([]),
+        cache_path=output(),
+        tokenizer=versioned(tok),
+    ))
+
+
 def tokenize_dolma(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Dolma 1.7 dataset splits."""
     from experiments.llama import llama3_tokenizer
@@ -119,18 +129,9 @@ def tokenize_dolma(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
     if tokenizer is None:
         tokenizer = llama3_tokenizer
 
-    dolma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
+    dolma_steps: dict[str, StepRef] = {}
     for dataset, files in DOLMA_DATASETS.items():
-        @step(name=os.path.join("tokenized", "dolma", dataset))
-        def tokenize_dolma_split(file_list=files, tok=tokenizer):
-            return tokenize(TokenizeConfig(
-                train_paths=[_DOLMA_V1_7_PATH + "/" + file for file in file_list],
-                validation_paths=versioned([]),
-                cache_path=output(),
-                tokenizer=versioned(tok),
-            ))
-
-        result = tokenize_dolma_split()
+        result = _tokenize_dolma_split(dataset=dataset, file_list=files, tok=tokenizer)
 
         # Check if we need to use override path for llama3
         if tokenizer == llama3_tokenizer and dataset in DOLMA_LLAMA3_OVERRIDES:

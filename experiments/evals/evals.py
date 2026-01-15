@@ -22,13 +22,13 @@ from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate as _evaluate
 from marin.execution import (
-    ExecutorStep,
     StepRef,
     deferred,
     output,
     step,
     versioned,
 )
+from marin.execution.executor import ExecutorStep
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
 from experiments.evals.task_configs import (
@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 evaluate = deferred(_evaluate)
 
 
+@step(name="evaluation/lm_evaluation_harness/{model_name}")
 def evaluate_lm_evaluation_harness(
     model_name: str,
     model_path: str | StepRef,
@@ -60,7 +61,7 @@ def evaluate_lm_evaluation_harness(
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
-) -> ExecutorStep:
+) -> StepRef:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
 
@@ -69,25 +70,22 @@ def evaluate_lm_evaluation_harness(
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
     """
-    @step(name=f"evaluation/lm_evaluation_harness/{model_name}")
-    def _eval():
-        return evaluate(
-            EvaluationConfig(
-                evaluator="lm_evaluation_harness",
-                model_name=model_name,
-                model_path=model_path,
-                evaluation_path=output(),
-                evals=evals,
-                max_eval_instances=max_eval_instances,
-                launch_with_ray=True,
-                discover_latest_checkpoint=discover_latest_checkpoint,
-                engine_kwargs=engine_kwargs,
-                resource_config=resource_config,
-                apply_chat_template=apply_chat_template,
-                wandb_tags=wandb_tags,
-            )
+    return evaluate(
+        EvaluationConfig(
+            evaluator="lm_evaluation_harness",
+            model_name=model_name,
+            model_path=model_path,
+            evaluation_path=output(),
+            evals=evals,
+            max_eval_instances=max_eval_instances,
+            launch_with_ray=True,
+            discover_latest_checkpoint=discover_latest_checkpoint,
+            engine_kwargs=engine_kwargs,
+            resource_config=resource_config,
+            apply_chat_template=apply_chat_template,
+            wandb_tags=wandb_tags,
         )
-    return _eval()
+    )
 
 
 def _infer_model_name_for_path(model_path: str) -> str:
@@ -133,6 +131,7 @@ def extract_model_name_and_path(step: ExecutorStep | StepRef | str) -> tuple[str
     return name, model_step_path
 
 
+@step(name="evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}")
 def evaluate_levanter_lm_evaluation_harness(
     model_name: str,
     model_path: str | StepRef,
@@ -141,28 +140,25 @@ def evaluate_levanter_lm_evaluation_harness(
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
-) -> ExecutorStep:
+) -> StepRef:
     """
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
     """
     logger.info(f"Running evals on the following tasks: {evals}")
 
-    @step(name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}")
-    def _eval():
-        return evaluate(
-            EvaluationConfig(
-                evaluator="levanter_lm_evaluation_harness",
-                model_name=None,  # imputed automatically
-                model_path=model_path,
-                evaluation_path=output(),
-                evals=versioned(evals),
-                discover_latest_checkpoint=discover_latest_checkpoint,
-                max_eval_instances=versioned(max_eval_instances),
-                resource_config=resource_config,
-                apply_chat_template=apply_chat_template,
-            )
+    return evaluate(
+        EvaluationConfig(
+            evaluator="levanter_lm_evaluation_harness",
+            model_name=None,  # imputed automatically
+            model_path=model_path,
+            evaluation_path=output(),
+            evals=versioned(evals),
+            discover_latest_checkpoint=discover_latest_checkpoint,
+            max_eval_instances=versioned(max_eval_instances),
+            resource_config=resource_config,
+            apply_chat_template=apply_chat_template,
         )
-    return _eval()
+    )
 
 
 def default_eval(
@@ -172,7 +168,7 @@ def default_eval(
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
-) -> ExecutorStep:
+) -> StepRef:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness on a step.
 
@@ -349,7 +345,7 @@ def default_key_evals(
     model_name: str | None = None,
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
-) -> list[ExecutorStep]:
+) -> list[StepRef]:
     """
     Create a list of ExecutorSteps to evaluate the model using LM Evaluation Harness on a step.
     """

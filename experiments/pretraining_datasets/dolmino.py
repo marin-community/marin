@@ -18,8 +18,7 @@ import os.path
 
 from marin.download.huggingface.download_hf import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf as _download_hf
-from marin.execution.executor import ExecutorStep, versioned
-from marin.execution import step, deferred, output
+from marin.execution import StepRef, deferred, output, step, versioned
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize import tokenize as _tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
@@ -84,6 +83,17 @@ def _get_dolmino_split_paths(split: str):
     return [dolmino_split_input_base_path / pattern for pattern in patterns]
 
 
+@step(name="tokenized/dolmino/{split}")
+def _tokenize_dolmino_split(split: str, paths: list[StepRef], tok: str) -> StepRef:
+    """Tokenize a single Dolmino split."""
+    return tokenize(TokenizeConfig(
+        train_paths=paths,
+        validation_paths=versioned([]),
+        cache_path=output(),
+        tokenizer=versioned(tok),
+    ))
+
+
 def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Dolmino dataset splits."""
     if tokenizer is None:
@@ -91,21 +101,10 @@ def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep
 
         tokenizer = llama3_tokenizer
 
-    dolmino_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
+    dolmino_steps: dict[str, StepRef] = {}
     for split in DOLMINO_DATASETS:
-        dolmino_split_output_path = os.path.join("tokenized", "dolmino", split)
         dolmino_split_paths = _get_dolmino_split_paths(split)
-
-        @step(name=dolmino_split_output_path)
-        def tokenize_dolmino_split(paths=dolmino_split_paths, tok=tokenizer):
-            return tokenize(TokenizeConfig(
-                train_paths=paths,
-                validation_paths=versioned([]),
-                cache_path=output(),
-                tokenizer=versioned(tok),
-            ))
-
-        result = tokenize_dolmino_split()
+        result = _tokenize_dolmino_split(split=split, paths=dolmino_split_paths, tok=tokenizer)
 
         # Check if we need to use override path for llama3
         from experiments.llama import llama3_tokenizer as _llama3_tokenizer
@@ -117,7 +116,7 @@ def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep
     return dolmino_steps
 
 
-def tokenize_dolmino_subset(name: str, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:
+def tokenize_dolmino_subset(name: str, tokenizer: str | None = None) -> StepRef:
     """Get a specific dolmino split tokenization step."""
     assert name in DOLMINO_DATASETS, f"Split {name} not found in DOLMINO_DATASETS"
     return tokenize_dolmino(tokenizer=tokenizer)[f"dolmino/{name}"]
@@ -129,20 +128,22 @@ _all_dolmino_math_files = [
 ]
 
 
-def tokenize_dolmino_math(tokenizer: str | None = None):
+@step(name="tokenized/dolmino/all_math")
+def _tokenize_dolmino_all_math(paths: list[StepRef], tok: str) -> StepRef:
+    """Tokenize all math datasets combined."""
+    return tokenize(TokenizeConfig(
+        train_paths=paths,
+        validation_paths=versioned([]),
+        cache_path=output(),
+        tokenizer=versioned(tok),
+    ))
+
+
+def tokenize_dolmino_math(tokenizer: str | None = None) -> StepRef:
     """Create the combined math dataset tokenization step."""
     if tokenizer is None:
         from experiments.llama import llama3_tokenizer
 
         tokenizer = llama3_tokenizer
 
-    @step(name="tokenized/dolmino/all_math")
-    def tokenize_dolmino_all_math():
-        return tokenize(TokenizeConfig(
-            train_paths=_all_dolmino_math_files,
-            validation_paths=versioned([]),
-            cache_path=output(),
-            tokenizer=versioned(tokenizer),
-        ))
-
-    return tokenize_dolmino_all_math().with_output_path("tokenized/dolmino/all_math-9d507c")
+    return _tokenize_dolmino_all_math(paths=_all_dolmino_math_files, tok=tokenizer).with_output_path("tokenized/dolmino/all_math-9d507c")

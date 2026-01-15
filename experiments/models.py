@@ -29,9 +29,13 @@ executor_main([download_step])
 
 from dataclasses import dataclass
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, StepContext, step, versioned
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
+from marin.execution import StepRef, deferred, output, step, versioned
 from marin.utils import get_directory_friendly_name
+
+# Mark library function as deferred
+download_hf = deferred(_download_hf)
 
 
 @dataclass(frozen=True)
@@ -43,25 +47,34 @@ class ModelConfig:
 MODEL_OUTPUT_SUBDIR = "models"
 
 
-def download_model_step(model_config: ModelConfig) -> ExecutorStep:
-    model_name = get_directory_friendly_name(model_config.hf_repo_id)
-    model_revision = get_directory_friendly_name(model_config.hf_revision)
-
-    @step(
-        name=f"{MODEL_OUTPUT_SUBDIR}/{model_name}--{model_revision}",
-        fn=download_hf,
-        override_output_path=f"{MODEL_OUTPUT_SUBDIR}/{model_name}--{model_revision}",
-    )
-    def _download(ctx: StepContext):
-        return DownloadConfig(
-            hf_dataset_id=model_config.hf_repo_id,
-            revision=versioned(model_config.hf_revision),
-            gcs_output_path=ctx.output,
+@step(name="{step_name}")
+def _download_model_impl(
+    step_name: str,
+    hf_repo_id: str,
+    hf_revision: str,
+) -> StepRef:
+    """Internal step implementation for downloading models."""
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id=hf_repo_id,
+            revision=versioned(hf_revision),
+            gcs_output_path=output(),
             wait_for_completion=True,
             hf_repo_type_prefix="",
         )
+    )
 
-    return _download()
+
+def download_model_step(model_config: ModelConfig) -> StepRef:
+    """Download a model from HuggingFace Hub."""
+    model_name = get_directory_friendly_name(model_config.hf_repo_id)
+    model_revision = get_directory_friendly_name(model_config.hf_revision)
+    step_name = f"{MODEL_OUTPUT_SUBDIR}/{model_name}--{model_revision}"
+    return _download_model_impl(
+        step_name=step_name,
+        hf_repo_id=model_config.hf_repo_id,
+        hf_revision=model_config.hf_revision,
+    )
 
 
 smollm2_1_7b_instruct = download_model_step(

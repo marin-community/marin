@@ -25,8 +25,7 @@ from levanter.data.text import TextLmDatasetFormat
 from levanter.store.cache import CacheOptions
 from marin.download.huggingface.download_hf import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf as _download_hf
-from marin.execution.executor import ExecutorStep, versioned
-from marin.execution import step, deferred, output
+from marin.execution import StepRef, deferred, output, step, versioned
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize import tokenize as _tokenize
 
@@ -41,27 +40,38 @@ tokenize = deferred(_tokenize)
 # ============================================================================
 
 
+@step(name="tokenized/{name}")
+def _tokenize_simple_impl(
+    name: str,
+    raw_dataset: StepRef,
+    tokenizer: str,
+    text_format: TextLmDatasetFormat = TextLmDatasetFormat(),
+) -> StepRef:
+    """Internal step for tokenizing a simple dataset."""
+    return tokenize(TokenizeConfig(
+        train_paths=[raw_dataset],
+        validation_paths=versioned([]),
+        cache_path=output(),
+        tokenizer=versioned(tokenizer),
+        format=text_format,
+    ))
+
+
 def tokenize_simple(
     name: str,
-    raw_dataset: ExecutorStep,
+    raw_dataset: StepRef,
     tokenizer: str | None = None,
     override_path: str | None = None,
     text_format: TextLmDatasetFormat = TextLmDatasetFormat(),
     cache_options: CacheOptions | None = None,
-) -> ExecutorStep[TokenizeConfig]:
+) -> StepRef:
     """Helper to create a simple tokenized dataset."""
-
-    @step(name=os.path.join("tokenized", name))
-    def tokenize_step():
-        return tokenize(TokenizeConfig(
-            train_paths=[raw_dataset()],
-            validation_paths=versioned([]),
-            cache_path=output(),
-            tokenizer=versioned(tokenizer),
-            format=text_format,
-        ))
-
-    result = tokenize_step()
+    result = _tokenize_simple_impl(
+        name=name,
+        raw_dataset=raw_dataset,
+        tokenizer=tokenizer or llama3_tokenizer,
+        text_format=text_format,
+    )
     if override_path is not None:
         result = result.with_output_path(override_path)
 

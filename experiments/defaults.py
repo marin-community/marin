@@ -84,11 +84,14 @@ from marin.training.training import TrainLmOnPodConfig
 logger = logging.getLogger("ray")
 
 
+@step(
+    name="{name}",
+    description="Download {hf_dataset_id} revision {revision}",
+)
 def default_download(
     name: str,
     hf_dataset_id: str,
     revision: str,
-    override_output_path: str | None = None,
     **kwargs: Any,
 ) -> StepRef:
     """
@@ -100,31 +103,25 @@ def default_download(
         hf_dataset_id: The HuggingFace dataset ID to download. As `$ORG/$DATASET` on HF Hub
         revision: The revision of the dataset to download.
             Short Commit Hash from HF Dataset Repo (7 characters)
-        override_output_path: Optional. The output path for the dataset.
         **kwargs: Additional keyword arguments that are passed to the download config.
 
     The final output data will reside in '{output_path}/{revision}'.
     """
-
-    @step(
-        name=name,
-        description=f"Download {hf_dataset_id} revision {revision}",
-        override_output_path=override_output_path,
-    )
-    def _download():
-        return download_hf(
-            DownloadConfig(
-                hf_dataset_id=hf_dataset_id,
-                revision=revision,
-                gcs_output_path=output(),
-                wait_for_completion=True,
-                **kwargs,
-            )
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id=hf_dataset_id,
+            revision=revision,
+            gcs_output_path=output(),
+            wait_for_completion=True,
+            **kwargs,
         )
+    )
 
-    return _download().ref
 
-
+@step(
+    name="tokenized/{name}",
+    description="Tokenize raw text using the {tokenizer} tokenizer.",
+)
 def default_tokenize(
     name: str,
     dataset: StepRef | ExecutorStep | str | HfDatasetSpec,
@@ -133,7 +130,7 @@ def default_tokenize(
     *,
     sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
-) -> ExecutorStep:
+) -> StepRef:
     """
     Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
 
@@ -152,51 +149,43 @@ def default_tokenize(
         sample_count: Optional limit on the number of samples to tokenize per shard. If ``None``, tokenize everything.
         is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
     Returns:
-        An ExecutorStep that represents the tokenized dataset.
+        A StepRef that represents the tokenized dataset.
     """
+    # If dataset is a StepRef or ExecutorStep, call it to get the value
+    if isinstance(dataset, (StepRef, ExecutorStep)):
+        resolved_dataset = dataset
+    else:
+        resolved_dataset = dataset
 
-    @step(
-        name=os.path.join("tokenized", name),
-        description=f"Tokenize raw text using the {tokenizer} tokenizer.",
-    )
-    def _tokenize():
-        # If dataset is a StepRef or ExecutorStep, call it to get the value
-        if isinstance(dataset, (StepRef, ExecutorStep)):
-            resolved_dataset = dataset
-        else:
-            resolved_dataset = dataset
+    # sniff out if it's a HuggingFace dataset
+    if isinstance(dataset, HfDatasetSpec):
+        config = HfTokenizeConfig(
+            id=dataset.id,
+            name=dataset.name,
+            cache_path=output(),
+            tokenizer=ensure_versioned(tokenizer),
+            format=format,
+            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+        )
+    elif isinstance(resolved_dataset, str) and resolved_dataset.count("/") == 1 and not fsspec_utils.exists(resolved_dataset):
+        config = HfTokenizeConfig(
+            id=resolved_dataset,
+            cache_path=output(),
+            tokenizer=ensure_versioned(tokenizer),
+            format=format,
+            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+        )
+    else:
+        config = TokenizeConfig(
+            train_paths=[resolved_dataset] if not is_validation else [],
+            validation_paths=[resolved_dataset] if is_validation else [],
+            cache_path=output(),
+            tokenizer=ensure_versioned(tokenizer),
+            format=format,
+            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+        )
 
-        # sniff out if it's a HuggingFace dataset
-        if isinstance(dataset, HfDatasetSpec):
-            config = HfTokenizeConfig(
-                id=dataset.id,
-                name=dataset.name,
-                cache_path=output(),
-                tokenizer=ensure_versioned(tokenizer),
-                format=format,
-                sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
-            )
-        elif isinstance(resolved_dataset, str) and resolved_dataset.count("/") == 1 and not fsspec_utils.exists(resolved_dataset):
-            config = HfTokenizeConfig(
-                id=resolved_dataset,
-                cache_path=output(),
-                tokenizer=ensure_versioned(tokenizer),
-                format=format,
-                sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
-            )
-        else:
-            config = TokenizeConfig(
-                train_paths=[resolved_dataset] if not is_validation else [],
-                validation_paths=[resolved_dataset] if is_validation else [],
-                cache_path=output(),
-                tokenizer=ensure_versioned(tokenizer),
-                format=format,
-                sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
-            )
-
-        return tokenize(config)
-
-    return _tokenize()
+    return tokenize(config)
 
 
 @lru_cache  # LRU to make the executor happier
