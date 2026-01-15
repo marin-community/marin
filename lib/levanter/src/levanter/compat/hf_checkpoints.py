@@ -75,7 +75,47 @@ from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
+# Environment variable to enable streaming from HuggingFace Hub via hf:// fsspec protocol.
+# When enabled, models are streamed directly without caching to local disk.
+# This is useful for TPUs with limited disk space.
+HF_STREAMING_ENV_VAR = "MARIN_HF_USE_STREAMING"
+
 logger = logging.getLogger(__name__)
+
+
+def _should_use_hf_streaming() -> bool:
+    """Check if HF streaming mode is enabled via environment variable."""
+    return os.environ.get(HF_STREAMING_ENV_VAR, "").lower() in ("1", "true", "yes")
+
+
+def _convert_to_hf_url(model_id: str, revision: Optional[str] = None) -> str:
+    """Convert a HuggingFace model ID to an hf:// URL for fsspec streaming.
+
+    Args:
+        model_id: HuggingFace model ID like "meta-llama/Llama-2-7b"
+        revision: Optional git revision (branch, tag, or commit hash)
+
+    Returns:
+        An hf:// URL like "hf://meta-llama/Llama-2-7b" or "hf://meta-llama/Llama-2-7b@main"
+    """
+    if revision:
+        return f"hf://{model_id}@{revision}"
+    return f"hf://{model_id}"
+
+
+def _is_hf_model_id(path: str) -> bool:
+    """Check if a path looks like a HuggingFace model ID (not a URL or local path)."""
+    # If it contains "://", it's already a URL
+    if "://" in path:
+        return False
+    # If it starts with "/" or "./" or "../", it's a local path
+    if path.startswith("/") or path.startswith("./") or path.startswith("../"):
+        return False
+    # If it exists as a local directory, it's a local path
+    if os.path.isdir(path):
+        return False
+    # Otherwise, assume it's an HF model ID
+    return True
 
 
 PYTORCH_MODEL = "pytorch_model.bin"
@@ -512,7 +552,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
         return ref.model_name_or_path, ref.revision
 
     def load_state_dict(self, ref: Optional[Union[str, RepoRef]] = None, dtype: Optional[jnp.dtype] = None) -> dict:
-        """Load a state dict from either HF Hub or a GCS path"""
+        """Load a state dict from either HF Hub or a GCS path.
+
+        When MARIN_HF_USE_STREAMING=1 is set, HuggingFace model IDs are converted to
+        hf:// URLs and streamed directly without caching to local disk.
+        """
         if ref is None:
             ref = self.reference_checkpoint
         if ref is None:
@@ -524,6 +568,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
             if rev is not None:
                 raise ValueError("Revisions not supported for explicit URLs")
             return self._load_from_remote(id, dtype)
+
+        # If streaming mode is enabled and this looks like an HF model ID,
+        # convert to hf:// URL and stream directly.
+        if _should_use_hf_streaming() and _is_hf_model_id(id):
+            hf_url = _convert_to_hf_url(id, rev)
+            logger.info(f"Using HF streaming mode: loading from {hf_url}")
+            return self._load_from_remote(hf_url, dtype)
 
         for index_file in [SAFE_TENSORS_INDEX_NAME, PYTORCH_WEIGHTS_INDEX_NAME]:
             try:

@@ -19,10 +19,14 @@ from haliax import Axis
 from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict
 
 from levanter.compat.hf_checkpoints import (
+    HF_STREAMING_ENV_VAR,
     SAFE_TENSORS_INDEX_NAME,
     SAFE_TENSORS_MODEL,
     ModelWithHfSerializationMixin,
+    _convert_to_hf_url,
     _convert_to_jnp,
+    _is_hf_model_id,
+    _should_use_hf_streaming,
 )
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from test_utils import skip_if_no_torch
@@ -263,3 +267,139 @@ def test_save_pretrained_to_memory_fs():
             assert_trees_all_close(original_value, reloaded_value)
 
     fs.rm(base_path, recursive=True)
+
+
+# Tests for HF streaming functionality
+
+def test_convert_to_hf_url():
+    """Test that model IDs are correctly converted to hf:// URLs."""
+    # Simple model ID
+    assert _convert_to_hf_url("meta-llama/Llama-2-7b") == "hf://meta-llama/Llama-2-7b"
+
+    # Model ID with revision
+    assert _convert_to_hf_url("meta-llama/Llama-2-7b", "main") == "hf://meta-llama/Llama-2-7b@main"
+    assert _convert_to_hf_url("gpt2", "v1.0") == "hf://gpt2@v1.0"
+
+    # Empty revision should not append @
+    assert _convert_to_hf_url("gpt2", None) == "hf://gpt2"
+
+
+def test_is_hf_model_id():
+    """Test that we correctly identify HF model IDs vs local paths and URLs."""
+    # HF model IDs
+    assert _is_hf_model_id("meta-llama/Llama-2-7b") is True
+    assert _is_hf_model_id("gpt2") is True
+    assert _is_hf_model_id("mistralai/Mistral-7B-v0.1") is True
+
+    # URLs should not be HF model IDs
+    assert _is_hf_model_id("hf://meta-llama/Llama-2-7b") is False
+    assert _is_hf_model_id("gs://bucket/path/model") is False
+    assert _is_hf_model_id("s3://bucket/path/model") is False
+
+    # Local paths should not be HF model IDs
+    assert _is_hf_model_id("/absolute/path/to/model") is False
+    assert _is_hf_model_id("./relative/path") is False
+    assert _is_hf_model_id("../parent/path") is False
+
+
+def test_should_use_hf_streaming_env_var():
+    """Test that the streaming mode environment variable is correctly detected."""
+    original_value = os.environ.get(HF_STREAMING_ENV_VAR)
+
+    try:
+        # Test various enabled values
+        os.environ[HF_STREAMING_ENV_VAR] = "1"
+        assert _should_use_hf_streaming() is True
+
+        os.environ[HF_STREAMING_ENV_VAR] = "true"
+        assert _should_use_hf_streaming() is True
+
+        os.environ[HF_STREAMING_ENV_VAR] = "TRUE"
+        assert _should_use_hf_streaming() is True
+
+        os.environ[HF_STREAMING_ENV_VAR] = "yes"
+        assert _should_use_hf_streaming() is True
+
+        # Test disabled values
+        os.environ[HF_STREAMING_ENV_VAR] = "0"
+        assert _should_use_hf_streaming() is False
+
+        os.environ[HF_STREAMING_ENV_VAR] = "false"
+        assert _should_use_hf_streaming() is False
+
+        os.environ[HF_STREAMING_ENV_VAR] = ""
+        assert _should_use_hf_streaming() is False
+
+        # Test unset
+        del os.environ[HF_STREAMING_ENV_VAR]
+        assert _should_use_hf_streaming() is False
+
+    finally:
+        # Restore original value
+        if original_value is not None:
+            os.environ[HF_STREAMING_ENV_VAR] = original_value
+        elif HF_STREAMING_ENV_VAR in os.environ:
+            del os.environ[HF_STREAMING_ENV_VAR]
+
+
+@pytest.mark.network
+def test_load_model_with_hf_streaming():
+    """Test that loading a model with HF streaming enabled works correctly.
+
+    This test verifies that when MARIN_HF_USE_STREAMING=1 is set:
+    1. The model loads successfully from HuggingFace Hub
+    2. The model is loaded via the hf:// fsspec protocol
+    3. The local HF cache is not populated (streamed directly)
+    """
+    from levanter.models.gpt2 import Gpt2Config
+
+    # Use a very small model for testing
+    model_id = "hf-internal-testing/tiny-random-gpt2"
+
+    original_value = os.environ.get(HF_STREAMING_ENV_VAR)
+    original_hf_cache = os.environ.get("HF_HOME")
+
+    try:
+        # Set up a temporary HF cache directory to verify streaming doesn't use it
+        with tempfile.TemporaryDirectory() as tmp_hf_cache:
+            os.environ["HF_HOME"] = tmp_hf_cache
+            os.environ[HF_STREAMING_ENV_VAR] = "1"
+
+            gpt2_config = Gpt2Config(
+                num_layers=2,
+                num_heads=2,
+                hidden_dim=32,
+                use_flash_attention=False,
+            )
+            converter = gpt2_config.hf_checkpoint_converter()
+
+            with use_test_mesh():
+                # This should trigger streaming mode
+                state_dict = converter.load_state_dict(model_id)
+
+            # Verify we got a state dict
+            assert isinstance(state_dict, dict)
+            assert len(state_dict) > 0
+
+            # Check that no model files were downloaded to the cache
+            # (the hf:// protocol should stream directly)
+            hub_cache = os.path.join(tmp_hf_cache, "hub")
+            if os.path.exists(hub_cache):
+                # If hub directory exists, it should be empty or have no model files
+                cached_files = []
+                for root, dirs, files in os.walk(hub_cache):
+                    cached_files.extend(files)
+                model_files = [f for f in cached_files if f.endswith((".safetensors", ".bin"))]
+                assert len(model_files) == 0, f"Expected no model files in cache, found: {model_files}"
+
+    finally:
+        # Restore original values
+        if original_value is not None:
+            os.environ[HF_STREAMING_ENV_VAR] = original_value
+        elif HF_STREAMING_ENV_VAR in os.environ:
+            del os.environ[HF_STREAMING_ENV_VAR]
+
+        if original_hf_cache is not None:
+            os.environ["HF_HOME"] = original_hf_cache
+        elif "HF_HOME" in os.environ:
+            del os.environ["HF_HOME"]
