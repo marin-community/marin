@@ -36,6 +36,7 @@ Usage:
 
 from __future__ import annotations
 
+import inspect
 import os
 from dataclasses import dataclass, field, replace
 from functools import wraps
@@ -46,6 +47,11 @@ if TYPE_CHECKING:
     from marin.resources import ResourceConfig
 
 ConfigT = TypeVar("ConfigT")
+
+
+def _noop_fn(config: ConfigT) -> ConfigT:
+    """No-op function used during step tracing. Returns config unchanged."""
+    return config
 
 
 @dataclass(frozen=True)
@@ -191,25 +197,28 @@ def step(
     """
     Decorator to define an executor step.
 
-    Usage:
+    There are two ways to specify the execution function:
+
+    1. Pass fn to decorator (traditional):
         @step(name="tokenize/fineweb", fn=tokenize_fn)
         def tokenize_fineweb(ctx: StepContext):
-            download = ctx.require(download_step)
-            return TokenizeConfig(
-                train_paths=[download / "train"],
-                cache_path=ctx.output,
-            )
+            return TokenizeConfig(cache_path=ctx.output)
 
-        # Create the step
-        my_step = tokenize_fineweb()
+    2. Call fn directly in the step function (preferred):
+        @step(name="tokenize/fineweb")
+        def tokenize_fineweb(ctx: StepContext, fn=tokenize_fn):
+            config = TokenizeConfig(cache_path=ctx.output)
+            return fn(config)  # fn is no-op during tracing
+
+       During tracing (step construction), fn is replaced with a no-op
+       that returns the config unchanged. At execution time, the real
+       fn is called with the resolved config.
 
     Parameterized steps with format strings:
-        @step(name="tokenized/{dataset_name}", fn=tokenize_fn)
-        def tokenize_dataset(ctx: StepContext, dataset_name: str, tokenizer: str):
-            return TokenizeConfig(
-                cache_path=ctx.output,
-                tokenizer=tokenizer,
-            )
+        @step(name="tokenized/{dataset_name}")
+        def tokenize_dataset(ctx: StepContext, dataset_name: str, tokenizer: str, fn=tokenize_fn):
+            config = TokenizeConfig(cache_path=ctx.output, tokenizer=tokenizer)
+            return fn(config)
 
         # Call with arguments - name is formatted automatically
         step = tokenize_dataset(dataset_name="fineweb", tokenizer="llama3")
@@ -217,7 +226,8 @@ def step(
     Args:
         name: Step name, used for output path generation. Can contain {arg_name}
               placeholders that will be substituted with kwargs when called.
-        fn: The function to execute (receives resolved config)
+        fn: The function to execute (receives resolved config). Can also be
+            specified as a default parameter on the step function itself.
         description: Human-readable description. Can also use {arg_name} placeholders.
         resources: GPU/TPU/CPU requirements
         pip_dependency_groups: Extra pip dependencies
@@ -226,6 +236,14 @@ def step(
     """
 
     def decorator(config_fn: Callable[[StepContext], ConfigT]) -> Callable[..., ExecutorStep[ConfigT]]:
+        # Check if config_fn has a 'fn' parameter with a default value
+        sig = inspect.signature(config_fn)
+        fn_from_signature: Callable | None = None
+        if "fn" in sig.parameters:
+            param = sig.parameters["fn"]
+            if param.default is not inspect.Parameter.empty:
+                fn_from_signature = param.default
+
         @wraps(config_fn)
         def make_step(*args: Any, **kwargs: Any) -> ExecutorStep[ConfigT]:
             from marin.execution.executor import ExecutorStep
@@ -243,12 +261,19 @@ def step(
             if override_output_path and "{" in override_output_path:
                 actual_override_output_path = override_output_path.format(**kwargs)
 
+            # Determine the real fn: decorator arg takes precedence, then signature default
+            real_fn = fn or fn_from_signature
+
+            # If fn is in signature, inject no-op for tracing
+            if fn_from_signature is not None and "fn" not in kwargs:
+                kwargs["fn"] = _noop_fn
+
             ctx = StepContext()
             config = config_fn(ctx, *args, **kwargs)
 
             step_obj = ExecutorStep(
                 name=actual_name,
-                fn=fn,
+                fn=real_fn,
                 config=config,
                 description=actual_description,
                 resources=resources,

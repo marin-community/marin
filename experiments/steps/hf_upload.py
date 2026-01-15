@@ -23,7 +23,7 @@ from marin.execution import ExecutorStep, StepContext, step
 from marin.export.hf_upload import UploadToHfConfig, upload_to_hf
 
 
-@step(name="metadata/hf_uploads/{name}", fn=upload_to_hf)
+@step(name="metadata/hf_uploads/{name}")
 def upload_dir_to_hf(
     ctx: StepContext,
     name: str,
@@ -34,6 +34,7 @@ def upload_dir_to_hf(
     private: bool = False,
     revision: str | None = None,
     commit_batch_size: str = "1GiB",
+    fn=upload_to_hf,
     **upload_kwargs: str,
 ):
     """
@@ -49,9 +50,10 @@ def upload_dir_to_hf(
         private: Whether to create a private repo if it doesn't exist
         revision: Branch to upload to (if not provided, uses default)
         commit_batch_size: Maximum size of files to batch in a single commit
+        fn: The upload function (replaced with no-op during tracing)
         **upload_kwargs: Additional kwargs for huggingface_hub.upload_folder
     """
-    return UploadToHfConfig(
+    config = UploadToHfConfig(
         input_path=ctx.require(input_step),
         repo_id=repo_id,
         repo_type=repo_type,
@@ -61,9 +63,10 @@ def upload_dir_to_hf(
         commit_batch_size=commit_batch_size,
         upload_kwargs=upload_kwargs,
     )
+    return fn(config)
 
 
-@step(name="metadata/hf_uploads/{name}", fn=upload_to_hf)
+@step(name="metadata/hf_uploads/{name}")
 def upload_path_to_hf(
     ctx: StepContext,
     name: str,
@@ -74,6 +77,7 @@ def upload_path_to_hf(
     private: bool = False,
     revision: str | None = None,
     commit_batch_size: str = "1GiB",
+    fn=upload_to_hf,
     **upload_kwargs: str,
 ):
     """
@@ -92,9 +96,10 @@ def upload_path_to_hf(
         private: Whether to create a private repo if it doesn't exist
         revision: Branch to upload to (if not provided, uses default)
         commit_batch_size: Maximum size of files to batch in a single commit
+        fn: The upload function (replaced with no-op during tracing)
         **upload_kwargs: Additional kwargs for huggingface_hub.upload_folder
     """
-    return UploadToHfConfig(
+    config = UploadToHfConfig(
         input_path=input_path,
         repo_id=repo_id,
         repo_type=repo_type,
@@ -104,3 +109,4 @@ def upload_path_to_hf(
         commit_batch_size=commit_batch_size,
         upload_kwargs=upload_kwargs,
     )
+    return fn(config)
