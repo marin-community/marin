@@ -16,7 +16,9 @@
 
 import pytest
 
-from fluster.actor import ActorClient, ActorContext, ActorServer, FixedResolver, current_ctx
+from fluster.actor import ActorClient, ActorServer, FixedResolver
+from fluster.cluster.types import Namespace
+from fluster.context import FlusterContext, fluster_ctx, fluster_ctx_scope
 
 
 class Calculator:
@@ -36,7 +38,7 @@ class ContextAwareActor:
     """Test actor that accesses the injected context."""
 
     def get_job_id(self) -> str:
-        return current_ctx().job_id
+        return fluster_ctx().job_id
 
 
 def test_basic_actor_call():
@@ -64,12 +66,19 @@ def test_actor_exception_propagation():
 
 
 def test_actor_context_injection():
-    """Test that ActorContext is properly injected and accessible."""
-    server = ActorServer(host="127.0.0.1")
-    server.register("ctx_actor", ContextAwareActor())
+    """Test that FlusterContext is properly injected and accessible."""
+    ctx = FlusterContext(
+        namespace=Namespace.DEFAULT,
+        job_id="test-job-123",
+        worker_id="test-worker",
+        controller=None,
+    )
 
-    ctx = ActorContext(cluster=None, resolver=None, job_id="test-job-123", namespace="<local>")
-    port = server.serve_background(context=ctx)
+    # Set up context before starting server (server captures context at serve_background time)
+    with fluster_ctx_scope(ctx):
+        server = ActorServer(host="127.0.0.1")
+        server.register("ctx_actor", ContextAwareActor())
+        port = server.serve_background()
 
     resolver = FixedResolver({"ctx_actor": f"http://127.0.0.1:{port}"})
     client = ActorClient(resolver, "ctx_actor")

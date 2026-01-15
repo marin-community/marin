@@ -431,7 +431,7 @@ def test_get_logs_nonexistent_job(worker):
 def test_build_command_with_entrypoint(worker):
     """Test _build_command creates correct cloudpickle command."""
     entrypoint = create_test_entrypoint()
-    command = worker._build_command(entrypoint)
+    command = worker._build_command(entrypoint, ports={})
 
     assert command[0] == "python"
     assert command[1] == "-c"

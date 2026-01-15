@@ -32,9 +32,30 @@ from fluster import cluster_pb2
 
 # Type aliases for clarity
 JobId = NewType("JobId", str)
-Namespace = NewType("Namespace", str)
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
+
+
+class Namespace(str):
+    """Namespace for actor isolation.
+
+    Namespaces provide isolation between different jobs/environments.
+    Actors in one namespace cannot discover actors in another namespace.
+
+    Use Namespace.DEFAULT for the default namespace.
+    """
+
+    DEFAULT: "Namespace"
+
+    def __new__(cls, value: str = "default") -> "Namespace":
+        return super().__new__(cls, value)
+
+    def __repr__(self) -> str:
+        return f"Namespace({super().__repr__()})"
+
+
+# Default namespace (replaces the confusing "<local>" convention)
+Namespace.DEFAULT = Namespace("default")
 
 
 def is_job_finished(state: int) -> bool:

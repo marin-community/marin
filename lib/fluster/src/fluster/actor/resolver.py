@@ -14,13 +14,13 @@
 
 """Resolver types and implementations for actor discovery."""
 
-import os
 from dataclasses import dataclass, field
 from typing import Protocol as TypingProtocol
 
 from fluster import cluster_pb2
 from fluster.cluster.types import Namespace
 from fluster.cluster_connect import ControllerServiceClientSync
+from fluster.context import get_fluster_ctx
 
 
 @dataclass
@@ -65,7 +65,7 @@ class FixedResolver:
     def __init__(
         self,
         endpoints: dict[str, str | list[str]],
-        namespace: Namespace = Namespace("<local>"),
+        namespace: Namespace = Namespace.DEFAULT,
     ):
         self._namespace = namespace
         self._endpoints: dict[str, list[str]] = {}
@@ -94,7 +94,8 @@ class ClusterResolver:
 
     Args:
         controller_address: Controller URL (e.g., "http://localhost:8080")
-        namespace: Namespace for actor isolation (defaults to FLUSTER_NAMESPACE env var)
+        namespace: Namespace for actor isolation. If None, uses the namespace
+            from the current FlusterContext, or Namespace.DEFAULT if not in a context.
         timeout: HTTP request timeout in seconds
     """
 
@@ -106,7 +107,14 @@ class ClusterResolver:
     ):
         self._address = controller_address.rstrip("/")
         self._timeout = timeout
-        self._namespace = namespace or Namespace(os.environ.get("FLUSTER_NAMESPACE", "<local>"))
+
+        # Determine namespace: explicit > context > default
+        if namespace is not None:
+            self._namespace = namespace
+        else:
+            ctx = get_fluster_ctx()
+            self._namespace = ctx.namespace if ctx else Namespace.DEFAULT
+
         self._client = ControllerServiceClientSync(
             address=self._address,
             timeout_ms=int(timeout * 1000),
@@ -205,14 +213,15 @@ class GcsResolver:
     Discovers actor endpoints by querying GCP VM instance metadata. Instances must
     have metadata tags in the format:
     - `fluster_actor_<name>`: port number for the actor
-    - `fluster_namespace`: namespace for isolation (defaults to "<local>")
+    - `fluster_namespace`: namespace for isolation
 
     Only RUNNING instances are considered for resolution.
 
     Args:
         project: GCP project ID
         zone: GCP zone (e.g., "us-central1-a")
-        namespace: Namespace for actor isolation (defaults to FLUSTER_NAMESPACE env var)
+        namespace: Namespace for actor isolation. If None, uses the namespace
+            from the current FlusterContext, or Namespace.DEFAULT if not in a context.
         api: GcsApi implementation (defaults to RealGcsApi)
     """
 
@@ -229,7 +238,13 @@ class GcsResolver:
         self._project = project
         self._zone = zone
         self._api = api or RealGcsApi()
-        self._namespace = namespace or Namespace(os.environ.get("FLUSTER_NAMESPACE", "<local>"))
+
+        # Determine namespace: explicit > context > default
+        if namespace is not None:
+            self._namespace = namespace
+        else:
+            ctx = get_fluster_ctx()
+            self._namespace = ctx.namespace if ctx else Namespace.DEFAULT
 
     @property
     def default_namespace(self) -> Namespace:
@@ -255,7 +270,7 @@ class GcsResolver:
                 continue
 
             metadata = instance.get("metadata", {})
-            instance_ns = metadata.get(self.NAMESPACE_KEY, "<local>")
+            instance_ns = metadata.get(self.NAMESPACE_KEY, str(Namespace.DEFAULT))
 
             if instance_ns != str(ns):
                 continue

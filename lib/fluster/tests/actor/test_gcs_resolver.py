@@ -27,7 +27,7 @@ def test_gcs_resolver_finds_actors():
                 "internal_ip": "10.0.0.1",
                 "status": "RUNNING",
                 "metadata": {
-                    "fluster_namespace": "<local>",
+                    "fluster_namespace": "default",
                     "fluster_actor_inference": "8080",
                 },
             },
@@ -57,7 +57,7 @@ def test_gcs_resolver_filters_namespace():
             },
         ]
     )
-    resolver = GcsResolver("project", "zone", namespace=Namespace("<local>"), api=api)
+    resolver = GcsResolver("project", "zone", namespace=Namespace("default"), api=api)
     result = resolver.resolve("inference")
 
     assert result.is_empty
@@ -72,7 +72,7 @@ def test_gcs_resolver_ignores_non_running():
                 "internal_ip": "10.0.0.1",
                 "status": "TERMINATED",
                 "metadata": {
-                    "fluster_namespace": "<local>",
+                    "fluster_namespace": "default",
                     "fluster_actor_inference": "8080",
                 },
             },
@@ -93,7 +93,7 @@ def test_gcs_resolver_multiple_instances():
                 "internal_ip": "10.0.0.1",
                 "status": "RUNNING",
                 "metadata": {
-                    "fluster_namespace": "<local>",
+                    "fluster_namespace": "default",
                     "fluster_actor_inference": "8080",
                 },
             },
@@ -102,7 +102,7 @@ def test_gcs_resolver_multiple_instances():
                 "internal_ip": "10.0.0.2",
                 "status": "RUNNING",
                 "metadata": {
-                    "fluster_namespace": "<local>",
+                    "fluster_namespace": "default",
                     "fluster_actor_inference": "8080",
                 },
             },
@@ -126,7 +126,7 @@ def test_gcs_resolver_no_matching_actor():
                 "internal_ip": "10.0.0.1",
                 "status": "RUNNING",
                 "metadata": {
-                    "fluster_namespace": "<local>",
+                    "fluster_namespace": "default",
                     "fluster_actor_training": "8080",
                 },
             },
@@ -147,7 +147,7 @@ def test_gcs_resolver_missing_internal_ip():
                 "internal_ip": None,
                 "status": "RUNNING",
                 "metadata": {
-                    "fluster_namespace": "<local>",
+                    "fluster_namespace": "default",
                     "fluster_actor_inference": "8080",
                 },
             },
@@ -168,15 +168,15 @@ def test_gcs_resolver_default_namespace():
                 "internal_ip": "10.0.0.1",
                 "status": "RUNNING",
                 "metadata": {
-                    "fluster_namespace": "<local>",
+                    "fluster_namespace": "default",
                     "fluster_actor_inference": "8080",
                 },
             },
         ]
     )
-    resolver = GcsResolver("project", "zone", namespace=Namespace("<local>"), api=api)
+    resolver = GcsResolver("project", "zone", namespace=Namespace("default"), api=api)
 
-    assert resolver.default_namespace == Namespace("<local>")
+    assert resolver.default_namespace == Namespace("default")
 
 
 def test_gcs_resolver_custom_namespace():
@@ -194,7 +194,7 @@ def test_gcs_resolver_custom_namespace():
             },
         ]
     )
-    resolver = GcsResolver("project", "zone", namespace=Namespace("<local>"), api=api)
+    resolver = GcsResolver("project", "zone", namespace=Namespace("default"), api=api)
 
     # Should not find with default namespace
     result = resolver.resolve("inference")

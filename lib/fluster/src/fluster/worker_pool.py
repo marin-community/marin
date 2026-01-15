@@ -37,7 +37,6 @@ Example:
         results = [f.result() for f in futures]
 """
 
-import os
 import threading
 import time
 import uuid
@@ -56,7 +55,7 @@ from fluster.actor.resolver import ClusterResolver, Resolver
 from fluster.actor_connect import ActorServiceClientSync
 from fluster.cluster.client import ClusterClient
 from fluster.cluster.types import Entrypoint, JobId, Namespace
-from fluster.cluster_connect import ControllerServiceClientSync
+from fluster.context import fluster_ctx
 
 T = TypeVar("T")
 
@@ -157,88 +156,39 @@ class TaskExecutorActor:
         return fn(*args, **kwargs)
 
 
-def register_endpoint(
-    controller_url: str,
-    name: str,
-    address: str,
-    job_id: str,
-    namespace: str,
-) -> str:
-    """Register an endpoint with the cluster controller.
-
-    Args:
-        controller_url: Controller URL (e.g., "http://localhost:8080")
-        name: Endpoint name for discovery
-        address: Address where the endpoint is listening (host:port)
-        job_id: Job ID that owns this endpoint
-        namespace: Namespace for isolation
-
-    Returns:
-        Endpoint ID assigned by the controller
-    """
-    client = ControllerServiceClientSync(address=controller_url, timeout_ms=10000)
-    request = cluster_pb2.Controller.RegisterEndpointRequest(
-        name=name,
-        address=address,
-        job_id=job_id,
-        namespace=namespace,
-    )
-    response = client.register_endpoint(request)
-    return response.endpoint_id
-
-
 def worker_job_entrypoint(pool_id: str, worker_index: int) -> None:
     """Job entrypoint that starts a TaskExecutor actor with a unique name.
 
     This function is called when a worker job starts. It:
-    1. Reads cluster configuration from environment variables
+    1. Gets cluster configuration from FlusterContext
     2. Starts an ActorServer with a TaskExecutorActor
-    3. Registers the endpoint with the controller under a unique name
+    3. Registers the endpoint with the controller
     4. Runs forever, serving requests
 
     Each worker registers with a unique name so the client can target
     specific idle workers when dispatching tasks.
 
-    Environment variables (injected by the cluster):
-        FLUSTER_JOB_ID: Unique job identifier
-        FLUSTER_NAMESPACE: Namespace for actor isolation
-        FLUSTER_PORT_ACTOR: Port allocated for the actor server
-        FLUSTER_CONTROLLER_ADDRESS: Controller URL for registration
-
     Args:
         pool_id: Unique identifier for the worker pool
         worker_index: Index of this worker (0, 1, 2, ...)
     """
-    job_id = os.environ["FLUSTER_JOB_ID"]
-    namespace = os.environ["FLUSTER_NAMESPACE"]
-    port = int(os.environ["FLUSTER_PORT_ACTOR"])
-    controller_url = os.environ["FLUSTER_CONTROLLER_ADDRESS"]
+    ctx = fluster_ctx()
 
     # Unique name per worker
     worker_name = f"_workerpool_{pool_id}:worker-{worker_index}"
 
     print(f"Worker starting: pool_id={pool_id}, worker_index={worker_index}")
-    print(f"Worker name: {worker_name}")
+    print(f"Worker name: {worker_name}, job_id={ctx.job_id}")
 
     # Start actor server
-    server = ActorServer(host="0.0.0.0", port=port)
+    server = ActorServer(host="0.0.0.0")
     server.register(worker_name, TaskExecutorActor())
     actual_port = server.serve_background()
-    print(f"ActorServer started on port {actual_port}")
 
-    # Register with controller
-    # Use localhost since the port is mapped from host to container via Docker -p
-    endpoint_address = f"localhost:{actual_port}"
-    print(f"Registering endpoint: {worker_name} at {endpoint_address}")
-
-    endpoint_id = register_endpoint(
-        controller_url,
-        worker_name,
-        endpoint_address,
-        job_id,
-        namespace,
-    )
-    print(f"Endpoint registered: {endpoint_id}")
+    # Register endpoint with controller
+    address = f"localhost:{actual_port}"
+    ctx.controller.endpoint_registry.register(worker_name, address, {"job_id": ctx.job_id})
+    print(f"ActorServer started and registered on port {actual_port}")
 
     # Serve forever
     print("Worker ready, waiting for tasks...")
@@ -508,7 +458,7 @@ class WorkerPool:
 
         # Resolver for endpoint discovery (injectable for testing)
         self._resolver: Resolver | None = resolver
-        self._namespace = Namespace("<local>")
+        self._namespace = Namespace.DEFAULT
 
     def __enter__(self) -> "WorkerPool":
         """Start workers and wait for at least one to register."""

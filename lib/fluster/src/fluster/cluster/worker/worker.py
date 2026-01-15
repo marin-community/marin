@@ -42,8 +42,9 @@ from pathlib import Path
 import cloudpickle
 import uvicorn
 
-from fluster import cluster_pb2
-from fluster.cluster_connect import ControllerServiceClientSync
+from fluster.rpc import cluster_pb2
+from fluster.rpc.cluster_connect import ControllerServiceClientSync
+from fluster.rpc.errors import format_exception_with_traceback
 from fluster.cluster.worker.builder import ImageCache, ImageProvider, VenvCache
 from fluster.cluster.worker.bundle import BundleCache, BundleProvider
 from fluster.cluster.worker.dashboard import WorkerDashboard
@@ -237,26 +238,32 @@ class Worker:
             self._heartbeat_thread.start()
 
     def stop(self) -> None:
-        """Stop worker server and cleanup.
-
-        Note: Cleanup of temp directory is best-effort. If jobs have created
-        files in the cache, cleanup may fail. This is acceptable since the
-        temp directory will be cleaned up by the OS eventually.
-        """
+        """Stop worker server and cleanup all containers."""
         # Stop heartbeat thread
         self._stop_heartbeat.set()
         if self._heartbeat_thread:
             self._heartbeat_thread.join(timeout=5.0)
+
+        # Kill and remove all containers
+        with self._lock:
+            jobs = list(self._jobs.values())
+        for job in jobs:
+            if job.container_id:
+                try:
+                    self._runtime.kill(job.container_id, force=True)
+                except RuntimeError:
+                    pass
+                try:
+                    self._runtime.remove(job.container_id)
+                except RuntimeError:
+                    pass
 
         # Cleanup temp directory (best-effort)
         if self._temp_dir:
             try:
                 self._temp_dir.cleanup()
             except OSError:
-                # Cleanup may fail if cache has files from running jobs
-                # This is acceptable - temp directories are cleaned by OS
                 pass
-        # Dashboard stops when thread exits (daemon)
 
     def _run_server(self) -> None:
         """Run worker server (blocking, for thread)."""
@@ -353,6 +360,7 @@ class Worker:
         - FLUSTER_JOB_ID: The job's unique identifier
         - FLUSTER_WORKER_ID: ID of the worker running this job
         - FLUSTER_CONTROLLER_ADDRESS: Controller URL for endpoint registration
+        - FLUSTER_BUNDLE_GCS_PATH: Bundle path for sub-job workspace inheritance
         - FLUSTER_PORT_<NAME>: Allocated port numbers (e.g., FLUSTER_PORT_HTTP)
         - FRAY_PORT_MAPPING: All port mappings as "name:port,name:port"
 
@@ -439,7 +447,7 @@ class Worker:
 
             # Deserialize entrypoint
             entrypoint = cloudpickle.loads(job.request.serialized_entrypoint)
-            command = self._build_command(entrypoint)
+            command = self._build_command(entrypoint, job.ports)
 
             # Build environment from user-provided vars + EnvironmentConfig
             env = dict(env_config.env_vars)
@@ -452,6 +460,10 @@ class Worker:
 
             if self._config.controller_address:
                 env["FLUSTER_CONTROLLER_ADDRESS"] = _rewrite_address_for_container(self._config.controller_address)
+
+            # Inject bundle path for sub-job inheritance
+            if job.request.bundle_gcs_path:
+                env["FLUSTER_BUNDLE_GCS_PATH"] = job.request.bundle_gcs_path
 
             # Inject allocated ports
             for name, port in job.ports.items():
@@ -580,8 +592,9 @@ class Worker:
                 time.sleep(5.0)
 
         except Exception as e:
-            job.logs.add("error", f"Job failed: {e!r}")
-            job.transition_to(cluster_pb2.JOB_STATE_FAILED, error=repr(e))
+            error_msg = format_exception_with_traceback(e)
+            job.logs.add("error", f"Job failed:\n{error_msg}")
+            job.transition_to(cluster_pb2.JOB_STATE_FAILED, error=error_msg)
         finally:
             # Release semaphore
             self._semaphore.release()
@@ -603,24 +616,35 @@ class Worker:
                 if job.workdir and job.workdir.exists():
                     shutil.rmtree(job.workdir, ignore_errors=True)
 
-    def _build_command(self, entrypoint) -> list[str]:
-        """Build command to run entrypoint.
+    def _build_command(self, entrypoint, ports: dict[str, int]) -> list[str]:
+        """Build command to run entrypoint with FlusterContext injection.
 
-        Serializes only the raw callable/args/kwargs tuple rather than the Entrypoint
-        dataclass to avoid requiring fluster.cluster.types in the container.
+        Serializes the raw callable/args/kwargs tuple. Ports are passed via
+        FLUSTER_PORT_<NAME> environment variables set by the worker.
+
+        The thunk uses create_context_from_env() to set up FlusterContext,
+        enabling job code to use fluster_ctx() for cluster operations.
+
+        Args:
+            entrypoint: Job entrypoint dataclass
+            ports: Allocated ports mapping (name -> port) - passed via env vars
         """
+        del ports  # Ports are passed via FLUSTER_PORT_* env vars, not serialized
+
         data = (entrypoint.callable, entrypoint.args, entrypoint.kwargs)
         serialized = cloudpickle.dumps(data)
         encoded = base64.b64encode(serialized).decode()
 
-        # Thunk that executes the function and writes result to file.
-        # Exceptions propagate naturally (container exits non-zero).
         thunk = f"""
 import cloudpickle
 import base64
+from fluster.context import create_context_from_env, fluster_ctx_scope
 
 fn, args, kwargs = cloudpickle.loads(base64.b64decode('{encoded}'))
-result = fn(*args, **kwargs)
+
+with fluster_ctx_scope(create_context_from_env()):
+    result = fn(*args, **kwargs)
+
 with open('/workdir/_result.pkl', 'wb') as f:
     f.write(cloudpickle.dumps(result))
 """

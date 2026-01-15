@@ -414,7 +414,7 @@ class ControllerServiceImpl:
             name=request.name,
             address=request.address,
             job_id=JobId(request.job_id),
-            namespace=request.namespace or "<local>",
+            namespace=request.namespace or "default",
             metadata=dict(request.metadata),
             registered_at_ms=int(time.time() * 1000),
         )
@@ -469,7 +469,7 @@ class ControllerServiceImpl:
         Returns:
             LookupEndpointResponse with first matching endpoint (empty if not found)
         """
-        namespace = request.namespace or "<local>"
+        namespace = request.namespace or "default"
         endpoints = self._state.lookup_endpoints(request.name, namespace)
         if not endpoints:
             logger.debug("Endpoint lookup found no results: name=%s namespace=%s", request.name, namespace)
@@ -504,7 +504,7 @@ class ControllerServiceImpl:
         Returns:
             ListEndpointsResponse with matching endpoints
         """
-        namespace = request.namespace or "<local>"
+        namespace = request.namespace or "default"
         endpoints = self._state.list_endpoints_by_prefix(request.prefix, namespace)
         return cluster_pb2.Controller.ListEndpointsResponse(
             endpoints=[

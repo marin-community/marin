@@ -127,14 +127,14 @@ class LogPoller:
         self._thread = None
 
 
-class ClusterContext:
+class ExampleCluster:
     """Synchronous context manager running a controller + worker cluster.
 
     Provides a simple API for submitting jobs through the controller,
     which schedules them to workers.
 
     Example:
-        with ClusterContext() as cluster:
+        with ExampleCluster() as cluster:
             job_id = cluster.submit(my_function, arg1, arg2)
             status = cluster.wait(job_id)
             logs = cluster.logs(job_id)
@@ -304,7 +304,7 @@ class ClusterContext:
             env_vars: Environment variables
             cpu: Number of CPUs to request
             memory: Memory to request (e.g., "1g", "512m")
-            namespace: Namespace for actor isolation (defaults to "<local>")
+            namespace: Namespace for actor isolation (defaults to "default")
             ports: List of port names to allocate (e.g., ["actor", "metrics"])
             **kwargs: Keyword arguments for fn
 
@@ -323,7 +323,7 @@ class ClusterContext:
             name=name or fn.__name__,
             resources=resources,
             environment=environment,
-            namespace=namespace or "<local>",
+            namespace=namespace or "default",
             ports=ports,
         )
 
@@ -419,14 +419,14 @@ class ClusterContext:
 # =============================================================================
 
 
-def example_actor_job_workflow(cluster: ClusterContext):
+def example_actor_job_workflow(cluster: ExampleCluster):
     """Demonstrate real actor job workflow with cluster integration.
 
     This example shows the complete end-to-end workflow:
     1. Submit a job that runs an ActorServer
-    2. The job registers its actor endpoint with the controller
+    2. The job registers its actor endpoint via serve_and_register()
     3. A client uses ClusterResolver to discover and call the actor
-    4. The actor can access cluster context via current_ctx()
+    4. The actor can access cluster context via fluster_ctx()
 
     This is the recommended pattern for production actor deployments.
     """
@@ -436,22 +436,14 @@ def example_actor_job_workflow(cluster: ClusterContext):
     # This function will run inside a cluster job and start an ActorServer
     def actor_job_entrypoint():
         """Job entrypoint that starts an ActorServer and registers with controller."""
-        import os
         import time
 
-        from fluster import cluster_pb2
         from fluster.actor import ActorServer
-        from fluster.cluster_connect import ControllerServiceClientSync
+        from fluster.context import fluster_ctx
 
-        # Get environment variables injected by the cluster
-        job_id = os.environ["FLUSTER_JOB_ID"]
-        namespace = os.environ["FLUSTER_NAMESPACE"]
-        controller_url = os.environ["FLUSTER_CONTROLLER_ADDRESS"]
-        # Port allocated by the cluster and mapped to host via Docker -p flag
-        allocated_port = int(os.environ["FLUSTER_PORT_ACTOR"])
-
-        print(f"Actor job starting: job_id={job_id}, namespace={namespace}")
-        print(f"Using allocated port: {allocated_port}")
+        # Get context injected by the cluster
+        ctx = fluster_ctx()
+        print(f"Actor job starting: job_id={ctx.job_id}, namespace={ctx.namespace}")
 
         # Define our actor class inline (could also be imported)
         class Calculator:
@@ -473,36 +465,15 @@ def example_actor_job_workflow(cluster: ClusterContext):
             def get_history(self) -> list[str]:
                 return self._history
 
-        # Start the ActorServer on the allocated port
-        # Use 0.0.0.0 to bind to all interfaces (necessary inside Docker)
-        # The port is mapped to the host via Docker -p flag
-        server = ActorServer(host="0.0.0.0", port=allocated_port)
+        # Start the ActorServer
+        server = ActorServer(host="0.0.0.0")
         server.register("calculator", Calculator())
         port = server.serve_background()
-        print(f"ActorServer started on port {port}")
 
-        # Register the endpoint with the controller using Connect RPC
-        # Use localhost since the port is mapped from host to container via Docker -p
-        # Clients on the host will connect to localhost:<port>
-        endpoint_address = f"localhost:{port}"
-
-        print(f"Registering endpoint: calculator at {endpoint_address}")
-        try:
-            controller_client = ControllerServiceClientSync(address=controller_url)
-            request = cluster_pb2.Controller.RegisterEndpointRequest(
-                name="calculator",
-                address=endpoint_address,
-                job_id=job_id,
-                namespace=namespace,
-                metadata={"version": "1.0"},
-            )
-            response = controller_client.register_endpoint(request)
-            print(f"Endpoint registered successfully: {response.endpoint_id}")
-        except Exception as e:
-            print(f"Error registering endpoint: {e}")
-            import traceback
-
-            traceback.print_exc()
+        # Register endpoint with controller
+        address = f"localhost:{port}"
+        ctx.controller.endpoint_registry.register("calculator", address, {"job_id": ctx.job_id})
+        print(f"ActorServer started and registered on port {port}")
 
         # Keep the job running to serve requests
         print("Actor server ready, waiting for requests...")
@@ -517,7 +488,7 @@ def example_actor_job_workflow(cluster: ClusterContext):
         name="calculator-actor",
         cpu=1,
         memory="512m",
-        namespace="<local>",
+        namespace="default",
         ports=["actor"],
     )
     print(f"Job submitted: {job_id}")
@@ -563,9 +534,10 @@ def example_actor_job_workflow(cluster: ClusterContext):
 
     # Step 4: Use ClusterResolver to discover the actor
     from fluster.actor import ActorClient, ClusterResolver
+    from fluster.cluster.types import Namespace
 
     print("\nResolving actor via ClusterResolver...")
-    resolver = ClusterResolver(cluster.controller_url, namespace="<local>")
+    resolver = ClusterResolver(cluster.controller_url, namespace=Namespace("default"))
     client = ActorClient(resolver, "calculator")
 
     # Step 5: Call the actor methods
@@ -583,7 +555,7 @@ def example_actor_job_workflow(cluster: ClusterContext):
     print("Note: The actor job will continue running until the cluster shuts down.")
 
 
-def example_worker_pool(cluster: ClusterContext):
+def example_worker_pool(cluster: ExampleCluster):
     """Demonstrate WorkerPool for task dispatch."""
     from fluster.worker_pool import WorkerPool, WorkerPoolConfig
 
@@ -607,7 +579,7 @@ def example_worker_pool(cluster: ClusterContext):
     print("\nWorkerPool example complete!")
 
 
-def example_basic(cluster: ClusterContext):
+def example_basic(cluster: ExampleCluster):
     """Basic job submission through cluster."""
     print("\n=== Example: Basic Job Submission ===\n", flush=True)
 
@@ -632,7 +604,7 @@ def example_basic(cluster: ClusterContext):
             print(f"  {log}")
 
 
-def example_with_args(cluster: ClusterContext):
+def example_with_args(cluster: ExampleCluster):
     """Job with arguments."""
     print("\n=== Example: Job With Arguments ===\n")
 
@@ -654,7 +626,7 @@ def example_with_args(cluster: ClusterContext):
             print(f"  {log}")
 
 
-def example_concurrent(cluster: ClusterContext):
+def example_concurrent(cluster: ExampleCluster):
     """Multiple concurrent jobs."""
     print("\n=== Example: Concurrent Jobs ===\n")
 
@@ -680,7 +652,7 @@ def example_concurrent(cluster: ClusterContext):
         print(f"Job {i} ({job_id[:8]}...): {status['state']}")
 
 
-def example_kill(cluster: ClusterContext):
+def example_kill(cluster: ExampleCluster):
     """Kill a running job."""
     print("\n=== Example: Kill Job ===\n")
 
@@ -716,7 +688,7 @@ def example_kill(cluster: ClusterContext):
     print(f"Final state: {status['state']}")
 
 
-def example_resource_serialization(cluster: ClusterContext):
+def example_resource_serialization(cluster: ExampleCluster):
     """Demonstrate job serialization based on resource constraints.
 
     The worker has 4 CPUs. We submit jobs requiring 2 CPUs each,
@@ -754,7 +726,7 @@ def example_resource_serialization(cluster: ClusterContext):
         print(f"Job {i} ({job_id[:8]}...): {status['state']}")
 
 
-def example_scheduling_timeout(cluster: ClusterContext):
+def example_scheduling_timeout(cluster: ExampleCluster):
     """Demonstrate scheduling timeout for jobs that can't be scheduled.
 
     Submit a job requiring more resources than available. With a short
@@ -786,7 +758,7 @@ def example_scheduling_timeout(cluster: ClusterContext):
         print(f"Error: {status['error']}")
 
 
-def example_small_job_skips_queue(cluster: ClusterContext):
+def example_small_job_skips_queue(cluster: ExampleCluster):
     """Demonstrate that smaller jobs can skip ahead of larger jobs.
 
     Submit a large job that won't fit, then a small job. The small
@@ -861,7 +833,7 @@ def main(wait: bool, mode: str):
         print("\nNote: Job examples require Docker to be running.")
 
     try:
-        with ClusterContext(max_concurrent_jobs=3) as cluster:
+        with ExampleCluster(max_concurrent_jobs=3) as cluster:
             print(f"\nController dashboard: {cluster.controller_url}", flush=True)
             print(f"Worker dashboard: {cluster.worker_url}", flush=True)
             if wait:

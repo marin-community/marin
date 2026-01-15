@@ -44,3 +44,10 @@ Test to this protocol, not the concrete class: the protocol should describe the
 interesting behavior of the class, but not betray the implementation details.
 
 (You may of course _instantiate_ the concrete class for testing.)
+
+## Imports
+
+Don't use TYPE_CHECKING. Use the real import. If there is a circular dependency:
+
+* Prefer to resolve it with refactoring when sensible
+* Otherwise use a protocol if you simply need the type information

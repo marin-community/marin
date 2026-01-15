@@ -26,11 +26,10 @@ from fluster.actor.resolver import (
     ResolvedEndpoint,
     Resolver,
 )
-from fluster.actor.server import ActorContext, ActorId, ActorServer, current_ctx
+from fluster.actor.server import ActorId, ActorServer
 
 __all__ = [
     "ActorClient",
-    "ActorContext",
     "ActorId",
     "ActorPool",
     "ActorServer",
@@ -44,5 +43,4 @@ __all__ = [
     "ResolveResult",
     "ResolvedEndpoint",
     "Resolver",
-    "current_ctx",
 ]
