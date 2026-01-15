@@ -163,7 +163,7 @@ result = resolver.resolve("calculator")  # Looks up "abc123/calculator"
 The `FlusterContext` available in job code provides convenient access:
 
 ```python
-from fluster.context import fluster_ctx
+from fluster.client import fluster_ctx
 
 ctx = fluster_ctx()
 print(f"Job ID: {ctx.job_id}")        # "abc123/worker-0"

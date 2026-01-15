@@ -649,13 +649,13 @@ class Worker:
                     shutil.rmtree(job.workdir, ignore_errors=True)
 
     def _build_command(self, entrypoint, ports: dict[str, int]) -> list[str]:
-        """Build command to run entrypoint with FlusterContext injection.
+        """Build command to run entrypoint.
 
         Serializes the raw callable/args/kwargs tuple. Ports are passed via
         FLUSTER_PORT_<NAME> environment variables set by the worker.
 
-        The thunk uses create_context_from_env() to set up FlusterContext,
-        enabling job code to use fluster_ctx() for cluster operations.
+        The thunk executes user code directly. If user code calls fluster_ctx(),
+        it lazily creates context from FLUSTER_* environment variables.
 
         Args:
             entrypoint: Job entrypoint dataclass
@@ -670,12 +670,9 @@ class Worker:
         thunk = f"""
 import cloudpickle
 import base64
-from fluster.context import create_context_from_env, fluster_ctx_scope
 
 fn, args, kwargs = cloudpickle.loads(base64.b64decode('{encoded}'))
-
-with fluster_ctx_scope(create_context_from_env()):
-    result = fn(*args, **kwargs)
+result = fn(*args, **kwargs)
 
 with open('/workdir/_result.pkl', 'wb') as f:
     f.write(cloudpickle.dumps(result))

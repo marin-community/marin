@@ -71,7 +71,7 @@ It's only available during actor method calls and doesn't provide access to work
 A new unified context dataclass with all execution information:
 
 ```python
-# fluster/context.py
+# fluster/client/context.py
 
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -564,13 +564,13 @@ class RpcClusterClient:
 ### Phase 1: Core Context Infrastructure
 
 **Files to create:**
-- `src/fluster/context.py` - FlusterContext, fluster_ctx(), ClusterController, EndpointRegistry protocols
+- `src/fluster/client/context.py` - FlusterContext, fluster_ctx(), ClusterController, EndpointRegistry protocols
 
 **Files to modify:**
 - `src/fluster/cluster/types.py` - Add Namespace.DEFAULT
 
 ```python
-# context.py skeleton
+# client/context.py skeleton
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -820,7 +820,7 @@ ctx = current_ctx()
 resolver = ctx.resolver
 
 # After:
-from fluster.context import fluster_ctx
+from fluster.client import fluster_ctx
 ctx = fluster_ctx()
 resolver = ctx.resolver
 ```
@@ -851,6 +851,8 @@ resolver = ctx.resolver
 ### Example Test
 
 ```python
+from fluster.client import FlusterContext, fluster_ctx, fluster_ctx_scope, LocalClient, LocalClientConfig
+
 def test_fluster_ctx_available_in_job():
     """Context should be available in job code."""
     results = []
@@ -891,7 +893,7 @@ def test_resolver_uses_context_namespace():
 
 | File | Change Type | Description |
 |------|-------------|-------------|
-| `src/fluster/context.py` | New | FlusterContext, fluster_ctx(), ClusterController, EndpointRegistry Protocols |
+| `src/fluster/client/context.py` | New | FlusterContext, fluster_ctx(), ClusterController, EndpointRegistry Protocols |
 | `src/fluster/cluster/local_client.py` | New | LocalClient, LocalEndpointRegistry, LocalResolver, LocalControllerAdapter |
 | `src/fluster/cluster/rpc_adapter.py` | New | RpcControllerAdapter, RpcEndpointRegistry for remote execution |
 | `src/fluster/cluster/types.py` | Modify | Add Namespace.DEFAULT |

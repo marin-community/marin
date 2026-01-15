@@ -17,7 +17,7 @@
 import os
 from unittest import mock
 
-from fluster.context import create_context_from_env
+from fluster.client import create_context_from_env
 
 
 def test_create_context_from_env_with_attempt_id():

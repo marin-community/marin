@@ -12,52 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Resolver types and implementations for actor discovery."""
+"""Resolver types and implementations for actor discovery.
 
-from dataclasses import dataclass, field
-from typing import Protocol as TypingProtocol
+The core types (Resolver, ResolvedEndpoint, ResolveResult) are defined in
+fluster.client.protocols and re-exported here for backwards compatibility.
+"""
 
+from typing import Protocol
+
+from fluster.client import get_fluster_ctx
+from fluster.client.protocols import ResolvedEndpoint, ResolveResult, Resolver
 from fluster.cluster.types import Namespace
-from fluster.context import get_fluster_ctx
 from fluster.rpc import cluster_pb2
 from fluster.rpc.cluster_connect import ControllerServiceClientSync
 
-
-@dataclass
-class ResolvedEndpoint:
-    """A single resolved endpoint."""
-
-    url: str  # e.g., "http://host:port"
-    actor_id: str  # Unique handle for staleness detection
-    metadata: dict[str, str] = field(default_factory=dict)
-
-
-@dataclass
-class ResolveResult:
-    """Result of resolving an actor name."""
-
-    name: str
-    endpoints: list[ResolvedEndpoint] = field(default_factory=list)
-
-    @property
-    def is_empty(self) -> bool:
-        return len(self.endpoints) == 0
-
-    def first(self) -> ResolvedEndpoint:
-        if not self.endpoints:
-            raise ValueError(f"No endpoints for '{self.name}'")
-        return self.endpoints[0]
-
-
-class Resolver(TypingProtocol):
-    """Protocol for actor name resolution.
-
-    Resolvers automatically handle namespace prefixing based on the current
-    FlusterContext. When resolving "calculator", the resolver will look up
-    "{namespace}/calculator" where namespace is derived from the context.
-    """
-
-    def resolve(self, name: str) -> ResolveResult: ...
+# Re-export for backwards compatibility
+__all__ = [
+    "ClusterResolver",
+    "FixedResolver",
+    "GcsApi",
+    "GcsResolver",
+    "MockGcsApi",
+    "RealGcsApi",
+    "ResolveResult",
+    "ResolvedEndpoint",
+    "Resolver",
+]
 
 
 class FixedResolver:
@@ -165,7 +145,7 @@ class ClusterResolver:
         return ResolveResult(name=name, endpoints=endpoints)
 
 
-class GcsApi(TypingProtocol):
+class GcsApi(Protocol):
     """Protocol for GCS Compute API operations."""
 
     def list_instances(self, project: str, zone: str) -> list[dict]:

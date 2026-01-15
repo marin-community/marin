@@ -290,7 +290,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fluster.actor.resolver import Resolver
-    from fluster.cluster.client import Cluster
+    from fluster.client import ClusterClient as Cluster
 
 _actor_context: ContextVar["ActorContext | None"] = ContextVar("actor_context", default=None)
 

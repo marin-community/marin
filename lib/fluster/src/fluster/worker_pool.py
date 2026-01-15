@@ -22,7 +22,7 @@ jobs that can execute any callable.
 Example:
     from pathlib import Path
     from fluster.worker_pool import WorkerPool, WorkerPoolConfig
-    from fluster.cluster.client import RpcClusterClient
+    from fluster.client import RpcClusterClient
 
     client = RpcClusterClient("http://controller:8080", workspace=Path("./my-project"))
 
@@ -55,9 +55,8 @@ from fluster.rpc import actor_pb2, cluster_pb2
 from fluster.actor import ActorServer
 from fluster.actor.resolver import Resolver
 from fluster.rpc.actor_connect import ActorServiceClientSync
-from fluster.cluster.client import ClusterClient
+from fluster.client import ClusterClient, fluster_ctx
 from fluster.cluster.types import Entrypoint, JobId
-from fluster.context import fluster_ctx
 
 T = TypeVar("T")
 

@@ -33,7 +33,7 @@ from pathlib import Path
 import cloudpickle
 import pytest
 
-from fluster.cluster.client import RpcClusterClient
+from fluster.client import RpcClusterClient
 from fluster.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
 from fluster.cluster.types import Entrypoint
 from fluster.cluster.worker.builder import BuildResult, ImageCache

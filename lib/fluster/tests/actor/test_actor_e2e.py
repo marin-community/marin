@@ -17,7 +17,7 @@
 import pytest
 
 from fluster.actor import ActorClient, ActorServer, FixedResolver
-from fluster.context import FlusterContext, fluster_ctx, fluster_ctx_scope
+from fluster.client import FlusterContext, fluster_ctx, fluster_ctx_scope
 
 
 class Calculator:

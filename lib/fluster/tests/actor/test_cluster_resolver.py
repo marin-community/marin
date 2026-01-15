@@ -32,7 +32,7 @@ from fluster.actor.resolver import ClusterResolver
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState
 from fluster.cluster.types import JobId
-from fluster.context import FlusterContext, fluster_ctx_scope
+from fluster.client import FlusterContext, fluster_ctx_scope
 from fluster.rpc import cluster_pb2
 from fluster.rpc.cluster_connect import ControllerServiceASGIApplication
 

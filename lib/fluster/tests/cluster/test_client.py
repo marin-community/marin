@@ -16,7 +16,7 @@
 
 import pytest
 
-from fluster.cluster.client import LocalClient, LocalClientConfig
+from fluster.client import LocalClient, LocalClientConfig
 from fluster.cluster.types import Entrypoint
 from fluster.rpc import cluster_pb2
 

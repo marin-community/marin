@@ -25,7 +25,7 @@ in any job code, providing access to:
 
 Example:
     # In job code:
-    from fluster.context import fluster_ctx
+    from fluster.client.context import fluster_ctx
 
     ctx = fluster_ctx()
     print(f"Running job {ctx.job_id} in namespace {ctx.namespace}")
@@ -37,149 +37,14 @@ Example:
     sub_job_id = ctx.controller.submit(entrypoint, "sub-job", resources)
 """
 
+import os
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-if TYPE_CHECKING:
-    from fluster.actor.resolver import Resolver
-
+from fluster.client.protocols import ClusterController, Resolver
 from fluster.cluster.types import Namespace
-
-
-@runtime_checkable
-class EndpointRegistry(Protocol):
-    """Protocol for registering actor endpoints.
-
-    Implementations:
-    - RpcEndpointRegistry: Registers via RPC to controller
-    - LocalEndpointRegistry: In-memory registry for local execution
-    """
-
-    def register(
-        self,
-        name: str,
-        address: str,
-        metadata: dict[str, str] | None = None,
-    ) -> str:
-        """Register an endpoint for actor discovery.
-
-        Args:
-            name: Actor name for discovery
-            address: Address where actor is listening (host:port)
-            metadata: Optional metadata for the endpoint
-
-        Returns:
-            Unique endpoint ID for later unregistration
-        """
-        ...
-
-    def unregister(self, endpoint_id: str) -> None:
-        """Unregister a previously registered endpoint.
-
-        Args:
-            endpoint_id: ID returned from register()
-        """
-        ...
-
-
-@runtime_checkable
-class ClusterController(Protocol):
-    """Protocol for cluster operations.
-
-    Abstracts the interface for job management and actor discovery,
-    allowing the same code to work with both LocalClient and RpcClusterClient.
-
-    Implementations:
-    - RpcClusterClient: Backed by RPC to controller (with job_id set)
-    - _LocalJobControllerAdapter: In-process for local execution
-    """
-
-    def submit(
-        self,
-        entrypoint: Any,  # Entrypoint
-        name: str,
-        resources: Any,  # cluster_pb2.ResourceSpec
-        environment: Any = None,  # cluster_pb2.EnvironmentConfig | None
-        ports: list[str] | None = None,
-    ) -> Any:  # JobId
-        """Submit a job for execution.
-
-        Namespace is inherited from the current context.
-
-        Args:
-            entrypoint: Job entrypoint (callable + args/kwargs)
-            name: Job name
-            resources: Resource requirements (cluster_pb2.ResourceSpec)
-            environment: Environment configuration (cluster_pb2.EnvironmentConfig)
-            ports: Port names to allocate (e.g., ["actor", "metrics"])
-
-        Returns:
-            Job ID for the submitted job
-        """
-        ...
-
-    def status(self, job_id: Any) -> Any:  # JobId -> cluster_pb2.JobStatus
-        """Get job status.
-
-        Args:
-            job_id: Job ID to query
-
-        Returns:
-            JobStatus proto with current state
-        """
-        ...
-
-    def wait(
-        self,
-        job_id: Any,  # JobId
-        timeout: float = 300.0,
-        poll_interval: float = 0.5,
-    ) -> Any:  # cluster_pb2.JobStatus
-        """Wait for job to complete.
-
-        Args:
-            job_id: Job ID to wait for
-            timeout: Maximum time to wait in seconds
-            poll_interval: Time between status checks
-
-        Returns:
-            Final JobStatus
-
-        Raises:
-            TimeoutError: If job doesn't complete within timeout
-        """
-        ...
-
-    def terminate(self, job_id: Any) -> None:  # JobId
-        """Terminate a running job.
-
-        Args:
-            job_id: Job ID to terminate
-        """
-        ...
-
-    def resolver(self) -> Any:  # -> Resolver
-        """Get a resolver for actor discovery.
-
-        The namespace is derived from the current job context.
-
-        Returns:
-            Resolver implementation
-        """
-        ...
-
-    @property
-    def endpoint_registry(self) -> EndpointRegistry:
-        """Get the endpoint registry for actor registration."""
-        ...
-
-    @property
-    def address(self) -> str:
-        """Address of the controller (for compatibility)."""
-        ...
 
 
 @dataclass
@@ -249,7 +114,7 @@ class FlusterContext:
         return self.ports[name]
 
     @property
-    def resolver(self) -> "Resolver":
+    def resolver(self) -> Resolver:
         """Get a resolver for actor discovery.
 
         The resolver uses the namespace derived from this context's job ID.
@@ -270,21 +135,19 @@ _fluster_context: ContextVar[FlusterContext | None] = ContextVar(
 
 
 def fluster_ctx() -> FlusterContext:
-    """Get the current FlusterContext.
+    """Get or create FlusterContext from environment.
+
+    On first call (when context is not set), automatically creates context
+    from FLUSTER_* environment variables. This enables worker thunks to
+    skip explicit context setup.
 
     Returns:
         Current FlusterContext
-
-    Raises:
-        RuntimeError: If called outside of a fluster job
     """
     ctx = _fluster_context.get()
     if ctx is None:
-        raise RuntimeError(
-            "fluster_ctx() called outside of a fluster job. "
-            "Ensure your code is running within a job submitted via "
-            "LocalClient or RpcClusterClient."
-        )
+        ctx = create_context_from_env()
+        _fluster_context.set(ctx)
     return ctx
 
 
@@ -342,8 +205,6 @@ def create_context_from_env() -> FlusterContext:
     Returns:
         Configured FlusterContext
     """
-    import os
-
     job_id = os.environ.get("FLUSTER_JOB_ID", "")
     attempt_id = int(os.environ.get("FLUSTER_ATTEMPT_ID", "0"))
     worker_id = os.environ.get("FLUSTER_WORKER_ID")
@@ -359,7 +220,7 @@ def create_context_from_env() -> FlusterContext:
 
     controller = None
     if controller_address:
-        from fluster.cluster.client import RpcClusterClient
+        from fluster.client.rpc_client import RpcClusterClient
 
         controller = RpcClusterClient(
             controller_address=controller_address,

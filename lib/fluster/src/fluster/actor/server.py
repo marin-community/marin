@@ -48,7 +48,7 @@ import uvicorn
 from fluster.rpc import actor_pb2
 from fluster.time_utils import wait_until
 from fluster.rpc.actor_connect import ActorServiceASGIApplication
-from fluster.context import FlusterContext, fluster_ctx_scope, get_fluster_ctx
+from fluster.client import FlusterContext, fluster_ctx_scope, get_fluster_ctx
 from connectrpc.request import RequestContext
 
 logger = logging.getLogger(__name__)
