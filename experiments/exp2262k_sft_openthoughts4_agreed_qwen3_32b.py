@@ -93,6 +93,7 @@ mixture_sft_config = SimpleSFTConfig(
     weight_decay=0.0,
     beta1=0.9,
     beta2=0.999,
+    pad_tokenizer_to_match_model=True,  # Pad tokenizer vocab to match model's vocab size (Qwen2.5-7B-Instruct model/tokenizer vocab sizes are different)
 )
 
 mixture_config = lm_mixture_data_config(

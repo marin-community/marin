@@ -396,6 +396,49 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         return dataclasses.replace(self, **replacements)  # type: ignore
 
+    def with_tokenizer_padded_to_match_model(
+        self, ref: Optional[Union[str, RepoRef]] = None
+    ) -> "HFCheckpointConverter":
+        """
+        Returns a new converter with the tokenizer padded to match the model's vocab size.
+
+        This is useful when the model checkpoint has a larger vocab than the tokenizer
+        (e.g., Qwen models pad their vocab to be divisible by 4 for TPU efficiency).
+        Padding the tokenizer ensures the Vocab axis matches the model's embedding size.
+
+        Args:
+            ref: The reference checkpoint to get the model vocab size from.
+                 If None, uses the converter's reference_checkpoint.
+
+        Returns:
+            A new HFCheckpointConverter with the tokenizer padded to match the model vocab.
+        """
+        hf_config = self.hf_config_from_hf_checkpoint(ref)
+        model_vocab_size = hf_config.vocab_size
+        tokenizer_vocab_size = len(self.tokenizer)
+
+        if tokenizer_vocab_size >= model_vocab_size:
+            logger.info(
+                f"Tokenizer vocab size ({tokenizer_vocab_size}) >= model vocab size ({model_vocab_size}). "
+                "No padding needed."
+            )
+            return self
+
+        num_to_add = model_vocab_size - tokenizer_vocab_size
+        logger.info(
+            f"Padding tokenizer vocab from {tokenizer_vocab_size} to {model_vocab_size} "
+            f"(adding {num_to_add} dummy tokens) to match model vocab size."
+        )
+
+        # Add dummy tokens to the tokenizer
+        dummy_tokens = [f"<|padding_{i}|>" for i in range(num_to_add)]
+        self.tokenizer.add_tokens(dummy_tokens)
+
+        # Return a new converter with the modified tokenizer
+        # Note: We modify self.tokenizer in place, but since the Vocab property is cached,
+        # we need to return a new converter to get a fresh Vocab
+        return dataclasses.replace(self, tokenizer=self.tokenizer)  # type: ignore
+
     def with_config_overrides(self, config_overrides: dict, merge: bool = True) -> "HFCheckpointConverter":
         if self.config_overrides is not None and merge:
             config_overrides = mergedeep.merge({}, self.config_overrides, config_overrides)

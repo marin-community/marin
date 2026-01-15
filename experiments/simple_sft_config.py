@@ -114,6 +114,11 @@ class SimpleSFTConfig:
     int8: bool = False
     """Int8 (quantized) training in Levanter."""
 
+    pad_tokenizer_to_match_model: bool = False
+    """If True, pad the tokenizer's vocab to match the model's vocab size by adding dummy tokens.
+    Useful when the model checkpoint has a larger vocab than the tokenizer (e.g., Qwen models
+    pad their vocab to be divisible by 4 for TPU efficiency)."""
+
     z_loss_weight: float = 0.0
 
     reinit_tokens: list[str] | bool = False

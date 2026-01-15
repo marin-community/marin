@@ -368,6 +368,7 @@ def default_train(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
         ),
         initialize_from_hf=hf_checkpoint_path_to_load_from or False,
+        pad_tokenizer_to_match_model=train_config.pad_tokenizer_to_match_model,
         z_loss_weight=train_config.z_loss_weight,
         train_seq_len=train_length,
         model=model_config,
@@ -494,6 +495,7 @@ def default_sft(
         z_loss_weight=sft_config.z_loss_weight,
         beta1=sft_config.beta1,
         beta2=sft_config.beta2,
+        pad_tokenizer_to_match_model=sft_config.pad_tokenizer_to_match_model,
     )
 
     if sft_config.reinit_tokens:
