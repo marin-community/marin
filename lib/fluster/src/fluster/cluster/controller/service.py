@@ -266,14 +266,6 @@ class ControllerServiceImpl:
         """List all jobs.
 
         Returns a list of all jobs in the controller, regardless of state.
-        Note that the namespace field in the request is ignored in v0.
-
-        Args:
-            request: List request (namespace field currently ignored)
-            ctx: Request context (unused in v0)
-
-        Returns:
-            ListJobsResponse containing all jobs as JobStatus protos
         """
         jobs = []
         for j in self._state.list_all_jobs():

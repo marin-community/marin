@@ -98,12 +98,7 @@ class WorkerServiceImpl:
         _request: cluster_pb2.Worker.ListJobsRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.Worker.ListJobsResponse:
-        """List jobs.
-
-        Note: namespace filtering is not implemented in this stage as jobs
-        are stored without namespace information. Empty string is treated
-        as "list all jobs".
-        """
+        """List all jobs on this worker."""
         jobs = self._provider.list_jobs()
         return cluster_pb2.Worker.ListJobsResponse(
             jobs=[job.to_proto() for job in jobs],

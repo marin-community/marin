@@ -235,9 +235,7 @@ message Controller {
     string job_id = 1;
   }
 
-  message ListJobsRequest {
-    string namespace = 1;
-  }
+  message ListJobsRequest {}
 
   message ListJobsResponse {
     repeated JobStatus jobs = 1;
@@ -293,7 +291,6 @@ message Controller {
 
   // --- Endpoint Registry ---
   // Endpoints are registered with prefixed names: "{root_job_id}/{actor_name}"
-  // This provides automatic namespace isolation without explicit filtering.
   message Endpoint {
     string endpoint_id = 1;
     string name = 2;                 // Full prefixed name: "abc123/my-actor"
@@ -368,9 +365,7 @@ message Worker {
     bool include_result = 2;
   }
 
-  message ListJobsRequest {
-    string namespace = 1;
-  }
+  message ListJobsRequest {}
 
   message ListJobsResponse {
     repeated JobStatus jobs = 1;

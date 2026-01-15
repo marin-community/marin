@@ -274,10 +274,8 @@ class Controller(_message.Message):
         job_id: str
         def __init__(self, job_id: _Optional[str] = ...) -> None: ...
     class ListJobsRequest(_message.Message):
-        __slots__ = ("namespace",)
-        NAMESPACE_FIELD_NUMBER: _ClassVar[int]
-        namespace: str
-        def __init__(self, namespace: _Optional[str] = ...) -> None: ...
+        __slots__ = ()
+        def __init__(self) -> None: ...
     class ListJobsResponse(_message.Message):
         __slots__ = ("jobs",)
         JOBS_FIELD_NUMBER: _ClassVar[int]
@@ -461,10 +459,8 @@ class Worker(_message.Message):
         include_result: bool
         def __init__(self, job_id: _Optional[str] = ..., include_result: _Optional[bool] = ...) -> None: ...
     class ListJobsRequest(_message.Message):
-        __slots__ = ("namespace",)
-        NAMESPACE_FIELD_NUMBER: _ClassVar[int]
-        namespace: str
-        def __init__(self, namespace: _Optional[str] = ...) -> None: ...
+        __slots__ = ()
+        def __init__(self) -> None: ...
     class ListJobsResponse(_message.Message):
         __slots__ = ("jobs",)
         JOBS_FIELD_NUMBER: _ClassVar[int]
