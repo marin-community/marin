@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3_wrong
+from marin.execution import step
 from marin.execution.executor import executor_main
 import dataclasses
 import logging
@@ -140,10 +141,15 @@ TAG = ["654_scaling_tootsie"]
 
 suite = scaling_law_suite(sweep_name="tootsie-scaling", tokenized=dclm_mixture_config_llama3_wrong, tags=TAG)
 
+
+@step(name="tootsie/exp654/scaling_suite")
+def run_scaling_suite():
+    """Entry point for Tootsie scaling law suite."""
+    return suite
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=[
-            *suite,
-        ],
+        steps=[run_scaling_suite()],
         description="scaling law suite to predict performance of 8B model on DCLM mix",
     )

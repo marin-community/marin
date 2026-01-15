@@ -35,7 +35,7 @@ from experiments.steps import default_lm_log_probs
 from fray.cluster import ResourceConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from marin.download.uncheatable_eval.download import make_uncheatable_eval_step
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.executor import ExecutorStep, executor_main, step
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep, mixture_for_evaluation
 
@@ -162,14 +162,19 @@ def build_steps() -> list[ExecutorStep]:
     return steps
 
 
-def main():
+@step(name="evals/uncheatable/all")
+def run_uncheatable_evals():
+    """Entry point for uncheatable evaluation experiments."""
     if os.getenv("CI", None) is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    for step in build_steps():
-        executor_main(steps=[step])
+    for eval_step in build_steps():
+        eval_step()
 
 
 if __name__ == "__main__":
-    main()
+    executor_main(
+        steps=[run_uncheatable_evals()],
+        description="Uncheatable Evals: Evaluate models' perplexity on diverse, high-quality, and fresh datasets.",
+    )

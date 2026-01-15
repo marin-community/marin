@@ -338,7 +338,10 @@ for model, revision in model_revision_pairs:
     gemstone_splits[config.variant][config] = gemstone_model
 
 
-if __name__ == "__main__":
+@step(name="gemstones/scaling_law_all")
+def run_gemstones_scaling_law():
+    """Entry point for Gemstones scaling law experiments."""
+    # Generate eval steps for cooldown models at 10% cooldown point
     for config in gemstone_splits["cooldown"]:
         if roughly_equals(config.step, int(config.cooldown_start_step + (0.1 * config.cooldown_start_step))):
             try:
@@ -349,7 +352,7 @@ if __name__ == "__main__":
                 )
                 gemstone_model = gemstone_splits["cooldown"][config]
 
-                eval_step = default_lm_log_probs(
+                default_lm_log_probs(
                     gemstone_model,
                     model_config,
                     evaluation_mixture,
@@ -360,13 +363,11 @@ if __name__ == "__main__":
                         f"M={model_config.model_type}",
                         "eval=domain-scaling-laws",
                     ],
-                )
-                executor_main(
-                    [eval_step],
-                    description="Compute logprobs for all Gemstone Model Checkpoints",
-                )
+                )  # Step traced on creation
             except ValueError as e:
                 print(f"Skipping {model}/{revision}: {e}")
+
+    # Generate eval steps for baseline models
     baselines = [
         ("allenai/OLMo-2-1124-7B", "stage1-step928646-tokens3896B"),
         ("allenai/OLMo-2-1124-13B", "stage1-step596000-tokens5000B"),
@@ -377,14 +378,17 @@ if __name__ == "__main__":
         model_config = HFCheckpointConverter.from_hf(f"{model}@{revision}").config_from_hf_checkpoint(
             f"{model}@{revision}"
         )
-        eval_step = default_lm_log_probs(
+        default_lm_log_probs(
             model_instance,
             model_config,
             local_evaluation_mixture,
             checkpoint_is_hf=True,
             name=versioned(f"Domain-Scaling-Laws-tokenizer-fix-{model}@{revision}"),
-        )
-        executor_main(
-            [eval_step],
-            description="Compute logprobs for all Baseline Model Checkpoints",
-        )
+        )  # Step traced on creation
+
+
+if __name__ == "__main__":
+    executor_main(
+        steps=[run_gemstones_scaling_law()],
+        description="Compute logprobs for all Gemstone and Baseline Model Checkpoints",
+    )

@@ -20,7 +20,7 @@ import logging
 
 from experiments.llama import llama_150m
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, step
 from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
@@ -46,9 +46,14 @@ speedrun_config = SpeedrunConfig(
 
 speedrun_config.print_run_info()
 
-if __name__ == "__main__":
-    executor_main(
-        steps=default_speedrun(
-            "llama_150m_run", speedrun_config, override_output_path="checkpoints/speedrun/llama_150m_run-37ce8d"
-        )
+
+@step(name="speedrun/llama_150m_run/all")
+def run_llama_150m():
+    """Entry point for Llama 150M training."""
+    default_speedrun(
+        "llama_150m_run", speedrun_config, override_output_path="checkpoints/speedrun/llama_150m_run-37ce8d"
     )
+
+
+if __name__ == "__main__":
+    executor_main(steps=[run_llama_150m()], description="150M param model based on Llama architecture")

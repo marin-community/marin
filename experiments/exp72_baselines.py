@@ -80,13 +80,16 @@ nemotron_cc_model = default_train(
 
 ############################################################
 
+@step(name="baselines/all")
+def run_all_baselines():
+    """Entry point for baseline model training experiments."""
+    slimpajama_6b_model()
+    slimpajama_model()
+    fineweb_edu_model()
+    nemotron_cc_model()
+
 if __name__ == "__main__":
     executor_main(
-        steps=[
-            slimpajama_6b_model,
-            slimpajama_model,
-            fineweb_edu_model,
-            nemotron_cc_model,
-        ],
+        steps=[run_all_baselines()],
         description="Train 1.4B models on standard datasets (SlimPajama 6B, SlimPajama, FineWebEdu, Nemotron-CC).",
     )

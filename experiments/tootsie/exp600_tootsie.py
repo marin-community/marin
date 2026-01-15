@@ -47,6 +47,7 @@ from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
+from marin.execution import step
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 from fray.cluster import ResourceConfig
@@ -712,18 +713,24 @@ tootsie_8b_deeper_starling = default_train(
 ).with_output_path("checkpoints/tootsie-8b-deeper-starling")
 
 
+@step(name="tootsie/exp600/all")
+def run_tootsie_experiment():
+    """Entry point for Tootsie 8B training experiment with all phases."""
+    return [
+        llama_8b_tootsie_phase1,
+        llama_8b_tootsie_phase3,
+        llama_8b_tootsie_dessert_BAD,
+        llama_8b_tootsie_dessert_v3,
+        llama_8b_tootsie_cooldown_v2,
+        llama_8b_tootsie_adept_phoenix,
+        tootsie_8b_sensible_starling,
+        tootsie_8b_deeper_starling,
+        *default_base_eval(tootsie_8b_deeper_starling),
+    ]
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=[
-            llama_8b_tootsie_phase1,
-            llama_8b_tootsie_phase3,
-            llama_8b_tootsie_dessert_BAD,
-            llama_8b_tootsie_dessert_v3,
-            llama_8b_tootsie_cooldown_v2,
-            llama_8b_tootsie_adept_phoenix,
-            tootsie_8b_sensible_starling,
-            tootsie_8b_deeper_starling,
-            *default_base_eval(tootsie_8b_deeper_starling),
-        ],
+        steps=[run_tootsie_experiment()],
         description="Train 8B model on DCLM using WSD-S, then switching to EMA with a new mixture.",
     )
