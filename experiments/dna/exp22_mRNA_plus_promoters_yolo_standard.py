@@ -21,7 +21,7 @@ https://github.com/Open-Athena/bolinas-dna/issues/22
 import dataclasses
 import logging
 from fray.cluster import ResourceConfig
-from levanter.data.text import DNALmDatasetFormat
+from levanter.data.text import TextLmDatasetFormat
 from experiments.qwen3 import qwen3_1_7b
 from marin.execution.executor import executor_main
 from experiments.defaults import default_tokenize, default_train
@@ -57,10 +57,10 @@ model_config = dataclasses.replace(qwen3_1_7b, max_seq_len=dataset_seq_len)
 # Dataset configuration
 # -----------------------------------------------------------------------------
 data_tokenized = default_tokenize(
-    name="animal-mRNA-plus-promoters-repeat-weight-0.01",
+    name="animal-mRNA-plus-promoters",
     dataset=dataset_path,
     tokenizer=tokenizer_path,
-    format=DNALmDatasetFormat(soft_mask_weight=0.01),
+    format=TextLmDatasetFormat(text_key="seq"),
     window_size_bytes=50_000_000,
 )
 
@@ -82,7 +82,7 @@ train_config = SimpleTrainConfig(
 )
 
 training_step = default_train(
-    name=f"animal-mRNA-plus-promoters-yolo-repeat-weight-0.01-r{run_number:02d}",
+    name=f"animal-mRNA-plus-promoters-yolo-r{run_number:02d}",
     tokenized=data_tokenized,
     model_config=model_config,
     train_config=train_config,
@@ -91,5 +91,18 @@ training_step = default_train(
     use_default_validation=False,
 )
 
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
 if __name__ == "__main__":
+    logger.info("🧬 DNA Training Experiment")
+    logger.info("=" * 64)
+    logger.info(f"Model:              {model_config}")
+    logger.info(f"Learning rate:      {learning_rate}")
+    logger.info(f"Global batch size:  {train_batch_size}")
+    logger.info(f"Training steps:     {num_train_steps:,}")
+    logger.info(f"Steps per export:   {steps_per_export:,}")
+    logger.info(f"Steps per eval:     {steps_per_eval:,}")
+    logger.info("=" * 64)
+
     executor_main(steps=[training_step])
