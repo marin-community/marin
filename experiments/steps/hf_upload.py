@@ -13,48 +13,51 @@
 # limitations under the License.
 
 """
-Step wrappers for uploading to Hugging Face Hub.
+Step definitions for uploading to Hugging Face Hub.
 
-This module provides step definitions that wrap the library functions in
-marin.export.hf_upload.
+Uses JAX-style tracing - steps can call other steps naturally.
 """
 
-from marin.execution import ExecutorStep, StepContext, step
+from marin.execution import StepRef, step
 from marin.export.hf_upload import UploadToHfConfig, upload_to_hf
 
 
-@step(name="metadata/hf_uploads/{name}")
+@step(name="metadata/hf_uploads/{name}", fn=upload_to_hf)
 def upload_dir_to_hf(
-    ctx: StepContext,
     name: str,
-    input_step: ExecutorStep,
+    input_ref: StepRef,
     repo_id: str,
     repo_type: str = "dataset",
     token: str | None = None,
     private: bool = False,
     revision: str | None = None,
     commit_batch_size: str = "1GiB",
-    fn=upload_to_hf,
     **upload_kwargs: str,
 ):
     """
-    Create a step that uploads a step's output to a Hugging Face repo.
+    Upload a step's output to a Hugging Face repo.
 
     Args:
-        ctx: Step context (automatically provided by @step decorator)
         name: Name for this upload step (used in output path)
-        input_step: The step whose output to upload
+        input_ref: StepRef from calling another step (the data to upload)
         repo_id: The repo id to upload to (e.g. "username/repo_name")
         repo_type: The type of repo ("dataset", "model", etc.)
         token: Auth token (if not provided, uses default)
         private: Whether to create a private repo if it doesn't exist
         revision: Branch to upload to (if not provided, uses default)
         commit_batch_size: Maximum size of files to batch in a single commit
-        fn: The upload function (replaced with no-op during tracing)
         **upload_kwargs: Additional kwargs for huggingface_hub.upload_folder
+
+    Usage:
+        tokenized = tokenize_dataset()  # Returns StepRef
+        upload = upload_dir_to_hf(
+            name="fineweb_tokenized",
+            input_ref=tokenized,
+            repo_id="my-org/fineweb-tokenized",
+        )
     """
-    config = UploadToHfConfig(
-        input_path=ctx.require(input_step),
+    return UploadToHfConfig(
+        input_path=input_ref,
         repo_id=repo_id,
         repo_type=repo_type,
         token=token,
@@ -63,12 +66,10 @@ def upload_dir_to_hf(
         commit_batch_size=commit_batch_size,
         upload_kwargs=upload_kwargs,
     )
-    return fn(config)
 
 
-@step(name="metadata/hf_uploads/{name}")
+@step(name="metadata/hf_uploads/{name}", fn=upload_to_hf)
 def upload_path_to_hf(
-    ctx: StepContext,
     name: str,
     input_path: str,
     repo_id: str,
@@ -77,17 +78,15 @@ def upload_path_to_hf(
     private: bool = False,
     revision: str | None = None,
     commit_batch_size: str = "1GiB",
-    fn=upload_to_hf,
     **upload_kwargs: str,
 ):
     """
-    Create a step that uploads a raw path (GCS, local) to a Hugging Face repo.
+    Upload a raw path (GCS, local) to a Hugging Face repo.
 
     Use this for uploading existing paths that aren't step outputs.
     For uploading step outputs, use upload_dir_to_hf instead.
 
     Args:
-        ctx: Step context (automatically provided by @step decorator)
         name: Name for this upload step (used in output path)
         input_path: The GCS/local path to upload
         repo_id: The repo id to upload to (e.g. "username/repo_name")
@@ -96,10 +95,9 @@ def upload_path_to_hf(
         private: Whether to create a private repo if it doesn't exist
         revision: Branch to upload to (if not provided, uses default)
         commit_batch_size: Maximum size of files to batch in a single commit
-        fn: The upload function (replaced with no-op during tracing)
         **upload_kwargs: Additional kwargs for huggingface_hub.upload_folder
     """
-    config = UploadToHfConfig(
+    return UploadToHfConfig(
         input_path=input_path,
         repo_id=repo_id,
         repo_type=repo_type,
@@ -109,4 +107,3 @@ def upload_path_to_hf(
         commit_batch_size=commit_batch_size,
         upload_kwargs=upload_kwargs,
     )
-    return fn(config)

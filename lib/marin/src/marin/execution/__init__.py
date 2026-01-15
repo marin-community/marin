@@ -33,5 +33,8 @@ from .executor_step_status import (
 from .step_ref import (
     StepContext,
     StepRef,
+    output,
+    output_subpath,
     step,
+    trace,
 )
