@@ -289,28 +289,31 @@ def step(
 
     When called, a @step function:
     1. Creates a new tracing context
-    2. Executes the function body (which may call other steps)
+    2. Executes the function body (which may call other steps or @deferred functions)
     3. Creates an ExecutorStep with the returned config
     4. Registers as a dependency of any enclosing step
     5. Returns a StepRef for use in configs
 
-    Usage:
-        @step(name="download/fineweb", fn=download_fn)
-        def download_fineweb():
-            return DownloadConfig(output_path=output())
+    Usage with @deferred (preferred):
+        download_hf = deferred(_download_hf)
+        tokenize = deferred(_tokenize)
 
-        @step(name="tokenize/{dataset}", fn=tokenize_fn)
+        @step(name="download/fineweb")
+        def download_fineweb():
+            return download_hf(DownloadConfig(output_path=output()))
+
+        @step(name="tokenize/{dataset}")
         def tokenize_dataset(dataset: str):
             download = download_fineweb()  # Automatically tracked as dependency
-            return TokenizeConfig(
+            return tokenize(TokenizeConfig(
                 input_path=download,
                 output_path=output(),
-            )
+            ))
 
     Args:
         name: Step name, used for output path generation. Can contain {arg_name}
               placeholders that will be substituted with kwargs when called.
-        fn: The function to execute at runtime (receives resolved config)
+        fn: (Legacy) The function to execute at runtime. Prefer using @deferred instead.
         description: Human-readable description. Can use {arg_name} placeholders.
         resources: GPU/TPU/CPU requirements
         pip_dependency_groups: Extra pip dependencies
