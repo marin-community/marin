@@ -14,10 +14,9 @@
 
 """
 Library code for uploading directories to Hugging Face Hub.
-
-This module contains pure processing functions that work with concrete paths.
-For step wrappers that handle StepRef, see experiments/steps/hf_upload.py
 """
+
+from __future__ import annotations
 
 import dataclasses
 import functools
@@ -26,6 +25,7 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import fsspec
 import humanfriendly
@@ -36,6 +36,9 @@ from tqdm_loggable.auto import tqdm
 from marin.utilities.fn_utils import with_retries
 from marin.utils import fsspec_glob
 
+if TYPE_CHECKING:
+    from marin.execution import StepRef
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,8 +46,8 @@ logger = logging.getLogger(__name__)
 class UploadToHfConfig:
     """Configuration for uploading a directory to Hugging Face Hub."""
 
-    input_path: str
-    """Path to the directory to upload (can be a GCS path or other fsspec path)."""
+    input_path: str | StepRef
+    """Path to the directory to upload. Can be a string path, GCS path, or StepRef."""
 
     repo_id: str
     """The repo id to upload to (e.g. "username/repo_name")."""

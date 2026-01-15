@@ -19,28 +19,38 @@ This module provides a tracing-based system where steps can call other steps
 naturally, and the dependency graph is automatically constructed.
 
 Usage:
-    from marin.execution import step, output
+    from marin.execution import step, output, deferred
 
-    @step(name="download/fineweb", fn=download_fn)
+    # Mark terminal functions with @deferred
+    @deferred
+    def download_fn(config: DownloadConfig):
+        # Actually does the download
+        ...
+
+    @deferred
+    def tokenize_fn(config: TokenizeConfig):
+        # Actually tokenizes
+        ...
+
+    # Steps call deferred functions naturally
+    @step(name="download/fineweb")
     def download_fineweb():
-        return DownloadConfig(output_path=output())
+        return download_fn(DownloadConfig(output_path=output()))
 
-    @step(name="tokenize/fineweb", fn=tokenize_fn)
+    @step(name="tokenize/fineweb")
     def tokenize_fineweb():
-        download = download_fineweb()  # Calls step, returns StepRef
-        return TokenizeConfig(
-            input_path=download / "train",
+        return tokenize_fn(TokenizeConfig(
+            input_path=download_fineweb() / "train",
             output_path=output(),
-        )
+        ))
 
-    # Entry point for executor - just a function that calls steps
+    # Entry point for executor
     def my_pipeline():
-        tokenize = tokenize_fineweb()
-        train = train_model(data=tokenize)
-        return train
+        return tokenize_fineweb()
 
     # Executor traces from entry point
-    executor.run(my_pipeline)
+    steps = trace(my_pipeline)
+    executor.run_steps(steps)
 """
 
 from __future__ import annotations
@@ -59,6 +69,52 @@ ConfigT = TypeVar("ConfigT")
 
 # Context variable tracking the current step being constructed
 _tracing_context: ContextVar[StepContext | None] = ContextVar("tracing_context", default=None)
+
+
+@dataclass
+class DeferredCall:
+    """
+    Represents a deferred function call captured during tracing.
+
+    When a @deferred function is called during step tracing, it returns
+    a DeferredCall instead of executing. The @step decorator extracts
+    the function and config from this.
+    """
+
+    fn: Callable
+    config: Any
+
+
+def deferred(fn: Callable[[ConfigT], Any]) -> Callable[[ConfigT], ConfigT | DeferredCall]:
+    """
+    Mark a function as deferred execution.
+
+    During tracing (inside a @step function), returns a DeferredCall
+    containing the function and config. At execution time, the function
+    is called normally.
+
+    Usage:
+        @deferred
+        def download_fn(config: DownloadConfig):
+            # Actually downloads
+            ...
+
+        @step(name="download/fineweb")
+        def download_fineweb():
+            return download_fn(DownloadConfig(output_path=output()))
+    """
+
+    @wraps(fn)
+    def wrapper(config: ConfigT) -> ConfigT | DeferredCall:
+        ctx = _tracing_context.get()
+        if ctx is not None:
+            # During tracing - return DeferredCall, don't execute
+            return DeferredCall(fn=fn, config=config)
+        else:
+            # During execution - actually call the function
+            return fn(config)
+
+    return wrapper
 
 
 @dataclass(frozen=True)
@@ -285,11 +341,19 @@ def step(
             # Set as current tracing context (save outer context)
             token = _tracing_context.set(ctx)
             try:
-                # Execute the step function - may call other steps
-                config = step_fn(*args, **kwargs)
+                # Execute the step function - may call other steps or deferred functions
+                result = step_fn(*args, **kwargs)
             finally:
                 # Restore outer context
                 _tracing_context.reset(token)
+
+            # Handle DeferredCall - extract fn and config
+            if isinstance(result, DeferredCall):
+                real_fn = result.fn
+                config = result.config
+            else:
+                real_fn = fn
+                config = result
 
             # Extract any StepRefs from config and register as dependencies
             # This handles StepRefs passed as arguments (not created by calling steps)
@@ -298,7 +362,7 @@ def step(
             # Create the ExecutorStep
             step_obj = ExecutorStep(
                 name=actual_name,
-                fn=fn,
+                fn=real_fn,
                 config=config,
                 description=actual_description,
                 resources=resources,

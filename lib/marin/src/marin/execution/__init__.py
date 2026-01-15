@@ -31,8 +31,10 @@ from .executor_step_status import (
     STATUS_SUCCESS,
 )
 from .step_ref import (
+    DeferredCall,
     StepContext,
     StepRef,
+    deferred,
     output,
     output_subpath,
     step,
