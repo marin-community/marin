@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Downloads marin-community/open-thoughts-4-30k-science-qwen3-32b-annotated (which uses 7500 max tokens for each generation)
+Downloads marin-community/open-thoughts-4-30k-code-qwen3-32b-annotated (which uses 7500 max tokens for each generation)
 and regenerates the responses with 32768 max tokens.
 
 This version uses the generation inference API with Fray ResourceConfig instead of the
@@ -28,25 +28,25 @@ from marin.generation.inference import TextGenerationInferenceConfig
 from marin.generation.inference import run_inference as run_generation_inference
 from fray.cluster import ResourceConfig
 
-open_thoughts_4_science = ExecutorStep(
-    name="raw/marin-community/open-thoughts-4-30k-science-qwen3-32b-annotated",
+open_thoughts_4_code = ExecutorStep(
+    name="raw/marin-community/open-thoughts-4-30k-code-qwen3-32b-annotated",
     fn=download_hf,
     config=DownloadConfig(
-        hf_dataset_id="marin-community/open-thoughts-4-30k-science-qwen3-32b-annotated",
-        revision="409a5ed",
+        hf_dataset_id="marin-community/open-thoughts-4-30k-code-qwen3-32b-annotated",
+        revision="e8bfeef",
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
-    override_output_path="raw/marin-community/open-thoughts-4-30k-science-qwen3-32b-annotated-409a5ed",
+    override_output_path="raw/marin-community/open-thoughts-4-30k-code-qwen3-32b-annotated-e8bfeef",
     pip_dependency_groups=["vllm"],
 ).cd("data")
 
-qwen_32B_annotated_open_thoughts_4_science = ExecutorStep(
-    name="documents/open-thoughts-4-30k-science-qwen3-32b-annotated-o32768",
+qwen_32B_annotated_open_thoughts_4_code = ExecutorStep(
+    name="documents/open-thoughts-4-30k-code-qwen3-32b-annotated-o32768",
     fn=run_generation_inference,
     config=TextGenerationInferenceConfig(
         # IO specific
-        input_path=open_thoughts_4_science,
+        input_path=open_thoughts_4_code,
         output_path=this_output_path(),
 
         # Model specific
@@ -69,7 +69,7 @@ qwen_32B_annotated_open_thoughts_4_science = ExecutorStep(
 
         # Ray data specific
         num_instances=(1, 32),  # Use between 1 and 32 parallel workers
-        batch_size=48,
+        batch_size=96,
         tensor_parallel_size=4,
         preserve_order=False,
 
@@ -84,19 +84,19 @@ qwen_32B_annotated_open_thoughts_4_science = ExecutorStep(
         generated_text_column_name="generated_text",
 
         # Checkpointing for resumption
-        checkpoint_id_column="row_id",  # Not ms_id here because not all ms_id values are unique in this dataset
+        checkpoint_id_column="ms_id",
     ),
     pip_dependency_groups=["vllm"],
 )
 
-upload_qwen32b_annotated_open_thoughts_4_science = upload_dir_to_hf(
-    input_path=qwen_32B_annotated_open_thoughts_4_science,
-    repo_id="marin-community/open-thoughts-4-30k-science-qwen3-32b-annotated-32768-tokens",
+upload_qwen32b_annotated_open_thoughts_4_code = upload_dir_to_hf(
+    input_path=qwen_32B_annotated_open_thoughts_4_code,
+    repo_id="marin-community/open-thoughts-4-30k-code-qwen3-32b-annotated-32768-tokens",
     repo_type="dataset",
 )
 
-upload_qwen32b_annotated_open_thoughts_4_science = replace(
-    upload_qwen32b_annotated_open_thoughts_4_science, pip_dependency_groups=["vllm"]
+upload_qwen32b_annotated_open_thoughts_4_code = replace(
+    upload_qwen32b_annotated_open_thoughts_4_code, pip_dependency_groups=["vllm"]
 )
 
 
@@ -104,5 +104,5 @@ if __name__ == "__main__":
     # It's recommended to just run the first 2 steps (download model and annotate) separately
     # and then run the last step (upload to HF) afterwards
     executor_main([qwen3_32b])
-    executor_main([qwen_32B_annotated_open_thoughts_4_science])
-    # executor_main([upload_qwen32b_annotated_open_thoughts_4_science])
+    executor_main([qwen_32B_annotated_open_thoughts_4_code])
+    # executor_main([upload_qwen32b_annotated_open_thoughts_4_code])
