@@ -390,46 +390,55 @@ EVAL_DATASET_STEPS: list[ExecutorStep] = [
     winograd_wsc_convert_dolma(),
 ]
 
+@step(name="train_test_overlap/eval_overlap/all")
+def run_all_eval_overlap():
+    """Entry point for eval datasets overlap analysis.
+
+    Downloads raw evaluation datasets and converts them to dolma format
+    for train-test overlap detection.
+    """
+    # Download raw datasets
+    mmlu_raw()
+    gsm8k_raw()
+    math_raw()
+    truthful_qa_raw()
+    bbh_raw()
+    humaneval_raw()
+    gpqa_raw()
+    instruction_following_raw()
+    musr_raw()
+    mmlu_pro_raw()
+    boolq_raw()
+    ai2_arc_raw()
+    hellaswag_raw()
+    piqa_raw()
+    winograd_wsc_raw()
+    commonsense_qa_raw()
+    lambada_openai_raw()
+    openbookqa_raw()
+
+    # Convert to dolma format for decontamination
+    gsm8k_convert_dolma()
+    math_convert_dolma()
+    truthful_qa_convert_dolma()
+    bbh_convert_dolma()
+    mmlu_convert_dolma()
+    humaneval_convert_dolma()
+    instruction_following_convert_dolma()
+    gpqa_convert_dolma()
+    musr_convert_dolma()
+    mmlu_pro_convert_dolma()
+    hellaswag_convert_dolma()
+    ai2_arc_convert_dolma()
+    boolq_convert_dolma()
+    commonsense_qa_convert_dolma()
+    lambada_openai_convert_dolma()
+    openbookqa_convert_dolma()
+    piqa_convert_dolma()
+    winograd_wsc_convert_dolma()
+
 if __name__ == "__main__":
     executor_main(
-        steps=[
-            mmlu_raw(),
-            mmlu_convert_dolma(),
-            gsm8k_raw(),
-            math_raw(),
-            truthful_qa_raw(),
-            bbh_raw(),
-            mmlu_raw(),
-            humaneval_raw(),
-            gpqa_raw(),
-            instruction_following_raw(),
-            musr_raw(),
-            mmlu_pro_raw(),
-            boolq_raw(),
-            ai2_arc_raw(),
-            hellaswag_raw(),
-            piqa_raw(),
-            winograd_wsc_raw(),
-            commonsense_qa_raw(),
-            lambada_openai_raw(),
-            openbookqa_raw(),
-            gsm8k_convert_dolma(),
-            math_convert_dolma(),
-            truthful_qa_convert_dolma(),
-            bbh_convert_dolma(),
-            mmlu_convert_dolma(),
-            humaneval_convert_dolma(),
-            instruction_following_convert_dolma(),
-            gpqa_convert_dolma(),
-            musr_convert_dolma(),
-            mmlu_pro_convert_dolma(),
-            hellaswag_convert_dolma(),
-            ai2_arc_convert_dolma(),
-            boolq_convert_dolma(),
-            commonsense_qa_convert_dolma(),
-            lambada_openai_convert_dolma(),
-            openbookqa_convert_dolma(),
-            piqa_convert_dolma(),
-            winograd_wsc_convert_dolma(),
-        ]
+        steps=[run_all_eval_overlap()],
+        description="Download and convert evaluation datasets for train-test overlap analysis",
     )

@@ -428,10 +428,20 @@ def build_aggregate_total_step(
     )
 
 
-STEPS = [build_aggregate_total_step()]
+@step(name="train_test_overlap/aggregate_total/all")
+def run_all_aggregate_total():
+    """Entry point for train-test overlap aggregation.
+
+    Aggregates overlap across all discovered training datasets with:
+    - Per-training-dataset aggregation
+    - Union aggregation across all training datasets
+    - Overlap matrix showing training_datasets X evaluation_datasets
+    """
+    build_aggregate_total_step()
+
 
 if __name__ == "__main__":
     executor_main(
-        steps=STEPS,
+        steps=[run_all_aggregate_total()],
         description="Aggregate train-test overlap across all training datasets",
     )

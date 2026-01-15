@@ -39,7 +39,7 @@ from experiments.pretraining_datasets.simple import downloads
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, StepRef, executor_main
+from marin.execution.executor import ExecutorStep, StepRef, executor_main, step
 from marin.processing.tokenize import lm_mixture_data_config
 
 DEFAULT_BUDGETS = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
@@ -387,6 +387,14 @@ MARIN_SCALING_SUITES = {
     "dolma3_mix_150b": generate_isoflop_sweep(dolma3_mix, experiment_name="dolma3-mix-150b-1025"),
 }
 
+@step(name="isoflop/dolma3_mix_150b")
+def run_isoflop_sweep():
+    """Entry point for iso-flop scaling experiments on Dolma3 Mix 150B dataset."""
+    steps, _ = generate_isoflop_sweep(dolma3_mix, experiment_name="dolma3-mix-150b-1025")
+    for step_item in steps:
+        pass  # Steps traced on creation
+    return steps
+
+
 if __name__ == "__main__":
-    steps, _ = MARIN_SCALING_SUITES["dolma3_mix_150b"]
-    executor_main(steps=steps)
+    executor_main(steps=[run_isoflop_sweep()], description="ISOFlop scaling law experiments")

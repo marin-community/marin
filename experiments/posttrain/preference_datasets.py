@@ -177,12 +177,16 @@ def get_preference_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",
     return transform_step
 
 
-if __name__ == "__main__":
-    all_steps = []
+@step(name="posttrain/preference_datasets/all")
+def prepare_all_preference_datasets():
+    """Entry point that prepares all preference datasets."""
     for config in PREFERENCE_DATASET_NAME_TO_CONFIG.values():
         downloaded_dataset = download_preference_dataset_step(config)
-        all_steps.append(downloaded_dataset)
-        transformed_dataset = transform_preference_dataset_step(config, downloaded_dataset)
-        all_steps.append(transformed_dataset)
+        transform_preference_dataset_step(config, downloaded_dataset)
 
-    executor_main(steps=all_steps)
+
+if __name__ == "__main__":
+    executor_main(
+        steps=[prepare_all_preference_datasets()],
+        description="Prepare all preference datasets for DPO/RLHF training"
+    )

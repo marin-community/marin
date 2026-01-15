@@ -640,10 +640,15 @@ tulu3_flat_llama_tokenized_as_train = default_tokenize(
 ).with_output_path("tokenized/tulu_sft-349fb7/")
 
 
-if __name__ == "__main__":
-    all_steps = []
+@step(name="posttrain/instruction_datasets/all")
+def prepare_all_instruction_datasets():
+    """Entry point that prepares all instruction datasets."""
     for config in INSTRUCTION_DATASET_NAME_TO_CONFIG.values():
-        transformed_dataset = transform_dataset_step(config)
-        all_steps.append(transformed_dataset)
+        transform_dataset_step(config)
 
-    executor_main(steps=all_steps)
+
+if __name__ == "__main__":
+    executor_main(
+        steps=[prepare_all_instruction_datasets()],
+        description="Prepare all instruction datasets for supervised fine-tuning"
+    )

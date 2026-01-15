@@ -505,6 +505,15 @@ def comma_cooldown_mixture(*, tokenizer: str = llama3_tokenizer, permutation_typ
     )
 
 
+@step(name="common_pile/all")
+def tokenize_all_common_pile():
+    """Entry point that tokenizes all common pile datasets."""
+    tokenized = common_pile_tokenized()
+    return list(tokenized.values())
+
+
 if __name__ == "__main__":
-    steps = list(common_pile_tokenized().values())
-    executor_main(steps=steps)
+    executor_main(
+        steps=[tokenize_all_common_pile()],
+        description="Tokenize all Common Pile v0.1 filtered datasets",
+    )
