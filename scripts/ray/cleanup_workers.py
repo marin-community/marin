@@ -32,6 +32,7 @@ from glob import glob
 
 import click
 import yaml
+from tabulate import tabulate
 from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -209,34 +210,18 @@ def get_worker_disk_info(
 
 
 def print_workers_table(workers: list[WorkerDiskInfo]) -> None:
-    """Print a simple text table of all workers."""
+    """Print a table of all workers."""
     if not workers:
         return
 
-    # Column headers and widths
     headers = ["Worker Name", "Type", "Topology", "Free Disk"]
     rows = []
     for w in sorted(workers, key=lambda x: (x.free_pct, x.tpu_name, x.worker_id)):
-        worker_type = "preemptible" if w.is_preemptible else "manual"
+        worker_type = "preemptible" if w.is_preemptible else "on-demand"
         rows.append([f"{w.tpu_name}:{w.worker_id}", worker_type, w.topology, f"{w.free_pct}% ({w.available})"])
 
-    # Calculate column widths
-    col_widths = [len(h) for h in headers]
-    for row in rows:
-        for i, cell in enumerate(row):
-            col_widths[i] = max(col_widths[i], len(cell))
-
-    # Build table lines
-    def format_row(cells: list[str]) -> str:
-        return "  " + "  ".join(cell.ljust(col_widths[i]) for i, cell in enumerate(cells))
-
-    separator = "  " + "  ".join("-" * w for w in col_widths)
-    lines = ["\nWorker Summary:", separator, format_row(headers), separator]
-    for row in rows:
-        lines.append(format_row(row))
-    lines.append(separator)
-
-    logger.info("\n".join(lines))
+    table = tabulate(rows, headers=headers, tablefmt="simple")
+    logger.info(f"\nWorker Summary:\n{table}")
 
 
 def restart_worker(
