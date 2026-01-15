@@ -397,6 +397,19 @@ class ControllerState:
         with self._lock:
             self._queue = deque(jid for jid in self._queue if jid != job_id)
 
+    def add_to_queue(self, job: ControllerJob) -> None:
+        """Add a job back to the queue for retry.
+
+        Used when dispatch fails and the job needs to be rescheduled.
+        The job must already exist in the jobs dict.
+
+        Args:
+            job: Job to add back to the queue
+        """
+        with self._lock:
+            if job.job_id not in self._queue:
+                self._queue.append(job.job_id)
+
     def add_endpoint(self, endpoint: ControllerEndpoint) -> None:
         """Add an endpoint to the controller registry.
 

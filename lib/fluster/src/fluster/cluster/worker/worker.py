@@ -129,6 +129,7 @@ class WorkerConfig:
         port_range: Port range for job ports (default: (30000, 40000))
         controller_address: Controller URL for endpoint registration (default: None)
         worker_id: Worker ID (default: None)
+        poll_interval_seconds: Interval between container status checks (default: 5.0)
     """
 
     host: str = "127.0.0.1"
@@ -139,6 +140,7 @@ class WorkerConfig:
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
+    poll_interval_seconds: float = 5.0
 
 
 class Worker:
@@ -596,7 +598,7 @@ class Worker:
                     pass  # Don't fail job on stats collection errors
 
                 # Sleep before next poll
-                time.sleep(5.0)
+                time.sleep(self._config.poll_interval_seconds)
 
         except Exception as e:
             error_msg = format_exception_with_traceback(e)

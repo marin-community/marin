@@ -294,28 +294,26 @@ class Controller:
             result: ScheduleResult from scheduler
             now_ms: Current timestamp in milliseconds
         """
-        # Handle timed-out jobs
         for job in result.timed_out_jobs:
             self._mark_job_unschedulable(job, now_ms)
 
-        # Dispatch assignments
         for job, worker in result.assignments:
-            success = self._dispatch_job(job, worker)
-            if success:
-                self._handle_successful_dispatch(job, worker, now_ms)
-            else:
-                self._handle_failed_dispatch(job, worker)
+            self._dispatch_job(job, worker, now_ms)
 
-    def _dispatch_job(self, job: ControllerJob, worker: ControllerWorker) -> bool:
+    def _dispatch_job(self, job: ControllerJob, worker: ControllerWorker, now_ms: int) -> None:
         """Dispatch a job to a worker via RPC.
 
-        Args:
-            job: Job to dispatch
-            worker: Worker to dispatch to
+        All state is set BEFORE the RPC call. The worker reports all state
+        transitions (BUILDING, RUNNING, SUCCEEDED, etc.) via ReportJobState.
 
-        Returns:
-            True if dispatch succeeded, False on failure
+        On failure: resets state and marks worker unhealthy.
         """
+        # Set all state BEFORE RPC - worker may complete before RPC returns
+        job.worker_id = worker.worker_id
+        job.started_at_ms = now_ms
+        worker.running_jobs.add(job.job_id)
+        self._state.remove_from_queue(job.job_id)
+
         try:
             stub = self._stub_factory.get_stub(worker.address)
             request = cluster_pb2.Worker.RunJobRequest(
@@ -333,36 +331,28 @@ class Controller:
                 ports=list(job.request.ports),
             )
             stub.run_job(request)
-            return True
+
+            logger.info(f"Dispatched job {job.job_id} to worker {worker.worker_id}")
+            self._state.log_action(
+                "job_dispatched",
+                job_id=job.job_id,
+                worker_id=worker.worker_id,
+            )
+
         except Exception:
+            # Failure: reset all state changes
+            job.worker_id = None
+            job.started_at_ms = None
+            job.state = cluster_pb2.JOB_STATE_PENDING
+            worker.running_jobs.discard(job.job_id)
+            self._state.add_to_queue(job)  # Re-add to queue for retry
+            worker.healthy = False
             logger.exception("Failed to dispatch job %s to worker %s", job.job_id, worker.address)
-            return False
-
-    def _handle_successful_dispatch(self, job: ControllerJob, worker: ControllerWorker, now_ms: int) -> None:
-        """Update state after successful dispatch."""
-        job.state = cluster_pb2.JOB_STATE_RUNNING
-        job.worker_id = worker.worker_id
-        job.started_at_ms = now_ms
-
-        worker.running_jobs.add(job.job_id)
-        self._state.remove_from_queue(job.job_id)
-
-        logger.info(f"Dispatched job {job.job_id} to worker {worker.worker_id}")
-        self._state.log_action(
-            "job_dispatched",
-            job_id=job.job_id,
-            worker_id=worker.worker_id,
-        )
-
-    def _handle_failed_dispatch(self, job: ControllerJob, worker: ControllerWorker) -> None:
-        """Handle dispatch failure - mark worker unhealthy, keep job in queue."""
-        worker.healthy = False
-        logger.warning(f"Failed to dispatch job {job.job_id} to {worker.worker_id}, " "marking worker unhealthy")
-        self._state.log_action(
-            "dispatch_failed",
-            job_id=job.job_id,
-            worker_id=worker.worker_id,
-        )
+            self._state.log_action(
+                "dispatch_failed",
+                job_id=job.job_id,
+                worker_id=worker.worker_id,
+            )
 
     def _mark_job_unschedulable(self, job: ControllerJob, now_ms: int) -> None:
         """Mark job as unschedulable and remove from queue."""

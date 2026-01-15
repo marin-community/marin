@@ -218,6 +218,7 @@ def worker(mock_bundle_cache, mock_venv_cache, mock_image_cache, mock_runtime):
         port=0,
         max_concurrent_jobs=5,
         port_range=(50000, 50100),
+        poll_interval_seconds=0.1,  # Fast polling for tests
     )
     return Worker(
         config,
@@ -501,6 +502,7 @@ def test_job_failure_error_appears_in_logs(worker, mock_bundle_cache):
 
 def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_image_cache):
     """Test that job retries with new ports when port binding fails."""
+    del mock_venv_cache  # unused
     runtime = Mock(spec=DockerRuntime)
     runtime.create_container = Mock(return_value="container123")
 
@@ -531,6 +533,7 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_
         port=0,
         max_concurrent_jobs=5,
         port_range=(50000, 50100),
+        poll_interval_seconds=0.1,
     )
     worker = Worker(
         config,
@@ -543,9 +546,12 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_
     job_id = worker.submit_job(request)
 
     job = worker.get_job(job_id)
+    assert job is not None
+    assert job.thread is not None
     job.thread.join(timeout=15.0)
 
     final_job = worker.get_job(job_id)
+    assert final_job is not None
     assert final_job.status == cluster_pb2.JOB_STATE_SUCCEEDED
 
     assert runtime.start_container.call_count == 2
@@ -558,6 +564,7 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_
 
 def test_port_retry_exhausted(mock_bundle_cache, mock_venv_cache, mock_image_cache):
     """Test that job fails after max port retries are exhausted."""
+    del mock_venv_cache  # unused
     runtime = Mock(spec=DockerRuntime)
     runtime.create_container = Mock(return_value="container123")
     runtime.start_container = Mock(side_effect=RuntimeError("failed to bind host port: address already in use"))
@@ -568,6 +575,7 @@ def test_port_retry_exhausted(mock_bundle_cache, mock_venv_cache, mock_image_cac
         port=0,
         max_concurrent_jobs=5,
         port_range=(50000, 50100),
+        poll_interval_seconds=0.1,
     )
     worker = Worker(
         config,
@@ -580,10 +588,14 @@ def test_port_retry_exhausted(mock_bundle_cache, mock_venv_cache, mock_image_cac
     job_id = worker.submit_job(request)
 
     job = worker.get_job(job_id)
+    assert job is not None
+    assert job.thread is not None
     job.thread.join(timeout=15.0)
 
     final_job = worker.get_job(job_id)
+    assert final_job is not None
     assert final_job.status == cluster_pb2.JOB_STATE_FAILED
+    assert final_job.error is not None
     assert "address already in use" in final_job.error
 
     assert runtime.start_container.call_count == 3
@@ -682,6 +694,7 @@ def real_worker(cache_dir):
         registry="localhost:5000",
         max_concurrent_jobs=2,
         port_range=(40000, 40100),
+        poll_interval_seconds=0.5,  # Faster polling for tests
     )
     return Worker(config)
 
