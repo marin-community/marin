@@ -75,17 +75,7 @@ from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
-# Environment variable to enable streaming from HuggingFace Hub via hf:// fsspec protocol.
-# When enabled, models are streamed directly without caching to local disk.
-# This is useful for TPUs with limited disk space.
-HF_STREAMING_ENV_VAR = "MARIN_HF_USE_STREAMING"
-
 logger = logging.getLogger(__name__)
-
-
-def _should_use_hf_streaming() -> bool:
-    """Check if HF streaming mode is enabled via environment variable."""
-    return os.environ.get(HF_STREAMING_ENV_VAR, "").lower() in ("1", "true", "yes")
 
 
 def _convert_to_hf_url(model_id: str, revision: Optional[str] = None) -> str:
@@ -554,8 +544,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
     def load_state_dict(self, ref: Optional[Union[str, RepoRef]] = None, dtype: Optional[jnp.dtype] = None) -> dict:
         """Load a state dict from either HF Hub or a GCS path.
 
-        When MARIN_HF_USE_STREAMING=1 is set, HuggingFace model IDs are converted to
-        hf:// URLs and streamed directly without caching to local disk.
+        HuggingFace model IDs are converted to hf:// URLs and streamed directly
+        without caching to local disk.
         """
         if ref is None:
             ref = self.reference_checkpoint
@@ -569,11 +559,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 raise ValueError("Revisions not supported for explicit URLs")
             return self._load_from_remote(id, dtype)
 
-        # If streaming mode is enabled and this looks like an HF model ID,
-        # convert to hf:// URL and stream directly.
-        if _should_use_hf_streaming() and _is_hf_model_id(id):
+        # Convert HF model IDs to hf:// URLs and stream directly
+        if _is_hf_model_id(id):
             hf_url = _convert_to_hf_url(id, rev)
-            logger.info(f"Using HF streaming mode: loading from {hf_url}")
+            logger.info(f"Loading from HuggingFace Hub: {hf_url}")
             return self._load_from_remote(hf_url, dtype)
 
         for index_file in [SAFE_TENSORS_INDEX_NAME, PYTORCH_WEIGHTS_INDEX_NAME]:
