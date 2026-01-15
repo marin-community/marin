@@ -31,7 +31,7 @@ from experiments.defaults import default_validation_sets
 from experiments.llama import llama_8b_old_rotary
 from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b
 from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs as _visualize_lm_log_probs
-from marin.execution import step, deferred, output, executor_main, versioned
+from marin.execution import step, deferred, executor_main, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 
 visualize_lm_log_probs = deferred(_visualize_lm_log_probs)
@@ -59,13 +59,15 @@ eval_set_mixture = mixture_for_evaluation(eval_sets)
 
 @step(name="analysis/viz/{checkpoint_name}")
 def _viz_step_impl(checkpoint_name: str, checkpoint_path: str, comparison_model_path: str | None):
-    return visualize_lm_log_probs(VizLmConfig(
-        checkpoint_path=checkpoint_path,
-        model=llama_8b,
-        datasets=eval_set_mixture,
-        num_docs_per_dataset=32,
-        comparison_model_path=comparison_model_path,
-    ))
+    return visualize_lm_log_probs(
+        VizLmConfig(
+            checkpoint_path=checkpoint_path,
+            model=llama_8b,
+            datasets=eval_set_mixture,
+            num_docs_per_dataset=32,
+            comparison_model_path=comparison_model_path,
+        )
+    )
 
 
 all_steps = []
@@ -94,13 +96,15 @@ PHASE_1_CHECKPOINTS = [
 
 @step(name="analysis/viz/{checkpoint_name}")
 def _viz_phase1_step_impl(checkpoint_name: str, checkpoint_path: str, comparison_model_path: str | None):
-    return visualize_lm_log_probs(VizLmConfig(
-        checkpoint_path=checkpoint_path,
-        model=PHASE_1_CONFIG,
-        datasets=eval_set_mixture,
-        num_docs_per_dataset=32,
-        comparison_model_path=comparison_model_path,
-    ))
+    return visualize_lm_log_probs(
+        VizLmConfig(
+            checkpoint_path=checkpoint_path,
+            model=PHASE_1_CONFIG,
+            datasets=eval_set_mixture,
+            num_docs_per_dataset=32,
+            comparison_model_path=comparison_model_path,
+        )
+    )
 
 
 for checkpoint in PHASE_1_CHECKPOINTS:

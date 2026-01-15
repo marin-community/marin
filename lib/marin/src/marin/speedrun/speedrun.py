@@ -31,7 +31,7 @@ import fsspec
 from fray.cluster import ResourceConfig
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
-from marin.execution import ExecutorStep, StepRef, step, deferred, output
+from marin.execution import ExecutorStep, StepRef, step, deferred
 from marin.processing.tokenize import add_validation_sets_to_mixture, lm_data_config
 from marin.speedrun.paloma_local_download import speedrun_paloma_tokenized
 from marin.training.training import TrainLmOnPodConfig
@@ -136,7 +136,7 @@ class SpeedrunConfig:
         if model_size is None:
             logger.info("Model size: unknown (model did not report total_trainable_params).")
         else:
-            logger.info(f"Model size: {model_size/1e6:.2f} million parameters")
+            logger.info(f"Model size: {model_size / 1e6:.2f} million parameters")
         logger.info("----- END OF PRINT RUN INFO -----")
 
     def compute_model_flops(self) -> float:
@@ -167,8 +167,8 @@ class SpeedrunConfig:
         logger.info(
             f"""
 The rough estimated compute (calculated as (total model FLOPs / Assumed MFU)) for your run is probably between:
-      * {estimated_model_flops/0.5:.2e} FLOPs assuming an MFU of 0.5, and
-      * {estimated_model_flops/0.2:.2e} FLOPs assuming an MFU of 0.2.
+      * {estimated_model_flops / 0.5:.2e} FLOPs assuming an MFU of 0.5, and
+      * {estimated_model_flops / 0.2:.2e} FLOPs assuming an MFU of 0.2.
 
 This is calculated based on assumed MFU values and can be used as a rough estimate to guide your config/training setup.
 """.strip()
@@ -421,13 +421,15 @@ def default_speedrun(
         else:
             resolved_train_step = train_step
 
-        return speedrun_results_deferred(SpeedrunResultsConfig(
-            wandb_run_id=wandb_run_id,
-            wandb_entity=wandb_entity,
-            wandb_project=wandb_project,
-            speedrun_config=config,
-            output_path=resolved_train_step / "speedrun_results.json",
-        ))
+        return speedrun_results_deferred(
+            SpeedrunResultsConfig(
+                wandb_run_id=wandb_run_id,
+                wandb_entity=wandb_entity,
+                wandb_project=wandb_project,
+                speedrun_config=config,
+                output_path=resolved_train_step / "speedrun_results.json",
+            )
+        )
 
     results_step = _results_step()
 

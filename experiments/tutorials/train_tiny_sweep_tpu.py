@@ -16,6 +16,7 @@
 This is a tutorial script demonstrating how to perform a hyperparameter sweep
 while training a tiny model on the TinyStories dataset using TPU hardware.
 """
+
 import dataclasses
 
 from fray.cluster import ResourceConfig

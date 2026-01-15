@@ -26,7 +26,7 @@ from levanter.trainer import TrainerConfig
 from transformers import AutoConfig
 from levanter.utils.mesh import MeshConfig
 
-from marin.execution import step, StepContext, ExecutorStep, StepRef
+from marin.execution import step, StepContext, ExecutorStep
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
@@ -237,7 +237,9 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
                 tags=[*config.tags, "rollout", config.model_config.name.split("/")[-1]],
             ),
             pip_dependency_groups=(
-                config.model_config.pip_dependency_groups if config.model_config.pip_dependency_groups else ["vllm", "math"]
+                config.model_config.pip_dependency_groups
+                if config.model_config.pip_dependency_groups
+                else ["vllm", "math"]
             ),
         )
 

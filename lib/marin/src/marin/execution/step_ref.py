@@ -59,7 +59,8 @@ import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
+from collections.abc import Callable
 
 if TYPE_CHECKING:
     from marin.execution.executor import ExecutorStep
@@ -143,6 +144,27 @@ class StepRef:
             new_subpath = subpath
         return replace(self, _subpath=new_subpath)
 
+    def cd(self, subpath: str) -> StepRef:
+        """Navigate to subpath (alias for / operator)."""
+        return self / subpath
+
+    @property
+    def step(self) -> ExecutorStep:
+        """Get the underlying ExecutorStep."""
+        if self._step is None:
+            raise ValueError("Cannot get step from a hardcoded StepRef")
+        return self._step
+
+    @property
+    def config(self):
+        """Get the config from the underlying ExecutorStep."""
+        return self.step.config
+
+    @property
+    def name(self) -> str:
+        """Get the name from the underlying ExecutorStep."""
+        return self.step.name
+
     def nonblocking(self) -> StepRef:
         """
         Mark as non-blocking dependency.
@@ -151,6 +173,19 @@ class StepRef:
         Use for referencing checkpoints from still-running training steps.
         """
         return replace(self, _blocking=False)
+
+    def with_output_path(self, output_path: str) -> StepRef:
+        """
+        Return a new StepRef with the underlying step's output path overridden.
+
+        This modifies the ExecutorStep's override_output_path attribute.
+        """
+        if self._step is None:
+            raise ValueError("Cannot set output_path on a StepRef without an underlying step")
+        from dataclasses import replace as dc_replace
+
+        new_step = dc_replace(self._step, override_output_path=output_path)
+        return replace(self, _step=new_step)
 
     @staticmethod
     def hardcoded(path: str) -> StepRef:
@@ -323,20 +358,28 @@ def step(
     def decorator(step_fn: Callable[..., ConfigT]) -> Callable[..., StepRef]:
         @wraps(step_fn)
         def traced_step(*args: Any, **kwargs: Any) -> StepRef:
+            from inspect import signature
+
             from marin.execution.executor import ExecutorStep
 
-            # Format name with kwargs if it contains placeholders
-            actual_name = name.format(**kwargs) if "{" in name else name
+            # Bind args to parameter names for formatting
+            sig = signature(step_fn)
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+            all_args = bound.arguments
+
+            # Format name with all arguments if it contains placeholders
+            actual_name = name.format(**all_args) if "{" in name else name
 
             # Format description if provided and contains placeholders
             actual_description = description
             if description and "{" in description:
-                actual_description = description.format(**kwargs)
+                actual_description = description.format(**all_args)
 
             # Format override_output_path if provided and contains placeholders
             actual_override_output_path = override_output_path
             if override_output_path and "{" in override_output_path:
-                actual_override_output_path = override_output_path.format(**kwargs)
+                actual_override_output_path = override_output_path.format(**all_args)
 
             # Create context for this step
             ctx = StepContext()

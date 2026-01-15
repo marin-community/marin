@@ -18,7 +18,6 @@ import dataclasses
 import logging
 from collections.abc import Sequence
 
-from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.llama import LlamaConfig
 
 from experiments.common_pile.tokenize_common_pile import stackv2, stackv2_edu_filtered
@@ -28,7 +27,7 @@ from experiments.llama import llama3_tokenizer, llama_1_4b
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, StepRef, executor_main
+from marin.execution.executor import ExecutorStep, executor_main, step
 
 TPU_TYPE = "v5p-8"
 TAG = ["exp1752", "simulated_epoching"]
@@ -54,9 +53,29 @@ training_config = SimpleTrainConfig(
 )
 
 
+def _round_to_multiple(x: float, multiple: int) -> int:
+    return int(multiple * round(x / multiple))
+
+
+def tokenize_stackv2():
+    return default_tokenize(
+        name="common_pile_stackv2",
+        dataset=stackv2 / "documents",
+        tokenizer=llama3_tokenizer,
+    )
+
+
+def tokenize_stackv2_edu():
+    return default_tokenize(
+        name="common_pile_stackv2_edu",
+        dataset=stackv2_edu_filtered,
+        tokenizer=llama3_tokenizer,
+    )
+
+
 def simulated_scaling_law_suite(
     sweep_name: str,
-    tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized_fn,
     *,
     widths: Sequence[int] = (512, 768, 1024, 1536, 2048),
     base_model_config: LlamaConfig = llama_1_4b,
@@ -96,7 +115,7 @@ def simulated_scaling_law_suite(
         steps.append(
             simulated_epoching_train(
                 name=f"{sweep_name}-{width}",
-                tokenized=tokenized,
+                tokenized=tokenized_fn(),
                 model_config=model_config,
                 train_config=lr_training_config,
                 target_budget=target_budget,
@@ -107,52 +126,38 @@ def simulated_scaling_law_suite(
     return steps
 
 
-def _round_to_multiple(x: float, multiple: int) -> int:
-    return int(multiple * round(x / multiple))
+@step(name="exp1752-simulated-epoching/all")
+def run_simulated_epoching_experiment():
+    """Entry point for simulated epoching scaling law comparison."""
+    stackv2_suite = simulated_scaling_law_suite(
+        sweep_name=STACK_V2_SWEEP_NAME,
+        tokenized_fn=tokenize_stackv2,
+        tags=[*TAG, "stackv2"],
+        intermediate_scale=4,
+        training_config=training_config,
+    )
 
+    stackv2_edu_suite = simulated_scaling_law_suite(
+        sweep_name=STACK_V2_EDU_SWEEP_NAME,
+        tokenized_fn=tokenize_stackv2_edu,
+        tags=[*TAG, "stackv2_edu"],
+        intermediate_scale=4,
+        training_config=training_config,
+    )
 
-stackv2_tokenized = default_tokenize(
-    name="common_pile_stackv2",
-    dataset=stackv2 / "documents",
-    tokenizer=llama3_tokenizer,
-)
+    starcoder_suite = simulated_scaling_law_suite(
+        sweep_name=STARCODER_SWEEP_NAME,
+        tokenized_fn=lambda: dclm_components_llama3["starcoderdata"],
+        tags=[*TAG, "starcoderdata"],
+        intermediate_scale=4,
+        training_config=training_config,
+    )
 
-stackv2_edu_tokenized = default_tokenize(
-    name="common_pile_stackv2_edu",
-    dataset=stackv2_edu_filtered,
-    tokenizer=llama3_tokenizer,
-)
+    return [*stackv2_suite, *stackv2_edu_suite, *starcoder_suite]
 
-stackv2_suite = simulated_scaling_law_suite(
-    sweep_name=STACK_V2_SWEEP_NAME,
-    tokenized=stackv2_tokenized,
-    tags=[*TAG, "stackv2"],
-    intermediate_scale=4,
-    training_config=training_config,
-)
-
-stackv2_edu_suite = simulated_scaling_law_suite(
-    sweep_name=STACK_V2_EDU_SWEEP_NAME,
-    tokenized=stackv2_edu_tokenized,
-    tags=[*TAG, "stackv2_edu"],
-    intermediate_scale=4,
-    training_config=training_config,
-)
-
-starcoder_suite = simulated_scaling_law_suite(
-    sweep_name=STARCODER_SWEEP_NAME,
-    tokenized=dclm_components_llama3["starcoderdata"],
-    tags=[*TAG, "starcoderdata"],
-    intermediate_scale=4,
-    training_config=training_config,
-)
 
 if __name__ == "__main__":
     executor_main(
-        steps=[
-            *stackv2_suite,
-            *stackv2_edu_suite,
-            *starcoder_suite,
-        ],
+        steps=run_simulated_epoching_experiment(),
         description="Scaling law sweeps comparing Stack v2 with StarCoderData using simulated epoching.",
     )

@@ -25,7 +25,7 @@ from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 from experiments.defaults import default_train
 from experiments.qwen3 import qwen3_32b
 from experiments.tootsie.exp1295_32b import llama_32b_tootsie, llama_32b_train_config, nemotron_mix
-from marin.execution import executor_main
+from marin.execution import StepRef, executor_main, step
 from fray.cluster import ResourceConfig
 
 # We have doctored the opt state to include update history from
@@ -65,14 +65,11 @@ qwen_32b_warmstart_train = dataclasses.replace(
     ),
 )
 
-marin_32b_qwen = default_train(
-    name="marin-32b-qwen",
-    tokenized=nemotron_mix,
-    model_config=qwen3_32b_remat,
-    train_config=qwen_32b_warmstart_train,
-    tags=["qwen", "32b", "ema", "exp859", "exp1395", "tootsie"],
-    eval_harness_tasks=[],
-).with_output_path("checkpoints/marin-32b-qwen")
+MARIN_32B_QWEN_OUTPUT_PATH = "checkpoints/marin-32b-qwen"
+MARIN_32B_QWEN_V5P_OUTPUT_PATH = "checkpoints/marin-32b-v5p-qwen-2"
+
+marin_32b_qwen = StepRef(MARIN_32B_QWEN_OUTPUT_PATH)
+marin_32b_qwen_v5p = StepRef(MARIN_32B_QWEN_V5P_OUTPUT_PATH)
 
 
 # we got some v5p spot capacity. gonna try it over there
@@ -87,18 +84,31 @@ qwen_32b_warmstart_train_v5p = dataclasses.replace(
     allow_partial_checkpoint=False,
 )
 
-marin_32b_qwen_v5p = default_train(
-    name="marin-32b-v5p-qwen-2",
-    tokenized=nemotron_mix,
-    model_config=qwen3_32b,  # no remat. tons of hbm
-    train_config=qwen_32b_warmstart_train_v5p,
-    tags=["qwen", "32b", "ema", "exp859", "exp1395", "tootsie"],
-    eval_harness_tasks=[],
-).with_output_path("checkpoints/marin-32b-v5p-qwen-2")
+
+@step(name="tootsie/exp1395_qwen3_32b/all")
+def run_experiment():
+    """Entry point for Qwen3 32B training experiment."""
+    default_train(
+        name="marin-32b-qwen",
+        tokenized=nemotron_mix,
+        model_config=qwen3_32b_remat,
+        train_config=qwen_32b_warmstart_train,
+        tags=["qwen", "32b", "ema", "exp859", "exp1395", "tootsie"],
+        eval_harness_tasks=[],
+    ).with_output_path(MARIN_32B_QWEN_OUTPUT_PATH)
+
+    default_train(
+        name="marin-32b-v5p-qwen-2",
+        tokenized=nemotron_mix,
+        model_config=qwen3_32b,  # no remat. tons of hbm
+        train_config=qwen_32b_warmstart_train_v5p,
+        tags=["qwen", "32b", "ema", "exp859", "exp1395", "tootsie"],
+        eval_harness_tasks=[],
+    ).with_output_path(MARIN_32B_QWEN_V5P_OUTPUT_PATH)
 
 
 if __name__ == "__main__":
     executor_main(
-        [marin_32b_qwen, marin_32b_qwen_v5p],
+        steps=[run_experiment()],
         description="Warmstart 32B Qwen3 from Llama 32B Tootsie checkpoint and train on Nemotron etc",
     )

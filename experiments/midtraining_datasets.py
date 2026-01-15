@@ -18,10 +18,11 @@ from experiments.llama import llama3_tokenizer
 from marin.download.huggingface.download_hf import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf as _download_hf
 from marin.execution import deferred, output, step, versioned
-from marin.execution.executor import ExecutorStep
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.transform.common_pile.filter_by_extension import FilterByMetadataExtensionConfig
-from marin.transform.common_pile.filter_by_extension import filter_dataset_by_metadata_extension as _filter_dataset_by_metadata_extension
+from marin.transform.common_pile.filter_by_extension import (
+    filter_dataset_by_metadata_extension as _filter_dataset_by_metadata_extension,
+)
 from marin.transform.medical.lavita_to_dolma import LavitaToDolmaConfig
 from marin.transform.medical.lavita_to_dolma import convert_lavita_split_to_dolma as _convert_lavita_split_to_dolma
 
@@ -46,11 +47,15 @@ def finemath():
 
 
 finemath_3_plus = finemath().cd("finemath-3plus")
-finemath_3_plus_tokenized = default_tokenize(
-    name="finemath_3_plus",
-    dataset=finemath_3_plus,
-    tokenizer=llama3_tokenizer,
-).with_output_path("tokenized/finemath_3_plus-a26b0f/")
+
+
+def tokenize_finemath_3_plus():
+    return default_tokenize(
+        name="finemath_3_plus",
+        dataset=finemath_3_plus,
+        tokenizer=llama3_tokenizer,
+    ).with_output_path("tokenized/finemath_3_plus-a26b0f/")
+
 
 STACKV2_EDU_PYTHON_EXTENSIONS = (".py", ".pyw", ".pyi")
 
@@ -66,11 +71,14 @@ def stackv2_edu_filtered_python():
         )
     )
 
-stackv2_edu_filtered_python_tokenized = default_tokenize(
-    name="common_pile_stackv2_edu_filtered_python",
-    dataset=stackv2_edu_filtered_python(),
-    tokenizer=llama3_tokenizer,
-)
+
+def tokenize_stackv2_edu_filtered_python():
+    return default_tokenize(
+        name="common_pile_stackv2_edu_filtered_python",
+        dataset=stackv2_edu_filtered_python(),
+        tokenizer=llama3_tokenizer,
+    )
+
 
 # Define MegaMath dataset source
 megamath_source = default_download(
@@ -92,14 +100,17 @@ megamath_split_paths = {
     "megamath/web": megamath_source / "megamath-web/*/*.parquet",
 }
 
-megamath_tokenized = {
-    name: default_tokenize(
-        name=name,
-        dataset=path,
-        tokenizer=llama3_tokenizer,
-    )
-    for name, path in megamath_split_paths.items()
-}
+
+def tokenize_megamath():
+    return {
+        name: default_tokenize(
+            name=name,
+            dataset=path,
+            tokenizer=llama3_tokenizer,
+        )
+        for name, path in megamath_split_paths.items()
+    }
+
 
 # source: https://huggingface.co/datasets/LLM360/MegaMath#detailed-statistics
 # in teratokens
@@ -113,22 +124,27 @@ megamath_token_counts = {
     "megamath/qa": 0.0070,  # 7.0B
 }
 
-megamath_mixture = lm_mixture_data_config(
-    components=megamath_tokenized,
-    weights=megamath_token_counts,
-)
 
-megamath_real_only = lm_mixture_data_config(
-    components={
-        "megamath/web": megamath_tokenized["megamath/web"],
-        "megamath/web_pro": megamath_tokenized["megamath/web_pro"],
-    },
-    weights={
-        "megamath/web": megamath_token_counts["megamath/web"],
-        "megamath/web_pro": megamath_token_counts["megamath/web_pro"],
-    },
-    permutation_type="feistel",
-)
+def megamath_mixture():
+    return lm_mixture_data_config(
+        components=tokenize_megamath(),
+        weights=megamath_token_counts,
+    )
+
+
+def megamath_real_only():
+    tokenized = tokenize_megamath()
+    return lm_mixture_data_config(
+        components={
+            "megamath/web": tokenized["megamath/web"],
+            "megamath/web_pro": tokenized["megamath/web_pro"],
+        },
+        weights={
+            "megamath/web": megamath_token_counts["megamath/web"],
+            "megamath/web_pro": megamath_token_counts["megamath/web_pro"],
+        },
+        permutation_type="feistel",
+    )
 
 
 pile_pubmed_abstracts_validation = default_download(
@@ -147,19 +163,23 @@ pile_pubmed_central_validation = default_download(
     hf_urls_glob=["val.json"],
 )
 
-pile_pubmed_central_validation_tokenized = default_tokenize(
-    name="pile_pubmed_central",
-    dataset=pile_pubmed_central_validation,
-    tokenizer=llama3_tokenizer,
-    is_validation=True,
-)
 
-pile_pubmed_abstracts_validation_tokenized = default_tokenize(
-    name="pile_pubmed_abstracts",
-    dataset=pile_pubmed_abstracts_validation,
-    tokenizer=llama3_tokenizer,
-    is_validation=True,
-)
+def tokenize_pile_pubmed_central_validation():
+    return default_tokenize(
+        name="pile_pubmed_central",
+        dataset=pile_pubmed_central_validation,
+        tokenizer=llama3_tokenizer,
+        is_validation=True,
+    )
+
+
+def tokenize_pile_pubmed_abstracts_validation():
+    return default_tokenize(
+        name="pile_pubmed_abstracts",
+        dataset=pile_pubmed_abstracts_validation,
+        tokenizer=llama3_tokenizer,
+        is_validation=True,
+    )
 
 
 # Medical QA datasets
@@ -169,6 +189,7 @@ lavita_medical_qa_datasets = default_download(
     revision="59d48e2",
     override_output_path="raw/lavita_medical_qa",
 )
+
 
 @step(name="documents/lavita_pubmed")
 def lavita_pubmed():
@@ -181,6 +202,7 @@ def lavita_pubmed():
         )
     )
 
+
 @step(name="documents/lavita_medmcqa")
 def lavita_medmcqa():
     return convert_lavita_split_to_dolma(
@@ -191,6 +213,7 @@ def lavita_medmcqa():
             split="train",
         )
     )
+
 
 @step(name="documents/lavita_allprocessed")
 def lavita_allprocessed():
@@ -203,6 +226,7 @@ def lavita_allprocessed():
         )
     )
 
+
 @step(name="documents/lavita_pubmed_validation")
 def lavita_pubmed_validation():
     return convert_lavita_split_to_dolma(
@@ -213,6 +237,7 @@ def lavita_pubmed_validation():
             split="validation",
         )
     )
+
 
 @step(name="documents/lavita_medmcqa_validation")
 def lavita_medmcqa_validation():
@@ -225,34 +250,80 @@ def lavita_medmcqa_validation():
         )
     )
 
-lavita_allprocessed_tokenized = default_tokenize(
-    "tokenized/lavita_allprocessed",
-    lavita_allprocessed(),
-    tokenizer=llama3_tokenizer,
-)
 
-lavita_medmcqa_tokenized = default_tokenize(
-    "tokenized/lavita_medmcqa",
-    lavita_medmcqa(),
-    tokenizer=llama3_tokenizer,
-)
+def tokenize_lavita_allprocessed():
+    return default_tokenize(
+        "tokenized/lavita_allprocessed",
+        lavita_allprocessed(),
+        tokenizer=llama3_tokenizer,
+    )
 
-lavita_pubmedqa_tokenized = default_tokenize(
-    "tokenized/lavita_pubmedqa",
-    lavita_pubmed(),
-    tokenizer=llama3_tokenizer,
-)
 
-lavita_pubmedqa_validation_tokenized = default_tokenize(
-    "tokenized/lavita_pubmedqa_validation",
-    lavita_pubmed_validation(),
-    tokenizer=llama3_tokenizer,
-    is_validation=True,
-)
+def tokenize_lavita_medmcqa():
+    return default_tokenize(
+        "tokenized/lavita_medmcqa",
+        lavita_medmcqa(),
+        tokenizer=llama3_tokenizer,
+    )
 
-lavita_medmcqa_validation_tokenized = default_tokenize(
-    "tokenized/lavita_medmcqa_validation",
-    lavita_medmcqa_validation(),
-    tokenizer=llama3_tokenizer,
-    is_validation=True,
-)
+
+def tokenize_lavita_pubmedqa():
+    return default_tokenize(
+        "tokenized/lavita_pubmedqa",
+        lavita_pubmed(),
+        tokenizer=llama3_tokenizer,
+    )
+
+
+def tokenize_lavita_pubmedqa_validation():
+    return default_tokenize(
+        "tokenized/lavita_pubmedqa_validation",
+        lavita_pubmed_validation(),
+        tokenizer=llama3_tokenizer,
+        is_validation=True,
+    )
+
+
+def tokenize_lavita_medmcqa_validation():
+    return default_tokenize(
+        "tokenized/lavita_medmcqa_validation",
+        lavita_medmcqa_validation(),
+        tokenizer=llama3_tokenizer,
+        is_validation=True,
+    )
+
+
+# Backward compatibility aliases for files that import the module-level variables
+# These are deprecated and should be replaced with function calls inside @step functions
+class _LazyTokenized:
+    """Provides backward-compatible access to tokenized datasets.
+
+    This class allows importing module-level variables like `finemath_3_plus_tokenized`
+    while deferring the actual step creation until the variable is used.
+    """
+
+    def __init__(self, factory):
+        self._factory = factory
+        self._cached = None
+
+    def __call__(self):
+        if self._cached is None:
+            self._cached = self._factory()
+        return self._cached
+
+    # Make it behave like an ExecutorStep when accessed directly
+    def __getattr__(self, name):
+        return getattr(self(), name)
+
+
+# These are for backward compatibility - new code should call the functions directly
+finemath_3_plus_tokenized = _LazyTokenized(tokenize_finemath_3_plus)
+stackv2_edu_filtered_python_tokenized = _LazyTokenized(tokenize_stackv2_edu_filtered_python)
+megamath_tokenized = _LazyTokenized(tokenize_megamath)
+pile_pubmed_central_validation_tokenized = _LazyTokenized(tokenize_pile_pubmed_central_validation)
+pile_pubmed_abstracts_validation_tokenized = _LazyTokenized(tokenize_pile_pubmed_abstracts_validation)
+lavita_allprocessed_tokenized = _LazyTokenized(tokenize_lavita_allprocessed)
+lavita_medmcqa_tokenized = _LazyTokenized(tokenize_lavita_medmcqa)
+lavita_pubmedqa_tokenized = _LazyTokenized(tokenize_lavita_pubmedqa)
+lavita_pubmedqa_validation_tokenized = _LazyTokenized(tokenize_lavita_pubmedqa_validation)
+lavita_medmcqa_validation_tokenized = _LazyTokenized(tokenize_lavita_medmcqa_validation)

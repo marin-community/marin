@@ -31,6 +31,7 @@ from experiments.midtraining_datasets import (
 )
 from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_components
 from fray.cluster import ResourceConfig
+from marin.execution import step
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
@@ -186,27 +187,29 @@ varying_mixture_8b = _build_varying_mixture_for_steps(
     NUM_8B_TRAIN_STEPS, train_batch_size=BATCH_SIZE_8B, mixture_block_size=2048
 )
 
-ferry_model_1b = default_train(
-    name="ferry_qwen3_1_7b_pt_to_cooldown",
-    tokenized=varying_mixture_1b,
-    model_config=qwen3_1_7b,
-    train_config=train_config_1b,
-    eval_harness_tasks=[],
-    override_output_path="checkpoints/ferry_qwen3_1_7b_pt_to_cooldown-027563",
-)
 
-ferry_model_8b = default_train(
-    name="ferry_qwen3_8b_pt_to_cooldown",
-    tokenized=varying_mixture_8b,
-    model_config=qwen3_8b,
-    train_config=train_config_8b,
-    eval_harness_tasks=[],
-    override_output_path="checkpoints/ferry_qwen3_8b_pt_to_cooldown-1fc2cb",
-)
+@step(name="ferries/initial_ferry/all")
+def run_ferry_experiment():
+    """Entry point for Ferry baseline experiments."""
+    default_train(
+        name="ferry_qwen3_1_7b_pt_to_cooldown",
+        tokenized=varying_mixture_1b,
+        model_config=qwen3_1_7b,
+        train_config=train_config_1b,
+        eval_harness_tasks=[],
+    ).with_output_path("checkpoints/ferry_qwen3_1_7b_pt_to_cooldown-027563")
 
-# Main execution block
+    default_train(
+        name="ferry_qwen3_8b_pt_to_cooldown",
+        tokenized=varying_mixture_8b,
+        model_config=qwen3_8b,
+        train_config=train_config_8b,
+        eval_harness_tasks=[],
+    ).with_output_path("checkpoints/ferry_qwen3_8b_pt_to_cooldown-1fc2cb")
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=[ferry_model_1b, ferry_model_8b],
+        steps=[run_ferry_experiment()],
         description=("Ferry: PT on Nemotron+Code then cooldown to HQ mix, scaled from Tootsie schedules"),
     )

@@ -303,7 +303,7 @@ def main():
         return
     logger.info("Generated SLURM script:")
     for i, line in enumerate(sbatch_script.split("\n")):
-        logger.info(f"{i+1}: {line}")
+        logger.info(f"{i + 1}: {line}")
     job_id = submit_slurm_job(sbatch_script, args.no_wait, slurm_args)
     if job_id:
         logger.info(f"Job submitted successfully with ID: {job_id}")

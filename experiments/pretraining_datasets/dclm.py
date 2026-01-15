@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import dataclasses
 
 from levanter.data.text import TextLmDatasetFormat
 
@@ -46,7 +45,7 @@ DCLM_BASELINE_ONLY_MIXTURE = {
 dclm_components_llama3 = {
     "dclm_baseline": tokenize_simple(
         "dclm_baseline",
-        dclm_baseline_download().cd("a3b142c"),
+        dclm_baseline_download() / ("a3b142c"),
         tokenizer=llama3_tokenizer,
         override_path="tokenized/dclm_baseline-0206f1/",
     ),
@@ -58,7 +57,7 @@ dclm_components_llama3 = {
     ),
     "proofpile_2": tokenize_simple(
         "proofpile_2",
-        proofpile_2_download().cd("901a927"),
+        proofpile_2_download() / ("901a927"),
         tokenizer=llama3_tokenizer,
     ),
 }
@@ -77,13 +76,12 @@ dclm_mixture_config_llama3 = lm_mixture_data_config(
 # These are preserved for reproducibility, but future runs should use the correct data.
 # YOU SHOULD NOT USE THESE TOKENIZED DATASETS FOR TRAINING
 dclm_components_llama3_wrong = {
-    "dclm_baseline": dataclasses.replace(
+    "dclm_baseline": (
         default_tokenize(
             name="dclm_baseline",
-            dataset=dclm_baseline_wrong_download().cd("a3b142c"),
+            dataset=dclm_baseline_wrong_download() / ("a3b142c"),
             tokenizer=llama3_tokenizer,
-        ),
-        override_output_path="gs://marin-us-central2/tokenized/dclm_baseline-0206f1_WRONG_20250211/",
+        ).with_output_path("gs://marin-us-central2/tokenized/dclm_baseline-0206f1_WRONG_20250211/")
     ),
     "starcoderdata": default_tokenize(
         name="starcoderdata",
@@ -93,7 +91,7 @@ dclm_components_llama3_wrong = {
     ),
     "proofpile_2": default_tokenize(
         name="proofpile_2",
-        dataset=proofpile_2_download().cd("901a927"),
+        dataset=proofpile_2_download() / ("901a927"),
         tokenizer=llama3_tokenizer,
     ),
 }

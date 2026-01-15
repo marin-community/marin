@@ -34,7 +34,7 @@ from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_com
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, step
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 # ------------------------------------------------------------------------------------
@@ -119,44 +119,48 @@ nanochat_train_config = SimpleTrainConfig(
     steps_per_task_eval=TOTAL_NUM_STEPS,
 )
 
-nanochat_pre_mid_step = default_train(
-    name="marinochat-pre-mid",
-    tokenized=nanochat_pretrain_mid_mixture,
-    model_config=MODEL_CONFIG,
-    train_config=nanochat_train_config,
-    tags=["nanochat-style", "pretrain-midtrain"],
-).with_output_path("checkpoints/marinochat-pre-mid")
-
-
-# Stage 3 SFT configuration using the instruction/reasoning mixture from exp808.
-sft_config = SimpleSFTConfig(
-    resources=ResourceConfig.with_tpu("v5p-8"),
-    train_batch_size=BATCH_SIZE,
-    num_train_steps=SFT_NUM_STEPS,
-    learning_rate=SFT_LEARNING_RATE,
-    weight_decay=WEIGHT_DECAY,
-    tokenizer=TOKENIZER_NAME,
-    model_name_or_path=nanochat_pre_mid_step / "hf/step-24999/",
-    steps_per_eval=100,
-    steps_per_checkpoint=200,
-    steps_per_hf_export=200,
-    warmup=SFT_WARMUP_FRACTION,
-    cooldown=SFT_COOLDOWN_FRACTION,
-)
-
-nanochat_sft_step = default_sft(
-    name="marinochat-sft",
-    tokenized=sft_mixture_llama3,
-    model_config=MODEL_CONFIG,
-    sft_config=sft_config,
-    tags=["nanochat-style", "sft"],
-).with_output_path("checkpoints/marinochat-sft")
 
 # ------------------------------------------------------------------------------------
 # Pipeline entry point
+@step(name="nanochat-three-stage/all")
+def run_nanochat_three_stage():
+    """Entry point for the NanoChat three-stage training experiment."""
+    nanochat_pre_mid_step = default_train(
+        name="marinochat-pre-mid",
+        tokenized=nanochat_pretrain_mid_mixture,
+        model_config=MODEL_CONFIG,
+        train_config=nanochat_train_config,
+        tags=["nanochat-style", "pretrain-midtrain"],
+    ).with_output_path("checkpoints/marinochat-pre-mid")
+
+    # Stage 3 SFT configuration using the instruction/reasoning mixture from exp808.
+    sft_config = SimpleSFTConfig(
+        resources=ResourceConfig.with_tpu("v5p-8"),
+        train_batch_size=BATCH_SIZE,
+        num_train_steps=SFT_NUM_STEPS,
+        learning_rate=SFT_LEARNING_RATE,
+        weight_decay=WEIGHT_DECAY,
+        tokenizer=TOKENIZER_NAME,
+        model_name_or_path=nanochat_pre_mid_step / "hf/step-24999/",
+        steps_per_eval=100,
+        steps_per_checkpoint=200,
+        steps_per_hf_export=200,
+        warmup=SFT_WARMUP_FRACTION,
+        cooldown=SFT_COOLDOWN_FRACTION,
+    )
+
+    default_sft(
+        name="marinochat-sft",
+        tokenized=sft_mixture_llama3,
+        model_config=MODEL_CONFIG,
+        sft_config=sft_config,
+        tags=["nanochat-style", "sft"],
+    ).with_output_path("checkpoints/marinochat-sft")
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=[nanochat_sft_step],
+        steps=[run_nanochat_three_stage()],
         description=(
             "Single-run NanoChat-style pipeline: warm up on DCLM, blend into the "
             "reasoning-focused midtraining mixture (W/S/D = 0.05/0.75/0.20), then run SFT "

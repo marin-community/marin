@@ -54,6 +54,8 @@ Downloads the following datasets
 - mbpp
 
 """
+
+
 ############################################################
 # download mmlu dataset
 # TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
@@ -69,6 +71,7 @@ def mmlu_raw():
             hf_urls_glob=["**/*.parquet", "*.md"],
         )
     )
+
 
 # download boolq dataset
 # TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
@@ -158,6 +161,7 @@ humaneval_raw = default_download(
     hf_urls_glob=["**/*.parquet", "*.md"],
 )
 
+
 # download mbpp
 # TODO: Earlier datasets were stored in gcs_output_path/<revision> instead of gcs_output_path.
 #   Migrate the dataset and cd can be removed.
@@ -172,6 +176,7 @@ def mbpp_raw():
             hf_urls_glob=["**/*.parquet", "*.md"],
         )
     )
+
 
 """
 Converts raw to JSON for:
@@ -224,6 +229,7 @@ def mmlu_aux_eval():
         )
     )
 
+
 # This creates one file per subject from MMLU, excluding the all and auxiliary training subsets
 @step(name="evaluation/mmlu-eval-subject")
 def mmlu_subject_eval():
@@ -245,6 +251,7 @@ def mmlu_subject_eval():
         )
     )
 
+
 # This creates a JSON file representing the train and validation data subset of boolq
 @step(name="evaluation/boolq-eval")
 def boolq_eval():
@@ -263,6 +270,7 @@ def boolq_eval():
             answer_text_ignore=True,
         )
     )
+
 
 # This creates a JSON file representing the training and validation data subset of piqa
 @step(name="evaluation/piqa")
@@ -283,6 +291,7 @@ def piqa_eval():
         )
     )
 
+
 # This creates a JSON file representing the training and validation data subset of winogrande_xl
 @step(name="evaluation/winogrande")
 def winogrande_eval():
@@ -301,6 +310,7 @@ def winogrande_eval():
             answer_labels=["1", "2"],
         )
     )
+
 
 # This creates a JSON file representing the train and validation splits of ARC-Easy
 @step(name="evaluation/arc-easy")
@@ -321,6 +331,7 @@ def arc_easy_eval():
         )
     )
 
+
 # This creates a JSON file representing the train and validation splits of ARC-Challenge
 @step(name="evaluation/arc-challenge")
 def arc_challenge_eval():
@@ -339,6 +350,7 @@ def arc_challenge_eval():
             answer_label_key="answerKey",
         )
     )
+
 
 # This creates a JSON file for the train and validation subsets of OpenBookQA
 @step(name="evaluation/openbookqa-eval")
@@ -359,6 +371,7 @@ def openbookqa_eval():
         )
     )
 
+
 # This creates a JSON file representing the training and validation splits for hellaswag
 @step(name="evaluation/hellaswag-eval")
 def hellaswag_eval():
@@ -377,6 +390,7 @@ def hellaswag_eval():
             answer_idx_key="label",
         )
     )
+
 
 # This creates a JSON file representing the test and validation splits for MMLU-Pro
 @step(name="evaluation/MMLU-Pro-eval")
@@ -397,6 +411,7 @@ def mmlu_pro_eval():
         )
     )
 
+
 # This creates a JSON file representing the test and validation splits for openai_humaneval
 @step(name="evaluation/humaneval-eval")
 def humaneval_eval():
@@ -413,6 +428,7 @@ def humaneval_eval():
             answer_text_key="canonical_solution",
         )
     )
+
 
 # This creates a JSON file representing the train, test, and validation splits for mbpp
 @step(name="evaluation/mbpp-eval")
@@ -431,6 +447,7 @@ def mbpp_eval():
             answer_text_key="code",
         )
     )
+
 
 eval_datasets = [
     # these tags are used to group datasets together for averaging
@@ -469,6 +486,7 @@ def mmlu_convert_dolma():
         )
     )
 
+
 @step(name="raw/ambean/lingOly")
 def lingoly():
     return download_hf(
@@ -479,6 +497,7 @@ def lingoly():
             wait_for_completion=True,
         )
     )
+
 
 # gsm8k raw
 @step(name="raw/gsm8k", override_output_path="raw/gsm8k/mainhf")
@@ -493,6 +512,7 @@ def gsm8k_raw():
         )
     )
 
+
 # math dataset raw
 @step(name="raw/hendrycks_math", override_output_path="raw/hendrycks/mathhf")
 def math_raw():
@@ -505,6 +525,7 @@ def math_raw():
             hf_urls_glob=["**/*.parquet", "*.md"],
         )
     )
+
 
 # truthful_qa raw
 @step(name="raw/truthful_qa", override_output_path="raw/truthful_qa/multiple_choicehf")
@@ -519,6 +540,7 @@ def truthful_qa_raw():
         )
     )
 
+
 # bbh raw
 @step(name="raw/bbh", override_output_path="raw/SaylorTwift/bbhhf")
 def bbh_raw():
@@ -531,6 +553,7 @@ def bbh_raw():
             hf_urls_glob=["**/*.parquet", "*.md"],
         )
     )
+
 
 # gpqa raw
 @step(name="raw/gpqa", override_output_path="raw/Idavidrein/gpqa")
@@ -545,6 +568,7 @@ def gpqa_raw():
         )
     )
 
+
 # instruction-following raw
 @step(name="raw/instruction_following_eval", override_output_path="raw/wis-k/instruction-following-evalhf")
 def instruction_following_raw():
@@ -557,6 +581,7 @@ def instruction_following_raw():
             hf_urls_glob=["**/*.jsonl", "*.jsonl"],
         )
     )
+
 
 # musr raw
 @step(name="raw/musr", override_output_path="raw/WillHeld/MuSRDecontamhf")
@@ -571,6 +596,7 @@ def musr_raw():
         )
     )
 
+
 # winograd WSC raw
 @step(name="raw/winograd_wsc", override_output_path="raw/marcov/winograd_wsc_wsc273_promptsourcehf")
 def winograd_wsc_raw():
@@ -583,6 +609,7 @@ def winograd_wsc_raw():
             hf_urls_glob=["**/*.parquet", "*.parquet"],
         )
     )
+
 
 # commonsense_qa raw
 @step(name="raw/commonsense_qa", override_output_path="raw/tau/commonsense_qahf")
@@ -597,6 +624,7 @@ def commonsense_qa_raw():
         )
     )
 
+
 # lambada_openai raw
 @step(name="raw/lambada_openai", override_output_path="raw/EleutherAI/lambada_openaihf")
 def lambada_openai_raw():
@@ -610,6 +638,7 @@ def lambada_openai_raw():
         )
     )
 
+
 # Alternative PIQA variant used only for contamination analysis
 @step(name="raw/baber/piqa", override_output_path="raw/baber/piqahf")
 def piqa_baber_raw():
@@ -622,6 +651,7 @@ def piqa_baber_raw():
             hf_urls_glob=["**/*.parquet", "*.parquet"],
         )
     )
+
 
 ############################################################
 

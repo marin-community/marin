@@ -35,7 +35,7 @@ from experiments.steps import default_lm_log_probs
 from fray.cluster import ResourceConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from marin.download.uncheatable_eval.download import make_uncheatable_eval_step
-from marin.execution.executor import ExecutorStep, executor_main, step
+from marin.execution import ExecutorStep, executor_main, step
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep, mixture_for_evaluation
 

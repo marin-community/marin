@@ -29,8 +29,6 @@ import fsspec
 import requests
 from marin.execution import (
     ExecutorStep,
-    StepContext,
-    StepRef,
     VersionedValue,
     ensure_versioned,
     step,
@@ -389,17 +387,19 @@ def make_uncheatable_eval_step(
 
     @step(name=name)
     def step_creator():
-        return download_latest_uncheatable_eval_deferred(UncheatableEvalDownloadConfig(
-            output_path=output(),
-            repo_owner=ensure_versioned(repo_owner),
-            repo_name=ensure_versioned(repo_name),
-            data_path=ensure_versioned(data_path),
-            branch=ensure_versioned(branch),
-            max_concurrent_downloads=max_concurrent_downloads,
-            request_timeout=request_timeout,
-            github_token=github_token,
-            skip_existing=skip_existing,
-        ))
+        return download_latest_uncheatable_eval_deferred(
+            UncheatableEvalDownloadConfig(
+                output_path=output(),
+                repo_owner=ensure_versioned(repo_owner),
+                repo_name=ensure_versioned(repo_name),
+                data_path=ensure_versioned(data_path),
+                branch=ensure_versioned(branch),
+                max_concurrent_downloads=max_concurrent_downloads,
+                request_timeout=request_timeout,
+                github_token=github_token,
+                skip_existing=skip_existing,
+            )
+        )
 
     return step_creator()
 

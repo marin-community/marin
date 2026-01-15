@@ -20,13 +20,10 @@ from lib/marin. The library functions work with concrete types (strings),
 while these step wrappers handle dependency resolution and executor integration.
 
 Usage:
-    from experiments.steps import upload_dir_to_hf, upload_path_to_hf
+    from experiments.steps import upload_to_hf_step
 
-    # Upload a step's output:
-    step = upload_dir_to_hf(name="my-upload", input_step=my_previous_step, repo_id="user/repo")
-
-    # Upload a raw GCS/local path:
-    step = upload_path_to_hf(name="my-upload", input_path="gs://bucket/path", repo_id="user/repo")
+    # Upload a step's output or path:
+    step = upload_to_hf_step(name="my-upload", input_path=my_previous_step, repo_id="user/repo")
 
     # Convert a checkpoint to HuggingFace format:
     step = convert_checkpoint_to_hf_step(name="hf/my-model", checkpoint_path="gs://...", ...)
@@ -36,7 +33,7 @@ Usage:
 """
 
 from experiments.steps.download_pretokenized import download_pretokenized_cache
-from experiments.steps.hf_upload import upload_dir_to_hf, upload_path_to_hf
+from experiments.steps.hf_upload import upload_to_hf_step
 from experiments.steps.levanter_checkpoint import (
     convert_checkpoint_from_step,
     convert_checkpoint_to_hf_step,
@@ -59,6 +56,5 @@ __all__ = [
     "tokenize_from_paths",
     "tokenize_from_step",
     "tokenize_hf_dataset",
-    "upload_dir_to_hf",
-    "upload_path_to_hf",
+    "upload_to_hf_step",
 ]

@@ -30,7 +30,7 @@ from experiments.llama import llama_32b
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution import executor_main
+from marin.execution import StepRef, executor_main, step
 from marin.processing.tokenize import lm_mixture_data_config
 
 ## 32b experiments
@@ -98,20 +98,26 @@ nemotron_mix = lm_mixture_data_config(
     permutation_type="linear",
 )
 
-llama_32b_tootsie = default_train(
-    name="llama-32b-tootsie-2",
-    tokenized=nemotron_mix,
-    model_config=llama_32b_remat,
-    train_config=llama_32b_train_config,
-    tags=["llama", "32b", "ema", "exp859", "tootsie"],
-    eval_harness_tasks=[],
-).with_output_path("checkpoints/llama-32b-tootsie-2")
+LLAMA_32B_TOOTSIE_OUTPUT_PATH = "checkpoints/llama-32b-tootsie-2"
+
+llama_32b_tootsie = StepRef(LLAMA_32B_TOOTSIE_OUTPUT_PATH)
+
+
+@step(name="tootsie/exp1295_32b/all")
+def run_experiment():
+    """Entry point for 32B Tootsie training."""
+    default_train(
+        name="llama-32b-tootsie-2",
+        tokenized=nemotron_mix,
+        model_config=llama_32b_remat,
+        train_config=llama_32b_train_config,
+        tags=["llama", "32b", "ema", "exp859", "tootsie"],
+        eval_harness_tasks=[],
+    ).with_output_path(LLAMA_32B_TOOTSIE_OUTPUT_PATH)
 
 
 if __name__ == "__main__":
     executor_main(
-        [
-            llama_32b_tootsie,
-        ],
+        steps=[run_experiment()],
         description="Train 32B on Nemotron with Starcoderdata and Proofpile 2",
     )

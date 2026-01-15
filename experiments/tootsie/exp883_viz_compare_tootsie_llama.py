@@ -58,14 +58,16 @@ tulu_3_in_dolma = mixture_for_evaluation(eval_sets)
 
 @step(name="analysis/viz-compare/{checkpoint_name}")
 def _viz_compare_step_impl(checkpoint: str, checkpoint_name: str):
-    return visualize_lm_log_probs(VizLmConfig(
-        checkpoint_path=checkpoint,
-        model=llama_8b,
-        datasets=tulu_3_in_dolma,
-        num_docs_per_dataset=32,
-        comparison_model_path=COMPARISON_MODEL,
-        comparison_is_hf=True,
-    ))
+    return visualize_lm_log_probs(
+        VizLmConfig(
+            checkpoint_path=checkpoint,
+            model=llama_8b,
+            datasets=tulu_3_in_dolma,
+            num_docs_per_dataset=32,
+            comparison_model_path=COMPARISON_MODEL,
+            comparison_is_hf=True,
+        )
+    )
 
 
 all_steps = []

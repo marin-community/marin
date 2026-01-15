@@ -33,7 +33,7 @@ from datasets import Dataset, load_dataset
 from huggingface_hub import HfApi
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from marin.execution import StepRef, step, deferred, output
+from marin.execution import step, deferred, output
 from marin.execution.executor import executor_main, versioned
 from marin.utilities.json_encoder import CustomJsonEncoder
 
@@ -523,10 +523,12 @@ run_plantcad_evaluation = deferred(_run_plantcad_evaluation)
 @step(name="plantcad-eval")
 def evaluation_step():
     checkpoint_path = "hf://plantcad/marin_exp1729__pcv1_600m_c512__checkpoints/local_store/checkpoints/plantcad-train-600m-r16-a1bc43/hf/step-26782"
-    return run_plantcad_evaluation(DnaEvalConfig(
-        checkpoint_path=versioned(checkpoint_path),
-        output_path=output(),
-    ))
+    return run_plantcad_evaluation(
+        DnaEvalConfig(
+            checkpoint_path=versioned(checkpoint_path),
+            output_path=output(),
+        )
+    )
 
 
 # -----------------------------------------------------------------------------

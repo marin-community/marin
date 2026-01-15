@@ -16,7 +16,7 @@
 Step definitions for uploading to Hugging Face Hub.
 """
 
-from marin.execution import StepRef, deferred, output, step
+from marin.execution import StepRef, deferred, step
 from marin.export.hf_upload import UploadToHfConfig
 from marin.export.hf_upload import upload_to_hf as _upload_to_hf
 

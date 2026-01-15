@@ -29,7 +29,6 @@ from datetime import datetime, timezone
 from enum import StrEnum, auto
 import typing
 
-from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.processing.classification.deduplication.connected_components import connected_components
 from marin.utilities.time_logger import log_time
 import pyarrow as pa
@@ -67,10 +66,8 @@ class DedupeConfig:
         text_field (str): field to use for text content in Parquet files
     """
 
-    # TODO (rav): had to make this optional to avoid default argument issues in dataclass, what is the
-    #   best way to handle this in marin and draccus?
     input_path: str | list[str]
-    output_path: str = THIS_OUTPUT_PATH
+    output_path: str
     # TODO: remove this and just hard code the attribute names
     attribute_name: str = "exact_duplicate"
     processes: int = 1

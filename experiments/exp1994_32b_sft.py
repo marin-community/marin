@@ -21,7 +21,7 @@ import dataclasses
 
 from experiments.defaults import default_sft
 from experiments.evals.evals import default_sft_eval
-from experiments.exp1880_sft_baseline import mixture_config
+from experiments.exp1880_sft_baseline import build_mixture_config
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.tootsie.exp1529_32b_mantis_cooldown import (
@@ -29,7 +29,7 @@ from experiments.tootsie.exp1529_32b_mantis_cooldown import (
     tootsie_32b_cooldown_mantis,
 )
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution import executor_main, step
 
 TRAIN_BATCH_SIZE = 2048
 # Matches the 3-epoch budget from exp1880_sft_baseline (computed against that mixture).
@@ -38,7 +38,6 @@ LEARNING_RATE = 1e-5
 WARMSTART_STEP = 191_999
 
 qwen3_32b_remat_8k = dataclasses.replace(qwen3_32b_remat, max_seq_len=8192)
-mantis_checkpoint = tootsie_32b_cooldown_mantis.cd(f"checkpoints/step-{WARMSTART_STEP}/").nonblocking()
 
 mantis_sft_config = SimpleSFTConfig(
     resources=ResourceConfig.with_tpu("v4-2048"),
@@ -46,24 +45,38 @@ mantis_sft_config = SimpleSFTConfig(
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=LEARNING_RATE,
     tokenizer=marin_tokenizer,
-    initialize_from_checkpoint_path=mantis_checkpoint,
+    initialize_from_checkpoint_path=None,  # Will be set in the step function
     max_seq_len=8192,
     seed=0,
 )
 
-tootsie_32b_mantis_sft = default_sft(
-    name="tootsie-32b-mantis-sft-exp1994",
-    tokenized=mixture_config,
-    model_config=qwen3_32b_remat_8k,
-    sft_config=mantis_sft_config,
-    tags=["qwen", "32b", "exp1994", "mantis", "cooldown"],
-)
 
-tootsie_32b_mantis_sft_evals = default_sft_eval(
-    tootsie_32b_mantis_sft,
-    use_levanter_inference=True,
-    resource_config=ResourceConfig.with_tpu("v4-8"),
-)
+@step(name="tootsie/exp1994_32b_sft/all")
+def run_32b_sft():
+    """Entry point for 32B SFT training and evaluation."""
+    mantis_checkpoint = tootsie_32b_cooldown_mantis.cd(f"checkpoints/step-{WARMSTART_STEP}/").nonblocking()
+
+    sft_config_with_checkpoint = dataclasses.replace(
+        mantis_sft_config,
+        initialize_from_checkpoint_path=mantis_checkpoint,
+    )
+
+    mixture = build_mixture_config()
+
+    tootsie_32b_mantis_sft = default_sft(
+        name="tootsie-32b-mantis-sft-exp1994",
+        tokenized=mixture,
+        model_config=qwen3_32b_remat_8k,
+        sft_config=sft_config_with_checkpoint,
+        tags=["qwen", "32b", "exp1994", "mantis", "cooldown"],
+    )
+
+    tootsie_32b_mantis_sft_evals = default_sft_eval(
+        tootsie_32b_mantis_sft,
+        use_levanter_inference=True,
+        resource_config=ResourceConfig.with_tpu("v4-8"),
+    )
+
 
 if __name__ == "__main__":
-    executor_main([tootsie_32b_mantis_sft, *tootsie_32b_mantis_sft_evals])
+    executor_main(steps=[run_32b_sft()], description="32B Qwen cooldown-style SFT")

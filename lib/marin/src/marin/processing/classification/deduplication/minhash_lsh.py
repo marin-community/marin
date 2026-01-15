@@ -79,7 +79,6 @@ def _extract_char_shingles(text: str, shingle_size: int) -> set[bytes]:
 def _minhash_lsh(
     records: Iterator[MinHashLshInputRecord], vector_length: int, num_bands: int, shingle_size: int
 ) -> Iterator[MinHashLshOutputRecord]:
-
     min_hash = MinHash(num_perm=vector_length)
 
     def _get_shingles(records: Iterator[MinHashLshInputRecord]) -> Iterator[tuple[set[bytes], Any]]:

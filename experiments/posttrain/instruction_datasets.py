@@ -56,11 +56,12 @@ from typing import Any
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from marin.execution import step, deferred, output
-from marin.execution.executor import (
+from marin.execution import (
     ExecutorStep,
+    deferred,
     executor_main,
-    StepRef,
+    output,
+    step,
     versioned,
 )
 from marin.transform.conversation.conversation_to_dolma import (
@@ -593,16 +594,18 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig):
         -{adapter_signature_str}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
-    return transform_hf_dataset(TransformSFTDatasetConfig(
-        source=versioned(dataset_cfg.hf_dataset_id),
-        revision=versioned(dataset_cfg.revision),
-        output_path=output(),
-        metadata_columns=versioned(dataset_cfg.metadata_columns),
-        adapter=versioned(adapter),
-        subsets=versioned(dataset_cfg.subsets),
-        splits=versioned(dataset_cfg.splits),
-        max_parallelism=dataset_cfg.max_parallelism,
-    ))
+    return transform_hf_dataset(
+        TransformSFTDatasetConfig(
+            source=versioned(dataset_cfg.hf_dataset_id),
+            revision=versioned(dataset_cfg.revision),
+            output_path=output(),
+            metadata_columns=versioned(dataset_cfg.metadata_columns),
+            adapter=versioned(adapter),
+            subsets=versioned(dataset_cfg.subsets),
+            splits=versioned(dataset_cfg.splits),
+            max_parallelism=dataset_cfg.max_parallelism,
+        )
+    )
 
 
 def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = None) -> ExecutorStep:
@@ -622,22 +625,57 @@ def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = N
 
 @step(name="dolma/tulu_3_in_dolma")
 def _tulu_3_in_dolma_step():
-    return convert_conversation_to_dolma(ConversationToDolmaConfig(get_instruction_dataset("allenai/tulu-3-sft-mixture")))
+    return convert_conversation_to_dolma(
+        ConversationToDolmaConfig(
+            input_path=get_instruction_dataset("allenai/tulu-3-sft-mixture"),
+            output_path=output(),
+        )
+    )
+
 
 tulu_3_in_dolma = _tulu_3_in_dolma_step()
 
 
-# levanter treats validation and  training as separate so we tokenize twice. Not ideal, but fine here.
-tulu3_flat_llama_tokenized_as_validation = default_tokenize(
-    "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=True
-).with_output_path("tokenized/tulu_sft-1bb7d4")
-"""
-"flat" here means that we interpolated all the chat messages into a single string per doc
-"""
+def tokenize_tulu3_flat_llama_validation():
+    """Tokenize Tulu-3 SFT data as validation set.
 
-tulu3_flat_llama_tokenized_as_train = default_tokenize(
-    "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=False
-).with_output_path("tokenized/tulu_sft-349fb7/")
+    "flat" here means that we interpolated all the chat messages into a single string per doc.
+    """
+    return default_tokenize(
+        "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=True
+    ).with_output_path("tokenized/tulu_sft-1bb7d4")
+
+
+def tokenize_tulu3_flat_llama_train():
+    """Tokenize Tulu-3 SFT data as training set.
+
+    "flat" here means that we interpolated all the chat messages into a single string per doc.
+    """
+    return default_tokenize(
+        "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=False
+    ).with_output_path("tokenized/tulu_sft-349fb7/")
+
+
+# Backward compatibility aliases
+class _LazyTokenized:
+    """Provides backward-compatible access to tokenized datasets."""
+
+    def __init__(self, factory):
+        self._factory = factory
+        self._cached = None
+
+    def __call__(self):
+        if self._cached is None:
+            self._cached = self._factory()
+        return self._cached
+
+    def __getattr__(self, name):
+        return getattr(self(), name)
+
+
+# levanter treats validation and training as separate so we tokenize twice. Not ideal, but fine here.
+tulu3_flat_llama_tokenized_as_validation = _LazyTokenized(tokenize_tulu3_flat_llama_validation)
+tulu3_flat_llama_tokenized_as_train = _LazyTokenized(tokenize_tulu3_flat_llama_train)
 
 
 @step(name="posttrain/instruction_datasets/all")
@@ -650,5 +688,5 @@ def prepare_all_instruction_datasets():
 if __name__ == "__main__":
     executor_main(
         steps=[prepare_all_instruction_datasets()],
-        description="Prepare all instruction datasets for supervised fine-tuning"
+        description="Prepare all instruction datasets for supervised fine-tuning",
     )

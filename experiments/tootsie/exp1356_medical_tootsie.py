@@ -36,7 +36,7 @@ from experiments.midtraining_datasets import (
 )
 from experiments.tootsie.exp600_tootsie import phoenix_phase4_checkpoint_for_phase5
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, step
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 pubmed_qa_tokens = 78_993_593
@@ -101,10 +101,15 @@ tootsie_control = default_anneal(
     anneal_config=control_anneal_config,
 )
 
+
+@step(name="tootsie/exp1356_medical_tootsie/all")
+def run_experiment():
+    """Entry point for the experiment."""
+    return [
+        medical_tootsie_anneal,
+        tootsie_control,
+    ]
+
+
 if __name__ == "__main__":
-    executor_main(
-        [
-            medical_tootsie_anneal,
-            tootsie_control,
-        ]
-    )
+    executor_main(steps=[run_experiment()], description="Annealing on medical QA datasets")

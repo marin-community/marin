@@ -21,6 +21,7 @@ endpoint so that each split is weighted by its document count. (2025-11-07)
 
 TODO: this should probably be tokens instead of doc counts.
 """
+
 import math
 import re
 
@@ -37,7 +38,8 @@ from experiments.posttrain.instruction_datasets import (
 from experiments.simple_sft_config import SimpleSFTConfig
 from fray.cluster import ResourceConfig
 from levanter.data.text import ChatLmDatasetFormat
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution import step
+from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
 SLUGIFY_PATTERN = re.compile(r"[^a-z0-9]+")
@@ -126,12 +128,6 @@ def create_tokenization_step(dataset_identifier: str, short_name: str) -> Execut
 
 
 DATASETS, mixture_weights = build_dataset_specs()
-tokenized_datasets = {
-    short_name: create_tokenization_step(dataset_identifier, short_name)
-    for short_name, dataset_identifier in DATASETS.items()
-}
-
-assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
@@ -147,28 +143,46 @@ mixture_sft_config = SimpleSFTConfig(
     seed=0,
 )
 
-mixture_config = lm_mixture_data_config(
-    tokenized_datasets,
-    mixture_weights,
-    permutation_type="feistel",
-    shuffle=True,
-    missing_weights_are_validation=True,
-    mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
-)
 
-marin_8b_sft_smoltalk2_nemotron_v2 = default_sft(
-    name="marin_8b_sft_smoltalk2_nemotron_v2_big",
-    tokenized=mixture_config,
-    model_config=llama_8b,
-    sft_config=mixture_sft_config,
-    tags=["llama", "smoltalk2", "nemotron_v2", "sft"],
-)
+def tokenize_all_datasets():
+    """Tokenize all SmolTalk2 and Nemotron v2 datasets."""
+    return {
+        short_name: create_tokenization_step(dataset_identifier, short_name)
+        for short_name, dataset_identifier in DATASETS.items()
+    }
 
-marin_8b_sft_smoltalk2_nemotron_v2_evals = default_sft_eval(
-    marin_8b_sft_smoltalk2_nemotron_v2,
-    use_levanter_inference=True,
-    resource_config=ResourceConfig.with_tpu("v4-8"),
-)
+
+def build_mixture_config():
+    """Build the mixture config for SmolTalk2 + Nemotron v2 SFT."""
+    return lm_mixture_data_config(
+        tokenize_all_datasets(),
+        mixture_weights,
+        permutation_type="feistel",
+        shuffle=True,
+        missing_weights_are_validation=True,
+        mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
+    )
+
+
+@step(name="exp1880/sft_baseline/all")
+def run_sft_baseline():
+    """Entry point for SmolTalk2 + Nemotron v2 SFT baseline."""
+    mixture = build_mixture_config()
+
+    sft_step = default_sft(
+        name="marin_8b_sft_smoltalk2_nemotron_v2_big",
+        tokenized=mixture,
+        model_config=llama_8b,
+        sft_config=mixture_sft_config,
+        tags=["llama", "smoltalk2", "nemotron_v2", "sft"],
+    )
+
+    default_sft_eval(
+        sft_step,
+        use_levanter_inference=True,
+        resource_config=ResourceConfig.with_tpu("v4-8"),
+    )
+
 
 if __name__ == "__main__":
-    executor_main(steps=[marin_8b_sft_smoltalk2_nemotron_v2, *marin_8b_sft_smoltalk2_nemotron_v2_evals])
+    executor_main(steps=[run_sft_baseline()])

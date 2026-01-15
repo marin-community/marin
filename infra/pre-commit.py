@@ -361,7 +361,6 @@ def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
     for file_path in config_files:
         if file_path.suffix == ".toml":
             try:
-
                 with open(file_path, "rb") as f:
                     tomllib.load(f)
             except Exception as e:
@@ -369,7 +368,6 @@ def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
 
         elif file_path.suffix in [".yaml", ".yml"]:
             try:
-
                 with open(file_path) as f:
                     yaml.safe_load(f)
             except Exception as e:

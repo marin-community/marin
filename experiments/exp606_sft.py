@@ -18,7 +18,7 @@ from experiments.llama import llama3_instruct_tokenizer, llama_8b
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, step
 from marin.processing.tokenize import lm_data_config
 
 # Get instruction dataset
@@ -32,17 +32,6 @@ NUM_TRAIN_TOKENS = 670426314
 # Link: https://huggingface.co/allenai/Llama-3.1-Tulu-3-8B
 NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (128 * 4096) * 3  # 2 epochs
 
-# Create tokenization step for Tulu-3 dataset
-tulu3_llama_tokenize_step = default_tokenize(
-    name="tulu_sft_v3_llama3_instruct_tokenizer",
-    dataset=tulu_3_dataset / "**/*.jsonl.gz",
-    tokenizer=llama3_instruct_tokenizer,
-    format=llama3_instruct_chat_format,
-)
-
-# This dataset should only by used for older runs. Don't use this in new experiments
-tulu3_llama_data_old = lm_data_config(tulu3_llama_tokenize_step, permutation_type="linear")
-
 tulu_sft_config = SimpleSFTConfig(
     train_batch_size=128,
     num_train_steps=NUM_TRAIN_STEPS,  # Adjust as needed.
@@ -54,10 +43,28 @@ tulu_sft_config = SimpleSFTConfig(
     seed=1,
 )
 
-# Configure SFT training
-sft_step = default_sft(
-    name="tulu3_llama3_sft", tokenized=tulu3_llama_data_old, model_config=llama_8b, sft_config=tulu_sft_config
-)
+
+def tokenize_tulu3_llama():
+    return default_tokenize(
+        name="tulu_sft_v3_llama3_instruct_tokenizer",
+        dataset=tulu_3_dataset / "**/*.jsonl.gz",
+        tokenizer=llama3_instruct_tokenizer,
+        format=llama3_instruct_chat_format,
+    )
+
+
+@step(name="exp606-sft/all")
+def run_tulu3_sft():
+    """Entry point for Tulu-3 SFT training."""
+    tulu3_llama_tokenize_step = tokenize_tulu3_llama()
+    tulu3_llama_data = lm_data_config(tulu3_llama_tokenize_step, permutation_type="linear")
+
+    sft_step = default_sft(
+        name="tulu3_llama3_sft", tokenized=tulu3_llama_data, model_config=llama_8b, sft_config=tulu_sft_config
+    )
+
+    return sft_step
+
 
 if __name__ == "__main__":
-    executor_main(steps=[tulu3_llama_tokenize_step, sft_step])
+    executor_main(steps=[run_tulu3_sft()])

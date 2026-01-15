@@ -42,8 +42,7 @@ Notes
 import logging
 from dataclasses import dataclass
 
-from marin.execution import deferred, output
-from marin.execution.executor import executor_main, StepRef, step
+from marin.execution import StepRef, deferred, executor_main, output, step
 from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 
 from experiments.midtraining_datasets import finemath_3_plus

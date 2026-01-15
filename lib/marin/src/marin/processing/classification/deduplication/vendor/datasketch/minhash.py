@@ -16,7 +16,7 @@ import numpy as np
 
 # GPU backend
 # try:
-    # import cupy as cp
+# import cupy as cp
 # except ImportError:
 # NOTE: GPU backend disabled for now
 cp = None

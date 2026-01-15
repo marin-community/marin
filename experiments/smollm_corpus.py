@@ -27,6 +27,7 @@ download_hf = deferred(_download_hf)
 
 SMOLLM_REVISION = "3ba9d605774198c5868892d7a8deda78031a781f"
 
+
 @step(name="raw/smollm_corpus/cosmopedia-v2")
 def smollm_cosmopedia():
     return download_hf(
@@ -39,6 +40,7 @@ def smollm_cosmopedia():
         )
     )
 
+
 @step(name="raw/smollm_corpus/fineweb-edu-dedup")
 def smollm_fineweb_edu():
     return download_hf(
@@ -50,6 +52,7 @@ def smollm_fineweb_edu():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/smollm_corpus/python-edu")
 def smollm_python_edu():

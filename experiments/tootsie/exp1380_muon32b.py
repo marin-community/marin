@@ -23,7 +23,7 @@ from levanter.optim import MuonConfig
 from experiments.defaults import default_train
 from experiments.tootsie.exp1295_32b import llama_32b_remat, llama_32b_tootsie, llama_32b_train_config, nemotron_mix
 from fray.cluster import ResourceConfig
-from marin.execution import executor_main
+from marin.execution import executor_main, step
 
 warmstart_checkpoint = llama_32b_tootsie.cd("checkpoints/step-77096/").nonblocking()
 
@@ -47,20 +47,19 @@ llama_32b_warmstart_train = dataclasses.replace(
     reset_data_loader_on_init=False,
 )
 
-llama_32b_muon = default_train(
-    name="marin-32b-muon-4",
-    tokenized=nemotron_mix,
-    model_config=llama_32b_remat,
-    train_config=llama_32b_warmstart_train,
-    tags=["llama", "32b", "ema", "exp859", "tootsie", "muon"],
-    eval_harness_tasks=[],
-).with_output_path("checkpoints/marin-32b-muon-4")
+
+@step(name="tootsie/exp1380_muon32b/all")
+def run_muon32b():
+    """Entry point for 32B Muon training."""
+    default_train(
+        name="marin-32b-muon-4",
+        tokenized=nemotron_mix,
+        model_config=llama_32b_remat,
+        train_config=llama_32b_warmstart_train,
+        tags=["llama", "32b", "ema", "exp859", "tootsie", "muon"],
+        eval_harness_tasks=[],
+    ).with_output_path("checkpoints/marin-32b-muon-4")
 
 
 if __name__ == "__main__":
-    executor_main(
-        [
-            llama_32b_muon,
-        ],
-        description="Give muon a shot on 32B with Nemotron and Starcoderdata",
-    )
+    executor_main(steps=[run_muon32b()], description="Give muon a shot on 32B with Nemotron and Starcoderdata")

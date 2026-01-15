@@ -23,16 +23,19 @@ from marin.execution import step, deferred, output, executor_main, versioned
 
 download_hf = deferred(_download_hf)
 
+
 ############################################################
 # download open-web-math dataset
 @step(name="raw/open-web-math")
 def open_web_math_raw_creator():
-    return download_hf(DownloadConfig(
-        hf_dataset_id="open-web-math/open-web-math",
-        revision=versioned("fde8ef8"),
-        gcs_output_path=output(),
-        wait_for_completion=False,
-    ))
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="open-web-math/open-web-math",
+            revision=versioned("fde8ef8"),
+            gcs_output_path=output(),
+            wait_for_completion=False,
+        )
+    )
 
 
 open_web_math_raw = open_web_math_raw_creator(override_output_path="raw/open-web-math-fde8ef8")

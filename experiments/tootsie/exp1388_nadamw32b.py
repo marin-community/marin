@@ -24,7 +24,7 @@ from experiments.defaults import default_train
 from experiments.llama import llama_32b
 from experiments.tootsie.exp1295_32b import llama_32b_tootsie, llama_32b_train_config, nemotron_mix
 from fray.cluster import ResourceConfig
-from marin.execution import executor_main
+from marin.execution import executor_main, step
 
 warmstart_checkpoint = llama_32b_tootsie.cd("checkpoints/step-77096/").nonblocking()
 
@@ -46,20 +46,22 @@ llama_32b_warmstart_train = dataclasses.replace(
     reset_data_loader_on_init=False,
 )
 
-llama_32b_nadamw = default_train(
-    name="marin-32b-nadamw-4",
-    tokenized=nemotron_mix,
-    model_config=llama_32b,
-    train_config=llama_32b_warmstart_train,
-    tags=["llama", "32b", "ema", "exp1388", "tootsie", "nadamw"],
-    eval_harness_tasks=[],
-).with_output_path("checkpoints/marin-32b-nadamw-4")
+
+@step(name="tootsie/exp1388_nadamw32b/all")
+def run_experiment():
+    """Entry point for the experiment."""
+    return default_train(
+        name="marin-32b-nadamw-4",
+        tokenized=nemotron_mix,
+        model_config=llama_32b,
+        train_config=llama_32b_warmstart_train,
+        tags=["llama", "32b", "ema", "exp1388", "tootsie", "nadamw"],
+        eval_harness_tasks=[],
+    ).with_output_path("checkpoints/marin-32b-nadamw-4")
 
 
 if __name__ == "__main__":
     executor_main(
-        [
-            llama_32b_nadamw,
-        ],
+        steps=[run_experiment()],
         description="Give nadamw a shot on 32B with Nemotron and Starcoderdata",
     )

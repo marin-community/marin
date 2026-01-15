@@ -13,14 +13,19 @@
 # limitations under the License.
 
 from experiments.steps import upload_path_to_hf
-from marin.execution.executor import executor_main
+from marin.execution import executor_main, step
 
-medu_exported = upload_path_to_hf(
-    name="medu-science-qa",
-    input_path="gs://marin-us-east1/documents/medu-mmlu-science-llama8b-qa-whole-1a419d",
-    repo_id="marin-community/medu-science-qa",
-    repo_type="dataset",
-)
+
+@step(name="tootsie/exp_1246_upload_datasets/all")
+def run_upload_datasets():
+    """Entry point for uploading datasets to HuggingFace."""
+    upload_path_to_hf(
+        name="medu-science-qa",
+        input_path="gs://marin-us-east1/documents/medu-mmlu-science-llama8b-qa-whole-1a419d",
+        repo_id="marin-community/medu-science-qa",
+        repo_type="dataset",
+    )
+
 
 if __name__ == "__main__":
-    executor_main([medu_exported])
+    executor_main(steps=[run_upload_datasets()], description="Upload medu-science-qa to HuggingFace")

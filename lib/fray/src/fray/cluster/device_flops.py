@@ -17,6 +17,7 @@
 Data originally from Mosaic SPDX-License-Identifier: Apache-2.0
 https://github.com/mosaicml/composer/blob/56ccc2ebc59a8c68a6d075c4b61735ebf089b5a2/composer/callbacks/speed_monitor.py#L23
 """
+
 import logging
 from typing import Literal
 

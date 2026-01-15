@@ -35,11 +35,12 @@ from dataclasses import dataclass, field
 
 from marin.download.huggingface.download_hf import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf as _download_hf
-from marin.execution import step, deferred, output
-from marin.execution.executor import (
+from marin.execution import (
     ExecutorStep,
+    deferred,
     executor_main,
-    StepRef,
+    output,
+    step,
     versioned,
 )
 from marin.transform.conversation.transform_preference_data import (
@@ -110,12 +111,14 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
 def download_preference_dataset_step(dataset: PreferenceDatasetConfig):
     """ExecutorStep for downloading preference data from external source to GCP"""
     dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
-    return download_hf(DownloadConfig(
-        hf_dataset_id=dataset.hf_dataset_id,
-        revision=versioned(dataset.revision),
-        gcs_output_path=output(),
-        wait_for_completion=True,
-    ))
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id=dataset.hf_dataset_id,
+            revision=versioned(dataset.revision),
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
+    )
 
 
 @step(name="preference")
@@ -148,17 +151,19 @@ def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, down
         -{sorted(dataset_cfg.splits)}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
-    return transform_hf_preference_dataset(TransformPreferenceDatasetConfig(
-        input_path=download_step,
-        output_path=output(),
-        shard_size=versioned(5000),
-        metadata_columns=versioned(dataset_cfg.metadata_columns),
-        filetype=dataset_cfg.filetype,
-        source=dataset_cfg.hf_dataset_id,
-        subsets=dataset_cfg.subsets,
-        splits=dataset_cfg.splits,
-        adapter_name=adapter_name,
-    ))
+    return transform_hf_preference_dataset(
+        TransformPreferenceDatasetConfig(
+            input_path=download_step,
+            output_path=output(),
+            shard_size=versioned(5000),
+            metadata_columns=versioned(dataset_cfg.metadata_columns),
+            filetype=dataset_cfg.filetype,
+            source=dataset_cfg.hf_dataset_id,
+            subsets=dataset_cfg.subsets,
+            splits=dataset_cfg.splits,
+            adapter_name=adapter_name,
+        )
+    )
 
 
 def get_preference_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> ExecutorStep:
@@ -187,6 +192,5 @@ def prepare_all_preference_datasets():
 
 if __name__ == "__main__":
     executor_main(
-        steps=[prepare_all_preference_datasets()],
-        description="Prepare all preference datasets for DPO/RLHF training"
+        steps=[prepare_all_preference_datasets()], description="Prepare all preference datasets for DPO/RLHF training"
     )

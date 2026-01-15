@@ -18,7 +18,6 @@ This file represents the best practices for each stage of the pipeline.
 
 import dataclasses
 import logging
-import os
 from collections.abc import Sequence
 from datetime import timedelta
 from functools import lru_cache
@@ -35,7 +34,6 @@ from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
-from levanter.schedule import BatchSchedule
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
@@ -48,14 +46,14 @@ from experiments.evals.task_configs import (
     convert_to_levanter_task_config,
     convert_to_task_metrics,
 )
-from experiments.llama import compute_num_parameters, llama_8b
+from experiments.llama import llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.download.huggingface.download_hf import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf as _download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution import deferred, output, step, versioned
+from marin.execution import deferred, output, step
 from marin.execution.executor import (
     ExecutorStep,
     StepRef,
@@ -79,7 +77,13 @@ download_hf = deferred(_download_hf)
 tokenize = deferred(_tokenize)
 
 from marin.scaling_laws.scaling_laws import ScalingLawConfig
+from marin.scaling_laws.scaling_laws import run_scaling_law_analysis as _run_scaling_law_analysis
 from marin.training.training import TrainLmOnPodConfig
+from marin.training.training import run_levanter_train_lm as _run_levanter_train_lm
+
+# Mark training functions as deferred at module level
+run_levanter_train_lm = deferred(_run_levanter_train_lm)
+run_scaling_law_analysis = deferred(_run_scaling_law_analysis)
 
 logger = logging.getLogger("ray")
 
@@ -167,7 +171,11 @@ def default_tokenize(
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
-    elif isinstance(resolved_dataset, str) and resolved_dataset.count("/") == 1 and not fsspec_utils.exists(resolved_dataset):
+    elif (
+        isinstance(resolved_dataset, str)
+        and resolved_dataset.count("/") == 1
+        and not fsspec_utils.exists(resolved_dataset)
+    ):
         config = HfTokenizeConfig(
             id=resolved_dataset,
             cache_path=output(),
@@ -208,7 +216,7 @@ def simulated_epoching_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
-) -> ExecutorStep:
+) -> StepRef:
     """
     Simulates the number of epochs seen in a full training run by sub-sampling individual datasets.
     Otherwise, operates the same as default_train.
@@ -248,6 +256,10 @@ def simulated_epoching_train(
     )
 
 
+@step(
+    name="checkpoints/{name}",
+    description="Train a language model with the given configuration.",
+)
 def default_train(
     name: str,
     tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
@@ -256,8 +268,7 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
-    override_output_path: str | None = None,
-) -> ExecutorStep:
+) -> StepRef:
     """
     Train a language model using the default configuration.
 
@@ -272,8 +283,6 @@ def default_train(
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
-
-    vocab_size = _get_vocab_size(pretraining_data)
 
     steps_per_export = train_config.steps_per_export
 
@@ -315,9 +324,6 @@ def default_train(
         per_device_eval_parallelism = -1
     else:
         per_device_eval_parallelism = train_config.per_device_eval_parallelism
-
-    schedule = BatchSchedule(unwrap_versioned_value(train_config.train_batch_size))
-    total_examples = schedule.global_data_offset_by_step(train_config.num_train_steps)
 
     checkpoint_path_to_load_from = train_config.initialize_from_checkpoint_path
     hf_checkpoint_path_to_load_from = train_config.initialize_from_hf
@@ -410,33 +416,13 @@ def default_train(
     # Create the pod config
     pod_config = train_config.resources
 
-    model_config_unwrapped = unwrap_versioned_value(model_config)
-
-    # Import here to avoid circular dependency
-    from marin.training.training import run_levanter_train_lm as _run_levanter_train_lm
-    run_levanter_train_lm = deferred(_run_levanter_train_lm)
-
-    @step(
-        name=os.path.join("checkpoints", name),
-        description=(
-            f"Train a {compute_num_parameters(model_config_unwrapped, vocab_size):,} parameter model for "
-            f"{train_config.num_train_steps} (steps) * "
-            f"{train_config.train_batch_size} (batch_size) * "
-            f"{train_length} (train_seq_len) "
-            f"= {total_examples * train_length} tokens."
-        ),
-        override_output_path=override_output_path,
-    )
-    def _train():
-        return run_levanter_train_lm(
-            TrainLmOnPodConfig(
-                train_config=inner_config,
-                resources=pod_config,
-                output_path=output(),
-            )
+    return run_levanter_train_lm(
+        TrainLmOnPodConfig(
+            train_config=inner_config,
+            resources=pod_config,
+            output_path=output(),
         )
-
-    return _train()
+    )
 
 
 def default_sft(
@@ -445,9 +431,9 @@ def default_sft(
     model_config: LlamaConfig,
     sft_config: SimpleSFTConfig,
     tags: Sequence[str] = (),
-) -> ExecutorStep:
+) -> StepRef:
     """
-    Creates an ExecutorStep for supervised fine-tuning of a language model.
+    Creates a step for supervised fine-tuning of a language model.
 
     This function provides a unified interface for both single-dataset SFT and mixture-based
     SFT with a simplified configuration approach.
@@ -462,7 +448,7 @@ def default_sft(
         tags: Additional tags for WandB logging. Default: ().
 
     Returns:
-        An ExecutorStep configured for supervised fine-tuning.
+        A StepRef for the supervised fine-tuning step.
     """
     # Set up common configurations
     if "sft" not in tags:
@@ -504,7 +490,6 @@ def default_sft(
     if sft_config.reinit_tokens:
         raise NotImplementedError("reinit_tokens is not supported by default_train")
 
-    # Create and return the ExecutorStep
     return default_train(
         name=name,
         tokenized=tokenized,
@@ -516,9 +501,8 @@ def default_sft(
     )
 
 
-def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
+def default_anneal(name: str, anneal_config: AnnealConfig) -> StepRef:
     """
-
     Runs an annealing training run. This is a kind of continued pre-training intended
     to replicate Llama 3-style data ablations (or XXX databricks microannealing)
 
@@ -526,10 +510,9 @@ def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
         name: The name of the training run. Will form the basis of the output path for the executor step.
               `checkpoints/` will be prepended to the name.
         anneal_config: Configuration for the annealing run.
+
     Returns:
-
-        An ExecutorStep configured for annealing.
-
+        A StepRef for the annealing step.
     """
     checkpoint_path = anneal_config.initialize_from_checkpoint_path
     imputed_checkpoint_step = _impute_checkpoint_step(checkpoint_path)
@@ -648,14 +631,29 @@ def _get_tokenizer_for_train(tokenized: StepRef | ExecutorStep | LMMixtureDatase
     return tokenizer
 
 
+@step(
+    name="scaling_laws/{name}",
+    description="Predict model performance using scaling laws.",
+)
 def default_scaling_law_pred(
+    name: str,
     ladder_runs: Sequence[ExecutorStep | StepRef | str],
     pred_run: ExecutorStep | StepRef | str | None = None,
     task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb",),
     task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] | None = None,
-):
+) -> StepRef:
     """
     Given a suite of small models, predict the performance on a number of (N, D) values.
+
+    Args:
+        name: The name for this scaling law prediction step.
+        ladder_runs: Sequence of training runs (ExecutorStep, StepRef, or run ID strings) to use as the ladder.
+        pred_run: Optional target run to predict performance for.
+        task_losses: Loss metrics to track.
+        task_accuracies: Accuracy metrics or EvalTaskConfigs to track.
+
+    Returns:
+        A StepRef for the scaling law prediction step.
     """
     # get the executor steps or run IDs for the ladder runs and the pred run
     ladder_steps_or_ids = [get_executor_step(run) if not isinstance(run, str) else run for run in ladder_runs]
@@ -668,25 +666,12 @@ def default_scaling_law_pred(
     if task_accuracies is not None:
         task_accuracies = convert_to_task_metrics(task_accuracies, metric="acc")
 
-    if pred_run_or_id:
-        name = pred_run_or_id if isinstance(pred_run_or_id, str) else pred_run_or_id.name
-    else:
-        name = "projection"
-
-    # Import here to avoid circular dependency
-    from marin.scaling_laws.scaling_laws import run_scaling_law_analysis as _run_scaling_law_analysis
-    run_scaling_law_analysis_fn = deferred(_run_scaling_law_analysis)
-
-    @step(name=f"""scaling_laws/{name}""")
-    def _scaling_law():
-        return run_scaling_law_analysis_fn(
-            ScalingLawConfig(
-                name=name,
-                ladder_model_steps=ladder_steps_or_ids,
-                pred_model_step=pred_run_or_id,
-                task_losses=task_losses,
-                task_accuracies=task_accuracies,
-            )
+    return run_scaling_law_analysis(
+        ScalingLawConfig(
+            name=name,
+            ladder_model_steps=ladder_steps_or_ids,
+            pred_model_step=pred_run_or_id,
+            task_losses=task_losses,
+            task_accuracies=task_accuracies,
         )
-
-    return _scaling_law()
+    )

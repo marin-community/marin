@@ -25,14 +25,13 @@ uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
 import dataclasses
 
 import draccus
-from marin.execution.executor import THIS_OUTPUT_PATH
 from zephyr import Backend, Dataset, load_jsonl
 
 
 @dataclasses.dataclass
 class ConversationToDolmaConfig:
     input_path: str
-    output_path: str = THIS_OUTPUT_PATH
+    output_path: str
 
 
 def transform_conversation_to_dolma(row: dict):

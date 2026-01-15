@@ -26,7 +26,6 @@ from marin.execution import (
     ExecutorMainConfig,
     ExecutorStep,
     StepContext,
-    StepRef,
     executor_main,
     step,
     versioned,

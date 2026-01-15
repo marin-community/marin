@@ -23,33 +23,11 @@ from experiments.pretraining_datasets import DOLMA_OLMO_MIXTURE_WEIGHTS, tokeniz
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
+from marin.execution import step
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 EXPERIMENT_TAG = ["442_dolma"]
-
-dolma_llama3_tokenized = lm_mixture_data_config(
-    components=tokenize_dolma(),
-    weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
-    permutation_type="linear",
-)
-
-dolma_1_4b = default_train(
-    name="dolma-1.4b",
-    tokenized=dolma_llama3_tokenized,
-    model_config=llama_1_4b,
-    train_config=llama_1_4b_train_config,
-    tags=EXPERIMENT_TAG,
-)
-
-## olmo replications
-
-# (neox is close enough to olmo tokenizer)
-dolma_neox_tokenized = lm_mixture_data_config(
-    components=tokenize_dolma(tokenizer="EleutherAI/gpt-neox-20b"),
-    weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
-    permutation_type="linear",
-)
 
 # https://arxiv.org/pdf/2402.00838 page 3 (Table 1
 olmoish_1b_config = LlamaConfig(
@@ -73,14 +51,39 @@ olmoish_1b_train_config = SimpleTrainConfig(
     num_train_steps=500000,  # 2048 * 2048 * 500000 = 2.1T tokens
 )
 
-olmoish_1b = default_train(
-    name="olmoish-1b",
-    tokenized=dolma_neox_tokenized,
-    model_config=olmoish_1b_config,
-    train_config=olmoish_1b_train_config,
-    tags=[*EXPERIMENT_TAG, "olmoish", "1b"],
-)
+
+@step(name="dolma/exp442/all")
+def run_dolma_experiments():
+    """Entry point for Dolma/OLMo training experiments."""
+    dolma_llama3_tokenized = lm_mixture_data_config(
+        components=tokenize_dolma(),
+        weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
+        permutation_type="linear",
+    )
+
+    default_train(
+        name="dolma-1.4b",
+        tokenized=dolma_llama3_tokenized,
+        model_config=llama_1_4b,
+        train_config=llama_1_4b_train_config,
+        tags=EXPERIMENT_TAG,
+    )
+
+    # (neox is close enough to olmo tokenizer)
+    dolma_neox_tokenized = lm_mixture_data_config(
+        components=tokenize_dolma(tokenizer="EleutherAI/gpt-neox-20b"),
+        weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
+        permutation_type="linear",
+    )
+
+    default_train(
+        name="olmoish-1b",
+        tokenized=dolma_neox_tokenized,
+        model_config=olmoish_1b_config,
+        train_config=olmoish_1b_train_config,
+        tags=[*EXPERIMENT_TAG, "olmoish", "1b"],
+    )
 
 
 if __name__ == "__main__":
-    executor_main(steps=[olmoish_1b, dolma_1_4b])
+    executor_main(steps=[run_dolma_experiments()])

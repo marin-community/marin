@@ -29,7 +29,7 @@ from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from levanter.infra.cli_helpers import load_config
-from marin.execution import step, deferred, output, ExecutorStep, executor_main, StepRef
+from marin.execution import step, deferred, ExecutorStep, executor_main, StepRef
 from marin.processing.tokenize import lm_data_config, lm_mixture_data_config
 from marin.speedrun.speedrun import Author, SpeedrunConfig, SpeedrunResultsConfig, speedrun_results as _speedrun_results
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
@@ -136,13 +136,15 @@ def _results_step_impl(
     config: SpeedrunConfig,
     train_step: ExecutorStep,
 ) -> ExecutorStep:
-    return speedrun_results(SpeedrunResultsConfig(
-        wandb_run_id=wandb_run_id,
-        wandb_entity=wandb_entity,
-        wandb_project=wandb_project,
-        speedrun_config=config,
-        output_path=train_step / "speedrun_results.json",
-    ))
+    return speedrun_results(
+        SpeedrunResultsConfig(
+            wandb_run_id=wandb_run_id,
+            wandb_entity=wandb_entity,
+            wandb_project=wandb_project,
+            speedrun_config=config,
+            output_path=train_step / "speedrun_results.json",
+        )
+    )
 
 
 def nemotron_only_speedrun(
@@ -223,14 +225,17 @@ def nemotron_only_speedrun(
     else:
         wandb_run_id = train_step  # resolved to the actual output path by the executor
 
-    return [train_step, _results_step_impl(
-        name=name,
-        wandb_run_id=wandb_run_id,
-        wandb_entity=wandb_entity,
-        wandb_project=wandb_project,
-        config=config,
-        train_step=train_step,
-    )]
+    return [
+        train_step,
+        _results_step_impl(
+            name=name,
+            wandb_run_id=wandb_run_id,
+            wandb_entity=wandb_entity,
+            wandb_project=wandb_project,
+            config=config,
+            train_step=train_step,
+        ),
+    ]
 
 
 def make_speedrun_config(

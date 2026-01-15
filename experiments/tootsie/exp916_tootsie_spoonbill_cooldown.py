@@ -36,15 +36,15 @@ from experiments.posttrain.instruction_datasets import (
     tulu3_flat_llama_tokenized_as_validation,
 )
 from experiments.tootsie.exp600_tootsie import (
+    PHASE3_CHECKPOINT_PATH,
     PHASE_3_END,
     PHASE_3_START,
     cooldown_mixture_weights_v1,
-    llama_8b_tootsie_phase3,
     llama_8b_train_config_phase3,
     phase_3_tokenized,
 )
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution import StepRef, executor_main, step
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 # 3072 * 4096 * 10000 is 125B tokens
@@ -59,7 +59,7 @@ tootsie_8b_hypnotic_spoonbill_train = dataclasses.replace(
     num_train_steps=COOLDOWN_END,
     min_lr_ratio=2.75e-5 / 1.7e-4,
     decay=COOLDOWN_LEN,
-    initialize_from_checkpoint_path=llama_8b_tootsie_phase3 / "checkpoints/step-819924",
+    initialize_from_checkpoint_path=f"{PHASE3_CHECKPOINT_PATH}/checkpoints/step-819924",
     reset_data_loader_on_init=False,
     per_device_eval_parallelism=16,
     allow_partial_checkpoint=False,
@@ -95,19 +95,8 @@ spoonbill_mixture = lm_varying_mixture_data_config(
 )
 
 
-tootsie_8b_hypnotic_spoonbill = dataclasses.replace(
-    default_train(
-        name="tootsie-8b-hypnotic-spoonbill",
-        tokenized=spoonbill_mixture,
-        model_config=llama_8b,
-        train_config=tootsie_8b_hypnotic_spoonbill_train,
-        use_default_validation=True,
-        tags=["llama", "8b", "ema", "exp916", "tootsie"],
-        # HF is having trouble today so skipping this.
-        eval_harness_tasks=[],
-    ),
-    override_output_path="checkpoints/tootsie-8b-hypnotic-spoonbill-2",
-)
+HYPNOTIC_SPOONBILL_PATH = "checkpoints/tootsie-8b-hypnotic-spoonbill-2"
+tootsie_8b_hypnotic_spoonbill = StepRef(HYPNOTIC_SPOONBILL_PATH)
 
 norm_tracking_spoonbill_train = dataclasses.replace(
     tootsie_8b_hypnotic_spoonbill_train,
@@ -119,19 +108,8 @@ norm_tracking_spoonbill_train = dataclasses.replace(
 )
 
 
-norm_tootsie_8b_hypnotic_spoonbill = dataclasses.replace(
-    default_train(
-        name="tootsie-8b-hypnotic-spoonbill-norms-2",
-        tokenized=spoonbill_mixture,
-        model_config=llama_8b,
-        train_config=norm_tracking_spoonbill_train,
-        use_default_validation=True,
-        tags=["llama", "8b", "ema", "exp916", "tootsie"],
-        # HF is having trouble today so skipping this.
-        eval_harness_tasks=[],
-    ),
-    override_output_path="checkpoints/tootsie-8b-hypnotic-spoonbill-norms-2",
-)
+HYPNOTIC_SPOONBILL_NORMS_PATH = "checkpoints/tootsie-8b-hypnotic-spoonbill-norms-2"
+norm_tootsie_8b_hypnotic_spoonbill = StepRef(HYPNOTIC_SPOONBILL_NORMS_PATH)
 
 
 llama_8b_fp32_attn = dataclasses.replace(llama_8b, upcast_attn=True)
@@ -148,19 +126,8 @@ tootsie_8b_focused_spoonbill_train = dataclasses.replace(
     ),
 )
 
-norm_tootsie_8b_focused_spoonbill_fp32_attention = dataclasses.replace(
-    default_train(
-        name="tootsie-8b-focused-spoonbill-fp32",
-        tokenized=spoonbill_mixture,
-        model_config=llama_8b_fp32_attn,
-        train_config=tootsie_8b_focused_spoonbill_train,
-        use_default_validation=True,
-        tags=["llama", "8b", "ema", "exp916", "tootsie"],
-        # HF is having trouble today so skipping this.
-        eval_harness_tasks=[],
-    ),
-    override_output_path="checkpoints/tootsie-8b-focused-spoonbill_fp32",
-)
+FOCUSED_SPOONBILL_FP32_PATH = "checkpoints/tootsie-8b-focused-spoonbill_fp32"
+norm_tootsie_8b_focused_spoonbill_fp32_attention = StepRef(FOCUSED_SPOONBILL_FP32_PATH)
 
 
 tootsie_8b_focused_spoonbill_train_zloss = dataclasses.replace(
@@ -178,19 +145,8 @@ tootsie_8b_focused_spoonbill_train_zloss = dataclasses.replace(
     steps_per_hf_export=5000,
 )
 
-norm_tootsie_8b_focused_spoonbill_zloss = dataclasses.replace(
-    default_train(
-        name="tootsie-8b-focused-spoonbill-zloss",
-        tokenized=spoonbill_mixture,
-        model_config=llama_8b_fp32_attn,
-        train_config=tootsie_8b_focused_spoonbill_train_zloss,
-        use_default_validation=True,
-        tags=["llama", "8b", "ema", "exp916", "tootsie"],
-        # HF is having trouble today so skipping this.
-        eval_harness_tasks=[],
-    ),
-    override_output_path="checkpoints/tootsie-8b-focused-spoonbill-zloss",
-)
+FOCUSED_SPOONBILL_ZLOSS_PATH = "checkpoints/tootsie-8b-focused-spoonbill-zloss"
+norm_tootsie_8b_focused_spoonbill_zloss = StepRef(FOCUSED_SPOONBILL_ZLOSS_PATH)
 
 EXTRA_STEPS = 10000
 DEEPER_END = COOLDOWN_END + EXTRA_STEPS
@@ -198,7 +154,7 @@ DEEPER_END = COOLDOWN_END + EXTRA_STEPS
 
 tootsie_8b_deeper_spoonbill_train = dataclasses.replace(
     norm_tracking_spoonbill_train,
-    initialize_from_checkpoint_path=norm_tootsie_8b_focused_spoonbill_zloss / "checkpoints/step-829947",
+    initialize_from_checkpoint_path=f"{FOCUSED_SPOONBILL_ZLOSS_PATH}/checkpoints/step-829947",
     watch=WatchConfig(
         interval=10,
         # fp32 pushes the ram too high here
@@ -216,59 +172,114 @@ tootsie_8b_deeper_spoonbill_train = dataclasses.replace(
 )
 
 
-tootsie_8b_deeper_spoonbill = dataclasses.replace(
-    default_train(
-        name="tootsie-8b-deeper-spoonbill-2",
-        tokenized=spoonbill_mixture,
-        model_config=llama_8b_fp32_attn,
-        train_config=tootsie_8b_deeper_spoonbill_train,
-        use_default_validation=True,
-        tags=["llama", "8b", "ema", "exp916", "tootsie"],
-        # HF is having trouble today so skipping this.
-        eval_harness_tasks=[],
-    ),
-    override_output_path="checkpoints/tootsie-8b-deeper-spoonbill-2",
-)
+DEEPER_SPOONBILL_PATH = "checkpoints/tootsie-8b-deeper-spoonbill-2"
+tootsie_8b_deeper_spoonbill = StepRef(DEEPER_SPOONBILL_PATH)
 
 # do some sfts
 
 spoonbill_zloss_tulu3_sft_config = dataclasses.replace(
     tulu_sft_config,
-    model_name_or_path=norm_tootsie_8b_focused_spoonbill_zloss / "hf/step-829999/",
+    model_name_or_path=f"{FOCUSED_SPOONBILL_ZLOSS_PATH}/hf/step-829999/",
 )
 
 
-sft_tulu3_spoonbill_zloss = default_sft(
-    name="sft/tulu3_tootsie_sft_spoonbill_zloss",
-    tokenized=tulu3_llama_data_old,
-    model_config=llama_8b_fp32_attn,
-    sft_config=spoonbill_zloss_tulu3_sft_config,
-    tags=["llama", "8b", "exp916", "tootsie", "sft", "spoonbill"],
-).with_output_path("checkpoints/sft/tulu3_tootsie_sft_spoonbill_zloss")
+SFT_TULU3_SPOONBILL_ZLOSS_PATH = "checkpoints/sft/tulu3_tootsie_sft_spoonbill_zloss"
+sft_tulu3_spoonbill_zloss = StepRef(SFT_TULU3_SPOONBILL_ZLOSS_PATH)
+
+SFT_TULU3_DEEPER_SPOONBILL_PATH = "checkpoints/sft/tulu3_tootsie_sft_deeper_spoonbill_zloss"
+sft_tulu3_deeper_spoonbill = StepRef(SFT_TULU3_DEEPER_SPOONBILL_PATH)
 
 
-sft_tulu3_deeper_spoonbill = default_sft(
-    name="sft/tulu3_tootsie_deeper_spoonbill",
-    tokenized=tulu3_llama_data_old,
-    model_config=llama_8b_fp32_attn,
-    sft_config=dataclasses.replace(
-        spoonbill_zloss_tulu3_sft_config,
-        model_name_or_path=tootsie_8b_deeper_spoonbill / "hf/step-839999/",
-    ),
-    tags=["llama", "8b", "exp916", "tootsie", "sft", "spoonbill"],
-).with_output_path("checkpoints/sft/tulu3_tootsie_sft_deeper_spoonbill_zloss")
+@step(name="tootsie/exp916_spoonbill_cooldown/all")
+def run_spoonbill_cooldown():
+    """Entry point for Spoonbill cooldown experiments."""
+    dataclasses.replace(
+        default_train(
+            name="tootsie-8b-hypnotic-spoonbill",
+            tokenized=spoonbill_mixture,
+            model_config=llama_8b,
+            train_config=tootsie_8b_hypnotic_spoonbill_train,
+            use_default_validation=True,
+            tags=["llama", "8b", "ema", "exp916", "tootsie"],
+            eval_harness_tasks=[],
+        ),
+        override_output_path=HYPNOTIC_SPOONBILL_PATH,
+    )
+
+    dataclasses.replace(
+        default_train(
+            name="tootsie-8b-hypnotic-spoonbill-norms-2",
+            tokenized=spoonbill_mixture,
+            model_config=llama_8b,
+            train_config=norm_tracking_spoonbill_train,
+            use_default_validation=True,
+            tags=["llama", "8b", "ema", "exp916", "tootsie"],
+            eval_harness_tasks=[],
+        ),
+        override_output_path=HYPNOTIC_SPOONBILL_NORMS_PATH,
+    )
+
+    dataclasses.replace(
+        default_train(
+            name="tootsie-8b-focused-spoonbill-fp32",
+            tokenized=spoonbill_mixture,
+            model_config=llama_8b_fp32_attn,
+            train_config=tootsie_8b_focused_spoonbill_train,
+            use_default_validation=True,
+            tags=["llama", "8b", "ema", "exp916", "tootsie"],
+            eval_harness_tasks=[],
+        ),
+        override_output_path=FOCUSED_SPOONBILL_FP32_PATH,
+    )
+
+    dataclasses.replace(
+        default_train(
+            name="tootsie-8b-focused-spoonbill-zloss",
+            tokenized=spoonbill_mixture,
+            model_config=llama_8b_fp32_attn,
+            train_config=tootsie_8b_focused_spoonbill_train_zloss,
+            use_default_validation=True,
+            tags=["llama", "8b", "ema", "exp916", "tootsie"],
+            eval_harness_tasks=[],
+        ),
+        override_output_path=FOCUSED_SPOONBILL_ZLOSS_PATH,
+    )
+
+    dataclasses.replace(
+        default_train(
+            name="tootsie-8b-deeper-spoonbill-2",
+            tokenized=spoonbill_mixture,
+            model_config=llama_8b_fp32_attn,
+            train_config=tootsie_8b_deeper_spoonbill_train,
+            use_default_validation=True,
+            tags=["llama", "8b", "ema", "exp916", "tootsie"],
+            eval_harness_tasks=[],
+        ),
+        override_output_path=DEEPER_SPOONBILL_PATH,
+    )
+
+    default_sft(
+        name="sft/tulu3_tootsie_sft_spoonbill_zloss",
+        tokenized=tulu3_llama_data_old,
+        model_config=llama_8b_fp32_attn,
+        sft_config=spoonbill_zloss_tulu3_sft_config,
+        tags=["llama", "8b", "exp916", "tootsie", "sft", "spoonbill"],
+    ).with_output_path(SFT_TULU3_SPOONBILL_ZLOSS_PATH)
+
+    default_sft(
+        name="sft/tulu3_tootsie_deeper_spoonbill",
+        tokenized=tulu3_llama_data_old,
+        model_config=llama_8b_fp32_attn,
+        sft_config=dataclasses.replace(
+            spoonbill_zloss_tulu3_sft_config,
+            model_name_or_path=f"{DEEPER_SPOONBILL_PATH}/hf/step-839999/",
+        ),
+        tags=["llama", "8b", "exp916", "tootsie", "sft", "spoonbill"],
+    ).with_output_path(SFT_TULU3_DEEPER_SPOONBILL_PATH)
 
 
 if __name__ == "__main__":
     executor_main(
-        [
-            tootsie_8b_hypnotic_spoonbill,
-            norm_tootsie_8b_hypnotic_spoonbill,
-            norm_tootsie_8b_focused_spoonbill_fp32_attention,
-            norm_tootsie_8b_focused_spoonbill_zloss,
-            tootsie_8b_deeper_spoonbill,
-            sft_tulu3_spoonbill_zloss,
-            sft_tulu3_deeper_spoonbill,
-        ],
+        steps=[run_spoonbill_cooldown()],
         description="Cooldown run for tootsie-8b model with some flan and tulu",
     )

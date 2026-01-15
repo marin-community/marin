@@ -30,7 +30,7 @@ upload_config = ModelUploadConfig(
     gcs_directories=["gs://bucket/checkpoints/model-name/hf/"]
 )
 upload_step = upload_model_to_hf_step(upload_config)
-executor_main([upload_step])
+executor_main(steps=[upload_step], ...)
 ```
 """
 
@@ -79,45 +79,43 @@ def upload_model_to_hf_step(model_config: ModelUploadConfig) -> StepRef:
     )
 
 
-# Predefined upload steps organized by region
-# EU West4 region uploads
-eu_west4_uploads = upload_model_to_hf_step(
-    ModelUploadConfig(
-        hf_repo_id="WillHeld/mystery-model",
-        gcs_directories=[
-            "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/hf/",
-        ],
+@step(name="tootsie/exp1063_upload_tootsie/all")
+def run_all_uploads():
+    """Entry point for uploading all model checkpoints to HuggingFace."""
+    # EU West4 region uploads
+    upload_model_to_hf_step(
+        ModelUploadConfig(
+            hf_repo_id="WillHeld/mystery-model",
+            gcs_directories=[
+                "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/hf/",
+            ],
+        )
     )
-)
 
-# US Central2 region uploads
-us_central2_uploads = upload_model_to_hf_step(
-    ModelUploadConfig(
-        hf_repo_id="WillHeld/mystery-model",
-        gcs_directories=[
-            "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/hf/",
-            "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase3/hf/",
-            "gs://marin-us-central2/checkpoints/tootsie-8b-soft-raccoon-3/hf/",
-            "gs://marin-us-central2/checkpoints/llama-8b-tootsie-adept-phoenix/hf/",
-            "gs://marin-us-central2/checkpoints/tootsie-8b-sensible-starling/hf/",
-        ],
+    # US Central2 region uploads
+    upload_model_to_hf_step(
+        ModelUploadConfig(
+            hf_repo_id="WillHeld/mystery-model",
+            gcs_directories=[
+                "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase2/hf/",
+                "gs://marin-us-central2/checkpoints/llama-8b-tootsie-phase3/hf/",
+                "gs://marin-us-central2/checkpoints/tootsie-8b-soft-raccoon-3/hf/",
+                "gs://marin-us-central2/checkpoints/llama-8b-tootsie-adept-phoenix/hf/",
+                "gs://marin-us-central2/checkpoints/tootsie-8b-sensible-starling/hf/",
+            ],
+        )
     )
-)
 
-# US Central1 region uploads
-us_central1_uploads = upload_model_to_hf_step(
-    ModelUploadConfig(
-        hf_repo_id="WillHeld/mystery-model",
-        gcs_directories=[
-            "gs://marin-us-central1/checkpoints/tootsie-8b-deeper-starling/hf/",
-        ],
+    # US Central1 region uploads
+    upload_model_to_hf_step(
+        ModelUploadConfig(
+            hf_repo_id="WillHeld/mystery-model",
+            gcs_directories=[
+                "gs://marin-us-central1/checkpoints/tootsie-8b-deeper-starling/hf/",
+            ],
+        )
     )
-)
 
 
 if __name__ == "__main__":
-    # Default to running region-based upload steps when script is executed directly
-    executor_main(
-        [eu_west4_uploads, us_central2_uploads, us_central1_uploads],
-        description="Upload model checkpoints to Hugging Face by region",
-    )
+    executor_main(steps=[run_all_uploads()], description="Upload model checkpoints to Hugging Face by region")

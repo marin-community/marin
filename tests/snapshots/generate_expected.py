@@ -120,7 +120,7 @@ DATASETS = {
 def regenerate_dataset(name: str, input_ext: str, transform_fn) -> None:
     """Regenerate expected outputs for a dataset."""
     input_dir = os.path.join(MY_DIR, name.split("/")[0], "inputs")
-    expected_dir = os.path.join(MY_DIR, name, "expected") if "/" in name else os.path.join(MY_DIR, name, "expected")
+    expected_dir = os.path.join(MY_DIR, name, "expected")
 
     # Handle web/resiliparse special case
     if name == "web/resiliparse":

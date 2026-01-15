@@ -117,9 +117,7 @@ def extract_model_name_and_path(step: ExecutorStep | StepRef | str) -> tuple[str
         else:
             # Reference to a step
             model_step_path = (
-                step
-                if step._subpath is not None
-                else step._step / ("hf" if "gcsfuse" not in step._step.name else "")
+                step if step._subpath is not None else step._step / ("hf" if "gcsfuse" not in step._step.name else "")
             )
             name = step._step.name
     elif isinstance(step, str):

@@ -16,6 +16,7 @@
 Environment Wrapper for the Environments Hub by Prime-Intellect, which contains a collection of environments.
 https://app.primeintellect.ai/dashboard/environments?ex_sort=most_stars
 """
+
 import logging
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 

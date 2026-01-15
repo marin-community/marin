@@ -30,7 +30,7 @@ from levanter.models.llama import LlamaConfig
 
 from experiments.defaults import SimpleTrainConfig, default_train
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
-from marin.execution.executor import executor_main
+from marin.execution import executor_main, step
 
 # Define the LlamaConfig for a 1.4B parameter model
 # This follows the 1B-1x competition scale in the DCLM benchmark
@@ -68,18 +68,24 @@ training_config = SimpleTrainConfig(
     z_loss_weight=1e-4,  # Stabilization technique to prevent extreme logits
 )
 
-# Create the training pipeline for the DCLM mixture model
-dclm_mixture_model = default_train(
-    name="dclm_1b_1x_how_to",
-    tokenized=dclm_mixture_config_llama3,
-    model_config=llama_1_4b_dclm,
-    train_config=training_config,
-    tags=["HOWTOS", "DCLM_1B_1X"],  # Tags for experiment tracking
-)
+
+@step(name="tutorials/exp1077_reproduce_dclm_1b1x/all")
+def run_experiment():
+    """Entry point for the experiment."""
+    # Create the training pipeline for the DCLM mixture model
+    dclm_mixture_model = default_train(
+        name="dclm_1b_1x_how_to",
+        tokenized=dclm_mixture_config_llama3,
+        model_config=llama_1_4b_dclm,
+        train_config=training_config,
+        tags=["HOWTOS", "DCLM_1B_1X"],  # Tags for experiment tracking
+    )
+    return dclm_mixture_model
+
 
 # Main execution block
 if __name__ == "__main__":
     executor_main(
-        steps=[dclm_mixture_model],
+        steps=[run_experiment()],
         description="A How-To Which Reproduces the DCLM 1B/1X Baseline for the competition pool.",
     )

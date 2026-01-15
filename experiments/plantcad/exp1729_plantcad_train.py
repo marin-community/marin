@@ -20,7 +20,7 @@ import jax
 import logging
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main, versioned
+from marin.execution.executor import executor_main, step, versioned
 from levanter.models.llama import LlamaConfig
 from experiments.defaults import default_train, default_tokenize
 from experiments.simple_train_config import SimpleTrainConfig
@@ -62,19 +62,6 @@ model_config = LlamaConfig(
 )
 
 # -----------------------------------------------------------------------------
-# Dataset configuration
-# -----------------------------------------------------------------------------
-# Load dataset containing DNA sequences of form `[ACGTN]+`; see:
-# https://huggingface.co/datasets/kuleshov-group/Angiosperm_16_genomes
-data_tokenized = default_tokenize(
-    name="angiosperm_16_genomes",
-    dataset=versioned(dataset_path),
-    tokenizer=tokenizer_path,
-    # DNA sequences are in `seq`, not `text`
-    format=TextLmDatasetFormat(text_key="seq"),
-)
-
-# -----------------------------------------------------------------------------
 # Training configuration
 # -----------------------------------------------------------------------------
 train_config = SimpleTrainConfig(
@@ -94,21 +81,42 @@ train_config = SimpleTrainConfig(
     steps_per_export=steps_per_export,
     data_seed=42,
 )
-training_step = default_train(
-    name=f"plantcad-train-r{run_number:02d}",
-    tokenized=data_tokenized,
-    model_config=model_config,
-    train_config=train_config,
-    tags=["dna", "plantcad", "training"],
-    eval_harness_tasks=[],
-    use_default_validation=False,
-)
+
+
+def tokenize_angiosperm_genomes():
+    """Tokenize Angiosperm genome dataset for DNA sequence modeling."""
+    return default_tokenize(
+        name="angiosperm_16_genomes",
+        dataset=versioned(dataset_path),
+        tokenizer=tokenizer_path,
+        # DNA sequences are in `seq`, not `text`
+        format=TextLmDatasetFormat(text_key="seq"),
+    )
+
+
+@step(name="plantcad/train/all")
+def run_plantcad_training():
+    """Entry point for PlantCAD training experiment."""
+    data_tokenized = tokenize_angiosperm_genomes()
+
+    training_step = default_train(
+        name=f"plantcad-train-r{run_number:02d}",
+        tokenized=data_tokenized,
+        model_config=model_config,
+        train_config=train_config,
+        tags=["dna", "plantcad", "training"],
+        eval_harness_tasks=[],
+        use_default_validation=False,
+    )
+
+    return training_step
+
 
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    logger.info("🧬 PlantCAD Training Experiment")
+    logger.info("PlantCAD Training Experiment")
     logger.info("=" * 64)
     logger.info(f"Model:              {model_config}")
     logger.info(f"Learning rate:      {learning_rate}")
@@ -120,4 +128,4 @@ if __name__ == "__main__":
     logger.info(f"Steps per eval:     {steps_per_eval:,}")
     logger.info("=" * 64)
 
-    executor_main(steps=[training_step])
+    executor_main(steps=[run_plantcad_training()])

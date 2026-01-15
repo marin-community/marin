@@ -142,9 +142,7 @@ class MixtralConfig(MistralConfig):
             self.num_experts_per_tok <= self.n_routed_experts
         ), f"num_experts_per_tok={self.num_experts_per_tok} greater than by n_routed_experts={self.n_routed_experts}."
 
-    def hf_checkpoint_converter(
-        self, ref_checkpoint: str | None = None
-    ) -> HFCheckpointConverter["MixtralConfig"]:  # type: ignore
+    def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["MixtralConfig"]:  # type: ignore
         return HFCheckpointConverter(
             self.__class__,
             reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,

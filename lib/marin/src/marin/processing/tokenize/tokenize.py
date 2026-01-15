@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """
 Tokenize datasets using zephyr pipeline and write to Levanter cache format.
 
@@ -25,7 +27,7 @@ import logging
 import os
 import re
 from collections.abc import Iterator, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import draccus
 import transformers
@@ -43,10 +45,11 @@ from levanter.store.cache import consolidate_shard_caches
 from zephyr import Backend, Dataset
 from zephyr.readers import load_file
 
+from marin.execution.step_ref import StepRef
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
 
 if TYPE_CHECKING:
-    from marin.execution.executor import ExecutorStep, StepRef
+    from marin.execution.executor import ExecutorStep
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +67,7 @@ class TokenizeConfigBase(abc.ABC):
 
     @abc.abstractmethod
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | "StepRef" | "ExecutorStep" | None, *, include_raw_paths=True
+        self, actual_output_path: str | StepRef | ExecutorStep | None, *, include_raw_paths=True
     ) -> LMDatasetSourceConfig:
         """
         Create a Levanter dataset source config from this config and the actual output path.
@@ -99,7 +102,7 @@ class TokenizeConfig(TokenizeConfigBase):
     """
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | "StepRef" | "ExecutorStep" | None, *, include_raw_paths=True
+        self, actual_output_path: str | StepRef | ExecutorStep | None, *, include_raw_paths=True
     ) -> LMDatasetSourceConfig:
         """
         For use in Levanter training runs with mixtures of datasets.
@@ -157,7 +160,7 @@ class HfTokenizeConfig(TokenizeConfigBase):
     """Number of samples to tokenize. If None, tokenize all samples."""
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | "StepRef" | "ExecutorStep" | None, *, include_raw_paths=True
+        self, actual_output_path: str | StepRef | ExecutorStep | None, *, include_raw_paths=True
     ) -> LMDatasetSourceConfig:
         return HfDatasetSourceConfig(
             id=self.id,
@@ -168,18 +171,20 @@ class HfTokenizeConfig(TokenizeConfigBase):
         )
 
 
-def _validate_train_urls(train_paths: list[str], warn):
+def _validate_train_urls(train_paths: list[str | StepRef], warn):
     """
     Validates the training data URLs to ensure they do not contain forbidden patterns.
     Raises a ValueError if a forbidden pattern is found.
     """
     for url in train_paths:
+        # Extract string path from StepRef if needed
+        url_str = url._subpath if isinstance(url, StepRef) else url
+        if url_str is None:
+            continue
         # \b doesn't work because of underscores
-        if re.search(r"[^a-zA-Z]test[^a-zA-Z]", url) or re.search(r"validation", url):
+        if re.search(r"[^a-zA-Z]test[^a-zA-Z]", url_str) or re.search(r"validation", url_str):
             if warn:
-                logger.warning(
-                    f"Warning: Training data URL '{url}' contains a forbidden pattern "
-                )
+                logger.warning(f"Warning: Training data URL '{url}' contains a forbidden pattern ")
             else:
                 raise ValueError(
                     f"Error: Training data URL '{url}' contains a forbidden pattern "

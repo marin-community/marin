@@ -19,7 +19,6 @@ from marin.core.runtime import TaskConfig
 from marin.execution import (
     StepRef,
     deferred,
-    output,
     output_subpath,
     step,
     versioned,

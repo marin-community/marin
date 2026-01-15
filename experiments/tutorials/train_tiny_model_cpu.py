@@ -25,7 +25,8 @@ For GPU training, see train_tiny_model_gpu.py
 
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main, versioned
+from marin.execution import step, versioned
+from marin.execution.executor import executor_main
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_nano
@@ -34,17 +35,6 @@ from experiments.simple_train_config import SimpleTrainConfig
 
 # 1. Choose a dataset
 tinystories_hf_id = "roneneldan/TinyStories"
-
-# 2. Tokenize the dataset with sampling
-# For this tutorial, we limit to 1000 documents per shard
-tinystories_tokenized = default_tokenize(
-    name=tinystories_hf_id,
-    dataset=tinystories_hf_id,
-    tokenizer=marin_tokenizer,
-    format=TextLmDatasetFormat(),
-    sample_count=1000,
-)
-
 
 # 3. Define training configuration
 nano_train_config = SimpleTrainConfig(
@@ -59,25 +49,46 @@ nano_train_config = SimpleTrainConfig(
     max_eval_batches=4,
 )
 
-# 4. Train the model
-nano_tinystories_model = default_train(
-    name="marin-nano-tinystories",
-    # Steps can depend on other steps: nano_tinystories_model depends on tinystories_tokenized
-    tokenized=tinystories_tokenized,
-    model_config=versioned(llama_nano),
-    train_config=nano_train_config,
-    # wandb tags
-    tags=["llama", "nano", "tinystories", "tutorial"],
-    # We can run many [eval_harness](https://github.com/EleutherAI/lm-evaluation-harness) tasks in the loop
-    # during training, but there's no point in running evals on such a tiny model
-    eval_harness_tasks=[],
-    # to keep tutorial fast, skip default validation sets
-    use_default_validation=False,
-)
+
+def tokenize_tinystories():
+    """Tokenize the TinyStories dataset with sampling."""
+    return default_tokenize(
+        name=tinystories_hf_id,
+        dataset=tinystories_hf_id,
+        tokenizer=marin_tokenizer,
+        format=TextLmDatasetFormat(),
+        sample_count=1000,
+    )
+
+
+@step(name="tutorials/train_tiny_model_cpu/all")
+def run_cpu_training():
+    """Entry point for CPU training tutorial."""
+    # 2. Tokenize the dataset with sampling
+    # For this tutorial, we limit to 1000 documents per shard
+    tinystories_tokenized = tokenize_tinystories()
+
+    # Train the model
+    nano_tinystories_model = default_train(
+        name="marin-nano-tinystories",
+        # Steps can depend on other steps: nano_tinystories_model depends on tinystories_tokenized
+        tokenized=tinystories_tokenized,
+        model_config=versioned(llama_nano),
+        train_config=nano_train_config,
+        # wandb tags
+        tags=["llama", "nano", "tinystories", "tutorial"],
+        # We can run many [eval_harness](https://github.com/EleutherAI/lm-evaluation-harness) tasks in the loop
+        # during training, but there's no point in running evals on such a tiny model
+        eval_harness_tasks=[],
+        # to keep tutorial fast, skip default validation sets
+        use_default_validation=False,
+    )
+
+    return nano_tinystories_model
+
 
 if __name__ == "__main__":
     executor_main(
-        steps=[
-            nano_tinystories_model,
-        ]
+        steps=[run_cpu_training()],
+        description="Train a tiny model on CPU using TinyStories dataset",
     )

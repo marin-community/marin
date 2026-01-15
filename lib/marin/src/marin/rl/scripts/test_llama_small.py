@@ -127,7 +127,6 @@ def llama_small_inference_server_config(output_dir: str) -> InferenceServerConfi
 
 
 def llama_small_training_worker_config(output_dir: str, run_id: str) -> TrainWorkerConfig:
-
     rollout_storage = RolloutStorageConfig(
         storage_type=StorageType.FILE,
         path=ROLLOUT_QUEUE_PATH,

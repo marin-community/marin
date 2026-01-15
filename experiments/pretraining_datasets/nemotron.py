@@ -27,12 +27,16 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 download_nemotron_cc = deferred(_download_nemotron_cc)
 tokenize = deferred(_tokenize)
 
+
 # Raw dataset download step
 @step(name="raw/nemotron-cc")
 def nemotron_cc_download():
-    return download_nemotron_cc(NemotronIngressConfig(
-        output_path=output(),
-    ))
+    return download_nemotron_cc(
+        NemotronIngressConfig(
+            output_path=output(),
+        )
+    )
+
 
 NEMOTRON_DATASETS = {
     "hq_actual": ["quality=high/kind=actual/**/*.jsonl.gz"],
@@ -77,12 +81,14 @@ def _get_nemotron_split_paths(split: str):
 @step(name="tokenized/nemotron_cc/{split}")
 def _tokenize_nemotron_split(split: str, paths: list[StepRef], tok: str) -> StepRef:
     """Tokenize a single Nemotron split."""
-    return tokenize(TokenizeConfig(
-        train_paths=paths,
-        validation_paths=versioned([]),
-        cache_path=output(),
-        tokenizer=versioned(tok),
-    ))
+    return tokenize(
+        TokenizeConfig(
+            train_paths=paths,
+            validation_paths=versioned([]),
+            cache_path=output(),
+            tokenizer=versioned(tok),
+        )
+    )
 
 
 def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:

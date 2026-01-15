@@ -27,20 +27,24 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 download_hf = deferred(_download_hf)
 tokenize = deferred(_tokenize)
 
+
 # Raw dataset download step
 @step(name="raw/dolmino-mix-1124", override_output_path="raw/dolmino-mix-1124-157960")
 def dolmino_download():
-    return download_hf(DownloadConfig(
-        hf_dataset_id="allenai/dolmino-mix-1124",
-        revision="bb54cab",
-        gcs_output_path=output(),
-        wait_for_completion=True,
-    ))
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="allenai/dolmino-mix-1124",
+            revision="bb54cab",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
+    )
 
 
 def _get_dolmino_base_dir():
     """Get the base directory for dolmino dataset."""
     return dolmino_download() / "bb54cab" / "data"
+
 
 # The following dataset splits define file patterns for each split.
 DOLMINO_DATASETS = {
@@ -86,12 +90,14 @@ def _get_dolmino_split_paths(split: str):
 @step(name="tokenized/dolmino/{split}")
 def _tokenize_dolmino_split(split: str, paths: list[StepRef], tok: str) -> StepRef:
     """Tokenize a single Dolmino split."""
-    return tokenize(TokenizeConfig(
-        train_paths=paths,
-        validation_paths=versioned([]),
-        cache_path=output(),
-        tokenizer=versioned(tok),
-    ))
+    return tokenize(
+        TokenizeConfig(
+            train_paths=paths,
+            validation_paths=versioned([]),
+            cache_path=output(),
+            tokenizer=versioned(tok),
+        )
+    )
 
 
 def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
@@ -131,12 +137,14 @@ _all_dolmino_math_files = [
 @step(name="tokenized/dolmino/all_math")
 def _tokenize_dolmino_all_math(paths: list[StepRef], tok: str) -> StepRef:
     """Tokenize all math datasets combined."""
-    return tokenize(TokenizeConfig(
-        train_paths=paths,
-        validation_paths=versioned([]),
-        cache_path=output(),
-        tokenizer=versioned(tok),
-    ))
+    return tokenize(
+        TokenizeConfig(
+            train_paths=paths,
+            validation_paths=versioned([]),
+            cache_path=output(),
+            tokenizer=versioned(tok),
+        )
+    )
 
 
 def tokenize_dolmino_math(tokenizer: str | None = None) -> StepRef:
@@ -146,4 +154,6 @@ def tokenize_dolmino_math(tokenizer: str | None = None) -> StepRef:
 
         tokenizer = llama3_tokenizer
 
-    return _tokenize_dolmino_all_math(paths=_all_dolmino_math_files, tok=tokenizer).with_output_path("tokenized/dolmino/all_math-9d507c")
+    return _tokenize_dolmino_all_math(paths=_all_dolmino_math_files, tok=tokenizer).with_output_path(
+        "tokenized/dolmino/all_math-9d507c"
+    )

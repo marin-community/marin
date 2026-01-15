@@ -18,7 +18,7 @@ import random
 import re
 import tempfile
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from threading import Thread
 
 import pytest
@@ -289,6 +289,7 @@ def test_status_actor_multiple_steps_race_condition():
                 f.write("1")
 
         with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+
             @step(name="step", fn=fn)
             def the_step(ctx: StepContext):
                 return Config(output_path)
@@ -296,9 +297,7 @@ def test_status_actor_multiple_steps_race_condition():
             executor_refs = []
             for _ in range(10):
                 executor = create_executor(temp_dir)
-                thread = Thread(
-                    target=executor.run, args=([the_step()],)
-                )
+                thread = Thread(target=executor.run, args=([the_step()],))
                 thread.start()
                 executor_refs.append(thread)
 
@@ -330,6 +329,7 @@ def test_parallelism():
 
     bs = []
     for i in range(parallelism):
+
         @step(name=f"b{i}", fn=fn)
         def b(ctx: StepContext):
             return MyConfig(input_path="/", output_path=ctx.output, n=1, m=1)
@@ -367,17 +367,14 @@ def test_versioning():
 
         def get_output_path(a_input_path: str, a_n: int, a_m: int, name: str, b_n: int, b_m: int):
             """Make steps [a -> b] with the given arguments, and return the output_path of `b`."""
+
             @step(name="a", fn=fn)
             def a(ctx: StepContext):
-                return MyConfig(
-                    input_path=versioned(a_input_path), output_path=ctx.output, n=versioned(a_n), m=a_m
-                )
+                return MyConfig(input_path=versioned(a_input_path), output_path=ctx.output, n=versioned(a_n), m=a_m)
 
             @step(name="b", fn=fn)
             def b(ctx: StepContext):
-                return MyConfig(
-                    input_path=ctx.require(a()) / name, output_path=ctx.output, n=versioned(b_n), m=b_m
-                )
+                return MyConfig(input_path=ctx.require(a()) / name, output_path=ctx.output, n=versioned(b_n), m=b_m)
 
             executor = create_executor(temp_dir)
             executor.run(steps=[b()])
@@ -583,6 +580,7 @@ def test_parent_doesnt_run_on_skip_parent():
     Parent should not run if child is a skip-parent.
     """
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+
         @step(name="parent", fn=shouldnt_run_fn)
         def parent(ctx: StepContext):
             return DummyCfg(x=1, output_path=ctx.output)
@@ -600,6 +598,7 @@ def test_skippable_parent_will_run_if_asked():
     Parent should run if child is a skip-parent and we ask it to.
     """
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+
         @step(name="parent", fn=dummy_fn)
         def parent(ctx: StepContext):
             return DummyCfg(x=1, output_path=ctx.output)
@@ -620,6 +619,7 @@ def test_parent_will_run_if_some_child_is_not_skippable():
     Parent should run if child is a skip-parent and we ask it to.
     """
     with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+
         @step(name="parent", fn=dummy_fn)
         def parent(ctx: StepContext):
             return DummyCfg(x=1, output_path=ctx.output)

@@ -81,7 +81,6 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             from lm_eval.utils import simple_parse_args_string
 
             for eval_task in evals:
-
                 result_filepath = os.path.join(self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot")
 
                 # Create the output directory
@@ -134,7 +133,6 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             raise RuntimeError("lm-eval failed. Please check the logs for more information.") from e
 
         finally:
-
             # this is in the finally block so even in the case of exceptions we will
             # write what has been saved
             if is_remote_path(output_path):

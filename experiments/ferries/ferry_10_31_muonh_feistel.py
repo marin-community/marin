@@ -22,6 +22,7 @@ from levanter.optim import MuonHConfig
 from experiments.defaults import SimpleTrainConfig, default_train
 from experiments.qwen3 import qwen3_1_7b, qwen3_8b
 from fray.cluster import ResourceConfig
+from marin.execution import step
 from marin.execution.executor import executor_main
 
 from experiments.ferries.initial_ferry import (
@@ -89,28 +90,30 @@ base_mixture_8b = _base_build_varying_mixture_for_steps(
 )
 varying_mixture_8b = dataclasses.replace(base_mixture_8b, permutation_type="feistel")
 
-ferry_model_1b = default_train(
-    name="ferry_muonh_qwen3_1_7b_feistel",
-    tokenized=varying_mixture_1b,
-    model_config=qwen3_1_7b,
-    train_config=train_config_1b,
-    eval_harness_tasks=[],
-    override_output_path="checkpoints/ferry_muonh_qwen3_1_7b_feistel-b5c378",
-)
 
-ferry_model_8b = default_train(
-    name="ferry_muonh_qwen3_8b_feistel",
-    tokenized=varying_mixture_8b,
-    model_config=qwen3_8b,
-    train_config=train_config_8b,
-    eval_harness_tasks=[],
-    override_output_path="checkpoints/ferry_muonh_qwen3_8b_feistel-515e16",
-)
+@step(name="ferries/ferry_10_31_muonh_feistel/all")
+def run_ferry_muonh_feistel():
+    """Entry point for Ferry (Feistel + MuonH) experiments."""
+    default_train(
+        name="ferry_muonh_qwen3_1_7b_feistel",
+        tokenized=varying_mixture_1b,
+        model_config=qwen3_1_7b,
+        train_config=train_config_1b,
+        eval_harness_tasks=[],
+    ).with_output_path("checkpoints/ferry_muonh_qwen3_1_7b_feistel-b5c378")
+
+    default_train(
+        name="ferry_muonh_qwen3_8b_feistel",
+        tokenized=varying_mixture_8b,
+        model_config=qwen3_8b,
+        train_config=train_config_8b,
+        eval_harness_tasks=[],
+    ).with_output_path("checkpoints/ferry_muonh_qwen3_8b_feistel-515e16")
 
 
 if __name__ == "__main__":
     executor_main(
-        steps=[ferry_model_1b, ferry_model_8b],
+        steps=[run_ferry_muonh_feistel()],
         description=(
             "Ferry (Feistel + MuonH): PT on Nemotron+Code then cooldown to HQ mix, scaled from Tootsie schedules"
         ),

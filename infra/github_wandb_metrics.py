@@ -20,7 +20,6 @@ import wandb
 
 # Function to log weekly data and update the table
 def log_weekly_data(data, week_id, project_name, id_, table_key="Ray Restart Events"):
-
     try:
         table = wandb.use_artifact(f"run-{id_}-RayRestartEvents:latest").get("Ray Restart Events")
     except Exception:

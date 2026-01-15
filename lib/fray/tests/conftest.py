@@ -14,7 +14,6 @@
 
 """Pytest fixtures for fray tests."""
 
-
 import logging
 
 import pytest

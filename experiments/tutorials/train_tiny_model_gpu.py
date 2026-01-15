@@ -25,7 +25,8 @@ For CPU training, see train_tiny_model_cpu.py
 
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main, versioned
+from marin.execution import step, versioned
+from marin.execution.executor import executor_main
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_nano
@@ -34,16 +35,6 @@ from experiments.simple_train_config import SimpleTrainConfig
 
 # 1. Choose a dataset
 wikitext_hf_id = "dlwh/wikitext_2_detokenized"
-
-# For this tutorial, we limit to 1000 documents per shard
-wikitext_tokenized = default_tokenize(
-    name=wikitext_hf_id,
-    dataset=wikitext_hf_id,
-    tokenizer=marin_tokenizer,
-    format=TextLmDatasetFormat(),
-    sample_count=versioned(1000),
-)
-
 
 nano_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
@@ -54,23 +45,41 @@ nano_train_config = SimpleTrainConfig(
     weight_decay=0.1,
 )
 
-nano_wikitext_model = default_train(
-    name="llama-nano-wikitext",
-    # Steps can depend on other steps: nano_wikitext_model depends on wikitext_tokenized
-    tokenized=wikitext_tokenized,
-    model_config=llama_nano,
-    train_config=nano_train_config,
-    tags=["llama", "nano", "wikitext", "tutorial"],
-    # no point in running evals on such a tiny model
-    eval_harness_tasks=[],
-    use_default_validation=False,
-)
+
+def tokenize_wikitext():
+    """Tokenize the Wikitext-2 dataset with sampling."""
+    return default_tokenize(
+        name=wikitext_hf_id,
+        dataset=wikitext_hf_id,
+        tokenizer=marin_tokenizer,
+        format=TextLmDatasetFormat(),
+        sample_count=versioned(1000),
+    )
+
+
+@step(name="tutorials/train_tiny_model_gpu/all")
+def run_gpu_training():
+    """Entry point for GPU training tutorial."""
+    # For this tutorial, we limit to 1000 documents per shard
+    wikitext_tokenized = tokenize_wikitext()
+
+    nano_wikitext_model = default_train(
+        name="llama-nano-wikitext",
+        # Steps can depend on other steps: nano_wikitext_model depends on wikitext_tokenized
+        tokenized=wikitext_tokenized,
+        model_config=llama_nano,
+        train_config=nano_train_config,
+        tags=["llama", "nano", "wikitext", "tutorial"],
+        # no point in running evals on such a tiny model
+        eval_harness_tasks=[],
+        use_default_validation=False,
+    )
+
+    return nano_wikitext_model
 
 
 if __name__ == "__main__":
     executor_main(
-        steps=[
-            wikitext_tokenized,
-            nano_wikitext_model,
-        ]
+        steps=[run_gpu_training()],
+        description="Train a tiny model on GPU using Wikitext-2 dataset",
     )

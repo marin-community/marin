@@ -32,16 +32,18 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 download_hf = deferred(_download_hf)
 tokenize = deferred(_tokenize)
 
+
 # Raw dataset download step
 @step(name="raw/dolma", override_output_path="raw/dolma")
 def dolma_download():
-    return download_hf(DownloadConfig(
-        hf_dataset_id="allenai/dolma",
-        revision="7f48140",
-        gcs_output_path=output(),
-        wait_for_completion=True,
-    ))
-
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="allenai/dolma",
+            revision="7f48140",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
+    )
 
 
 # For dolma 1.7, we hardcode the path since it was added before versioning
@@ -114,12 +116,14 @@ DOLMA_LLAMA3_OVERRIDES = {
 @step(name="tokenized/dolma/{dataset}")
 def _tokenize_dolma_split(dataset: str, file_list: list[str], tok: str) -> StepRef:
     """Tokenize a single Dolma split."""
-    return tokenize(TokenizeConfig(
-        train_paths=[_DOLMA_V1_7_PATH + "/" + file for file in file_list],
-        validation_paths=versioned([]),
-        cache_path=output(),
-        tokenizer=versioned(tok),
-    ))
+    return tokenize(
+        TokenizeConfig(
+            train_paths=[_DOLMA_V1_7_PATH + "/" + file for file in file_list],
+            validation_paths=versioned([]),
+            cache_path=output(),
+            tokenizer=versioned(tok),
+        )
+    )
 
 
 def tokenize_dolma(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:

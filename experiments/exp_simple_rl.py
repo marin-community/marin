@@ -330,7 +330,7 @@ def main():
             tokens, _ = sample_completion(model, prompt_named, args.max_gen_tokens, subkey, temperature=0.7)
             completion = tokenizer.decode(tokens, skip_special_tokens=True)
             reward = compute_reward(tokens, expected_tokens)
-            print(f"  {i+1}. '{completion}' (reward={reward})")
+            print(f"  {i + 1}. '{completion}' (reward={reward})")
 
 
 if __name__ == "__main__":

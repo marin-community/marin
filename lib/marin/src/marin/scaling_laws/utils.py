@@ -440,11 +440,11 @@ def plot_actual_vs_predicted(
 
         def format_ticks(x, _):
             if x >= 1e12:
-                return f"{x/1e12:.1f}T"
+                return f"{x / 1e12:.1f}T"
             elif x >= 1e9:
-                return f"{x/1e9:.1f}B"
+                return f"{x / 1e9:.1f}B"
             else:
-                return f"{x/1e6:.1f}M"
+                return f"{x / 1e6:.1f}M"
 
         plt.gca().xaxis.set_major_formatter(plt.FuncFormatter(format_ticks))
 
@@ -469,11 +469,11 @@ def plot_scaling_projections(predicted: np.ndarray, points: list[ProjectionPoint
         mask = np.array([p.num_params == param for p in points])
         tokens = np.array([p.num_tokens for p in points])[mask]
         preds = predicted[mask]
-        plt.plot(tokens, preds, "o-", linewidth=2, label=f"{param/1e9:.1f}B params")
+        plt.plot(tokens, preds, "o-", linewidth=2, label=f"{param / 1e9:.1f}B params")
 
         # add annotations for each point
         for t, pred in zip(tokens, preds, strict=False):
-            token_str = f"{t/1e9:.1f}B" if t < 1e11 else f"{t/1e12:.1f}T"
+            token_str = f"{t / 1e9:.1f}B" if t < 1e11 else f"{t / 1e12:.1f}T"
             plt.annotate(f"{token_str}, {pred:.3f}", (t, pred), ha="center", va="bottom", fontsize=6)
 
     plt.xscale("log")

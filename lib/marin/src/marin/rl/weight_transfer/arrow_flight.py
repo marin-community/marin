@@ -218,7 +218,6 @@ class ArrowFlightCoordinator:
         self._server_info = None
 
     def update_server(self, weight_id: int, param_names: list[str], server_locations: list[tuple[str, int]]) -> None:
-
         # TODO(chris): how about when trainer dies? we should reset the server info.
         # Only accept if newer than current
         current_weight_id = self._server_info.weight_id if self._server_info is not None else None

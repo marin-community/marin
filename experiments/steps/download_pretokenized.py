@@ -12,14 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 """
 Step wrappers for downloading pretokenized caches from Hugging Face.
 
 This module provides step definitions that wrap the library functions in
 marin.processing.tokenize.download_pretokenized.
 """
-
-import os
 
 from levanter.data.text import LmDatasetFormatBase, TextLmDatasetFormat
 

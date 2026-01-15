@@ -37,7 +37,7 @@ from experiments.pretraining_datasets.dclm import (
     dclm_mixture_config_llama3_old,
 )
 from experiments.defaults import default_train
-from experiments.llama import llama_13b, llama_24b, llama_56b
+from experiments.llama import llama_13b, llama_24b
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from marin.execution import step
@@ -101,26 +101,6 @@ llama_22b_train_config = SimpleTrainConfig(
     lr_schedule="inv",
 )
 
-# We didn't know if we'd actually have this capacity for any length of time,
-# so they were initially just "testing" runs.
-llama_13b_tootsie_phase1 = default_train(
-    name="llama-13b-tootsie-dummy-testing",
-    tokenized=dclm_mixture_config_llama3_old,
-    model_config=llama_13b_old_rotary,
-    train_config=llama_13b_train_config,
-    tags=["llama", "13b", "wsd-s", "exp201", "tootsie"],
-    eval_harness_tasks=[],
-)
-
-llama_22b_tootsie_phase1 = default_train(
-    name="llama-22b-tootsie-dummy-testing",
-    tokenized=dclm_mixture_config_llama3_old,
-    model_config=llama_24b_old_rotary,
-    train_config=llama_22b_train_config,
-    tags=["llama", "22b", "wsd-s", "exp201", "tootsie"],
-    eval_harness_tasks=[],
-)
-
 #####
 # Phase 2 for 13B, 22B: EMA on same mixture as tootsie 8b, increased batch size
 #####
@@ -161,31 +141,6 @@ dclm_mixture_config_llama3_zoned = lm_mixture_data_config(
     permutation_type="linear",
     include_raw_paths=False,
 )
-llama_13b_tootsie_ema_warmstart = dataclasses.replace(
-    default_train(
-        name="llama-13b-tootsie-ema-mk2",
-        tokenized=dclm_mixture_config_llama3_zoned,
-        model_config=llama_13b,
-        train_config=llama_13b_train_config_ema,
-        tags=["llama", "13b", "ema", "exp201", "tootsie"],
-        eval_harness_tasks=[],
-    ),
-    override_output_path="checkpoints/llama-13b-tootsie-ema-mk2",
-)
-
-# warmstarted from llama_22b_tootsie at 200,000
-llama_22b_tootsie_ema_warmstart = dataclasses.replace(
-    default_train(
-        name="llama-22b-tootsie-ema-mk2",
-        tokenized=dclm_mixture_config_llama3_zoned,
-        model_config=llama_24b,
-        train_config=llama_22b_train_config_ema,
-        tags=["llama", "22b", "ema", "exp201", "tootsie"],
-        eval_harness_tasks=[],
-    ),
-    override_output_path="checkpoints/llama-22b-tootsie-ema-mk2",
-)
-
 
 #####
 # sigh... 56B. you can ignore this.
@@ -221,41 +176,55 @@ llama_56b_train_config_mk2 = dataclasses.replace(
 )
 
 
-# actual 56B model
-llama_70b_tootsie_mk2_BAD = dataclasses.replace(
-    default_train(
-        name="llama-70b-tootsie-mk2",
-        # not recorded here:
-        # warmstart weights from llama_70b_tootsie step 80000
-        tokenized=dclm_mixture_config_llama3_old,
-        model_config=llama_56b,
-        train_config=llama_56b_train_config_mk2,
-        tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
-        eval_harness_tasks=[],
-    ),
-    override_output_path="checkpoints/llama-70b-tootsie-mk2",
-)
-
-
-llama_56b_tootsie = default_train(
-    name="llama-70b-tootsie-dummy-testing",
-    tokenized=dclm_mixture_config_llama3_old,
-    model_config=llama_56b,
-    train_config=llama_56b_train_config,
-    tags=["llama", "70b", "wsd-s", "exp201", "tootsie"],
-    eval_harness_tasks=[],
-)
-
-
 @step(name="tootsie/exp859/big_tootsies")
 def run_big_tootsies_experiment():
     """Entry point for Big Tootsies training experiment (13B and 22B models)."""
-    return [
-        llama_13b_tootsie_phase1,
-        llama_22b_tootsie_phase1,
-        llama_13b_tootsie_ema_warmstart,
-        llama_22b_tootsie_ema_warmstart,
-    ]
+    # Phase 1: WSD-S runs
+    # We didn't know if we'd actually have this capacity for any length of time,
+    # so they were initially just "testing" runs.
+    default_train(
+        name="llama-13b-tootsie-dummy-testing",
+        tokenized=dclm_mixture_config_llama3_old,
+        model_config=llama_13b_old_rotary,
+        train_config=llama_13b_train_config,
+        tags=["llama", "13b", "wsd-s", "exp201", "tootsie"],
+        eval_harness_tasks=[],
+    )
+
+    default_train(
+        name="llama-22b-tootsie-dummy-testing",
+        tokenized=dclm_mixture_config_llama3_old,
+        model_config=llama_24b_old_rotary,
+        train_config=llama_22b_train_config,
+        tags=["llama", "22b", "wsd-s", "exp201", "tootsie"],
+        eval_harness_tasks=[],
+    )
+
+    # Phase 2: EMA warmstart runs
+    dataclasses.replace(
+        default_train(
+            name="llama-13b-tootsie-ema-mk2",
+            tokenized=dclm_mixture_config_llama3_zoned,
+            model_config=llama_13b,
+            train_config=llama_13b_train_config_ema,
+            tags=["llama", "13b", "ema", "exp201", "tootsie"],
+            eval_harness_tasks=[],
+        ),
+        override_output_path="checkpoints/llama-13b-tootsie-ema-mk2",
+    )
+
+    # warmstarted from llama_22b_tootsie at 200,000
+    dataclasses.replace(
+        default_train(
+            name="llama-22b-tootsie-ema-mk2",
+            tokenized=dclm_mixture_config_llama3_zoned,
+            model_config=llama_24b,
+            train_config=llama_22b_train_config_ema,
+            tags=["llama", "22b", "ema", "exp201", "tootsie"],
+            eval_harness_tasks=[],
+        ),
+        override_output_path="checkpoints/llama-22b-tootsie-ema-mk2",
+    )
 
 
 if __name__ == "__main__":

@@ -88,7 +88,6 @@ might be:
 """
 
 import copy
-import dataclasses
 import hashlib
 import inspect
 import json
@@ -103,7 +102,7 @@ from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from threading import Event, Thread
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
@@ -318,6 +317,10 @@ class ExecutorStep(Generic[ConfigT]):
     def __hash__(self):
         """Hash based on the ID (every object is different)."""
         return hash(id(self))
+
+    def __eq__(self, other):
+        """Equality based on identity (to match __hash__)."""
+        return self is other
 
     def with_output_path(self, output_path: str) -> "ExecutorStep":
         """Return a copy of the step with the given output_path."""

@@ -20,62 +20,10 @@ from experiments.pretraining_datasets.dclm import DCLM_BASELINE_ONLY_MIXTURE, DC
 from experiments.pretraining_datasets.simple import downloads
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, step
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
 gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
-
-### Define the datasets and tokenization configurations
-
-dclm_baseline_tokenized_neox_wrong = default_tokenize(
-    name="dclm_baseline",
-    dataset=downloads["dclm_baseline"],
-    tokenizer=gpt_neox_tokenizer,
-)
-
-
-dclm_baseline_neox_tokenized = default_tokenize(
-    name="dclm_baseline",
-    dataset=downloads["dclm_baseline"],
-    tokenizer=gpt_neox_tokenizer,
-)
-
-starcoderdata_neox_tokenized = default_tokenize(
-    name="starcoderdata",
-    dataset=downloads["starcoderdata"],
-    tokenizer=gpt_neox_tokenizer,
-    format=TextLmDatasetFormat(text_key="content"),
-)
-
-proofpile_2_neox_tokenized = default_tokenize(
-    name="proofpile_2",
-    dataset=downloads["proofpile_2"],
-    tokenizer=gpt_neox_tokenizer,
-)
-
-DCLM_MIXTURE_COMPONENTS_NEOX_WRONG = {
-    "dclm_baseline": dclm_baseline_tokenized_neox_wrong,
-    "starcoderdata": starcoderdata_neox_tokenized,
-    "proofpile_2": proofpile_2_neox_tokenized,
-}
-
-### Define the mixtures of datasets and their weights
-
-# weights are from page 11 of https://arxiv.org/abs/2406.11794. Sampling is done uniformly over tokens.
-# the 7B model was trained on 4.1T tokens, and the 1.4B model's data mixture weights are scaled accordingly.
-
-# Define a mixture that has only dclm_baseline data; set the weights of the other datasets to 0
-
-dclm_mixture_config_wrong = lm_mixture_data_config(
-    components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG,
-    weights=DCLM_MIXTURE_WEIGHTS,
-    permutation_type="linear",
-)
-dclm_baseline_only_config_wrong = lm_mixture_data_config(
-    components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG,
-    weights=DCLM_BASELINE_ONLY_MIXTURE,
-    permutation_type="linear",
-)
 
 ### Define the model and training configurations
 
@@ -109,35 +57,82 @@ training_config = SimpleTrainConfig(
 EXPERIMENT_TAG_MIXTURE = ["433_dclm_1b_1x"]
 EXPERIMENT_TAG_BASELINE_ONLY = ["433_dclm_baseline_1b_1x"]
 
-dclm_mixture_model = default_train(
-    name="dclm_1b_1x_replication_eval_check",
-    tokenized=dclm_mixture_config_wrong,
-    model_config=llama_1_4b_dclm,
-    train_config=training_config,
-    tags=EXPERIMENT_TAG_MIXTURE,
-)
 
-dclm_baseline_only_model = default_train(
-    name="dclm_baseline_1b_1x_replication_nov12",
-    tokenized=dclm_baseline_only_config_wrong,
-    model_config=llama_1_4b_dclm,
-    train_config=training_config,
-    tags=EXPERIMENT_TAG_BASELINE_ONLY,
-)
+def tokenize_dclm_baseline_neox():
+    return default_tokenize(
+        name="dclm_baseline",
+        dataset=downloads["dclm_baseline"],
+        tokenizer=gpt_neox_tokenizer,
+    )
 
-dclm_mixture_eval = default_eval(step=dclm_mixture_model, evals=CORE_TASKS_PLUS_MMLU)
 
-dclm_baseline_only_eval = default_eval(step=dclm_baseline_only_model)
+def tokenize_starcoderdata_neox():
+    return default_tokenize(
+        name="starcoderdata",
+        dataset=downloads["starcoderdata"],
+        tokenizer=gpt_neox_tokenizer,
+        format=TextLmDatasetFormat(text_key="content"),
+    )
+
+
+def tokenize_proofpile_2_neox():
+    return default_tokenize(
+        name="proofpile_2",
+        dataset=downloads["proofpile_2"],
+        tokenizer=gpt_neox_tokenizer,
+    )
+
+
+def dclm_mixture_components_neox():
+    return {
+        "dclm_baseline": tokenize_dclm_baseline_neox(),
+        "starcoderdata": tokenize_starcoderdata_neox(),
+        "proofpile_2": tokenize_proofpile_2_neox(),
+    }
+
+
+# weights are from page 11 of https://arxiv.org/abs/2406.11794. Sampling is done uniformly over tokens.
+# the 7B model was trained on 4.1T tokens, and the 1.4B model's data mixture weights are scaled accordingly.
+
+
+@step(name="dclm-run/all")
+def run_dclm_experiment():
+    """Entry point for the DCLM 1.4B model training experiment."""
+    components = dclm_mixture_components_neox()
+
+    dclm_mixture_config = lm_mixture_data_config(
+        components=components,
+        weights=DCLM_MIXTURE_WEIGHTS,
+        permutation_type="linear",
+    )
+    dclm_baseline_only_config = lm_mixture_data_config(
+        components=components,
+        weights=DCLM_BASELINE_ONLY_MIXTURE,
+        permutation_type="linear",
+    )
+
+    dclm_mixture_model = default_train(
+        name="dclm_1b_1x_replication_eval_check",
+        tokenized=dclm_mixture_config,
+        model_config=llama_1_4b_dclm,
+        train_config=training_config,
+        tags=EXPERIMENT_TAG_MIXTURE,
+    )
+
+    dclm_baseline_only_model = default_train(
+        name="dclm_baseline_1b_1x_replication_nov12",
+        tokenized=dclm_baseline_only_config,
+        model_config=llama_1_4b_dclm,
+        train_config=training_config,
+        tags=EXPERIMENT_TAG_BASELINE_ONLY,
+    )
+
+    default_eval(step=dclm_mixture_model, evals=CORE_TASKS_PLUS_MMLU)
+    default_eval(step=dclm_baseline_only_model)
+
 
 if __name__ == "__main__":
     executor_main(
-        steps=[
-            dclm_baseline_tokenized_neox_wrong,
-            starcoderdata_neox_tokenized,
-            proofpile_2_neox_tokenized,
-            dclm_mixture_model,
-            dclm_baseline_only_model,
-            dclm_mixture_eval,
-            dclm_baseline_only_eval,
-        ]
+        steps=[run_dclm_experiment()],
+        description="Train 1.4B models on DCLM mixture and baseline-only datasets, then evaluate on core tasks.",
     )

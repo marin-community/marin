@@ -52,7 +52,7 @@ def fox_corpus():
         {
             "id": "train_kit_partial",
             "text": (
-                "Juvenile animals mature rapidly during springtime.\n" "They remain sheltered underground for many days."
+                "Juvenile animals mature rapidly during springtime.\nThey remain sheltered underground for many days."
             ),
             "source": "train",
         },

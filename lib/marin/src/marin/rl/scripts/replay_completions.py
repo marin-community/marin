@@ -207,7 +207,7 @@ async def replay_all_with_warmup(
         }
 
     total_batches = (len(requests) + config.batch_size - 1) // config.batch_size
-    logger.info(f"Processing {len(requests)} requests in {total_batches} batches of " f"size {config.batch_size}")
+    logger.info(f"Processing {len(requests)} requests in {total_batches} batches of size {config.batch_size}")
 
     current_start = 0
 

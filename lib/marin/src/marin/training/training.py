@@ -388,7 +388,6 @@ def _check_for_wandb_key(env):
 
 
 def _check_path_in_region(key, path, region, local_ok):
-
     if not path.startswith("gs://"):
         if local_ok:
             logger.warning(f"{key} is not a GCS path: {path}. This is fine if you're running locally.")

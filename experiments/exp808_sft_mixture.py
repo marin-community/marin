@@ -29,6 +29,7 @@ from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
 from fray.cluster import ResourceConfig
+from marin.execution import step
 from marin.execution.executor import ExecutorStep, executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
@@ -71,9 +72,6 @@ DATASETS = {
 
 NUM_TRAIN_STEPS = 19086  # 3 Epochs over all datasets above
 
-# Create tokenization steps for multiple datasets
-tokenized_datasets = {short_name: create_tokenization_step(hf_name) for short_name, hf_name in DATASETS.items()}
-
 # Dataset weights set with the naive baseline of the number of documents per dataset
 mixture_weights = {
     "tulu_3_sft_mixture": 939343,
@@ -87,9 +85,6 @@ mixture_weights = {
     "bespoke_stratos_17k": 16710,
 }
 
-
-assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
-
 # Define an SFT config appropriate for mixture training
 mixture_sft_config = SimpleSFTConfig(
     train_batch_size=128,
@@ -102,24 +97,32 @@ mixture_sft_config = SimpleSFTConfig(
     seed=0,
 )
 
-mixture_config = lm_mixture_data_config(
-    tokenized_datasets,
-    mixture_weights,
-    permutation_type="linear",
-    shuffle=True,
-    missing_weights_are_validation=True,
-)
 
-# Configure mixture-based SFT training
-training_step = default_sft(
-    name="llama3.1_mixture_total-redux",
-    tokenized=mixture_config,
-    model_config=llama_8b,
-    sft_config=mixture_sft_config,
-    tags=["llama", "mixture"],
-)
+@step(name="exp808/sft_mixture/all")
+def run_sft_mixture():
+    """Entry point for SFT mixture training."""
+    # Create tokenization steps for multiple datasets
+    tokenized_datasets = {short_name: create_tokenization_step(hf_name) for short_name, hf_name in DATASETS.items()}
+
+    assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
+
+    mixture_config = lm_mixture_data_config(
+        tokenized_datasets,
+        mixture_weights,
+        permutation_type="linear",
+        shuffle=True,
+        missing_weights_are_validation=True,
+    )
+
+    # Configure mixture-based SFT training
+    default_sft(
+        name="llama3.1_mixture_total-redux",
+        tokenized=mixture_config,
+        model_config=llama_8b,
+        sft_config=mixture_sft_config,
+        tags=["llama", "mixture"],
+    )
 
 
 if __name__ == "__main__":
-    # Run all steps
-    executor_main(steps=[*list(tokenized_datasets.values()), training_step])
+    executor_main(steps=[run_sft_mixture()])

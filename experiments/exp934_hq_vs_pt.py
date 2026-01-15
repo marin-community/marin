@@ -32,7 +32,7 @@ Metrics: Paloma Loss, Tulu3 Validation Loss, MMLU Accuracy
 
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main, versioned
-from marin.execution import step, StepContext, StepRef, deferred, output
+from marin.execution import step, deferred, output
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
@@ -98,81 +98,104 @@ nemotron_code_dolmino_mix = lm_mixture_data_config(
 
 # 4. Full mix with everything
 
+
 # Wikipedia resiliparse custom fork step (data already exists at hardcoded path)
-@step(name="documents/wikipedia-resiliparse-custom-fork")
+@step(
+    name="documents/wikipedia-resiliparse-custom-fork",
+    override_output_path="documents/wikipedia-resiliparse-custom-fork-2569de",
+)
+def _wikipedia_resiliparse_custom_fork_step():
+    return process_wiki_dump(
+        WikiExtractionConfig(
+            input_path="gs://marin-us-central2/raw/wikipedia-a7dad0/20241201",
+            revision=versioned("20241201"),
+            output_path=output(),
+            extract_method="resiliparse",
+            extract_config=ResiliparseConfig(
+                links=False,
+                skip_elements=WIKI_BLACKLISTED_SELECTORS,
+                markdownify_config=HtmlToMarkdownConfig(include_images=False, include_links=False),
+            ),
+            remove_reference_section=versioned(True),
+            digit_threshold=versioned(50),
+            word_threshold=versioned(70),
+            special_char_threshold=versioned(50),
+        )
+    )
+
+
 def wikipedia_resiliparse_custom_fork():
-    return process_wiki_dump(WikiExtractionConfig(
-        input_path="gs://marin-us-central2/raw/wikipedia-a7dad0/20241201",
-        revision=versioned("20241201"),
-        output_path=output(),
-        extract_method="resiliparse",
-        extract_config=ResiliparseConfig(
-            links=False,
-            skip_elements=WIKI_BLACKLISTED_SELECTORS,
-            markdownify_config=HtmlToMarkdownConfig(include_images=False, include_links=False),
-        ),
-        remove_reference_section=versioned(True),
-        digit_threshold=versioned(50),
-        word_threshold=versioned(70),
-        special_char_threshold=versioned(50),
-    )).with_output_path("documents/wikipedia-resiliparse-custom-fork-2569de").cd("20241201")
+    return _wikipedia_resiliparse_custom_fork_step() / "20241201"
+
 
 # ar5iv resiliparse custom fork step (data already exists at hardcoded path)
-@step(name="documents/ar5iv/ar5iv-04-2024-no-problem")
+@step(
+    name="documents/ar5iv/ar5iv-04-2024-no-problem",
+    override_output_path="documents/ar5iv/ar5iv-04-2024-no-problem-3971f",
+)
 def ar5iv_no_problem_resiliparse_custom_fork():
-    return process_ar5iv_dump(Ar5ivExtractionConfig(
-        input_path="gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem-49c4e3/202404",
-        revision="042024",
-        output_path=output() / "resiliparse-custom-fork",
-        extract_method=versioned("resiliparse"),
-        extract_config=ResiliparseConfig(
-            links=versioned(False),
-            prepend_title=True,
-            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
-        ),
-        remove_reference_section=versioned(True),
-    )).with_output_path("documents/ar5iv/ar5iv-04-2024-no-problem-3971f")
+    return process_ar5iv_dump(
+        Ar5ivExtractionConfig(
+            input_path="gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem-49c4e3/202404",
+            revision="042024",
+            output_path=output() / "resiliparse-custom-fork",
+            extract_method=versioned("resiliparse"),
+            extract_config=ResiliparseConfig(
+                links=versioned(False),
+                prepend_title=True,
+                skip_elements=ARXIV_BLACKLISTED_SELECTORS,
+            ),
+            remove_reference_section=versioned(True),
+        )
+    )
 
-# Create the medu science QA dataset
-# MMLU Science QA tokenization
-medu_mmlu_science_qa_tokenized = default_tokenize(
-    name="medu-mmlu-science-qa",
-    dataset="gs://marin-us-east1/documents/medu-mmlu-science-llama8b-qa-whole-1a419d",
-    tokenizer=llama3_tokenizer,
-).with_output_path("tokenized/medu-mmlu-science-qa-c64fda")
 
-# Wikipedia tokenization
-md_wiki_tokenized = default_tokenize(
-    name="wikipedia",
-    dataset=wikipedia_resiliparse_custom_fork(),
-    tokenizer=llama3_tokenizer,
-).with_output_path("tokenized/wikipedia-6980f2")
+def tokenize_medu_mmlu_science_qa():
+    return default_tokenize(
+        name="medu-mmlu-science-qa",
+        dataset="gs://marin-us-east1/documents/medu-mmlu-science-llama8b-qa-whole-1a419d",
+        tokenizer=llama3_tokenizer,
+    ).with_output_path("tokenized/medu-mmlu-science-qa-c64fda")
 
-# Arxiv tokenization
-md_arxiv_tokenized = default_tokenize(
-    name="arxiv-no-problem",
-    dataset=ar5iv_no_problem_resiliparse_custom_fork(),
-    tokenizer=llama3_tokenizer,
-).with_output_path("tokenized/arxiv-no-problem-a3e054")
 
-# Stackexchange tokenization
-md_stackexchange_tokenized = default_tokenize(
-    name="stackexchange",
-    dataset=stackexchange_text_resiliparse_custom_fork,
-    tokenizer=llama3_tokenizer,
-).with_output_path("tokenized/stackexchange-621b94")
+def tokenize_wikipedia_markdown():
+    return default_tokenize(
+        name="wikipedia",
+        dataset=wikipedia_resiliparse_custom_fork(),
+        tokenizer=llama3_tokenizer,
+    ).with_output_path("tokenized/wikipedia-6980f2")
 
-pt_vs_hq_components = {
-    **tokenize_nemotron(),
-    "starcoderdata": dclm_components_llama3["starcoderdata"],
-    "proofpile_2": dclm_components_llama3["proofpile_2"],
-    "all_math": tokenize_dolmino_math(),
-    "arxiv_markdownified": md_arxiv_tokenized,
-    "wikipedia_markdown": md_wiki_tokenized,
-    "stackexchange_custom": md_stackexchange_tokenized,
-    "medu_science_qa": medu_mmlu_science_qa_tokenized,
-    **tokenize_dolmino(),
-}
+
+def tokenize_arxiv_markdown():
+    return default_tokenize(
+        name="arxiv-no-problem",
+        dataset=ar5iv_no_problem_resiliparse_custom_fork(),
+        tokenizer=llama3_tokenizer,
+    ).with_output_path("tokenized/arxiv-no-problem-a3e054")
+
+
+def tokenize_stackexchange_markdown():
+    return default_tokenize(
+        name="stackexchange",
+        dataset=stackexchange_text_resiliparse_custom_fork,
+        tokenizer=llama3_tokenizer,
+    ).with_output_path("tokenized/stackexchange-621b94")
+
+
+def build_pt_vs_hq_components():
+    """Build the full high-quality components dictionary."""
+    return {
+        **tokenize_nemotron(),
+        "starcoderdata": dclm_components_llama3["starcoderdata"],
+        "proofpile_2": dclm_components_llama3["proofpile_2"],
+        "all_math": tokenize_dolmino_math(),
+        "arxiv_markdownified": tokenize_arxiv_markdown(),
+        "wikipedia_markdown": tokenize_wikipedia_markdown(),
+        "stackexchange_custom": tokenize_stackexchange_markdown(),
+        "medu_science_qa": tokenize_medu_mmlu_science_qa(),
+        **tokenize_dolmino(),
+    }
+
 
 # weights based on either compressed TB or teratokens, which is roughly equivalent
 # scale of 5 to oversample higher quality data
@@ -191,19 +214,15 @@ full_mix_weights = {
     "medu_science_qa": 0.0012 * 5,
 }
 
-full_mix = lm_mixture_data_config(
-    components=pt_vs_hq_components,
-    weights=full_mix_weights,
-    permutation_type="linear",
-)
 
-# Dictionary of all mixes
-data_mixes = {
-    "original_pt_mix": original_mix,
-    "nemotron_pt_only": nemotron_only_mix,
-    "nemotron_code_dolmino": nemotron_code_dolmino_mix,
-    "nemotron_code_dolmino_misc": full_mix,
-}
+def build_full_mix():
+    """Build the full data mix configuration."""
+    return lm_mixture_data_config(
+        components=build_pt_vs_hq_components(),
+        weights=full_mix_weights,
+        permutation_type="linear",
+    )
+
 
 # Default parameters for annealing
 anneal_tokens = 50_000_000_000  # 50B tokens
@@ -212,7 +231,19 @@ node_count = 4
 checkpoint = "gs://marin-us-central2/checkpoints/llama-8b-tootsie-adept-phoenix/checkpoints/step-1240000"
 
 
+@step(name="exp934-hq-vs-pt/all")
 def run_cooldown_ablation():
+    """Entry point for cooldown ablation experiment."""
+    # Build all data mixes
+    full_mix = build_full_mix()
+
+    data_mixes = {
+        "original_pt_mix": original_mix,
+        "nemotron_pt_only": nemotron_only_mix,
+        "nemotron_code_dolmino": nemotron_code_dolmino_mix,
+        "nemotron_code_dolmino_misc": full_mix,
+    }
+
     # Apply annealing to each mix
     results = []
     for mix_name, data_mix in data_mixes.items():
@@ -237,6 +268,42 @@ def run_cooldown_ablation():
         )
 
     return results
+
+
+# Backward compatibility: provide a lazy dictionary that builds components on access
+class _LazyComponentsDict:
+    """Provides backward-compatible access to pt_vs_hq_components."""
+
+    def __init__(self, factory):
+        self._factory = factory
+        self._cached = None
+
+    def _ensure_built(self):
+        if self._cached is None:
+            self._cached = self._factory()
+        return self._cached
+
+    def __getitem__(self, key):
+        return self._ensure_built()[key]
+
+    def __iter__(self):
+        return iter(self._ensure_built())
+
+    def items(self):
+        return self._ensure_built().items()
+
+    def keys(self):
+        return self._ensure_built().keys()
+
+    def values(self):
+        return self._ensure_built().values()
+
+    def __contains__(self, item):
+        return item in self._ensure_built()
+
+
+# For backward compatibility - new code should call build_pt_vs_hq_components() directly
+pt_vs_hq_components = _LazyComponentsDict(build_pt_vs_hq_components)
 
 
 if __name__ == "__main__":

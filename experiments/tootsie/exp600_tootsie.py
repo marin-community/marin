@@ -47,10 +47,17 @@ from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution import step
+from marin.execution import StepRef, step
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 from fray.cluster import ResourceConfig
+
+# Export checkpoint paths for external reference
+TOOTSIE_8B_SENSIBLE_STARLING_PATH = "checkpoints/tootsie-8b-sensible-starling"
+tootsie_8b_sensible_starling = StepRef(TOOTSIE_8B_SENSIBLE_STARLING_PATH)
+
+TOOTSIE_8B_DEEPER_STARLING_PATH = "checkpoints/tootsie-8b-deeper-starling"
+tootsie_8b_deeper_starling = StepRef(TOOTSIE_8B_DEEPER_STARLING_PATH)
 
 # Phases/Runs in this file:
 # 1. Kestrel: WSD-S on DCLM+Starcode+Proofpile on 2x v5litepod-256 (from scratch)
@@ -88,17 +95,9 @@ tootsie_phase1_config = SimpleTrainConfig(
     lr_schedule="inv",
 )
 
-llama_8b_tootsie_phase1 = dataclasses.replace(
-    default_train(
-        name="llama-8b-tootsie-0.001",
-        tokenized=dclm_mixture_config_llama3_old,
-        # I am a dummy and use old rotary config
-        model_config=llama_8b_old_rotary,
-        train_config=tootsie_phase1_config,
-        tags=["llama", "8b", "wsd-s", "exp600"],
-    ),
-    override_output_path="checkpoints/llama-8b-tootsie-0.001-19ad63",
-)
+# Phase 1 checkpoint path for reference
+PHASE1_CHECKPOINT_PATH = "checkpoints/llama-8b-tootsie-0.001-19ad63"
+llama_8b_tootsie_phase1 = StepRef(PHASE1_CHECKPOINT_PATH)
 
 
 ##########################
@@ -135,16 +134,9 @@ llama_8b_train_config_phase2 = SimpleTrainConfig(
 )
 
 
-llama_8b_tootsie_phase2 = dataclasses.replace(
-    default_train(
-        name="llama-8b-tootsie-phase2",
-        tokenized=dclm_mixture_config_llama3_old,
-        model_config=llama_8b,
-        train_config=llama_8b_train_config_phase2,
-        tags=["llama", "8b", "ema", "exp600"],
-    ),
-    override_output_path="checkpoints/llama-8b-tootsie-phase2",
-)
+# Phase 2 checkpoint path for reference
+PHASE2_CHECKPOINT_PATH = "checkpoints/llama-8b-tootsie-phase2"
+llama_8b_tootsie_phase2 = StepRef(PHASE2_CHECKPOINT_PATH)
 
 # Note, we originally tried to fold the phase 3 mixture (below) into phase 2, but I messed up the hand off, so
 # we made a new config. (Specifically, mixture schedules used to be in terms of samples not steps and I didn't
@@ -263,17 +255,9 @@ phase_3_data_mixture = lm_varying_mixture_data_config(
     permutation_type="linear",
 )
 
-llama_8b_tootsie_phase3 = dataclasses.replace(
-    default_train(
-        name="llama-8b-tootsie-phase3",
-        tokenized=phase_3_data_mixture,
-        model_config=llama_8b,
-        train_config=llama_8b_train_config_phase3,
-        tags=["llama", "8b", "ema", "exp600"],
-        # eval_harness_tasks=[],
-    ),
-    override_output_path="checkpoints/llama-8b-tootsie-phase3",
-)
+# Phase 3 checkpoint path for reference
+PHASE3_CHECKPOINT_PATH = "checkpoints/llama-8b-tootsie-phase3"
+llama_8b_tootsie_phase3 = StepRef(PHASE3_CHECKPOINT_PATH)
 
 ################################################################
 ## Tootsie Dessert (Attempt 1): Sprinkle in a bit of flan and synth math
@@ -372,16 +356,8 @@ llama_8b_train_config_dessert = SimpleTrainConfig(
 )
 
 # BAD, Don't use this. Here for documentation purposes.
-llama_8b_tootsie_dessert_BAD = dataclasses.replace(
-    default_train(
-        name="llama-8b-tootsie-dessert",
-        tokenized=bad_dessert_data_mixture_v1,
-        model_config=llama_8b,
-        train_config=llama_8b_train_config_dessert,
-        tags=["llama", "8b", "ema", "exp600"],
-    ),
-    override_output_path="checkpoints/llama-8b-tootsie-dessert",
-)
+DESSERT_BAD_CHECKPOINT_PATH = "checkpoints/llama-8b-tootsie-dessert"
+llama_8b_tootsie_dessert_BAD = StepRef(DESSERT_BAD_CHECKPOINT_PATH)
 
 
 # attempt 2: I had swapped HQ and Dessert weights. Also, the math sets are so small they don't get picked up
@@ -420,17 +396,8 @@ dessert_data_mixture_v3 = lm_varying_mixture_data_config(
     permutation_type="linear",
 )
 
-llama_8b_tootsie_dessert_v3 = dataclasses.replace(
-    default_train(
-        name="llama-8b-tootsie-dessert-v3",
-        tokenized=dessert_data_mixture_v3,
-        model_config=llama_8b,
-        train_config=llama_8b_train_config_dessert,
-        tags=["llama", "8b", "ema", "exp600"],
-        eval_harness_tasks=[],
-    ),
-    override_output_path="checkpoints/llama-8b-tootsie-dessert-v3",
-)
+DESSERT_V3_CHECKPOINT_PATH = "checkpoints/llama-8b-tootsie-dessert-v3"
+llama_8b_tootsie_dessert_v3 = StepRef(DESSERT_V3_CHECKPOINT_PATH)
 
 ################################################################
 ## Tootsie Cooldown v2: Another attempt at a final cooldown
@@ -486,17 +453,8 @@ cooldown_config_v2 = lm_varying_mixture_data_config(
 # This means we're doing slightly fewer effective passes through the data, but it feels more science-y
 # to keep the number of steps the same.
 
-llama_8b_tootsie_cooldown_v2 = dataclasses.replace(
-    default_train(
-        name="llama-8b-tootsie-cooldown-take-2",
-        tokenized=cooldown_config_v2,
-        model_config=llama_8b,
-        train_config=llama_8b_train_config_phase3,
-        tags=["llama", "8b", "ema", "exp600"],
-        eval_harness_tasks=[],
-    ),
-    override_output_path="checkpoints/llama-8b-tootsie-cooldown-take-2",
-)
+COOLDOWN_V2_CHECKPOINT_PATH = "checkpoints/llama-8b-tootsie-cooldown-take-2"
+llama_8b_tootsie_cooldown_v2 = StepRef(COOLDOWN_V2_CHECKPOINT_PATH)
 
 
 ###############################################################
@@ -557,17 +515,8 @@ phase_4_data_mixture = lm_varying_mixture_data_config(
     permutation_type="linear",
 )
 
-llama_8b_tootsie_adept_phoenix = dataclasses.replace(
-    default_train(
-        name="llama-8b-tootsie-adept-phoenix",
-        tokenized=phase_4_data_mixture,
-        model_config=llama_8b,
-        train_config=llama_8b_train_config_phase4,
-        tags=["llama", "8b", "ema", "exp600"],
-        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
-    ),
-    override_output_path="checkpoints/llama-8b-tootsie-adept-phoenix",
-)
+PHOENIX_CHECKPOINT_PATH = "checkpoints/llama-8b-tootsie-adept-phoenix"
+llama_8b_tootsie_adept_phoenix = StepRef(PHOENIX_CHECKPOINT_PATH)
 
 # little bit of sanity check code to make sure the LR schedules line up
 # levanter_train_config_old = llama_8b_tootsie_phase3.config
@@ -666,14 +615,9 @@ starling_cooldown_mixture = lm_varying_mixture_data_config(
     permutation_type="linear",
 )
 
-tootsie_8b_sensible_starling = default_train(
-    name="tootsie-8b-sensible-starling",
-    tokenized=starling_cooldown_mixture,
-    model_config=llama_8b,
-    train_config=cooldown_train_config,
-    tags=["llama", "8b", "ema", "exp977", "tootsie", "cooldown"],
-    eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
-).with_output_path("checkpoints/tootsie-8b-sensible-starling")
+# Already defined at top of file:
+# TOOTSIE_8B_SENSIBLE_STARLING_PATH = "checkpoints/tootsie-8b-sensible-starling"
+# tootsie_8b_sensible_starling = StepRef(TOOTSIE_8B_SENSIBLE_STARLING_PATH)
 
 # print normalized weights for final phase
 # sanity checks:
@@ -703,30 +647,122 @@ tootsie_8b_deeper_starling_train_config = dataclasses.replace(
     reset_data_loader_on_init=False,
 )
 
-tootsie_8b_deeper_starling = default_train(
-    name="tootsie-8b-deeper-starling",
-    tokenized=starling_cooldown_mixture,
-    model_config=llama_8b,
-    train_config=tootsie_8b_deeper_starling_train_config,
-    tags=["llama", "8b", "ema", "exp977", "tootsie", "cooldown"],
-    eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
-).with_output_path("checkpoints/tootsie-8b-deeper-starling")
+# Already defined at top of file:
+# TOOTSIE_8B_DEEPER_STARLING_PATH = "checkpoints/tootsie-8b-deeper-starling"
+# tootsie_8b_deeper_starling = StepRef(TOOTSIE_8B_DEEPER_STARLING_PATH)
 
 
 @step(name="tootsie/exp600/all")
 def run_tootsie_experiment():
     """Entry point for Tootsie 8B training experiment with all phases."""
-    return [
-        llama_8b_tootsie_phase1,
-        llama_8b_tootsie_phase3,
-        llama_8b_tootsie_dessert_BAD,
-        llama_8b_tootsie_dessert_v3,
-        llama_8b_tootsie_cooldown_v2,
-        llama_8b_tootsie_adept_phoenix,
-        tootsie_8b_sensible_starling,
-        tootsie_8b_deeper_starling,
-        *default_base_eval(tootsie_8b_deeper_starling),
-    ]
+    # Phase 1: Kestrel
+    dataclasses.replace(
+        default_train(
+            name="llama-8b-tootsie-0.001",
+            tokenized=dclm_mixture_config_llama3_old,
+            model_config=llama_8b_old_rotary,
+            train_config=tootsie_phase1_config,
+            tags=["llama", "8b", "wsd-s", "exp600"],
+        ),
+        override_output_path=PHASE1_CHECKPOINT_PATH,
+    )
+
+    # Phase 2: Ocelot (skipped in execution, only used for checkpoint reference)
+    # dataclasses.replace(
+    #     default_train(
+    #         name="llama-8b-tootsie-phase2",
+    #         tokenized=dclm_mixture_config_llama3_old,
+    #         model_config=llama_8b,
+    #         train_config=llama_8b_train_config_phase2,
+    #         tags=["llama", "8b", "ema", "exp600"],
+    #     ),
+    #     override_output_path=PHASE2_CHECKPOINT_PATH,
+    # )
+
+    # Phase 3: Jellyfish
+    dataclasses.replace(
+        default_train(
+            name="llama-8b-tootsie-phase3",
+            tokenized=phase_3_data_mixture,
+            model_config=llama_8b,
+            train_config=llama_8b_train_config_phase3,
+            tags=["llama", "8b", "ema", "exp600"],
+        ),
+        override_output_path=PHASE3_CHECKPOINT_PATH,
+    )
+
+    # Dessert Attempt 1 (BAD - for documentation only)
+    dataclasses.replace(
+        default_train(
+            name="llama-8b-tootsie-dessert",
+            tokenized=bad_dessert_data_mixture_v1,
+            model_config=llama_8b,
+            train_config=llama_8b_train_config_dessert,
+            tags=["llama", "8b", "ema", "exp600"],
+        ),
+        override_output_path=DESSERT_BAD_CHECKPOINT_PATH,
+    )
+
+    # Dessert Attempt 2 (v3)
+    dataclasses.replace(
+        default_train(
+            name="llama-8b-tootsie-dessert-v3",
+            tokenized=dessert_data_mixture_v3,
+            model_config=llama_8b,
+            train_config=llama_8b_train_config_dessert,
+            tags=["llama", "8b", "ema", "exp600"],
+            eval_harness_tasks=[],
+        ),
+        override_output_path=DESSERT_V3_CHECKPOINT_PATH,
+    )
+
+    # Cooldown v2
+    dataclasses.replace(
+        default_train(
+            name="llama-8b-tootsie-cooldown-take-2",
+            tokenized=cooldown_config_v2,
+            model_config=llama_8b,
+            train_config=llama_8b_train_config_phase3,
+            tags=["llama", "8b", "ema", "exp600"],
+            eval_harness_tasks=[],
+        ),
+        override_output_path=COOLDOWN_V2_CHECKPOINT_PATH,
+    )
+
+    # Phase 4: Phoenix
+    dataclasses.replace(
+        default_train(
+            name="llama-8b-tootsie-adept-phoenix",
+            tokenized=phase_4_data_mixture,
+            model_config=llama_8b,
+            train_config=llama_8b_train_config_phase4,
+            tags=["llama", "8b", "ema", "exp600"],
+            eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+        ),
+        override_output_path=PHOENIX_CHECKPOINT_PATH,
+    )
+
+    # Phase 5: Starling
+    default_train(
+        name="tootsie-8b-sensible-starling",
+        tokenized=starling_cooldown_mixture,
+        model_config=llama_8b,
+        train_config=cooldown_train_config,
+        tags=["llama", "8b", "ema", "exp977", "tootsie", "cooldown"],
+        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+    ).with_output_path(TOOTSIE_8B_SENSIBLE_STARLING_PATH)
+
+    # Phase 6: Deeper Starling
+    deeper_starling_step = default_train(
+        name="tootsie-8b-deeper-starling",
+        tokenized=starling_cooldown_mixture,
+        model_config=llama_8b,
+        train_config=tootsie_8b_deeper_starling_train_config,
+        tags=["llama", "8b", "ema", "exp977", "tootsie", "cooldown"],
+        eval_harness_tasks=CORE_TASKS_PLUS_MMLU,
+    ).with_output_path(TOOTSIE_8B_DEEPER_STARLING_PATH)
+
+    default_base_eval(deeper_starling_step)
 
 
 if __name__ == "__main__":

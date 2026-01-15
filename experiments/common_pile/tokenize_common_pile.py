@@ -26,6 +26,7 @@ from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_dat
 # Mark library functions as deferred
 download_hf = deferred(_download_hf)
 
+
 # Common Pile v0.1 filtered dataset download steps
 @step(name="raw/common_pile/arxiv_abstracts_filtered")
 def arxiv_abstracts_filtered():
@@ -38,6 +39,7 @@ def arxiv_abstracts_filtered():
         )
     )
 
+
 @step(name="raw/common_pile/arxiv_papers_filtered")
 def arxiv_papers_filtered():
     return download_hf(
@@ -48,6 +50,7 @@ def arxiv_papers_filtered():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/biodiversity_heritage_library_filtered")
 def biodiversity_heritage_library_filtered():
@@ -60,6 +63,7 @@ def biodiversity_heritage_library_filtered():
         )
     )
 
+
 @step(name="raw/common_pile/caselaw_access_project_filtered")
 def caselaw_access_project_filtered():
     return download_hf(
@@ -70,6 +74,7 @@ def caselaw_access_project_filtered():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/cccc_filtered")
 def cccc_filtered():
@@ -82,6 +87,7 @@ def cccc_filtered():
         )
     )
 
+
 @step(name="raw/common_pile/data_provenance_initiative_filtered")
 def data_provenance_initiative_filtered():
     return download_hf(
@@ -92,6 +98,7 @@ def data_provenance_initiative_filtered():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/doab_filtered")
 def doab_filtered():
@@ -104,6 +111,7 @@ def doab_filtered():
         )
     )
 
+
 @step(name="raw/common_pile/foodista_filtered")
 def foodista_filtered():
     return download_hf(
@@ -114,6 +122,7 @@ def foodista_filtered():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/github_archive_filtered")
 def github_archive_filtered():
@@ -126,6 +135,7 @@ def github_archive_filtered():
         )
     )
 
+
 @step(name="raw/common_pile/library_of_congress_filtered")
 def library_of_congress_filtered():
     return download_hf(
@@ -136,6 +146,7 @@ def library_of_congress_filtered():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/libretexts_filtered")
 def libretexts_filtered():
@@ -148,6 +159,7 @@ def libretexts_filtered():
         )
     )
 
+
 @step(name="raw/common_pile/news_filtered")
 def news_filtered():
     return download_hf(
@@ -158,6 +170,7 @@ def news_filtered():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/oercommons_filtered")
 def oercommons_filtered():
@@ -170,6 +183,7 @@ def oercommons_filtered():
         )
     )
 
+
 @step(name="raw/common_pile/peS2o_filtered")
 def peS2o_filtered(ctx: StepContext):
     return download_hf(
@@ -180,6 +194,7 @@ def peS2o_filtered(ctx: StepContext):
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/pre_1929_books_filtered")
 def pre_1929_books_filtered(ctx: StepContext):
@@ -192,6 +207,7 @@ def pre_1929_books_filtered(ctx: StepContext):
         )
     )
 
+
 @step(name="raw/common_pile/pressbooks_filtered")
 def pressbooks_filtered():
     return download_hf(
@@ -202,6 +218,7 @@ def pressbooks_filtered():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/project_gutenberg_filtered")
 def project_gutenberg_filtered():
@@ -214,6 +231,7 @@ def project_gutenberg_filtered():
         )
     )
 
+
 @step(name="raw/common_pile/public_domain_review_filtered")
 def public_domain_review_filtered():
     return download_hf(
@@ -224,6 +242,7 @@ def public_domain_review_filtered():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/pubmed_filtered")
 def pubmed_filtered():
@@ -236,6 +255,7 @@ def pubmed_filtered():
         )
     )
 
+
 @step(name="raw/common_pile/python_enhancement_proposals_filtered")
 def python_enhancement_proposals_filtered():
     return download_hf(
@@ -246,6 +266,7 @@ def python_enhancement_proposals_filtered():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/regulations_filtered")
 def regulations_filtered():
@@ -258,6 +279,7 @@ def regulations_filtered():
         )
     )
 
+
 @step(name="raw/common_pile/stackexchange_filtered")
 def stackexchange_filtered():
     return download_hf(
@@ -268,6 +290,7 @@ def stackexchange_filtered():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/stackv2_edu_filtered")
 def stackv2_edu_filtered(ctx: StepContext):
@@ -280,6 +303,7 @@ def stackv2_edu_filtered(ctx: StepContext):
         )
     )
 
+
 @step(name="raw/common_pile/stackv2_html_filtered")
 def stackv2_html_filtered(ctx: StepContext):
     return download_hf(
@@ -290,6 +314,7 @@ def stackv2_html_filtered(ctx: StepContext):
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/stackv2")
 def stackv2(ctx: StepContext):
@@ -302,6 +327,7 @@ def stackv2(ctx: StepContext):
         )
     )
 
+
 @step(name="raw/common_pile/ubuntu_irc_filtered")
 def ubuntu_irc_filtered():
     return download_hf(
@@ -312,6 +338,7 @@ def ubuntu_irc_filtered():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/uk_hansard_filtered")
 def uk_hansard_filtered():
@@ -324,6 +351,7 @@ def uk_hansard_filtered():
         )
     )
 
+
 @step(name="raw/common_pile/usgpo_filtered")
 def usgpo_filtered():
     return download_hf(
@@ -334,6 +362,7 @@ def usgpo_filtered():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/uspto_filtered")
 def uspto_filtered():
@@ -346,6 +375,7 @@ def uspto_filtered():
         )
     )
 
+
 @step(name="raw/common_pile/wikimedia_filtered")
 def wikimedia_filtered():
     return download_hf(
@@ -356,6 +386,7 @@ def wikimedia_filtered():
             wait_for_completion=True,
         )
     )
+
 
 @step(name="raw/common_pile/wikiteam_filtered")
 def wikiteam_filtered():
@@ -368,6 +399,7 @@ def wikiteam_filtered():
         )
     )
 
+
 @step(name="raw/common_pile/youtube_filtered")
 def youtube_filtered():
     return download_hf(
@@ -378,6 +410,7 @@ def youtube_filtered():
             wait_for_completion=True,
         )
     )
+
 
 # Map dataset names to their corresponding raw download steps
 COMMON_PILE_DATASETS: dict[str, TokenizerStep] = {

@@ -25,7 +25,7 @@ from marin.download.huggingface.download_hf import download_hf as _download_hf
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
-from marin.execution import deferred, executor_main, output, step, versioned
+from marin.execution import StepRef, deferred, executor_main, output, step, versioned
 from marin.execution.executor import ExecutorStep
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
@@ -57,7 +57,8 @@ PALOMA_DATASETS_TO_DIR = {
     "wikitext_103": "wikitext_103",
 }
 
-@step(name="raw/paloma")
+
+@step(name="raw/paloma", override_output_path="raw/paloma-fc6827")
 def create_paloma_config():
     return download_hf(
         HfDownloadConfig(
@@ -70,11 +71,11 @@ def create_paloma_config():
     )
 
 
-paloma = create_paloma_config().with_output_path("raw/paloma-fc6827").cd("65cd6fc")
+paloma = create_paloma_config() / "65cd6fc"
 
 
 def paloma_tokenized(
-    *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, paloma_raw: ExecutorStep = paloma
+    *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, paloma_raw: StepRef = paloma
 ) -> dict[str, TokenizerStep]:
     """
     Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
@@ -86,7 +87,7 @@ def paloma_tokenized(
     for dataset, path_part in PALOMA_DATASETS_TO_DIR.items():
         paloma_steps[os.path.join("paloma", dataset)] = default_tokenize(
             name=os.path.join("paloma", dataset),
-            dataset=paloma_raw.cd(f"{path_part}/val/val*.jsonl.gz"),
+            dataset=paloma_raw / f"{path_part}/val/val*.jsonl.gz",
             tokenizer=tokenizer,
             is_validation=True,
         )

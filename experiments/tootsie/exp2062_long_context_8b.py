@@ -57,7 +57,7 @@ from experiments.posttrain.long_context_datasets import (
     longmino_by_bucket,
 )
 from experiments.tootsie.exp600_tootsie import (
-    tootsie_8b_sensible_starling,
+    TOOTSIE_8B_SENSIBLE_STARLING_PATH,
     starling_cooldown_weights,
     starling_components,
     PHASE_3_START,
@@ -77,7 +77,7 @@ from marin.processing.tokenize.data_configs import (
     lm_varying_mixture_data_config,
 )
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
+from marin.execution import executor_main, step
 
 # ---------------------------
 # Phases
@@ -237,7 +237,9 @@ giraffe_long_mixture = dataclasses.replace(giraffe_long_mixture, tokenizer=marin
 llama_8b_4k = dataclasses.replace(llama_8b, cross_entropy_block_size=32000)
 
 llama_8b_32k = dataclasses.replace(
-    llama_8b_4k, max_seq_len=32_768, rope=dataclasses.replace(llama_8b.rope, theta=1_500_000)  # type: ignore[arg-type]
+    llama_8b_4k,
+    max_seq_len=32_768,
+    rope=dataclasses.replace(llama_8b.rope, theta=1_500_000),  # type: ignore[arg-type]
 )
 
 llama_8b_64k = dataclasses.replace(
@@ -280,9 +282,7 @@ def _train_config(
 
 STARLING_WARMSTART_STEP = "1399923"
 # needed to move step-1399923-patched/opt_state/inner_state/1 to opt_state/inner_state/0 for some reason
-starling_checkpoint = tootsie_8b_sensible_starling.cd(
-    f"checkpoints/step-{STARLING_WARMSTART_STEP}-patched"
-).nonblocking()
+STARLING_CHECKPOINT_PATH = f"{TOOTSIE_8B_SENSIBLE_STARLING_PATH}/checkpoints/step-{STARLING_WARMSTART_STEP}-patched"
 
 # Phase 1: 4k -> ~100B tokens
 PHASE1_STEPS = GIRAFFE_4K_STEPS
@@ -292,7 +292,7 @@ giraffe_4k_config = dataclasses.replace(
     resources=ResourceConfig.with_tpu("v4-512", slice_count=1),
     train_seq_len=4096,
     num_train_steps=GIRAFFE_4K_END + 3,  # +3 to avoid fencepost issues
-    initialize_from_checkpoint_path=starling_checkpoint,
+    initialize_from_checkpoint_path=STARLING_CHECKPOINT_PATH,
     steps_per_export=1000,
     steps_per_hf_export=1000,
     optimizer_config=AdamConfig(
@@ -311,65 +311,66 @@ giraffe_4k_config = dataclasses.replace(
 )
 
 
-# the original had a botched lr schedule. classic me.
-tootsie_8b_giraffe_phase1 = default_train(
-    name="tootsie-8b-giraffe-4k-v4",
-    tokenized=giraffe_4K_mixture,
-    model_config=llama_8b_4k,
-    train_config=giraffe_4k_config,
-    tags=["llama", "8b", "giraffe", "phase1", "exp2062"],
-    eval_harness_tasks=[],
-)
-
-# Phase 2: 32k with RoPE theta 1.5M for ~50B tokens
-# 3000 * 512 * 32768 ≈ 50B tokens
-phase1_final_checkpoint = tootsie_8b_giraffe_phase1.cd(f"hf/step-{GIRAFFE_4K_END}")
-phase2_train_config = _train_config(
-    num_steps=GIRAFFE_16K_STEPS, batch_size=512, train_seq_len=32_768, initialize_from=phase1_final_checkpoint, seed=2
-)
-
-tootsie_8b_giraffe_phase2 = default_train(
-    name="tootsie-8b-giraffe-32k",
-    tokenized=giraffe_long_mixture,
-    model_config=llama_8b_32k,
-    train_config=phase2_train_config,
-    tags=["llama", "8b", "giraffe", "phase2", "exp2062"],
-    eval_harness_tasks=[],
-    # hash changed somehow
-).with_output_path("checkpoints/tootsie-8b-giraffe-32k-293fef")
-
 # Phase 3: 64k with RoPE theta 5M for ~50B tokens
 PHASE3_STEPS = GIRAFFE_32K_STEPS  # 3000 * 256 * 65536 ≈ 50B tokens
-# - 1 because of fencepost issues
-phase2_final_checkpoint = tootsie_8b_giraffe_phase2.cd(f"hf/step-{GIRAFFE_16K_STEPS - 1}")
-phase3_train_config = _train_config(
-    num_steps=PHASE3_STEPS,
-    batch_size=256,
-    train_seq_len=65_536,
-    initialize_from=phase2_final_checkpoint,
-    seed=3,
-)
 
-tootsie_8b_giraffe_phase3 = default_train(
-    name="tootsie-8b-giraffe-phase3-64k",
-    tokenized=giraffe_long_mixture,
-    model_config=llama_8b_64k,
-    train_config=phase3_train_config,
-    tags=["llama", "8b", "giraffe", "phase3", "exp2062"],
-    eval_harness_tasks=[],
-)
 
-phase3_final_checkpoint = tootsie_8b_giraffe_phase3.cd(f"hf/step-{PHASE3_STEPS - 1}")
+@step(name="tootsie/exp2062_long_context_8b/all")
+def run_long_context_8b():
+    """Entry point for long-context 8B training experiment."""
+    # the original had a botched lr schedule. classic me.
+    phase1 = default_train(
+        name="tootsie-8b-giraffe-4k-v4",
+        tokenized=giraffe_4K_mixture,
+        model_config=llama_8b_4k,
+        train_config=giraffe_4k_config,
+        tags=["llama", "8b", "giraffe", "phase1", "exp2062"],
+        eval_harness_tasks=[],
+    )
+
+    # Phase 2: 32k with RoPE theta 1.5M for ~50B tokens
+    # 3000 * 512 * 32768 ≈ 50B tokens
+    phase1_final_checkpoint = phase1.cd(f"hf/step-{GIRAFFE_4K_END}")
+    phase2_train_config = _train_config(
+        num_steps=GIRAFFE_16K_STEPS,
+        batch_size=512,
+        train_seq_len=32_768,
+        initialize_from=phase1_final_checkpoint,
+        seed=2,
+    )
+
+    phase2 = default_train(
+        name="tootsie-8b-giraffe-32k",
+        tokenized=giraffe_long_mixture,
+        model_config=llama_8b_32k,
+        train_config=phase2_train_config,
+        tags=["llama", "8b", "giraffe", "phase2", "exp2062"],
+        eval_harness_tasks=[],
+        # hash changed somehow
+    ).with_output_path("checkpoints/tootsie-8b-giraffe-32k-293fef")
+
+    # - 1 because of fencepost issues
+    phase2_final_checkpoint = phase2.cd(f"hf/step-{GIRAFFE_16K_STEPS - 1}")
+    phase3_train_config = _train_config(
+        num_steps=PHASE3_STEPS,
+        batch_size=256,
+        train_seq_len=65_536,
+        initialize_from=phase2_final_checkpoint,
+        seed=3,
+    )
+
+    default_train(
+        name="tootsie-8b-giraffe-phase3-64k",
+        tokenized=giraffe_long_mixture,
+        model_config=llama_8b_64k,
+        train_config=phase3_train_config,
+        tags=["llama", "8b", "giraffe", "phase3", "exp2062"],
+        eval_harness_tasks=[],
+    )
 
 
 if __name__ == "__main__":
     executor_main(
-        [
-            *long_context_tokenized.values(),
-            *finepdfs_edu_tokenized.values(),
-            *reasoning_tokenized.values(),
-            tootsie_8b_giraffe_phase1,
-            tootsie_8b_giraffe_phase2,
-            tootsie_8b_giraffe_phase3,
-        ]
+        steps=[run_long_context_8b()],
+        description="Long-context extension for Tootsie 8B",
     )

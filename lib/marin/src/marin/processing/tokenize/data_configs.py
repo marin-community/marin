@@ -267,9 +267,7 @@ def add_validation_sets_to_mixture(
     """
     Adds validation sets to a mixture config. Works with both fixed and varying mixture weights.
     """
-    valid_configs = {
-        name: step.config.as_lm_dataset_source_config(step) for name, step in validation_sets.items()
-    }
+    valid_configs = {name: step.config.as_lm_dataset_source_config(step) for name, step in validation_sets.items()}
     new_configs = {
         **config.configs,
         **{name: source for name, source in valid_configs.items() if name not in config.configs},

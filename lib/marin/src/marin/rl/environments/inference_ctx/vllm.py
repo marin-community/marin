@@ -155,7 +155,6 @@ class vLLMInferenceContext(BaseInferenceContext):
             # Try to find a matching pattern
             matched = False
             for src_pattern, (dst_pattern, _) in mapping.items():
-
                 if not re.match(src_pattern, src_key):
                     continue
 
@@ -341,7 +340,8 @@ class vLLMInferenceContext(BaseInferenceContext):
             # Plain string prompts with system prompt
             assert all(isinstance(p, str) for p in prompts), "prompts must be strings when system_prompt is provided"
             message_lists = [
-                [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}] for prompt in prompts  # type: ignore
+                [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
+                for prompt in prompts  # type: ignore
             ]
         else:
             # Plain string prompts without system prompt

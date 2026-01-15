@@ -56,6 +56,7 @@ TASK_CONFIGS = (
     + SPECIALIZED_TASKS
 )
 
+
 @step(name="evals/lm-harness/all")
 def run_lm_eval_harness():
     """Entry point for comprehensive LM Evaluation Harness testing."""

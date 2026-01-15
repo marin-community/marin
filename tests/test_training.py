@@ -68,7 +68,6 @@ def test_lm_config_with_local_paths(trainer_config, tpu_type):
         patch("marin.training.training.get_vm_region") as mock_get_vm_region,
         patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
     ):
-
         # Set up mocks
         mock_get_vm_region.return_value = "us-central1"
         mock_get_bucket_location.return_value = "us-central1"
@@ -93,7 +92,6 @@ def test_lm_config_with_gcs_paths_same_region(trainer_config):
         patch("marin.training.training.get_vm_region") as mock_get_vm_region,
         patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
     ):
-
         # Set up mocks
         mock_get_vm_region.return_value = "us-central1"
         mock_get_bucket_location.return_value = "us-central1"
@@ -117,7 +115,6 @@ def test_lm_config_with_gcs_paths_different_region(trainer_config):
         patch("marin.training.training.get_vm_region") as mock_get_vm_region,
         patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
     ):
-
         # Set up mocks
         mock_get_vm_region.return_value = "us-central1"
         mock_get_bucket_location.return_value = "us-east1"
@@ -144,7 +141,6 @@ def test_lm_config_with_allowed_out_of_region_paths(trainer_config):
         patch("marin.training.training.get_vm_region") as mock_get_vm_region,
         patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
     ):
-
         # Set up mocks
         mock_get_vm_region.return_value = "us-central1"
         mock_get_bucket_location.return_value = "us-east1"
@@ -169,7 +165,6 @@ def test_recursive_path_checking(trainer_config):
         patch("marin.training.training.get_vm_region") as mock_get_vm_region,
         patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
     ):
-
         # Set up mocks
         mock_get_vm_region.return_value = "us-central1"
         mock_get_bucket_location.return_value = "us-east1"
@@ -200,7 +195,6 @@ def test_dataclass_recursive_checking(trainer_config):
         patch("marin.training.training.get_vm_region") as mock_get_vm_region,
         patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
     ):
-
         # Set up mocks
         mock_get_vm_region.return_value = "us-central1"
         mock_get_bucket_location.return_value = "us-east1"
@@ -228,7 +222,6 @@ def test_pathlib_path_handling(trainer_config):
         patch("marin.training.training.get_vm_region") as mock_get_vm_region,
         patch("marin.training.training.get_bucket_location") as mock_get_bucket_location,
     ):
-
         mock_get_vm_region.return_value = "us-central1"
         mock_get_bucket_location.return_value = "us-east1"
 

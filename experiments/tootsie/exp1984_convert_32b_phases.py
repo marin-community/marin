@@ -32,6 +32,7 @@ from experiments.tootsie.exp1380_muon32b import llama_32b_muon
 from experiments.tootsie.exp1390_32b_necro import marin_32b_necro
 from experiments.tootsie.exp1395_qwen3_32b import marin_32b_qwen, qwen3_32b_remat
 from fray.cluster import ResourceConfig
+from marin.execution import step
 from marin.execution.executor import ExecutorStep, executor_main
 
 BASE_CHECKPOINT_PREFIX = "gs://marin-us-central2/checkpoints"
@@ -147,7 +148,7 @@ def create_phase_export_steps(trainer: TrainerConfig | None = None) -> Sequence[
     steps: list[ExecutorStep] = []
     for spec in PHASE_EXPORT_SPECS:
         trainer_config = spec.resolve_trainer_config(trainer)
-        step = convert_checkpoint_to_hf_step(
+        conversion_step = convert_checkpoint_to_hf_step(
             name=f"tootsie-32b-{spec.slug}",
             checkpoint_path=spec.checkpoint_path,
             model=spec.model_config,
@@ -156,12 +157,18 @@ def create_phase_export_steps(trainer: TrainerConfig | None = None) -> Sequence[
             tokenizer="marin-community/marin-tokenizer",
             discover_latest=spec.discover_latest,
         )
-        steps.append(step)
+        steps.append(conversion_step)
     return steps
+
+
+@step(name="tootsie/exp1984_convert_32b_phases/all")
+def run_experiment():
+    """Entry point for the experiment."""
+    return create_phase_export_steps()
 
 
 if __name__ == "__main__":
     executor_main(
-        steps=create_phase_export_steps(),
+        steps=[run_experiment()],
         description="Convert every Marin 32B Tootsie phase into Hugging Face checkpoints.",
     )
