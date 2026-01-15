@@ -368,13 +368,12 @@ class TwoStageConfig:
         return hash(self) == hash(other)
 
 
+@step(name="checkpoints/two_stage/{name}")
+def _two_stage_train_impl(name: str, two_stage_config: TwoStageConfig):
+    train_lm_on_pod_config = two_stage_config.build_train_lm_on_pod_config()
+    train_lm_on_pod_config.output_path = output()
+    return run_levanter_train_lm(train_lm_on_pod_config)
+
+
 def two_stage_train_step(two_stage_config: TwoStageConfig):
-    executor_step_name = os.path.join("checkpoints", "two_stage", two_stage_config.build_name())
-
-    @step(name=executor_step_name)
-    def _create_train_step():
-        train_lm_on_pod_config = two_stage_config.build_train_lm_on_pod_config()
-        train_lm_on_pod_config.output_path = output()
-        return run_levanter_train_lm(train_lm_on_pod_config)
-
-    return _create_train_step()
+    return _two_stage_train_impl(name=two_stage_config.build_name(), two_stage_config=two_stage_config)

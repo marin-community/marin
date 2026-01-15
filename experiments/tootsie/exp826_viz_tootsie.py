@@ -57,22 +57,29 @@ eval_sets = default_validation_sets(tokenizer=versioned(llama3_tokenizer))
 eval_set_mixture = mixture_for_evaluation(eval_sets)
 
 
+@step(name="analysis/viz/{checkpoint_name}")
+def _viz_step_impl(checkpoint_name: str, checkpoint_path: str, comparison_model_path: str | None):
+    return visualize_lm_log_probs(VizLmConfig(
+        checkpoint_path=checkpoint_path,
+        model=llama_8b,
+        datasets=eval_set_mixture,
+        num_docs_per_dataset=32,
+        comparison_model_path=comparison_model_path,
+    ))
+
+
 all_steps = []
 
 for checkpoint in CHECKPOINTS:
     name = path_to_step_name(checkpoint)
-
-    @step(name=name)
-    def viz_step(ckpt=checkpoint):
-        return visualize_lm_log_probs(VizLmConfig(
-            checkpoint_path=ckpt,
-            model=llama_8b,
-            datasets=eval_set_mixture,
-            num_docs_per_dataset=32,
-            comparison_model_path=COMPARISON_MODEL if ckpt != COMPARISON_MODEL else None,
-        ))
-
-    all_steps.append(viz_step())
+    # Extract checkpoint name from full path (e.g., "analysis/viz/llama-8b-tootsie-phase2-730000" -> "llama-8b-tootsie-phase2-730000")
+    checkpoint_name = name.split("analysis/viz/")[1]
+    viz_step = _viz_step_impl(
+        checkpoint_name=checkpoint_name,
+        checkpoint_path=checkpoint,
+        comparison_model_path=COMPARISON_MODEL if checkpoint != COMPARISON_MODEL else None,
+    )
+    all_steps.append(viz_step)
 
 
 PHASE_1_CONFIG = llama_8b_old_rotary
@@ -84,20 +91,28 @@ PHASE_1_CHECKPOINTS = [
     "gs://marin-eu-west4/checkpoints/llama-8b-tootsie-0.001-19ad63/checkpoints/step-500000/",
 ]
 
+
+@step(name="analysis/viz/{checkpoint_name}")
+def _viz_phase1_step_impl(checkpoint_name: str, checkpoint_path: str, comparison_model_path: str | None):
+    return visualize_lm_log_probs(VizLmConfig(
+        checkpoint_path=checkpoint_path,
+        model=PHASE_1_CONFIG,
+        datasets=eval_set_mixture,
+        num_docs_per_dataset=32,
+        comparison_model_path=comparison_model_path,
+    ))
+
+
 for checkpoint in PHASE_1_CHECKPOINTS:
     name = path_to_step_name(checkpoint)
-
-    @step(name=name)
-    def viz_phase1_step(ckpt=checkpoint):
-        return visualize_lm_log_probs(VizLmConfig(
-            checkpoint_path=ckpt,
-            model=PHASE_1_CONFIG,
-            datasets=eval_set_mixture,
-            num_docs_per_dataset=32,
-            comparison_model_path=PHASE_1_BASE if ckpt != PHASE_1_BASE else None,
-        ))
-
-    all_steps.append(viz_phase1_step())
+    # Extract checkpoint name from full path
+    checkpoint_name = name.split("analysis/viz/")[1]
+    viz_step = _viz_phase1_step_impl(
+        checkpoint_name=checkpoint_name,
+        checkpoint_path=checkpoint,
+        comparison_model_path=PHASE_1_BASE if checkpoint != PHASE_1_BASE else None,
+    )
+    all_steps.append(viz_step)
 
 
 if __name__ == "__main__":
