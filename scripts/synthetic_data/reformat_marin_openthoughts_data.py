@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Script to transform HuggingFace datasets:
-1. Remove 'response_seed' column
-2. Remove 'messages' column
+1. Remove 'response_seed' column (if it exists)
+2. Remove 'messages' column (if it exists)
 3. Add 'conversations' column with the specified format
 
 Usage:
@@ -13,6 +13,9 @@ Usage:
 Examples:
     python reformat_marin_openthoughts_data.py --dataset_name marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated
     python reformat_marin_openthoughts_data.py --dataset_name marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens
+    python reformat_marin_openthoughts_data.py --dataset_name marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-32768-tokens --force_overwrite
+    python reformat_marin_openthoughts_data.py --dataset_name marin-community/open-thoughts-4-30k-science-qwen3-32b-annotated-32768-tokens --force_overwrite
+    python reformat_marin_openthoughts_data.py --dataset_name marin-community/open-thoughts-4-30k-code-qwen3-32b-annotated --force_overwrite
     python reformat_marin_openthoughts_data.py --dataset_name marin-community/another-dataset
     python reformat_marin_openthoughts_data.py --dataset_name marin-community/another-dataset --response_column my_response_column
 """
@@ -22,7 +25,7 @@ from datasets import load_dataset, Dataset
 from huggingface_hub import HfApi
 
 
-def main(dataset_name: str, response_column: str):
+def main(dataset_name: str, response_column: str, force_overwrite: bool = False):
     # Load the dataset
     print(f"Loading dataset: {dataset_name}")
     ds = load_dataset(dataset_name, split="train")
@@ -32,10 +35,13 @@ def main(dataset_name: str, response_column: str):
     
     # Check if conversations column already exists
     if "conversations" in ds.column_names:
-        user_input = input(f"Warning: 'conversations' column already exists in dataset '{dataset_name}'. It will be overwritten. Continue? (y/n): ")
-        if user_input.lower() != 'y':
-            print("QUITTING.")
-            exit(0)
+        if not force_overwrite:
+            user_input = input(f"Warning: 'conversations' column already exists in dataset '{dataset_name}'. It will be overwritten. Continue? (y/n): ")
+            if user_input.lower() != 'y':
+                print("QUITTING.")
+                exit(0)
+        else:
+            print(f"Warning: 'conversations' column already exists. Overwriting due to --force_overwrite flag.")
         ds = ds.remove_columns(["conversations"])
     
     # Check if response_column exists
@@ -106,6 +112,11 @@ if __name__ == "__main__":
         default="generated_text",
         help="The column to use for the gpt response value (default: 'generated_text')"
     )
-    
+    parser.add_argument(
+        "--force_overwrite",
+        action="store_true",
+        help="If set, automatically overwrite 'conversations' column without prompting"
+    )
+
     args = parser.parse_args()
-    main(args.dataset_name, args.response_column)
+    main(args.dataset_name, args.response_column, args.force_overwrite)
