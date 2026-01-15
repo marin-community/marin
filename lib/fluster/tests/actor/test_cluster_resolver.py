@@ -351,6 +351,7 @@ def test_cluster_resolver_metadata(controller_with_endpoint):
 
 
 def test_cluster_resolver_requires_context():
-    """Test that ClusterResolver raises error without FlusterContext."""
-    with pytest.raises(RuntimeError, match="requires a FlusterContext"):
-        ClusterResolver("http://localhost:8080")
+    """Test that ClusterResolver.resolve() raises error without FlusterContext."""
+    resolver = ClusterResolver("http://localhost:8080")
+    with pytest.raises(RuntimeError, match="No FlusterContext"):
+        resolver.resolve("some-actor")

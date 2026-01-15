@@ -167,14 +167,15 @@ class RpcEndpointRegistry:
     def unregister(self, endpoint_id: str) -> None:
         """Unregister an endpoint.
 
-        Not implemented - controller automatically cleans up endpoints when
-        jobs terminate.
+        This is a no-op for the RPC registry. The controller automatically
+        cleans up endpoints when jobs terminate, so explicit unregistration
+        is not required.
+
+        Args:
+            endpoint_id: Endpoint ID (ignored)
         """
-        del endpoint_id  # Unused - method not implemented
-        raise NotImplementedError(
-            "Explicit endpoint unregistration not implemented. "
-            "Endpoints are automatically cleaned up when jobs terminate."
-        )
+        # No-op: controller auto-cleans endpoints on job termination
+        del endpoint_id
 
 
 class RpcClusterClient:
@@ -214,6 +215,7 @@ class RpcClusterClient:
         self._timeout_ms = timeout_ms
         self._bundle_blob: bytes | None = None
         self._registry: RpcEndpointRegistry | None = None
+        self._resolver: ClusterResolver | None = None
         self._client = ControllerServiceClientSync(
             address=controller_address,
             timeout_ms=timeout_ms,
@@ -247,8 +249,11 @@ class RpcClusterClient:
         """Get a resolver for actor discovery.
 
         The resolver uses the namespace derived from the current job context.
+        The resolver is cached for efficiency.
         """
-        return ClusterResolver(self._address)
+        if self._resolver is None:
+            self._resolver = ClusterResolver(self._address)
+        return self._resolver
 
     def submit(
         self,

@@ -81,7 +81,8 @@ class ClusterResolver:
     registered by running jobs. Automatically prefixes names with the namespace
     derived from the current FlusterContext.
 
-    Requires a FlusterContext to be active (must be called from within a job).
+    The namespace prefix is computed dynamically from the current FlusterContext,
+    so a single resolver instance can be shared across jobs.
 
     Args:
         controller_address: Controller URL (e.g., "http://localhost:8080")
@@ -93,22 +94,19 @@ class ClusterResolver:
         controller_address: str,
         timeout: float = 5.0,
     ):
-        ctx = get_fluster_ctx()
-        if ctx is None:
-            raise RuntimeError(
-                "ClusterResolver requires a FlusterContext. "
-                "Ensure your code is running within a job submitted via "
-                "LocalClient or RpcClusterClient."
-            )
-
         self._address = controller_address.rstrip("/")
         self._timeout = timeout
-        self._namespace_prefix = str(Namespace.from_job_id(ctx.job_id))
-
         self._client = ControllerServiceClientSync(
             address=self._address,
             timeout_ms=int(timeout * 1000),
         )
+
+    def _namespace_prefix(self) -> str:
+        """Get namespace prefix from current FlusterContext."""
+        ctx = get_fluster_ctx()
+        if ctx is None:
+            raise RuntimeError("No FlusterContext - must be called from within a job")
+        return str(Namespace.from_job_id(ctx.job_id))
 
     def resolve(self, name: str) -> ResolveResult:
         """Resolve actor name to endpoints via controller.
@@ -123,7 +121,7 @@ class ClusterResolver:
         Returns:
             ResolveResult with matching endpoints
         """
-        prefixed_name = f"{self._namespace_prefix}/{name}"
+        prefixed_name = f"{self._namespace_prefix()}/{name}"
 
         request = cluster_pb2.Controller.ListEndpointsRequest(
             prefix=prefixed_name,
