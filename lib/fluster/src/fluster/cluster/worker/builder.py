@@ -156,7 +156,10 @@ class ImageCache:
 
         Returns cached image if deps_hash matches.
         """
-        image_tag = f"{self._registry}/fluster-job-{job_id}:{deps_hash[:8]}"
+        if self._registry:
+            image_tag = f"{self._registry}/fluster-job-{job_id}:{deps_hash[:8]}"
+        else:
+            image_tag = f"fluster-job-{job_id}:{deps_hash[:8]}"
 
         # Check if image exists locally
         if self._docker.exists(image_tag):
@@ -190,7 +193,10 @@ class ImageCache:
 
     def _evict_old_images(self) -> None:
         """Remove old fluster images when over limit."""
-        pattern = f"{self._registry}/fluster-job-*"
+        if self._registry:
+            pattern = f"{self._registry}/fluster-job-*"
+        else:
+            pattern = "fluster-job-*"
         images = self._docker.list_images(pattern)
 
         if len(images) <= self._max_images:

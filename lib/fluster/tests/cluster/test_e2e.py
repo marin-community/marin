@@ -36,8 +36,9 @@ import pytest
 from fluster.cluster.client import RpcClusterClient
 from fluster.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
 from fluster.cluster.types import Entrypoint
-from fluster.cluster.worker.builder import BuildResult
-from fluster.cluster.worker.docker import ContainerConfig, ContainerStats, ContainerStatus
+from fluster.cluster.worker.builder import BuildResult, ImageCache
+from fluster.cluster.worker.bundle import BundleCache
+from fluster.cluster.worker.docker import ContainerConfig, ContainerStats, ContainerStatus, DockerRuntime
 from fluster.cluster.worker.worker import Worker, WorkerConfig
 from fluster.cluster.worker.worker_types import LogLine
 from fluster.rpc import cluster_pb2
@@ -68,10 +69,6 @@ class MockContainer:
 
     def _execute(self):
         import os
-
-        # Small delay to let controller update job state with worker_id
-        # before we complete and report state back.
-        time.sleep(0.2)
 
         original_env = {}
         try:
@@ -207,16 +204,18 @@ def find_free_port() -> int:
 # =============================================================================
 
 
-class TestCluster:
+class E2ECluster:
     """Synchronous context manager running a controller + worker cluster.
 
-    Uses in-process execution (no Docker) for fast testing.
+    Uses in-process execution (no Docker) by default for fast testing.
+    Set use_docker=True to use real Docker containers.
     """
 
-    def __init__(self, max_concurrent_jobs: int = 3, num_workers: int = 1):
+    def __init__(self, max_concurrent_jobs: int = 3, num_workers: int = 1, use_docker: bool = False):
         self._controller_port = find_free_port()
         self._max_concurrent_jobs = max_concurrent_jobs
         self._num_workers = num_workers
+        self._use_docker = use_docker
 
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._controller: Controller | None = None
@@ -257,7 +256,17 @@ class TestCluster:
             timeout_ms=30000,
         )
 
-        # Start Workers with mocked dependencies
+        # Select providers based on use_docker flag
+        if self._use_docker:
+            bundle_provider = BundleCache(cache_path, max_bundles=10)
+            image_provider = ImageCache(cache_path, registry="", max_images=10)
+            container_runtime = DockerRuntime()
+        else:
+            bundle_provider = MockBundleProvider(fake_bundle)
+            image_provider = MockImageProvider()
+            container_runtime = InProcessContainerRuntime()
+
+        # Start Workers
         for i in range(self._num_workers):
             worker_id = f"worker-{i}-{uuid.uuid4().hex[:8]}"
             worker_port = find_free_port()
@@ -268,13 +277,14 @@ class TestCluster:
                 max_concurrent_jobs=self._max_concurrent_jobs,
                 controller_address=f"http://127.0.0.1:{self._controller_port}",
                 worker_id=worker_id,
+                poll_interval_seconds=0.1,  # Fast polling for tests
             )
             worker = Worker(
                 worker_config,
                 cache_dir=cache_path,
-                bundle_provider=MockBundleProvider(fake_bundle),
-                image_provider=MockImageProvider(),
-                container_runtime=InProcessContainerRuntime(),
+                bundle_provider=bundle_provider,
+                image_provider=image_provider,
+                container_runtime=container_runtime,
             )
             worker.start()
             self._workers.append(worker)
@@ -366,17 +376,17 @@ class TestCluster:
 # =============================================================================
 
 
-@pytest.fixture
-def test_cluster():
-    """Provide a running test cluster for E2E tests."""
-    with TestCluster(max_concurrent_jobs=3) as cluster:
+@pytest.fixture(scope="session")
+def test_cluster(use_docker):
+    """Provide a running test cluster for E2E tests (session-scoped)."""
+    with E2ECluster(max_concurrent_jobs=3, use_docker=use_docker) as cluster:
         yield cluster
 
 
-@pytest.fixture
-def multi_worker_cluster():
-    """Provide a cluster with multiple workers."""
-    with TestCluster(max_concurrent_jobs=3, num_workers=3) as cluster:
+@pytest.fixture(scope="session")
+def multi_worker_cluster(use_docker):
+    """Provide a cluster with multiple workers (session-scoped)."""
+    with E2ECluster(max_concurrent_jobs=3, num_workers=3, use_docker=use_docker) as cluster:
         yield cluster
 
 
@@ -527,18 +537,20 @@ class TestPorts:
 
     def test_port_allocation(self, test_cluster):
         """Ports are allocated and passed via environment."""
-        received_ports = {}
 
         def port_job():
             import os
 
-            received_ports["http"] = os.environ.get("FLUSTER_PORT_HTTP")
-            received_ports["grpc"] = os.environ.get("FLUSTER_PORT_GRPC")
+            # Verify ports are set - raise if missing so job fails
+            http_port = os.environ.get("FLUSTER_PORT_HTTP")
+            grpc_port = os.environ.get("FLUSTER_PORT_GRPC")
+            if not http_port or not grpc_port:
+                raise ValueError(f"Ports not set: http={http_port}, grpc={grpc_port}")
+            # Verify they're valid port numbers
+            int(http_port)
+            int(grpc_port)
 
         job_id = test_cluster.submit(port_job, name="port-job", ports=["http", "grpc"])
         status = test_cluster.wait(job_id, timeout=30)
-        assert status["state"] == "JOB_STATE_SUCCEEDED"
-
-        # Ports should have been allocated (non-None)
-        assert received_ports.get("http") is not None
-        assert received_ports.get("grpc") is not None
+        # Job succeeds only if ports were correctly passed
+        assert status["state"] == "JOB_STATE_SUCCEEDED", f"Job failed: {status}"

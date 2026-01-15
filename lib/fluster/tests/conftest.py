@@ -13,3 +13,19 @@
 # limitations under the License.
 
 # Test configuration for fluster
+
+import pytest
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--use-docker",
+        action="store_true",
+        default=False,
+        help="Use real Docker containers instead of in-process mocks",
+    )
+
+
+@pytest.fixture(scope="session")
+def use_docker(request):
+    return request.config.getoption("--use-docker")
