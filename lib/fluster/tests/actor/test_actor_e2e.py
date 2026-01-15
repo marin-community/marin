@@ -69,7 +69,6 @@ def test_actor_context_injection():
     ctx = FlusterContext(
         job_id="test-job-123",
         worker_id="test-worker",
-        controller=None,
     )
 
     # Set up context before starting server (server captures context at serve_background time)

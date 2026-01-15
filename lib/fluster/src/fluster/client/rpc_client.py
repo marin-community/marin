@@ -112,22 +112,26 @@ class RpcEndpointRegistry:
 
     Used by ActorServer to register endpoints when running in a remote worker.
     Names are auto-prefixed with the namespace (root job ID) for isolation.
+
+    The namespace prefix is computed dynamically from the current FlusterContext,
+    so a single registry instance can be shared.
     """
 
-    def __init__(
-        self,
-        client: ControllerServiceClientSync,
-        job_id: str,
-    ):
+    def __init__(self, client: ControllerServiceClientSync):
         """Initialize the RPC endpoint registry.
 
         Args:
             client: RPC client for controller communication
-            job_id: Job ID that owns registered endpoints (namespace derived from root)
         """
         self._client = client
-        self._job_id = job_id
-        self._namespace_prefix = str(Namespace.from_job_id(job_id))
+
+    def _get_job_context(self) -> tuple[str, str]:
+        """Get job_id and namespace_prefix from current FlusterContext."""
+        ctx = get_fluster_ctx()
+        if ctx is None:
+            raise RuntimeError("No FlusterContext - must be called from within a job")
+        namespace_prefix = str(Namespace.from_job_id(ctx.job_id))
+        return ctx.job_id, namespace_prefix
 
     def register(
         self,
@@ -149,11 +153,12 @@ class RpcEndpointRegistry:
         Returns:
             Endpoint ID assigned by controller
         """
-        prefixed_name = f"{self._namespace_prefix}/{name}"
+        job_id, namespace_prefix = self._get_job_context()
+        prefixed_name = f"{namespace_prefix}/{name}"
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=prefixed_name,
             address=address,
-            job_id=self._job_id,
+            job_id=job_id,
             metadata=metadata or {},
         )
         response = self._client.register_endpoint(request)
@@ -179,8 +184,9 @@ class RpcClusterClient:
     1. External client (with workspace): Bundles workspace and submits jobs from outside.
        Example: client = RpcClusterClient("http://controller:8080", workspace=Path("./my-project"))
 
-    2. Inside-job client (with job_id): Used by job code to submit sub-jobs and register actors.
-       Example: client = RpcClusterClient("http://controller:8080", job_id="abc123/worker-0")
+    2. Inside-job client: Used by job code to submit sub-jobs. The job_id is automatically
+       inferred from the FlusterContext.
+       Example: client = RpcClusterClient("http://controller:8080", bundle_gcs_path="gs://...")
     """
 
     def __init__(
@@ -188,7 +194,6 @@ class RpcClusterClient:
         controller_address: str,
         *,
         workspace: Path | None = None,
-        job_id: str | None = None,
         bundle_gcs_path: str | None = None,
         timeout_ms: int = 30000,
     ):
@@ -199,15 +204,12 @@ class RpcClusterClient:
             workspace: Path to workspace directory containing pyproject.toml.
                 If provided, this directory will be bundled and sent to workers.
                 Required for external job submission.
-            job_id: Current job ID for inside-job use. Enables endpoint_registry
-                and parent_job_id inference for sub-job submission.
             bundle_gcs_path: GCS path to workspace bundle for sub-job inheritance.
                 When set, sub-jobs use this path instead of creating new bundles.
             timeout_ms: RPC timeout in milliseconds
         """
         self._address = controller_address
         self._workspace = workspace
-        self._job_id = job_id
         self._bundle_gcs_path = bundle_gcs_path
         self._timeout_ms = timeout_ms
         self._bundle_blob: bytes | None = None
@@ -230,14 +232,10 @@ class RpcClusterClient:
     def endpoint_registry(self) -> EndpointRegistry:
         """Get the endpoint registry for actor registration.
 
-        Only available when job_id was provided to constructor.
+        The registry looks up job_id from the FlusterContext dynamically.
         """
         if self._registry is None:
-            if self._job_id is None:
-                raise RuntimeError(
-                    "endpoint_registry requires job_id. " "Pass job_id to constructor when using inside a job."
-                )
-            self._registry = RpcEndpointRegistry(self._client, self._job_id)
+            self._registry = RpcEndpointRegistry(self._client)
         return self._registry
 
     @property
@@ -296,9 +294,9 @@ class RpcClusterClient:
             extras=list(environment.extras) if environment else [],
         )
 
-        # Get parent job ID from context or self._job_id
+        # Get parent job ID from context
         ctx = get_fluster_ctx()
-        parent_job_id = ctx.job_id if ctx else (self._job_id or "")
+        parent_job_id = ctx.job_id if ctx else ""
 
         # Construct full hierarchical name
         if parent_job_id:

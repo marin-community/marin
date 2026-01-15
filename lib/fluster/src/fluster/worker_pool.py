@@ -186,9 +186,9 @@ def worker_job_entrypoint(pool_id: str, worker_index: int) -> None:
     server.register(worker_name, TaskExecutorActor())
     actual_port = server.serve_background()
 
-    # Register endpoint with controller
+    # Register endpoint with registry
     address = f"localhost:{actual_port}"
-    ctx.controller.endpoint_registry.register(worker_name, address, {"job_id": ctx.job_id})
+    ctx.registry.register(worker_name, address, {"job_id": ctx.job_id})
     print(f"ActorServer started and registered on port {actual_port}")
 
     # Serve forever

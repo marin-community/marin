@@ -15,7 +15,7 @@
 """Fluster client package.
 
 This package provides the core client interfaces for Fluster:
-- ClusterClient, ClusterController: Protocols for cluster operations
+- ClusterClient: Protocol for cluster operations
 - EndpointRegistry: Protocol for actor endpoint registration
 - FlusterContext: Execution context available in jobs
 - LocalClient: Thread-based local execution
@@ -32,7 +32,6 @@ from fluster.client.context import (
 )
 from fluster.client.protocols import (
     ClusterClient,
-    ClusterController,
     EndpointRegistry,
     ResolvedEndpoint,
     ResolveResult,
@@ -59,7 +58,6 @@ def __getattr__(name: str):
 
 __all__ = [
     "ClusterClient",
-    "ClusterController",
     "EndpointRegistry",
     "FlusterContext",
     "LocalClient",

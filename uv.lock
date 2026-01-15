@@ -1999,7 +1999,9 @@ dependencies = [
 [package.dev-dependencies]
 demo = [
     { name = "click" },
+    { name = "ipykernel" },
     { name = "jupyter" },
+    { name = "nbconvert" },
 ]
 dev = [
     { name = "pytest" },
@@ -2024,7 +2026,9 @@ requires-dist = [
 [package.metadata.requires-dev]
 demo = [
     { name = "click", specifier = ">=8.3.1" },
+    { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "jupyter", specifier = ">=1.1.1" },
+    { name = "nbconvert", specifier = ">=7.16.6" },
 ]
 dev = [
     { name = "pytest", specifier = ">=8.3.2" },

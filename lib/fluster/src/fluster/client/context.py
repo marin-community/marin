@@ -20,7 +20,8 @@ in any job code, providing access to:
 - namespace: Namespace for actor isolation
 - job_id: Unique job identifier
 - worker_id: Worker executing the job
-- controller: Protocol for cluster operations
+- client: ClusterClient for job operations
+- registry: EndpointRegistry for actor registration
 - ports: Allocated ports for actor servers
 
 Example:
@@ -34,7 +35,7 @@ Example:
     port = ctx.get_port("actor")
 
     # Submit a sub-job
-    sub_job_id = ctx.controller.submit(entrypoint, "sub-job", resources)
+    sub_job_id = ctx.client.submit(entrypoint, "sub-job", resources)
 """
 
 import os
@@ -43,7 +44,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
-from fluster.client.protocols import ClusterController, Resolver
+from fluster.client.protocols import ClusterClient, EndpointRegistry, Resolver
 from fluster.cluster.types import Namespace
 
 
@@ -62,14 +63,16 @@ class FlusterContext:
         job_id: Unique identifier for this job (hierarchical: "root/parent/child")
         attempt_id: Attempt number for this job execution (0-based)
         worker_id: Identifier for the worker executing this job (may be None)
-        controller: ClusterController for job/actor operations
+        client: ClusterClient for job operations (submit, status, wait, etc.)
+        registry: EndpointRegistry for actor endpoint registration
         ports: Allocated ports by name (e.g., {"actor": 50001})
     """
 
     job_id: str
     attempt_id: int = 0
     worker_id: str | None = None
-    controller: ClusterController | None = None
+    client: ClusterClient | None = None
+    registry: EndpointRegistry | None = None
     ports: dict[str, int] = field(default_factory=dict)
 
     @property
@@ -120,11 +123,11 @@ class FlusterContext:
         The resolver uses the namespace derived from this context's job ID.
 
         Raises:
-            RuntimeError: If no controller is available
+            RuntimeError: If no client is available
         """
-        if self.controller is None:
-            raise RuntimeError("No controller available in context")
-        return self.controller.resolver()
+        if self.client is None:
+            raise RuntimeError("No client available in context")
+        return self.client.resolver()
 
 
 # Module-level ContextVar for the current fluster context
@@ -218,20 +221,27 @@ def create_context_from_env() -> FlusterContext:
             port_name = key[len("FLUSTER_PORT_") :].lower()
             ports[port_name] = int(value)
 
-    controller = None
+    client = None
+    registry = None
     if controller_address:
-        from fluster.client.rpc_client import RpcClusterClient
+        from fluster.client.rpc_client import RpcClusterClient, RpcEndpointRegistry
+        from fluster.rpc.cluster_connect import ControllerServiceClientSync
 
-        controller = RpcClusterClient(
+        rpc_client = ControllerServiceClientSync(
+            address=controller_address,
+            timeout_ms=30000,
+        )
+        client = RpcClusterClient(
             controller_address=controller_address,
-            job_id=job_id,
             bundle_gcs_path=bundle_gcs_path,
         )
+        registry = RpcEndpointRegistry(rpc_client)
 
     return FlusterContext(
         job_id=job_id,
         attempt_id=attempt_id,
         worker_id=worker_id,
-        controller=controller,
+        client=client,
+        registry=registry,
         ports=ports,
     )

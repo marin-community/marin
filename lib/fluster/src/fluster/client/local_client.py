@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from fluster.client.context import FlusterContext, fluster_ctx_scope, get_fluster_ctx
-from fluster.client.protocols import EndpointRegistry, ResolvedEndpoint, ResolveResult, Resolver
+from fluster.client.protocols import ResolvedEndpoint, ResolveResult, Resolver
 from fluster.cluster.types import Entrypoint, JobId, Namespace, is_job_finished
 from fluster.rpc import cluster_pb2
 from fluster.time_utils import ExponentialBackoff
@@ -119,16 +119,25 @@ class _EndpointStore:
 
 
 class LocalEndpointRegistry:
-    """Per-job endpoint registry implementing the EndpointRegistry protocol.
+    """Endpoint registry implementing the EndpointRegistry protocol.
 
     Wraps the shared _EndpointStore and auto-prefixes names with the job's
-    namespace (derived from job_id). This class implements the EndpointRegistry
+    namespace (derived from context). This class implements the EndpointRegistry
     protocol and is the public API for endpoint registration in local mode.
+
+    The namespace prefix is computed dynamically from the current FlusterContext,
+    so a single registry instance can be shared across all jobs.
     """
 
-    def __init__(self, store: _EndpointStore, job_id: str):
+    def __init__(self, store: _EndpointStore):
         self._store = store
-        self._namespace_prefix = str(Namespace.from_job_id(job_id))
+
+    def _namespace_prefix(self) -> str:
+        """Get namespace prefix from current FlusterContext."""
+        ctx = get_fluster_ctx()
+        if ctx is None:
+            raise RuntimeError("No FlusterContext - must be called from within a job")
+        return str(Namespace.from_job_id(ctx.job_id))
 
     def register(
         self,
@@ -137,7 +146,7 @@ class LocalEndpointRegistry:
         metadata: dict[str, str] | None = None,
     ) -> str:
         """Register an endpoint, auto-prefixing with namespace."""
-        full_name = f"{self._namespace_prefix}/{name}"
+        full_name = f"{self._namespace_prefix()}/{name}"
         return self._store.store(full_name, address, metadata)
 
     def unregister(self, endpoint_id: str) -> None:
@@ -150,17 +159,25 @@ class LocalResolver:
 
     Used by jobs running in LocalClient to discover actors registered
     with the local endpoint store. Auto-prefixes names with namespace.
+
+    The namespace prefix is computed dynamically from the current FlusterContext,
+    so a single resolver instance can be shared across all jobs.
     """
 
-    def __init__(self, store: _EndpointStore, job_id: str):
+    def __init__(self, store: _EndpointStore):
         """Initialize the local resolver.
 
         Args:
             store: The shared endpoint store to look up from
-            job_id: Job ID used to derive namespace prefix
         """
         self._store = store
-        self._namespace_prefix = str(Namespace.from_job_id(job_id))
+
+    def _namespace_prefix(self) -> str:
+        """Get namespace prefix from current FlusterContext."""
+        ctx = get_fluster_ctx()
+        if ctx is None:
+            raise RuntimeError("No FlusterContext - must be called from within a job")
+        return str(Namespace.from_job_id(ctx.job_id))
 
     def resolve(self, name: str) -> ResolveResult:
         """Resolve actor name to endpoints.
@@ -173,65 +190,10 @@ class LocalResolver:
         Returns:
             ResolveResult with matching endpoints
         """
-        prefixed_name = f"{self._namespace_prefix}/{name}"
+        prefixed_name = f"{self._namespace_prefix()}/{name}"
         matches = self._store.lookup(prefixed_name)
         endpoints = [ResolvedEndpoint(url=f"http://{addr}", actor_id=eid, metadata=meta) for addr, eid, meta in matches]
         return ResolveResult(name=name, endpoints=endpoints)
-
-
-class _LocalJobControllerAdapter:
-    """Per-job ClusterController implementation for LocalClient.
-
-    Each job gets its own adapter instance with its job_id, enabling
-    proper namespace derivation that matches RPC behavior.
-    """
-
-    def __init__(self, client: "LocalClient", job_id: str):
-        self._client = client
-        self._job_id = job_id
-        self._registry = LocalEndpointRegistry(client._endpoint_store, job_id)
-
-    def submit(
-        self,
-        entrypoint: Entrypoint,
-        name: str,
-        resources: cluster_pb2.ResourceSpec,
-        environment: cluster_pb2.EnvironmentConfig | None = None,
-        ports: list[str] | None = None,
-    ) -> JobId:
-        """Submit a job for local execution."""
-        return self._client.submit(entrypoint, name, resources, environment, ports)
-
-    def status(self, job_id: JobId) -> cluster_pb2.JobStatus:
-        """Get job status."""
-        return self._client.status(job_id)
-
-    def wait(
-        self,
-        job_id: JobId,
-        timeout: float = 300.0,
-        poll_interval: float = 0.5,
-    ) -> cluster_pb2.JobStatus:
-        """Wait for job to complete."""
-        return self._client.wait(job_id, timeout, poll_interval)
-
-    def terminate(self, job_id: JobId) -> None:
-        """Terminate a job."""
-        self._client.terminate(job_id)
-
-    def resolver(self) -> Resolver:
-        """Get a resolver for actor discovery."""
-        return LocalResolver(self._client._endpoint_store, self._job_id)
-
-    @property
-    def endpoint_registry(self) -> EndpointRegistry:
-        """Get the endpoint registry."""
-        return self._registry
-
-    @property
-    def address(self) -> str:
-        """Address (local client has no network address)."""
-        return "local://localhost"
 
 
 class LocalClient:
@@ -261,6 +223,8 @@ class LocalClient:
         self._job_counter = 0
         self._next_port = self._config.port_range[0]
         self._endpoint_store = _EndpointStore()
+        self._registry = LocalEndpointRegistry(self._endpoint_store)
+        self._resolver = LocalResolver(self._endpoint_store)
 
     def __enter__(self) -> "LocalClient":
         self._executor = ThreadPoolExecutor(max_workers=self._config.max_workers)
@@ -273,14 +237,10 @@ class LocalClient:
         """Get a resolver for actor discovery.
 
         Uses the namespace derived from the current job context.
-        Must be called from within a job.
+        The resolver is shared across all jobs; namespace is looked up
+        dynamically from FlusterContext when resolve() is called.
         """
-        ctx = get_fluster_ctx()
-        if ctx is None:
-            raise RuntimeError(
-                "LocalClient.resolver() requires a FlusterContext. " "Call this from within a submitted job."
-            )
-        return LocalResolver(self._endpoint_store, ctx.job_id)
+        return self._resolver
 
     def _allocate_port(self) -> int:
         """Allocate a port from the configured range."""
@@ -341,14 +301,12 @@ class LocalClient:
         # Allocate requested ports
         allocated_ports = {port_name: self._allocate_port() for port_name in ports or []}
 
-        # Create per-job controller adapter (matches RPC behavior)
-        job_controller = _LocalJobControllerAdapter(self, job_id)
-
         # Create context for this job (namespace is derived from job_id root)
         job_ctx = FlusterContext(
             job_id=job_id,
             worker_id=f"local-worker-{threading.current_thread().ident}",
-            controller=job_controller,
+            client=self,
+            registry=self._registry,
             ports=allocated_ports,
         )
 

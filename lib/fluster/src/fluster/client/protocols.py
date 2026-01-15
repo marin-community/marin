@@ -20,8 +20,7 @@ with both local execution (LocalClient) and remote cluster execution (RpcCluster
 
 Protocols:
 - EndpointRegistry: Registering actor endpoints for discovery
-- ClusterController: Cluster operations available inside jobs (via FlusterContext)
-- ClusterClient: Full cluster client interface for external job submission
+- ClusterClient: Cluster client interface for job submission
 - Resolver: Protocol for actor name resolution
 """
 
@@ -111,103 +110,6 @@ class EndpointRegistry(Protocol):
         Args:
             endpoint_id: ID returned from register()
         """
-        ...
-
-
-@runtime_checkable
-class ClusterController(Protocol):
-    """Protocol for cluster operations.
-
-    Abstracts the interface for job management and actor discovery,
-    allowing the same code to work with both LocalClient and RpcClusterClient.
-
-    Implementations:
-    - RpcClusterClient: Backed by RPC to controller (with job_id set)
-    - _LocalJobControllerAdapter: In-process for local execution
-    """
-
-    def submit(
-        self,
-        entrypoint: Entrypoint,
-        name: str,
-        resources: cluster_pb2.ResourceSpec,
-        environment: cluster_pb2.EnvironmentConfig | None = None,
-        ports: list[str] | None = None,
-    ) -> JobId:
-        """Submit a job for execution.
-
-        Namespace is inherited from the current context.
-
-        Args:
-            entrypoint: Job entrypoint (callable + args/kwargs)
-            name: Job name
-            resources: Resource requirements
-            environment: Environment configuration
-            ports: Port names to allocate (e.g., ["actor", "metrics"])
-
-        Returns:
-            Job ID for the submitted job
-        """
-        ...
-
-    def status(self, job_id: JobId) -> cluster_pb2.JobStatus:
-        """Get job status.
-
-        Args:
-            job_id: Job ID to query
-
-        Returns:
-            JobStatus proto with current state
-        """
-        ...
-
-    def wait(
-        self,
-        job_id: JobId,
-        timeout: float = 300.0,
-        poll_interval: float = 0.5,
-    ) -> cluster_pb2.JobStatus:
-        """Wait for job to complete.
-
-        Args:
-            job_id: Job ID to wait for
-            timeout: Maximum time to wait in seconds
-            poll_interval: Time between status checks
-
-        Returns:
-            Final JobStatus
-
-        Raises:
-            TimeoutError: If job doesn't complete within timeout
-        """
-        ...
-
-    def terminate(self, job_id: JobId) -> None:
-        """Terminate a running job.
-
-        Args:
-            job_id: Job ID to terminate
-        """
-        ...
-
-    def resolver(self) -> Resolver:
-        """Get a resolver for actor discovery.
-
-        The namespace is derived from the current job context.
-
-        Returns:
-            Resolver implementation
-        """
-        ...
-
-    @property
-    def endpoint_registry(self) -> EndpointRegistry:
-        """Get the endpoint registry for actor registration."""
-        ...
-
-    @property
-    def address(self) -> str:
-        """Address of the controller (for compatibility)."""
         ...
 
 

@@ -17,7 +17,7 @@
 ActorServer hosts actor instances and handles RPC calls. It integrates with
 FlusterContext for:
 - Getting allocated ports via ctx.get_port("actor")
-- Registering endpoints via ctx.controller.endpoint_registry
+- Registering endpoints via ctx.registry
 
 Example:
     # In a job entrypoint:
@@ -276,14 +276,14 @@ class ActorServer:
         return self._actual_port
 
     def shutdown(self) -> None:
-        """Unregister endpoint from controller.
+        """Unregister endpoint from registry.
 
         Call this when shutting down the actor server cleanly.
         Note: The controller also automatically cleans up endpoints when jobs terminate.
         """
-        if self._endpoint_id and self._fluster_context and self._fluster_context.controller:
+        if self._endpoint_id and self._fluster_context and self._fluster_context.registry:
             try:
-                self._fluster_context.controller.endpoint_registry.unregister(self._endpoint_id)
+                self._fluster_context.registry.unregister(self._endpoint_id)
                 logger.info(f"Unregistered endpoint {self._endpoint_id}")
             except Exception as e:
                 logger.warning(f"Failed to unregister endpoint: {e}")
