@@ -25,11 +25,13 @@ Usage:
 
 import logging
 
-from marin.execution.executor import ExecutorStep, executor_main, StepRef, step, StepContext
-from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
+from marin.execution.executor import ExecutorStep, executor_main, StepRef, step, deferred, output
+from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate as _decontaminate
 
 from experiments.pretraining_datasets.simple import tokenized
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
+
+decontaminate = deferred(_decontaminate)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -43,26 +45,19 @@ DEFAULT_NGRAM_CONFIG = NGramConfig(
 )
 
 
-def run_train_test_overlap(config: DeconConfig) -> str:
-    logger.info(f"Starting train-test overlap dedupe with config: {config}")
-    decontaminate(config)
-    logger.info(f"Train-test overlap completed! Results written to {config.output_path}")
-    return config.output_path
-
-
-@step(name="tmp/train_test_overlap/proofpile", fn=run_train_test_overlap, description="Run dedupe train-test overlap on Proofpile")
-def build_proofpile_step(ctx: StepContext):
-    return DeconConfig(
-        input_path=ctx.require(tokenized["proofpile_2"]),
-        output_path=ctx.output,
-        decontaminate_source=[ctx.require(s) for s in EVAL_DATASET_STEPS],
+@step(name="tmp/train_test_overlap/proofpile", description="Run dedupe train-test overlap on Proofpile")
+def build_proofpile_step():
+    return decontaminate(DeconConfig(
+        input_path=tokenized["proofpile_2"],
+        output_path=output(),
+        decontaminate_source=EVAL_DATASET_STEPS,
         attribute_name="ngram_overlap",
         false_positive_rate=1e-20,
         ngram=DEFAULT_NGRAM_CONFIG,
         processes=1024,
         mode=DeconMode.TRAIN_TEST_OVERLAP,
         text_field="text",
-    )
+    ))
 
 
 STEPS = [build_proofpile_step()]

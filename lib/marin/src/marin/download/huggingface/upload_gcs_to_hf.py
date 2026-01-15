@@ -45,7 +45,7 @@ from google.cloud import storage
 from google.cloud.storage import transfer_manager
 from huggingface_hub import HfApi, create_repo
 
-from marin.execution import ExecutorStep, StepContext, StepRef, step
+from marin.execution import ExecutorStep, StepContext, StepRef, step, deferred, output
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -355,14 +355,15 @@ def upload_gcs_to_hf_step(
     Returns:
         ExecutorStep: An executor step that performs the upload
     """
+    upload_gcs_to_hf_deferred = deferred(upload_gcs_to_hf)
 
-    @step(name="upload_gcs_to_hf", fn=upload_gcs_to_hf)
-    def _step(ctx: StepContext):
-        return UploadConfig(
+    @step(name="upload_gcs_to_hf")
+    def _step():
+        return upload_gcs_to_hf_deferred(UploadConfig(
             hf_repo_id=hf_repo_id,
             gcs_directories=gcs_directories or [],
             dry_run=dry_run,
-        )
+        ))
 
     return _step()
 

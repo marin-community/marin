@@ -34,6 +34,8 @@ from marin.execution import (
     VersionedValue,
     ensure_versioned,
     step,
+    deferred,
+    output,
 )
 from marin.utils import fsspec_mkdirs
 from requests.adapters import HTTPAdapter
@@ -383,11 +385,12 @@ def make_uncheatable_eval_step(
     skip_existing: bool = True,
 ) -> ExecutorStep[UncheatableEvalDownloadConfig]:
     """Create an :class:`ExecutorStep` that downloads the latest Uncheatable Eval dumps."""
+    download_latest_uncheatable_eval_deferred = deferred(download_latest_uncheatable_eval)
 
-    @step(name=name, fn=download_latest_uncheatable_eval)
-    def step_creator(ctx: StepContext):
-        return UncheatableEvalDownloadConfig(
-            output_path=ctx.output,
+    @step(name=name)
+    def step_creator():
+        return download_latest_uncheatable_eval_deferred(UncheatableEvalDownloadConfig(
+            output_path=output(),
             repo_owner=ensure_versioned(repo_owner),
             repo_name=ensure_versioned(repo_name),
             data_path=ensure_versioned(data_path),
@@ -396,7 +399,7 @@ def make_uncheatable_eval_step(
             request_timeout=request_timeout,
             github_token=github_token,
             skip_existing=skip_existing,
-        )
+        ))
 
     return step_creator()
 

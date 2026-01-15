@@ -30,10 +30,13 @@ from experiments.evals.task_configs import convert_to_levanter_task_config
 from experiments.two_stage.data import data_dict
 from experiments.two_stage.models import model_dict
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution import step, StepContext
+from marin.execution import step, deferred, output
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig, lm_varying_mixture_data_config
 from fray.cluster import ResourceConfig
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.training import TrainLmOnPodConfig
+from marin.training.training import run_levanter_train_lm as _run_levanter_train_lm
+
+run_levanter_train_lm = deferred(_run_levanter_train_lm)
 
 
 @dataclass
@@ -368,10 +371,10 @@ class TwoStageConfig:
 def two_stage_train_step(two_stage_config: TwoStageConfig):
     executor_step_name = os.path.join("checkpoints", "two_stage", two_stage_config.build_name())
 
-    @step(name=executor_step_name, fn=run_levanter_train_lm)
-    def _create_train_step(ctx: StepContext):
+    @step(name=executor_step_name)
+    def _create_train_step():
         train_lm_on_pod_config = two_stage_config.build_train_lm_on_pod_config()
-        train_lm_on_pod_config.output_path = ctx.output
-        return train_lm_on_pod_config
+        train_lm_on_pod_config.output_path = output()
+        return run_levanter_train_lm(train_lm_on_pod_config)
 
     return _create_train_step()

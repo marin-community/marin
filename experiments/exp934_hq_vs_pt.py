@@ -32,13 +32,15 @@ Metrics: Paloma Loss, Tulu3 Validation Loss, MMLU Accuracy
 
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main, versioned
-from marin.execution import step, StepContext, StepRef
+from marin.execution import step, StepContext, StepRef, deferred, output
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
 from marin.schemas.web.selectors import ARXIV_BLACKLISTED_SELECTORS, WIKI_BLACKLISTED_SELECTORS
-from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
-from marin.transform.wikipedia.transform_wikipedia import WikiExtractionConfig, process_wiki_dump
+from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig
+from marin.transform.ar5iv.transform_ar5iv import process_ar5iv_dump as _process_ar5iv_dump
+from marin.transform.wikipedia.transform_wikipedia import WikiExtractionConfig
+from marin.transform.wikipedia.transform_wikipedia import process_wiki_dump as _process_wiki_dump
 
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal, default_tokenize
@@ -48,6 +50,10 @@ from experiments.posttrain.instruction_datasets import tulu3_flat_llama_tokenize
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino, tokenize_dolmino_math
+
+# Mark library functions as deferred
+process_wiki_dump = deferred(_process_wiki_dump)
+process_ar5iv_dump = deferred(_process_ar5iv_dump)
 
 # 1. Original mix: DCLM + StarCoder + ProofPile
 original_mix = lm_mixture_data_config(
@@ -93,12 +99,12 @@ nemotron_code_dolmino_mix = lm_mixture_data_config(
 # 4. Full mix with everything
 
 # Wikipedia resiliparse custom fork step (data already exists at hardcoded path)
-@step(name="documents/wikipedia-resiliparse-custom-fork", fn=process_wiki_dump)
-def wikipedia_resiliparse_custom_fork(ctx: StepContext):
-    return WikiExtractionConfig(
+@step(name="documents/wikipedia-resiliparse-custom-fork")
+def wikipedia_resiliparse_custom_fork():
+    return process_wiki_dump(WikiExtractionConfig(
         input_path="gs://marin-us-central2/raw/wikipedia-a7dad0/20241201",
         revision=versioned("20241201"),
-        output_path=ctx.output,
+        output_path=output(),
         extract_method="resiliparse",
         extract_config=ResiliparseConfig(
             links=False,
@@ -109,15 +115,15 @@ def wikipedia_resiliparse_custom_fork(ctx: StepContext):
         digit_threshold=versioned(50),
         word_threshold=versioned(70),
         special_char_threshold=versioned(50),
-    ).with_output_path("documents/wikipedia-resiliparse-custom-fork-2569de").cd("20241201")
+    )).with_output_path("documents/wikipedia-resiliparse-custom-fork-2569de").cd("20241201")
 
 # ar5iv resiliparse custom fork step (data already exists at hardcoded path)
-@step(name="documents/ar5iv/ar5iv-04-2024-no-problem", fn=process_ar5iv_dump)
-def ar5iv_no_problem_resiliparse_custom_fork(ctx: StepContext):
-    return Ar5ivExtractionConfig(
+@step(name="documents/ar5iv/ar5iv-04-2024-no-problem")
+def ar5iv_no_problem_resiliparse_custom_fork():
+    return process_ar5iv_dump(Ar5ivExtractionConfig(
         input_path="gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem-49c4e3/202404",
         revision="042024",
-        output_path=ctx.output / "resiliparse-custom-fork",
+        output_path=output() / "resiliparse-custom-fork",
         extract_method=versioned("resiliparse"),
         extract_config=ResiliparseConfig(
             links=versioned(False),
@@ -125,7 +131,7 @@ def ar5iv_no_problem_resiliparse_custom_fork(ctx: StepContext):
             skip_elements=ARXIV_BLACKLISTED_SELECTORS,
         ),
         remove_reference_section=versioned(True),
-    ).with_output_path("documents/ar5iv/ar5iv-04-2024-no-problem-3971f")
+    )).with_output_path("documents/ar5iv/ar5iv-04-2024-no-problem-3971f")
 
 # Create the medu science QA dataset
 # MMLU Science QA tokenization

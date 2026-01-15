@@ -17,8 +17,11 @@ from experiments.llama import llama3_tokenizer
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.pretraining_datasets import tokenize_dolma
 from experiments.pretraining_datasets.simple import tokenized
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution import step, StepContext
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
+from marin.execution import step, deferred, output
+
+download_hf = deferred(_download_hf)
 
 dolma_components = tokenize_dolma()
 
@@ -29,14 +32,14 @@ flan_tokenized = dolma_components["dolma/flan"]
 
 slimpajama_tokenized = tokenized["slimpajama_6b"]
 
-@step(name="raw/latxa_corpus", fn=download_hf)
-def latxa_corpus(ctx: StepContext):
-    return DownloadConfig(
+@step(name="raw/latxa_corpus")
+def latxa_corpus():
+    return download_hf(DownloadConfig(
         hf_dataset_id="HiTZ/latxa-corpus-v1.1",
         revision="02dc515",
-        gcs_output_path=ctx.output,
+        gcs_output_path=output(),
         wait_for_completion=True,
-    )
+    ))
 
 latxa_corpus_tokenized = default_tokenize(
     name="latxa_corpus",

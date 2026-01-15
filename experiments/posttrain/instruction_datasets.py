@@ -56,7 +56,7 @@ from typing import Any
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from marin.execution import step, StepContext
+from marin.execution import step, deferred, output
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -65,13 +65,20 @@ from marin.execution.executor import (
 )
 from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
-    convert_conversation_to_dolma,
+)
+from marin.transform.conversation.conversation_to_dolma import (
+    convert_conversation_to_dolma as _convert_conversation_to_dolma,
 )
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
-    transform_hf_dataset,
 )
+from marin.transform.conversation.transform_conversation import (
+    transform_hf_dataset as _transform_hf_dataset,
+)
+
+convert_conversation_to_dolma = deferred(_convert_conversation_to_dolma)
+transform_hf_dataset = deferred(_transform_hf_dataset)
 
 SMOLTALK2_SPLITS = [
     "LongAlign_64k_Qwen3_32B_yarn_131k_think",
@@ -557,8 +564,8 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     return dataset_name
 
 
-@step(name="documents", fn=transform_hf_dataset)
-def transform_dataset_step(ctx: StepContext, dataset_cfg: InstructionDatasetConfig):
+@step(name="documents")
+def transform_dataset_step(dataset_cfg: InstructionDatasetConfig):
     """ExecutorStep that preprocesses the input dataset into a canonicalized format for SFT training."""
     adapter = dataset_cfg.adapter
     output_name = dataset_cfg.name if dataset_cfg.name is not None else dataset_cfg.hf_dataset_id
@@ -586,16 +593,16 @@ def transform_dataset_step(ctx: StepContext, dataset_cfg: InstructionDatasetConf
         -{adapter_signature_str}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
-    return TransformSFTDatasetConfig(
+    return transform_hf_dataset(TransformSFTDatasetConfig(
         source=versioned(dataset_cfg.hf_dataset_id),
         revision=versioned(dataset_cfg.revision),
-        output_path=ctx.output,
+        output_path=output(),
         metadata_columns=versioned(dataset_cfg.metadata_columns),
         adapter=versioned(adapter),
         subsets=versioned(dataset_cfg.subsets),
         splits=versioned(dataset_cfg.splits),
         max_parallelism=dataset_cfg.max_parallelism,
-    )
+    ))
 
 
 def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = None) -> ExecutorStep:
@@ -613,9 +620,9 @@ def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = N
     return transform_dataset_step(config)
 
 
-@step(name="dolma/tulu_3_in_dolma", fn=convert_conversation_to_dolma)
-def _tulu_3_in_dolma_step(ctx: StepContext):
-    return ConversationToDolmaConfig(ctx.require(get_instruction_dataset("allenai/tulu-3-sft-mixture")))
+@step(name="dolma/tulu_3_in_dolma")
+def _tulu_3_in_dolma_step():
+    return convert_conversation_to_dolma(ConversationToDolmaConfig(get_instruction_dataset("allenai/tulu-3-sft-mixture")))
 
 tulu_3_in_dolma = _tulu_3_in_dolma_step()
 

@@ -35,18 +35,19 @@ Reference Issue: https://github.com/marin-community/marin/issues/822
 """
 
 from marin.execution.executor import executor_main, versioned
-from marin.execution import step, StepContext, StepRef
+from marin.execution import step, StepContext, StepRef, deferred, output
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
-from marin.transform.stackexchange.transform_stackexchange import (
-    StackExchangeExtractionConfig,
-    process_stackexchange_dump,
-)
+from marin.transform.stackexchange.transform_stackexchange import StackExchangeExtractionConfig
+from marin.transform.stackexchange.transform_stackexchange import process_stackexchange_dump as _process_stackexchange_dump
 
-@step(name="documents/stackexchange-resiliparse-custom-fork", fn=process_stackexchange_dump)
-def stackexchange_text_resiliparse_custom_fork_step(ctx: StepContext):
-    return StackExchangeExtractionConfig(
+# Mark library functions as deferred
+process_stackexchange_dump = deferred(_process_stackexchange_dump)
+
+@step(name="documents/stackexchange-resiliparse-custom-fork")
+def stackexchange_text_resiliparse_custom_fork_step():
+    return process_stackexchange_dump(StackExchangeExtractionConfig(
         input_path=versioned("gs://marin-us-central2/documents/stackexchange/v2024-04-02/md-complete"),
-        output_path=ctx.output,
+        output_path=output(),
         extract_method="resiliparse",
         extract_config=ResiliparseConfig(
             links=False,
@@ -55,7 +56,7 @@ def stackexchange_text_resiliparse_custom_fork_step(ctx: StepContext):
                 include_links=False,
             ),
         ),
-    )
+    ))
 
 stackexchange_text_resiliparse_custom_fork = stackexchange_text_resiliparse_custom_fork_step().with_output_path("documents/stackexchange-resiliparse-custom-fork-ab41ad")
 
