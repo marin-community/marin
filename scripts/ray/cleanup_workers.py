@@ -131,7 +131,7 @@ def cleanup_preempted_tpus(zone: str, project: str, dry_run: bool = False) -> li
     return preempted
 
 
-def list_cluster_workers(cluster_name: str, zone: str, project: str) -> list[str]:
+def list_cluster_workers(zone: str, project: str) -> list[str]:
     result = subprocess.run(
         [
             "gcloud",
@@ -216,7 +216,7 @@ def print_workers_table(workers: list[WorkerDiskInfo]) -> None:
     # Column headers and widths
     headers = ["Worker Name", "Type", "Topology", "Free Disk"]
     rows = []
-    for w in sorted(workers, key=lambda x: (x.tpu_name, x.worker_id)):
+    for w in sorted(workers, key=lambda x: (x.free_pct, x.tpu_name, x.worker_id)):
         worker_type = "preemptible" if w.is_preemptible else "manual"
         rows.append([f"{w.tpu_name}:{w.worker_id}", worker_type, w.topology, f"{w.free_pct}% ({w.available})"])
 
@@ -282,7 +282,7 @@ def process_cluster(config_path: str, threshold: int, dry_run: bool, parallel: i
     if deleted:
         logger.info(f"Cleaned up {len(deleted)} preempted/terminated TPUs")
 
-    tpu_names = list_cluster_workers(cluster_name, zone, project)
+    tpu_names = list_cluster_workers(zone, project)
     if not tpu_names:
         logger.info("No manual workers found")
         return True
