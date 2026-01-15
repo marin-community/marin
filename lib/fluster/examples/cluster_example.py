@@ -576,27 +576,61 @@ def example_actor_job_workflow(cluster: ExampleCluster):
 
 
 def example_worker_pool(cluster: ExampleCluster):
-    """Demonstrate WorkerPool for task dispatch."""
-    from fluster.worker_pool import WorkerPool, WorkerPoolConfig
+    """Demonstrate WorkerPool for task dispatch.
 
+    WorkerPool requires a FlusterContext, so we run the pool logic inside a job.
+    This is the recommended pattern: a coordinator job creates a WorkerPool
+    to parallelize work across child jobs.
+    """
     print("\n=== Example: Worker Pool ===\n")
 
-    client = cluster.get_client()
-    config = WorkerPoolConfig(
-        num_workers=2,
-        resources=cluster_pb2.ResourceSpec(cpu=1, memory="512m"),
+    def coordinator_job_entrypoint():
+        """Coordinator job that creates a WorkerPool and dispatches tasks."""
+        from fluster.context import fluster_ctx
+        from fluster.rpc import cluster_pb2
+        from fluster.worker_pool import WorkerPool, WorkerPoolConfig
+
+        ctx = fluster_ctx()
+        print(f"Coordinator starting: job_id={ctx.job_id}")
+
+        config = WorkerPoolConfig(
+            num_workers=2,
+            resources=cluster_pb2.ResourceSpec(cpu=1, memory="512m"),
+        )
+
+        def square(x):
+            return x * x
+
+        with WorkerPool(ctx.controller, config) as pool:
+            print(f"WorkerPool started with {pool.size} workers")
+            futures = pool.map(square, [1, 2, 3, 4, 5])
+            results = [f.result() for f in futures]
+            print(f"Results: {results}")
+
+        print("WorkerPool example complete!")
+
+    # Submit the coordinator job
+    print("Submitting coordinator job for WorkerPool example...")
+    job_id = cluster.submit(
+        coordinator_job_entrypoint,
+        name="workerpool-coordinator",
+        cpu=1,
+        memory="512m",
     )
+    print(f"Coordinator job submitted: {job_id}")
 
-    def square(x):
-        return x * x
+    # Start log polling
+    cluster.start_log_polling(job_id, poll_interval=1.0, prefix="[coordinator] ")
 
-    with WorkerPool(client, config) as pool:
-        print(f"WorkerPool started with {pool.size} workers")
-        futures = pool.map(square, [1, 2, 3, 4, 5])
-        results = [f.result() for f in futures]
-        print(f"Results: {results}")
+    # Wait for completion
+    status = cluster.wait(job_id, timeout=120.0)
+    print(f"\nCoordinator job completed: {status['state']}")
 
-    print("\nWorkerPool example complete!")
+    # Stop log polling
+    cluster.stop_log_polling(job_id)
+
+    if status.get("error"):
+        print(f"Error: {status['error']}")
 
 
 def example_basic(cluster: ExampleCluster):
@@ -863,7 +897,10 @@ def main(wait: bool, mode: str):
                 print("ACTOR SYSTEM EXAMPLES")
                 print("=" * 60)
                 example_actor_job_workflow(cluster)
-                example_worker_pool(cluster)
+                # NOTE: WorkerPool example requires Docker host networking mode
+                # or custom network setup for containers to communicate. Skipped
+                # in default Docker Desktop configuration.
+                # example_worker_pool(cluster)
 
             # Run cluster job examples
             if mode in ["all", "jobs"]:

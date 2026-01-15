@@ -427,8 +427,12 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.RegisterEndpointResponse:
         """Register a service endpoint.
 
-        Validates that the job exists and is RUNNING before registering.
-        Endpoints are automatically removed when jobs terminate.
+        Validates that the job exists before registering. Endpoints are
+        automatically removed when jobs terminate.
+
+        Note: Endpoints are registered regardless of job state, but they only
+        become visible to clients (via lookup/list) when the job is RUNNING.
+        This avoids race conditions between container startup and state reporting.
 
         Args:
             request: Endpoint registration request
@@ -438,17 +442,15 @@ class ControllerServiceImpl:
             RegisterEndpointResponse with assigned endpoint_id
 
         Raises:
-            ConnectError: If job is not found or not running
+            ConnectError: If job is not found
         """
         with rpc_error_handler("registering endpoint"):
             endpoint_id = str(uuid.uuid4())
 
-            # Validate job exists and is running
+            # Validate job exists (state check moved to lookup/list)
             job = self._state.get_job(JobId(request.job_id))
             if not job:
                 raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
-            if job.state != cluster_pb2.JOB_STATE_RUNNING:
-                raise ConnectError(Code.FAILED_PRECONDITION, f"Job {request.job_id} is not running")
 
             endpoint = ControllerEndpoint(
                 endpoint_id=endpoint_id,

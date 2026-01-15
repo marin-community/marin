@@ -241,6 +241,13 @@ class Worker:
             max_interval=0.5,
         )
 
+        # Create controller client synchronously (before any jobs can be dispatched)
+        if self._config.controller_address:
+            self._controller_client = ControllerServiceClientSync(
+                address=self._config.controller_address,
+                timeout_ms=5000,
+            )
+
         # Start heartbeat loop if controller configured
         if self._config.controller_address:
             self._heartbeat_thread = threading.Thread(
@@ -318,14 +325,8 @@ class Worker:
             metadata=metadata,
         )
 
-        controller_address = self._config.controller_address
-        assert controller_address is not None  # Checked before starting this thread
-
-        # Create cached client
-        self._controller_client = ControllerServiceClientSync(
-            address=controller_address,
-            timeout_ms=5000,
-        )
+        # Controller client is created in start() before this thread starts
+        assert self._controller_client is not None
 
         # Retry registration until successful
         attempt = 0
@@ -546,6 +547,9 @@ class Worker:
 
             # container_id is guaranteed to be set here (loop breaks on success, raises on failure)
             assert container_id is not None
+
+            # Report RUNNING state to controller so endpoints become visible
+            self._report_job_state(job)
 
             # Phase 4: Poll loop - check status and collect stats
             timeout = config.timeout_seconds
