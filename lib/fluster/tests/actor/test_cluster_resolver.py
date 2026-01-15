@@ -67,6 +67,11 @@ class AsyncControllerServiceWrapper:
     ) -> cluster_pb2.Controller.ListWorkersResponse:
         return self._service.list_workers(request, ctx)
 
+    async def report_job_state(
+        self, request: cluster_pb2.Controller.ReportJobStateRequest, ctx: RequestContext
+    ) -> cluster_pb2.Controller.ReportJobStateResponse:
+        return self._service.report_job_state(request, ctx)
+
     async def register_endpoint(
         self, request: cluster_pb2.Controller.RegisterEndpointRequest, ctx: RequestContext
     ) -> cluster_pb2.Controller.RegisterEndpointResponse:

@@ -32,7 +32,7 @@ management across all components.
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -42,7 +42,6 @@ from fluster import cluster_pb2
 from fluster.cluster.controller.dashboard import ControllerDashboard
 from fluster.cluster.controller.retry import handle_job_failure
 from fluster.cluster.controller.scheduler import ScheduleResult, Scheduler
-from fluster.cluster.types import JobId
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
 from fluster.cluster_connect import WorkerServiceClientSync
@@ -108,35 +107,6 @@ class DefaultWorkerStubFactory:
         )
 
 
-MAX_CONSECUTIVE_HEARTBEAT_FAILURES = 3
-
-
-@dataclass
-class JobStateUpdate:
-    """A job state change from heartbeat response."""
-
-    job_id: JobId
-    new_state: int  # JobState enum value
-    exit_code: int = 0
-    error: str | None = None
-    finished_at_ms: int = 0
-
-
-@dataclass
-class HeartbeatResult:
-    """Result of processing a single heartbeat.
-
-    Contains all information to update state after a heartbeat check.
-    """
-
-    worker_id: str
-    success: bool
-    consecutive_failures: int = 0
-    worker_failed: bool = False
-    failed_job_ids: list[JobId] = field(default_factory=list)
-    job_updates: list[JobStateUpdate] = field(default_factory=list)
-
-
 @dataclass
 class ControllerConfig:
     """Controller configuration.
@@ -146,14 +116,14 @@ class ControllerConfig:
         port: Port to bind the HTTP server to (default: 0 for auto-assign)
         bundle_dir: Directory for storing uploaded job bundles (optional)
         scheduler_interval_seconds: How often the scheduler checks for pending jobs (default: 0.5)
-        heartbeat_interval_seconds: How often to check worker health (default: 2.0)
+        worker_timeout_seconds: Time after which a worker without heartbeat is marked unhealthy (default: 60.0)
     """
 
     host: str = "127.0.0.1"
     port: int = 0
     bundle_dir: Path | None = None
     scheduler_interval_seconds: float = 0.5
-    heartbeat_interval_seconds: float = 2.0
+    worker_timeout_seconds: float = 60.0
 
 
 class Controller:
@@ -234,9 +204,6 @@ class Controller:
         self._loop_thread: threading.Thread | None = None
         self._server_thread: threading.Thread | None = None
 
-        # Track timing for scheduler and heartbeat
-        self._last_heartbeat_time = 0.0
-
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
 
@@ -286,9 +253,9 @@ class Controller:
     def _run_loop(self) -> None:
         """Main controller loop.
 
-        Runs scheduling and heartbeat checks on configured intervals.
-        Uses an event for wake signaling to allow immediate scheduling
-        after job submissions or worker registrations.
+        Runs scheduling and worker timeout checks. Uses an event for wake
+        signaling to allow immediate scheduling after job submissions or
+        worker registrations.
         """
         while not self._stop:
             # Wait for wake signal or timeout (use scheduler interval)
@@ -301,11 +268,8 @@ class Controller:
             # Run scheduling
             self._run_scheduling()
 
-            # Check if heartbeats are due
-            now = time.time()
-            if now - self._last_heartbeat_time >= self._config.heartbeat_interval_seconds:
-                self._run_heartbeats()
-                self._last_heartbeat_time = now
+            # Check for timed-out workers
+            self._check_worker_timeouts()
 
     def _run_scheduling(self) -> None:
         """Run one scheduling cycle.
@@ -371,6 +335,7 @@ class Controller:
             stub.run_job(request)
             return True
         except Exception:
+            logger.exception("Failed to dispatch job %s to worker %s", job.job_id, worker.address)
             return False
 
     def _handle_successful_dispatch(self, job: ControllerJob, worker: ControllerWorker, now_ms: int) -> None:
@@ -415,119 +380,31 @@ class Controller:
             details=f"timeout={job.request.scheduling_timeout_seconds}s",
         )
 
-    def _run_heartbeats(self) -> None:
-        """Run heartbeat checks for all workers."""
-        workers = self._state.list_all_workers()
+    def _check_worker_timeouts(self) -> None:
+        """Mark workers as unhealthy if they haven't sent heartbeat recently.
+
+        Workers send periodic heartbeats to the controller. If a worker hasn't
+        sent a heartbeat within worker_timeout_seconds, it's marked unhealthy
+        and its running jobs are failed for retry.
+        """
         now_ms = int(time.time() * 1000)
+        timeout_ms = int(self._config.worker_timeout_seconds * 1000)
 
-        for worker in workers:
-            if not worker.healthy:
-                continue
-
-            response = self._send_heartbeat(worker.address)
-            result = self._process_heartbeat(worker, response)
-            self._apply_heartbeat_result(worker, result, now_ms)
-
-    def _send_heartbeat(self, address: str) -> cluster_pb2.Worker.ListJobsResponse | None:
-        """Send heartbeat to a worker and get job status.
-
-        Args:
-            address: Worker address in "host:port" format
-
-        Returns:
-            ListJobsResponse with job statuses, or None on failure
-        """
-        try:
-            stub = self._stub_factory.get_stub(address)
-            stub.health_check(cluster_pb2.Empty())
-
-            jobs_response = stub.list_jobs(cluster_pb2.Worker.ListJobsRequest())
-            return jobs_response
-        except Exception:
-            return None
-
-    def _process_heartbeat(
-        self,
-        worker: ControllerWorker,
-        response: cluster_pb2.Worker.ListJobsResponse | None,
-    ) -> HeartbeatResult:
-        """Process heartbeat response and return what changed."""
-        if response is None:
-            new_failure_count = worker.consecutive_failures + 1
-            worker_failed = new_failure_count >= MAX_CONSECUTIVE_HEARTBEAT_FAILURES
-
-            return HeartbeatResult(
-                worker_id=worker.worker_id,
-                success=False,
-                consecutive_failures=new_failure_count,
-                worker_failed=worker_failed,
-                failed_job_ids=list(worker.running_jobs) if worker_failed else [],
-            )
-
-        job_updates = []
-        for status in response.jobs:
-            if status.state in (
-                cluster_pb2.JOB_STATE_SUCCEEDED,
-                cluster_pb2.JOB_STATE_FAILED,
-                cluster_pb2.JOB_STATE_KILLED,
-            ):
-                job_updates.append(
-                    JobStateUpdate(
-                        job_id=JobId(status.job_id),
-                        new_state=status.state,
-                        exit_code=status.exit_code,
-                        error=status.error or None,
-                        finished_at_ms=status.finished_at_ms,
-                    )
+        for worker in self._state.list_all_workers():
+            if worker.healthy and (now_ms - worker.last_heartbeat_ms) > timeout_ms:
+                worker.healthy = False
+                logger.warning(
+                    f"Worker {worker.worker_id} timed out (no heartbeat for {self._config.worker_timeout_seconds}s)"
                 )
-
-        return HeartbeatResult(
-            worker_id=worker.worker_id,
-            success=True,
-            consecutive_failures=0,
-            worker_failed=False,
-            job_updates=job_updates,
-        )
-
-    def _apply_heartbeat_result(self, worker: ControllerWorker, result: HeartbeatResult, now_ms: int) -> None:
-        """Apply heartbeat result to worker and job state.
-
-        Args:
-            worker: Worker that was checked
-            result: HeartbeatResult from health tracker
-            now_ms: Current timestamp in milliseconds
-        """
-        worker.consecutive_failures = result.consecutive_failures
-
-        if result.success:
-            worker.last_heartbeat_ms = now_ms
-
-        if result.worker_failed:
-            worker.healthy = False
-            logger.warning(f"Worker {worker.worker_id} failed health check")
-            self._state.log_action("worker_failed", worker_id=worker.worker_id)
-
-            # Retry jobs that were running on the failed worker
-            for job_id in result.failed_job_ids:
-                handle_job_failure(self._state, job_id, is_worker_failure=True)
-
-        # Apply job state updates from heartbeat response
-        for update in result.job_updates:
-            job = self._state.get_job(update.job_id)
-            if job:
-                job.state = update.new_state
-                job.exit_code = update.exit_code
-                job.error = update.error
-                job.finished_at_ms = update.finished_at_ms
-
-                # Remove from worker's running jobs
-                worker.running_jobs.discard(update.job_id)
-
                 self._state.log_action(
-                    "job_completed",
-                    job_id=update.job_id,
-                    details=f"state={update.new_state}, exit_code={update.exit_code}",
+                    "worker_timeout",
+                    worker_id=worker.worker_id,
+                    details=f"No heartbeat for {self._config.worker_timeout_seconds}s",
                 )
+
+                # Retry jobs that were running on the timed-out worker
+                for job_id in list(worker.running_jobs):
+                    handle_job_failure(self._state, job_id, is_worker_failure=True)
 
     def _run_server(self) -> None:
         """Run dashboard server (blocking, for thread)."""

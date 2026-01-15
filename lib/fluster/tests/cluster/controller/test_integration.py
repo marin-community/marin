@@ -147,11 +147,15 @@ def test_full_job_lifecycle(make_job_request, controller_with_workers):
     assert len(stub.run_job_calls) == 1
     assert stub.run_job_calls[0].job_id == job_id
 
-    # Configure mock to report job succeeded
-    stub.set_job_completed(job_id, cluster_pb2.JOB_STATE_SUCCEEDED)
-
-    # Run heartbeat
-    controller._run_heartbeats()
+    # Worker reports job completion via RPC
+    report_request = cluster_pb2.Controller.ReportJobStateRequest(
+        worker_id="w1",
+        job_id=job_id,
+        state=cluster_pb2.JOB_STATE_SUCCEEDED,
+        exit_code=0,
+        finished_at_ms=1000,
+    )
+    controller._service.report_job_state(report_request, None)
 
     # Verify job succeeded
     status = controller.get_job_status(job_id)
@@ -161,7 +165,7 @@ def test_full_job_lifecycle(make_job_request, controller_with_workers):
 
 def test_job_failure_and_retry(make_job_request, controller_with_workers):
     """Job fails on first attempt, succeeds after retry."""
-    controller, stub_factory = controller_with_workers(["w1"])
+    controller, _stub_factory = controller_with_workers(["w1"])
 
     # Submit job with retries enabled
     response = controller.launch_job(make_job_request("test-job"))
@@ -174,12 +178,16 @@ def test_job_failure_and_retry(make_job_request, controller_with_workers):
     controller._run_scheduling()
     assert controller.get_job_status(job_id).job.state == cluster_pb2.JOB_STATE_RUNNING
 
-    # Configure mock to report failure
-    stub = stub_factory.get_stub("host1:8080")
-    stub.set_job_completed(job_id, cluster_pb2.JOB_STATE_FAILED, exit_code=1, error="Simulated failure")
-
-    # Run heartbeat - picks up failure
-    controller._run_heartbeats()
+    # Worker reports job failure via RPC
+    report_request = cluster_pb2.Controller.ReportJobStateRequest(
+        worker_id="w1",
+        job_id=job_id,
+        state=cluster_pb2.JOB_STATE_FAILED,
+        exit_code=1,
+        error="Simulated failure",
+        finished_at_ms=1000,
+    )
+    controller._service.report_job_state(report_request, None)
 
     # Job should be FAILED
     assert controller.get_job_status(job_id).job.state == cluster_pb2.JOB_STATE_FAILED
@@ -191,23 +199,28 @@ def test_job_failure_and_retry(make_job_request, controller_with_workers):
     assert controller.get_job_status(job_id).job.state == cluster_pb2.JOB_STATE_PENDING
     assert job.failure_count == 1
 
-    # Clear the failure status and run scheduling again
-    stub.job_statuses.clear()
+    # Run scheduling again
     controller._run_scheduling()
 
     assert controller.get_job_status(job_id).job.state == cluster_pb2.JOB_STATE_RUNNING
 
-    # This time configure success
-    stub.set_job_completed(job_id, cluster_pb2.JOB_STATE_SUCCEEDED)
-    controller._run_heartbeats()
+    # Worker reports success
+    report_request = cluster_pb2.Controller.ReportJobStateRequest(
+        worker_id="w1",
+        job_id=job_id,
+        state=cluster_pb2.JOB_STATE_SUCCEEDED,
+        exit_code=0,
+        finished_at_ms=2000,
+    )
+    controller._service.report_job_state(report_request, None)
 
     assert controller.get_job_status(job_id).job.state == cluster_pb2.JOB_STATE_SUCCEEDED
     assert job.failure_count == 1  # Retained from retry
 
 
 def test_worker_failure_triggers_retry(make_job_request, controller_with_workers):
-    """Worker dies, job is retried on another worker."""
-    controller, stub_factory = controller_with_workers(["w1", "w2"])
+    """Worker times out (no heartbeats), job is retried on another worker."""
+    controller, _stub_factory = controller_with_workers(["w1", "w2"])
 
     # Submit job
     response = controller.launch_job(make_job_request("test-job"))
@@ -222,16 +235,14 @@ def test_worker_failure_triggers_retry(make_job_request, controller_with_workers
     assert controller.get_job_status(job_id).job.state == cluster_pb2.JOB_STATE_RUNNING
     assert job.worker_id == "w1"
 
-    # Make worker 1 unhealthy (heartbeat fails)
-    stub1 = stub_factory.get_stub("host1:8080")
-    stub1.healthy = False
+    # Simulate worker timeout by setting last_heartbeat_ms to old value
+    worker1 = controller.state.get_worker("w1")
+    worker1.last_heartbeat_ms = 0  # Very old timestamp
 
-    # Run heartbeats 3 times to trigger failure threshold
-    for _ in range(3):
-        controller._run_heartbeats()
+    # Check worker timeouts - this marks worker unhealthy and retries jobs
+    controller._check_worker_timeouts()
 
     # Worker should be marked unhealthy, job should be pending for retry
-    worker1 = controller.state.get_worker("w1")
     assert worker1.healthy is False
     assert controller.get_job_status(job_id).job.state == cluster_pb2.JOB_STATE_PENDING
     assert job.preemption_count == 1
@@ -243,9 +254,14 @@ def test_worker_failure_triggers_retry(make_job_request, controller_with_workers
     assert job.worker_id == "w2"
 
     # Worker 2 reports success
-    stub2 = stub_factory.get_stub("host2:8080")
-    stub2.set_job_completed(job_id, cluster_pb2.JOB_STATE_SUCCEEDED)
-    controller._run_heartbeats()
+    report_request = cluster_pb2.Controller.ReportJobStateRequest(
+        worker_id="w2",
+        job_id=job_id,
+        state=cluster_pb2.JOB_STATE_SUCCEEDED,
+        exit_code=0,
+        finished_at_ms=1000,
+    )
+    controller._service.report_job_state(report_request, None)
 
     assert controller.get_job_status(job_id).job.state == cluster_pb2.JOB_STATE_SUCCEEDED
     assert job.preemption_count == 1
@@ -253,7 +269,7 @@ def test_worker_failure_triggers_retry(make_job_request, controller_with_workers
 
 def test_multiple_jobs_scheduled(make_job_request, controller_with_workers):
     """Submit multiple jobs, all complete successfully."""
-    controller, stub_factory = controller_with_workers(
+    controller, _stub_factory = controller_with_workers(
         ["w1"],
         resources=cluster_pb2.ResourceSpec(cpu=10, memory="8g"),
     )
@@ -271,12 +287,16 @@ def test_multiple_jobs_scheduled(make_job_request, controller_with_workers):
     for job_id in job_ids:
         assert controller.get_job_status(job_id).job.state == cluster_pb2.JOB_STATE_RUNNING
 
-    # Configure mock to report all jobs succeeded
-    stub = stub_factory.get_stub("host1:8080")
+    # Worker reports all jobs succeeded via RPC
     for job_id in job_ids:
-        stub.set_job_completed(job_id, cluster_pb2.JOB_STATE_SUCCEEDED)
-
-    controller._run_heartbeats()
+        report_request = cluster_pb2.Controller.ReportJobStateRequest(
+            worker_id="w1",
+            job_id=job_id,
+            state=cluster_pb2.JOB_STATE_SUCCEEDED,
+            exit_code=0,
+            finished_at_ms=1000,
+        )
+        controller._service.report_job_state(report_request, None)
 
     # Verify all jobs succeeded
     for job_id in job_ids:
@@ -305,7 +325,7 @@ def test_job_terminated_during_execution(make_job_request, controller_with_worke
 
 def test_concurrent_job_execution_on_multiple_workers(make_job_request, controller_with_workers):
     """Multiple workers can run jobs concurrently."""
-    controller, stub_factory = controller_with_workers(
+    controller, _stub_factory = controller_with_workers(
         ["w1", "w2", "w3"],
         resources=cluster_pb2.ResourceSpec(cpu=2, memory="8g"),
     )
@@ -323,14 +343,18 @@ def test_concurrent_job_execution_on_multiple_workers(make_job_request, controll
     running = [jid for jid in job_ids if controller.get_job_status(jid).job.state == cluster_pb2.JOB_STATE_RUNNING]
     assert len(running) == 3
 
-    # Complete all running jobs
+    # Workers report their running jobs as completed
     for worker_id in ["w1", "w2", "w3"]:
-        stub = stub_factory.get_stub(f"host{worker_id[1:]}:8080")
         worker = controller.state.get_worker(worker_id)
         for job_id in list(worker.running_jobs):
-            stub.set_job_completed(str(job_id), cluster_pb2.JOB_STATE_SUCCEEDED)
-
-    controller._run_heartbeats()
+            report_request = cluster_pb2.Controller.ReportJobStateRequest(
+                worker_id=worker_id,
+                job_id=str(job_id),
+                state=cluster_pb2.JOB_STATE_SUCCEEDED,
+                exit_code=0,
+                finished_at_ms=1000,
+            )
+            controller._service.report_job_state(report_request, None)
 
     # Run scheduling again to pick up remaining jobs
     controller._run_scheduling()

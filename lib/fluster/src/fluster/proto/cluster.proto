@@ -137,6 +137,34 @@ message EnvironmentConfig {
 }
 
 // ============================================================================
+// WORKER METADATA
+// ============================================================================
+
+// Typed metadata about a worker's environment, collected at registration.
+message WorkerMetadata {
+  // Basic info
+  string hostname = 1;
+  string ip_address = 2;
+  int32 cpu_count = 3;
+  int64 memory_bytes = 4;
+
+  // TPU environment (from TPU_* env vars)
+  string tpu_name = 10;                    // TPU_NAME
+  string tpu_worker_hostnames = 11;        // TPU_WORKER_HOSTNAMES
+  string tpu_worker_id = 12;               // TPU_WORKER_ID
+  string tpu_chips_per_host_bounds = 13;   // TPU_CHIPS_PER_HOST_BOUNDS
+
+  // GPU info (from nvidia-smi)
+  int32 gpu_count = 20;
+  string gpu_name = 21;
+  int32 gpu_memory_mb = 22;
+
+  // GCE instance metadata
+  string gce_instance_name = 30;
+  string gce_zone = 31;
+}
+
+// ============================================================================
 // CONTROLLER SERVICE MESSAGES
 // ============================================================================
 
@@ -193,12 +221,14 @@ message Controller {
     string address = 2;              // host:port for WorkerService
     ResourceSpec resources = 3;      // Worker capabilities
     int64 registered_at_ms = 4;
+    WorkerMetadata metadata = 5;
   }
 
   message RegisterWorkerRequest {
     string worker_id = 1;
     string address = 2;
     ResourceSpec resources = 3;
+    WorkerMetadata metadata = 4;
   }
 
   message RegisterWorkerResponse {
@@ -219,6 +249,18 @@ message Controller {
   message ListWorkersResponse {
     repeated WorkerHealthStatus workers = 1;
   }
+
+  // --- Job State Reporting (worker -> controller) ---
+  message ReportJobStateRequest {
+    string worker_id = 1;
+    string job_id = 2;
+    JobState state = 3;
+    int32 exit_code = 4;
+    string error = 5;
+    int64 finished_at_ms = 6;
+  }
+
+  message ReportJobStateResponse {}
 
   // --- Endpoint Registry ---
   message Endpoint {
@@ -351,9 +393,10 @@ service ControllerService {
   rpc TerminateJob(Controller.TerminateJobRequest) returns (Empty);
   rpc ListJobs(Controller.ListJobsRequest) returns (Controller.ListJobsResponse);
 
-  // Worker management (controller polls workers internally via Worker.HealthCheck)
+  // Worker management (workers send heartbeats to controller)
   rpc RegisterWorker(Controller.RegisterWorkerRequest) returns (Controller.RegisterWorkerResponse);
   rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
+  rpc ReportJobState(Controller.ReportJobStateRequest) returns (Controller.ReportJobStateResponse);
 
   // Endpoint registry (generic service discovery)
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);

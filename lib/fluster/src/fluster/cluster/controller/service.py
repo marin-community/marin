@@ -28,17 +28,21 @@ The service layer is thin, delegating most logic to the ControllerState and
 Scheduler. It focuses on proto message conversion and error handling.
 """
 
+import logging
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Protocol
 
 from connectrpc.code import Code
+
 from connectrpc.errors import ConnectError
 
 from fluster import cluster_pb2
 from fluster.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState, ControllerWorker
 from fluster.cluster.types import JobId, WorkerId, is_job_finished
+
+logger = logging.getLogger(__name__)
 
 
 class SchedulerProtocol(Protocol):
@@ -242,24 +246,39 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.RegisterWorkerRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.RegisterWorkerResponse:
-        """Register a new worker with the controller.
+        """Register a new worker or process a heartbeat from an existing worker.
 
-        Workers register themselves on startup and provide their address and
-        resource capabilities. The controller adds them to the worker registry
-        and wakes the scheduler to potentially dispatch pending jobs.
+        Workers send periodic heartbeats via this endpoint. If the worker already
+        exists, we update its heartbeat timestamp and metadata. If it's a new
+        worker, we add it to the registry and wake the scheduler.
 
         Args:
-            request: Worker registration request
+            request: Worker registration request (also used as heartbeat)
             ctx: Request context (unused in v0)
 
         Returns:
             RegisterWorkerResponse with acceptance status
         """
+        now_ms = int(time.time() * 1000)
+        worker_id = WorkerId(request.worker_id)
+
+        # Check if worker already exists (heartbeat case)
+        existing = self._state.get_worker(worker_id)
+        if existing:
+            # Update heartbeat timestamp and worker info
+            existing.last_heartbeat_ms = now_ms
+            existing.resources = request.resources
+            existing.metadata = request.metadata
+            existing.healthy = True  # Worker is alive
+            return cluster_pb2.Controller.RegisterWorkerResponse(accepted=True)
+
+        # New worker registration
         worker = ControllerWorker(
-            worker_id=WorkerId(request.worker_id),
+            worker_id=worker_id,
             address=request.address,
             resources=request.resources,
-            last_heartbeat_ms=int(time.time() * 1000),
+            metadata=request.metadata,
+            last_heartbeat_ms=now_ms,
         )
         self._state.add_worker(worker)
         self._state.log_action(
@@ -299,6 +318,65 @@ class ControllerServiceImpl:
             for w in self._state.list_all_workers()
         ]
         return cluster_pb2.Controller.ListWorkersResponse(workers=workers)
+
+    def report_job_state(
+        self,
+        request: cluster_pb2.Controller.ReportJobStateRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.ReportJobStateResponse:
+        """Report job state change from worker.
+
+        Workers call this when jobs transition to terminal states (SUCCEEDED, FAILED, KILLED).
+        The controller updates its job state and removes the job from the worker's running set.
+
+        Args:
+            request: Job state report from worker
+            ctx: Request context (unused in v0)
+
+        Returns:
+            ReportJobStateResponse (empty)
+        """
+        job_id = JobId(request.job_id)
+        worker_id = WorkerId(request.worker_id)
+
+        job = self._state.get_job(job_id)
+        if not job:
+            logger.warning("Received job state report for unknown job %s from worker %s", job_id, worker_id)
+            return cluster_pb2.Controller.ReportJobStateResponse()
+
+        # Verify this report is from the assigned worker
+        if job.worker_id != worker_id:
+            logger.warning(
+                "Received job state report from wrong worker: job_id=%s expected_worker=%s reporting_worker=%s",
+                job_id,
+                job.worker_id,
+                worker_id,
+            )
+            return cluster_pb2.Controller.ReportJobStateResponse()
+
+        # Update job state
+        job.state = request.state
+        job.exit_code = request.exit_code
+        job.error = request.error or None
+        job.finished_at_ms = request.finished_at_ms
+
+        # Remove from worker's running jobs
+        worker = self._state.get_worker(worker_id)
+        if worker:
+            worker.running_jobs.discard(job_id)
+
+        # Clean up endpoints for finished job
+        if is_job_finished(job.state):
+            self._state.remove_endpoints_for_job(job_id)
+
+        self._state.log_action(
+            "job_completed",
+            job_id=job_id,
+            worker_id=worker_id,
+            details=f"state={request.state}, exit_code={request.exit_code}",
+        )
+
+        return cluster_pb2.Controller.ReportJobStateResponse()
 
     # Endpoint registry methods
 
@@ -394,6 +472,7 @@ class ControllerServiceImpl:
         namespace = request.namespace or "<local>"
         endpoints = self._state.lookup_endpoints(request.name, namespace)
         if not endpoints:
+            logger.debug("Endpoint lookup found no results: name=%s namespace=%s", request.name, namespace)
             return cluster_pb2.Controller.LookupEndpointResponse()
 
         e = endpoints[0]

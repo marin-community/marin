@@ -166,6 +166,36 @@ class EnvironmentConfig(_message.Message):
     extras: _containers.RepeatedScalarFieldContainer[str]
     def __init__(self, workspace: _Optional[str] = ..., pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ...) -> None: ...
 
+class WorkerMetadata(_message.Message):
+    __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone")
+    HOSTNAME_FIELD_NUMBER: _ClassVar[int]
+    IP_ADDRESS_FIELD_NUMBER: _ClassVar[int]
+    CPU_COUNT_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
+    TPU_NAME_FIELD_NUMBER: _ClassVar[int]
+    TPU_WORKER_HOSTNAMES_FIELD_NUMBER: _ClassVar[int]
+    TPU_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    TPU_CHIPS_PER_HOST_BOUNDS_FIELD_NUMBER: _ClassVar[int]
+    GPU_COUNT_FIELD_NUMBER: _ClassVar[int]
+    GPU_NAME_FIELD_NUMBER: _ClassVar[int]
+    GPU_MEMORY_MB_FIELD_NUMBER: _ClassVar[int]
+    GCE_INSTANCE_NAME_FIELD_NUMBER: _ClassVar[int]
+    GCE_ZONE_FIELD_NUMBER: _ClassVar[int]
+    hostname: str
+    ip_address: str
+    cpu_count: int
+    memory_bytes: int
+    tpu_name: str
+    tpu_worker_hostnames: str
+    tpu_worker_id: str
+    tpu_chips_per_host_bounds: str
+    gpu_count: int
+    gpu_name: str
+    gpu_memory_mb: int
+    gce_instance_name: str
+    gce_zone: str
+    def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ...) -> None: ...
+
 class Controller(_message.Message):
     __slots__ = ()
     class LaunchJobRequest(_message.Message):
@@ -222,25 +252,29 @@ class Controller(_message.Message):
         jobs: _containers.RepeatedCompositeFieldContainer[JobStatus]
         def __init__(self, jobs: _Optional[_Iterable[_Union[JobStatus, _Mapping]]] = ...) -> None: ...
     class WorkerInfo(_message.Message):
-        __slots__ = ("worker_id", "address", "resources", "registered_at_ms")
+        __slots__ = ("worker_id", "address", "resources", "registered_at_ms", "metadata")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
         ADDRESS_FIELD_NUMBER: _ClassVar[int]
         RESOURCES_FIELD_NUMBER: _ClassVar[int]
         REGISTERED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+        METADATA_FIELD_NUMBER: _ClassVar[int]
         worker_id: str
         address: str
         resources: ResourceSpec
         registered_at_ms: int
-        def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., registered_at_ms: _Optional[int] = ...) -> None: ...
+        metadata: WorkerMetadata
+        def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., registered_at_ms: _Optional[int] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ...) -> None: ...
     class RegisterWorkerRequest(_message.Message):
-        __slots__ = ("worker_id", "address", "resources")
+        __slots__ = ("worker_id", "address", "resources", "metadata")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
         ADDRESS_FIELD_NUMBER: _ClassVar[int]
         RESOURCES_FIELD_NUMBER: _ClassVar[int]
+        METADATA_FIELD_NUMBER: _ClassVar[int]
         worker_id: str
         address: str
         resources: ResourceSpec
-        def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ...) -> None: ...
+        metadata: WorkerMetadata
+        def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ...) -> None: ...
     class RegisterWorkerResponse(_message.Message):
         __slots__ = ("accepted", "controller_address")
         ACCEPTED_FIELD_NUMBER: _ClassVar[int]
@@ -269,6 +303,24 @@ class Controller(_message.Message):
         WORKERS_FIELD_NUMBER: _ClassVar[int]
         workers: _containers.RepeatedCompositeFieldContainer[Controller.WorkerHealthStatus]
         def __init__(self, workers: _Optional[_Iterable[_Union[Controller.WorkerHealthStatus, _Mapping]]] = ...) -> None: ...
+    class ReportJobStateRequest(_message.Message):
+        __slots__ = ("worker_id", "job_id", "state", "exit_code", "error", "finished_at_ms")
+        WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+        JOB_ID_FIELD_NUMBER: _ClassVar[int]
+        STATE_FIELD_NUMBER: _ClassVar[int]
+        EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
+        ERROR_FIELD_NUMBER: _ClassVar[int]
+        FINISHED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+        worker_id: str
+        job_id: str
+        state: JobState
+        exit_code: int
+        error: str
+        finished_at_ms: int
+        def __init__(self, worker_id: _Optional[str] = ..., job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., finished_at_ms: _Optional[int] = ...) -> None: ...
+    class ReportJobStateResponse(_message.Message):
+        __slots__ = ()
+        def __init__(self) -> None: ...
     class Endpoint(_message.Message):
         __slots__ = ("endpoint_id", "name", "address", "job_id", "namespace", "metadata")
         class MetadataEntry(_message.Message):

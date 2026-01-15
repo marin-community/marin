@@ -15,6 +15,7 @@
 """Bundle cache for workspace bundles from GCS."""
 
 import hashlib
+import logging
 import threading
 import zipfile
 from collections import defaultdict
@@ -22,6 +23,8 @@ from pathlib import Path
 from typing import Protocol
 
 import fsspec
+
+logger = logging.getLogger(__name__)
 
 
 class BundleProvider(Protocol):
@@ -72,6 +75,7 @@ class BundleCache:
         if extract_path.exists():
             # Update access time for LRU
             extract_path.touch()
+            logger.debug("Bundle cache hit: %s", gcs_path)
             return extract_path
 
         # Use a lock per bundle to prevent concurrent extractions to the same path
@@ -84,7 +88,10 @@ class BundleCache:
             # Download and extract
             zip_path = self._bundles_dir / f"{key}.zip"
             if not zip_path.exists():
+                logger.debug("Downloading bundle: %s", gcs_path)
                 self._download(gcs_path, zip_path)
+            else:
+                logger.debug("Bundle zip cached, extracting: %s", gcs_path)
 
             if expected_hash:
                 actual_hash = self._compute_hash(zip_path)

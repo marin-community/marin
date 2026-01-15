@@ -40,6 +40,10 @@ def cli():
 @click.option("--registry", required=True, help="Docker registry for built images")
 @click.option("--max-concurrent-jobs", default=10, type=int, help="Max concurrent jobs")
 @click.option("--port-range", default="30000-40000", help="Port range for job ports (start-end)")
+@click.option(
+    "--controller-address", default=None, help="Controller URL for auto-registration (e.g., http://controller:8080)"
+)
+@click.option("--worker-id", default=None, help="Worker ID (auto-generated if not provided)")
 def serve(
     host: str,
     port: int,
@@ -47,6 +51,8 @@ def serve(
     registry: str,
     max_concurrent_jobs: int,
     port_range: str,
+    controller_address: str | None,
+    worker_id: str | None,
 ):
     """Start the Fluster worker service."""
     port_start, port_end = map(int, port_range.split("-"))
@@ -58,6 +64,8 @@ def serve(
         registry=registry,
         max_concurrent_jobs=max_concurrent_jobs,
         port_range=(port_start, port_end),
+        controller_address=controller_address,
+        worker_id=worker_id,
     )
 
     worker = Worker(config)
@@ -66,6 +74,8 @@ def serve(
     click.echo(f"  Registry: {registry}")
     click.echo(f"  Cache dir: {config.cache_dir}")
     click.echo(f"  Max concurrent jobs: {max_concurrent_jobs}")
+    if controller_address:
+        click.echo(f"  Controller: {controller_address}")
     worker._run_server()
 
 

@@ -34,6 +34,9 @@ class ControllerService(Protocol):
     async def list_workers(self, request: cluster__pb2.Controller.ListWorkersRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListWorkersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def report_job_state(self, request: cluster__pb2.Controller.ReportJobStateRequest, ctx: RequestContext) -> cluster__pb2.Controller.ReportJobStateResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def register_endpoint(self, request: cluster__pb2.Controller.RegisterEndpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.RegisterEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -111,6 +114,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_workers,
+                ),
+                "/fluster.cluster.ControllerService/ReportJobState": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ReportJobState",
+                        service_name="fluster.cluster.ControllerService",
+                        input=cluster__pb2.Controller.ReportJobStateRequest,
+                        output=cluster__pb2.Controller.ReportJobStateResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.report_job_state,
                 ),
                 "/fluster.cluster.ControllerService/RegisterEndpoint": Endpoint.unary(
                     method=MethodInfo(
@@ -278,6 +291,26 @@ class ControllerServiceClient(ConnectClient):
                 service_name="fluster.cluster.ControllerService",
                 input=cluster__pb2.Controller.ListWorkersRequest,
                 output=cluster__pb2.Controller.ListWorkersResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def report_job_state(
+        self,
+        request: cluster__pb2.Controller.ReportJobStateRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.ReportJobStateResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ReportJobState",
+                service_name="fluster.cluster.ControllerService",
+                input=cluster__pb2.Controller.ReportJobStateRequest,
+                output=cluster__pb2.Controller.ReportJobStateResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -597,6 +630,8 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_workers(self, request: cluster__pb2.Controller.ListWorkersRequest, ctx: RequestContext) -> cluster__pb2.Controller.ListWorkersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def report_job_state(self, request: cluster__pb2.Controller.ReportJobStateRequest, ctx: RequestContext) -> cluster__pb2.Controller.ReportJobStateResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def register_endpoint(self, request: cluster__pb2.Controller.RegisterEndpointRequest, ctx: RequestContext) -> cluster__pb2.Controller.RegisterEndpointResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def unregister_endpoint(self, request: cluster__pb2.Controller.UnregisterEndpointRequest, ctx: RequestContext) -> cluster__pb2.Empty:
@@ -670,6 +705,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_workers,
+                ),
+                "/fluster.cluster.ControllerService/ReportJobState": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ReportJobState",
+                        service_name="fluster.cluster.ControllerService",
+                        input=cluster__pb2.Controller.ReportJobStateRequest,
+                        output=cluster__pb2.Controller.ReportJobStateResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.report_job_state,
                 ),
                 "/fluster.cluster.ControllerService/RegisterEndpoint": EndpointSync.unary(
                     method=MethodInfo(
@@ -837,6 +882,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="fluster.cluster.ControllerService",
                 input=cluster__pb2.Controller.ListWorkersRequest,
                 output=cluster__pb2.Controller.ListWorkersResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def report_job_state(
+        self,
+        request: cluster__pb2.Controller.ReportJobStateRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.ReportJobStateResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ReportJobState",
+                service_name="fluster.cluster.ControllerService",
+                input=cluster__pb2.Controller.ReportJobStateRequest,
+                output=cluster__pb2.Controller.ReportJobStateResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

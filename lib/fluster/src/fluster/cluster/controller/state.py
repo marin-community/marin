@@ -87,13 +87,14 @@ class ControllerWorker:
     """Controller's view of a worker.
 
     Tracks worker capabilities, health status, and current job assignments.
-    The heartbeat monitor uses this to detect worker failures and the scheduler
-    uses it to find available capacity.
+    Workers send periodic heartbeats to the controller, which uses this to
+    detect worker failures. The scheduler uses this to find available capacity.
 
     Args:
         worker_id: Unique worker identifier
         address: Worker RPC address (host:port)
         resources: Worker's available resources
+        metadata: Worker environment metadata (TPU vars, GPU info, etc.)
         healthy: Whether worker is currently healthy
         consecutive_failures: Number of consecutive heartbeat failures
         last_heartbeat_ms: Timestamp of last successful heartbeat
@@ -103,6 +104,7 @@ class ControllerWorker:
     worker_id: WorkerId
     address: str
     resources: cluster_pb2.ResourceSpec
+    metadata: cluster_pb2.WorkerMetadata | None = None
 
     # Health tracking
     healthy: bool = True

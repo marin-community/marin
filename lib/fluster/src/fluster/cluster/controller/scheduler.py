@@ -24,10 +24,13 @@ function-like object that can be easily tested and composed without mocking
 threads or callbacks.
 """
 
+import logging
 from dataclasses import dataclass, field
 
 from fluster.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
 from fluster.cluster.controller.workers import worker_can_fit_job
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -106,7 +109,21 @@ class Scheduler:
             if worker:
                 result.assignments.append((job, worker))
                 assigned_jobs_by_worker.setdefault(worker.worker_id, []).append(job)
+            else:
+                logger.debug(
+                    "No suitable worker for job %s (cpu=%d, memory=%d)",
+                    job.job_id,
+                    job.request.resources.cpu,
+                    job.request.resources.memory,
+                )
 
+        if result.assignments or result.timed_out_jobs:
+            logger.debug(
+                "Scheduling cycle: %d pending, %d assigned, %d timed_out",
+                len(pending_jobs),
+                len(result.assignments),
+                len(result.timed_out_jobs),
+            )
         return result
 
     def _is_job_timed_out(self, job: ControllerJob, now_ms: int) -> bool:

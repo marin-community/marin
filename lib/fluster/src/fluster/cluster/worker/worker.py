@@ -30,6 +30,7 @@ Example:
 """
 
 import base64
+import logging
 import shutil
 import socket
 import tempfile
@@ -38,17 +39,19 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-
 import cloudpickle
 import uvicorn
 
 from fluster import cluster_pb2
+from fluster.cluster_connect import ControllerServiceClientSync
 from fluster.cluster.worker.builder import ImageCache, ImageProvider, VenvCache
 from fluster.cluster.worker.bundle import BundleCache, BundleProvider
 from fluster.cluster.worker.dashboard import WorkerDashboard
 from fluster.cluster.worker.docker import ContainerConfig, ContainerRuntime, DockerRuntime
 from fluster.cluster.worker.service import WorkerServiceImpl
 from fluster.cluster.worker.worker_types import Job, collect_workdir_size_mb
+
+logger = logging.getLogger(__name__)
 
 
 def _rewrite_address_for_container(address: str) -> str:
@@ -99,6 +102,7 @@ class PortAllocator:
                 continue
             if self._is_port_free(port):
                 return port
+        logger.warning("Port allocation exhausted: no free ports in range %d-%d", self._range[0], self._range[1])
         raise RuntimeError("No free ports available")
 
     def _is_port_free(self, port: int) -> bool:
@@ -209,14 +213,28 @@ class Worker:
 
         self._server_thread: threading.Thread | None = None
 
+        # Heartbeat/registration thread
+        self._heartbeat_thread: threading.Thread | None = None
+        self._stop_heartbeat = threading.Event()
+        self._worker_id: str | None = config.worker_id
+        self._controller_client: ControllerServiceClientSync | None = None
+
     def start(self) -> None:
-        """Start worker server."""
+        """Start worker server and heartbeat loop."""
         self._server_thread = threading.Thread(
             target=self._run_server,
             daemon=True,
         )
         self._server_thread.start()
         time.sleep(1.0)  # Wait for startup
+
+        # Start heartbeat loop if controller configured
+        if self._config.controller_address:
+            self._heartbeat_thread = threading.Thread(
+                target=self._heartbeat_loop,
+                daemon=True,
+            )
+            self._heartbeat_thread.start()
 
     def stop(self) -> None:
         """Stop worker server and cleanup.
@@ -225,6 +243,11 @@ class Worker:
         files in the cache, cleanup may fail. This is acceptable since the
         temp directory will be cleaned up by the OS eventually.
         """
+        # Stop heartbeat thread
+        self._stop_heartbeat.set()
+        if self._heartbeat_thread:
+            self._heartbeat_thread.join(timeout=5.0)
+
         # Cleanup temp directory (best-effort)
         if self._temp_dir:
             try:
@@ -246,6 +269,78 @@ class Worker:
             )
         except Exception as e:
             print(f"Worker server error: {e}")
+
+    def _heartbeat_loop(self) -> None:
+        """Background loop: register with retry, then send periodic heartbeats."""
+        from fluster.cluster.worker.env_probe import build_resource_spec, probe_worker_environment
+
+        # Probe environment once
+        metadata = probe_worker_environment()
+        resources = build_resource_spec(metadata)
+
+        # Generate worker ID if not provided
+        if not self._worker_id:
+            self._worker_id = f"worker-{uuid.uuid4().hex[:8]}"
+
+        # Build registration request
+        request = cluster_pb2.Controller.RegisterWorkerRequest(
+            worker_id=self._worker_id,
+            address=f"{metadata.ip_address}:{self._config.port}",
+            resources=resources,
+            metadata=metadata,
+        )
+
+        controller_address = self._config.controller_address
+        assert controller_address is not None  # Checked before starting this thread
+
+        # Create cached client
+        self._controller_client = ControllerServiceClientSync(
+            address=controller_address,
+            timeout_ms=5000,
+        )
+
+        # Retry registration until successful
+        attempt = 0
+        while not self._stop_heartbeat.is_set():
+            attempt += 1
+            try:
+                logger.debug("Registration attempt %d for worker %s", attempt, self._worker_id)
+                response = self._controller_client.register_worker(request)
+                if response.accepted:
+                    logger.info("Registered with controller: %s", self._worker_id)
+                    break
+            except Exception as e:
+                logger.warning("Registration attempt %d failed, retrying in 5s: %s", attempt, e)
+            self._stop_heartbeat.wait(5.0)
+
+        # Periodic heartbeat (re-registration)
+        heartbeat_interval = 10.0  # seconds
+        while not self._stop_heartbeat.is_set():
+            self._stop_heartbeat.wait(heartbeat_interval)
+            if self._stop_heartbeat.is_set():
+                break
+            try:
+                self._controller_client.register_worker(request)
+            except Exception as e:
+                logger.warning(f"Heartbeat failed: {e}")
+
+    def _report_job_state(self, job: "Job") -> None:
+        """Report job state change to controller."""
+        if not self._controller_client or not self._worker_id:
+            return
+
+        try:
+            request = cluster_pb2.Controller.ReportJobStateRequest(
+                worker_id=self._worker_id,
+                job_id=job.job_id,
+                state=job.status,
+                exit_code=job.exit_code or 0,
+                error=job.error or "",
+                finished_at_ms=job.finished_at_ms or 0,
+            )
+            self._controller_client.report_job_state(request)
+        except Exception as e:
+            logger.warning(f"Failed to report job state to controller: {e}")
 
     # Job management methods
 
@@ -387,6 +482,9 @@ class Worker:
                     break
                 except RuntimeError as e:
                     if "address already in use" in str(e) and attempt < max_port_retries - 1:
+                        logger.warning(
+                            "Port conflict for job %s, retrying with new ports (attempt %d)", job.job_id, attempt + 2
+                        )
                         job.logs.add("build", f"Port conflict, retrying with new ports (attempt {attempt + 2})")
                         # Release current ports and allocate new ones
                         self._port_allocator.release(list(job.ports.values()))
@@ -487,6 +585,14 @@ class Worker:
         finally:
             # Release semaphore
             self._semaphore.release()
+
+            # Report job state to controller if in terminal state
+            if job.status in (
+                cluster_pb2.JOB_STATE_SUCCEEDED,
+                cluster_pb2.JOB_STATE_FAILED,
+                cluster_pb2.JOB_STATE_KILLED,
+            ):
+                self._report_job_state(job)
 
             # Cleanup: release ports, remove workdir (keep container for logs)
             if not job.cleanup_done:
