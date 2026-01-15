@@ -23,9 +23,9 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from fluster import cluster_pb2
 from fluster.cluster.types import is_job_finished
-from fluster.cluster_pb2 import JobState
+from fluster.rpc import cluster_pb2
+from fluster.rpc.cluster_pb2 import JobState
 
 
 def collect_workdir_size_mb(workdir: Path) -> int:

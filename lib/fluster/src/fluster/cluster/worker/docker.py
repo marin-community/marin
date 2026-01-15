@@ -26,10 +26,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
+import docker
 import docker.errors
 
-import docker
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 from fluster.cluster.worker.worker_types import JobLogs, LogLine
 
 

@@ -1,7 +1,6 @@
 version: v2
 modules:
-  - path: src/fluster/proto
-  - path: src/fluster/actor/proto
+  - path: src/fluster/rpc
 lint:
   use:
     - STANDARD

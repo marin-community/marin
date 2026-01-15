@@ -29,10 +29,10 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
-from fluster import cluster_pb2
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.types import JobId
-from fluster.cluster_connect import ControllerServiceWSGIApplication
+from fluster.rpc import cluster_pb2
+from fluster.rpc.cluster_connect import ControllerServiceWSGIApplication
 
 
 class FakeRequestContext:
@@ -841,7 +841,6 @@ class ControllerDashboard:
                         "name": ep.name,
                         "address": ep.address,
                         "job_id": str(ep.job_id),
-                        "namespace": ep.namespace,
                         "metadata": dict(ep.metadata),
                     }
                 )

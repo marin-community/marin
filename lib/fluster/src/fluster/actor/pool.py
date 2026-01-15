@@ -22,9 +22,9 @@ from typing import Any, Generic, TypeVar
 
 import cloudpickle
 
-from fluster import actor_pb2
+from fluster.rpc import actor_pb2
 from fluster.actor.resolver import ResolveResult, ResolvedEndpoint, Resolver
-from fluster.actor_connect import ActorServiceClientSync
+from fluster.rpc.actor_connect import ActorServiceClientSync
 
 T = TypeVar("T")
 

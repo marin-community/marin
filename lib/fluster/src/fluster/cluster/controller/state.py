@@ -30,7 +30,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from threading import RLock
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 from fluster.cluster.types import JobId, WorkerId
 
 
@@ -52,6 +52,7 @@ class ControllerJob:
         max_retries_failure: Maximum internal failures before giving up
         max_retries_preemption: Maximum external failures before giving up
         gang_id: Gang identifier for gang-scheduled jobs (None for solo jobs)
+        parent_job_id: Parent job identifier for hierarchical jobs (None for root jobs)
         submitted_at_ms: Timestamp when job was submitted
         started_at_ms: Timestamp when job started running
         finished_at_ms: Timestamp when job reached terminal state
@@ -72,6 +73,9 @@ class ControllerJob:
 
     # Gang scheduling
     gang_id: str | None = None
+
+    # Hierarchical job tracking
+    parent_job_id: JobId | None = None
 
     # Timestamps
     submitted_at_ms: int = 0
@@ -123,21 +127,22 @@ class ControllerEndpoint:
     When a job transitions to a terminal state, all its endpoints are
     automatically removed.
 
+    Names are prefixed with the root job ID for namespace isolation:
+    e.g., "abc123/my-actor" where "abc123" is the root job ID.
+
     Args:
         endpoint_id: Unique endpoint identifier
-        name: Service name for discovery
+        name: Full prefixed service name (e.g., "abc123/my-actor")
         address: Network address (host:port)
         job_id: Job that registered this endpoint
-        namespace: Namespace for isolation
         metadata: Additional key-value metadata
         registered_at_ms: Timestamp when endpoint was registered
     """
 
     endpoint_id: str
-    name: str
+    name: str  # Full prefixed name: "{root_job_id}/{actor_name}"
     address: str
     job_id: JobId
-    namespace: str
     metadata: dict[str, str] = field(default_factory=dict)
     registered_at_ms: int = 0
 
@@ -313,6 +318,18 @@ class ControllerState:
             job_ids = self._gangs.get(gang_id, set())
             return [self._jobs[jid] for jid in job_ids if jid in self._jobs]
 
+    def get_children(self, job_id: JobId) -> list[ControllerJob]:
+        """Get all direct child jobs of a parent job.
+
+        Args:
+            job_id: Parent job identifier
+
+        Returns:
+            List of child jobs (may be empty)
+        """
+        with self._lock:
+            return [job for job in self._jobs.values() if job.parent_job_id == job_id]
+
     def log_action(
         self,
         action: str,
@@ -410,15 +427,16 @@ class ControllerState:
                     job_endpoints.discard(endpoint_id)
             return endpoint
 
-    def lookup_endpoints(self, name: str, namespace: str) -> list[ControllerEndpoint]:
+    def lookup_endpoints(self, name: str) -> list[ControllerEndpoint]:
         """Find endpoints by exact name match.
 
         Only returns endpoints for jobs in RUNNING state. Endpoints for
         jobs that have terminated or are not yet running are filtered out.
 
+        Names are expected to be fully prefixed (e.g., "abc123/my-actor").
+
         Args:
-            name: Service name to look up
-            namespace: Namespace to search in
+            name: Full prefixed service name to look up
 
         Returns:
             List of matching endpoints (may be empty)
@@ -426,7 +444,7 @@ class ControllerState:
         with self._lock:
             results = []
             for ep in self._endpoints.values():
-                if ep.name != name or ep.namespace != namespace:
+                if ep.name != name:
                     continue
                 # Only return endpoints for running jobs
                 job = self._jobs.get(ep.job_id)
@@ -434,14 +452,15 @@ class ControllerState:
                     results.append(ep)
             return results
 
-    def list_endpoints_by_prefix(self, prefix: str, namespace: str) -> list[ControllerEndpoint]:
+    def list_endpoints_by_prefix(self, prefix: str) -> list[ControllerEndpoint]:
         """List endpoints matching a name prefix.
 
         Only returns endpoints for jobs in RUNNING state.
 
+        Prefix is expected to include the namespace (e.g., "abc123/" or "abc123/my-actor").
+
         Args:
-            prefix: Service name prefix to match
-            namespace: Namespace to search in
+            prefix: Service name prefix to match (includes namespace prefix)
 
         Returns:
             List of matching endpoints (may be empty)
@@ -449,7 +468,7 @@ class ControllerState:
         with self._lock:
             results = []
             for ep in self._endpoints.values():
-                if not ep.name.startswith(prefix) or ep.namespace != namespace:
+                if not ep.name.startswith(prefix):
                     continue
                 job = self._jobs.get(ep.job_id)
                 if job and job.state == cluster_pb2.JOB_STATE_RUNNING:

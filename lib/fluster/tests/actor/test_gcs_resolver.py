@@ -12,10 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for GcsResolver."""
+"""Tests for GcsResolver.
+
+GcsResolver is an infrastructure discovery mechanism that finds actors via
+GCP VM instance metadata tags. Unlike ClusterResolver, it does NOT use
+namespace prefixing - it returns all instances with matching actor metadata.
+"""
 
 from fluster.actor.resolver import GcsResolver, MockGcsApi
-from fluster.cluster.types import Namespace
 
 
 def test_gcs_resolver_finds_actors():
@@ -27,7 +31,6 @@ def test_gcs_resolver_finds_actors():
                 "internal_ip": "10.0.0.1",
                 "status": "RUNNING",
                 "metadata": {
-                    "fluster_namespace": "default",
                     "fluster_actor_inference": "8080",
                 },
             },
@@ -42,27 +45,6 @@ def test_gcs_resolver_finds_actors():
     assert result.first().metadata == {"instance": "worker-1"}
 
 
-def test_gcs_resolver_filters_namespace():
-    """Test that GcsResolver filters by namespace."""
-    api = MockGcsApi(
-        [
-            {
-                "name": "worker-1",
-                "internal_ip": "10.0.0.1",
-                "status": "RUNNING",
-                "metadata": {
-                    "fluster_namespace": "other-ns",
-                    "fluster_actor_inference": "8080",
-                },
-            },
-        ]
-    )
-    resolver = GcsResolver("project", "zone", namespace=Namespace("default"), api=api)
-    result = resolver.resolve("inference")
-
-    assert result.is_empty
-
-
 def test_gcs_resolver_ignores_non_running():
     """Test that GcsResolver only considers RUNNING instances."""
     api = MockGcsApi(
@@ -72,7 +54,6 @@ def test_gcs_resolver_ignores_non_running():
                 "internal_ip": "10.0.0.1",
                 "status": "TERMINATED",
                 "metadata": {
-                    "fluster_namespace": "default",
                     "fluster_actor_inference": "8080",
                 },
             },
@@ -93,7 +74,6 @@ def test_gcs_resolver_multiple_instances():
                 "internal_ip": "10.0.0.1",
                 "status": "RUNNING",
                 "metadata": {
-                    "fluster_namespace": "default",
                     "fluster_actor_inference": "8080",
                 },
             },
@@ -102,7 +82,6 @@ def test_gcs_resolver_multiple_instances():
                 "internal_ip": "10.0.0.2",
                 "status": "RUNNING",
                 "metadata": {
-                    "fluster_namespace": "default",
                     "fluster_actor_inference": "8080",
                 },
             },
@@ -126,7 +105,6 @@ def test_gcs_resolver_no_matching_actor():
                 "internal_ip": "10.0.0.1",
                 "status": "RUNNING",
                 "metadata": {
-                    "fluster_namespace": "default",
                     "fluster_actor_training": "8080",
                 },
             },
@@ -147,7 +125,6 @@ def test_gcs_resolver_missing_internal_ip():
                 "internal_ip": None,
                 "status": "RUNNING",
                 "metadata": {
-                    "fluster_namespace": "default",
                     "fluster_actor_inference": "8080",
                 },
             },
@@ -159,8 +136,8 @@ def test_gcs_resolver_missing_internal_ip():
     assert result.is_empty
 
 
-def test_gcs_resolver_default_namespace():
-    """Test that GcsResolver uses default namespace correctly."""
+def test_gcs_resolver_result_includes_name():
+    """Test that GcsResolver includes the actor name in ResolveResult."""
     api = MockGcsApi(
         [
             {
@@ -168,38 +145,13 @@ def test_gcs_resolver_default_namespace():
                 "internal_ip": "10.0.0.1",
                 "status": "RUNNING",
                 "metadata": {
-                    "fluster_namespace": "default",
                     "fluster_actor_inference": "8080",
                 },
             },
         ]
     )
-    resolver = GcsResolver("project", "zone", namespace=Namespace("default"), api=api)
-
-    assert resolver.default_namespace == Namespace("default")
-
-
-def test_gcs_resolver_custom_namespace():
-    """Test that GcsResolver can override namespace."""
-    api = MockGcsApi(
-        [
-            {
-                "name": "worker-1",
-                "internal_ip": "10.0.0.1",
-                "status": "RUNNING",
-                "metadata": {
-                    "fluster_namespace": "custom-ns",
-                    "fluster_actor_inference": "8080",
-                },
-            },
-        ]
-    )
-    resolver = GcsResolver("project", "zone", namespace=Namespace("default"), api=api)
-
-    # Should not find with default namespace
+    resolver = GcsResolver("project", "zone", api=api)
     result = resolver.resolve("inference")
-    assert result.is_empty
 
-    # Should find with custom namespace
-    result = resolver.resolve("inference", namespace=Namespace("custom-ns"))
+    assert result.name == "inference"
     assert len(result.endpoints) == 1

@@ -34,12 +34,13 @@ import uuid
 from pathlib import Path
 
 import click
-from fluster import cluster_pb2
+
 from fluster.cluster.client import RpcClusterClient
 from fluster.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
 from fluster.cluster.types import Entrypoint
 from fluster.cluster.worker.worker import Worker, WorkerConfig
-from fluster.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
+from fluster.rpc import cluster_pb2
+from fluster.rpc.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
 
 # The fluster project root (lib/fluster/) - used as workspace for the example
 FLUSTER_ROOT = Path(__file__).parent.parent
@@ -291,8 +292,8 @@ class ExampleCluster:
         env_vars: dict[str, str] | None = None,
         cpu: int = 1,
         memory: str = "1g",
-        namespace: str | None = None,
         ports: list[str] | None = None,
+        scheduling_timeout_seconds: int = 0,
         **kwargs,
     ) -> str:
         """Submit a job to the cluster.
@@ -304,8 +305,8 @@ class ExampleCluster:
             env_vars: Environment variables
             cpu: Number of CPUs to request
             memory: Memory to request (e.g., "1g", "512m")
-            namespace: Namespace for actor isolation (defaults to "default")
             ports: List of port names to allocate (e.g., ["actor", "metrics"])
+            scheduling_timeout_seconds: Timeout for scheduling (0 = no timeout)
             **kwargs: Keyword arguments for fn
 
         Returns:
@@ -323,8 +324,8 @@ class ExampleCluster:
             name=name or fn.__name__,
             resources=resources,
             environment=environment,
-            namespace=namespace or "default",
             ports=ports,
+            scheduling_timeout_seconds=scheduling_timeout_seconds,
         )
 
     def status(self, job_id: str) -> dict:
@@ -488,7 +489,6 @@ def example_actor_job_workflow(cluster: ExampleCluster):
         name="calculator-actor",
         cpu=1,
         memory="512m",
-        namespace="default",
         ports=["actor"],
     )
     print(f"Job submitted: {job_id}")
@@ -532,12 +532,32 @@ def example_actor_job_workflow(cluster: ExampleCluster):
     print("Waiting for endpoint registration...")
     time.sleep(3)
 
-    # Step 4: Use ClusterResolver to discover the actor
-    from fluster.actor import ActorClient, ClusterResolver
-    from fluster.cluster.types import Namespace
+    # Step 4: Discover the actor endpoint via controller
+    # Note: ClusterResolver requires FlusterContext (for namespace derivation).
+    # When calling from outside a job, query the controller directly and use FixedResolver.
+    from fluster.actor import ActorClient, FixedResolver
 
-    print("\nResolving actor via ClusterResolver...")
-    resolver = ClusterResolver(cluster.controller_url, namespace=Namespace("default"))
+    print("\nDiscovering actor endpoint via controller...")
+
+    # Query controller for all endpoints (prefix="" returns all)
+    list_request = cluster_pb2.Controller.ListEndpointsRequest(prefix="")
+    list_response = cluster._controller_client.list_endpoints(list_request)
+
+    # Find the calculator endpoint (name will be "{job_namespace}/calculator")
+    calculator_endpoint = None
+    for ep in list_response.endpoints:
+        if ep.name.endswith("/calculator"):
+            calculator_endpoint = ep
+            break
+
+    if not calculator_endpoint:
+        print("Calculator endpoint not found!")
+        return
+
+    print(f"Found endpoint: {calculator_endpoint.name} at {calculator_endpoint.address}")
+
+    # Use FixedResolver with the discovered address
+    resolver = FixedResolver({"calculator": f"http://{calculator_endpoint.address}"})
     client = ActorClient(resolver, "calculator")
 
     # Step 5: Call the actor methods
@@ -739,15 +759,13 @@ def example_scheduling_timeout(cluster: ExampleCluster):
         return 0
 
     # Submit a job requiring 100 CPUs (worker only has 4)
-    # With a 2 second scheduling timeout, it should fail quickly
+    # The job will remain pending until manually terminated
     print("Submitting job requiring 100 CPUs (worker has 4)...")
-    print("Setting 2 second scheduling timeout...")
     job_id = cluster.submit(
         impossible_job,
         name="impossible-job",
         cpu=100,
         memory="1g",
-        scheduling_timeout_seconds=2,
     )
     print(f"Submitted: {job_id[:8]}...")
 

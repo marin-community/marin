@@ -19,7 +19,7 @@ from unittest.mock import Mock
 import pytest
 from starlette.testclient import TestClient
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 from fluster.cluster.controller.dashboard import ControllerDashboard
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import (
@@ -116,19 +116,11 @@ def test_stats_counts_endpoints_for_running_jobs_only(client, state, job_request
     """Endpoint count only includes endpoints for RUNNING jobs."""
     # Running job with endpoint
     state.add_job(ControllerJob(job_id=JobId("running"), request=job_request, state=cluster_pb2.JOB_STATE_RUNNING))
-    state.add_endpoint(
-        ControllerEndpoint(
-            endpoint_id="ep1", name="svc", address="host:80", job_id=JobId("running"), namespace="default"
-        )
-    )
+    state.add_endpoint(ControllerEndpoint(endpoint_id="ep1", name="svc", address="host:80", job_id=JobId("running")))
 
     # Pending job with endpoint (should not count)
     state.add_job(ControllerJob(job_id=JobId("pending"), request=job_request, state=cluster_pb2.JOB_STATE_PENDING))
-    state.add_endpoint(
-        ControllerEndpoint(
-            endpoint_id="ep2", name="svc2", address="host:81", job_id=JobId("pending"), namespace="default"
-        )
-    )
+    state.add_endpoint(ControllerEndpoint(endpoint_id="ep2", name="svc2", address="host:81", job_id=JobId("pending")))
 
     stats = client.get("/api/stats").json()
 
@@ -143,15 +135,9 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     state.add_job(ControllerJob(job_id=JobId("succeeded"), request=job_request, state=cluster_pb2.JOB_STATE_SUCCEEDED))
 
     # Add endpoints for each
-    state.add_endpoint(
-        ControllerEndpoint(endpoint_id="ep1", name="pending-svc", address="h:1", job_id=JobId("pending"), namespace="")
-    )
-    state.add_endpoint(
-        ControllerEndpoint(endpoint_id="ep2", name="running-svc", address="h:2", job_id=JobId("running"), namespace="")
-    )
-    state.add_endpoint(
-        ControllerEndpoint(endpoint_id="ep3", name="done-svc", address="h:3", job_id=JobId("succeeded"), namespace="")
-    )
+    state.add_endpoint(ControllerEndpoint(endpoint_id="ep1", name="pending-svc", address="h:1", job_id=JobId("pending")))
+    state.add_endpoint(ControllerEndpoint(endpoint_id="ep2", name="running-svc", address="h:2", job_id=JobId("running")))
+    state.add_endpoint(ControllerEndpoint(endpoint_id="ep3", name="done-svc", address="h:3", job_id=JobId("succeeded")))
 
     endpoints = client.get("/api/endpoints").json()
 

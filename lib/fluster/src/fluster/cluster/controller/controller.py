@@ -38,13 +38,13 @@ from typing import Protocol
 
 import uvicorn
 
-from fluster import cluster_pb2
 from fluster.cluster.controller.dashboard import ControllerDashboard
 from fluster.cluster.controller.retry import handle_job_failure
 from fluster.cluster.controller.scheduler import ScheduleResult, Scheduler
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
-from fluster.cluster_connect import WorkerServiceClientSync
+from fluster.rpc import cluster_pb2
+from fluster.rpc.cluster_connect import WorkerServiceClientSync
 
 logger = logging.getLogger(__name__)
 

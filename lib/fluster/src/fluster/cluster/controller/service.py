@@ -38,9 +38,10 @@ from connectrpc.code import Code
 
 from connectrpc.errors import ConnectError
 
-from fluster import cluster_pb2
 from fluster.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState, ControllerWorker
 from fluster.cluster.types import JobId, WorkerId, is_job_finished
+from fluster.rpc import cluster_pb2
+from fluster.rpc.errors import rpc_error_handler
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,10 @@ class ControllerServiceImpl:
         If bundle_blob is provided and bundle_dir is configured, writes the
         bundle to disk and updates bundle_gcs_path to a file:// URL.
 
+        If parent_job_id is provided in the request, the job is tracked as a
+        child of that parent job. When the parent is terminated, all children
+        will be terminated as well.
+
         Args:
             request: Job launch request with entrypoint and resource spec
             ctx: Request context (unused in v0)
@@ -95,37 +100,43 @@ class ControllerServiceImpl:
         Returns:
             LaunchJobResponse containing the assigned job_id
         """
-        job_id = str(uuid.uuid4())
+        with rpc_error_handler("launching job"):
+            job_id = str(uuid.uuid4())
 
-        # Handle bundle_blob: write to bundle_dir if provided
-        if request.bundle_blob and self._bundle_dir:
-            bundle_path = self._bundle_dir / job_id / "bundle.zip"
-            bundle_path.parent.mkdir(parents=True, exist_ok=True)
-            bundle_path.write_bytes(request.bundle_blob)
+            # Handle bundle_blob: write to bundle_dir if provided
+            if request.bundle_blob and self._bundle_dir:
+                bundle_path = self._bundle_dir / job_id / "bundle.zip"
+                bundle_path.parent.mkdir(parents=True, exist_ok=True)
+                bundle_path.write_bytes(request.bundle_blob)
 
-            # Update the request with file:// path
-            request = cluster_pb2.Controller.LaunchJobRequest(
-                name=request.name,
-                serialized_entrypoint=request.serialized_entrypoint,
-                resources=request.resources,
-                environment=request.environment,
-                bundle_gcs_path=f"file://{bundle_path}",
-                bundle_hash=request.bundle_hash,
-                ports=list(request.ports),
-                scheduling_timeout_seconds=request.scheduling_timeout_seconds,
+                # Update the request with file:// path
+                request = cluster_pb2.Controller.LaunchJobRequest(
+                    name=request.name,
+                    serialized_entrypoint=request.serialized_entrypoint,
+                    resources=request.resources,
+                    environment=request.environment,
+                    bundle_gcs_path=f"file://{bundle_path}",
+                    bundle_hash=request.bundle_hash,
+                    ports=list(request.ports),
+                    scheduling_timeout_seconds=request.scheduling_timeout_seconds,
+                    parent_job_id=request.parent_job_id,
+                )
+
+            # Resolve parent_job_id: empty string means no parent
+            parent_job_id = JobId(request.parent_job_id) if request.parent_job_id else None
+
+            job = ControllerJob(
+                job_id=JobId(job_id),
+                request=request,
+                submitted_at_ms=int(time.time() * 1000),
+                parent_job_id=parent_job_id,
             )
 
-        job = ControllerJob(
-            job_id=JobId(job_id),
-            request=request,
-            submitted_at_ms=int(time.time() * 1000),
-        )
+            self._state.add_job(job)
+            self._state.log_action("job_submitted", job_id=job.job_id, details=request.name)
+            self._scheduler.wake()  # Try to schedule immediately
 
-        self._state.add_job(job)
-        self._state.log_action("job_submitted", job_id=job.job_id, details=request.name)
-        self._scheduler.wake()  # Try to schedule immediately
-
-        return cluster_pb2.Controller.LaunchJobResponse(job_id=job_id)
+            return cluster_pb2.Controller.LaunchJobResponse(job_id=job_id)
 
     def get_job_status(
         self,
@@ -164,6 +175,7 @@ class ControllerServiceImpl:
                 finished_at_ms=job.finished_at_ms or 0,
                 worker_id=job.worker_id or "",
                 worker_address=worker_address,
+                parent_job_id=job.parent_job_id or "",
             )
         )
 
@@ -172,11 +184,12 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.TerminateJobRequest,
         ctx: Any,
     ) -> cluster_pb2.Empty:
-        """Terminate a running job.
+        """Terminate a running job and all its children.
 
-        Marks the job as KILLED in the controller state. Note that in v0,
-        this does not send an actual kill signal to the worker - that is
-        deferred to a future implementation.
+        Marks the job as KILLED in the controller state. Cascade termination
+        is performed depth-first: all children are terminated before the parent.
+        Note that in v0, this does not send an actual kill signal to the worker -
+        that is deferred to a future implementation.
 
         Args:
             request: Request containing job_id
@@ -192,16 +205,29 @@ class ControllerServiceImpl:
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        # Idempotent: if already in terminal state, do nothing
+        # Cascade terminate children first (depth-first)
+        self._terminate_job_tree(job)
+
+        return cluster_pb2.Empty()
+
+    def _terminate_job_tree(self, job: ControllerJob) -> None:
+        """Recursively terminate a job and all its descendants (depth-first).
+
+        Children are terminated before the parent to ensure proper cascade.
+        """
+        # First, terminate all children recursively
+        children = self._state.get_children(job.job_id)
+        for child in children:
+            self._terminate_job_tree(child)
+
+        # Now terminate this job if not already in terminal state
         if is_job_finished(job.state):
-            return cluster_pb2.Empty()
+            return
 
         # TODO: Send kill to worker
         job.state = cluster_pb2.JOB_STATE_KILLED
         job.finished_at_ms = int(time.time() * 1000)
         self._state.log_action("job_killed", job_id=job.job_id)
-
-        return cluster_pb2.Empty()
 
     def list_jobs(
         self,
@@ -237,6 +263,7 @@ class ControllerServiceImpl:
                     exit_code=j.exit_code or 0,
                     started_at_ms=j.started_at_ms or 0,
                     finished_at_ms=j.finished_at_ms or 0,
+                    parent_job_id=j.parent_job_id or "",
                 )
             )
         return cluster_pb2.Controller.ListJobsResponse(jobs=jobs)
@@ -400,31 +427,31 @@ class ControllerServiceImpl:
         Raises:
             ConnectError: If job is not found or not running
         """
-        endpoint_id = str(uuid.uuid4())
+        with rpc_error_handler("registering endpoint"):
+            endpoint_id = str(uuid.uuid4())
 
-        # Validate job exists and is running
-        job = self._state.get_job(JobId(request.job_id))
-        if not job:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
-        if job.state != cluster_pb2.JOB_STATE_RUNNING:
-            raise ConnectError(Code.FAILED_PRECONDITION, f"Job {request.job_id} is not running")
+            # Validate job exists and is running
+            job = self._state.get_job(JobId(request.job_id))
+            if not job:
+                raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+            if job.state != cluster_pb2.JOB_STATE_RUNNING:
+                raise ConnectError(Code.FAILED_PRECONDITION, f"Job {request.job_id} is not running")
 
-        endpoint = ControllerEndpoint(
-            endpoint_id=endpoint_id,
-            name=request.name,
-            address=request.address,
-            job_id=JobId(request.job_id),
-            namespace=request.namespace or "default",
-            metadata=dict(request.metadata),
-            registered_at_ms=int(time.time() * 1000),
-        )
-        self._state.add_endpoint(endpoint)
-        self._state.log_action(
-            "endpoint_registered",
-            job_id=job.job_id,
-            details=f"{request.name} at {request.address}",
-        )
-        return cluster_pb2.Controller.RegisterEndpointResponse(endpoint_id=endpoint_id)
+            endpoint = ControllerEndpoint(
+                endpoint_id=endpoint_id,
+                name=request.name,  # Expected to be prefixed: "{root_job_id}/{actor_name}"
+                address=request.address,
+                job_id=JobId(request.job_id),
+                metadata=dict(request.metadata),
+                registered_at_ms=int(time.time() * 1000),
+            )
+            self._state.add_endpoint(endpoint)
+            self._state.log_action(
+                "endpoint_registered",
+                job_id=job.job_id,
+                details=f"{request.name} at {request.address}",
+            )
+            return cluster_pb2.Controller.RegisterEndpointResponse(endpoint_id=endpoint_id)
 
     def unregister_endpoint(
         self,
@@ -459,20 +486,19 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.LookupEndpointResponse:
         """Look up a service endpoint by name.
 
-        Returns the first endpoint matching the name in the given namespace.
+        Returns the first endpoint matching the full prefixed name.
         Only endpoints for RUNNING jobs are returned.
 
         Args:
-            request: Lookup request with name and namespace
+            request: Lookup request with full prefixed name (e.g., "abc123/my-actor")
             ctx: Request context (unused)
 
         Returns:
             LookupEndpointResponse with first matching endpoint (empty if not found)
         """
-        namespace = request.namespace or "default"
-        endpoints = self._state.lookup_endpoints(request.name, namespace)
+        endpoints = self._state.lookup_endpoints(request.name)
         if not endpoints:
-            logger.debug("Endpoint lookup found no results: name=%s namespace=%s", request.name, namespace)
+            logger.debug("Endpoint lookup found no results: name=%s", request.name)
             return cluster_pb2.Controller.LookupEndpointResponse()
 
         e = endpoints[0]
@@ -482,7 +508,6 @@ class ControllerServiceImpl:
                 name=e.name,
                 address=e.address,
                 job_id=e.job_id,
-                namespace=e.namespace,
                 metadata=e.metadata,
             )
         )
@@ -494,18 +519,19 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.ListEndpointsResponse:
         """List endpoints by name prefix.
 
-        Returns all endpoints matching the prefix in the given namespace.
+        Returns all endpoints matching the prefix.
         Only endpoints for RUNNING jobs are returned.
 
+        Prefix is expected to include the namespace (e.g., "abc123/" or "abc123/my-actor").
+
         Args:
-            request: List request with prefix and namespace
+            request: List request with prefix (includes namespace)
             ctx: Request context (unused)
 
         Returns:
             ListEndpointsResponse with matching endpoints
         """
-        namespace = request.namespace or "default"
-        endpoints = self._state.list_endpoints_by_prefix(request.prefix, namespace)
+        endpoints = self._state.list_endpoints_by_prefix(request.prefix)
         return cluster_pb2.Controller.ListEndpointsResponse(
             endpoints=[
                 cluster_pb2.Controller.Endpoint(
@@ -513,7 +539,6 @@ class ControllerServiceImpl:
                     name=e.name,
                     address=e.address,
                     job_id=e.job_id,
-                    namespace=e.namespace,
                     metadata=e.metadata,
                 )
                 for e in endpoints

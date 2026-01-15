@@ -28,7 +28,8 @@ from queue import Queue
 import cloudpickle
 import pytest
 from connectrpc.errors import ConnectError
-from fluster import cluster_pb2
+
+from fluster.rpc import cluster_pb2
 from fluster.actor import ActorServer
 from fluster.actor.resolver import FixedResolver
 from fluster.cluster.types import Entrypoint, JobId
@@ -362,14 +363,13 @@ class MockClusterClient:
     started directly as ActorServers and discovered via FixedResolver.
     """
 
-    def __init__(self, controller_address: str = "http://mock-controller:8080"):
-        self._controller_address = controller_address
+    def __init__(self):
         self._jobs: dict[JobId, MockJob] = {}
         self._job_counter = 0
 
-    @property
-    def controller_address(self) -> str:
-        return self._controller_address
+    def resolver(self):
+        # Return a FixedResolver that will be replaced by test harness
+        return FixedResolver({})
 
     def submit(
         self,
@@ -377,7 +377,6 @@ class MockClusterClient:
         name: str,
         resources: cluster_pb2.ResourceSpec,
         environment: cluster_pb2.EnvironmentConfig | None = None,
-        namespace: str = "<local>",
         ports: list[str] | None = None,
     ) -> JobId:
         job_id = JobId(f"mock-job-{self._job_counter}")

@@ -28,7 +28,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, NewType
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 
 # Type aliases for clarity
 JobId = NewType("JobId", str)
@@ -42,20 +42,41 @@ class Namespace(str):
     Namespaces provide isolation between different jobs/environments.
     Actors in one namespace cannot discover actors in another namespace.
 
-    Use Namespace.DEFAULT for the default namespace.
+    The namespace is derived from the root job ID: all jobs in a hierarchy
+    share the same namespace. This ensures automatic isolation without
+    explicit configuration.
     """
 
-    DEFAULT: "Namespace"
-
-    def __new__(cls, value: str = "default") -> "Namespace":
+    def __new__(cls, value: str) -> "Namespace":
+        if not value:
+            raise ValueError("Namespace cannot be empty")
         return super().__new__(cls, value)
 
     def __repr__(self) -> str:
         return f"Namespace({super().__repr__()})"
 
+    @classmethod
+    def from_job_id(cls, job_id: str) -> "Namespace":
+        """Derive namespace from hierarchical job ID.
 
-# Default namespace (replaces the confusing "<local>" convention)
-Namespace.DEFAULT = Namespace("default")
+        The namespace is the first component of the job ID hierarchy.
+        For example:
+            "abc123" -> Namespace("abc123")
+            "abc123/worker-0" -> Namespace("abc123")
+            "abc123/worker-0/sub-task" -> Namespace("abc123")
+
+        Args:
+            job_id: Hierarchical job ID
+
+        Returns:
+            Namespace derived from root job ID
+
+        Raises:
+            ValueError: If job_id is empty
+        """
+        if not job_id:
+            raise ValueError("Job ID cannot be empty")
+        return cls(job_id.split("/")[0])
 
 
 def is_job_finished(state: int) -> bool:

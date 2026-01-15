@@ -28,10 +28,10 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
-from fluster import cluster_pb2
 from starlette.middleware.wsgi import WSGIMiddleware
 
-from fluster.cluster_connect import WorkerServiceWSGIApplication
+from fluster.rpc import cluster_pb2
+from fluster.rpc.cluster_connect import WorkerServiceWSGIApplication
 from fluster.cluster.worker.service import WorkerServiceImpl
 
 

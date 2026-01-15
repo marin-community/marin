@@ -21,7 +21,7 @@ utilities used by the scheduler for resource-aware job matching.
 
 import humanfriendly
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 
 
 def parse_memory_string(memory_str: str) -> int:

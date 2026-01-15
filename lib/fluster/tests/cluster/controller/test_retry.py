@@ -16,7 +16,7 @@
 
 import pytest
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 from fluster.cluster.controller.retry import handle_gang_failure, handle_job_failure
 from fluster.cluster.controller.state import ControllerJob, ControllerState
 from fluster.cluster.types import JobId

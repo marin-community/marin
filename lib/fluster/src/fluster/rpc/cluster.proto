@@ -72,6 +72,9 @@ message JobStatus {
   string worker_id = 11;
   string worker_address = 12;  // host:port for direct worker connection
   bytes serialized_result = 13;  // cloudpickle serialized return value (if requested)
+
+  // Parent job ID for hierarchical job tracking (empty string if root job)
+  string parent_job_id = 14;
 }
 
 // ============================================================================
@@ -188,6 +191,10 @@ message Controller {
     // Named ports to allocate (e.g., ["http", "grpc", "actor"])
     // Worker allocates ports and injects FLUSTER_PORT_<NAME> env vars into the container
     repeated string ports = 9;
+
+    // Parent job ID for hierarchical job tracking (empty string if root job)
+    // Child job IDs are formed as "{parent_job_id}/{name}"
+    string parent_job_id = 10;
   }
 
   message LaunchJobResponse {
@@ -263,21 +270,21 @@ message Controller {
   message ReportJobStateResponse {}
 
   // --- Endpoint Registry ---
+  // Endpoints are registered with prefixed names: "{root_job_id}/{actor_name}"
+  // This provides automatic namespace isolation without explicit filtering.
   message Endpoint {
     string endpoint_id = 1;
-    string name = 2;
+    string name = 2;                 // Full prefixed name: "abc123/my-actor"
     string address = 3;              // host:port
     string job_id = 4;
-    string namespace = 5;
-    map<string, string> metadata = 6;
+    map<string, string> metadata = 5;
   }
 
   message RegisterEndpointRequest {
-    string name = 1;
+    string name = 1;                 // Full prefixed name: "abc123/my-actor"
     string address = 2;
     string job_id = 3;
-    string namespace = 4;
-    map<string, string> metadata = 5;
+    map<string, string> metadata = 4;
   }
 
   message RegisterEndpointResponse {
@@ -289,8 +296,7 @@ message Controller {
   }
 
   message LookupEndpointRequest {
-    string name = 1;
-    string namespace = 2;
+    string name = 1;                 // Full prefixed name: "abc123/my-actor"
   }
 
   message LookupEndpointResponse {
@@ -298,8 +304,7 @@ message Controller {
   }
 
   message ListEndpointsRequest {
-    string prefix = 1;
-    string namespace = 2;
+    string prefix = 1;               // Prefix to match: "abc123/" or "abc123/my-actor"
   }
 
   message ListEndpointsResponse {

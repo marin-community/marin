@@ -61,7 +61,7 @@ class BuildMetrics(_message.Message):
     def __init__(self, build_started_ms: _Optional[int] = ..., build_finished_ms: _Optional[int] = ..., from_cache: _Optional[bool] = ..., image_tag: _Optional[str] = ...) -> None: ...
 
 class JobStatus(_message.Message):
-    __slots__ = ("job_id", "state", "exit_code", "error", "started_at_ms", "finished_at_ms", "ports", "resource_usage", "status_message", "build_metrics", "worker_id", "worker_address", "serialized_result")
+    __slots__ = ("job_id", "state", "exit_code", "error", "started_at_ms", "finished_at_ms", "ports", "resource_usage", "status_message", "build_metrics", "worker_id", "worker_address", "serialized_result", "parent_job_id")
     class PortsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -82,6 +82,7 @@ class JobStatus(_message.Message):
     WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     WORKER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
     SERIALIZED_RESULT_FIELD_NUMBER: _ClassVar[int]
+    PARENT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
     job_id: str
     state: JobState
     exit_code: int
@@ -95,7 +96,8 @@ class JobStatus(_message.Message):
     worker_id: str
     worker_address: str
     serialized_result: bytes
-    def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., ports: _Optional[_Mapping[str, int]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., status_message: _Optional[str] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., worker_id: _Optional[str] = ..., worker_address: _Optional[str] = ..., serialized_result: _Optional[bytes] = ...) -> None: ...
+    parent_job_id: str
+    def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., ports: _Optional[_Mapping[str, int]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., status_message: _Optional[str] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., worker_id: _Optional[str] = ..., worker_address: _Optional[str] = ..., serialized_result: _Optional[bytes] = ..., parent_job_id: _Optional[str] = ...) -> None: ...
 
 class DeviceConfig(_message.Message):
     __slots__ = ("cpu", "gpu", "tpu")
@@ -199,7 +201,7 @@ class WorkerMetadata(_message.Message):
 class Controller(_message.Message):
     __slots__ = ()
     class LaunchJobRequest(_message.Message):
-        __slots__ = ("name", "serialized_entrypoint", "resources", "environment", "bundle_gcs_path", "bundle_hash", "bundle_blob", "scheduling_timeout_seconds", "ports")
+        __slots__ = ("name", "serialized_entrypoint", "resources", "environment", "bundle_gcs_path", "bundle_hash", "bundle_blob", "scheduling_timeout_seconds", "ports", "parent_job_id")
         NAME_FIELD_NUMBER: _ClassVar[int]
         SERIALIZED_ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
         RESOURCES_FIELD_NUMBER: _ClassVar[int]
@@ -209,6 +211,7 @@ class Controller(_message.Message):
         BUNDLE_BLOB_FIELD_NUMBER: _ClassVar[int]
         SCHEDULING_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
         PORTS_FIELD_NUMBER: _ClassVar[int]
+        PARENT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
         name: str
         serialized_entrypoint: bytes
         resources: ResourceSpec
@@ -218,7 +221,8 @@ class Controller(_message.Message):
         bundle_blob: bytes
         scheduling_timeout_seconds: int
         ports: _containers.RepeatedScalarFieldContainer[str]
-        def __init__(self, name: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout_seconds: _Optional[int] = ..., ports: _Optional[_Iterable[str]] = ...) -> None: ...
+        parent_job_id: str
+        def __init__(self, name: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout_seconds: _Optional[int] = ..., ports: _Optional[_Iterable[str]] = ..., parent_job_id: _Optional[str] = ...) -> None: ...
     class LaunchJobResponse(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -322,7 +326,7 @@ class Controller(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
     class Endpoint(_message.Message):
-        __slots__ = ("endpoint_id", "name", "address", "job_id", "namespace", "metadata")
+        __slots__ = ("endpoint_id", "name", "address", "job_id", "metadata")
         class MetadataEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -334,17 +338,15 @@ class Controller(_message.Message):
         NAME_FIELD_NUMBER: _ClassVar[int]
         ADDRESS_FIELD_NUMBER: _ClassVar[int]
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
-        NAMESPACE_FIELD_NUMBER: _ClassVar[int]
         METADATA_FIELD_NUMBER: _ClassVar[int]
         endpoint_id: str
         name: str
         address: str
         job_id: str
-        namespace: str
         metadata: _containers.ScalarMap[str, str]
-        def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., job_id: _Optional[str] = ..., namespace: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+        def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., job_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
     class RegisterEndpointRequest(_message.Message):
-        __slots__ = ("name", "address", "job_id", "namespace", "metadata")
+        __slots__ = ("name", "address", "job_id", "metadata")
         class MetadataEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -355,14 +357,12 @@ class Controller(_message.Message):
         NAME_FIELD_NUMBER: _ClassVar[int]
         ADDRESS_FIELD_NUMBER: _ClassVar[int]
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
-        NAMESPACE_FIELD_NUMBER: _ClassVar[int]
         METADATA_FIELD_NUMBER: _ClassVar[int]
         name: str
         address: str
         job_id: str
-        namespace: str
         metadata: _containers.ScalarMap[str, str]
-        def __init__(self, name: _Optional[str] = ..., address: _Optional[str] = ..., job_id: _Optional[str] = ..., namespace: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+        def __init__(self, name: _Optional[str] = ..., address: _Optional[str] = ..., job_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
     class RegisterEndpointResponse(_message.Message):
         __slots__ = ("endpoint_id",)
         ENDPOINT_ID_FIELD_NUMBER: _ClassVar[int]
@@ -374,24 +374,20 @@ class Controller(_message.Message):
         endpoint_id: str
         def __init__(self, endpoint_id: _Optional[str] = ...) -> None: ...
     class LookupEndpointRequest(_message.Message):
-        __slots__ = ("name", "namespace")
+        __slots__ = ("name",)
         NAME_FIELD_NUMBER: _ClassVar[int]
-        NAMESPACE_FIELD_NUMBER: _ClassVar[int]
         name: str
-        namespace: str
-        def __init__(self, name: _Optional[str] = ..., namespace: _Optional[str] = ...) -> None: ...
+        def __init__(self, name: _Optional[str] = ...) -> None: ...
     class LookupEndpointResponse(_message.Message):
         __slots__ = ("endpoint",)
         ENDPOINT_FIELD_NUMBER: _ClassVar[int]
         endpoint: Controller.Endpoint
         def __init__(self, endpoint: _Optional[_Union[Controller.Endpoint, _Mapping]] = ...) -> None: ...
     class ListEndpointsRequest(_message.Message):
-        __slots__ = ("prefix", "namespace")
+        __slots__ = ("prefix",)
         PREFIX_FIELD_NUMBER: _ClassVar[int]
-        NAMESPACE_FIELD_NUMBER: _ClassVar[int]
         prefix: str
-        namespace: str
-        def __init__(self, prefix: _Optional[str] = ..., namespace: _Optional[str] = ...) -> None: ...
+        def __init__(self, prefix: _Optional[str] = ...) -> None: ...
     class ListEndpointsResponse(_message.Message):
         __slots__ = ("endpoints",)
         ENDPOINTS_FIELD_NUMBER: _ClassVar[int]

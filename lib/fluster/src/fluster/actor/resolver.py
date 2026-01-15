@@ -17,10 +17,10 @@
 from dataclasses import dataclass, field
 from typing import Protocol as TypingProtocol
 
-from fluster import cluster_pb2
 from fluster.cluster.types import Namespace
-from fluster.cluster_connect import ControllerServiceClientSync
 from fluster.context import get_fluster_ctx
+from fluster.rpc import cluster_pb2
+from fluster.rpc.cluster_connect import ControllerServiceClientSync
 
 
 @dataclass
@@ -37,7 +37,6 @@ class ResolveResult:
     """Result of resolving an actor name."""
 
     name: str
-    namespace: Namespace
     endpoints: list[ResolvedEndpoint] = field(default_factory=list)
 
     @property
@@ -46,28 +45,34 @@ class ResolveResult:
 
     def first(self) -> ResolvedEndpoint:
         if not self.endpoints:
-            raise ValueError(f"No endpoints for '{self.name}' in namespace '{self.namespace}'")
+            raise ValueError(f"No endpoints for '{self.name}'")
         return self.endpoints[0]
 
 
 class Resolver(TypingProtocol):
-    """Protocol for actor name resolution."""
+    """Protocol for actor name resolution.
 
-    def resolve(self, name: str, namespace: Namespace | None = None) -> ResolveResult: ...
+    Resolvers automatically handle namespace prefixing based on the current
+    FlusterContext. When resolving "calculator", the resolver will look up
+    "{namespace}/calculator" where namespace is derived from the context.
+    """
 
-    @property
-    def default_namespace(self) -> Namespace: ...
+    def resolve(self, name: str) -> ResolveResult: ...
 
 
 class FixedResolver:
-    """Resolver with statically configured endpoints."""
+    """Resolver with statically configured endpoints.
 
-    def __init__(
-        self,
-        endpoints: dict[str, str | list[str]],
-        namespace: Namespace = Namespace.DEFAULT,
-    ):
-        self._namespace = namespace
+    Used for testing or when endpoints are known ahead of time.
+    Does not use namespace prefixing since endpoints are static.
+    """
+
+    def __init__(self, endpoints: dict[str, str | list[str]]):
+        """Initialize with a mapping of actor names to URLs.
+
+        Args:
+            endpoints: Mapping of actor name to URL or list of URLs
+        """
         self._endpoints: dict[str, list[str]] = {}
         for name, urls in endpoints.items():
             if isinstance(urls, str):
@@ -75,70 +80,73 @@ class FixedResolver:
             else:
                 self._endpoints[name] = list(urls)
 
-    @property
-    def default_namespace(self) -> Namespace:
-        return self._namespace
+    def resolve(self, name: str) -> ResolveResult:
+        """Resolve actor name to endpoints.
 
-    def resolve(self, name: str, namespace: Namespace | None = None) -> ResolveResult:
-        ns = namespace or self._namespace
+        Args:
+            name: Actor name to resolve
+
+        Returns:
+            ResolveResult with configured endpoints
+        """
         urls = self._endpoints.get(name, [])
         endpoints = [ResolvedEndpoint(url=url, actor_id=f"fixed-{name}-{i}") for i, url in enumerate(urls)]
-        return ResolveResult(name=name, namespace=ns, endpoints=endpoints)
+        return ResolveResult(name=name, endpoints=endpoints)
 
 
 class ClusterResolver:
     """Resolver backed by the cluster controller's endpoint registry.
 
     Queries the controller's ListEndpoints RPC to discover actor endpoints
-    registered by running jobs. Respects namespace boundaries for isolation.
+    registered by running jobs. Automatically prefixes names with the namespace
+    derived from the current FlusterContext.
+
+    Requires a FlusterContext to be active (must be called from within a job).
 
     Args:
         controller_address: Controller URL (e.g., "http://localhost:8080")
-        namespace: Namespace for actor isolation. If None, uses the namespace
-            from the current FlusterContext, or Namespace.DEFAULT if not in a context.
         timeout: HTTP request timeout in seconds
     """
 
     def __init__(
         self,
         controller_address: str,
-        namespace: Namespace | None = None,
         timeout: float = 5.0,
     ):
+        ctx = get_fluster_ctx()
+        if ctx is None:
+            raise RuntimeError(
+                "ClusterResolver requires a FlusterContext. "
+                "Ensure your code is running within a job submitted via "
+                "LocalClient or RpcClusterClient."
+            )
+
         self._address = controller_address.rstrip("/")
         self._timeout = timeout
-
-        # Determine namespace: explicit > context > default
-        if namespace is not None:
-            self._namespace = namespace
-        else:
-            ctx = get_fluster_ctx()
-            self._namespace = ctx.namespace if ctx else Namespace.DEFAULT
+        self._namespace_prefix = str(Namespace.from_job_id(ctx.job_id))
 
         self._client = ControllerServiceClientSync(
             address=self._address,
             timeout_ms=int(timeout * 1000),
         )
 
-    @property
-    def default_namespace(self) -> Namespace:
-        return self._namespace
-
-    def resolve(self, name: str, namespace: Namespace | None = None) -> ResolveResult:
+    def resolve(self, name: str) -> ResolveResult:
         """Resolve actor name to endpoints via controller.
 
+        The name is auto-prefixed with the namespace before lookup.
+        For example, resolving "calculator" with namespace "abc123" looks up
+        "abc123/calculator".
+
         Args:
-            name: Actor name to resolve
-            namespace: Override default namespace
+            name: Actor name to resolve (will be prefixed with namespace)
 
         Returns:
             ResolveResult with matching endpoints
         """
-        ns = namespace or self._namespace
+        prefixed_name = f"{self._namespace_prefix}/{name}"
 
         request = cluster_pb2.Controller.ListEndpointsRequest(
-            prefix=name,
-            namespace=str(ns),
+            prefix=prefixed_name,
         )
 
         resp = self._client.list_endpoints(request)
@@ -151,10 +159,10 @@ class ClusterResolver:
                 metadata=dict(ep.metadata),
             )
             for ep in resp.endpoints
-            if ep.name == name
+            if ep.name == prefixed_name
         ]
 
-        return ResolveResult(name=name, namespace=ns, endpoints=endpoints)
+        return ResolveResult(name=name, endpoints=endpoints)
 
 
 class GcsApi(TypingProtocol):
@@ -210,57 +218,50 @@ class MockGcsApi:
 class GcsResolver:
     """Resolver using GCS VM instance metadata tags.
 
-    Discovers actor endpoints by querying GCP VM instance metadata. Instances must
-    have metadata tags in the format:
+    Discovers actor endpoints by querying GCP VM instance metadata. This is purely
+    an infrastructure discovery mechanism - it finds all running instances with
+    matching actor metadata.
+
+    Instances must have metadata tags in the format:
     - `fluster_actor_<name>`: port number for the actor
-    - `fluster_namespace`: namespace for isolation
 
     Only RUNNING instances are considered for resolution.
+
+    Note: Unlike ClusterResolver, GcsResolver does NOT do namespace prefixing.
+    It's an infrastructure discovery mechanism that returns all instances with
+    matching actor metadata tags. Use this for static VM-based deployments where
+    namespace isolation is not needed.
 
     Args:
         project: GCP project ID
         zone: GCP zone (e.g., "us-central1-a")
-        namespace: Namespace for actor isolation. If None, uses the namespace
-            from the current FlusterContext, or Namespace.DEFAULT if not in a context.
         api: GcsApi implementation (defaults to RealGcsApi)
     """
 
     ACTOR_PREFIX = "fluster_actor_"
-    NAMESPACE_KEY = "fluster_namespace"
 
     def __init__(
         self,
         project: str,
         zone: str,
-        namespace: Namespace | None = None,
         api: GcsApi | None = None,
     ):
         self._project = project
         self._zone = zone
         self._api = api or RealGcsApi()
 
-        # Determine namespace: explicit > context > default
-        if namespace is not None:
-            self._namespace = namespace
-        else:
-            ctx = get_fluster_ctx()
-            self._namespace = ctx.namespace if ctx else Namespace.DEFAULT
-
-    @property
-    def default_namespace(self) -> Namespace:
-        return self._namespace
-
-    def resolve(self, name: str, namespace: Namespace | None = None) -> ResolveResult:
+    def resolve(self, name: str) -> ResolveResult:
         """Resolve actor name to endpoints via GCS instance metadata.
+
+        Discovers all running instances with matching actor metadata.
+        No namespace prefixing is applied.
 
         Args:
             name: Actor name to resolve
-            namespace: Override default namespace
 
         Returns:
             ResolveResult with matching endpoints from RUNNING instances
         """
-        ns = namespace or self._namespace
         endpoints = []
 
         instances = self._api.list_instances(self._project, self._zone)
@@ -270,10 +271,6 @@ class GcsResolver:
                 continue
 
             metadata = instance.get("metadata", {})
-            instance_ns = metadata.get(self.NAMESPACE_KEY, str(Namespace.DEFAULT))
-
-            if instance_ns != str(ns):
-                continue
 
             actor_key = f"{self.ACTOR_PREFIX}{name}"
             if actor_key in metadata:
@@ -288,4 +285,4 @@ class GcsResolver:
                         )
                     )
 
-        return ResolveResult(name=name, namespace=ns, endpoints=endpoints)
+        return ResolveResult(name=name, endpoints=endpoints)

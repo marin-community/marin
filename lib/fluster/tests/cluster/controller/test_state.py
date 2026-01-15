@@ -18,7 +18,7 @@ import threading
 
 import pytest
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 from fluster.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
 from fluster.cluster.types import JobId, WorkerId
 
@@ -305,3 +305,99 @@ def test_controller_state_action_log_bounded():
     # Oldest should be action_50 (first 50 were evicted)
     assert actions[0].action == "action_50"
     assert actions[-1].action == "action_149"
+
+
+# =============================================================================
+# Hierarchical Job Tests
+# =============================================================================
+
+
+def test_controller_state_get_children_returns_direct_children(make_job_request):
+    """Verify get_children returns only direct children of a parent job."""
+    state = ControllerState()
+
+    # Create parent job
+    parent = ControllerJob(job_id=JobId("parent"), request=make_job_request("parent"))
+    state.add_job(parent)
+
+    # Create child jobs
+    child1 = ControllerJob(
+        job_id=JobId("child1"),
+        request=make_job_request("child1"),
+        parent_job_id=JobId("parent"),
+    )
+    child2 = ControllerJob(
+        job_id=JobId("child2"),
+        request=make_job_request("child2"),
+        parent_job_id=JobId("parent"),
+    )
+    state.add_job(child1)
+    state.add_job(child2)
+
+    # Create an unrelated job with no parent
+    unrelated = ControllerJob(job_id=JobId("unrelated"), request=make_job_request("unrelated"))
+    state.add_job(unrelated)
+
+    # Get children of parent
+    children = state.get_children(JobId("parent"))
+    assert len(children) == 2
+    assert {c.job_id for c in children} == {"child1", "child2"}
+
+
+def test_controller_state_get_children_returns_empty_for_no_children(make_job_request):
+    """Verify get_children returns empty list when job has no children."""
+    state = ControllerState()
+
+    # Create a job with no children
+    job = ControllerJob(job_id=JobId("lonely"), request=make_job_request("lonely"))
+    state.add_job(job)
+
+    children = state.get_children(JobId("lonely"))
+    assert children == []
+
+
+def test_controller_state_get_children_only_returns_direct_not_grandchildren(make_job_request):
+    """Verify get_children only returns direct children, not grandchildren."""
+    state = ControllerState()
+
+    # Create a 3-level hierarchy: grandparent -> parent -> child
+    grandparent = ControllerJob(job_id=JobId("grandparent"), request=make_job_request("grandparent"))
+    parent = ControllerJob(
+        job_id=JobId("parent"),
+        request=make_job_request("parent"),
+        parent_job_id=JobId("grandparent"),
+    )
+    child = ControllerJob(
+        job_id=JobId("child"),
+        request=make_job_request("child"),
+        parent_job_id=JobId("parent"),
+    )
+    state.add_job(grandparent)
+    state.add_job(parent)
+    state.add_job(child)
+
+    # get_children of grandparent should only return parent, not grandchild
+    children = state.get_children(JobId("grandparent"))
+    assert len(children) == 1
+    assert children[0].job_id == "parent"
+
+
+def test_controller_job_parent_job_id_field(make_job_request):
+    """Verify ControllerJob properly stores parent_job_id."""
+    job = ControllerJob(
+        job_id=JobId("child-job"),
+        request=make_job_request("child"),
+        parent_job_id=JobId("parent-job"),
+    )
+
+    assert job.parent_job_id == "parent-job"
+
+
+def test_controller_job_parent_job_id_defaults_to_none(make_job_request):
+    """Verify ControllerJob parent_job_id defaults to None for root jobs."""
+    job = ControllerJob(
+        job_id=JobId("root-job"),
+        request=make_job_request("root"),
+    )
+
+    assert job.parent_job_id is None

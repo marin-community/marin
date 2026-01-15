@@ -28,7 +28,7 @@ import socket
 import subprocess
 import urllib.request
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
 

@@ -289,10 +289,17 @@ class Worker:
         if not self._worker_id:
             self._worker_id = f"worker-{uuid.uuid4().hex[:8]}"
 
+        # Determine the address to advertise to the controller.
+        # If host is 0.0.0.0 (bind to all interfaces), use the probed IP for external access.
+        # Otherwise, use the configured host.
+        address_host = self._config.host
+        if address_host == "0.0.0.0":
+            address_host = metadata.ip_address
+
         # Build registration request
         request = cluster_pb2.Controller.RegisterWorkerRequest(
             worker_id=self._worker_id,
-            address=f"{metadata.ip_address}:{self._config.port}",
+            address=f"{address_host}:{self._config.port}",
             resources=resources,
             metadata=metadata,
         )

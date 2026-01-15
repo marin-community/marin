@@ -12,7 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for ClusterResolver integration with controller."""
+"""Tests for ClusterResolver integration with controller.
+
+These tests verify that ClusterResolver correctly resolves actor endpoints
+by querying the controller. The resolver auto-prefixes names with the
+namespace derived from the current FlusterContext.
+"""
 
 import socket
 import threading
@@ -23,12 +28,13 @@ import uvicorn
 
 from connectrpc.request import RequestContext
 
-from fluster import cluster_pb2
 from fluster.actor.resolver import ClusterResolver
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState
-from fluster.cluster.types import JobId, Namespace
-from fluster.cluster_connect import ControllerServiceASGIApplication
+from fluster.cluster.types import JobId
+from fluster.context import FlusterContext, fluster_ctx_scope
+from fluster.rpc import cluster_pb2
+from fluster.rpc.cluster_connect import ControllerServiceASGIApplication
 
 
 class AsyncControllerServiceWrapper:
@@ -111,24 +117,27 @@ def create_controller_app(state: ControllerState) -> ControllerServiceASGIApplic
 
 @pytest.fixture
 def controller_with_endpoint():
-    """Start a controller with a registered endpoint."""
+    """Start a controller with a registered endpoint.
+
+    The endpoint uses prefixed naming: "test-ns/inference"
+    where "test-ns" is the namespace (root job ID).
+    """
     state = ControllerState()
 
-    # Add a running job
+    # Add a running job with "test-ns" as root job ID
     job = ControllerJob(
-        job_id=JobId("job-1"),
+        job_id=JobId("test-ns"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     state.add_job(job)
 
-    # Add an endpoint
+    # Add an endpoint with prefixed name
     ep = ControllerEndpoint(
         endpoint_id="ep-1",
-        name="inference",
+        name="test-ns/inference",  # Prefixed with namespace
         address="10.0.0.1:8080",
-        job_id=JobId("job-1"),
-        namespace="<local>",
+        job_id=JobId("test-ns"),
     )
     state.add_endpoint(ep)
 
@@ -157,8 +166,11 @@ def test_cluster_resolver_finds_endpoint(controller_with_endpoint):
     """Test that ClusterResolver successfully resolves a registered endpoint."""
     address, _state = controller_with_endpoint
 
-    resolver = ClusterResolver(address, namespace=Namespace("<local>"))
-    result = resolver.resolve("inference")
+    # Create a FlusterContext with job_id that derives namespace "test-ns"
+    ctx = FlusterContext(job_id="test-ns/worker-0")
+    with fluster_ctx_scope(ctx):
+        resolver = ClusterResolver(address)
+        result = resolver.resolve("inference")
 
     assert len(result.endpoints) == 1
     assert "10.0.0.1:8080" in result.first().url
@@ -169,8 +181,10 @@ def test_cluster_resolver_missing_endpoint(controller_with_endpoint):
     """Test that ClusterResolver returns empty result for non-existent actor."""
     address, _state = controller_with_endpoint
 
-    resolver = ClusterResolver(address, namespace=Namespace("<local>"))
-    result = resolver.resolve("nonexistent")
+    ctx = FlusterContext(job_id="test-ns/worker-0")
+    with fluster_ctx_scope(ctx):
+        resolver = ClusterResolver(address)
+        result = resolver.resolve("nonexistent")
 
     assert result.is_empty
 
@@ -179,9 +193,9 @@ def test_cluster_resolver_multiple_endpoints(controller_with_endpoint):
     """Test that ClusterResolver returns all matching endpoints."""
     address, state = controller_with_endpoint
 
-    # Add another job and endpoint with the same name
+    # Add another job and endpoint with the same name (same namespace)
     job2 = ControllerJob(
-        job_id=JobId("job-2"),
+        job_id=JobId("test-ns/child-job"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
@@ -189,15 +203,16 @@ def test_cluster_resolver_multiple_endpoints(controller_with_endpoint):
 
     ep2 = ControllerEndpoint(
         endpoint_id="ep-2",
-        name="inference",
+        name="test-ns/inference",  # Same prefixed name
         address="10.0.0.2:8080",
-        job_id=JobId("job-2"),
-        namespace="<local>",
+        job_id=JobId("test-ns/child-job"),
     )
     state.add_endpoint(ep2)
 
-    resolver = ClusterResolver(address, namespace=Namespace("<local>"))
-    result = resolver.resolve("inference")
+    ctx = FlusterContext(job_id="test-ns/worker-0")
+    with fluster_ctx_scope(ctx):
+        resolver = ClusterResolver(address)
+        result = resolver.resolve("inference")
 
     assert len(result.endpoints) == 2
     addresses = {ep.url for ep in result.endpoints}
@@ -206,12 +221,12 @@ def test_cluster_resolver_multiple_endpoints(controller_with_endpoint):
 
 
 def test_cluster_resolver_namespace_isolation(controller_with_endpoint):
-    """Test that ClusterResolver respects namespace boundaries."""
+    """Test that namespace prefixing provides isolation."""
     address, state = controller_with_endpoint
 
     # Add endpoint in different namespace
     job2 = ControllerJob(
-        job_id=JobId("job-2"),
+        job_id=JobId("other-ns"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
@@ -219,22 +234,27 @@ def test_cluster_resolver_namespace_isolation(controller_with_endpoint):
 
     ep2 = ControllerEndpoint(
         endpoint_id="ep-2",
-        name="inference",
+        name="other-ns/inference",  # Different namespace prefix
         address="10.0.0.2:8080",
-        job_id=JobId("job-2"),
-        namespace="other-namespace",
+        job_id=JobId("other-ns"),
     )
     state.add_endpoint(ep2)
 
-    # Resolve in <local> namespace should only find ep-1
-    resolver = ClusterResolver(address, namespace=Namespace("<local>"))
-    result = resolver.resolve("inference")
+    # Resolve in "test-ns" namespace should only find ep-1
+    ctx = FlusterContext(job_id="test-ns/worker-0")
+    with fluster_ctx_scope(ctx):
+        resolver = ClusterResolver(address)
+        result = resolver.resolve("inference")
 
     assert len(result.endpoints) == 1
     assert result.first().url == "http://10.0.0.1:8080"
 
-    # Resolve in other-namespace should only find ep-2
-    result_other = resolver.resolve("inference", namespace=Namespace("other-namespace"))
+    # Resolve in "other-ns" namespace should only find ep-2
+    ctx_other = FlusterContext(job_id="other-ns/worker-0")
+    with fluster_ctx_scope(ctx_other):
+        resolver_other = ClusterResolver(address)
+        result_other = resolver_other.resolve("inference")
+
     assert len(result_other.endpoints) == 1
     assert result_other.first().url == "http://10.0.0.2:8080"
 
@@ -245,7 +265,7 @@ def test_cluster_resolver_filters_exact_name_match(controller_with_endpoint):
 
     # Add endpoint with similar but different name
     job2 = ControllerJob(
-        job_id=JobId("job-2"),
+        job_id=JobId("test-ns/child-job"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
@@ -253,16 +273,17 @@ def test_cluster_resolver_filters_exact_name_match(controller_with_endpoint):
 
     ep2 = ControllerEndpoint(
         endpoint_id="ep-2",
-        name="inference-v2",
+        name="test-ns/inference-v2",  # Similar but different
         address="10.0.0.2:8080",
-        job_id=JobId("job-2"),
-        namespace="<local>",
+        job_id=JobId("test-ns/child-job"),
     )
     state.add_endpoint(ep2)
 
     # Resolve "inference" should not return "inference-v2"
-    resolver = ClusterResolver(address, namespace=Namespace("<local>"))
-    result = resolver.resolve("inference")
+    ctx = FlusterContext(job_id="test-ns/worker-0")
+    with fluster_ctx_scope(ctx):
+        resolver = ClusterResolver(address)
+        result = resolver.resolve("inference")
 
     assert len(result.endpoints) == 1
     assert result.first().url == "http://10.0.0.1:8080"
@@ -274,7 +295,7 @@ def test_cluster_resolver_only_running_jobs(controller_with_endpoint):
 
     # Add a completed job with endpoint
     job2 = ControllerJob(
-        job_id=JobId("job-2"),
+        job_id=JobId("test-ns/child-job"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_SUCCEEDED,
     )
@@ -282,16 +303,17 @@ def test_cluster_resolver_only_running_jobs(controller_with_endpoint):
 
     ep2 = ControllerEndpoint(
         endpoint_id="ep-2",
-        name="inference",
+        name="test-ns/inference",
         address="10.0.0.2:8080",
-        job_id=JobId("job-2"),
-        namespace="<local>",
+        job_id=JobId("test-ns/child-job"),
     )
     state.add_endpoint(ep2)
 
     # Should only find the running job's endpoint
-    resolver = ClusterResolver(address, namespace=Namespace("<local>"))
-    result = resolver.resolve("inference")
+    ctx = FlusterContext(job_id="test-ns/worker-0")
+    with fluster_ctx_scope(ctx):
+        resolver = ClusterResolver(address)
+        result = resolver.resolve("inference")
 
     assert len(result.endpoints) == 1
     assert result.first().url == "http://10.0.0.1:8080"
@@ -303,7 +325,7 @@ def test_cluster_resolver_metadata(controller_with_endpoint):
 
     # Add endpoint with metadata
     job2 = ControllerJob(
-        job_id=JobId("job-2"),
+        job_id=JobId("test-ns/child-job"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
@@ -311,17 +333,24 @@ def test_cluster_resolver_metadata(controller_with_endpoint):
 
     ep2 = ControllerEndpoint(
         endpoint_id="ep-2",
-        name="tagged-actor",
+        name="test-ns/tagged-actor",
         address="10.0.0.2:8080",
-        job_id=JobId("job-2"),
-        namespace="<local>",
+        job_id=JobId("test-ns/child-job"),
         metadata={"model": "gpt-4", "version": "1.0"},
     )
     state.add_endpoint(ep2)
 
-    resolver = ClusterResolver(address, namespace=Namespace("<local>"))
-    result = resolver.resolve("tagged-actor")
+    ctx = FlusterContext(job_id="test-ns/worker-0")
+    with fluster_ctx_scope(ctx):
+        resolver = ClusterResolver(address)
+        result = resolver.resolve("tagged-actor")
 
     assert len(result.endpoints) == 1
     assert result.first().metadata["model"] == "gpt-4"
     assert result.first().metadata["version"] == "1.0"
+
+
+def test_cluster_resolver_requires_context():
+    """Test that ClusterResolver raises error without FlusterContext."""
+    with pytest.raises(RuntimeError, match="requires a FlusterContext"):
+        ClusterResolver("http://localhost:8080")

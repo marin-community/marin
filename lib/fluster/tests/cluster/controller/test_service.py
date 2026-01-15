@@ -20,7 +20,7 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerJob, ControllerState
 from fluster.cluster.types import JobId, WorkerId
@@ -366,3 +366,202 @@ def test_terminate_job_logs_action(service, state, make_job_request):
     assert len(actions) == 1
     assert actions[0].action == "job_killed"
     assert actions[0].job_id == "test-job-id"
+
+
+# =============================================================================
+# Hierarchical Job Tests
+# =============================================================================
+
+
+def test_launch_job_with_parent_job_id(service, state):
+    """Verify launch_job stores parent_job_id from request."""
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="child-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        parent_job_id="parent-123",
+    )
+
+    response = service.launch_job(request, None)
+
+    job = state.get_job(JobId(response.job_id))
+    assert job is not None
+    assert job.parent_job_id == "parent-123"
+
+
+def test_launch_job_without_parent_job_id(service, state):
+    """Verify launch_job sets parent_job_id to None when not provided."""
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="root-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+
+    response = service.launch_job(request, None)
+
+    job = state.get_job(JobId(response.job_id))
+    assert job is not None
+    assert job.parent_job_id is None
+
+
+def test_get_job_status_includes_parent_job_id(service, state, make_job_request):
+    """Verify get_job_status returns parent_job_id in response."""
+    # Add a job with a parent
+    job = ControllerJob(
+        job_id=JobId("child-job"),
+        request=make_job_request("child"),
+        parent_job_id=JobId("parent-job"),
+    )
+    state.add_job(job)
+
+    request = cluster_pb2.Controller.GetJobStatusRequest(job_id="child-job")
+    response = service.get_job_status(request, None)
+
+    assert response.job.parent_job_id == "parent-job"
+
+
+def test_terminate_job_cascades_to_children(service, state, make_job_request):
+    """Verify terminate_job terminates all children when parent is terminated."""
+    # Create parent and child jobs
+    parent = ControllerJob(
+        job_id=JobId("parent"),
+        request=make_job_request("parent"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+    )
+    child1 = ControllerJob(
+        job_id=JobId("child1"),
+        request=make_job_request("child1"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+        parent_job_id=JobId("parent"),
+    )
+    child2 = ControllerJob(
+        job_id=JobId("child2"),
+        request=make_job_request("child2"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+        parent_job_id=JobId("parent"),
+    )
+    state.add_job(parent)
+    state.add_job(child1)
+    state.add_job(child2)
+
+    # Terminate parent
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id="parent")
+    service.terminate_job(request, None)
+
+    # All jobs should be killed
+    assert parent.state == cluster_pb2.JOB_STATE_KILLED
+    assert child1.state == cluster_pb2.JOB_STATE_KILLED
+    assert child2.state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_terminate_job_cascades_depth_first(service, state, make_job_request):
+    """Verify terminate_job terminates children before parent (depth-first)."""
+    # Create a 3-level hierarchy: grandparent -> parent -> child
+    grandparent = ControllerJob(
+        job_id=JobId("grandparent"),
+        request=make_job_request("grandparent"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+    )
+    parent = ControllerJob(
+        job_id=JobId("parent"),
+        request=make_job_request("parent"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+        parent_job_id=JobId("grandparent"),
+    )
+    child = ControllerJob(
+        job_id=JobId("child"),
+        request=make_job_request("child"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+        parent_job_id=JobId("parent"),
+    )
+    state.add_job(grandparent)
+    state.add_job(parent)
+    state.add_job(child)
+
+    # Terminate grandparent
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id="grandparent")
+    service.terminate_job(request, None)
+
+    # All should be killed
+    assert grandparent.state == cluster_pb2.JOB_STATE_KILLED
+    assert parent.state == cluster_pb2.JOB_STATE_KILLED
+    assert child.state == cluster_pb2.JOB_STATE_KILLED
+
+    # Verify termination order via action log (children killed before parents)
+    actions = state.get_recent_actions()
+    killed_order = [a.job_id for a in actions if a.action == "job_killed"]
+    # Child should be killed first, then parent, then grandparent
+    assert killed_order == ["child", "parent", "grandparent"]
+
+
+def test_terminate_job_only_affects_descendants(service, state, make_job_request):
+    """Verify terminate_job does not affect sibling jobs."""
+    # Create two sibling jobs under the same parent
+    parent = ControllerJob(
+        job_id=JobId("parent"),
+        request=make_job_request("parent"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+    )
+    child1 = ControllerJob(
+        job_id=JobId("child1"),
+        request=make_job_request("child1"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+        parent_job_id=JobId("parent"),
+    )
+    child2 = ControllerJob(
+        job_id=JobId("child2"),
+        request=make_job_request("child2"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+        parent_job_id=JobId("parent"),
+    )
+    state.add_job(parent)
+    state.add_job(child1)
+    state.add_job(child2)
+
+    # Terminate only child1
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id="child1")
+    service.terminate_job(request, None)
+
+    # Only child1 should be killed
+    assert child1.state == cluster_pb2.JOB_STATE_KILLED
+    assert child2.state == cluster_pb2.JOB_STATE_RUNNING
+    assert parent.state == cluster_pb2.JOB_STATE_RUNNING
+
+
+def test_terminate_job_skips_already_finished_children(service, state, make_job_request):
+    """Verify terminate_job skips children already in terminal state."""
+    parent = ControllerJob(
+        job_id=JobId("parent"),
+        request=make_job_request("parent"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+    )
+    # Child already succeeded
+    child_succeeded = ControllerJob(
+        job_id=JobId("child-succeeded"),
+        request=make_job_request("child-succeeded"),
+        state=cluster_pb2.JOB_STATE_SUCCEEDED,
+        parent_job_id=JobId("parent"),
+        finished_at_ms=12345,
+    )
+    # Child still running
+    child_running = ControllerJob(
+        job_id=JobId("child-running"),
+        request=make_job_request("child-running"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+        parent_job_id=JobId("parent"),
+    )
+    state.add_job(parent)
+    state.add_job(child_succeeded)
+    state.add_job(child_running)
+
+    request = cluster_pb2.Controller.TerminateJobRequest(job_id="parent")
+    service.terminate_job(request, None)
+
+    # Succeeded child should remain in SUCCEEDED state
+    assert child_succeeded.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    # Running child should be killed
+    assert child_running.state == cluster_pb2.JOB_STATE_KILLED
+    # Parent should be killed
+    assert parent.state == cluster_pb2.JOB_STATE_KILLED

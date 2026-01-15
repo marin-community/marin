@@ -28,7 +28,7 @@ if ALL jobs in the gang have retries remaining. This maintains gang consistency.
 
 import logging
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 from fluster.cluster.controller.state import ControllerState
 from fluster.cluster.types import JobId
 

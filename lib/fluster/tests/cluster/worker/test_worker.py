@@ -25,14 +25,13 @@ import cloudpickle
 import pytest
 from connectrpc.request import RequestContext
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 from fluster.cluster.types import Entrypoint
-from fluster.cluster.worker.builder import BuildResult, ImageCache, VenvCache
+from fluster.cluster.worker.builder import BuildResult, VenvCache
 from fluster.cluster.worker.bundle import BundleCache
 from fluster.cluster.worker.docker import ContainerConfig, ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
 from fluster.cluster.worker.service import WorkerServiceImpl
 from fluster.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
-
 
 # ============================================================================
 # PortAllocator Tests
@@ -207,9 +206,7 @@ def mock_runtime():
     runtime.inspect = Mock(side_effect=inspect_side_effect)
     runtime.kill = Mock()
     runtime.remove = Mock()
-    runtime.get_stats = Mock(
-        return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True)
-    )
+    runtime.get_stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
     runtime.get_logs = Mock(return_value=[])
     return runtime
 
@@ -527,9 +524,7 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_
         return ContainerStatus(running=False, exit_code=0)
 
     runtime.inspect = Mock(side_effect=inspect_side_effect)
-    runtime.get_stats = Mock(
-        return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True)
-    )
+    runtime.get_stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
     runtime.get_logs = Mock(return_value=[])
 
     config = WorkerConfig(
@@ -565,9 +560,7 @@ def test_port_retry_exhausted(mock_bundle_cache, mock_venv_cache, mock_image_cac
     """Test that job fails after max port retries are exhausted."""
     runtime = Mock(spec=DockerRuntime)
     runtime.create_container = Mock(return_value="container123")
-    runtime.start_container = Mock(
-        side_effect=RuntimeError("failed to bind host port: address already in use")
-    )
+    runtime.start_container = Mock(side_effect=RuntimeError("failed to bind host port: address already in use"))
     runtime.remove = Mock()
     runtime.get_logs = Mock(return_value=[])
 
@@ -795,9 +788,7 @@ class TestWorkerIntegration:
         if not check_docker_available():
             pytest.skip("Docker not available")
 
-        requests = [
-            create_integration_run_job_request(test_bundle, f"concurrent-{i}") for i in range(4)
-        ]
+        requests = [create_integration_run_job_request(test_bundle, f"concurrent-{i}") for i in range(4)]
 
         _job_ids = [real_worker.submit_job(r) for r in requests]
 

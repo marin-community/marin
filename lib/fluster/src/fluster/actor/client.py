@@ -40,9 +40,9 @@ from typing import Any
 
 import cloudpickle
 
-from fluster import actor_pb2
+from fluster.rpc import actor_pb2
 from fluster.actor.resolver import Resolver, ResolveResult
-from fluster.actor_connect import ActorServiceClientSync
+from fluster.rpc.actor_connect import ActorServiceClientSync
 
 logger = logging.getLogger(__name__)
 

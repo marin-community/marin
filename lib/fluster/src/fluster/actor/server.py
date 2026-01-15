@@ -45,8 +45,8 @@ from typing import Any, NewType
 import cloudpickle
 import uvicorn
 
-from fluster import actor_pb2
-from fluster.actor_connect import ActorServiceASGIApplication
+from fluster.rpc import actor_pb2
+from fluster.rpc.actor_connect import ActorServiceASGIApplication
 from fluster.context import FlusterContext, fluster_ctx_scope, get_fluster_ctx
 from connectrpc.request import RequestContext
 

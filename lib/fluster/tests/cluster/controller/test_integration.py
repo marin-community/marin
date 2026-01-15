@@ -23,7 +23,7 @@ deterministic, synchronous testing.
 
 import pytest
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 from fluster.cluster.controller.controller import Controller, ControllerConfig
 from fluster.cluster.controller.retry import handle_job_failure
 from fluster.cluster.controller.workers import WorkerConfig, load_workers_from_config

@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 from fluster.cluster.worker.docker import ContainerConfig, DockerRuntime
 
 

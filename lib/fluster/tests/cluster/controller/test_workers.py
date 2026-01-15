@@ -18,7 +18,7 @@ import time
 
 import pytest
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 from fluster.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
 from fluster.cluster.controller.workers import (
     WorkerConfig,

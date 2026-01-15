@@ -24,14 +24,15 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
-from fluster import cluster_pb2
+
 from fluster.cluster.worker.builder import BuildResult, ImageCache, VenvCache
 from fluster.cluster.worker.bundle import BundleCache
 from fluster.cluster.worker.dashboard import WorkerDashboard
 from fluster.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime
 from fluster.cluster.worker.service import WorkerServiceImpl
 from fluster.cluster.worker.worker import Worker, WorkerConfig
-from fluster.cluster_connect import WorkerServiceClient
+from fluster.rpc import cluster_pb2
+from fluster.rpc.cluster_connect import WorkerServiceClient
 from starlette.testclient import TestClient
 
 # ============================================================================

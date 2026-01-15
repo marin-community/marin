@@ -49,12 +49,12 @@ from typing import Any, Generic, TypeVar
 
 import cloudpickle
 
-from fluster import actor_pb2, cluster_pb2
+from fluster.rpc import actor_pb2, cluster_pb2
 from fluster.actor import ActorServer
-from fluster.actor.resolver import ClusterResolver, Resolver
-from fluster.actor_connect import ActorServiceClientSync
+from fluster.actor.resolver import Resolver
+from fluster.rpc.actor_connect import ActorServiceClientSync
 from fluster.cluster.client import ClusterClient
-from fluster.cluster.types import Entrypoint, JobId, Namespace
+from fluster.cluster.types import Entrypoint, JobId
 from fluster.context import fluster_ctx
 
 T = TypeVar("T")
@@ -458,7 +458,6 @@ class WorkerPool:
 
         # Resolver for endpoint discovery (injectable for testing)
         self._resolver: Resolver | None = resolver
-        self._namespace = Namespace.DEFAULT
 
     def __enter__(self) -> "WorkerPool":
         """Start workers and wait for at least one to register."""
@@ -493,11 +492,9 @@ class WorkerPool:
     def _launch_workers(self) -> None:
         """Launch worker jobs and start dispatch threads."""
         # Create resolver for worker discovery if not injected
+        # The resolver automatically derives namespace from the current FlusterContext
         if self._resolver is None:
-            self._resolver = ClusterResolver(
-                self._client.controller_address,
-                namespace=self._namespace,
-            )
+            self._resolver = self._client.resolver()
 
         # Initialize worker state and launch jobs
         for i in range(self._config.num_workers):
@@ -519,7 +516,6 @@ class WorkerPool:
                 name=f"{self._config.name_prefix}-{self._pool_id}-{i}",
                 resources=self._config.resources,
                 environment=self._config.environment,
-                namespace=self._namespace,
                 ports=["actor"],
             )
             self._job_ids.append(job_id)

@@ -26,8 +26,9 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
-from fluster import cluster_pb2
 from fluster.cluster.worker.worker_types import Job
+from fluster.rpc import cluster_pb2
+from fluster.rpc.errors import rpc_error_handler
 
 
 class JobProvider(Protocol):
@@ -65,16 +66,17 @@ class WorkerServiceImpl:
         _ctx: RequestContext,
     ) -> cluster_pb2.Worker.RunJobResponse:
         """Submit job for execution."""
-        job_id = self._provider.submit_job(request)
-        job = self._provider.get_job(job_id)
+        with rpc_error_handler("running job"):
+            job_id = self._provider.submit_job(request)
+            job = self._provider.get_job(job_id)
 
-        if not job:
-            raise ConnectError(Code.INTERNAL, f"Job {job_id} not found after submission")
+            if not job:
+                raise ConnectError(Code.INTERNAL, f"Job {job_id} not found after submission")
 
-        return cluster_pb2.Worker.RunJobResponse(
-            job_id=job_id,
-            state=job.to_proto().state,
-        )
+            return cluster_pb2.Worker.RunJobResponse(
+                job_id=job_id,
+                state=job.to_proto().state,
+            )
 
     def get_job_status(
         self,

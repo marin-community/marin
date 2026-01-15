@@ -59,14 +59,14 @@ def run_buf_generate(root_dir: Path) -> None:
 def main():
     """Generate protobuf files and fix imports."""
     root_dir = Path(__file__).parent.parent
-    src_dir = root_dir / "src" / "fluster"
+    rpc_dir = root_dir / "src" / "fluster" / "rpc"
 
     # Run buf generate
     run_buf_generate(root_dir)
 
     # Fix imports in all generated Connect files
     print("\nFixing imports in generated files...")
-    for connect_file in src_dir.glob("*_connect.py"):
+    for connect_file in rpc_dir.glob("*_connect.py"):
         fix_imports(connect_file)
 
     print("\n✓ Generation complete!")

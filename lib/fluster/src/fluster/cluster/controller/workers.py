@@ -25,7 +25,7 @@ This module provides:
 import time
 from dataclasses import dataclass
 
-from fluster import cluster_pb2
+from fluster.rpc import cluster_pb2
 from fluster.cluster.controller.resources import (
     get_device_type,
     get_device_variant,

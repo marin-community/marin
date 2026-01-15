@@ -17,7 +17,6 @@
 import pytest
 
 from fluster.actor import ActorClient, ActorServer, FixedResolver
-from fluster.cluster.types import Namespace
 from fluster.context import FlusterContext, fluster_ctx, fluster_ctx_scope
 
 
@@ -68,7 +67,6 @@ def test_actor_exception_propagation():
 def test_actor_context_injection():
     """Test that FlusterContext is properly injected and accessible."""
     ctx = FlusterContext(
-        namespace=Namespace.DEFAULT,
         job_id="test-job-123",
         worker_id="test-worker",
         controller=None,
@@ -88,7 +86,7 @@ def test_actor_context_injection():
 @pytest.mark.asyncio
 async def test_list_actors():
     """Test that list_actors returns registered actors."""
-    from fluster import actor_pb2
+    from fluster.rpc import actor_pb2
 
     server = ActorServer(host="127.0.0.1")
     actor_id1 = server.register("calc", Calculator())
@@ -115,7 +113,7 @@ async def test_list_actors():
 @pytest.mark.asyncio
 async def test_list_methods():
     """Test that list_methods returns method info for an actor."""
-    from fluster import actor_pb2
+    from fluster.rpc import actor_pb2
 
     server = ActorServer(host="127.0.0.1")
     server.register("calc", Calculator())
@@ -137,7 +135,7 @@ async def test_list_methods():
 @pytest.mark.asyncio
 async def test_list_methods_with_docstring():
     """Test that list_methods includes docstrings when present."""
-    from fluster import actor_pb2
+    from fluster.rpc import actor_pb2
 
     class DocumentedActor:
         def documented_method(self) -> str:
@@ -166,7 +164,7 @@ async def test_list_methods_with_docstring():
 @pytest.mark.asyncio
 async def test_list_methods_missing_actor():
     """Test that list_methods returns empty response for missing actor."""
-    from fluster import actor_pb2
+    from fluster.rpc import actor_pb2
 
     server = ActorServer(host="127.0.0.1")
     server.register("calc", Calculator())
