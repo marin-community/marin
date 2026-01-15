@@ -523,6 +523,65 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="marin-community/open-thoughts-4-30k-math-qwen3-235b-a22b-annotated",
         max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
     ),
+    # Filtered subsets for teacher model comparison ablation study (see GitHub issue #2262):
+    # Samples where both Qwen3-32B and Qwen3-235B-A22B produced the same final answer
+    "marin-community/open-thoughts-4-11k-math-qwen3-32b-agreed-answers": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-11k-math-qwen3-32b-agreed-answers",
+        revision="0dcc70a",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="role",
+            user_value="user",
+            assistant_value="assistant",
+            content_key="content",
+        ),
+        metadata_columns=["ms_id", "answer_extracted", "other_model_answer", "answers_match", "source_model"],
+        name="marin-community/open-thoughts-4-11k-math-qwen3-32b-agreed-answers",
+        max_parallelism=32,
+    ),
+    "marin-community/open-thoughts-4-11k-math-qwen3-235b-a22b-agreed-answers": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-11k-math-qwen3-235b-a22b-agreed-answers",
+        revision="7f6e0af",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="role",
+            user_value="user",
+            assistant_value="assistant",
+            content_key="content",
+        ),
+        metadata_columns=["ms_id", "answer_extracted", "other_model_answer", "answers_match", "source_model"],
+        name="marin-community/open-thoughts-4-11k-math-qwen3-235b-a22b-agreed-answers",
+        max_parallelism=32,
+    ),
+    # Samples where Qwen3-32B and Qwen3-235B-A22B produced different final answers
+    "marin-community/open-thoughts-4-6k-math-qwen3-32b-disagreed-answers": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-6k-math-qwen3-32b-disagreed-answers",
+        revision="cfe288b",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="role",
+            user_value="user",
+            assistant_value="assistant",
+            content_key="content",
+        ),
+        metadata_columns=["ms_id", "answer_extracted", "other_model_answer", "answers_match", "source_model"],
+        name="marin-community/open-thoughts-4-6k-math-qwen3-32b-disagreed-answers",
+        max_parallelism=32,
+    ),
+    "marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-disagreed-answers": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-disagreed-answers",
+        revision="63bf373",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="role",
+            user_value="user",
+            assistant_value="assistant",
+            content_key="content",
+        ),
+        metadata_columns=["ms_id", "answer_extracted", "other_model_answer", "answers_match", "source_model"],
+        name="marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-disagreed-answers",
+        max_parallelism=32,
+    ),
 }
 
 for split_name in SMOLTALK2_SPLITS:
