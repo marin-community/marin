@@ -21,13 +21,16 @@ marin.processing.tokenize.
 
 from levanter.data.text import LmDatasetFormatBase, TextLmDatasetFormat
 
-from marin.execution import ExecutorStep, StepContext, step
-from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig, tokenize
+from marin.execution import StepRef, deferred, output, step
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig
+from marin.processing.tokenize.tokenize import tokenize as _tokenize
+
+# Mark library function as deferred
+tokenize = deferred(_tokenize)
 
 
-@step(name="{name}", fn=tokenize)
+@step(name="{name}")
 def tokenize_from_paths(
-    ctx: StepContext,
     name: str,
     train_paths: list[str],
     validation_paths: list[str],
@@ -42,7 +45,6 @@ def tokenize_from_paths(
     Create a step that tokenizes datasets from raw file paths.
 
     Args:
-        ctx: Step context (automatically provided by @step decorator)
         name: Name for this tokenization step (used in output path)
         train_paths: List of paths to training data files
         validation_paths: List of paths to validation data files
@@ -53,24 +55,25 @@ def tokenize_from_paths(
         window_size_bytes: Window size for bundling files
         allow_test_in_train: If True, allows 'test' or 'validation' in train_paths
     """
-    return TokenizeConfig(
-        train_paths=train_paths,
-        validation_paths=validation_paths,
-        cache_path=ctx.output,
-        tokenizer=tokenizer,
-        tags=tags or [],
-        sample_count=sample_count,
-        format=format,
-        window_size_bytes=window_size_bytes,
-        allow_test_in_train=allow_test_in_train,
+    return tokenize(
+        TokenizeConfig(
+            train_paths=train_paths,
+            validation_paths=validation_paths,
+            cache_path=output(),
+            tokenizer=tokenizer,
+            tags=tags or [],
+            sample_count=sample_count,
+            format=format,
+            window_size_bytes=window_size_bytes,
+            allow_test_in_train=allow_test_in_train,
+        )
     )
 
 
-@step(name="{name}", fn=tokenize)
+@step(name="{name}")
 def tokenize_from_step(
-    ctx: StepContext,
     name: str,
-    input_step: ExecutorStep,
+    input_step: StepRef,
     tokenizer: str,
     tags: list[str] | None = None,
     format: LmDatasetFormatBase = TextLmDatasetFormat(),
@@ -80,10 +83,9 @@ def tokenize_from_step(
     is_validation: bool = False,
 ):
     """
-    Create a step that tokenizes a dataset from another ExecutorStep's output.
+    Create a step that tokenizes a dataset from another step's output.
 
     Args:
-        ctx: Step context (automatically provided by @step decorator)
         name: Name for this tokenization step (used in output path)
         input_step: The step whose output to tokenize
         tokenizer: HuggingFace tokenizer name
@@ -94,24 +96,23 @@ def tokenize_from_step(
         allow_test_in_train: If True, allows 'test' or 'validation' in train_paths
         is_validation: Whether the dataset is a validation set
     """
-    resolved_path = ctx.require(input_step)
-
-    return TokenizeConfig(
-        train_paths=[resolved_path] if not is_validation else [],
-        validation_paths=[resolved_path] if is_validation else [],
-        cache_path=ctx.output,
-        tokenizer=tokenizer,
-        tags=tags or [],
-        sample_count=sample_count,
-        format=format,
-        window_size_bytes=window_size_bytes,
-        allow_test_in_train=allow_test_in_train,
+    return tokenize(
+        TokenizeConfig(
+            train_paths=[input_step] if not is_validation else [],
+            validation_paths=[input_step] if is_validation else [],
+            cache_path=output(),
+            tokenizer=tokenizer,
+            tags=tags or [],
+            sample_count=sample_count,
+            format=format,
+            window_size_bytes=window_size_bytes,
+            allow_test_in_train=allow_test_in_train,
+        )
     )
 
 
-@step(name="{name}", fn=tokenize)
+@step(name="{name}")
 def tokenize_hf_dataset(
-    ctx: StepContext,
     name: str,
     hf_dataset_id: str,
     tokenizer: str,
@@ -126,7 +127,6 @@ def tokenize_hf_dataset(
     Create a step that tokenizes a HuggingFace dataset directly.
 
     Args:
-        ctx: Step context (automatically provided by @step decorator)
         name: Name for this tokenization step (used in output path)
         hf_dataset_id: HuggingFace dataset ID (e.g., "org/dataset")
         tokenizer: HuggingFace tokenizer name
@@ -137,14 +137,16 @@ def tokenize_hf_dataset(
         sample_count: Number of samples to tokenize. If None, tokenize all samples.
         window_size_bytes: Window size for bundling files
     """
-    return HfTokenizeConfig(
-        id=hf_dataset_id,
-        cache_path=ctx.output,
-        tokenizer=tokenizer,
-        revision=revision,
-        name=hf_dataset_name,
-        tags=tags or [],
-        format=format,
-        sample_count=sample_count,
-        window_size_bytes=window_size_bytes,
+    return tokenize(
+        HfTokenizeConfig(
+            id=hf_dataset_id,
+            cache_path=output(),
+            tokenizer=tokenizer,
+            revision=revision,
+            name=hf_dataset_name,
+            tags=tags or [],
+            format=format,
+            sample_count=sample_count,
+            window_size_bytes=window_size_bytes,
+        )
     )

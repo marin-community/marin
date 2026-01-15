@@ -21,26 +21,32 @@ logic for all 15 splits.
 
 import os.path
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, StepRef, versioned
-from marin.execution import step, StepContext
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
+from marin.execution.executor import ExecutorStep, versioned
+from marin.execution import step, deferred, output
+from marin.processing.tokenize import TokenizeConfig
+from marin.processing.tokenize import tokenize as _tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
+tokenize = deferred(_tokenize)
+
 # Raw dataset download step
-@step(name="raw/dolma", fn=download_hf, override_output_path="raw/dolma")
-def dolma_download(ctx: StepContext):
-    return DownloadConfig(
+@step(name="raw/dolma", override_output_path="raw/dolma")
+def dolma_download():
+    return download_hf(DownloadConfig(
         hf_dataset_id="allenai/dolma",
         revision="7f48140",
-        gcs_output_path=ctx.output,
+        gcs_output_path=output(),
         wait_for_completion=True,
-    )
+    ))
 
 
 
 # For dolma 1.7, we hardcode the path since it was added before versioning
-_DOLMA_V1_7_PATH = StepRef.hardcoded("raw/dolma/v1.7")
+_DOLMA_V1_7_PATH = "raw/dolma/v1.7"
 
 
 # Sampling proportion comes from https://huggingface.co/datasets/allenai/dolma
@@ -115,14 +121,14 @@ def tokenize_dolma(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
 
     dolma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, files in DOLMA_DATASETS.items():
-        @step(name=os.path.join("tokenized", "dolma", dataset), fn=tokenize)
-        def tokenize_dolma_split(ctx: StepContext, file_list=files, tok=tokenizer):
-            return TokenizeConfig(
-                train_paths=[_DOLMA_V1_7_PATH / file for file in file_list],
+        @step(name=os.path.join("tokenized", "dolma", dataset))
+        def tokenize_dolma_split(file_list=files, tok=tokenizer):
+            return tokenize(TokenizeConfig(
+                train_paths=[_DOLMA_V1_7_PATH + "/" + file for file in file_list],
                 validation_paths=versioned([]),
-                cache_path=ctx.output,
+                cache_path=output(),
                 tokenizer=versioned(tok),
-            )
+            ))
 
         result = tokenize_dolma_split()
 

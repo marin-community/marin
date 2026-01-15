@@ -21,13 +21,16 @@ marin.tokenize.slice_cache.
 
 from levanter.data.text import LmDatasetSourceConfigBase
 
-from marin.execution import StepContext, step
-from marin.tokenize.slice_cache import SliceCacheConfig, _slice_cache_in_ray
+from marin.execution import deferred, output, step
+from marin.tokenize.slice_cache import SliceCacheConfig
+from marin.tokenize.slice_cache import _slice_cache_in_ray as _slice_cache_lib
+
+# Mark library function as deferred
+slice_cache_lib = deferred(_slice_cache_lib)
 
 
-@step(name="{name}", fn=_slice_cache_in_ray)
+@step(name="{name}")
 def slice_cache(
-    ctx: StepContext,
     name: str,
     input_config: LmDatasetSourceConfigBase,
     num_tokens: int,
@@ -42,7 +45,6 @@ def slice_cache(
     desired number of tokens is reached.
 
     Args:
-        ctx: Step context (automatically provided by @step decorator)
         name: Name for this slice cache step (used in output path)
         input_config: The input cache configuration (LmDatasetSourceConfigBase)
         num_tokens: The number of tokens to include in the sliced cache
@@ -52,10 +54,12 @@ def slice_cache(
     Returns:
         SliceCacheConfig to be executed by the step wrapper
     """
-    return SliceCacheConfig(
-        input_config=input_config,
-        num_tokens=num_tokens,
-        seed=seed,
-        tokenizer=tokenizer_spec,
-        cache_path=ctx.output,
+    return slice_cache_lib(
+        SliceCacheConfig(
+            input_config=input_config,
+            num_tokens=num_tokens,
+            seed=seed,
+            tokenizer=tokenizer_spec,
+            cache_path=output(),
+        )
     )

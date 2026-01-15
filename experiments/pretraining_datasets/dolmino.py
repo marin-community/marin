@@ -16,26 +16,32 @@
 
 import os.path
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, StepRef, versioned
-from marin.execution import step, StepContext
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
+from marin.execution.executor import ExecutorStep, versioned
+from marin.execution import step, deferred, output
+from marin.processing.tokenize import TokenizeConfig
+from marin.processing.tokenize import tokenize as _tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
+tokenize = deferred(_tokenize)
+
 # Raw dataset download step
-@step(name="raw/dolmino-mix-1124", fn=download_hf, override_output_path="raw/dolmino-mix-1124-157960")
-def dolmino_download(ctx: StepContext):
-    return DownloadConfig(
+@step(name="raw/dolmino-mix-1124", override_output_path="raw/dolmino-mix-1124-157960")
+def dolmino_download():
+    return download_hf(DownloadConfig(
         hf_dataset_id="allenai/dolmino-mix-1124",
         revision="bb54cab",
-        gcs_output_path=ctx.output,
+        gcs_output_path=output(),
         wait_for_completion=True,
-    )
+    ))
 
 
 def _get_dolmino_base_dir():
     """Get the base directory for dolmino dataset."""
-    return dolmino_download().cd("bb54cab").cd("data")
+    return dolmino_download() / "bb54cab" / "data"
 
 # The following dataset splits define file patterns for each split.
 DOLMINO_DATASETS = {
@@ -90,14 +96,14 @@ def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep
         dolmino_split_output_path = os.path.join("tokenized", "dolmino", split)
         dolmino_split_paths = _get_dolmino_split_paths(split)
 
-        @step(name=dolmino_split_output_path, fn=tokenize)
-        def tokenize_dolmino_split(ctx: StepContext, paths=dolmino_split_paths, tok=tokenizer):
-            return TokenizeConfig(
+        @step(name=dolmino_split_output_path)
+        def tokenize_dolmino_split(paths=dolmino_split_paths, tok=tokenizer):
+            return tokenize(TokenizeConfig(
                 train_paths=paths,
                 validation_paths=versioned([]),
-                cache_path=ctx.output,
+                cache_path=output(),
                 tokenizer=versioned(tok),
-            )
+            ))
 
         result = tokenize_dolmino_split()
 
@@ -130,13 +136,13 @@ def tokenize_dolmino_math(tokenizer: str | None = None):
 
         tokenizer = llama3_tokenizer
 
-    @step(name="tokenized/dolmino/all_math", fn=tokenize)
-    def tokenize_dolmino_all_math(ctx: StepContext):
-        return TokenizeConfig(
+    @step(name="tokenized/dolmino/all_math")
+    def tokenize_dolmino_all_math():
+        return tokenize(TokenizeConfig(
             train_paths=_all_dolmino_math_files,
             validation_paths=versioned([]),
-            cache_path=ctx.output,
+            cache_path=output(),
             tokenizer=versioned(tokenizer),
-        )
+        ))
 
     return tokenize_dolmino_all_math().with_output_path("tokenized/dolmino/all_math-9d507c")

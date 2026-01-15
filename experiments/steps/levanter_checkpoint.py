@@ -26,13 +26,16 @@ from levanter.compat.hf_checkpoints import RepoRef
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution import ExecutorStep, StepContext, step
-from marin.export.levanter_checkpoint import ConvertCheckpointStepConfig, convert_checkpoint_to_hf
+from marin.execution import StepRef, deferred, output, step
+from marin.export.levanter_checkpoint import ConvertCheckpointStepConfig
+from marin.export.levanter_checkpoint import convert_checkpoint_to_hf as _convert_checkpoint_to_hf
+
+# Mark library function as deferred
+convert_checkpoint_to_hf = deferred(_convert_checkpoint_to_hf)
 
 
-@step(name="{name}", fn=convert_checkpoint_to_hf)
+@step(name="{name}")
 def convert_checkpoint_to_hf_step(
-    ctx: StepContext,
     name: str,
     checkpoint_path: str,
     trainer: TrainerConfig,
@@ -50,7 +53,6 @@ def convert_checkpoint_to_hf_step(
     Create a step that converts a Levanter checkpoint to HuggingFace format.
 
     Args:
-        ctx: Step context (automatically provided by @step decorator)
         name: Step name. Commonly prefixed with "hf/" to keep outputs organized.
         checkpoint_path: Path to the Levanter checkpoint directory.
         trainer: TrainerConfig matching the topology the checkpoint was saved with.
@@ -64,27 +66,28 @@ def convert_checkpoint_to_hf_step(
         use_cpu: Force conversion to run on CPU instead of the configured device mesh.
         discover_latest: If True, resolves checkpoint_path to the most recent checkpoint.
     """
-    return ConvertCheckpointStepConfig(
-        checkpoint_path=checkpoint_path,
-        trainer=trainer,
-        model=model,
-        output_path=ctx.output,
-        resources=resources or ResourceConfig.with_cpu(),
-        upload_to_hf=upload_to_hf,
-        tokenizer=tokenizer,
-        override_vocab_size=override_vocab_size,
-        config_overrides=config_overrides,
-        save_tokenizer=save_tokenizer,
-        use_cpu=use_cpu,
-        discover_latest=discover_latest,
+    return convert_checkpoint_to_hf(
+        ConvertCheckpointStepConfig(
+            checkpoint_path=checkpoint_path,
+            trainer=trainer,
+            model=model,
+            output_path=output(),
+            resources=resources or ResourceConfig.with_cpu(),
+            upload_to_hf=upload_to_hf,
+            tokenizer=tokenizer,
+            override_vocab_size=override_vocab_size,
+            config_overrides=config_overrides,
+            save_tokenizer=save_tokenizer,
+            use_cpu=use_cpu,
+            discover_latest=discover_latest,
+        )
     )
 
 
-@step(name="{name}", fn=convert_checkpoint_to_hf)
+@step(name="{name}")
 def convert_checkpoint_from_step(
-    ctx: StepContext,
     name: str,
-    training_step: ExecutorStep,
+    training_step: StepRef,
     checkpoint_subpath: str,
     trainer: TrainerConfig,
     model: LmConfig,
@@ -100,11 +103,10 @@ def convert_checkpoint_from_step(
     """
     Create a step that converts a checkpoint from a training step to HuggingFace format.
 
-    This is for converting checkpoints that are outputs of another ExecutorStep.
+    This is for converting checkpoints that are outputs of another step.
     Use convert_checkpoint_to_hf_step for raw paths.
 
     Args:
-        ctx: Step context (automatically provided by @step decorator)
         name: Step name. Commonly prefixed with "hf/" to keep outputs organized.
         training_step: The training step whose checkpoint to convert.
         checkpoint_subpath: Subpath within the training step output (e.g., "checkpoints/step-80000").
@@ -119,18 +121,20 @@ def convert_checkpoint_from_step(
         use_cpu: Force conversion to run on CPU instead of the configured device mesh.
         discover_latest: If True, resolves checkpoint_path to the most recent checkpoint.
     """
-    checkpoint_ref = ctx.require(training_step) / checkpoint_subpath
-    return ConvertCheckpointStepConfig(
-        checkpoint_path=checkpoint_ref,
-        trainer=trainer,
-        model=model,
-        output_path=ctx.output,
-        resources=resources or ResourceConfig.with_cpu(),
-        upload_to_hf=upload_to_hf,
-        tokenizer=tokenizer,
-        override_vocab_size=override_vocab_size,
-        config_overrides=config_overrides,
-        save_tokenizer=save_tokenizer,
-        use_cpu=use_cpu,
-        discover_latest=discover_latest,
+    checkpoint_ref = training_step / checkpoint_subpath
+    return convert_checkpoint_to_hf(
+        ConvertCheckpointStepConfig(
+            checkpoint_path=checkpoint_ref,
+            trainer=trainer,
+            model=model,
+            output_path=output(),
+            resources=resources or ResourceConfig.with_cpu(),
+            upload_to_hf=upload_to_hf,
+            tokenizer=tokenizer,
+            override_vocab_size=override_vocab_size,
+            config_overrides=config_overrides,
+            save_tokenizer=save_tokenizer,
+            use_cpu=use_cpu,
+            discover_latest=discover_latest,
+        )
     )

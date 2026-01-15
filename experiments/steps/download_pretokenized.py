@@ -23,16 +23,20 @@ import os
 
 from levanter.data.text import LmDatasetFormatBase, TextLmDatasetFormat
 
-from marin.execution import ExecutorStep, StepContext, ensure_versioned, step
+from marin.execution import StepRef, deferred, ensure_versioned, output, step
 from marin.processing.tokenize.download_pretokenized import (
     PretokenizedCacheDownloadConfig,
-    download_pretokenized_cache as download_pretokenized_cache_lib,
+)
+from marin.processing.tokenize.download_pretokenized import (
+    download_pretokenized_cache as _download_pretokenized_cache,
 )
 
+# Mark library function as deferred
+download_pretokenized_cache_lib = deferred(_download_pretokenized_cache)
 
-@step(name="tokenized/subcache/{output_cache_path_name}", fn=download_pretokenized_cache_lib)
+
+@step(name="tokenized/subcache/{output_cache_path_name}")
 def download_pretokenized_cache(
-    ctx: StepContext,
     output_cache_path_name: str,
     hf_repo_id: str,
     tokenizer: str,
@@ -40,12 +44,11 @@ def download_pretokenized_cache(
     hf_token: str | None = None,
     tags: list[str] | None = None,
     format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa: A002
-) -> ExecutorStep[PretokenizedCacheDownloadConfig]:
+) -> StepRef[PretokenizedCacheDownloadConfig]:
     """
     Create a step to download a pre-tokenized Levanter cache from Hugging Face.
 
     Args:
-        ctx: Step context (automatically provided by @step decorator)
         output_cache_path_name: The logical name for this download step. The Executor will use this
                                 to construct the actual output directory for the cache.
         hf_repo_id: The Hugging Face repository ID (e.g., "username/my_cache_repo").
@@ -56,16 +59,18 @@ def download_pretokenized_cache(
         format: The format of the dataset (default is TextLmDatasetFormat).
 
     Returns:
-        An ExecutorStep that, when run, will download the cache and output a
+        A StepRef that, when run, will download the cache and output a
         PretokenizedCacheDownloadConfig pointing to the downloaded data.
     """
-    return PretokenizedCacheDownloadConfig(
-        cache_path=ctx.output,
-        tokenizer=ensure_versioned(tokenizer),
-        hf_repo_id=ensure_versioned(hf_repo_id),  # type: ignore[call-arg]
-        hf_revision=ensure_versioned(hf_revision),  # type: ignore[call-arg]
-        hf_repo_type_prefix="datasets",  # Default for Hugging Face datasets
-        hf_token=hf_token,
-        tags=tags or [],
-        format=format,
+    return download_pretokenized_cache_lib(
+        PretokenizedCacheDownloadConfig(
+            cache_path=output(),
+            tokenizer=ensure_versioned(tokenizer),
+            hf_repo_id=ensure_versioned(hf_repo_id),  # type: ignore[call-arg]
+            hf_revision=ensure_versioned(hf_revision),  # type: ignore[call-arg]
+            hf_repo_type_prefix="datasets",  # Default for Hugging Face datasets
+            hf_token=hf_token,
+            tags=tags or [],
+            format=format,
+        )
     )

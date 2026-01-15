@@ -20,14 +20,18 @@ https://huggingface.co/datasets/allenai/paloma
 
 import os.path
 
-from marin.download.huggingface.download_hf import DownloadConfig as HfDownloadConfig, download_hf
+from marin.download.huggingface.download_hf import DownloadConfig as HfDownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
-from marin.execution import step, StepContext
-from marin.execution.executor import ExecutorStep, executor_main, StepRef, versioned
+from marin.execution import deferred, executor_main, output, step, versioned
+from marin.execution.executor import ExecutorStep
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
+
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 
@@ -53,14 +57,16 @@ PALOMA_DATASETS_TO_DIR = {
     "wikitext_103": "wikitext_103",
 }
 
-@step(name="raw/paloma", fn=download_hf)
-def create_paloma_config(ctx: StepContext):
-    return HfDownloadConfig(
-        hf_dataset_id=versioned("allenai/paloma"),
-        revision=versioned("65cd6fc"),
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
-        append_sha_to_path=True,
+@step(name="raw/paloma")
+def create_paloma_config():
+    return download_hf(
+        HfDownloadConfig(
+            hf_dataset_id=versioned("allenai/paloma"),
+            revision=versioned("65cd6fc"),
+            gcs_output_path=output(),
+            wait_for_completion=True,
+            append_sha_to_path=True,
+        )
     )
 
 

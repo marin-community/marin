@@ -52,16 +52,16 @@ from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.execution import deferred, output, step, versioned
 from marin.execution.executor import (
     ExecutorStep,
-    StepContext,
     StepRef,
     VersionedValue,
     ensure_versioned,
     get_executor_step,
-    step,
     unwrap_versioned_value,
 )
 from marin.processing.tokenize import (
@@ -70,14 +70,16 @@ from marin.processing.tokenize import (
     TokenizerStep,
     add_validation_sets_to_mixture,
     lm_data_config,
-    tokenize,
 )
+from marin.processing.tokenize import tokenize as _tokenize
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
-from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
-from marin.training.training import (
-    TrainLmOnPodConfig,
-    run_levanter_train_lm,
-)
+
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
+tokenize = deferred(_tokenize)
+
+from marin.scaling_laws.scaling_laws import ScalingLawConfig
+from marin.training.training import TrainLmOnPodConfig
 
 logger = logging.getLogger("ray")
 
@@ -106,17 +108,18 @@ def default_download(
 
     @step(
         name=name,
-        fn=download_hf,
         description=f"Download {hf_dataset_id} revision {revision}",
         override_output_path=override_output_path,
     )
-    def _download(ctx: StepContext):
-        return DownloadConfig(
-            hf_dataset_id=hf_dataset_id,
-            revision=revision,
-            gcs_output_path=ctx.output,
-            wait_for_completion=True,
-            **kwargs,
+    def _download():
+        return download_hf(
+            DownloadConfig(
+                hf_dataset_id=hf_dataset_id,
+                revision=revision,
+                gcs_output_path=output(),
+                wait_for_completion=True,
+                **kwargs,
+            )
         )
 
     return _download().ref
@@ -154,13 +157,12 @@ def default_tokenize(
 
     @step(
         name=os.path.join("tokenized", name),
-        fn=tokenize,
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
     )
-    def _tokenize(ctx: StepContext):
-        # If dataset is a StepRef or ExecutorStep, need to require it
+    def _tokenize():
+        # If dataset is a StepRef or ExecutorStep, call it to get the value
         if isinstance(dataset, (StepRef, ExecutorStep)):
-            resolved_dataset = ctx.require(dataset)
+            resolved_dataset = dataset
         else:
             resolved_dataset = dataset
 
@@ -169,7 +171,7 @@ def default_tokenize(
             config = HfTokenizeConfig(
                 id=dataset.id,
                 name=dataset.name,
-                cache_path=ctx.output,
+                cache_path=output(),
                 tokenizer=ensure_versioned(tokenizer),
                 format=format,
                 sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
@@ -177,7 +179,7 @@ def default_tokenize(
         elif isinstance(resolved_dataset, str) and resolved_dataset.count("/") == 1 and not fsspec_utils.exists(resolved_dataset):
             config = HfTokenizeConfig(
                 id=resolved_dataset,
-                cache_path=ctx.output,
+                cache_path=output(),
                 tokenizer=ensure_versioned(tokenizer),
                 format=format,
                 sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
@@ -186,13 +188,13 @@ def default_tokenize(
             config = TokenizeConfig(
                 train_paths=[resolved_dataset] if not is_validation else [],
                 validation_paths=[resolved_dataset] if is_validation else [],
-                cache_path=ctx.output,
+                cache_path=output(),
                 tokenizer=ensure_versioned(tokenizer),
                 format=format,
                 sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
             )
 
-        return config
+        return tokenize(config)
 
     return _tokenize()
 
@@ -421,9 +423,12 @@ def default_train(
 
     model_config_unwrapped = unwrap_versioned_value(model_config)
 
+    # Import here to avoid circular dependency
+    from marin.training.training import run_levanter_train_lm as _run_levanter_train_lm
+    run_levanter_train_lm = deferred(_run_levanter_train_lm)
+
     @step(
         name=os.path.join("checkpoints", name),
-        fn=run_levanter_train_lm,
         description=(
             f"Train a {compute_num_parameters(model_config_unwrapped, vocab_size):,} parameter model for "
             f"{train_config.num_train_steps} (steps) * "
@@ -433,11 +438,13 @@ def default_train(
         ),
         override_output_path=override_output_path,
     )
-    def _train(ctx: StepContext):
-        return TrainLmOnPodConfig(
-            train_config=inner_config,
-            resources=pod_config,
-            output_path=ctx.output,
+    def _train():
+        return run_levanter_train_lm(
+            TrainLmOnPodConfig(
+                train_config=inner_config,
+                resources=pod_config,
+                output_path=output(),
+            )
         )
 
     return _train()
@@ -677,14 +684,20 @@ def default_scaling_law_pred(
     else:
         name = "projection"
 
-    @step(name=f"""scaling_laws/{name}""", fn=run_scaling_law_analysis)
-    def _scaling_law(ctx: StepContext):
-        return ScalingLawConfig(
-            name=name,
-            ladder_model_steps=ladder_steps_or_ids,
-            pred_model_step=pred_run_or_id,
-            task_losses=task_losses,
-            task_accuracies=task_accuracies,
+    # Import here to avoid circular dependency
+    from marin.scaling_laws.scaling_laws import run_scaling_law_analysis as _run_scaling_law_analysis
+    run_scaling_law_analysis_fn = deferred(_run_scaling_law_analysis)
+
+    @step(name=f"""scaling_laws/{name}""")
+    def _scaling_law():
+        return run_scaling_law_analysis_fn(
+            ScalingLawConfig(
+                name=name,
+                ladder_model_steps=ladder_steps_or_ids,
+                pred_model_step=pred_run_or_id,
+                task_losses=task_losses,
+                task_accuracies=task_accuracies,
+            )
         )
 
     return _scaling_law()

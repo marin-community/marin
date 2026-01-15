@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 import fsspec
 
-from marin.execution import step, StepContext, StepRef, executor_main
+from marin.execution import deferred, executor_main, output, step
 
 logger = logging.getLogger("ray")
 
@@ -39,7 +39,7 @@ class GenerateDataConfig:
     """Where to write the numbers."""
 
 
-def generate_data(config: GenerateDataConfig):
+def _generate_data(config: GenerateDataConfig):
     """Generate numbers from 0 to `n` - 1 and write them to `output_path`."""
     numbers = list(range(config.n))
 
@@ -58,7 +58,7 @@ class ComputeStatsConfig:
     """Where to write the stats."""
 
 
-def compute_stats(config: ComputeStatsConfig):
+def _compute_stats(config: ComputeStatsConfig):
     """Compute the sum of numbers in the input file and write it to the output file."""
     # Read from file
     numbers_path = os.path.join(config.input_path, "numbers.json")
@@ -76,23 +76,31 @@ def compute_stats(config: ComputeStatsConfig):
         json.dump(stats, f)
 
 
+# Mark library functions as deferred
+generate_data = deferred(_generate_data)
+compute_stats = deferred(_compute_stats)
+
 n = 100
 
 
-@step(name="hello_world/data", fn=generate_data, description=f"Generate data from 0 to {n}-1.")
-def data(ctx: StepContext):
-    return GenerateDataConfig(
-        n=n,
-        output_path=ctx.output,
+@step(name="hello_world/data", description=f"Generate data from 0 to {n}-1.")
+def data():
+    return generate_data(
+        GenerateDataConfig(
+            n=n,
+            output_path=output(),
+        )
     )
 
 
-@step(name="hello_world/stats", fn=compute_stats, description="Compute stats of the generated data.")
-def stats(ctx: StepContext):
-    data_output = ctx.require(data())
-    return ComputeStatsConfig(
-        input_path=data_output,
-        output_path=ctx.output,
+@step(name="hello_world/stats", description="Compute stats of the generated data.")
+def stats():
+    data_output = data()
+    return compute_stats(
+        ComputeStatsConfig(
+            input_path=data_output,
+            output_path=output(),
+        )
     )
 
 

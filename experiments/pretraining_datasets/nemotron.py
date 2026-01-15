@@ -16,18 +16,24 @@
 
 import os.path
 
-from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
-from marin.execution.executor import ExecutorStep, StepRef, versioned
-from marin.execution import step, StepContext
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig
+from marin.download.nemotron_cc.download_nemotron_cc import download_nemotron_cc as _download_nemotron_cc
+from marin.execution.executor import ExecutorStep, versioned
+from marin.execution import step, deferred, output
+from marin.processing.tokenize import TokenizeConfig
+from marin.processing.tokenize import tokenize as _tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
+# Mark library functions as deferred
+download_nemotron_cc = deferred(_download_nemotron_cc)
+tokenize = deferred(_tokenize)
+
 # Raw dataset download step
-@step(name="raw/nemotron-cc", fn=download_nemotron_cc)
-def nemotron_cc_download(ctx: StepContext):
-    return NemotronIngressConfig(
-        output_path=ctx.output,
-    )
+@step(name="raw/nemotron-cc")
+def nemotron_cc_download():
+    return download_nemotron_cc(NemotronIngressConfig(
+        output_path=output(),
+    ))
 
 NEMOTRON_DATASETS = {
     "hq_actual": ["quality=high/kind=actual/**/*.jsonl.gz"],
@@ -81,14 +87,14 @@ def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerSte
         nemotron_split_output_path = os.path.join("tokenized", "nemotron_cc", split)
         nemotron_split_paths = _get_nemotron_split_paths(split)
 
-        @step(name=nemotron_split_output_path, fn=tokenize)
-        def tokenize_nemotron_split(ctx: StepContext, paths=nemotron_split_paths, tok=tokenizer):
-            return TokenizeConfig(
+        @step(name=nemotron_split_output_path)
+        def tokenize_nemotron_split(paths=nemotron_split_paths, tok=tokenizer):
+            return tokenize(TokenizeConfig(
                 train_paths=paths,
                 validation_paths=versioned([]),
-                cache_path=ctx.output,
+                cache_path=output(),
                 tokenizer=versioned(tok),
-            )
+            ))
 
         result = tokenize_nemotron_split()
 

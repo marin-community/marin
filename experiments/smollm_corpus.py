@@ -18,39 +18,49 @@ Pattern matches datasets with Hugging Face-exposed subsets like
 ``experiments/nemotron_cc.py``.
 """
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution import step, StepContext, executor_main, versioned
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
+from marin.execution import deferred, executor_main, output, step, versioned
+
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
 
 SMOLLM_REVISION = "3ba9d605774198c5868892d7a8deda78031a781f"
 
-@step(name="raw/smollm_corpus/cosmopedia-v2", fn=download_hf)
-def smollm_cosmopedia(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="HuggingFaceTB/smollm-corpus",
-        revision=versioned(SMOLLM_REVISION),
-        hf_urls_glob=["cosmopedia-v2/*"],
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/smollm_corpus/cosmopedia-v2")
+def smollm_cosmopedia():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="HuggingFaceTB/smollm-corpus",
+            revision=versioned(SMOLLM_REVISION),
+            hf_urls_glob=["cosmopedia-v2/*"],
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/smollm_corpus/fineweb-edu-dedup", fn=download_hf)
-def smollm_fineweb_edu(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="HuggingFaceTB/smollm-corpus",
-        revision=versioned(SMOLLM_REVISION),
-        hf_urls_glob=["fineweb-edu-dedup/*"],
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/smollm_corpus/fineweb-edu-dedup")
+def smollm_fineweb_edu():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="HuggingFaceTB/smollm-corpus",
+            revision=versioned(SMOLLM_REVISION),
+            hf_urls_glob=["fineweb-edu-dedup/*"],
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/smollm_corpus/python-edu", fn=download_hf)
-def smollm_python_edu(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="HuggingFaceTB/smollm-corpus",
-        revision=versioned(SMOLLM_REVISION),
-        hf_urls_glob=["python-edu/*"],
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/smollm_corpus/python-edu")
+def smollm_python_edu():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="HuggingFaceTB/smollm-corpus",
+            revision=versioned(SMOLLM_REVISION),
+            hf_urls_glob=["python-edu/*"],
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
 

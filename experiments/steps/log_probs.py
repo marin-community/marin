@@ -23,35 +23,38 @@ from fray.cluster import ResourceConfig
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 
-from marin.evaluation.log_probs import EvalLmConfig, evaluate_lm_log_probs
-from marin.execution import ExecutorStep, StepContext, step
+from marin.evaluation.log_probs import EvalLmConfig
+from marin.evaluation.log_probs import evaluate_lm_log_probs as _evaluate_lm_log_probs
+from marin.execution import StepRef, deferred, output, step
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
+# Mark library function as deferred
+evaluate_lm_log_probs = deferred(_evaluate_lm_log_probs)
 
-def _extract_name_from_checkpoint(checkpoint: str | ExecutorStep) -> str:
+
+def _extract_name_from_checkpoint(checkpoint: str | StepRef) -> str:
     """
-    Extract a name from a checkpoint path or ExecutorStep for use in step naming.
+    Extract a name from a checkpoint path or StepRef for use in step naming.
 
     Args:
-        checkpoint: Either a string path or an ExecutorStep
+        checkpoint: Either a string path or a StepRef
 
     Returns:
         A derived name suitable for use in step names
     """
     if isinstance(checkpoint, str):
         return ckpt_path_to_step_name(checkpoint)
-    elif isinstance(checkpoint, ExecutorStep):
-        # For ExecutorStep, use the step's name
+    elif isinstance(checkpoint, StepRef):
+        # For StepRef, use the step's name
         return checkpoint.name.split("/")[-1]
     else:
         raise ValueError(f"Unknown type for checkpoint: {type(checkpoint)}")
 
 
-@step(name="analysis/log_probs/{name}", fn=evaluate_lm_log_probs)
+@step(name="analysis/log_probs/{name}")
 def log_probs_step(
-    ctx: StepContext,
     name: str,
-    checkpoint: ExecutorStep,
+    checkpoint: StepRef,
     model: LmConfig,
     data: LMMixtureDatasetConfig,
     resource_config: ResourceConfig,
@@ -61,13 +64,12 @@ def log_probs_step(
     wandb_tags: list[str] | None = None,
 ):
     """
-    Create a step that evaluates log probabilities from a checkpoint ExecutorStep.
+    Create a step that evaluates log probabilities from a checkpoint step.
 
-    Use this when the checkpoint is an output of another ExecutorStep.
+    Use this when the checkpoint is an output of another step.
     For raw checkpoint paths, use log_probs_from_path instead.
 
     Args:
-        ctx: Step context (automatically provided by @step decorator)
         name: Name for this evaluation step
         checkpoint: The checkpoint step to evaluate
         model: The model configuration
@@ -78,24 +80,25 @@ def log_probs_step(
         max_samples_per_dataset: Optional limit on samples per dataset
         wandb_tags: Optional tags to add to the wandb run
     """
-    return EvalLmConfig(
-        name=name,
-        checkpoint_path=ctx.require(checkpoint),
-        model=model,
-        datasets=data,
-        log_entropy=True,
-        resource_config=resource_config,
-        checkpoint_is_hf=checkpoint_is_hf,
-        per_device_batch_size=per_device_batch_size,
-        max_samples_per_dataset=max_samples_per_dataset,
-        wandb_tags=wandb_tags,
-        output_path=ctx.output,
+    return evaluate_lm_log_probs(
+        EvalLmConfig(
+            name=name,
+            checkpoint_path=checkpoint,
+            model=model,
+            datasets=data,
+            log_entropy=True,
+            resource_config=resource_config,
+            checkpoint_is_hf=checkpoint_is_hf,
+            per_device_batch_size=per_device_batch_size,
+            max_samples_per_dataset=max_samples_per_dataset,
+            wandb_tags=wandb_tags,
+            output_path=output(),
+        )
     )
 
 
-@step(name="analysis/log_probs/{name}", fn=evaluate_lm_log_probs)
+@step(name="analysis/log_probs/{name}")
 def log_probs_from_path(
-    ctx: StepContext,
     name: str,
     checkpoint_path: str,
     model: LmConfig,
@@ -110,10 +113,9 @@ def log_probs_from_path(
     Create a step that evaluates log probabilities from a raw checkpoint path.
 
     Use this for evaluating existing checkpoint paths (GCS, local).
-    For checkpoints that are outputs of another ExecutorStep, use log_probs_step instead.
+    For checkpoints that are outputs of another step, use log_probs_step instead.
 
     Args:
-        ctx: Step context (automatically provided by @step decorator)
         name: Name for this evaluation step
         checkpoint_path: The checkpoint path to evaluate (GCS or local path)
         model: The model configuration
@@ -124,23 +126,25 @@ def log_probs_from_path(
         max_samples_per_dataset: Optional limit on samples per dataset
         wandb_tags: Optional tags to add to the wandb run
     """
-    return EvalLmConfig(
-        name=name,
-        checkpoint_path=checkpoint_path,
-        model=model,
-        datasets=data,
-        log_entropy=True,
-        resource_config=resource_config,
-        checkpoint_is_hf=checkpoint_is_hf,
-        per_device_batch_size=per_device_batch_size,
-        max_samples_per_dataset=max_samples_per_dataset,
-        wandb_tags=wandb_tags,
-        output_path=ctx.output,
+    return evaluate_lm_log_probs(
+        EvalLmConfig(
+            name=name,
+            checkpoint_path=checkpoint_path,
+            model=model,
+            datasets=data,
+            log_entropy=True,
+            resource_config=resource_config,
+            checkpoint_is_hf=checkpoint_is_hf,
+            per_device_batch_size=per_device_batch_size,
+            max_samples_per_dataset=max_samples_per_dataset,
+            wandb_tags=wandb_tags,
+            output_path=output(),
+        )
     )
 
 
 def default_lm_log_probs(
-    checkpoint: str | ExecutorStep,
+    checkpoint: str | StepRef,
     model: LmConfig,
     data: LMMixtureDatasetConfig,
     resource_config: ResourceConfig,
@@ -149,7 +153,7 @@ def default_lm_log_probs(
     max_samples_per_dataset: int | None = None,
     name: str | None = None,
     wandb_tags: list[str] | None = None,
-) -> ExecutorStep:
+) -> StepRef:
     """
     Creates a step to evaluate log probabilities of a language model.
 
@@ -157,7 +161,7 @@ def default_lm_log_probs(
     and log_probs_from_path based on the type of the checkpoint parameter.
 
     Args:
-        checkpoint: The checkpoint to evaluate (ExecutorStep or path string)
+        checkpoint: The checkpoint to evaluate (StepRef or path string)
         model: The model configuration
         data: The data to evaluate on
         resource_config: The resource configuration
@@ -170,7 +174,7 @@ def default_lm_log_probs(
     if not name:
         name = _extract_name_from_checkpoint(checkpoint)
 
-    if isinstance(checkpoint, ExecutorStep):
+    if isinstance(checkpoint, StepRef):
         return log_probs_step(
             name=name,
             checkpoint=checkpoint,

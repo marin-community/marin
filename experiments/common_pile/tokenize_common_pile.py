@@ -18,297 +18,365 @@ from levanter.data.dataset import PermType
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution import step, StepContext, StepRef, ExecutorStep, executor_main
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
+from marin.execution import deferred, executor_main, output, step
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
+
 # Common Pile v0.1 filtered dataset download steps
-@step(name="raw/common_pile/arxiv_abstracts_filtered", fn=download_hf)
-def arxiv_abstracts_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/arxiv_abstracts_filtered",
-        revision="f1d7a9a",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/arxiv_abstracts_filtered")
+def arxiv_abstracts_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/arxiv_abstracts_filtered",
+            revision="f1d7a9a",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/arxiv_papers_filtered", fn=download_hf)
-def arxiv_papers_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/arxiv_papers_filtered",
-        revision="033cf7f",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/arxiv_papers_filtered")
+def arxiv_papers_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/arxiv_papers_filtered",
+            revision="033cf7f",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/biodiversity_heritage_library_filtered", fn=download_hf)
-def biodiversity_heritage_library_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/biodiversity_heritage_library_filtered",
-        revision="0486ed6",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/biodiversity_heritage_library_filtered")
+def biodiversity_heritage_library_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/biodiversity_heritage_library_filtered",
+            revision="0486ed6",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/caselaw_access_project_filtered", fn=download_hf)
-def caselaw_access_project_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/caselaw_access_project_filtered",
-        revision="50e1961",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/caselaw_access_project_filtered")
+def caselaw_access_project_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/caselaw_access_project_filtered",
+            revision="50e1961",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/cccc_filtered", fn=download_hf)
-def cccc_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/cccc_filtered",
-        revision="03a3de5",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/cccc_filtered")
+def cccc_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/cccc_filtered",
+            revision="03a3de5",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/data_provenance_initiative_filtered", fn=download_hf)
-def data_provenance_initiative_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/data_provenance_initiative_filtered",
-        revision="8f5afcf",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/data_provenance_initiative_filtered")
+def data_provenance_initiative_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/data_provenance_initiative_filtered",
+            revision="8f5afcf",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/doab_filtered", fn=download_hf)
-def doab_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/doab_filtered",
-        revision="defb24c",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/doab_filtered")
+def doab_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/doab_filtered",
+            revision="defb24c",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/foodista_filtered", fn=download_hf)
-def foodista_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/foodista_filtered",
-        revision="bf2c7aa",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/foodista_filtered")
+def foodista_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/foodista_filtered",
+            revision="bf2c7aa",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/github_archive_filtered", fn=download_hf)
-def github_archive_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/github_archive_filtered",
-        revision="52282fe",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/github_archive_filtered")
+def github_archive_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/github_archive_filtered",
+            revision="52282fe",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/library_of_congress_filtered", fn=download_hf)
-def library_of_congress_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/library_of_congress_filtered",
-        revision="56725c7",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/library_of_congress_filtered")
+def library_of_congress_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/library_of_congress_filtered",
+            revision="56725c7",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/libretexts_filtered", fn=download_hf)
-def libretexts_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/libretexts_filtered",
-        revision="70388bc",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/libretexts_filtered")
+def libretexts_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/libretexts_filtered",
+            revision="70388bc",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/news_filtered", fn=download_hf)
-def news_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/news_filtered",
-        revision="59aaa8f",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/news_filtered")
+def news_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/news_filtered",
+            revision="59aaa8f",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/oercommons_filtered", fn=download_hf)
-def oercommons_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/oercommons_filtered",
-        revision="506b615",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/oercommons_filtered")
+def oercommons_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/oercommons_filtered",
+            revision="506b615",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/peS2o_filtered", fn=download_hf)
+@step(name="raw/common_pile/peS2o_filtered")
 def peS2o_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/peS2o_filtered",
-        revision="2977475",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/peS2o_filtered",
+            revision="2977475",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/pre_1929_books_filtered", fn=download_hf)
+@step(name="raw/common_pile/pre_1929_books_filtered")
 def pre_1929_books_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/pre_1929_books_filtered",
-        revision="23f9d96",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/pre_1929_books_filtered",
+            revision="23f9d96",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/pressbooks_filtered", fn=download_hf)
-def pressbooks_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/pressbooks_filtered",
-        revision="1a1d3b5",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/pressbooks_filtered")
+def pressbooks_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/pressbooks_filtered",
+            revision="1a1d3b5",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/project_gutenberg_filtered", fn=download_hf)
-def project_gutenberg_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/project_gutenberg_filtered",
-        revision="3cdf687",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/project_gutenberg_filtered")
+def project_gutenberg_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/project_gutenberg_filtered",
+            revision="3cdf687",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/public_domain_review_filtered", fn=download_hf)
-def public_domain_review_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/public_domain_review_filtered",
-        revision="efc7f21",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/public_domain_review_filtered")
+def public_domain_review_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/public_domain_review_filtered",
+            revision="efc7f21",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/pubmed_filtered", fn=download_hf)
-def pubmed_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/pubmed_filtered",
-        revision="c156f05",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/pubmed_filtered")
+def pubmed_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/pubmed_filtered",
+            revision="c156f05",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/python_enhancement_proposals_filtered", fn=download_hf)
-def python_enhancement_proposals_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/python_enhancement_proposals_filtered",
-        revision="5821709",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/python_enhancement_proposals_filtered")
+def python_enhancement_proposals_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/python_enhancement_proposals_filtered",
+            revision="5821709",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/regulations_filtered", fn=download_hf)
-def regulations_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/regulations_filtered",
-        revision="3327364",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/regulations_filtered")
+def regulations_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/regulations_filtered",
+            revision="3327364",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/stackexchange_filtered", fn=download_hf)
-def stackexchange_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/stackexchange_filtered",
-        revision="c0ac737",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/stackexchange_filtered")
+def stackexchange_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/stackexchange_filtered",
+            revision="c0ac737",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/stackv2_edu_filtered", fn=download_hf)
+@step(name="raw/common_pile/stackv2_edu_filtered")
 def stackv2_edu_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/stackv2_edu_filtered",
-        revision="c354dbe",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/stackv2_edu_filtered",
+            revision="c354dbe",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/stackv2_html_filtered", fn=download_hf)
+@step(name="raw/common_pile/stackv2_html_filtered")
 def stackv2_html_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/stackv2_html_filtered",
-        revision="92c9fa8",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/stackv2_html_filtered",
+            revision="92c9fa8",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/stackv2", fn=download_hf)
+@step(name="raw/common_pile/stackv2")
 def stackv2(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/stackv2",
-        revision="d0e3266",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/stackv2",
+            revision="d0e3266",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/ubuntu_irc_filtered", fn=download_hf)
-def ubuntu_irc_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/ubuntu_irc_filtered",
-        revision="84f88c9",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/ubuntu_irc_filtered")
+def ubuntu_irc_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/ubuntu_irc_filtered",
+            revision="84f88c9",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/uk_hansard_filtered", fn=download_hf)
-def uk_hansard_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/uk_hansard_filtered",
-        revision="c88adc4",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/uk_hansard_filtered")
+def uk_hansard_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/uk_hansard_filtered",
+            revision="c88adc4",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/usgpo_filtered", fn=download_hf)
-def usgpo_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/usgpo_filtered",
-        revision="b150cc2",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/usgpo_filtered")
+def usgpo_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/usgpo_filtered",
+            revision="b150cc2",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/uspto_filtered", fn=download_hf)
-def uspto_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/uspto_filtered",
-        revision="13894c5",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/uspto_filtered")
+def uspto_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/uspto_filtered",
+            revision="13894c5",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/wikimedia_filtered", fn=download_hf)
-def wikimedia_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/wikimedia_filtered",
-        revision="0641bb8",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/wikimedia_filtered")
+def wikimedia_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/wikimedia_filtered",
+            revision="0641bb8",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/wikiteam_filtered", fn=download_hf)
-def wikiteam_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/wikiteam_filtered",
-        revision="f4ed055",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/wikiteam_filtered")
+def wikiteam_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/wikiteam_filtered",
+            revision="f4ed055",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
-@step(name="raw/common_pile/youtube_filtered", fn=download_hf)
-def youtube_filtered(ctx: StepContext):
-    return DownloadConfig(
-        hf_dataset_id="common-pile/youtube_filtered",
-        revision="dff8c8a",
-        gcs_output_path=ctx.output,
-        wait_for_completion=True,
+@step(name="raw/common_pile/youtube_filtered")
+def youtube_filtered():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="common-pile/youtube_filtered",
+            revision="dff8c8a",
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
     )
 
 # Map dataset names to their corresponding raw download steps

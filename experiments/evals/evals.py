@@ -20,11 +20,12 @@ import logging
 
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
-from marin.evaluation.run import evaluate
-from marin.execution.executor import (
+from marin.evaluation.run import evaluate as _evaluate
+from marin.execution import (
     ExecutorStep,
-    StepContext,
     StepRef,
+    deferred,
+    output,
     step,
     versioned,
 )
@@ -44,6 +45,9 @@ from experiments.evals.task_configs import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Mark library functions as deferred
+evaluate = deferred(_evaluate)
 
 
 def evaluate_lm_evaluation_harness(
@@ -65,27 +69,23 @@ def evaluate_lm_evaluation_harness(
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
     """
-    @step(name=f"evaluation/lm_evaluation_harness/{model_name}", fn=evaluate)
-    def _eval(ctx: StepContext):
-        # Resolve model_path if it's a dependency
-        if isinstance(model_path, (StepRef, ExecutorStep)):
-            resolved_model_path = ctx.require(model_path)
-        else:
-            resolved_model_path = model_path
-
-        return EvaluationConfig(
-            evaluator="lm_evaluation_harness",
-            model_name=model_name,
-            model_path=resolved_model_path,
-            evaluation_path=ctx.output,
-            evals=evals,
-            max_eval_instances=max_eval_instances,
-            launch_with_ray=True,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-            engine_kwargs=engine_kwargs,
-            resource_config=resource_config,
-            apply_chat_template=apply_chat_template,
-            wandb_tags=wandb_tags,
+    @step(name=f"evaluation/lm_evaluation_harness/{model_name}")
+    def _eval():
+        return evaluate(
+            EvaluationConfig(
+                evaluator="lm_evaluation_harness",
+                model_name=model_name,
+                model_path=model_path,
+                evaluation_path=output(),
+                evals=evals,
+                max_eval_instances=max_eval_instances,
+                launch_with_ray=True,
+                discover_latest_checkpoint=discover_latest_checkpoint,
+                engine_kwargs=engine_kwargs,
+                resource_config=resource_config,
+                apply_chat_template=apply_chat_template,
+                wandb_tags=wandb_tags,
+            )
         )
     return _eval()
 
@@ -147,24 +147,20 @@ def evaluate_levanter_lm_evaluation_harness(
     """
     logger.info(f"Running evals on the following tasks: {evals}")
 
-    @step(name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}", fn=evaluate)
-    def _eval(ctx: StepContext):
-        # Resolve model_path if it's a dependency
-        if isinstance(model_path, (StepRef, ExecutorStep)):
-            resolved_model_path = ctx.require(model_path)
-        else:
-            resolved_model_path = model_path
-
-        return EvaluationConfig(
-            evaluator="levanter_lm_evaluation_harness",
-            model_name=None,  # imputed automatically
-            model_path=resolved_model_path,
-            evaluation_path=ctx.output,
-            evals=versioned(evals),
-            discover_latest_checkpoint=discover_latest_checkpoint,
-            max_eval_instances=versioned(max_eval_instances),
-            resource_config=resource_config,
-            apply_chat_template=apply_chat_template,
+    @step(name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}")
+    def _eval():
+        return evaluate(
+            EvaluationConfig(
+                evaluator="levanter_lm_evaluation_harness",
+                model_name=None,  # imputed automatically
+                model_path=model_path,
+                evaluation_path=output(),
+                evals=versioned(evals),
+                discover_latest_checkpoint=discover_latest_checkpoint,
+                max_eval_instances=versioned(max_eval_instances),
+                resource_config=resource_config,
+                apply_chat_template=apply_chat_template,
+            )
         )
     return _eval()
 
