@@ -104,8 +104,15 @@ def stats():
     )
 
 
+@step(name="hello_world")
+def run_hello_world():
+    """Entry point that orchestrates all steps for the hello world experiment."""
+    data()
+    stats()
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=[data(), stats()],
+        steps=[run_hello_world()],
         description="Simple experiment to compute stats of some numbers.",
     )

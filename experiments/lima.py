@@ -99,9 +99,9 @@ def lima_text():
     )
 
 
-def lima_tokenized(tokenizer: str = llama3_tokenizer, is_validation: bool = True) -> dict[str, TokenizerStep]:
-    """Return steps to tokenize the LIMA validation set using both train and test splits."""
-
+@step(name="lima/tokenized")
+def lima_tokenized(tokenizer: str = llama3_tokenizer, is_validation: bool = True):
+    """Tokenize the LIMA validation set using both train and test splits."""
     return default_tokenize(
         name="lima_text",
         dataset=lima_text().with_output_path("raw/lima_text-68958e9/68958e9").cd("train.jsonl"),

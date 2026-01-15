@@ -64,11 +64,13 @@ def smollm_python_edu():
     )
 
 
+@step(name="smollm_corpus/all")
+def download_all_smollm():
+    """Entry point that downloads all SmolLM corpus subsets."""
+    smollm_cosmopedia()
+    smollm_fineweb_edu()
+    smollm_python_edu()
+
+
 if __name__ == "__main__":
-    executor_main(
-        steps=[
-            smollm_cosmopedia(),
-            smollm_fineweb_edu(),
-            smollm_python_edu(),
-        ]
-    )
+    executor_main(steps=[download_all_smollm()], description="Download SmolLM Corpus")

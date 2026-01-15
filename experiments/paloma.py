@@ -94,5 +94,14 @@ def paloma_tokenized(
     return paloma_steps
 
 
+@step(name="paloma/all")
+def run_paloma_experiment():
+    """Entry point that downloads and tokenizes all Paloma datasets."""
+    paloma()  # download step
+    # Call each tokenized step
+    for name, step in paloma_tokenized().items():
+        pass  # The step is already traced when created
+
+
 if __name__ == "__main__":
-    executor_main(steps=[paloma, *paloma_tokenized().values()])
+    executor_main(steps=[run_paloma_experiment()], description="Download and tokenize Paloma")

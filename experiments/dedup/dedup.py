@@ -113,15 +113,14 @@ def dedup_fineweb_edu_small_10bt():
     )
 
 
-STEPS = [
-    dedup_fineweb_edu_small_1(),
-    dedup_fineweb_edu_small_2(),
-    dedup_fineweb_edu_small_10bt(),
-]
+@step(name="dedup/all")
+def run_all_dedup():
+    """Entry point that runs all dedup experiments."""
+    dedup_fineweb_edu_small_1()
+    dedup_fineweb_edu_small_2()
+    dedup_fineweb_edu_small_10bt()
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    executor_main(
-        steps=STEPS,
-        description="Run dedupe",
-    )
+    executor_main(steps=[run_all_dedup()], description="Run dedupe")

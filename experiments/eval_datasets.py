@@ -625,10 +625,15 @@ def piqa_baber_raw():
 
 ############################################################
 
+
+@step(name="eval_datasets/all")
+def prepare_all_eval_datasets():
+    """Entry point that prepares all evaluation datasets."""
+    mmlu_convert_dolma()
+    for ds in eval_datasets:
+        for step in ds.steps:
+            pass  # Steps are already traced when the list is created
+
+
 if __name__ == "__main__":
-    executor_main(
-        steps=[
-            mmlu_convert_dolma(),
-            *[step for ds in eval_datasets for step in ds.steps],
-        ]
-    )
+    executor_main(steps=[prepare_all_eval_datasets()], description="Prepare evaluation datasets")
