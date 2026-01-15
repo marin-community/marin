@@ -192,7 +192,11 @@ class ImageCache:
         )
 
     def _evict_old_images(self) -> None:
-        """Remove old fluster images when over limit."""
+        """Remove oldest fluster images when over limit.
+
+        Sorts by Docker's created_at timestamp with tag as tiebreaker for
+        deterministic ordering when timestamps are identical.
+        """
         if self._registry:
             pattern = f"{self._registry}/fluster-job-*"
         else:
@@ -202,7 +206,8 @@ class ImageCache:
         if len(images) <= self._max_images:
             return
 
-        # Sort by creation time and remove oldest
-        images.sort(key=lambda x: x.created_at)
-        for image in images[: len(images) - self._max_images]:
+        # Sort by created_at (oldest first), with tag as tiebreaker for determinism
+        images.sort(key=lambda x: (x.created_at, x.tag))
+        to_remove = images[: len(images) - self._max_images]
+        for image in to_remove:
             self._docker.remove(image.tag)

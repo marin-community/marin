@@ -83,8 +83,9 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.LaunchJobResponse:
         """Submit a new job to the controller.
 
-        Creates a new job with a unique ID, adds it to the controller state,
-        and wakes the scheduler to attempt immediate dispatch.
+        The job name is the unique hierarchical identifier provided by the client.
+        The client is responsible for constructing the full hierarchical name
+        (e.g., "my-experiment/worker-0/task-1").
 
         If bundle_blob is provided and bundle_dir is configured, writes the
         bundle to disk and updates bundle_gcs_path to a file:// URL.
@@ -94,14 +95,26 @@ class ControllerServiceImpl:
         will be terminated as well.
 
         Args:
-            request: Job launch request with entrypoint and resource spec
+            request: Job launch request with name and resource spec
             ctx: Request context (unused in v0)
 
         Returns:
-            LaunchJobResponse containing the assigned job_id
+            LaunchJobResponse containing the job_id (same as name)
+
+        Raises:
+            ConnectError: INVALID_ARGUMENT if name is empty
+            ConnectError: ALREADY_EXISTS if a job with this name exists
         """
         with rpc_error_handler("launching job"):
-            job_id = str(uuid.uuid4())
+            # Name is the unique hierarchical identifier
+            if not request.name:
+                raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
+
+            job_id = request.name
+
+            # Reject duplicates
+            if self._state.get_job(JobId(job_id)):
+                raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists")
 
             # Handle bundle_blob: write to bundle_dir if provided
             if request.bundle_blob and self._bundle_dir:

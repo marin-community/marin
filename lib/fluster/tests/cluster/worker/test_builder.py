@@ -376,7 +376,6 @@ packages = ["src/test_app"]
 @pytest.mark.slow
 def test_lru_eviction_of_images(tmp_path, docker_bundle):
     """Test LRU eviction removes old images when over limit."""
-    import time
     import uuid
 
     if not check_docker_available():
@@ -393,8 +392,9 @@ def test_lru_eviction_of_images(tmp_path, docker_bundle):
     base_image = "python:3.11-slim"
     images_built = []
 
-    # Build 3 images to trigger eviction
-    # Use 1 second sleep to ensure different Docker timestamps (Docker has second granularity)
+    # Build 3 images to trigger eviction.
+    # Eviction sorts by (created_at, tag). When timestamps are identical
+    # (common with shared layers), tag is the tiebreaker: job-0 < job-1 < job-2
     for i in range(3):
         result = builder.build(
             bundle_path=docker_bundle,
@@ -405,16 +405,18 @@ def test_lru_eviction_of_images(tmp_path, docker_bundle):
         )
         images_built.append(result.image_tag)
 
-        # Docker timestamps have second granularity, so we need 1+ second delay
-        if i < 2:
-            time.sleep(1.1)
-
     # After building 3 images with max_images=2, oldest should be evicted
     # Note: _evict_old_images is called after each build, but only when count > max_images
 
-    # At least the newest image should exist
+    # The oldest image (image 0) should have been evicted
+    exists_0 = builder._docker.exists(images_built[0])
+    assert exists_0 is False, "Oldest image should have been evicted"
+
+    # The newest images should exist
+    exists_1 = builder._docker.exists(images_built[1])
     exists_2 = builder._docker.exists(images_built[2])
-    assert exists_2 is True
+    assert exists_1 is True, "Second image should exist"
+    assert exists_2 is True, "Newest image should exist"
 
     # Cleanup remaining images
     for tag in images_built:

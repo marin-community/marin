@@ -241,18 +241,46 @@ def test_get_job_status_includes_all_fields(service, state, make_job_request):
     assert response.job.exit_code == 42
 
 
-def test_launch_job_generates_unique_ids(service, make_job_request):
-    """Verify each launch_job call generates a unique job_id."""
-    request = make_job_request("test-job")
+def test_launch_job_uses_name_as_job_id(service, make_job_request):
+    """Verify job_id is the same as the provided name."""
+    request = make_job_request("my-unique-job")
 
-    # Launch multiple jobs
-    response1 = service.launch_job(request, None)
-    response2 = service.launch_job(request, None)
-    response3 = service.launch_job(request, None)
+    response = service.launch_job(request, None)
 
-    # All IDs should be unique
-    job_ids = {response1.job_id, response2.job_id, response3.job_id}
-    assert len(job_ids) == 3
+    # job_id should be the name
+    assert response.job_id == "my-unique-job"
+
+
+def test_launch_job_rejects_duplicate_name(service, make_job_request):
+    """Verify launch_job rejects duplicate job names."""
+    request = make_job_request("duplicate-job")
+
+    # First launch should succeed
+    response = service.launch_job(request, None)
+    assert response.job_id == "duplicate-job"
+
+    # Second launch with same name should fail
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.ALREADY_EXISTS
+    assert "duplicate-job" in exc_info.value.message
+
+
+def test_launch_job_rejects_empty_name(service, state):
+    """Verify launch_job rejects empty job names."""
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="",  # Empty name
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+    assert "name is required" in exc_info.value.message.lower()
 
 
 def test_terminate_pending_job(service, state, make_job_request):

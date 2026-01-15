@@ -1,6 +1,9 @@
 # Fluster
 
-Fluster is a distributed job orchestration and RPC framework designed to replace Ray with simpler, more focused primitives. It provides job lifecycle management, actor-based RPC communication, and task dispatch capabilities for distributed Python workloads.
+Fluster is a distributed job orchestration and RPC framework designed to replace
+Ray with simpler, more focused primitives. It provides job lifecycle management,
+actor-based RPC communication, and task dispatch capabilities for distributed
+Python workloads.
 
 ## Architecture Overview
 

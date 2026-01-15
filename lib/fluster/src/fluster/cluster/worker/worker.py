@@ -396,7 +396,9 @@ class Worker:
         ports = dict(zip(port_names, allocated_ports, strict=True))
 
         # Create job working directory
-        workdir = Path(tempfile.gettempdir()) / "fluster-worker" / "jobs" / job_id
+        # Use safe path component for hierarchical job IDs (e.g., "my-exp/worker-0" -> "my-exp__worker-0")
+        safe_job_id = job_id.replace("/", "__")
+        workdir = Path(tempfile.gettempdir()) / "fluster-worker" / "jobs" / safe_job_id
         workdir.mkdir(parents=True, exist_ok=True)
 
         job = Job(

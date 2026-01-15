@@ -63,15 +63,22 @@ class ClusterClient(Protocol):
     ) -> JobId:
         """Submit a job to the cluster.
 
+        The name is combined with the current job's name (if any) to form a
+        hierarchical identifier. For example, if the current job is "my-exp"
+        and you submit with name="worker-0", the full name becomes "my-exp/worker-0".
+
         Args:
             entrypoint: Job entrypoint (callable + args/kwargs)
-            name: Job name
+            name: Job name (cannot contain '/')
             resources: Resource requirements
             environment: Environment configuration
             ports: Port names to allocate (e.g., ["actor", "metrics"])
 
         Returns:
-            Job ID
+            Job ID (the full hierarchical name)
+
+        Raises:
+            ValueError: If name contains '/'
         """
         ...
 
@@ -341,21 +348,30 @@ class RpcClusterClient:
     ) -> JobId:
         """Submit a job to the cluster.
 
-        If running inside a FlusterContext (i.e., from within another job),
-        the submitted job will be registered as a child of the current job.
+        The name is combined with the current job's name (if any) to form a
+        hierarchical identifier. For example, if the current job is "my-exp"
+        and you submit with name="worker-0", the full name becomes "my-exp/worker-0".
+
         Child jobs are automatically terminated when their parent is terminated.
 
         Args:
             entrypoint: Job entrypoint (callable + args/kwargs)
-            name: Job name
+            name: Job name (cannot contain '/')
             resources: Resource requirements
             environment: Environment configuration
             ports: Port names to allocate (e.g., ["actor", "metrics"])
             scheduling_timeout_seconds: Timeout for scheduling (0 = no timeout)
 
         Returns:
-            Job ID
+            Job ID (the full hierarchical name)
+
+        Raises:
+            ValueError: If name contains '/'
         """
+        # Validate name
+        if "/" in name:
+            raise ValueError("Job name cannot contain '/'")
+
         serialized = cloudpickle.dumps(entrypoint)
 
         env_config = cluster_pb2.EnvironmentConfig(
@@ -365,15 +381,21 @@ class RpcClusterClient:
             extras=list(environment.extras) if environment else [],
         )
 
-        # Get parent_job_id: prefer context, fall back to self._job_id (inside-job mode)
+        # Get parent job ID from context or self._job_id
         ctx = get_fluster_ctx()
         parent_job_id = ctx.job_id if ctx else (self._job_id or "")
+
+        # Construct full hierarchical name
+        if parent_job_id:
+            full_name = f"{parent_job_id}/{name}"
+        else:
+            full_name = name
 
         # Use bundle_gcs_path if available (inside-job mode inherits parent workspace),
         # otherwise create bundle_blob from workspace
         if self._bundle_gcs_path:
             request = cluster_pb2.Controller.LaunchJobRequest(
-                name=name,
+                name=full_name,
                 serialized_entrypoint=serialized,
                 resources=resources,
                 environment=env_config,
@@ -384,7 +406,7 @@ class RpcClusterClient:
             )
         else:
             request = cluster_pb2.Controller.LaunchJobRequest(
-                name=name,
+                name=full_name,
                 serialized_entrypoint=serialized,
                 resources=resources,
                 environment=env_config,
@@ -695,38 +717,43 @@ class LocalClient:
     ) -> JobId:
         """Submit a job for local execution.
 
-        If running inside a FlusterContext (i.e., from within another job),
-        the submitted job will be registered as a child of the current job.
-        This matches RpcClusterClient behavior.
+        The name is combined with the current job's name (if any) to form a
+        hierarchical identifier. For example, if the current job is "my-exp"
+        and you submit with name="worker-0", the full name becomes "my-exp/worker-0".
+
+        This matches RpcClusterClient behavior - client constructs the full name.
 
         Args:
             entrypoint: Job entrypoint (callable + args/kwargs)
-            name: Job name (for logging/debugging)
+            name: Job name (cannot contain '/')
             resources: Resource requirements (ignored in local mode)
             environment: Environment configuration (env vars applied if provided)
             ports: Port names to allocate (e.g., ["actor"])
 
         Returns:
-            Job ID
+            Job ID (the full hierarchical name)
+
+        Raises:
+            ValueError: If name contains '/'
         """
         del resources, environment  # Unused in local mode
+
+        # Validate name
+        if "/" in name:
+            raise ValueError("Job name cannot contain '/'")
 
         if self._executor is None:
             raise RuntimeError("LocalClient not started. Use 'with LocalClient() as client:' or call __enter__().")
 
-        # Check if we're running inside a fluster job context (like RpcClusterClient)
+        # Get parent job ID from context
         ctx = get_fluster_ctx()
         parent_job_id = ctx.job_id if ctx else None
 
-        with self._lock:
-            self._job_counter += 1
-            if parent_job_id:
-                # Child job - hierarchical ID preserves namespace from parent
-                job_id = JobId(f"{parent_job_id}/{name}-{self._job_counter}")
-            else:
-                # Root job - generate unique namespace
-                namespace = uuid.uuid4().hex[:8]
-                job_id = JobId(f"{namespace}/{name}-{self._job_counter}")
+        # Construct full hierarchical name (matches RpcClusterClient)
+        if parent_job_id:
+            job_id = JobId(f"{parent_job_id}/{name}")
+        else:
+            job_id = JobId(name)
 
         # Allocate requested ports
         allocated_ports = {port_name: self._allocate_port() for port_name in ports or []}
@@ -742,15 +769,18 @@ class LocalClient:
             ports=allocated_ports,
         )
 
-        # Create job tracking
-        local_job = _LocalJob(
-            job_id=job_id,
-            future=Future(),
-            state=cluster_pb2.JOB_STATE_PENDING,
-            started_at_ms=int(time.time() * 1000),
-        )
-
+        # Reject duplicates (must check under lock for thread safety)
         with self._lock:
+            if job_id in self._jobs:
+                raise ValueError(f"Job {job_id} already exists")
+
+            # Create job tracking
+            local_job = _LocalJob(
+                job_id=job_id,
+                future=Future(),
+                state=cluster_pb2.JOB_STATE_PENDING,
+                started_at_ms=int(time.time() * 1000),
+            )
             self._jobs[job_id] = local_job
 
         # Submit to thread pool
