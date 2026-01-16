@@ -42,6 +42,7 @@ import time
 import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
+from contextvars import Context, copy_context
 from dataclasses import dataclass
 from enum import Enum, auto
 from queue import Empty, Queue
@@ -220,22 +221,34 @@ class WorkerDispatcher:
         task_queue: "Queue[PendingTask]",
         resolver: Resolver,
         timeout: float,
+        context: Context | None = None,
     ):
         self.state = state
         self._task_queue = task_queue
         self._resolver = resolver
         self._timeout = timeout
+        self._context = context
         self._shutdown = threading.Event()
         self._thread: threading.Thread | None = None
         self._discover_backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
 
     def start(self) -> None:
         """Start the dispatch thread."""
-        self._thread = threading.Thread(
-            target=self._run,
-            daemon=True,
-            name=f"dispatch-{self.state.worker_id}",
-        )
+        # If context was provided, run the thread in that context so it inherits
+        # ContextVars (like FlusterContext) from the parent thread.
+        if self._context is not None:
+            self._thread = threading.Thread(
+                target=self._context.run,
+                args=(self._run,),
+                daemon=True,
+                name=f"dispatch-{self.state.worker_id}",
+            )
+        else:
+            self._thread = threading.Thread(
+                target=self._run,
+                daemon=True,
+                name=f"dispatch-{self.state.worker_id}",
+            )
         self._thread.start()
 
     def stop(self) -> None:
@@ -499,8 +512,6 @@ class WorkerPool:
 
     def _launch_workers(self) -> None:
         """Launch worker jobs and start dispatch threads."""
-        # Create resolver for worker discovery if not injected
-        # The resolver automatically derives namespace from the current FlusterContext
         if self._resolver is None:
             self._resolver = self._client.resolver()
 
@@ -528,13 +539,16 @@ class WorkerPool:
             )
             self._job_ids.append(job_id)
 
-        # Start dispatchers (one per worker)
+        # Start dispatchers (one per worker). Each thread needs its own context copy
+        # because a Context can only be entered by one thread at a time.
         for worker_state in self._workers.values():
+            ctx = copy_context()
             dispatcher = WorkerDispatcher(
                 state=worker_state,
                 task_queue=self._task_queue,
                 resolver=self._resolver,
                 timeout=self._timeout,
+                context=ctx,
             )
             dispatcher.start()
             self._dispatchers.append(dispatcher)
