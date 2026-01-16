@@ -319,8 +319,8 @@ class Controller:
         # Job updates its own state BEFORE RPC - worker may complete before RPC returns
         job.mark_dispatched(worker.worker_id, now_ms)
 
-        # Controller coordinates external systems
-        worker.running_jobs.add(job.job_id)
+        # Controller coordinates external systems through state methods
+        self._state.assign_job_to_worker(worker.worker_id, job.job_id)
         self._state.remove_from_queue(job.job_id)
 
         try:
@@ -353,10 +353,10 @@ class Controller:
             # Job reverts its own state
             job.revert_dispatch()
 
-            # Controller coordinates external systems
-            worker.running_jobs.discard(job.job_id)
+            # Controller coordinates external systems through state methods
+            self._state.unassign_job_from_worker(worker.worker_id, job.job_id)
             self._state.add_to_queue(job)
-            worker.healthy = False
+            self._state.mark_worker_unhealthy(worker.worker_id)
             logger.exception("Failed to dispatch job %s to worker %s", job.job_id, worker.address)
             self._state.log_action(
                 "dispatch_failed",
@@ -372,6 +372,7 @@ class Controller:
         )
         job.transition(cluster_pb2.JOB_STATE_UNSCHEDULABLE, now_ms)
         self._state.remove_from_queue(job.job_id)
+        self._state.finalize_job(job.job_id, unassign_worker=False)
         self._state.log_action(
             "job_unschedulable",
             job_id=job.job_id,
@@ -390,7 +391,7 @@ class Controller:
 
         for worker in self._state.list_all_workers():
             if worker.healthy and (now_ms - worker.last_heartbeat_ms) > timeout_ms:
-                worker.healthy = False
+                self._state.mark_worker_unhealthy(worker.worker_id)
                 logger.warning(
                     f"Worker {worker.worker_id} timed out (no heartbeat for {self._config.worker_timeout_seconds}s)"
                 )
@@ -415,7 +416,9 @@ class Controller:
 
                     if result == TransitionResult.SHOULD_RETRY:
                         self._state.add_to_queue(job)
-                        worker.running_jobs.discard(job_id)
+                        self._state.unassign_job_from_worker(worker.worker_id, job_id)
+                    elif job.is_finished():
+                        self._state.finalize_job(job_id)
 
     def _run_server(self) -> None:
         """Run dashboard server (blocking, for thread)."""

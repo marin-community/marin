@@ -256,6 +256,7 @@ class ControllerServiceImpl:
         # TODO: Send kill to worker
         now_ms = int(time.time() * 1000)
         job.transition(cluster_pb2.JOB_STATE_KILLED, now_ms, error="Terminated by user")
+        self._state.finalize_job(job.job_id)
         self._state.log_action("job_killed", job_id=job.job_id)
 
     def list_jobs(
@@ -310,14 +311,13 @@ class ControllerServiceImpl:
         now_ms = int(time.time() * 1000)
         worker_id = WorkerId(request.worker_id)
 
-        # Check if worker already exists (heartbeat case)
-        existing = self._state.get_worker(worker_id)
-        if existing:
-            # Update heartbeat timestamp and worker info
-            existing.last_heartbeat_ms = now_ms
-            existing.resources = request.resources
-            existing.metadata = request.metadata
-            existing.healthy = True  # Worker is alive
+        # Try heartbeat update first (worker already exists)
+        if self._state.update_worker_heartbeat(
+            worker_id,
+            now_ms,
+            resources=request.resources,
+            metadata=request.metadata,
+        ):
             return cluster_pb2.Controller.RegisterWorkerResponse(accepted=True)
 
         # New worker registration
@@ -423,18 +423,13 @@ class ControllerServiceImpl:
         )
 
         # Controller coordinates external systems based on result
-        worker = self._state.get_worker(worker_id)
-
         if result == TransitionResult.SHOULD_RETRY:
-            # Job will retry - add back to queue
+            # Job will retry - add back to queue, unassign from worker
             self._state.add_to_queue(job)
-            if worker:
-                worker.running_jobs.discard(job_id)
+            self._state.unassign_job_from_worker(worker_id, job_id)
         elif job.is_finished():
-            # Job finished - clean up
-            if worker:
-                worker.running_jobs.discard(job_id)
-            self._state.remove_endpoints_for_job(job_id)
+            # Job finished - finalize handles endpoints and worker cleanup
+            self._state.finalize_job(job_id)
 
         self._state.log_action(
             "job_completed",

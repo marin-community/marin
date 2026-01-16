@@ -454,12 +454,139 @@ class ControllerState:
             List of removed endpoints
         """
         with self._lock:
-            endpoint_ids = list(self._endpoints_by_job.get(job_id, []))
-            removed = []
-            for eid in endpoint_ids:
-                ep = self.remove_endpoint(eid)
-                if ep:
-                    removed.append(ep)
-            # Clean up the job mapping
-            self._endpoints_by_job.pop(job_id, None)
-            return removed
+            return self._remove_endpoints_for_job(job_id)
+
+    def _remove_endpoints_for_job(self, job_id: JobId) -> list[ControllerEndpoint]:
+        """Internal method to remove endpoints for a job. Must hold lock."""
+        endpoint_ids = list(self._endpoints_by_job.get(job_id, []))
+        removed = []
+        for eid in endpoint_ids:
+            endpoint = self._endpoints.pop(eid, None)
+            if endpoint:
+                job_endpoints = self._endpoints_by_job.get(endpoint.job_id)
+                if job_endpoints:
+                    job_endpoints.discard(eid)
+                removed.append(endpoint)
+        self._endpoints_by_job.pop(job_id, None)
+        return removed
+
+    # --- Worker Mutation Methods ---
+
+    def assign_job_to_worker(self, worker_id: WorkerId, job_id: JobId) -> bool:
+        """Assign a job to a worker, updating running_jobs.
+
+        Args:
+            worker_id: Worker to assign to
+            job_id: Job being assigned
+
+        Returns:
+            True if worker exists and assignment succeeded, False otherwise
+        """
+        with self._lock:
+            worker = self._workers.get(worker_id)
+            if not worker:
+                return False
+            worker.running_jobs.add(job_id)
+            return True
+
+    def unassign_job_from_worker(self, worker_id: WorkerId, job_id: JobId) -> bool:
+        """Remove a job from a worker's running_jobs.
+
+        Args:
+            worker_id: Worker to unassign from
+            job_id: Job being unassigned
+
+        Returns:
+            True if worker exists, False otherwise
+        """
+        with self._lock:
+            worker = self._workers.get(worker_id)
+            if not worker:
+                return False
+            worker.running_jobs.discard(job_id)
+            return True
+
+    def mark_worker_unhealthy(self, worker_id: WorkerId) -> ControllerWorker | None:
+        """Mark a worker as unhealthy.
+
+        Args:
+            worker_id: Worker to mark unhealthy
+
+        Returns:
+            The worker if found, None otherwise
+        """
+        with self._lock:
+            worker = self._workers.get(worker_id)
+            if worker:
+                worker.healthy = False
+            return worker
+
+    def update_worker_heartbeat(
+        self,
+        worker_id: WorkerId,
+        now_ms: int,
+        resources: cluster_pb2.ResourceSpec | None = None,
+        metadata: cluster_pb2.WorkerMetadata | None = None,
+    ) -> bool:
+        """Update worker heartbeat and optionally resources/metadata.
+
+        Args:
+            worker_id: Worker receiving heartbeat
+            now_ms: Current timestamp
+            resources: Optional updated resources
+            metadata: Optional updated metadata
+
+        Returns:
+            True if worker exists, False otherwise
+        """
+        with self._lock:
+            worker = self._workers.get(worker_id)
+            if not worker:
+                return False
+            worker.last_heartbeat_ms = now_ms
+            worker.healthy = True
+            if resources is not None:
+                worker.resources = resources
+            if metadata is not None:
+                worker.metadata = metadata
+            return True
+
+    # --- Job Finalization ---
+
+    def finalize_job(
+        self,
+        job_id: JobId,
+        *,
+        unassign_worker: bool = True,
+    ) -> tuple[Job | None, list[ControllerEndpoint]]:
+        """Finalize a job that has reached terminal state.
+
+        Handles all cleanup when a job finishes:
+        1. Removes endpoints for the job
+        2. Optionally unassigns the job from its worker
+
+        This is the preferred method to call when a job terminates.
+
+        Precondition: The caller must ensure job.transition() was called first
+        to move the job to a terminal state. This method does not verify job state.
+
+        Args:
+            job_id: Job that has reached terminal state
+            unassign_worker: Whether to remove job from worker.running_jobs
+
+        Returns:
+            Tuple of (job if found, list of removed endpoints)
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return None, []
+
+            removed_endpoints = self._remove_endpoints_for_job(job_id)
+
+            if unassign_worker and job.worker_id:
+                worker = self._workers.get(job.worker_id)
+                if worker:
+                    worker.running_jobs.discard(job_id)
+
+            return job, removed_endpoints
