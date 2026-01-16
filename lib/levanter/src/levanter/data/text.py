@@ -263,7 +263,28 @@ LONG_STRING_WORKAROUND = 10_000
 ws = regex.compile(r"\s")
 
 
-class BatchTokenizer(BatchProcessor[dict, dict]):
+class BaseBatchTokenizer(BatchProcessor[dict, dict]):
+    """Base class for tokenizer-based batch processors."""
+
+    tokenizer: HfTokenizer
+    override_resources: dict | None
+
+    @property
+    def num_cpus(self) -> int:
+        if self.override_resources is not None:
+            cpus = self.override_resources.get("num_cpus", None)
+            if cpus is not None:
+                return cpus
+        return num_cpus_used_by_tokenizer(self.tokenizer)
+
+    @property
+    def num_gpus(self) -> int:
+        if self.override_resources is not None:
+            return self.override_resources.get("num_gpus", 0)
+        return 0
+
+
+class BatchTokenizer(BaseBatchTokenizer):
     """
     A batch processor that tokenizes a batch of strings using a tokenizer.
     By default, this will append eos to the end of the string, even if the tokenizer doesn't.
@@ -455,22 +476,8 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         else:
             return False
 
-    @property
-    def num_cpus(self) -> int:
-        if self.override_resources is not None:
-            cpus = self.override_resources.get("num_cpus", None)
-            if cpus is not None:
-                return cpus
-        return num_cpus_used_by_tokenizer(self.tokenizer)
 
-    @property
-    def num_gpus(self) -> int:
-        if self.override_resources is not None:
-            return self.override_resources.get("num_gpus", 0)
-        return 0
-
-
-class DNABatchTokenizer(BatchProcessor[dict, dict]):
+class DNABatchTokenizer(BaseBatchTokenizer):
     """
     A batch processor that tokenizes DNA sequences with soft-masking support.
 
@@ -551,20 +558,6 @@ class DNABatchTokenizer(BatchProcessor[dict, dict]):
             "soft_mask_weight": self.soft_mask_weight,
             "append_eos": self._need_to_add_eos,
         }
-
-    @property
-    def num_cpus(self) -> int:
-        if self.override_resources is not None:
-            cpus = self.override_resources.get("num_cpus", None)
-            if cpus is not None:
-                return cpus
-        return num_cpus_used_by_tokenizer(self.tokenizer)
-
-    @property
-    def num_gpus(self) -> int:
-        if self.override_resources is not None:
-            return self.override_resources.get("num_gpus", 0)
-        return 0
 
 
 class LmDatasetFormatBase(abc.ABC, ChoiceRegistry):
