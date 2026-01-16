@@ -773,10 +773,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
         dict_config = config.to_dict()
 
         try:
-            for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
-                attr = getattr(self.default_hf_config, k, None)
-                if attr is not None:
-                    dict_config[k] = attr
+            base_config = self.default_hf_config
+        except ValueError:
+            # Training-from-scratch runs may intentionally omit a reference checkpoint. In that case, we can't pull
+            # metadata like `architectures` from an upstream config; the config produced by `to_hf_config()` is still
+            # sufficient for most built-in architectures.
+            base_config = None
+            logger.warning("No reference checkpoint set; skipping base HF config metadata copy.")
         except Exception as e:  # noqa: BLE001
             if isinstance(e, GatedRepoError) or isinstance(e.__cause__, GatedRepoError):
                 warnings.warn("Could not copy keys from base config because the repo is gated. Making assumptions.")
@@ -785,8 +788,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     "AutoConfig": self.HfConfigClass.__qualname__,
                 }
                 dict_config["architectures"] = [self.HFAutoModelClass(AutoModelForCausalLM).__name__]
+                base_config = None
             else:
                 raise
+
+        if base_config is not None:
+            for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
+                attr = getattr(base_config, k, None)
+                if attr is not None:
+                    dict_config[k] = attr
 
         if self.tokenizer:
             tokenizer_dependent_config = {}
