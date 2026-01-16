@@ -13,6 +13,7 @@ from functools import cached_property
 from itertools import chain
 from typing import (
     Any,
+    Callable,
     Dict,
     Generic,
     List,
@@ -178,12 +179,26 @@ class WeightedTokenSeqDataset(GenericTokenSeqDataset[dict[str, np.ndarray]]):
         return [{"input_ids": t, "loss_weight": w} for t, w in zip(tokens, weights)]
 
 
-class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
+def standard_extractor(data: np.ndarray, Pos: Axis) -> dict[str, hax.NamedArray]:
+    """Extract tokens from a numpy array."""
+    return {"tokens": hax.named(data, Pos)}
+
+
+def weighted_extractor(data: dict[str, np.ndarray], Pos: Axis) -> dict[str, hax.NamedArray]:
+    """Extract tokens and loss weights from a dict."""
+    return {
+        "tokens": hax.named(data["input_ids"], Pos),
+        "loss_weight": hax.named(data["loss_weight"], Pos),
+    }
+
+
+class CausalLmDataset(MappedAsyncDataset[Any, LmExample]):
     def __init__(
         self,
-        dataset: AsyncDataset[np.ndarray],
+        dataset: AsyncDataset,
         Pos: Axis,
         *,
+        extractor: Callable[[Any, Axis], dict[str, hax.NamedArray]] = standard_extractor,
         ignore_index: Optional[int] = None,
         eos_id: Optional[int] = None,
         block_cross_document_attention: bool = True,
@@ -197,17 +212,15 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
 
         @functools.partial(eqx.filter_jit)
-        def _create_lm_example(tokens):
-            tokens = hax.named(tokens, self.Pos)
+        def _create_lm_example(data):
+            extracted = extractor(data, self.Pos)
             example = LmExample.causal(
-                tokens=tokens,
+                **extracted,
                 ignore_id=self.ignore_id,
                 eos_id=eos_id,
                 block_cross_document_attention=block_cross_document_attention,
             )
-
             example = jax.lax.with_sharding_constraint(example, sharding)
-
             return example
 
         super().__init__(self.dataset, _create_lm_example)
@@ -216,46 +229,26 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
         return await self.dataset.async_len()
 
 
-class WeightedCausalLmDataset(MappedAsyncDataset[dict, LmExample]):
-    """
-    A dataset that creates LmExamples with per-token loss weights.
-    """
+class WeightedCausalLmDataset(CausalLmDataset):
+    """A dataset that creates LmExamples with per-token loss weights."""
 
     def __init__(
         self,
-        dataset: AsyncDataset[dict],
+        dataset: AsyncDataset[dict[str, np.ndarray]],
         Pos: Axis,
         *,
         ignore_index: Optional[int] = None,
         eos_id: Optional[int] = None,
         block_cross_document_attention: bool = True,
     ):
-        self.dataset = dataset
-        self.Pos = Pos
-        self.ignore_id = ignore_index
-        self.eos_id = eos_id
-        self.block_cross_document_attention = block_cross_document_attention
-
-        sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
-
-        @functools.partial(eqx.filter_jit)
-        def _create_lm_example(example):
-            tokens = hax.named(example["input_ids"], self.Pos)
-            loss_weight = hax.named(example["loss_weight"], self.Pos)
-            lm_example = LmExample.causal(
-                tokens=tokens,
-                loss_weight=loss_weight,
-                ignore_id=self.ignore_id,
-                eos_id=eos_id,
-                block_cross_document_attention=block_cross_document_attention,
-            )
-            lm_example = jax.lax.with_sharding_constraint(lm_example, sharding)
-            return lm_example
-
-        super().__init__(self.dataset, _create_lm_example)
-
-    async def async_len(self) -> int:
-        return await self.dataset.async_len()
+        super().__init__(
+            dataset,
+            Pos,
+            extractor=weighted_extractor,
+            ignore_index=ignore_index,
+            eos_id=eos_id,
+            block_cross_document_attention=block_cross_document_attention,
+        )
 
 
 def _maybe_force_tokenizer_parallelism(tokenizer: PreTrainedTokenizerBase):
