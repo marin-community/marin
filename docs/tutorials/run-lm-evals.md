@@ -40,7 +40,9 @@ from fray.cluster import ResourceConfig
 from experiments.evals.evals import default_eval
 from marin.execution.executor import executor_main
 
-# Example: evaluate a standalone checkpoint
+# Example: evaluate a standalone checkpoint.
+# Note: the `gcsfuse_mount/` segment is a historical bucket prefix; Marin no longer
+# requires a FUSE mount. vLLM can read directly from `gs://` paths (via streaming).
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
 
 # This creates an ExecutorStep that runs CORE_TASKS
@@ -69,7 +71,9 @@ from fray.cluster import ResourceConfig
 from experiments.evals.evals import default_key_evals
 from marin.execution.executor import executor_main
 
-# Point to your checkpoint or a training ExecutorStep
+# Point to your checkpoint or a training ExecutorStep.
+# Note: the `gcsfuse_mount/` segment is a historical bucket prefix; Marin no longer
+# requires a FUSE mount. vLLM can read directly from `gs://` paths (via streaming).
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
 
 # This returns a list of three ExecutorSteps:
