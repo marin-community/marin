@@ -57,7 +57,6 @@ def evaluate(config: EvaluationConfig) -> None:
 
     start_time: float = time.time()
     if config.launch_with_ray:
-        # Pass generation_kwargs only for Levanter evaluator
         if config.evaluator == "levanter_lm_evaluation_harness":
             evaluator.launch_evaluate_with_ray(
                 model,
@@ -66,7 +65,6 @@ def evaluate(config: EvaluationConfig) -> None:
                 max_eval_instances=config.max_eval_instances,
                 resource_config=config.resource_config,
                 wandb_tags=config.wandb_tags,
-                generation_kwargs=config.generation_params,
             )
         else:
             evaluator.launch_evaluate_with_ray(
@@ -79,7 +77,6 @@ def evaluate(config: EvaluationConfig) -> None:
                 generation_params=config.generation_params,
             )
     else:
-        # Pass generation_kwargs only for Levanter evaluator
         if config.evaluator == "levanter_lm_evaluation_harness":
             evaluator.evaluate(
                 model,
@@ -87,7 +84,6 @@ def evaluate(config: EvaluationConfig) -> None:
                 output_path=config.evaluation_path,
                 max_eval_instances=config.max_eval_instances,
                 wandb_tags=config.wandb_tags,
-                generation_kwargs=config.generation_params,
             )
         else:
             evaluator.evaluate(
@@ -96,6 +92,7 @@ def evaluate(config: EvaluationConfig) -> None:
                 output_path=config.evaluation_path,
                 max_eval_instances=config.max_eval_instances,
                 wandb_tags=config.wandb_tags,
+                generation_params=config.generation_params,
             )
 
     logger.info(f"Done (total time: {time.time() - start_time} seconds)")
