@@ -20,26 +20,30 @@ local execution follows the same code path as production cluster execution.
 """
 
 import base64
+import io
 import re
 import socket
 import tempfile
 import threading
 import time
 import uuid
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Self
 
 import cloudpickle
 
+from fluster.cluster.client.remote_client import RemoteClusterClient
 from fluster.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
-from fluster.cluster.types import Entrypoint, is_job_finished
+from fluster.cluster.types import Entrypoint
 from fluster.cluster.worker.builder import BuildResult
-from fluster.cluster.worker.docker import ContainerConfig, ContainerStats, ContainerStatus
+from fluster.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
 from fluster.cluster.worker.worker import Worker, WorkerConfig
 from fluster.cluster.worker.worker_types import LogLine
 from fluster.rpc import cluster_pb2
 from fluster.rpc.cluster_connect import ControllerServiceClientSync
-from fluster.time_utils import ExponentialBackoff
 
 
 def _find_free_port() -> int:
@@ -97,6 +101,9 @@ class _LocalContainer:
     def _execute(self):
         from fluster.cluster.client.job_info import JobInfo, _parse_ports_from_env, set_job_info
 
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+
         try:
             # Build JobInfo from container config env vars
             env = self.config.env
@@ -118,8 +125,9 @@ class _LocalContainer:
                 self._exit_code = 137
                 return
 
-            # Execute the function
-            fn(*args, **kwargs)
+            # Execute the function with captured output
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                fn(*args, **kwargs)
             self._exit_code = 0
 
         except Exception as e:
@@ -127,6 +135,20 @@ class _LocalContainer:
             self._exit_code = 1
         finally:
             self._running = False
+            self._capture_output(stdout_capture, "stdout")
+            self._capture_output(stderr_capture, "stderr")
+
+    def _capture_output(self, capture: io.StringIO, source: str) -> None:
+        """Capture output lines from StringIO buffer into logs."""
+        capture.seek(0)
+        for line in capture:
+            line = line.rstrip("\n")
+            if line:
+                self._logs.append(LogLine(
+                    timestamp=datetime.now(timezone.utc),
+                    source=source,
+                    data=line,
+                ))
 
     def _extract_entrypoint(self, script: str):
         """Extract pickled (fn, args, kwargs) from the thunk script."""
@@ -146,7 +168,7 @@ class _LocalContainer:
             self._exit_code = 137
 
 
-class _LocalContainerRuntime:
+class _LocalContainerRuntime(ContainerRuntime):
     """Container runtime that executes jobs in-process without Docker."""
 
     def __init__(self):
@@ -229,33 +251,43 @@ class LocalClusterClient:
 
     Provides the same execution path as production clusters while running
     entirely in-process without Docker or network dependencies.
+
+    Use the create() classmethod to instantiate:
+        client = LocalClusterClient.create()
+        # ... use client ...
+        client.shutdown()
     """
 
     def __init__(
         self,
+        temp_dir: tempfile.TemporaryDirectory,
+        controller: Controller,
+        worker: Worker,
+        remote_client: RemoteClusterClient,
+    ):
+        """Private constructor. Use create() instead."""
+        self._temp_dir = temp_dir
+        self._controller = controller
+        self._worker = worker
+        self._remote_client = remote_client
+
+    @classmethod
+    def create(
+        cls,
         max_workers: int = 4,
         port_range: tuple[int, int] = (50000, 60000),
-    ):
-        """Initialize local cluster client.
+    ) -> Self:
+        """Create and start a local cluster client.
 
         Args:
             max_workers: Maximum concurrent job threads
             port_range: Port range for actor servers (inclusive start, exclusive end)
+
+        Returns:
+            A fully initialized LocalClusterClient ready for use
         """
-        self._max_workers = max_workers
-        self._port_range = port_range
-
-        # Will be initialized in start()
-        self._temp_dir: tempfile.TemporaryDirectory | None = None
-        self._controller: Controller | None = None
-        self._worker: Worker | None = None
-        self._controller_client: ControllerServiceClientSync | None = None
-        self._controller_port: int = 0
-
-    def start(self) -> None:
-        """Start controller and worker."""
-        self._temp_dir = tempfile.TemporaryDirectory(prefix="fluster_local_")
-        temp_path = Path(self._temp_dir.name)
+        temp_dir = tempfile.TemporaryDirectory(prefix="fluster_local_")
+        temp_path = Path(temp_dir.name)
         bundle_dir = temp_path / "bundles"
         bundle_dir.mkdir()
         cache_path = temp_path / "cache"
@@ -267,23 +299,19 @@ class LocalClusterClient:
         (fake_bundle / "pyproject.toml").write_text("[project]\nname = 'local'\n")
 
         # Start Controller
-        self._controller_port = _find_free_port()
+        controller_port = _find_free_port()
         controller_config = ControllerConfig(
             host="127.0.0.1",
-            port=self._controller_port,
+            port=controller_port,
             bundle_dir=bundle_dir,
         )
-        self._controller = Controller(
+        controller = Controller(
             config=controller_config,
             worker_stub_factory=DefaultWorkerStubFactory(),
         )
-        self._controller.start()
+        controller.start()
 
-        # Create RPC client
-        self._controller_client = ControllerServiceClientSync(
-            address=f"http://127.0.0.1:{self._controller_port}",
-            timeout_ms=30000,
-        )
+        controller_address = f"http://127.0.0.1:{controller_port}"
 
         # Start Worker with local providers
         worker_port = _find_free_port()
@@ -291,13 +319,13 @@ class LocalClusterClient:
             host="127.0.0.1",
             port=worker_port,
             cache_dir=cache_path,
-            max_concurrent_jobs=self._max_workers,
-            controller_address=f"http://127.0.0.1:{self._controller_port}",
+            max_concurrent_jobs=max_workers,
+            controller_address=controller_address,
             worker_id=f"local-worker-{uuid.uuid4().hex[:8]}",
             poll_interval_seconds=0.1,  # Fast polling for local
-            port_range=self._port_range,
+            port_range=port_range,
         )
-        self._worker = Worker(
+        worker = Worker(
             worker_config,
             cache_dir=cache_path,
             bundle_provider=_LocalBundleProvider(fake_bundle),
@@ -305,38 +333,44 @@ class LocalClusterClient:
             container_runtime=_LocalContainerRuntime(),
             environment_provider=LocalEnvironmentProvider(cpu=1000, memory_gb=1000),
         )
-        self._worker.start()
+        worker.start()
 
-        # Wait for worker registration
-        self._wait_for_worker_registration()
+        # Wait for worker registration using a temporary RPC client
+        cls._wait_for_worker_registration(controller_address)
 
-    def _wait_for_worker_registration(self, timeout: float = 5.0) -> None:
+        # Create RemoteClusterClient for all subsequent operations
+        remote_client = RemoteClusterClient(
+            controller_address=controller_address,
+            timeout_ms=30000,
+        )
+
+        return cls(temp_dir, controller, worker, remote_client)
+
+    @staticmethod
+    def _wait_for_worker_registration(controller_address: str, timeout: float = 5.0) -> None:
         """Wait for worker to register with controller."""
-        if self._controller_client is None:
-            raise RuntimeError("Controller client not initialized")
-        start = time.monotonic()
-        while time.monotonic() - start < timeout:
-            response = self._controller_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
-            if response.workers:
-                return
-            time.sleep(0.1)
-        raise TimeoutError("Worker failed to register with controller")
+        temp_client = ControllerServiceClientSync(
+            address=controller_address,
+            timeout_ms=30000,
+        )
+        try:
+            start = time.monotonic()
+            while time.monotonic() - start < timeout:
+                response = temp_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
+                if response.workers:
+                    return
+                time.sleep(0.1)
+            raise TimeoutError("Worker failed to register with controller")
+        finally:
+            temp_client.close()
 
     def shutdown(self, wait: bool = True) -> None:
         """Stop controller and worker."""
         del wait  # always clean shutdown
-        if self._controller_client:
-            self._controller_client.close()
-            self._controller_client = None
-        if self._worker:
-            self._worker.stop()
-            self._worker = None
-        if self._controller:
-            self._controller.stop()
-            self._controller = None
-        if self._temp_dir:
-            self._temp_dir.cleanup()
-            self._temp_dir = None
+        self._remote_client.shutdown()
+        self._worker.stop()
+        self._controller.stop()
+        self._temp_dir.cleanup()
 
     def submit_job(
         self,
@@ -348,41 +382,18 @@ class LocalClusterClient:
         scheduling_timeout_seconds: int = 0,
     ) -> None:
         """Submit a job to the local cluster via RPC."""
-        if self._controller_client is None:
-            raise RuntimeError("LocalClusterClient not started. Call start() first.")
-
-        serialized = cloudpickle.dumps(entrypoint)
-
-        env_config = cluster_pb2.EnvironmentConfig(
-            workspace=environment.workspace if environment else "/app",
-            pip_packages=list(environment.pip_packages) if environment else [],
-            env_vars=dict(environment.env_vars) if environment else {},
-            extras=list(environment.extras) if environment else [],
-        )
-
-        # Determine parent job ID (all but last component)
-        parts = job_id.rsplit("/", 1)
-        parent_job_id = parts[0] if len(parts) > 1 else ""
-
-        request = cluster_pb2.Controller.LaunchJobRequest(
-            name=job_id,
-            serialized_entrypoint=serialized,
+        self._remote_client.submit_job(
+            job_id=job_id,
+            entrypoint=entrypoint,
             resources=resources,
-            environment=env_config,
-            bundle_blob=b"",  # No bundle needed for local execution
-            ports=ports or [],
-            parent_job_id=parent_job_id,
+            environment=environment,
+            ports=ports,
             scheduling_timeout_seconds=scheduling_timeout_seconds,
         )
-        self._controller_client.launch_job(request)
 
     def get_job_status(self, job_id: str) -> cluster_pb2.JobStatus:
         """Get job status via RPC."""
-        if self._controller_client is None:
-            raise RuntimeError("LocalClusterClient not started. Call start() first.")
-        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
-        response = self._controller_client.get_job_status(request)
-        return response.job
+        return self._remote_client.get_job_status(job_id)
 
     def wait_for_job(
         self,
@@ -391,28 +402,11 @@ class LocalClusterClient:
         poll_interval: float = 2.0,
     ) -> cluster_pb2.JobStatus:
         """Wait for job to complete with exponential backoff polling."""
-        start = time.monotonic()
-        backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
-
-        while True:
-            job_info = self.get_job_status(job_id)
-            if is_job_finished(job_info.state):
-                return job_info
-
-            elapsed = time.monotonic() - start
-            if elapsed >= timeout:
-                raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
-
-            interval = backoff.next_interval()
-            remaining = timeout - elapsed
-            time.sleep(min(interval, remaining))
+        return self._remote_client.wait_for_job(job_id, timeout=timeout, poll_interval=poll_interval)
 
     def terminate_job(self, job_id: str) -> None:
         """Terminate a running job via RPC."""
-        if self._controller_client is None:
-            raise RuntimeError("LocalClusterClient not started. Call start() first.")
-        request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
-        self._controller_client.terminate_job(request)
+        self._remote_client.terminate_job(job_id)
 
     def register_endpoint(
         self,
@@ -422,25 +416,26 @@ class LocalClusterClient:
         metadata: dict[str, str] | None = None,
     ) -> str:
         """Register an endpoint via RPC."""
-        if self._controller_client is None:
-            raise RuntimeError("LocalClusterClient not started. Call start() first.")
-        request = cluster_pb2.Controller.RegisterEndpointRequest(
-            name=name,
-            address=address,
-            job_id=job_id,
-            metadata=metadata or {},
-        )
-        response = self._controller_client.register_endpoint(request)
-        return response.endpoint_id
+        return self._remote_client.register_endpoint(name=name, address=address, job_id=job_id, metadata=metadata)
 
     def unregister_endpoint(self, endpoint_id: str) -> None:
         """Unregister an endpoint (no-op, controller auto-cleans on job termination)."""
-        del endpoint_id
+        self._remote_client.unregister_endpoint(endpoint_id)
 
     def list_endpoints(self, prefix: str) -> list[cluster_pb2.Controller.Endpoint]:
         """List endpoints matching a prefix via RPC."""
-        if self._controller_client is None:
-            raise RuntimeError("LocalClusterClient not started. Call start() first.")
-        request = cluster_pb2.Controller.ListEndpointsRequest(prefix=prefix)
-        response = self._controller_client.list_endpoints(request)
-        return list(response.endpoints)
+        return self._remote_client.list_endpoints(prefix)
+
+    def list_jobs(self) -> list[cluster_pb2.JobStatus]:
+        """List all jobs via RPC."""
+        return self._remote_client.list_jobs()
+
+    def fetch_logs(
+        self,
+        job_id: str,
+        *,
+        start_ms: int = 0,
+        max_lines: int = 0,
+    ) -> list[cluster_pb2.Worker.LogEntry]:
+        """Fetch logs for a job."""
+        return self._remote_client.fetch_logs(job_id, start_ms=start_ms, max_lines=max_lines)
