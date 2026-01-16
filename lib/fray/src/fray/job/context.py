@@ -100,6 +100,7 @@ class JobContext(Protocol):
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         preemptible: bool = True,
+        num_cpus: float | None = None,
         **kwargs,
     ) -> Any:
         """Create an actor (stateful service) within the execution context.
@@ -251,6 +252,7 @@ class SyncContext:
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         preemptible: bool = True,
+        num_cpus: float | None = None,
         **kwargs,
     ) -> ThreadActorHandle:
         if name is not None and name in self._actors:
@@ -345,6 +347,7 @@ class ThreadContext:
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         preemptible: bool = True,
+        num_cpus: float | None = None,
         **kwargs,
     ) -> ThreadActorHandle:
         with self._actors_lock:
@@ -410,6 +413,7 @@ class RayContext:
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         preemptible: bool = True,
+        num_cpus: float | None = None,
         **kwargs,
     ) -> ActorHandle:
         options = {}
@@ -421,6 +425,9 @@ class RayContext:
         # run non-preemptible actors on the head node for persistence
         if not preemptible:
             options["resources"] = {"head_node": 0.0001}
+
+        if num_cpus is not None:
+            options["num_cpus"] = num_cpus
 
         remote_class = ray.remote(actor_class)
         ray_actor = remote_class.options(**options).remote(*args, **kwargs)
