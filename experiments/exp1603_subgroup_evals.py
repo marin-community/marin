@@ -24,6 +24,10 @@ from experiments.isoflop_sweep import MARIN_SCALING_SUITES
 from experiments.models import ModelConfig, download_model_step
 from marin.execution.executor import executor_main, output_path_of, versioned
 from marin.evaluation.log_probs import default_lm_log_probs
+from marin.processing.tokenize import get_vocab_size_for_tokenizer
+
+# Vocab size for building model configs
+VOCAB_SIZE = get_vocab_size_for_tokenizer("stanford-crfm/marin-tokenizer")
 
 # This is painfully slow to run in dry run mode
 # nodryrun
@@ -40,8 +44,10 @@ def create_eval_steps() -> list:
 
     steps = []
     dist_eval = distributional_eval_sets(llama3_tokenizer)
-    for model, metadata in list(zip(*MARIN_SCALING_SUITES["nemotron"], strict=False)):
-        name = f"marin-nemo-{metadata[0]}C-{metadata[-3] * metadata[-2] * 4096}T-{metadata[1]}W-{metadata[2]}D"
+    for model, candidate in list(zip(*MARIN_SCALING_SUITES["nemotron"], strict=False)):
+        total_tokens = int(candidate.tokens)
+        params = candidate.model_config.total_trainable_params(VOCAB_SIZE)
+        name = f"marin-nemo-{candidate.flops_budget:.0e}C-{total_tokens}T-N{params:.0e}"
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
@@ -51,9 +57,10 @@ def create_eval_steps() -> list:
         )
         steps.append(step)
 
+        model_config = candidate.model_config
         logprobs_step = default_lm_log_probs(
             output_path_of(model).cd("checkpoints"),
-            metadata[-1],
+            model_config,
             dist_eval,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
             checkpoint_is_hf=False,
@@ -62,8 +69,10 @@ def create_eval_steps() -> list:
 
         steps.append(logprobs_step)
 
-    for model, metadata in list(zip(*MARIN_SCALING_SUITES["common_pile"], strict=False)):
-        name = f"marin-comma-{metadata[0]}C-{metadata[-3] * metadata[-2] * 4096}T-{metadata[1]}W-{metadata[2]}D"
+    for model, candidate in list(zip(*MARIN_SCALING_SUITES["common_pile"], strict=False)):
+        total_tokens = int(candidate.tokens)
+        params = candidate.model_config.total_trainable_params(VOCAB_SIZE)
+        name = f"marin-comma-{candidate.flops_budget:.0e}C-{total_tokens}T-N{params:.0e}"
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
@@ -73,9 +82,10 @@ def create_eval_steps() -> list:
         )
         steps.append(step)
 
+        model_config = candidate.model_config
         logprobs_step = default_lm_log_probs(
             output_path_of(model).cd("checkpoints"),
-            metadata[-1],
+            model_config,
             dist_eval,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
             checkpoint_is_hf=False,
@@ -84,8 +94,10 @@ def create_eval_steps() -> list:
 
         steps.append(logprobs_step)
 
-    for model, metadata in list(zip(*MARIN_SCALING_SUITES["dclm-default"], strict=False)):
-        name = f"marin-dclm-{metadata[0]}C-{metadata[-3] * metadata[-2] * 4096}T-{metadata[1]}W-{metadata[2]}D"
+    for model, candidate in list(zip(*MARIN_SCALING_SUITES["dclm-default"], strict=False)):
+        total_tokens = int(candidate.tokens)
+        params = candidate.model_config.total_trainable_params(VOCAB_SIZE)
+        name = f"marin-dclm-{candidate.flops_budget:.0e}C-{total_tokens}T-N{params:.0e}"
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
@@ -95,16 +107,17 @@ def create_eval_steps() -> list:
         )
         steps.append(step)
 
-    logprobs_step = default_lm_log_probs(
-        output_path_of(model).cd("checkpoints"),
-        metadata[-1],
-        dist_eval,
-        resource_config=ResourceConfig.with_tpu("v5p-8"),
-        checkpoint_is_hf=False,
-        name=versioned(f"{name}-DistRobust-ICE-logprobs"),
-    )
+        model_config = candidate.model_config
+        logprobs_step = default_lm_log_probs(
+            output_path_of(model).cd("checkpoints"),
+            model_config,
+            dist_eval,
+            resource_config=ResourceConfig.with_tpu("v5p-8"),
+            checkpoint_is_hf=False,
+            name=versioned(f"{name}-DistRobust-ICE-logprobs"),
+        )
 
-    steps.append(logprobs_step)
+        steps.append(logprobs_step)
 
     baselines = [
         ("allenai/OLMo-2-1124-7B", "stage2-ingredient3-step8000-tokens34B"),

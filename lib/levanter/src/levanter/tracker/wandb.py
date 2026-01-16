@@ -36,7 +36,7 @@ class WandbTracker(Tracker):
     name: str = "wandb"
     run: WandbRun
 
-    def __init__(self, run: Optional[WandbRun]):
+    def __init__(self, run: Optional[WandbRun], replicate_path: Optional[str] = None):
         import wandb
 
         if run is None:
@@ -52,6 +52,7 @@ class WandbTracker(Tracker):
             self.run = run
 
         self._last_warning_step = -500
+        self._replicate_path = replicate_path
 
     def log_hyperparameters(self, hparams: dict[str, Any]):
         self.run.config.update(_convert_value_to_loggable_rec(hparams), allow_val_change=True)
@@ -100,7 +101,27 @@ class WandbTracker(Tracker):
 
     def finish(self):
         logger.info("Finishing wandb run...")
+        self._write_replicate_file()
         self.run.finish()
+
+    def _write_replicate_file(self):
+        if self._replicate_path is None:
+            return
+
+        import json
+
+        import fsspec
+
+        metrics_file = f"{self._replicate_path}/tracker_metrics.jsonl"
+        fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
+        fs.makedirs(self._replicate_path, exist_ok=True)
+
+        with fs.open(metrics_file, "w") as f:
+            record = {
+                "config": _convert_value_to_loggable_rec(dict(self.run.config)),
+                "summary": _convert_value_to_loggable_rec(dict(self.run.summary)),
+            }
+            f.write(json.dumps(record, sort_keys=True, default=str) + "\n")
 
 
 def _convert_value_to_loggable_rec(value: Any):
@@ -113,6 +134,13 @@ def _convert_value_to_loggable_rec(value: Any):
             return value.item()
         else:
             return np.array(value)
+    elif isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return value.item()
+        else:
+            return value.tolist()
+    elif isinstance(value, np.generic):
+        return value.item()
     elif isinstance(value, Histogram):
         import wandb
 
@@ -159,6 +187,9 @@ class WandbConfig(TrackerConfig):
 
     save_xla_dumps: bool = False
     """If True, will save the XLA code to wandb (as configured by XLA_FLAGS). This is useful for debugging."""
+
+    replicate_path: Optional[str] = None
+    """If set, write config and summary to this path (local or GCS) on finish()."""
 
     def init(self, run_id: Optional[str]) -> WandbTracker:
         import wandb
@@ -240,7 +271,7 @@ class WandbConfig(TrackerConfig):
         wandb.summary["num_hosts"] = jax.process_count()  # type: ignore
         wandb.summary["backend"] = jax.default_backend()  # type: ignore
 
-        return WandbTracker(r)
+        return WandbTracker(r, replicate_path=self.replicate_path)
 
     def _git_settings(self):
         other_settings = dict()
