@@ -1,0 +1,89 @@
+// Copyright 2025 The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package iris.actor;
+
+option py_generic_services = true;
+
+// ============ Actor RPC ============
+// This is the protocol for calling actor methods.
+// Actors register via the cluster's endpoint registry.
+
+message ActorCall {
+  string method_name = 1;
+  string actor_name = 2;        // Which actor on this server
+  bytes serialized_args = 3;    // cloudpickle(args)
+  bytes serialized_kwargs = 4;  // cloudpickle(kwargs)
+}
+
+message ActorResponse {
+  oneof result {
+    bytes serialized_value = 1;  // cloudpickle(return_value)
+    ActorError error = 2;
+  }
+}
+
+message ActorError {
+  string error_type = 1;
+  string message = 2;
+  bytes serialized_exception = 3;  // cloudpickle(exception) for re-raise
+}
+
+message Empty {}
+
+message HealthResponse {
+  bool healthy = 1;
+}
+
+// ============ Introspection ============
+// Methods for debugging and discovering actors
+
+message ListMethodsRequest {
+  string actor_name = 1;
+}
+
+message MethodInfo {
+  string name = 1;
+  string signature = 2;
+  string docstring = 3;
+}
+
+message ListMethodsResponse {
+  repeated MethodInfo methods = 1;
+}
+
+message ListActorsRequest {}
+
+message ActorInfo {
+  string name = 1;
+  string actor_id = 2;
+  int64 registered_at_ms = 3;
+  map<string, string> metadata = 4;
+}
+
+message ListActorsResponse {
+  repeated ActorInfo actors = 1;
+}
+
+// ============ Actor Service ============
+// Each ActorServer exposes this service
+
+service ActorService {
+  rpc Call(ActorCall) returns (ActorResponse);
+  rpc HealthCheck(Empty) returns (HealthResponse);
+  rpc ListMethods(ListMethodsRequest) returns (ListMethodsResponse);
+  rpc ListActors(ListActorsRequest) returns (ListActorsResponse);
+}

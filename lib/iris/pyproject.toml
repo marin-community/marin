@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "iris"
+version = "0.1.0"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "cloudpickle>=3.1.2",
+    "connect-python @ git+https://github.com/connectrpc/connect-python.git@5342eacecef85e52717604ee5ac7e03a1e16c7ac",
+    "fsspec>=2024.0.0",
+    "httpx>=0.28.1",
+    "humanfriendly>=10.0",
+    "pydantic>=2.12.5",
+    "starlette>=0.50.0",
+    "typing-extensions>=4.0",
+    "uvicorn[standard]>=0.23.0",
+]
+
+[dependency-groups]
+demo = [
+    "click>=8.3.1",
+    "ipykernel>=7.1.0",
+    "jupyter>=1.1.1",
+    "nbconvert>=7.16.6",
+]
+dev = [
+    "pytest>=8.3.2",
+    "pytest-asyncio",
+    "pytest-timeout",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/iris"]
+
+[tool.pytest.ini_options]
+timeout = 30
+addopts = "--durations=10"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "docker: marks tests that use real Docker (run with --use-docker)",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
+log_level = "INFO"
+log_format = "%(asctime)s %(levelname)s %(message)s"
+log_date_format = "%Y-%m-%d %H:%M:%S"
+log_cli_level = "INFO"
