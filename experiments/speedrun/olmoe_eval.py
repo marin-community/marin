@@ -14,47 +14,24 @@
 
 """Evaluate a (HF-exported) checkpoint on a TPU slice via the executor.
 
-This is intentionally lightweight: provide a `--model-path` pointing at an HF export directory
-(e.g. `gs://.../hf/step-60000/`) and it will run a default evaluation suite.
+We generally prefer to keep these small driver scripts configured in Python (constants below)
+rather than adding custom CLI flags on top of `executor_main`.
 """
-
-import argparse
-import sys
 
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 
-
-def _parse_args():
-    parser = argparse.ArgumentParser(description="Run a small evaluation suite on an HF-exported checkpoint.")
-    parser.add_argument(
-        "--model-path",
-        default="gs://marin-us-central1/checkpoints/example/hf/step-0/",
-        help='HF export directory, e.g. "gs://.../hf/step-60000/".',
-    )
-    parser.add_argument(
-        "--tpu-type",
-        default="v5p-64",
-        help='TPU type for `ResourceConfig.with_tpu` (default: "v5p-64").',
-    )
-    parser.add_argument(
-        "--slice-count",
-        type=int,
-        default=1,
-        help="Number of TPU slices (default: 1).",
-    )
-    return parser.parse_known_args()
+MODEL_PATH = "gs://marin-us-central1/checkpoints/example/hf/step-0/"
+TPU_TYPE = "v5p-64"
+SLICE_COUNT = 1
 
 
 if __name__ == "__main__":
-    args, remaining = _parse_args()
-    sys.argv = [sys.argv[0], *remaining]
-
     eval_step = default_eval(
-        args.model_path,
-        ResourceConfig.with_tpu(args.tpu_type, slice_count=args.slice_count),
-        evals=CORE_TASKS_PLUS_MMLU,
+        MODEL_PATH,
+        ResourceConfig.with_tpu(TPU_TYPE, slice_count=SLICE_COUNT),
+        evals=list(CORE_TASKS_PLUS_MMLU),
     )
-    executor_main([eval_step])
+    executor_main(steps=[eval_step])

@@ -54,7 +54,6 @@ class MixtralMoEMlpGMM(MixtralMoEMlp):
         *,
         key,
         use_bias=False,
-        use_gmm=True,  # Force GMM
     ):
         """Initialize MoE MLP with GMM enabled"""
         k1, k2, k3 = jrandom.split(key, 3)
@@ -85,7 +84,6 @@ class MixtralSparseMoeBlockGMM(MixtralSparseMoeBlock):
             activation_fn=config.activation_function,
             key=k_experts,
             use_bias=config.use_bias,
-            use_gmm=True,  # Force GMM
         )
 
         return MixtralSparseMoeBlockGMM(config, gate, experts)
@@ -218,6 +216,4 @@ speedrun_config = SpeedrunConfig(
 if __name__ == "__main__":
     # Add logging to confirm GMM is being used
     logger.info("Running Mixtral with GMM-enabled MoE layers")
-    logger.info(f"Model type: {moe_300m_config.model_type}")
-
-    executor_main(steps=default_speedrun("pranshu_mixtral_300m_gmm_run", speedrun_config))
+    executor_main(steps=default_speedrun("pranshu_mixtral_moe_gmm_v4_8", speedrun_config))

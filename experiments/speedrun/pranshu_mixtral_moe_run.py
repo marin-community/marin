@@ -46,12 +46,12 @@ speedrun_config = SpeedrunConfig(
         affiliation="Stanford University",
         url="https://stanford.edu/~pranshu",
     ),
-    description="Training a ~300M parameter Mixtral-style MoE model on a TPU (ragged dot MoE).",
+    description="Training a 300M parameter Mixtral-style MoE model on TPU v4-8 with ragged-dot experts.",
     model_config=moe_300m_config,
     train_config=SimpleTrainConfig(
-        ResourceConfig.with_tpu("v5p-8", slice_count=1),
+        ResourceConfig.with_tpu("v4-8", slice_count=1),
         train_batch_size=TRAIN_BATCH_SIZE,
-        num_train_steps=6000,
+        num_train_steps=4000,
         learning_rate=5e-4,
         weight_decay=0.1,
         steps_per_eval=1000,
@@ -59,9 +59,4 @@ speedrun_config = SpeedrunConfig(
 )
 
 if __name__ == "__main__":
-    executor_main(
-        steps=default_speedrun(
-            f"pranshu_mixtral_300m_run_central1_fresh_bs{TRAIN_BATCH_SIZE}",
-            speedrun_config,
-        )
-    )
+    executor_main(steps=default_speedrun("pranshu_mixtral_moe_ragged_v4_8", speedrun_config))

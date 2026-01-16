@@ -38,15 +38,14 @@ speedrun_config = SpeedrunConfig(
     model_config=llama_75m_tpu_v4_8,
     train_config=SimpleTrainConfig(
         ResourceConfig.with_tpu("v4-8", slice_count=1),
-        train_batch_size=512,
-        num_train_steps=3000,
-        learning_rate=3e-4,
+        train_batch_size=256,
+        num_train_steps=4000,
+        learning_rate=5e-4,
         weight_decay=0.1,
         steps_per_eval=1000,
     ),
 )
 
-speedrun_config.print_run_info()
-
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("pranshu_llama_75m_speedrun", speedrun_config))
+    logger.info("Launching Llama 75M speedrun on TPU v4-8.")
+    executor_main(steps=default_speedrun("pranshu_llama_75m_speedrun_v4_8", speedrun_config))

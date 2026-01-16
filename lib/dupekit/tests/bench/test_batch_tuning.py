@@ -13,20 +13,9 @@
 # limitations under the License.
 
 import pytest
-import pyarrow.parquet as pq
 import pyarrow as pa
 from typing import Any
 import dupekit
-
-
-@pytest.fixture(scope="module")
-def in_memory_table(parquet_file: str) -> pa.Table:
-    """
-    Loads 100k rows into memory.
-    """
-    pf = pq.ParquetFile(parquet_file)
-    first_batch = next(pf.iter_batches(batch_size=100_000))
-    return pa.Table.from_batches([first_batch])
 
 
 @pytest.mark.parametrize("batch_size", [1, 128, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072])
