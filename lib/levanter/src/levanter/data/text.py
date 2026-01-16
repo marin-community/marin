@@ -491,10 +491,14 @@ class DNABatchTokenizer(BaseBatchTokenizer):
     - Uppercase (ACGT): weight = 1.0
     - Lowercase (acgt): weight = soft_mask_weight
 
+    No special tokens are added to the sequences.
+
     Assumptions:
     - Character-level tokenizer (1:1 character-to-token mapping)
     - All sequences have the same length (no padding/truncation)
-    - Model context size matches sequence length (see experiment configs)
+    - Model context size matches sequence length (see experiment configs).
+      This is important to avoid concatenation of sequences which does not make sense
+      without special tokens.
     """
 
     def __init__(
@@ -509,18 +513,33 @@ class DNABatchTokenizer(BaseBatchTokenizer):
         self.soft_mask_weight = soft_mask_weight
 
     def __call__(self, batch: Sequence[dict]) -> list[dict]:
-        results = []
-        for example in batch:
-            text = example[self.text_field]
-            loss_weight = [1.0 if c.isupper() else self.soft_mask_weight for c in text]
-            encoding = self.tokenizer(text, return_attention_mask=False, verbose=False)
-            results.append(
-                {
-                    "input_ids": np.array(encoding["input_ids"], dtype=np.int32),
-                    "loss_weight": np.array(loss_weight, dtype=np.float32),
-                }
-            )
-        return results
+        texts = [example[self.text_field] for example in batch]
+
+        assert len(set(len(t) for t in texts)) == 1, "All sequences must have the same length"
+
+        encodings = self.tokenizer(
+            texts,
+            # important so input ids are aligned with loss weights
+            add_special_tokens=False,
+            return_attention_mask=False,
+            return_token_type_ids=False,
+            return_special_tokens_mask=False,
+            return_tensors="np",
+            verbose=False,
+        )
+
+        char_arrays = np.array([list(t) for t in texts], dtype="U1")
+        is_upper = np.char.isupper(char_arrays)
+        loss_weights = np.where(is_upper, 1.0, self.soft_mask_weight).astype(np.float32)
+
+        input_ids = encodings["input_ids"].astype(np.int32)
+
+        assert input_ids.shape == loss_weights.shape, (
+            f"Token count ({input_ids.shape[1]}) != char count ({loss_weights.shape[1]}). "
+            "Tokenizer must be character-level."
+        )
+
+        return [{"input_ids": ids, "loss_weight": weights} for ids, weights in zip(input_ids, loss_weights)]
 
     @property
     def output_exemplar(self) -> dict:
