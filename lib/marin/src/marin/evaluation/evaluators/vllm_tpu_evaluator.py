@@ -124,6 +124,8 @@ class VllmTpuEvaluator(Evaluator, ABC):
         resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        wandb_name: str | None = None,
+        wandb_group: str | None = None,
     ) -> None:
         """
         Launches the evaluation run with Fray.
@@ -135,15 +137,17 @@ class VllmTpuEvaluator(Evaluator, ABC):
             output_path: str,
             max_eval_instances: int | None = None,
             wandb_tags: list[str] | None = None,
+            wandb_name: str | None = None,
+            wandb_group: str | None = None,
         ) -> None:
             import logging
 
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
+            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags, wandb_name, wandb_group)
 
         def _run():
             with remove_tpu_lockfile_on_exit():
-                launch(model, evals, output_path, max_eval_instances, wandb_tags)
+                launch(model, evals, output_path, max_eval_instances, wandb_tags, wandb_name, wandb_group)
 
         if resource_config is None:
             resource_config = ResourceConfig()

@@ -55,6 +55,8 @@ def evaluate_lm_evaluation_harness(
     resource_config: ResourceConfig | None = None,
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
+    wandb_name: str | None = None,
+    wandb_group: str | None = None,
     discover_latest_checkpoint: bool = True,
 ) -> ExecutorStep:
     """
@@ -81,6 +83,8 @@ def evaluate_lm_evaluation_harness(
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
             wandb_tags=wandb_tags,
+            wandb_name=wandb_name,
+            wandb_group=wandb_group,
         ),
     )
 
@@ -136,6 +140,8 @@ def evaluate_levanter_lm_evaluation_harness(
     resource_config: ResourceConfig,
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
+    wandb_name: str | None = None,
+    wandb_group: str | None = None,
     discover_latest_checkpoint: bool = True,
 ) -> ExecutorStep:
     """
@@ -155,6 +161,8 @@ def evaluate_levanter_lm_evaluation_harness(
             max_eval_instances=versioned(max_eval_instances),
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
+            wandb_name=wandb_name,
+            wandb_group=wandb_group,
         ),
     )
 
@@ -165,6 +173,8 @@ def default_eval(
     evals: list[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
+    wandb_name: str | None = None,
+    wandb_group: str | None = None,
     discover_latest_checkpoint: bool = True,
 ) -> ExecutorStep:
     """
@@ -194,6 +204,8 @@ def default_eval(
         resource_config,
         max_eval_instances=max_eval_instances,
         apply_chat_template=apply_chat_template,
+        wandb_name=wandb_name,
+        wandb_group=wandb_group,
         discover_latest_checkpoint=discover_latest_checkpoint,
     )
 

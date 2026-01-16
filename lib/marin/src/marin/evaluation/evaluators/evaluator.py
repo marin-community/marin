@@ -101,6 +101,8 @@ class Evaluator(ABC):
         resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        wandb_name: str | None = None,
+        wandb_group: str | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -112,6 +114,8 @@ class Evaluator(ABC):
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
             step (ExecutorStep | None): The step to evaluate. Used to get the config for the model and the trainer.
             wandb_tags (list[str] | None): The tags to add to the wandb run.
+            wandb_name (str | None): Optional W&B run name override.
+            wandb_group (str | None): Optional W&B group for organizing runs.
         """
         pass
 
@@ -123,6 +127,8 @@ class Evaluator(ABC):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        wandb_name: str | None = None,
+        wandb_group: str | None = None,
     ) -> None:
         """What to run to evaluate."""
         pass

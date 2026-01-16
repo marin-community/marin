@@ -78,6 +78,8 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        wandb_name: str | None = None,
+        wandb_group: str | None = None,
     ) -> None:
         """
         Launches the evaluation run with Fray.
@@ -85,7 +87,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
 
         def _run():
             with remove_tpu_lockfile_on_exit():
-                self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
+                self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags, wandb_name, wandb_group)
 
         job_request = JobRequest(
             name="levanter-tpu-eval",

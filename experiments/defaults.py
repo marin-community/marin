@@ -254,6 +254,8 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    wandb_name: str | None = None,
+    wandb_group: str | None = None,
     override_output_path: str | None = None,
 ) -> ExecutorStep:
     """
@@ -267,6 +269,8 @@ def default_train(
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
+        wandb_name: Optional W&B display name for this run. Defaults to the (possibly truncated) executor step name.
+        wandb_group: Optional W&B group to organize related runs (e.g., a sweep).
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -290,6 +294,20 @@ def default_train(
             else:
                 name = prefix[: 63 - len(suffix)] + "-" + suffix
         logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
+
+    wandb_run_name = wandb_name or name
+    if len(wandb_run_name) > 64:
+        old_wandb_name = wandb_run_name
+        if "-" not in wandb_run_name:
+            wandb_run_name = wandb_run_name[:64]
+        else:
+            prefix, suffix = wandb_run_name.rsplit("-", 1)
+            if len(suffix) >= 64:
+                suffix = suffix[:64]
+                wandb_run_name = suffix
+            else:
+                wandb_run_name = prefix[: 63 - len(suffix)] + "-" + suffix
+        logger.warning(f"Truncated wandb_name from {old_wandb_name} to {wandb_run_name} to fit within WANDB limits.")
 
     if eval_harness_tasks:
         harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
@@ -334,7 +352,9 @@ def default_train(
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project="marin",
+                name=wandb_run_name,
                 tags=[*tags],
+                group=wandb_group,
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,

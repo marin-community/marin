@@ -20,22 +20,24 @@ import argparse
 import dataclasses
 import itertools
 import math
+import os
 from collections.abc import Iterable
 
 from experiments.speedrun.olmoe_1b7b_nemotron_40b import (
+    COMPOSITE_TOKEN_TARGET,
     DATASET_OPTIONS,
     DEFAULT_DATASET,
+    DEFAULT_TOKEN_TARGET,
     DEFAULT_MODEL,
     DEFAULT_PROFILER_NUM_STEPS,
     DEFAULT_PROFILER_START_STEP,
     MODEL_OPTIONS,
     SEQ_LEN,
-    TOKEN_TARGET,
     TPU_TYPE,
     nemotron_only_speedrun,
     make_speedrun_config,
 )
-from marin.execution.executor import executor_main
+from marin.execution.executor import ExecutorMainConfig, executor_main
 
 DEFAULT_GLOBAL_BATCH_SIZE = 128
 DEFAULT_LEARNING_RATES = (1e-4, 2e-4, 3e-4)
@@ -96,8 +98,37 @@ def main():
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--profile-start-step", type=int, default=DEFAULT_PROFILER_START_STEP)
     parser.add_argument("--profile-num-steps", type=int, default=DEFAULT_PROFILER_NUM_STEPS)
+    parser.add_argument(
+        "--eval-suite",
+        choices=("none", "core", "core_plus_mmlu", "core_plus_leaderboard"),
+        default="none",
+        help="Eval-harness suite name (applies to every sweep run).",
+    )
+    parser.add_argument(
+        "--eval-suite-mode",
+        choices=("post_train", "during_train", "both"),
+        default="post_train",
+        help="When to run eval-harness: post_train (default), during_train, or both.",
+    )
+    parser.add_argument(
+        "--eval-tpu-type",
+        default=None,
+        help="Optional TPU type for post-train eval steps (default: same as --tpu-type).",
+    )
+    parser.add_argument(
+        "--max-eval-instances",
+        type=int,
+        default=None,
+        help="Optional cap on max eval instances per task (post-train eval only).",
+    )
     parser.add_argument("--append-ici-ag-pipelining-flags", action="store_true")
     parser.add_argument("--append-async-collective-permute-flag", action="store_true")
+    # Executor controls (so this script can be run under other wrappers like ray_run without draccus CLI conflicts).
+    parser.add_argument("--prefix", default=os.getenv("MARIN_PREFIX"))
+    parser.add_argument("--executor-info-base-path", default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force-run-failed", action="store_true")
+    parser.add_argument("--run-only", nargs="*", default=None)
     args = parser.parse_args()
 
     learning_rates = _float_list(args.learning_rates)
@@ -108,7 +139,8 @@ def main():
     if args.num_train_steps is not None:
         num_steps = args.num_train_steps
     else:
-        num_steps = math.ceil(TOKEN_TARGET / (batch * seq_len))
+        token_target = COMPOSITE_TOKEN_TARGET if args.dataset == "nemotron_dclm_fineweb_10b" else DEFAULT_TOKEN_TARGET
+        num_steps = math.ceil(token_target / (batch * seq_len))
 
     for lr, beta2 in itertools.product(learning_rates, beta2_values):
         config = build_variant_config(
@@ -125,14 +157,24 @@ def main():
             profiler_num_steps=args.profile_num_steps,
         )
         suffix = f"{args.model}_nemotron40b_{args.tpu_type}_bs{batch}_seq{seq_len}_lr{lr:.0e}_beta2-{beta2}"
-        executor_main(
-            steps=nemotron_only_speedrun(
-                suffix,
-                config,
-                append_ici_ag_pipelining_flags=args.append_ici_ag_pipelining_flags,
-                append_async_collective_permute_flag=args.append_async_collective_permute_flag,
-            )
+        steps = nemotron_only_speedrun(
+            suffix,
+            config,
+            append_ici_ag_pipelining_flags=args.append_ici_ag_pipelining_flags,
+            append_async_collective_permute_flag=args.append_async_collective_permute_flag,
+            eval_suite=args.eval_suite,
+            eval_suite_mode=args.eval_suite_mode,
+            eval_tpu_type=args.eval_tpu_type,
+            max_eval_instances=args.max_eval_instances,
         )
+        executor_cfg = ExecutorMainConfig(
+            prefix=args.prefix,
+            executor_info_base_path=args.executor_info_base_path,
+            dry_run=args.dry_run,
+            force_run_failed=args.force_run_failed,
+            run_only=args.run_only,
+        )
+        executor_main.__wrapped__(executor_cfg, steps=steps)
 
 
 if __name__ == "__main__":

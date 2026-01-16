@@ -13,23 +13,56 @@
 # limitations under the License.
 
 # nodryrun
+"""Nemotron speedrun launcher for several model presets.
+
+Notable presets:
+- `olmoe_1b7b`: OLMoE-style 1B/7B MoE geometry (64 experts, 8 routed/token).
+- `olmoe_1b7b_bilinear`: same geometry, but with *bilinear* expert MLPs
+  (SwiGLU -> (W1 x) * (W3 x)) via `activation_function=linear`.
+- `llama_1_4b_bilinear`: same idea for a dense Llama 1.4B.
+
+Evaluation options:
+- `--eval-suite ...` selects which eval-harness task suite to run.
+- `--eval-suite-mode ...` chooses whether to run it during training, after training, or both.
+"""
+
 import argparse
 import dataclasses
+import json
 import logging
 import math
 import os
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 
+import fsspec
+import jmp
 from experiments.defaults import default_train
+from experiments.evals.evals import default_eval
+from experiments.evals.task_configs import (
+    CORE_TASKS,
+    CORE_TASKS_PLUS_LEADERBOARD,
+    CORE_TASKS_PLUS_MMLU,
+    convert_to_levanter_task_config,
+)
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
+from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
-from experiments.llama import llama3_tokenizer
+from experiments.llama import llama3_tokenizer, llama_1_4b
+from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
+from levanter.checkpoint import discover_latest_checkpoint
+from levanter.eval_harness import EvalHarnessMainConfig, LmEvalHarnessConfig, run_eval_harness_main
+from levanter.distributed import RayConfig
+from levanter.tracker.wandb import WandbConfig
+from levanter.trainer import TrainerConfig
+from levanter.utils.activation import ActivationFunctionEnum
 from levanter.infra.cli_helpers import load_config
 from marin.execution.executor import ExecutorStep, InputName, executor_main, output_path_of
+from marin.processing.tokenize.download_pretokenized import download_pretokenized_cache
 from marin.processing.tokenize import lm_data_config, lm_mixture_data_config
 from marin.speedrun.speedrun import Author, SpeedrunConfig, SpeedrunResultsConfig, speedrun_results
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
@@ -41,8 +74,8 @@ logger = logging.getLogger("ray")
 # ---------------------------------------------------------------------------
 SEQ_LEN = 2048
 DEFAULT_GLOBAL_BATCH_SIZE = 64
-TOKEN_TARGET = 40_000_000_000  # 40B tokens
-NUM_TRAIN_STEPS = math.ceil(TOKEN_TARGET / (DEFAULT_GLOBAL_BATCH_SIZE * SEQ_LEN))
+DEFAULT_TOKEN_TARGET = 40_000_000_000  # 40B tokens
+COMPOSITE_TOKEN_TARGET = 100_000_000_000  # 100B tokens
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.1
 STEPS_PER_EVAL = 5000
@@ -52,11 +85,82 @@ DEFAULT_PROFILER_START_STEP = 3
 DEFAULT_PROFILER_NUM_STEPS = 20
 
 MODEL_OLMOE_1B7B = "olmoe_1b7b"
+MODEL_OLMOE_1B7B_BILINEAR = "olmoe_1b7b_bilinear"
 MODEL_MIXTRAL_8X7B = "mixtral_8x7b"
-MODEL_OPTIONS = (MODEL_OLMOE_1B7B, MODEL_MIXTRAL_8X7B)
+MODEL_LLAMA_1_4B = "llama_1_4b"
+MODEL_LLAMA_1_4B_BILINEAR = "llama_1_4b_bilinear"
+MODEL_OPTIONS = (
+    MODEL_OLMOE_1B7B,
+    MODEL_OLMOE_1B7B_BILINEAR,
+    MODEL_MIXTRAL_8X7B,
+    MODEL_LLAMA_1_4B,
+    MODEL_LLAMA_1_4B_BILINEAR,
+)
 DEFAULT_MODEL = MODEL_OLMOE_1B7B
 
 OLMOE_1B7B_REFERENCE_CHECKPOINT = "allenai/OLMoE-1B-7B-0125"
+
+_EVAL_SUITES: dict[str, tuple | None] = {
+    "none": None,
+    "core": CORE_TASKS,
+    "core_plus_mmlu": CORE_TASKS_PLUS_MMLU,
+    "core_plus_leaderboard": CORE_TASKS_PLUS_LEADERBOARD,
+}
+
+
+@dataclass(frozen=True)
+class LevanterEvalHarnessStepConfig:
+    """Config for running Levanter's eval harness on a Levanter (non-HF) checkpoint."""
+
+    model_name: str
+    model_config: object
+    tokenizer: str
+    checkpoint_root: str
+    evals: tuple
+    max_eval_instances: int | None
+    output_path: str
+    apply_chat_template: bool = False
+    wandb_group: str | None = None
+
+
+def run_levanter_checkpoint_eval_harness(config: LevanterEvalHarnessStepConfig) -> None:
+    checkpoint_path = discover_latest_checkpoint(config.checkpoint_root)
+    if checkpoint_path is None:
+        raise ValueError(f"No checkpoints found under {config.checkpoint_root}")
+
+    trainer_config = TrainerConfig(
+        tracker=WandbConfig(project="marin", tags=["eval_harness"], name=config.model_name, group=config.wandb_group),
+        mp=jmp.get_policy("p=f32,c=bfloat16"),
+        per_device_eval_parallelism=1,
+        ray=RayConfig(auto_start_cluster=False),
+    )
+
+    eval_config = EvalHarnessMainConfig(
+        eval_harness=LmEvalHarnessConfig(
+            task_spec=convert_to_levanter_task_config(config.evals),
+            max_examples=config.max_eval_instances,
+            log_samples=False,
+            confirm_run_unsafe_code=True,
+        ),
+        tokenizer=config.tokenizer,
+        checkpoint_path=checkpoint_path,
+        checkpoint_is_hf=False,
+        apply_chat_template=config.apply_chat_template,
+        trainer=trainer_config,
+        model=config.model_config,  # type: ignore[arg-type]
+    )
+
+    results = run_eval_harness_main(eval_config)
+
+    fs = fsspec.filesystem("gcs") if config.output_path.startswith("gs://") else fsspec.filesystem("file")
+    output_path = config.output_path.rstrip("/") + "/results.json"
+    with fs.open(output_path, "w") as f:
+        json.dump(results, f, indent=2, default=str)
+
+
+def _supports_hf_export(model_config: object) -> bool:
+    activation = getattr(model_config, "activation_function", None)
+    return activation != ActivationFunctionEnum.linear
 
 
 def _build_olmoe_1b7b_config(seq_len: int) -> MixtralConfig:
@@ -103,11 +207,21 @@ def _build_mixtral_8x7b_config(seq_len: int) -> MixtralConfig:
     )
 
 
-def build_model_config(*, model: str, seq_len: int) -> MixtralConfig:
+def build_model_config(*, model: str, seq_len: int):
     if model == MODEL_OLMOE_1B7B:
         return _build_olmoe_1b7b_config(seq_len)
+    if model == MODEL_OLMOE_1B7B_BILINEAR:
+        # Bilinear expert MLP variant: remove the gate nonlinearity (SwiGLU -> (W1 x) * (W3 x)).
+        # Note: HF export isn't supported for this activation, so HF exports/evals are disabled by default.
+        return dataclasses.replace(_build_olmoe_1b7b_config(seq_len), activation_function=ActivationFunctionEnum.linear)
     if model == MODEL_MIXTRAL_8X7B:
         return _build_mixtral_8x7b_config(seq_len)
+    if model == MODEL_LLAMA_1_4B:
+        return dataclasses.replace(llama_1_4b, max_seq_len=seq_len)
+    if model == MODEL_LLAMA_1_4B_BILINEAR:
+        # Bilinear MLP variant: remove the gate nonlinearity (SwiGLU -> (W1 x) * (W3 x)).
+        # Note: HF export isn't supported for this activation, so we disable exports below.
+        return dataclasses.replace(llama_1_4b, max_seq_len=seq_len, activation_function=ActivationFunctionEnum.linear)
     raise ValueError(f"Unknown model preset {model!r}. Options: {MODEL_OPTIONS}.")
 
 
@@ -118,9 +232,49 @@ nemotron_cc_mixture = lm_mixture_data_config(
     permutation_type="linear",
 )
 
+fineweb_edu_subcache_10B_llama3 = download_pretokenized_cache(
+    "fineweb-edu-10B-llama3",
+    "marin-community/fineweb-edu-pretokenized-10B",
+    llama3_tokenizer,
+)
+
+
+def _normalize_weights(weights: dict[str, float]) -> dict[str, float]:
+    total = sum(weights.values())
+    if total <= 0:
+        raise ValueError("Weights must sum to a positive value.")
+    return {k: v / total for k, v in weights.items()}
+
+
+# Composite mixture ratios (approx token targets):
+# - Nemotron-CC: 40B tokens  -> 0.4
+# - FineWeb-Edu: 10B tokens  -> 0.1
+# - DCLM mix:    50B tokens  -> 0.5
+_NEMOTRON_SHARE = 0.4
+_FINEWEB_SHARE = 0.1
+_DCLM_SHARE = 0.5
+
+nemotron_dclm_fineweb_components = {
+    **nemotron_cc_steps,
+    **dclm_components_llama3,
+    "fineweb_edu_10b": fineweb_edu_subcache_10B_llama3,
+}
+nemotron_dclm_fineweb_weights = {
+    **{k: v * _NEMOTRON_SHARE for k, v in _normalize_weights(NEMOTRON_WEIGHTS).items()},
+    **{k: v * _DCLM_SHARE for k, v in _normalize_weights(DCLM_MIXTURE_WEIGHTS).items()},
+    "fineweb_edu_10b": _FINEWEB_SHARE,
+}
+nemotron_dclm_fineweb_mixture = lm_mixture_data_config(
+    components=nemotron_dclm_fineweb_components,
+    weights=nemotron_dclm_fineweb_weights,
+    permutation_type="linear",
+)
+
 DATASET_OPTIONS = {
     "nemotron_cc": nemotron_cc_mixture,
     "dclm": dclm_mixture_config_llama3,
+    "fineweb_edu_10b": fineweb_edu_subcache_10B,
+    "nemotron_dclm_fineweb_10b": nemotron_dclm_fineweb_mixture,
 }
 DEFAULT_DATASET = "nemotron_cc"
 
@@ -133,11 +287,20 @@ def nemotron_only_speedrun(
     *,
     append_ici_ag_pipelining_flags: bool = False,
     append_async_collective_permute_flag: bool = False,
+    wandb_name: str | None = None,
+    wandb_group: str | None = None,
+    eval_suite: str = "none",
+    eval_suite_mode: str = "post_train",
+    eval_tpu_type: str | None = None,
+    max_eval_instances: int | None = None,
 ) -> Sequence[ExecutorStep]:
     """Clone of default_speedrun that skips Paloma validation datasets."""
 
     logger.info(f"Running nemotron-only speedrun {name}")
     config.print_run_info()
+
+    if eval_suite_mode not in ("post_train", "during_train", "both"):
+        raise ValueError("eval_suite_mode must be one of: post_train, during_train, both")
 
     run_tags = ["speedrun"] + (tags or [])
     train_config = dataclasses.replace(config.train_config, data_seed=42)
@@ -145,11 +308,21 @@ def nemotron_only_speedrun(
     if isinstance(config.tokenized_dataset, (InputName, ExecutorStep)):
         pretraining_data = lm_data_config(
             training_set=config.tokenized_dataset,
-            validation_sets=[],
+            validation_sets=None,
             permutation_type="linear",
         )
     else:
         pretraining_data = config.tokenized_dataset
+
+    suite_evals = None
+    if eval_suite != "none":
+        if eval_suite not in _EVAL_SUITES:
+            raise ValueError(f"Unknown eval suite {eval_suite!r}. Options: {sorted(_EVAL_SUITES.keys())}")
+        suite_evals = _EVAL_SUITES[eval_suite]
+
+    eval_harness_tasks = ()
+    if eval_suite_mode in ("during_train", "both") and suite_evals:
+        eval_harness_tasks = suite_evals
 
     train_step = default_train(
         name=f"speedrun/{name}",
@@ -157,7 +330,9 @@ def nemotron_only_speedrun(
         model_config=config.model_config,
         train_config=train_config,
         tags=run_tags,
-        eval_harness_tasks=None,
+        eval_harness_tasks=eval_harness_tasks,
+        wandb_name=wandb_name or name,
+        wandb_group=wandb_group,
         override_output_path=override_output_path,
         use_default_validation=False,
     )
@@ -216,7 +391,52 @@ def nemotron_only_speedrun(
         ),
     )
 
-    return [train_step, results_step]
+    steps: list[ExecutorStep] = [train_step, results_step]
+
+    if eval_suite_mode in ("post_train", "both") and eval_suite != "none":
+        if suite_evals is None:
+            return steps
+
+        train_tpu_type = getattr(getattr(train_config.resources, "device", None), "variant", None)
+        if train_tpu_type is None:
+            raise ValueError(f"Cannot infer TPU type from resources: {train_config.resources!r}")
+        eval_resources = ResourceConfig.with_tpu(eval_tpu_type or train_tpu_type)
+        hf_export_enabled = train_config.steps_per_hf_export != -1
+        if _supports_hf_export(config.model_config) and hf_export_enabled:
+            steps.append(
+                default_eval(
+                    step=train_step,
+                    resource_config=eval_resources,
+                    evals=suite_evals,  # type: ignore[arg-type]
+                    max_eval_instances=max_eval_instances,
+                    apply_chat_template=False,
+                    wandb_name=f"{name}_eval_{eval_suite}",
+                    wandb_group=wandb_group,
+                )
+            )
+        else:
+            # Run Levanter eval harness directly on the latest Levanter checkpoint.
+            tokenizer = getattr(config.model_config, "tokenizer", None) or llama3_tokenizer
+            steps.append(
+                ExecutorStep(
+                    name=f"evaluation/levanter_eval_harness/{name}/{eval_suite}",
+                    fn=run_levanter_checkpoint_eval_harness,
+                    config=LevanterEvalHarnessStepConfig(
+                        model_name=f"{name}_{eval_suite}",
+                        model_config=config.model_config,
+                        tokenizer=tokenizer,
+                        checkpoint_root=train_step / "checkpoints",
+                        evals=suite_evals,  # type: ignore[arg-type]
+                        max_eval_instances=max_eval_instances,
+                        output_path=output_path_of(train_step, f"eval_harness/{eval_suite}"),
+                        wandb_group=wandb_group,
+                    ),
+                    resources=eval_resources,
+                    pip_dependency_groups=["tpu", "eval"],
+                )
+            )
+
+    return steps
 
 
 def make_speedrun_config(
@@ -233,6 +453,17 @@ def make_speedrun_config(
 ) -> SpeedrunConfig:
     tokenized_dataset = DATASET_OPTIONS[dataset_name]
     model_config = build_model_config(model=model, seq_len=seq_len)
+    # `steps_per_export` controls how often we *keep* Levanter checkpoints.
+    # It must be positive: negative values interact badly with `every=...` schedules (e.g. `step % -1 == 0`),
+    # causing checkpoint/HF export hooks to fire every step.
+    steps_per_export = STEPS_PER_EXPORT
+
+    # HF export uses a separate knob. For the bilinear Llama variant we intentionally disable HF export because
+    # there is no valid HF config/model_type mapping for `ActivationFunctionEnum.linear`.
+    steps_per_hf_export: int | None = None
+    if isinstance(getattr(model_config, "activation_function", None), ActivationFunctionEnum):
+        if model_config.activation_function == ActivationFunctionEnum.linear:
+            steps_per_hf_export = -1
     return SpeedrunConfig(
         author=Author(
             name="Marin Team",
@@ -248,7 +479,8 @@ def make_speedrun_config(
             learning_rate=LEARNING_RATE,
             weight_decay=WEIGHT_DECAY,
             steps_per_eval=STEPS_PER_EVAL,
-            steps_per_export=STEPS_PER_EXPORT,
+            steps_per_export=steps_per_export,
+            steps_per_hf_export=steps_per_hf_export,
             profiler=profiler,
             profiler_start_step=profiler_start_step,
             profiler_num_steps=profiler_num_steps,
@@ -268,8 +500,18 @@ def _parse_args():
     parser.add_argument(
         "--num-train-steps",
         type=int,
-        default=NUM_TRAIN_STEPS,
-        help=f"Number of training steps to run (default {NUM_TRAIN_STEPS}, i.e. ~40B tokens).",
+        default=None,
+        help="Number of training steps to run (default: computed from --token-target, --global-batch-size, --seq-len).",
+    )
+    parser.add_argument(
+        "--token-target",
+        type=int,
+        default=None,
+        help=(
+            "Total token budget used to compute a default --num-train-steps when that flag is omitted. "
+            f"Defaults to {DEFAULT_TOKEN_TARGET} for single-corpus runs and {COMPOSITE_TOKEN_TARGET} for the composite "
+            "mixture."
+        ),
     )
     parser.add_argument(
         "--global-batch-size",
@@ -310,13 +552,37 @@ def _parse_args():
         "--dataset",
         choices=DATASET_OPTIONS.keys(),
         default=DEFAULT_DATASET,
-        help="Which tokenized dataset to train on (default: dclm).",
+        help=f"Which tokenized dataset to train on (default: {DEFAULT_DATASET}).",
     )
     parser.add_argument(
         "--run-suffix",
         type=str,
         default=None,
         help="Optional override for the executor run suffix/output path.",
+    )
+    parser.add_argument(
+        "--eval-suite",
+        choices=sorted(_EVAL_SUITES.keys()),
+        default="none",
+        help="Eval-harness suite name (see --eval-suite-mode).",
+    )
+    parser.add_argument(
+        "--eval-suite-mode",
+        choices=("post_train", "during_train", "both"),
+        default="post_train",
+        help="When to run eval-harness: post_train (default), during_train, or both.",
+    )
+    parser.add_argument(
+        "--eval-tpu-type",
+        type=str,
+        default=None,
+        help="Optional TPU type for the eval step (default: same as --tpu-type).",
+    )
+    parser.add_argument(
+        "--max-eval-instances",
+        type=int,
+        default=None,
+        help="Optional cap on max eval instances per task (default: no cap).",
     )
     parser.add_argument(
         "--append-ici-ag-pipelining-flags",
@@ -337,11 +603,15 @@ def _parse_args():
     return parser.parse_known_args()
 
 
+def _steps_for_token_target(token_target: int, global_batch_size: int, seq_len: int) -> int:
+    return math.ceil(token_target / (global_batch_size * seq_len))
+
+
 # Keep a default config available for scripts that import this module.
 speedrun_config = make_speedrun_config(
     model=DEFAULT_MODEL,
     global_batch_size=DEFAULT_GLOBAL_BATCH_SIZE,
-    num_train_steps=NUM_TRAIN_STEPS,
+    num_train_steps=_steps_for_token_target(DEFAULT_TOKEN_TARGET, DEFAULT_GLOBAL_BATCH_SIZE, SEQ_LEN),
     profiler=False,
     profiler_start_step=DEFAULT_PROFILER_START_STEP,
     profiler_num_steps=DEFAULT_PROFILER_NUM_STEPS,
@@ -354,12 +624,14 @@ speedrun_config = make_speedrun_config(
 if __name__ == "__main__":
     args, remaining = _parse_args()
     sys.argv = [sys.argv[0], *remaining]
-    if args.num_train_steps == NUM_TRAIN_STEPS and (
-        args.global_batch_size != DEFAULT_GLOBAL_BATCH_SIZE or args.seq_len != SEQ_LEN
-    ):
-        num_train_steps = math.ceil(TOKEN_TARGET / (args.global_batch_size * args.seq_len))
-    else:
-        num_train_steps = args.num_train_steps
+    token_target = args.token_target
+    if token_target is None:
+        token_target = COMPOSITE_TOKEN_TARGET if args.dataset == "nemotron_dclm_fineweb_10b" else DEFAULT_TOKEN_TARGET
+    num_train_steps = (
+        args.num_train_steps
+        if args.num_train_steps is not None
+        else _steps_for_token_target(token_target, args.global_batch_size, args.seq_len)
+    )
     run_config = make_speedrun_config(
         model=args.model,
         global_batch_size=args.global_batch_size,
@@ -371,17 +643,19 @@ if __name__ == "__main__":
         seq_len=args.seq_len,
         tpu_type=args.tpu_type,
     )
-    logger.info("Launching MoE Nemotron speedrun.")
+    logger.info("Launching Nemotron speedrun.")
+    effective_tokens = run_config.train_config.train_batch_size * args.seq_len * run_config.train_config.num_train_steps
     logger.info(
         "Settings: dataset=%s, batch=%s, seq_len=%s, steps=%s (~%.2fB tokens)",
         args.dataset,
         run_config.train_config.train_batch_size,
-        run_config.model_config.seq_len,
+        args.seq_len,
         run_config.train_config.num_train_steps,
-        TOKEN_TARGET / 1e9,
+        effective_tokens / 1e9,
     )
     logger.info("Model preset: %s", args.model)
-    logger.info("Model config flags: use_gmm=%s", run_config.model_config.use_gmm)
+    if hasattr(run_config.model_config, "use_gmm"):
+        logger.info("Model config flags: use_gmm=%s", run_config.model_config.use_gmm)
     if args.profile:
         logger.info(
             "Profiler enabled: start_step=%s num_steps=%s",
@@ -401,5 +675,9 @@ if __name__ == "__main__":
             run_config,
             append_ici_ag_pipelining_flags=args.append_ici_ag_pipelining_flags,
             append_async_collective_permute_flag=args.append_async_collective_permute_flag,
+            eval_suite=args.eval_suite,
+            eval_suite_mode=args.eval_suite_mode,
+            eval_tpu_type=args.eval_tpu_type,
+            max_eval_instances=args.max_eval_instances,
         )
     )

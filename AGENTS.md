@@ -92,4 +92,43 @@ You don't generate comments that merely restate the code, e.g.
 
 - Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
 
+## Ray Run Notes
+
+- For Ray/TPU runs, prefer `TMPDIR=/tmp` and `RAY_TMPDIR=/tmp`.
+- Avoid setting `UV_CACHE_DIR` in Ray launch commands unless you have a specific reason (use uv's default cache).
+- For a brand new run, omit `--force-run-failed`; add it only when you explicitly want to rerun previously-failed steps.
+
+### Ray Token Auth (Central1)
+
+If you need to authenticate to the Ray dashboard (token auth):
+
+```bash
+make get_ray_auth_token
+uv run scripts/ray/cluster.py --cluster us-central1 auth
+```
+
+Example (size sweep on Central1):
+
+```bash
+TMPDIR=/tmp RAY_TMPDIR=/tmp uv run python -m marin.run.ray_run --cluster "infra/marin-us-central1.yaml" --extra tpu --env_vars WANDB_MODE online --env_vars WANDB_API_KEY "${WANDB_API_KEY:-}" --env_vars WANDB_ENTITY "${WANDB_ENTITY:-}" --env_vars WANDB_PROJECT "${WANDB_PROJECT:-}" --env_vars HF_TOKEN "${HF_TOKEN:-}" --env_vars PIP_NO_CACHE_DIR 1 --env_vars RAY_TMPDIR /tmp --env_vars TMPDIR /tmp --env_vars JAX_COMPILATION_CACHE_DIR gs://marin-us-central1/jax-cache/olmoe_sizes_v5p32 --env_vars JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS 0 --env_vars JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES -1 --env_vars JAX_RAGGED_DOT_USE_RAGGED_DOT_INSTRUCTION 1 -- python experiments/speedrun/olmoe_1b7b_size_speedrun_sweep.py --dataset nemotron_cc --tpu-type v5p-32 --seq-len 4096 --global-batch-size 64
+```
+
+Example (OLMoE sizes sweep, composite mixture, eval during+after, 2 terminals, shared W&B group):
+
+- Uses a deterministic W&B group based on the current git commit so you don't need to coordinate a timestamp across terminals.
+- Run uniqueness comes from `--run-suffix`.
+- Defaults to 4 sizes × 4 LR multipliers = 16 runs per command.
+
+SwiGLU (regular experts), BS=640:
+
+```bash
+GROUP="olmoe_sizes_bs640_$(git rev-parse --short HEAD)" && SUFFIX="t$(date +%Y%m%d_%H%M%S)" && source .venv/bin/activate && TMPDIR=/tmp uv run python -m marin.run.ray_run --cluster "infra/marin-us-central1.yaml" --extra tpu --env_vars WANDB_MODE online --env_vars WANDB_API_KEY "${WANDB_API_KEY:-}" --env_vars WANDB_ENTITY "${WANDB_ENTITY:-}" --env_vars WANDB_PROJECT "${WANDB_PROJECT:-}" --env_vars HF_TOKEN "${HF_TOKEN:-}" --env_vars PIP_NO_CACHE_DIR 1 --env_vars TMPDIR /tmp --env_vars JAX_COMPILATION_CACHE_DIR gs://marin-us-central1/jax-cache/olmoe_sizes_swiglu_bs640 --env_vars JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS 0 --env_vars JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES -1 --env_vars JAX_RAGGED_DOT_USE_RAGGED_DOT_INSTRUCTION 1 -- python -m experiments.speedrun.olmoe_1b7b_size_speedrun_sweep --dataset nemotron_dclm_fineweb_10b --tpu-type v5p-64 --seq-len 4096 --global-batch-size 640 --eval-suite core --eval-suite-mode both --steps-per-task-eval 500 --wandb-group "$GROUP" --run-suffix "$SUFFIX"
+```
+
+Bilinear experts, BS=640 (same group automatically):
+
+```bash
+GROUP="olmoe_sizes_bs640_$(git rev-parse --short HEAD)" && SUFFIX="t$(date +%Y%m%d_%H%M%S)" && source .venv/bin/activate && TMPDIR=/tmp uv run python -m marin.run.ray_run --cluster "infra/marin-us-central1.yaml" --extra tpu --env_vars WANDB_MODE online --env_vars WANDB_API_KEY "${WANDB_API_KEY:-}" --env_vars WANDB_ENTITY "${WANDB_ENTITY:-}" --env_vars WANDB_PROJECT "${WANDB_PROJECT:-}" --env_vars HF_TOKEN "${HF_TOKEN:-}" --env_vars PIP_NO_CACHE_DIR 1 --env_vars TMPDIR /tmp --env_vars JAX_COMPILATION_CACHE_DIR gs://marin-us-central1/jax-cache/olmoe_sizes_bilinear_bs640 --env_vars JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS 0 --env_vars JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES -1 --env_vars JAX_RAGGED_DOT_USE_RAGGED_DOT_INSTRUCTION 1 -- python -m experiments.speedrun.olmoe_1b7b_size_speedrun_sweep --dataset nemotron_dclm_fineweb_10b --tpu-type v5p-64 --seq-len 4096 --global-batch-size 640 --eval-suite core --eval-suite-mode both --steps-per-task-eval 500 --bilinear-mlp --wandb-group "$GROUP" --run-suffix "$SUFFIX"
+```
+
 > This file will be expanded as agent workflows and best practices evolve.

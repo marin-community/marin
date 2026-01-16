@@ -60,6 +60,8 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        wandb_name: str | None = None,
+        wandb_group: str | None = None,
     ) -> None:
         """
         Runs Levanter's lm-eval harness on the specified model and set of tasks.
@@ -83,7 +85,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
             # In the future, we should make this user-configurable.
             trainer_config = TrainerConfig(
-                tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
+                tracker=WandbConfig(project="marin", tags=wandb_tags, name=wandb_name or name, group=wandb_group),
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
                 per_device_eval_parallelism=1,
                 ray=RayConfig(auto_start_cluster=False),

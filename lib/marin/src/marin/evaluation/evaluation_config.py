@@ -102,3 +102,13 @@ class EvaluationConfig:
     """
     Tags to add to the wandb run.
     """
+
+    wandb_name: str | None = None
+    """
+    Optional Weights & Biases run name override for evaluation runs.
+    """
+
+    wandb_group: str | None = None
+    """
+    Optional Weights & Biases group to organize evaluation runs alongside training runs.
+    """

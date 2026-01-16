@@ -53,6 +53,8 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        wandb_name: str | None = None,
+        wandb_group: str | None = None,
     ) -> None:
         """
         Runs EleutherAI's lm-eval harness on the specified model and set of  tasks.
@@ -94,8 +96,9 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 wandb_args_dict = {
                     "project": "marin",
                     "job_type": "eval",
-                    "name": model.name,
+                    "name": wandb_name or model.name,
                     "tags": wandb_tags,
+                    "group": wandb_group,
                 }
                 # wandb_config_args_dict = simple_parse_args_string("")
                 wandb_logger = WandbLogger(init_args=wandb_args_dict)

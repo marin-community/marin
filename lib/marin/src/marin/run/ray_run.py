@@ -138,7 +138,9 @@ async def submit_and_track_job(
     runtime_dict = {
         "working_dir": current_dir,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"],
+        # Don't ship local artifacts/config into the Ray working_dir. In particular,
+        # `wandb/` can contain a persisted settings file that forces offline mode.
+        "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs", "wandb/", ".wandb/"],
     }
 
     # add the TPU dependency for cluster jobs.
@@ -252,7 +254,9 @@ def main():
     if not full_cmd.startswith("--"):
         logger.error("Command must start with '--'.")
         exit(1)
-    full_cmd = full_cmd[2:]
+    # Strip off the `--` separator (argparse keeps it in REMAINDER) and any
+    # whitespace that follows so Ray gets a clean entrypoint string.
+    full_cmd = full_cmd[2:].lstrip()
 
     # Auto-load env defaults from .marin.yaml if present, then merge -e overrides
     env_vars = {}

@@ -63,6 +63,9 @@ def evaluate(config: EvaluationConfig) -> None:
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
             resource_config=config.resource_config,
+            wandb_tags=config.wandb_tags,
+            wandb_name=config.wandb_name,
+            wandb_group=config.wandb_group,
         )
     else:
         evaluator.evaluate(
@@ -70,6 +73,9 @@ def evaluate(config: EvaluationConfig) -> None:
             evals=config.evals,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
+            wandb_tags=config.wandb_tags,
+            wandb_name=config.wandb_name,
+            wandb_group=config.wandb_group,
         )
 
     logger.info(f"Done (total time: {time.time() - start_time} seconds)")

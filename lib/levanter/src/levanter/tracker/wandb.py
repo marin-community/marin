@@ -175,12 +175,16 @@ class WandbConfig(TrackerConfig):
 
         hparams_to_save = {}
 
-        # for distributed runs, we only want the primary worker to use wandb, so we make everyone else be disabled
-        # however, we do share information about the run id, so that we can link to it from the other workers
+        # For distributed runs, only the primary process should actively talk to W&B. Other processes still call
+        # `wandb.init()` so they can share metadata (run id/name/group) via multihost broadcast, but they should not
+        # create offline runs or spam local directories.
         if jax.process_index() == 0:
             mode = self.mode
+            if mode is None:
+                # Respect explicit environment configuration when present.
+                mode = os.environ.get("WANDB_MODE")
         else:
-            mode = "offline"
+            mode = "disabled"
 
         git_settings = self._git_settings()
 
