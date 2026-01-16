@@ -212,14 +212,10 @@ class ControllerState:
                     pending.append(job)
             return pending
 
-    def remove_from_queue(self, job_id: JobId) -> None:
-        with self._lock:
-            self._queue = deque(jid for jid in self._queue if jid != job_id)
-
-    def add_to_queue(self, job: Job) -> None:
-        with self._lock:
-            if job.job_id not in self._queue:
-                self._queue.append(job.job_id)
+    def _add_to_queue(self, job_id: JobId) -> None:
+        """Internal: add job to queue if not already present. Caller must hold lock."""
+        if job_id not in self._queue:
+            self._queue.append(job_id)
 
     def add_endpoint(self, endpoint: ControllerEndpoint) -> None:
         with self._lock:
@@ -285,6 +281,7 @@ class ControllerState:
             if not worker:
                 return False
             worker.running_jobs.add(job_id)
+            self._queue = deque(jid for jid in self._queue if jid != job_id)
             return True
 
     def unassign_job_from_worker(self, worker_id: WorkerId, job_id: JobId) -> bool:
@@ -294,6 +291,14 @@ class ControllerState:
                 return False
             worker.running_jobs.discard(job_id)
             return True
+
+    def rollback_assignment(self, worker_id: WorkerId, job: Job) -> None:
+        """Rollback a failed assignment: unassign from worker and re-queue."""
+        with self._lock:
+            worker = self._workers.get(worker_id)
+            if worker:
+                worker.running_jobs.discard(job.job_id)
+            self._add_to_queue(job.job_id)
 
     def mark_worker_unhealthy(self, worker_id: WorkerId) -> ControllerWorker | None:
         with self._lock:

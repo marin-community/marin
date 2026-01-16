@@ -44,7 +44,6 @@ def serve(
     port: int,
     cache_dir: str,
     registry: str,
-    max_concurrent_jobs: int,
     port_range: str,
     controller_address: str | None,
     worker_id: str | None,
@@ -57,7 +56,6 @@ def serve(
         port=port,
         cache_dir=Path(cache_dir).expanduser(),
         registry=registry,
-        max_concurrent_jobs=max_concurrent_jobs,
         port_range=(port_start, port_end),
         controller_address=controller_address,
         worker_id=worker_id,
@@ -68,7 +66,6 @@ def serve(
     click.echo(f"Starting Fluster worker on {host}:{port}")
     click.echo(f"  Registry: {registry}")
     click.echo(f"  Cache dir: {config.cache_dir}")
-    click.echo(f"  Max concurrent jobs: {max_concurrent_jobs}")
     if controller_address:
         click.echo(f"  Controller: {controller_address}")
     worker._run_server()

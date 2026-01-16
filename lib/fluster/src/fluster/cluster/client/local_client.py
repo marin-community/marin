@@ -306,7 +306,6 @@ class LocalClusterClient:
             host="127.0.0.1",
             port=worker_port,
             cache_dir=cache_path,
-            max_concurrent_jobs=max_workers,
             controller_address=controller_address,
             worker_id=f"local-worker-{uuid.uuid4().hex[:8]}",
             poll_interval_seconds=0.1,  # Fast polling for local

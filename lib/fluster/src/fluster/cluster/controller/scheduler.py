@@ -24,88 +24,89 @@ from fluster.cluster.controller.resources import (
     parse_memory_string,
 )
 from fluster.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
+from fluster.cluster.types import WorkerId
 
 logger = logging.getLogger(__name__)
 
 
-def worker_can_fit_job(
-    state: ControllerState,
-    worker: ControllerWorker,
-    job: ControllerJob,
-    additional_jobs: list[ControllerJob] | None = None,
-) -> bool:
-    """Check if worker has sufficient available capacity for job.
+@dataclass
+class WorkerCapacity:
+    """Available resources on a worker (mutable during scheduling)."""
 
-    Checks CPU, memory, device type, device variant, and GPU count.
+    available_cpu: int
+    available_memory: int  # bytes
+    available_gpus: int
+    device_type: str  # "cpu", "gpu", "tpu"
+    device_variant: str | None
 
-    Args:
-        state: Controller state for looking up committed resources
-        worker: Worker to check capacity for
-        job: Job to check if it fits
-        additional_jobs: Jobs assigned this scheduling round but not yet dispatched
 
-    Returns:
-        True if worker can fit the job
-    """
-    job_resources = job.request.resources
-    worker_resources = worker.resources
+def worker_can_fit_job(capacity: WorkerCapacity, job: ControllerJob) -> bool:
+    """Check if worker capacity can fit job. Pure function, no state."""
+    res = job.request.resources
 
-    committed_cpu, committed_memory, committed_gpu = state.get_committed_resources(worker)
-
-    if additional_jobs:
-        for additional_job in additional_jobs:
-            add_resources = additional_job.request.resources
-            committed_cpu += add_resources.cpu
-            committed_memory += parse_memory_string(add_resources.memory)
-            committed_gpu += get_gpu_count(add_resources.device)
-
-    # CPU check
-    available_cpu = worker_resources.cpu - committed_cpu
-    if job_resources.cpu > available_cpu:
+    if res.cpu > capacity.available_cpu:
         return False
 
-    # Memory check
-    worker_memory = parse_memory_string(worker_resources.memory)
-    job_memory = parse_memory_string(job_resources.memory)
-    available_memory = worker_memory - committed_memory
-    if job_memory > available_memory:
+    job_memory = parse_memory_string(res.memory)
+    if job_memory > capacity.available_memory:
         return False
 
-    # Device type check
-    job_device_type = get_device_type(job_resources.device)
-    worker_device_type = get_device_type(worker_resources.device)
-    if job_device_type != worker_device_type:
+    job_device_type = get_device_type(res.device)
+    if job_device_type != capacity.device_type:
         return False
 
-    # Device variant check (only if job specifies one that's not "auto")
-    job_variant = get_device_variant(job_resources.device)
-    if job_variant and job_variant != "auto":
-        worker_variant = get_device_variant(worker_resources.device)
-        if worker_variant != job_variant:
-            return False
+    job_variant = get_device_variant(res.device)
+    if job_variant and job_variant != "auto" and job_variant != capacity.device_variant:
+        return False
 
-    # GPU count check
-    if job_device_type == "gpu":
-        job_gpu_count = get_gpu_count(job_resources.device)
-        worker_gpu_count = get_gpu_count(worker_resources.device)
-        available_gpus = worker_gpu_count - committed_gpu
-        if job_gpu_count > available_gpus:
-            return False
+    if job_device_type == "gpu" and get_gpu_count(res.device) > capacity.available_gpus:
+        return False
 
     return True
 
 
+def deduct_job_from_capacity(capacity: WorkerCapacity, job: ControllerJob) -> None:
+    """Deduct job's resources from capacity (mutates capacity)."""
+    res = job.request.resources
+    capacity.available_cpu -= res.cpu
+    capacity.available_memory -= parse_memory_string(res.memory)
+    capacity.available_gpus -= get_gpu_count(res.device)
+
+
+def compute_worker_capacity(state: ControllerState, worker: ControllerWorker) -> WorkerCapacity:
+    """Compute current available capacity for a worker."""
+    committed_cpu, committed_mem, committed_gpu = state.get_committed_resources(worker)
+    res = worker.resources
+    return WorkerCapacity(
+        available_cpu=res.cpu - committed_cpu,
+        available_memory=parse_memory_string(res.memory) - committed_mem,
+        available_gpus=get_gpu_count(res.device) - committed_gpu,
+        device_type=get_device_type(res.device),
+        device_variant=get_device_variant(res.device),
+    )
+
+
 @dataclass
-class ScheduleResult:
-    """Result of a scheduling attempt.
+class SchedulingTransaction:
+    """Accumulates tentative assignments that can be rolled back."""
 
-    Args:
-        assignments: List of (job, worker) pairs to dispatch
-        timed_out_jobs: Jobs that exceeded their scheduling_timeout_seconds
-    """
-
+    state: ControllerState
     assignments: list[tuple[ControllerJob, ControllerWorker]] = field(default_factory=list)
     timed_out_jobs: list[ControllerJob] = field(default_factory=list)
+
+    def tentatively_assign(self, job: ControllerJob, worker: ControllerWorker) -> None:
+        """Assign job to worker immediately (updates running_jobs and removes from queue)."""
+        self.state.assign_job_to_worker(worker.worker_id, job.job_id)
+        self.assignments.append((job, worker))
+
+    def rollback_assignment(self, job: ControllerJob, worker: ControllerWorker) -> None:
+        """Rollback a single failed assignment."""
+        self.state.rollback_assignment(worker.worker_id, job)
+
+
+def build_capacity_map(state: ControllerState, workers: list[ControllerWorker]) -> dict[WorkerId, WorkerCapacity]:
+    """Build capacity map for all healthy workers."""
+    return {w.worker_id: compute_worker_capacity(state, w) for w in workers if w.healthy}
 
 
 class Scheduler:
@@ -119,8 +120,8 @@ class Scheduler:
         pending_jobs: list[ControllerJob],
         workers: list[ControllerWorker],
         now_ms: int,
-    ) -> ScheduleResult:
-        """Match pending jobs to available workers.
+    ) -> SchedulingTransaction:
+        """Match pending jobs to available workers one at a time.
 
         Uses first-fit algorithm, skipping jobs that don't fit any worker.
         Also identifies jobs that have exceeded their scheduling timeout.
@@ -135,23 +136,24 @@ class Scheduler:
             now_ms: Current timestamp in milliseconds
 
         Returns:
-            ScheduleResult with assignments and timed-out jobs
+            SchedulingTransaction with assignments and timed-out jobs
         """
-        result = ScheduleResult()
-
-        # Track which workers have been assigned jobs in this scheduling round
-        # so we account for their capacity correctly
-        assigned_jobs_by_worker: dict[str, list[ControllerJob]] = {}
+        transaction = SchedulingTransaction(self._state)
+        capacities = build_capacity_map(self._state, workers)
 
         for job in pending_jobs:
             if self._is_job_timed_out(job, now_ms):
-                result.timed_out_jobs.append(job)
+                transaction.timed_out_jobs.append(job)
                 continue
 
-            worker = self._find_worker_for_job(job, workers, assigned_jobs_by_worker)
-            if worker:
-                result.assignments.append((job, worker))
-                assigned_jobs_by_worker.setdefault(worker.worker_id, []).append(job)
+            for worker in workers:
+                if not worker.healthy:
+                    continue
+                capacity = capacities[worker.worker_id]
+                if worker_can_fit_job(capacity, job):
+                    deduct_job_from_capacity(capacity, job)
+                    transaction.tentatively_assign(job, worker)
+                    break
             else:
                 logger.debug(
                     "No suitable worker for job %s (cpu=%d, memory=%s)",
@@ -160,14 +162,14 @@ class Scheduler:
                     job.request.resources.memory,
                 )
 
-        if result.assignments or result.timed_out_jobs:
+        if transaction.assignments or transaction.timed_out_jobs:
             logger.debug(
                 "Scheduling cycle: %d pending, %d assigned, %d timed_out",
                 len(pending_jobs),
-                len(result.assignments),
-                len(result.timed_out_jobs),
+                len(transaction.assignments),
+                len(transaction.timed_out_jobs),
             )
-        return result
+        return transaction
 
     def _is_job_timed_out(self, job: ControllerJob, now_ms: int) -> bool:
         timeout_seconds = job.request.scheduling_timeout_seconds
@@ -177,23 +179,3 @@ class Scheduler:
         pending_duration_ms = now_ms - job.submitted_at_ms
         timeout_ms = timeout_seconds * 1000
         return pending_duration_ms > timeout_ms
-
-    def _find_worker_for_job(
-        self,
-        job: ControllerJob,
-        workers: list[ControllerWorker],
-        assigned_jobs_by_worker: dict[str, list[ControllerJob]],
-    ) -> ControllerWorker | None:
-        """Find first worker that can fit the job.
-
-        Accounts for both jobs already running on each worker AND jobs assigned earlier
-        in this scheduling round (tracked in assigned_jobs_by_worker).
-        """
-        for worker in workers:
-            if not worker.healthy:
-                continue
-            # Check if worker can fit this job, considering jobs assigned this round
-            jobs_assigned_this_round = assigned_jobs_by_worker.get(worker.worker_id, [])
-            if worker_can_fit_job(self._state, worker, job, jobs_assigned_this_round):
-                return worker
-        return None

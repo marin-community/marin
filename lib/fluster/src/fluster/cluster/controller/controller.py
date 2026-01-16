@@ -27,7 +27,7 @@ from fluster.time_utils import ExponentialBackoff
 
 from fluster.cluster.controller.dashboard import ControllerDashboard
 from fluster.cluster.controller.job import Job
-from fluster.cluster.controller.scheduler import ScheduleResult, Scheduler
+from fluster.cluster.controller.scheduler import Scheduler, SchedulingTransaction
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerState, ControllerWorker
 from fluster.rpc import cluster_pb2
@@ -238,26 +238,27 @@ class Controller:
         result = self._scheduler.find_assignments(pending_jobs, workers, now_ms)
         self._apply_schedule_result(result, now_ms)
 
-    def _apply_schedule_result(self, result: ScheduleResult, now_ms: int) -> None:
+    def _apply_schedule_result(self, transaction: SchedulingTransaction, now_ms: int) -> None:
         """Apply scheduling results: dispatch jobs and handle timeouts."""
-        for job in result.timed_out_jobs:
+        for job in transaction.timed_out_jobs:
             self._mark_job_unschedulable(job, now_ms)
 
-        for job, worker in result.assignments:
-            self._dispatch_job(job, worker, now_ms)
+        for job, worker in transaction.assignments:
+            self._dispatch_job(transaction, job, worker, now_ms)
 
-    def _dispatch_job(self, job: Job, worker: ControllerWorker, now_ms: int) -> None:
+    def _dispatch_job(
+        self,
+        transaction: SchedulingTransaction,
+        job: Job,
+        worker: ControllerWorker,
+        now_ms: int,
+    ) -> None:
         """Dispatch a job to a worker via RPC.
 
-        All state is set BEFORE the RPC call. The worker reports all state
+        State is already updated by tentatively_assign(). The worker reports all state
         transitions (BUILDING, RUNNING, SUCCEEDED, etc.) via ReportJobState.
         """
-        # Job updates its own state BEFORE RPC - worker may complete before RPC returns
         job.mark_dispatched(worker.worker_id, now_ms)
-
-        # Controller coordinates external systems through state methods
-        self._state.assign_job_to_worker(worker.worker_id, job.job_id)
-        self._state.remove_from_queue(job.job_id)
 
         try:
             stub = self._stub_factory.get_stub(worker.address)
@@ -286,12 +287,8 @@ class Controller:
             )
 
         except Exception:
-            # Job reverts its own state
             job.revert_dispatch()
-
-            # Controller coordinates external systems through state methods
-            self._state.unassign_job_from_worker(worker.worker_id, job.job_id)
-            self._state.add_to_queue(job)
+            transaction.rollback_assignment(job, worker)
             self._state.mark_worker_unhealthy(worker.worker_id)
             logger.exception("Failed to dispatch job %s to worker %s", job.job_id, worker.address)
             self._state.log_action(

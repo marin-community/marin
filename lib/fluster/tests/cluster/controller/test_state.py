@@ -681,10 +681,9 @@ def test_transition_job_retry_requeues_and_unassigns(make_job_request, make_reso
     )
     state.add_job(job)
 
-    # Dispatch job
+    # Dispatch job (assign_job_to_worker automatically removes from queue)
     job.mark_dispatched(WorkerId("w1"), now_ms=1000)
     state.assign_job_to_worker(WorkerId("w1"), JobId("j1"))
-    state.remove_from_queue(JobId("j1"))
 
     # Verify job not in queue and worker has it
     pending = state.peek_pending_jobs()
@@ -795,7 +794,7 @@ def test_job_success_cleans_up_endpoints(make_job_request, make_resource_spec):
 
 
 def test_job_failure_with_retry_unassigns_worker(make_job_request, make_resource_spec):
-    """Job failure with retry unassigns worker and resets job to PENDING."""
+    """Job failure with retry unassigns worker and resets job to PENDING via transition_job."""
     from fluster.cluster.controller.job import TransitionResult
 
     state = ControllerState()
@@ -818,12 +817,9 @@ def test_job_failure_with_retry_unassigns_worker(make_job_request, make_resource
     job.mark_dispatched(WorkerId("w1"), now_ms=1000)
     state.assign_job_to_worker(WorkerId("w1"), JobId("j1"))
 
-    # First failure - should retry
-    result = job.transition(cluster_pb2.JOB_STATE_FAILED, now_ms=2000)
+    # First failure via transition_job - handles retry + unassign automatically
+    result, _ = state.transition_job(JobId("j1"), cluster_pb2.JOB_STATE_FAILED, now_ms=2000)
     assert result == TransitionResult.SHOULD_RETRY
-
-    # Unassign from worker (simulating what controller does)
-    state.unassign_job_from_worker(WorkerId("w1"), JobId("j1"))
 
     # Worker unassigned and job reset to PENDING for retry
     assert JobId("j1") not in worker.running_jobs
