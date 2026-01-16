@@ -53,13 +53,15 @@ def get_job_info() -> JobInfo | None:
     # Fall back to environment variables
     job_id = os.environ.get("FLUSTER_JOB_ID")
     if job_id:
-        return JobInfo(
+        info = JobInfo(
             job_id=job_id,
             attempt_id=int(os.environ.get("FLUSTER_ATTEMPT_ID", "0")),
             worker_id=os.environ.get("FLUSTER_WORKER_ID"),
             controller_address=os.environ.get("FLUSTER_CONTROLLER_ADDRESS"),
             ports=_parse_ports_from_env(),
         )
+        _job_info.set(info)
+        return info
     return None
 
 

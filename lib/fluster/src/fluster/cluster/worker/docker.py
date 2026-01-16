@@ -26,9 +26,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
-import docker
-import docker.errors
-
 from fluster.rpc import cluster_pb2
 from fluster.cluster.worker.worker_types import JobLogs, LogLine
 
@@ -277,24 +274,45 @@ class DockerRuntime:
             raise RuntimeError(f"Failed to remove container: {result.stderr}")
 
     def get_logs(self, container_id: str) -> list[LogLine]:
-        client = docker.from_env()  # type: ignore[attr-defined]
-        try:
-            container = client.containers.get(container_id)
-        except docker.errors.NotFound:
-            return []
-
         logs: list[LogLine] = []
 
         # Fetch stdout with timestamps
-        stdout_logs = container.logs(stdout=True, stderr=False, timestamps=True)
-        for line in stdout_logs.decode().splitlines():
+        result = subprocess.run(
+            ["docker", "logs", "--timestamps", container_id],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        # Container not found
+        if result.returncode != 0:
+            return []
+
+        # Docker logs combines stdout and stderr by default, but we can't easily separate them
+        # after the fact. We'll use stderr redirection to get them separately.
+        stdout_result = subprocess.run(
+            ["docker", "logs", "--timestamps", container_id],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+
+        for line in stdout_result.stdout.splitlines():
             if line:
                 timestamp, data = self._parse_docker_log_line(line)
                 logs.append(LogLine(timestamp=timestamp, source="stdout", data=data))
 
         # Fetch stderr with timestamps
-        stderr_logs = container.logs(stdout=False, stderr=True, timestamps=True)
-        for line in stderr_logs.decode().splitlines():
+        stderr_result = subprocess.run(
+            ["docker", "logs", "--timestamps", container_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+
+        for line in stderr_result.stderr.splitlines():
             if line:
                 timestamp, data = self._parse_docker_log_line(line)
                 logs.append(LogLine(timestamp=timestamp, source="stderr", data=data))
@@ -317,28 +335,14 @@ class DockerRuntime:
         return datetime.now(timezone.utc), line
 
     def get_stats(self, container_id: str) -> ContainerStats:
-        client = docker.from_env()  # type: ignore[attr-defined]
-        try:
-            container = client.containers.get(container_id)
-            stats = container.stats(stream=False)
+        result = subprocess.run(
+            ["docker", "stats", "--no-stream", "--format", "{{json .}}", container_id],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
-            # Parse memory usage (bytes to MB)
-            memory_bytes = stats.get("memory_stats", {}).get("usage", 0)
-            memory_mb = int(memory_bytes / (1024 * 1024))
-
-            # Calculate CPU percentage from deltas
-            cpu_percent = _calculate_cpu_percent(stats)
-
-            # Parse process count
-            process_count = stats.get("pids_stats", {}).get("current", 0)
-
-            return ContainerStats(
-                memory_mb=memory_mb,
-                cpu_percent=cpu_percent,
-                process_count=process_count,
-                available=True,
-            )
-        except (docker.errors.NotFound, docker.errors.APIError):
+        if result.returncode != 0:
             return ContainerStats(
                 memory_mb=0,
                 cpu_percent=0,
@@ -346,28 +350,59 @@ class DockerRuntime:
                 available=False,
             )
 
+        try:
+            stats = json.loads(result.stdout.strip())
 
-def _calculate_cpu_percent(stats: dict) -> int:
-    """Calculate CPU percentage from stats deltas.
+            # Parse memory usage (format: "123.4MiB / 2GiB")
+            memory_str = stats.get("MemUsage", "0B / 0B").split("/")[0].strip()
+            memory_mb = self._parse_memory_size(memory_str)
 
-    Docker stats format provides cpu_stats and precpu_stats for delta calculation.
-    CPU percentage = (cpu_delta / system_delta) * num_cpus * 100
-    """
-    cpu_stats = stats.get("cpu_stats", {})
-    precpu_stats = stats.get("precpu_stats", {})
+            # Parse CPU percentage (format: "12.34%")
+            cpu_str = stats.get("CPUPerc", "0%").rstrip("%")
+            cpu_percent = int(float(cpu_str)) if cpu_str else 0
 
-    cpu_delta = cpu_stats.get("cpu_usage", {}).get("total_usage", 0) - precpu_stats.get("cpu_usage", {}).get(
-        "total_usage", 0
-    )
-    system_delta = cpu_stats.get("system_cpu_usage", 0) - precpu_stats.get("system_cpu_usage", 0)
+            # Parse process count (format: "5")
+            pids_str = stats.get("PIDs", "0")
+            process_count = int(pids_str) if pids_str.isdigit() else 0
 
-    if system_delta == 0 or cpu_delta == 0:
-        return 0
+            return ContainerStats(
+                memory_mb=memory_mb,
+                cpu_percent=cpu_percent,
+                process_count=process_count,
+                available=True,
+            )
+        except (json.JSONDecodeError, ValueError, KeyError):
+            # Log parsing error but return unavailable stats
+            return ContainerStats(
+                memory_mb=0,
+                cpu_percent=0,
+                process_count=0,
+                available=False,
+            )
 
-    num_cpus = cpu_stats.get("online_cpus", 1)
-    cpu_percent = (cpu_delta / system_delta) * num_cpus * 100.0
+    def _parse_memory_size(self, size_str: str) -> int:
+        """Parse memory size string like '123.4MiB' to MB."""
+        size_str = size_str.strip()
+        match = re.match(r"^([\d.]+)\s*([KMGT]i?B?)$", size_str, re.IGNORECASE)
+        if not match:
+            return 0
 
-    return int(cpu_percent)
+        value = float(match.group(1))
+        unit = match.group(2).upper()
+
+        # Convert to MB
+        if unit.startswith("K"):
+            return int(value / 1024)
+        elif unit.startswith("M"):
+            return int(value)
+        elif unit.startswith("G"):
+            return int(value * 1024)
+        elif unit.startswith("T"):
+            return int(value * 1024 * 1024)
+        elif unit == "B":
+            return int(value / (1024 * 1024))
+        else:
+            return 0
 
 
 class DockerImageBuilder:

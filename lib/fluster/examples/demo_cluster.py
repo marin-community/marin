@@ -30,6 +30,7 @@ Usage:
     uv run python examples/demo_cluster.py --docker
 """
 
+import logging
 import os
 import re
 import socket
@@ -41,8 +42,7 @@ import uuid
 from pathlib import Path
 
 import click
-
-from fluster.client import FlusterClient, LogPoller
+from fluster.client import FlusterClient
 from fluster.cluster.client.local_client import (
     LocalEnvironmentProvider,
     _LocalBundleProvider,
@@ -50,7 +50,7 @@ from fluster.cluster.client.local_client import (
     _LocalImageProvider,
 )
 from fluster.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
-from fluster.cluster.types import Entrypoint
+from fluster.cluster.types import Entrypoint, JobId
 from fluster.cluster.worker.builder import ImageCache
 from fluster.cluster.worker.bundle_cache import BundleCache
 from fluster.cluster.worker.docker import DockerRuntime
@@ -61,41 +61,14 @@ from fluster.rpc.cluster_connect import ControllerServiceClientSync
 # The fluster project root (lib/fluster/) - used as workspace for the example
 FLUSTER_ROOT = Path(__file__).parent.parent
 
+logger = logging.getLogger(__name__)
+
 
 def find_free_port() -> int:
     """Find an available port."""
     with socket.socket() as s:
         s.bind(("", 0))
         return s.getsockname()[1]
-
-
-def cleanup_docker_containers() -> None:
-    """Clean up any orphaned fluster Docker containers from previous runs."""
-    # Find all containers with fluster-related images
-    result = subprocess.run(
-        ["docker", "ps", "-aq", "--filter", "ancestor=fluster-job"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode == 0 and result.stdout.strip():
-        container_ids = result.stdout.strip().split("\n")
-        for cid in container_ids:
-            if cid:
-                subprocess.run(["docker", "rm", "-f", cid], capture_output=True, check=False)
-
-    # Also clean up any containers with fluster in the name
-    result = subprocess.run(
-        ["docker", "ps", "-aq", "--filter", "name=fluster"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode == 0 and result.stdout.strip():
-        container_ids = result.stdout.strip().split("\n")
-        for cid in container_ids:
-            if cid:
-                subprocess.run(["docker", "rm", "-f", cid], capture_output=True, check=False)
 
 
 # =============================================================================
@@ -121,11 +94,9 @@ class DemoCluster:
     def __init__(
         self,
         use_docker: bool = False,
-        max_concurrent_jobs: int = 3,
         num_workers: int = 1,
     ):
         self._use_docker = use_docker
-        self._max_concurrent_jobs = max_concurrent_jobs
         self._num_workers = num_workers
         self._controller_port = find_free_port()
 
@@ -142,15 +113,9 @@ class DemoCluster:
         self._notebook_proc: subprocess.Popen | None = None
         self._notebook_url: str | None = None
 
-        # Log polling
-        self._log_pollers: dict[str, LogPoller] = {}
-
     def __enter__(self):
         """Start controller and worker."""
         # Clean up any orphaned containers from previous runs
-        if self._use_docker:
-            cleanup_docker_containers()
-
         self._temp_dir = tempfile.TemporaryDirectory(prefix="demo_cluster_")
         temp_path = Path(self._temp_dir.name)
         bundle_dir = temp_path / "bundles"
@@ -201,7 +166,6 @@ class DemoCluster:
                 host="127.0.0.1",
                 port=worker_port,
                 cache_dir=cache_path,
-                max_concurrent_jobs=self._max_concurrent_jobs,
                 controller_address=f"http://127.0.0.1:{self._controller_port}",
                 worker_id=worker_id,
                 poll_interval_seconds=0.1,  # Fast polling for demos
@@ -229,10 +193,6 @@ class DemoCluster:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Stop cluster and cleanup."""
         del exc_type, exc_val, exc_tb  # unused
-        # Stop all log polling threads
-        for job_id in list(self._log_pollers.keys()):
-            self.stop_log_polling(job_id)
-
         # Stop Jupyter notebook
         if self._notebook_proc:
             self._notebook_proc.terminate()
@@ -263,8 +223,9 @@ class DemoCluster:
             return f"http://127.0.0.1:{self._worker_ports[0]}"
         return ""
 
-    def get_client(self) -> FlusterClient:
-        """Get a FlusterClient for this cluster."""
+    @property
+    def client(self) -> FlusterClient:
+        """FlusterClient for this cluster."""
         if self._rpc_client is None:
             self._rpc_client = FlusterClient.remote(
                 self.controller_url,
@@ -285,60 +246,12 @@ class DemoCluster:
         entrypoint = Entrypoint.from_callable(fn, *args, **kwargs)
         environment = cluster_pb2.EnvironmentConfig(workspace="/app", env_vars={})
         resources = cluster_pb2.ResourceSpec(cpu=cpu, memory=memory)
-        return self.get_client().submit(
+        return self.client.submit(
             entrypoint=entrypoint,
             name=name or fn.__name__,
             resources=resources,
             environment=environment,
         )
-
-    def status(self, job_id: str) -> dict:
-        """Get job status from controller."""
-        if self._controller_client is None:
-            raise RuntimeError("Cluster not started - use 'with DemoCluster() as demo:'")
-        request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
-        response = self._controller_client.get_job_status(request)
-        return {
-            "jobId": response.job.job_id,
-            "state": cluster_pb2.JobState.Name(response.job.state),
-            "exitCode": response.job.exit_code,
-            "error": response.job.error,
-            "workerId": response.job.worker_id,
-        }
-
-    def wait(self, job_id: str, timeout: float = 60.0, poll_interval: float = 0.1) -> dict:
-        """Wait for job to complete."""
-        start = time.time()
-        terminal_states = {
-            "JOB_STATE_SUCCEEDED",
-            "JOB_STATE_FAILED",
-            "JOB_STATE_KILLED",
-            "JOB_STATE_UNSCHEDULABLE",
-        }
-        while time.time() - start < timeout:
-            status = self.status(job_id)
-            if status["state"] in terminal_states:
-                return status
-            time.sleep(poll_interval)
-        raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
-
-    def start_log_polling(self, job_id: str, poll_interval: float = 1.0, prefix: str = ""):
-        """Start a background thread that polls for job logs."""
-        if job_id in self._log_pollers:
-            return  # Already polling
-
-        def handler(entry):
-            print(f"{prefix}{entry.data}", flush=True)
-
-        poller = LogPoller(self.get_client(), job_id, handler, poll_interval)
-        poller.start()
-        self._log_pollers[job_id] = poller
-
-    def stop_log_polling(self, job_id: str):
-        """Stop log polling for a job."""
-        poller = self._log_pollers.pop(job_id, None)
-        if poller:
-            poller.stop()
 
     def seed_cluster(self) -> list[tuple[str, str]]:
         """Submit demo jobs to the cluster.
@@ -372,9 +285,9 @@ class DemoCluster:
 
         for fn, args, kwargs, name in jobs:
             job_id = self.submit(fn, *args, name=name, **kwargs)
-            status = self.wait(job_id)
-            results.append((job_id, status["state"]))
-            print(f"  {name}: {status['state']}")
+            status = self.client.wait(JobId(job_id))
+            results.append((job_id, cluster_pb2.JobState.Name(status.state)))
+            print(f"  {name}: {cluster_pb2.JobState.Name(status.state)}")
 
         return results
 
@@ -492,46 +405,12 @@ class DemoCluster:
             return True
         except CellExecutionError as e:
             print(f"Notebook execution failed: {e}")
-            self._dump_docker_logs()
+            for job in self.client.list_jobs():
+                print(f"  {job.id}: {job.state}")
+                # fetch logs
+                for log_entry in self.client.fetch_logs(job.id):
+                    logger.info("Log: %s", log_entry.data)
             return False
-
-    def _dump_docker_logs(self):
-        """Dump Docker container logs to help debug failures."""
-        if not self._use_docker:
-            return
-
-        print("\n" + "=" * 60)
-        print("DOCKER CONTAINER LOGS (for debugging)")
-        print("=" * 60)
-
-        # List recent containers
-        result = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.ID}}\t{{.Image}}\t{{.Status}}", "-n", "10"],
-            capture_output=True,
-            text=True,
-        )
-        print("\nRecent containers:")
-        print(result.stdout)
-
-        # Get logs from containers that look like fluster jobs
-        result = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.ID}}", "-n", "10"],
-            capture_output=True,
-            text=True,
-        )
-        for cid in result.stdout.strip().split("\n")[:5]:
-            if cid:
-                logs = subprocess.run(
-                    ["docker", "logs", "--tail", "100", cid],
-                    capture_output=True,
-                    text=True,
-                )
-                output = logs.stdout or logs.stderr
-                if output and output.strip():
-                    print(f"\n--- Container {cid} ---")
-                    print(output)
-
-        print("=" * 60)
 
 
 @click.command()

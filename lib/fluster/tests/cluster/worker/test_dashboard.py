@@ -106,7 +106,6 @@ def worker(mock_bundle_cache, mock_venv_cache, mock_image_cache, mock_runtime):
     """Create Worker with mocked dependencies."""
     config = WorkerConfig(
         port=0,
-        max_concurrent_jobs=5,
         port_range=(50000, 50100),
     )
     return Worker(

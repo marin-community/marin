@@ -202,7 +202,6 @@ def worker(mock_bundle_cache, mock_venv_cache, mock_image_cache, mock_runtime):
     """Create Worker with mocked dependencies."""
     config = WorkerConfig(
         port=0,
-        max_concurrent_jobs=5,
         port_range=(50000, 50100),
         poll_interval_seconds=0.1,  # Fast polling for tests
     )
@@ -478,7 +477,6 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_
 
     config = WorkerConfig(
         port=0,
-        max_concurrent_jobs=5,
         port_range=(50000, 50100),
         poll_interval_seconds=0.1,
     )
@@ -520,7 +518,6 @@ def test_port_retry_exhausted(mock_bundle_cache, mock_venv_cache, mock_image_cac
 
     config = WorkerConfig(
         port=0,
-        max_concurrent_jobs=5,
         port_range=(50000, 50100),
         poll_interval_seconds=0.1,
     )
@@ -639,7 +636,6 @@ def real_worker(cache_dir):
         port=0,
         cache_dir=cache_dir,
         registry="localhost:5000",
-        max_concurrent_jobs=2,
         port_range=(40000, 40100),
         poll_interval_seconds=0.5,  # Faster polling for tests
     )
@@ -741,23 +737,6 @@ class TestWorkerIntegration:
             cluster_pb2.JOB_STATE_SUCCEEDED,
             cluster_pb2.JOB_STATE_FAILED,
         )
-
-    @pytest.mark.slow
-    def test_concurrent_job_limit(self, real_worker, test_bundle):
-        """Test that max_concurrent_jobs is enforced."""
-        if not check_docker_available():
-            pytest.skip("Docker not available")
-
-        requests = [create_integration_run_job_request(test_bundle, f"concurrent-{i}") for i in range(4)]
-
-        _job_ids = [real_worker.submit_job(r) for r in requests]
-
-        time.sleep(1)
-
-        jobs = real_worker.list_jobs()
-        running = sum(1 for j in jobs if j.status == cluster_pb2.JOB_STATE_RUNNING)
-
-        assert running <= 2
 
 
 class TestWorkerServiceIntegration:

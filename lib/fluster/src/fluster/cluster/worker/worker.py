@@ -36,9 +36,9 @@ from fluster.cluster.worker.builder import ImageCache, ImageProvider, VenvCache
 from fluster.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from fluster.cluster.worker.dashboard import WorkerDashboard
 from fluster.cluster.worker.docker import ContainerConfig, ContainerRuntime, DockerRuntime
-from fluster.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
+from fluster.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider, collect_workdir_size_mb
 from fluster.cluster.worker.service import WorkerServiceImpl
-from fluster.cluster.worker.worker_types import Job, collect_workdir_size_mb
+from fluster.cluster.worker.worker_types import Job
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,6 @@ class WorkerConfig:
     port: int = 0
     cache_dir: Path | None = None
     registry: str = "localhost:5000"
-    max_concurrent_jobs: int = 10
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
@@ -154,7 +153,6 @@ class Worker:
         # Job state
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
-        self._semaphore = threading.Semaphore(config.max_concurrent_jobs)
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -347,9 +345,6 @@ class Worker:
         import sys
 
         try:
-            # Acquire semaphore to limit concurrent jobs
-            self._semaphore.acquire()
-
             # Phase 1: Download bundle
             job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="downloading bundle")
             job.started_at_ms = int(time.time() * 1000)
@@ -399,33 +394,9 @@ class Worker:
             # Build environment from user-provided vars + EnvironmentConfig
             env = dict(env_config.env_vars)
 
-            # Auto-inject Fluster system variables (these override user-provided values)
-            env["FLUSTER_JOB_ID"] = job.job_id
-            env["FLUSTER_ATTEMPT_ID"] = str(job.attempt_id)
-
-            if self._config.worker_id:
-                env["FLUSTER_WORKER_ID"] = self._config.worker_id
-
-            if self._config.controller_address:
-                # Only rewrite localhost addresses for Docker containers
-                if isinstance(self._runtime, DockerRuntime):
-                    env["FLUSTER_CONTROLLER_ADDRESS"] = _rewrite_address_for_container(self._config.controller_address)
-                else:
-                    env["FLUSTER_CONTROLLER_ADDRESS"] = self._config.controller_address
-
-            # Inject bundle path for sub-job inheritance
-            if job.request.bundle_gcs_path:
-                env["FLUSTER_BUNDLE_GCS_PATH"] = job.request.bundle_gcs_path
-
-            # Inject bind host - 0.0.0.0 for Docker (so port mapping works), 127.0.0.1 otherwise
-            if isinstance(self._runtime, DockerRuntime):
-                env["FLUSTER_BIND_HOST"] = "0.0.0.0"
-            else:
-                env["FLUSTER_BIND_HOST"] = "127.0.0.1"
-
-            # Inject allocated ports
-            for name, port in job.ports.items():
-                env[f"FLUSTER_PORT_{name.upper()}"] = str(port)
+            # Build fluster system environment based on runtime
+            fluster_env = self._build_fluster_env(job)
+            env.update(fluster_env)
 
             config = ContainerConfig(
                 image=build_result.image_tag,
@@ -479,81 +450,14 @@ class Worker:
             # Report RUNNING state to controller so endpoints become visible
             self._report_job_state(job)
 
-            # Phase 4: Poll loop - check status and collect stats
-            timeout = config.timeout_seconds
-            start_time = time.time()
-
-            while True:
-                # Check if we should stop
-                if job.should_stop:
-                    job.transition_to(cluster_pb2.JOB_STATE_KILLED)
-                    break
-
-                # Check timeout
-                if timeout and (time.time() - start_time) > timeout:
-                    self._runtime.kill(container_id, force=True)
-                    job.transition_to(
-                        cluster_pb2.JOB_STATE_FAILED,
-                        error="Timeout exceeded",
-                        exit_code=-1,
-                    )
-                    break
-
-                # Check container status
-                status = self._runtime.inspect(container_id)
-                if not status.running:
-                    # Read result file only if container succeeded
-                    if status.exit_code == 0 and job.workdir:
-                        result_path = job.workdir / "_result.pkl"
-                        if result_path.exists():
-                            try:
-                                job.result = result_path.read_bytes()
-                            except Exception as e:
-                                job.logs.add("error", f"Failed to read result file: {e}")
-
-                    # Container has stopped
-                    if status.error:
-                        job.transition_to(
-                            cluster_pb2.JOB_STATE_FAILED,
-                            error=status.error,
-                            exit_code=status.exit_code or -1,
-                        )
-                    elif status.exit_code == 0:
-                        job.transition_to(cluster_pb2.JOB_STATE_SUCCEEDED, exit_code=0)
-                    else:
-                        job.transition_to(
-                            cluster_pb2.JOB_STATE_FAILED,
-                            error=f"Exit code: {status.exit_code}",
-                            exit_code=status.exit_code or -1,
-                        )
-                    break
-
-                # Collect stats
-                try:
-                    stats = self._runtime.get_stats(container_id)
-                    if stats.available:
-                        job.current_memory_mb = stats.memory_mb
-                        job.current_cpu_percent = stats.cpu_percent
-                        job.process_count = stats.process_count
-                        if stats.memory_mb > job.peak_memory_mb:
-                            job.peak_memory_mb = stats.memory_mb
-
-                    if job.workdir:
-                        job.disk_mb = collect_workdir_size_mb(job.workdir)
-                except Exception:
-                    pass  # Don't fail job on stats collection errors
-
-                # Sleep before next poll
-                time.sleep(self._config.poll_interval_seconds)
+            # Phase 4: Monitor job execution
+            self._monitor_job(job, container_id, config.timeout_seconds)
 
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
             job.logs.add("error", f"Job failed:\n{error_msg}")
             job.transition_to(cluster_pb2.JOB_STATE_FAILED, error=error_msg)
         finally:
-            # Release semaphore
-            self._semaphore.release()
-
             # Report job state to controller if in terminal state
             if job.status in (
                 cluster_pb2.JOB_STATE_SUCCEEDED,
@@ -570,6 +474,117 @@ class Worker:
                 # Remove working directory (no longer needed since logs come from Docker)
                 if job.workdir and job.workdir.exists():
                     shutil.rmtree(job.workdir, ignore_errors=True)
+
+    def _monitor_job(self, job: Job, container_id: str, timeout_seconds: int | None) -> None:
+        """Monitor job execution: check status, collect stats, handle timeouts.
+
+        Polls container status at regular intervals until the container stops.
+        Collects runtime statistics (CPU, memory, disk) and handles timeout enforcement.
+        Updates job state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
+        """
+        start_time = time.time()
+
+        while True:
+            # Check if we should stop
+            if job.should_stop:
+                job.transition_to(cluster_pb2.JOB_STATE_KILLED)
+                break
+
+            # Check timeout
+            if timeout_seconds and (time.time() - start_time) > timeout_seconds:
+                self._runtime.kill(container_id, force=True)
+                job.transition_to(
+                    cluster_pb2.JOB_STATE_FAILED,
+                    error="Timeout exceeded",
+                    exit_code=-1,
+                )
+                break
+
+            # Check container status
+            status = self._runtime.inspect(container_id)
+            if not status.running:
+                # Read result file only if container succeeded
+                if status.exit_code == 0 and job.workdir:
+                    result_path = job.workdir / "_result.pkl"
+                    if result_path.exists():
+                        try:
+                            job.result = result_path.read_bytes()
+                        except Exception as e:
+                            job.logs.add("error", f"Failed to read result file: {e}")
+
+                # Container has stopped
+                if status.error:
+                    job.transition_to(
+                        cluster_pb2.JOB_STATE_FAILED,
+                        error=status.error,
+                        exit_code=status.exit_code or -1,
+                    )
+                elif status.exit_code == 0:
+                    job.transition_to(cluster_pb2.JOB_STATE_SUCCEEDED, exit_code=0)
+                else:
+                    job.transition_to(
+                        cluster_pb2.JOB_STATE_FAILED,
+                        error=f"Exit code: {status.exit_code}",
+                        exit_code=status.exit_code or -1,
+                    )
+                break
+
+            # Collect stats
+            try:
+                stats = self._runtime.get_stats(container_id)
+                if stats.available:
+                    job.current_memory_mb = stats.memory_mb
+                    job.current_cpu_percent = stats.cpu_percent
+                    job.process_count = stats.process_count
+                    if stats.memory_mb > job.peak_memory_mb:
+                        job.peak_memory_mb = stats.memory_mb
+
+                if job.workdir:
+                    job.disk_mb = collect_workdir_size_mb(job.workdir)
+            except Exception:
+                pass  # Don't fail job on stats collection errors
+
+            # Sleep before next poll
+            time.sleep(self._config.poll_interval_seconds)
+
+    def _build_fluster_env(self, job: Job) -> dict[str, str]:
+        """Build Fluster system environment variables for the job container.
+
+        Auto-injects job metadata and configuration that jobs need to interact
+        with the Fluster cluster (job ID, worker ID, controller address, ports).
+        These override user-provided values.
+        """
+        env = {}
+
+        # Core job metadata
+        env["FLUSTER_JOB_ID"] = job.job_id
+        env["FLUSTER_ATTEMPT_ID"] = str(job.attempt_id)
+
+        if self._config.worker_id:
+            env["FLUSTER_WORKER_ID"] = self._config.worker_id
+
+        if self._config.controller_address:
+            # Only rewrite localhost addresses for Docker containers
+            if isinstance(self._runtime, DockerRuntime):
+                env["FLUSTER_CONTROLLER_ADDRESS"] = _rewrite_address_for_container(self._config.controller_address)
+            else:
+                env["FLUSTER_CONTROLLER_ADDRESS"] = self._config.controller_address
+
+        # Inject bundle path for sub-job inheritance
+        if job.request.bundle_gcs_path:
+            env["FLUSTER_BUNDLE_GCS_PATH"] = job.request.bundle_gcs_path
+
+        # Inject bind host - 0.0.0.0 for Docker (so port mapping works), 127.0.0.1 otherwise
+        if isinstance(self._runtime, DockerRuntime):
+            env["FLUSTER_BIND_HOST"] = "0.0.0.0"
+        else:
+            env["FLUSTER_BIND_HOST"] = "127.0.0.1"
+
+        # Inject allocated ports
+        for name, port in job.ports.items():
+            env[f"FLUSTER_PORT_{name.upper()}"] = str(port)
+
+        return env
 
     def _build_command(self, entrypoint, ports: dict[str, int]) -> list[str]:
         del ports  # Ports are passed via FLUSTER_PORT_* env vars, not serialized
@@ -618,7 +633,7 @@ with open('/workdir/_result.pkl', 'wb') as f:
                 # Send SIGTERM
                 self._runtime.kill(job.container_id, force=False)
 
-                # Wait for graceful shutdown with exponential backoff
+                # Wait for shutdown
                 running_states = (cluster_pb2.JOB_STATE_RUNNING, cluster_pb2.JOB_STATE_BUILDING)
                 stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
                     lambda: job.status not in running_states,

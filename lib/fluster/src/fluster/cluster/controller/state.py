@@ -28,6 +28,21 @@ ControllerJob = Job
 
 
 @dataclass
+class WorkerConfig:
+    """Static worker configuration for v0.
+
+    Args:
+        worker_id: Unique worker identifier
+        address: Worker RPC address (host:port)
+        resources: Worker's available resources
+    """
+
+    worker_id: str
+    address: str
+    resources: cluster_pb2.ResourceSpec
+
+
+@dataclass
 class ControllerWorker:
     """Controller's view of a worker.
 
@@ -357,3 +372,40 @@ class ControllerState:
                         worker.running_jobs.discard(job_id)
 
             return result, removed_endpoints
+
+    # --- Resource and Scheduling Methods ---
+
+    def get_committed_resources(self, worker: ControllerWorker) -> tuple[int, int, int]:
+        """Compute resources committed to running jobs on this worker.
+
+        Returns:
+            (cpu, memory_bytes, gpu_count) tuple of committed resources
+        """
+        from fluster.cluster.controller.resources import get_gpu_count, parse_memory_string
+
+        with self._lock:
+            cpu = 0
+            memory = 0
+            gpu = 0
+
+            for job_id in worker.running_jobs:
+                job = self._jobs.get(job_id)
+                if job:
+                    resources = job.request.resources
+                    cpu += resources.cpu
+                    memory += parse_memory_string(resources.memory)
+                    gpu += get_gpu_count(resources.device)
+
+            return cpu, memory, gpu
+
+    def load_workers_from_config(self, configs: list[WorkerConfig]) -> None:
+        """Load workers from static configuration."""
+        now_ms = int(time.time() * 1000)
+        for cfg in configs:
+            worker = ControllerWorker(
+                worker_id=WorkerId(cfg.worker_id),
+                address=cfg.address,
+                resources=cfg.resources,
+                last_heartbeat_ms=now_ms,
+            )
+            self.add_worker(worker)

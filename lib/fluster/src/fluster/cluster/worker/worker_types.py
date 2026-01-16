@@ -14,7 +14,6 @@
 
 """Internal worker types for job tracking."""
 
-import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
@@ -26,27 +25,6 @@ from pydantic import BaseModel
 from fluster.cluster.types import is_job_finished
 from fluster.rpc import cluster_pb2
 from fluster.rpc.cluster_pb2 import JobState
-
-
-def collect_workdir_size_mb(workdir: Path) -> int:
-    """Calculate workdir size in MB using du -sm."""
-    if not workdir.exists():
-        return 0
-
-    result = subprocess.run(
-        ["du", "-sm", str(workdir)],
-        capture_output=True,
-        text=True,
-    )
-
-    if result.returncode != 0:
-        return 0
-
-    # du -sm output format: "SIZE\tPATH"
-    output = result.stdout.strip()
-    size_str = output.split("\t")[0]
-
-    return int(size_str)
 
 
 class LogLine(BaseModel):

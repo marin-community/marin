@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from fluster.cluster.worker.docker import ContainerConfig, ContainerStats, DockerRuntime
-from fluster.cluster.worker.worker_types import collect_workdir_size_mb
+from fluster.cluster.worker.env_probe import collect_workdir_size_mb
 
 
 def check_docker_available():

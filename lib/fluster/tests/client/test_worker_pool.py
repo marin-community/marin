@@ -271,15 +271,16 @@ def test_dispatch_retries_on_infrastructure_failure():
     """Infrastructure failures cause re-queue if retries remain."""
     # Start a real server for the "good" worker
     server = ActorServer(host="127.0.0.1", port=0)
-    actor_name = "_test_worker"
-    server.register(actor_name, TaskExecutorActor())
+    actor_name_good = "_test_worker_good"
+    server.register(actor_name_good, TaskExecutorActor())
     port = server.serve_background()
     good_url = f"http://127.0.0.1:{port}"
 
     # Worker 1 points to a non-existent endpoint (will fail)
+    actor_name_bad = "_test_worker_bad"
     worker_state_1 = WorkerState(
         worker_id="w-0",
-        worker_name=actor_name,
+        worker_name=actor_name_bad,
         endpoint_url="http://127.0.0.1:9999",
         status=WorkerStatus.IDLE,
     )
@@ -287,12 +288,17 @@ def test_dispatch_retries_on_infrastructure_failure():
     # Worker 2 points to the real server
     worker_state_2 = WorkerState(
         worker_id="w-1",
-        worker_name=actor_name,
+        worker_name=actor_name_good,
         endpoint_url=good_url,
         status=WorkerStatus.IDLE,
     )
 
-    resolver = FixedResolver({actor_name: good_url})
+    resolver = FixedResolver(
+        {
+            actor_name_bad: "http://127.0.0.1:9999",
+            actor_name_good: good_url,
+        }
+    )
     task_queue: Queue[PendingTask] = Queue()
 
     # Start both dispatchers
@@ -485,7 +491,7 @@ class TestWorkerPoolE2E:
         pool._launch_workers()
 
         # Wait for workers to be discovered
-        pool._wait_for_workers(min_workers=2, timeout=5.0)
+        pool.wait_for_workers(min_workers=2, timeout=5.0)
 
         assert pool.size == 2
         assert pool.idle_count == 2
@@ -496,7 +502,7 @@ class TestWorkerPoolE2E:
         pool = harness.pool
 
         pool._launch_workers()
-        pool._wait_for_workers(min_workers=1, timeout=5.0)
+        pool.wait_for_workers(min_workers=1, timeout=5.0)
 
         def add(a, b):
             return a + b
@@ -512,7 +518,7 @@ class TestWorkerPoolE2E:
         pool = harness.pool
 
         pool._launch_workers()
-        pool._wait_for_workers(min_workers=1, timeout=5.0)
+        pool.wait_for_workers(min_workers=1, timeout=5.0)
 
         def greet(name, prefix="Hello"):
             return f"{prefix}, {name}!"
@@ -528,7 +534,7 @@ class TestWorkerPoolE2E:
         pool = harness.pool
 
         pool._launch_workers()
-        pool._wait_for_workers(min_workers=2, timeout=5.0)
+        pool.wait_for_workers(min_workers=2, timeout=5.0)
 
         def square(x):
             return x * x
@@ -544,7 +550,7 @@ class TestWorkerPoolE2E:
         pool = harness.pool
 
         pool._launch_workers()
-        pool._wait_for_workers(min_workers=1, timeout=5.0)
+        pool.wait_for_workers(min_workers=1, timeout=5.0)
 
         def fail():
             raise ValueError("intentional error")
@@ -560,7 +566,7 @@ class TestWorkerPoolE2E:
         pool = harness.pool
 
         pool._launch_workers()
-        pool._wait_for_workers(min_workers=1, timeout=5.0)
+        pool.wait_for_workers(min_workers=1, timeout=5.0)
 
         def create_complex():
             return {
@@ -582,7 +588,7 @@ class TestWorkerPoolE2E:
         pool = harness.pool
 
         pool._launch_workers()
-        pool._wait_for_workers(min_workers=1, timeout=5.0)
+        pool.wait_for_workers(min_workers=1, timeout=5.0)
 
         multiplier = 7
 
@@ -600,7 +606,7 @@ class TestWorkerPoolE2E:
         pool = harness.pool
 
         pool._launch_workers()
-        pool._wait_for_workers(min_workers=2, timeout=5.0)
+        pool.wait_for_workers(min_workers=2, timeout=5.0)
 
         status = pool.status()
 
@@ -616,7 +622,7 @@ class TestWorkerPoolE2E:
         pool = harness.pool
 
         pool._launch_workers()
-        pool._wait_for_workers(min_workers=1, timeout=5.0)
+        pool.wait_for_workers(min_workers=1, timeout=5.0)
 
         # Test successful completion
         future_success = pool.submit(lambda: 42)
@@ -664,7 +670,7 @@ class TestWorkerPoolE2E:
         pool = harness.pool
 
         pool._launch_workers()
-        pool._wait_for_workers(min_workers=1, timeout=5.0)
+        pool.wait_for_workers(min_workers=1, timeout=5.0)
 
         pool.shutdown(wait=False)
 
@@ -706,7 +712,7 @@ class TestWorkerPoolRetry:
         pool._pool_id = "test"
 
         pool._launch_workers()
-        pool._wait_for_workers(min_workers=1, timeout=5.0)
+        pool.wait_for_workers(min_workers=1, timeout=5.0)
 
         # Submit task - may hit failed worker first but should succeed after retry
         future = pool.submit(lambda: "success")
@@ -739,7 +745,7 @@ class TestWorkerPoolRetry:
 
         pool._pool_id = "noretry"
         pool._launch_workers()
-        pool._wait_for_workers(min_workers=1, timeout=5.0)
+        pool.wait_for_workers(min_workers=1, timeout=5.0)
 
         future = pool.submit(lambda: "should fail")
 

@@ -19,6 +19,7 @@ import os
 import socket
 import subprocess
 import urllib.request
+from pathlib import Path
 from typing import Protocol
 
 from fluster.rpc import cluster_pb2
@@ -101,75 +102,25 @@ def _get_ip_address() -> str:
         return "127.0.0.1"
 
 
-def probe_worker_environment() -> cluster_pb2.WorkerMetadata:
-    hostname = socket.gethostname()
-    ip_address = _get_ip_address()
-    cpu_count = os.cpu_count() or 1
-    memory_bytes = _get_memory_total_bytes()
+def collect_workdir_size_mb(workdir: Path) -> int:
+    """Calculate workdir size in MB using du -sm."""
+    if not workdir.exists():
+        return 0
 
-    # TPU environment variables
-    tpu_name = os.environ.get("TPU_NAME", "")
-    tpu_worker_hostnames = os.environ.get("TPU_WORKER_HOSTNAMES", "")
-    tpu_worker_id = os.environ.get("TPU_WORKER_ID", "")
-    tpu_chips_per_host_bounds = os.environ.get("TPU_CHIPS_PER_HOST_BOUNDS", "")
-
-    # GPU info via nvidia-smi
-    gpu_count, gpu_name, gpu_memory_mb = _probe_gpu_info()
-
-    # GCE metadata
-    gce_instance_name, gce_zone = _probe_gce_metadata()
-
-    memory_gb = memory_bytes // (1024**3)
-    logger.info(
-        "Worker environment: hostname=%s ip=%s cpu=%d memory=%dGB gpu=%d tpu=%s",
-        hostname,
-        ip_address,
-        cpu_count,
-        memory_gb,
-        gpu_count,
-        tpu_name or "none",
+    result = subprocess.run(
+        ["du", "-sm", str(workdir)],
+        capture_output=True,
+        text=True,
     )
 
-    return cluster_pb2.WorkerMetadata(
-        hostname=hostname,
-        ip_address=ip_address,
-        cpu_count=cpu_count,
-        memory_bytes=memory_bytes,
-        tpu_name=tpu_name,
-        tpu_worker_hostnames=tpu_worker_hostnames,
-        tpu_worker_id=tpu_worker_id,
-        tpu_chips_per_host_bounds=tpu_chips_per_host_bounds,
-        gpu_count=gpu_count,
-        gpu_name=gpu_name,
-        gpu_memory_mb=gpu_memory_mb,
-        gce_instance_name=gce_instance_name,
-        gce_zone=gce_zone,
-    )
+    if result.returncode != 0:
+        return 0
 
+    # du -sm output format: "SIZE\tPATH"
+    output = result.stdout.strip()
+    size_str = output.split("\t")[0]
 
-def build_resource_spec(metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec:
-    memory_gb = metadata.memory_bytes // (1024**3)
-
-    resources = cluster_pb2.ResourceSpec(
-        cpu=metadata.cpu_count,
-        memory=f"{memory_gb}g",
-    )
-
-    # Add TPU device if detected
-    if metadata.tpu_name:
-        resources.device.CopyFrom(cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant=metadata.tpu_name)))
-    # Add GPU device if detected
-    elif metadata.gpu_count > 0:
-        resources.device.CopyFrom(
-            cluster_pb2.DeviceConfig(
-                gpu=cluster_pb2.GpuDevice(
-                    variant=metadata.gpu_name or "auto",
-                    count=metadata.gpu_count,
-                )
-            )
-        )
-
-    return resources
+    return int(size_str)
 
 
 class EnvironmentProvider(Protocol):
@@ -184,7 +135,70 @@ class DefaultEnvironmentProvider:
     """Default implementation that probes real system resources."""
 
     def probe(self) -> cluster_pb2.WorkerMetadata:
-        return probe_worker_environment()
+        hostname = socket.gethostname()
+        ip_address = _get_ip_address()
+        cpu_count = os.cpu_count() or 1
+        memory_bytes = _get_memory_total_bytes()
+
+        # TPU environment variables
+        tpu_name = os.environ.get("TPU_NAME", "")
+        tpu_worker_hostnames = os.environ.get("TPU_WORKER_HOSTNAMES", "")
+        tpu_worker_id = os.environ.get("TPU_WORKER_ID", "")
+        tpu_chips_per_host_bounds = os.environ.get("TPU_CHIPS_PER_HOST_BOUNDS", "")
+
+        # GPU info via nvidia-smi
+        gpu_count, gpu_name, gpu_memory_mb = _probe_gpu_info()
+
+        # GCE metadata
+        gce_instance_name, gce_zone = _probe_gce_metadata()
+
+        memory_gb = memory_bytes // (1024**3)
+        logger.info(
+            "Worker environment: hostname=%s ip=%s cpu=%d memory=%dGB gpu=%d tpu=%s",
+            hostname,
+            ip_address,
+            cpu_count,
+            memory_gb,
+            gpu_count,
+            tpu_name or "none",
+        )
+
+        return cluster_pb2.WorkerMetadata(
+            hostname=hostname,
+            ip_address=ip_address,
+            cpu_count=cpu_count,
+            memory_bytes=memory_bytes,
+            tpu_name=tpu_name,
+            tpu_worker_hostnames=tpu_worker_hostnames,
+            tpu_worker_id=tpu_worker_id,
+            tpu_chips_per_host_bounds=tpu_chips_per_host_bounds,
+            gpu_count=gpu_count,
+            gpu_name=gpu_name,
+            gpu_memory_mb=gpu_memory_mb,
+            gce_instance_name=gce_instance_name,
+            gce_zone=gce_zone,
+        )
 
     def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec:
-        return build_resource_spec(metadata)
+        memory_gb = metadata.memory_bytes // (1024**3)
+
+        resources = cluster_pb2.ResourceSpec(
+            cpu=metadata.cpu_count,
+            memory=f"{memory_gb}g",
+        )
+
+        # Add TPU device if detected
+        if metadata.tpu_name:
+            resources.device.CopyFrom(cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant=metadata.tpu_name)))
+        # Add GPU device if detected
+        elif metadata.gpu_count > 0:
+            resources.device.CopyFrom(
+                cluster_pb2.DeviceConfig(
+                    gpu=cluster_pb2.GpuDevice(
+                        variant=metadata.gpu_name or "auto",
+                        count=metadata.gpu_count,
+                    )
+                )
+            )
+
+        return resources

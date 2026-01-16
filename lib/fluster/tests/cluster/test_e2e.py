@@ -64,9 +64,8 @@ class E2ECluster:
     Set use_docker=True to use real Docker containers.
     """
 
-    def __init__(self, max_concurrent_jobs: int = 3, num_workers: int = 1, use_docker: bool = False):
+    def __init__(self, num_workers: int = 1, use_docker: bool = False):
         self._controller_port = find_free_port()
-        self._max_concurrent_jobs = max_concurrent_jobs
         self._num_workers = num_workers
         self._use_docker = use_docker
 
@@ -130,7 +129,6 @@ class E2ECluster:
                 host="127.0.0.1",
                 port=worker_port,
                 cache_dir=cache_path,
-                max_concurrent_jobs=self._max_concurrent_jobs,
                 controller_address=f"http://127.0.0.1:{self._controller_port}",
                 worker_id=worker_id,
                 poll_interval_seconds=0.1,  # Fast polling for tests
@@ -236,14 +234,14 @@ class E2ECluster:
 @pytest.fixture(scope="session")
 def test_cluster(use_docker):
     """Provide a running test cluster for E2E tests (session-scoped)."""
-    with E2ECluster(max_concurrent_jobs=3, use_docker=use_docker) as cluster:
+    with E2ECluster(use_docker=use_docker) as cluster:
         yield cluster
 
 
 @pytest.fixture(scope="session")
 def multi_worker_cluster(use_docker):
     """Provide a cluster with multiple workers (session-scoped)."""
-    with E2ECluster(max_concurrent_jobs=3, num_workers=3, use_docker=use_docker) as cluster:
+    with E2ECluster(num_workers=3, use_docker=use_docker) as cluster:
         yield cluster
 
 

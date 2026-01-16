@@ -72,25 +72,23 @@ def test_fetch_logs_returns_log_entry_type(local_client, resources):
         assert isinstance(entry.data, str)
 
 
-def test_log_poller_collects_logs(local_client, resources):
+def test_log_poller_collects_logs(local_client, resources, caplog):
     """Verify LogPoller collects logs as job runs."""
-    collected: list[LogEntry] = []
-
-    def collector(entry: LogEntry):
-        collected.append(entry)
+    import logging
 
     entrypoint = Entrypoint.from_callable(logging_job)
     job_id = local_client.submit(entrypoint, "poller-test", resources)
 
-    poller = LogPoller(local_client, job_id, collector, poll_interval=0.1)
-    poller.start()
+    with caplog.at_level(logging.INFO, logger="fluster.client.log_poller"):
+        poller = LogPoller(local_client, job_id, poll_interval=0.1)
+        poller.start()
 
-    local_client.wait(job_id)
-    time.sleep(0.5)
-    poller.stop()
+        local_client.wait(job_id)
+        time.sleep(0.5)
+        poller.stop()
 
-    log_data = [entry.data for entry in collected]
-    assert any("Log line 1" in d for d in log_data)
+    log_text = caplog.text
+    assert "Log line 1" in log_text
 
 
 def test_wait_with_stream_logs(local_client, resources, caplog):

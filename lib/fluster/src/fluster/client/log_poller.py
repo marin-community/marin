@@ -14,21 +14,27 @@
 
 """Log polling utility for streaming job logs."""
 
+import logging
 import threading
-from collections.abc import Callable
 
-from fluster.client.client import FlusterClient, LogEntry
+from fluster.client.client import FlusterClient
 from fluster.cluster.types import JobId
+
+logger = logging.getLogger(__name__)
 
 
 class LogPoller:
-    """Background thread that polls for job logs and calls a handler.
+    """Background thread that polls for job logs and writes them to logger.info.
+
+    Can be used as a context manager for automatic start/stop:
 
     Example:
-        def print_log(entry: LogEntry):
-            print(f"[{entry.source}] {entry.data}")
+        with LogPoller(client, job_id):
+            # logs are automatically polled and written to logger.info
+            # ... wait for job ...
 
-        poller = LogPoller(client, job_id, print_log)
+    Or manually:
+        poller = LogPoller(client, job_id)
         poller.start()
         # ... wait for job ...
         poller.stop()
@@ -38,7 +44,6 @@ class LogPoller:
         self,
         client: FlusterClient,
         job_id: JobId,
-        handler: Callable[[LogEntry], None],
         poll_interval: float = 1.0,
     ):
         """Initialize log poller.
@@ -46,12 +51,10 @@ class LogPoller:
         Args:
             client: FlusterClient to use for fetching logs
             job_id: Job ID to poll logs for
-            handler: Callback function for each new log entry
             poll_interval: Seconds between polls
         """
         self._client = client
         self._job_id = job_id
-        self._handler = handler
         self._poll_interval = poll_interval
         self._last_timestamp_ms = 0
         self._stop_event = threading.Event()
@@ -78,6 +81,13 @@ class LogPoller:
         self._thread = None
         self._stop_event.clear()
 
+    def __enter__(self) -> "LogPoller":
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.stop()
+
     def _poll_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
@@ -88,7 +98,7 @@ class LogPoller:
                 for entry in logs:
                     if entry.timestamp_ms > self._last_timestamp_ms:
                         self._last_timestamp_ms = entry.timestamp_ms
-                    self._handler(entry)
+                    logger.info("[%s] %s", entry.source, entry.data)
             except (ConnectionError, OSError, ValueError):
                 pass
 

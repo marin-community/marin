@@ -24,13 +24,6 @@ from fluster.cluster.worker.docker import DockerImageBuilder
 from fluster.cluster.worker.worker_types import JobLogs
 
 
-@dataclass
-class VenvCacheEntry:
-    deps_hash: str
-    created_at: float
-    size_bytes: int
-
-
 class VenvCache:
     """Utility for computing dependency hashes for cache invalidation.
 

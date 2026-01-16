@@ -165,7 +165,7 @@ class Controller:
         # Background loop state
         self._stop = False
         self._wake_event = threading.Event()
-        self._loop_thread: threading.Thread | None = None
+        self._scheduling_loop_thread: threading.Thread | None = None
         self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
 
@@ -184,11 +184,11 @@ class Controller:
         self._stop = False
 
         # Start main controller loop
-        self._loop_thread = threading.Thread(
-            target=self._run_loop,
+        self._scheduling_loop_thread = threading.Thread(
+            target=self._run_scheduling_loop,
             daemon=True,
         )
-        self._loop_thread.start()
+        self._scheduling_loop_thread.start()
 
         # Start dashboard server in background thread
         self._server_thread = threading.Thread(
@@ -207,10 +207,10 @@ class Controller:
         """Stop all background components gracefully."""
         self._stop = True
         self._wake_event.set()
-        if self._loop_thread:
-            self._loop_thread.join(timeout=5.0)
+        if self._scheduling_loop_thread:
+            self._scheduling_loop_thread.join(timeout=5.0)
 
-    def _run_loop(self) -> None:
+    def _run_scheduling_loop(self) -> None:
         """Main controller loop running scheduling and worker timeout checks."""
         while not self._stop:
             # Wait for wake signal or timeout (use scheduler interval)

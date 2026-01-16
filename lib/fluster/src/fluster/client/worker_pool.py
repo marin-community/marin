@@ -49,13 +49,14 @@ from queue import Empty, Queue
 from typing import Any, Generic, TypeVar
 
 import cloudpickle
+from connectrpc.errors import ConnectError
 
 from fluster.actor import ActorServer
+from fluster.actor.client import ActorClient
 from fluster.actor.resolver import Resolver
 from fluster.client.client import FlusterClient, fluster_ctx
 from fluster.cluster.types import Entrypoint, JobId
-from fluster.rpc import actor_pb2, cluster_pb2
-from fluster.rpc.actor_connect import ActorServiceClientSync
+from fluster.rpc import cluster_pb2
 from fluster.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -70,14 +71,6 @@ class WorkerStatus(Enum):
     IDLE = auto()  # Ready to accept tasks
     BUSY = auto()  # Currently executing a task
     FAILED = auto()  # Worker has failed/disconnected
-
-
-class UserException(Exception):
-    """Wrapper for exceptions raised by user code (not infrastructure failures)."""
-
-    def __init__(self, inner: BaseException):
-        self.inner = inner
-        super().__init__(str(inner))
 
 
 @dataclass
@@ -163,8 +156,8 @@ def worker_job_entrypoint(pool_id: str, worker_index: int) -> None:
     # Unique name per worker
     worker_name = f"_workerpool_{pool_id}:worker-{worker_index}"
 
-    print(f"Worker starting: pool_id={pool_id}, worker_index={worker_index}")
-    print(f"Worker name: {worker_name}, job_id={ctx.job_id}")
+    logger.info("Worker starting: pool_id=%s, worker_index=%d", pool_id, worker_index)
+    logger.info("Worker name: %s, job_id=%s", worker_name, ctx.job_id)
 
     # Start actor server
     server = ActorServer(host="0.0.0.0")
@@ -176,10 +169,10 @@ def worker_job_entrypoint(pool_id: str, worker_index: int) -> None:
         raise RuntimeError("No registry available - are you running in a cluster context?")
     address = f"localhost:{actual_port}"
     ctx.registry.register(worker_name, address, {"job_id": ctx.job_id})
-    print(f"ActorServer started and registered on port {actual_port}")
+    logger.info("ActorServer started and registered on port %d", actual_port)
 
     # Serve forever
-    print("Worker ready, waiting for tasks...")
+    logger.info("Worker ready, waiting for tasks...")
     while True:
         time.sleep(1)
 
@@ -210,6 +203,7 @@ class WorkerDispatcher:
         self._shutdown = threading.Event()
         self._thread: threading.Thread | None = None
         self._discover_backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
+        self._actor_client: ActorClient | None = None
 
     def start(self) -> None:
         if self._context is not None:
@@ -243,6 +237,14 @@ class WorkerDispatcher:
             if self.state.status == WorkerStatus.FAILED:
                 break
 
+            # Initialize actor client if needed (handles test cases where worker starts IDLE)
+            if self._actor_client is None:
+                self._actor_client = ActorClient(
+                    resolver=self._resolver,
+                    name=self.state.worker_name,
+                    timeout=self._timeout,
+                )
+
             task = self._get_task()
             if task:
                 self._execute_task(task)
@@ -254,7 +256,12 @@ class WorkerDispatcher:
             self.state.endpoint_url = endpoint.url
             self.state.status = WorkerStatus.IDLE
             self._discover_backoff.reset()
-            print(f"Worker {self.state.worker_id} discovered at {endpoint.url}")
+            self._actor_client = ActorClient(
+                resolver=self._resolver,
+                name=self.state.worker_name,
+                timeout=self._timeout,
+            )
+            logger.info("Worker %s discovered at %s", self.state.worker_id, endpoint.url)
         else:
             time.sleep(self._discover_backoff.next_interval())
 
@@ -271,26 +278,29 @@ class WorkerDispatcher:
         self.state.current_task_id = task.task_id
 
         try:
-            if self.state.endpoint_url is None:
-                raise RuntimeError(f"Worker {self.state.worker_id} has no endpoint URL")
-            result = _call_worker_endpoint(
-                endpoint_url=self.state.endpoint_url,
-                actor_name=self.state.worker_name,
-                task=task,
-                timeout=self._timeout,
+            if self._actor_client is None:
+                raise RuntimeError(f"Worker {self.state.worker_id} has no actor client")
+
+            result = self._actor_client.execute(
+                task.serialized_fn,
+                task.serialized_args,
+                task.serialized_kwargs,
             )
             task.future.set_result(result)
             self.state.tasks_completed += 1
-        except UserException as e:
-            task.future.set_exception(e.inner)
-            self.state.tasks_failed += 1
         except Exception as e:
-            if task.retries_remaining > 0:
+            # ActorClient propagates user exceptions directly (no UserException wrapper needed)
+            # We treat RuntimeError/TimeoutError/ConnectError as infrastructure failures eligible for retry
+            is_infrastructure_failure = isinstance(e, (RuntimeError, TimeoutError, ConnectionError, ConnectError))
+
+            if is_infrastructure_failure and task.retries_remaining > 0:
                 task.retries_remaining -= 1
                 self._task_queue.put(task)
-                print(
-                    f"Worker {self.state.worker_id} failed, re-queuing task {task.task_id} "
-                    f"({task.retries_remaining} retries left)"
+                logger.exception(
+                    "Worker %s failed, re-queuing task %s (%d retries left)",
+                    self.state.worker_id,
+                    task.task_id,
+                    task.retries_remaining,
                 )
                 self.state.status = WorkerStatus.FAILED
                 self.state.current_task_id = None
@@ -304,42 +314,6 @@ class WorkerDispatcher:
                 self.state.status = WorkerStatus.IDLE
                 self.state.current_task_id = None
                 self._task_queue.task_done()
-
-
-def _call_worker_endpoint(
-    endpoint_url: str,
-    actor_name: str,
-    task: PendingTask,
-    timeout: float,
-) -> Any:
-    """Make a direct RPC call to a specific worker endpoint."""
-    client = ActorServiceClientSync(
-        address=endpoint_url,
-        timeout_ms=int(timeout * 1000),
-    )
-
-    call = actor_pb2.ActorCall(
-        method_name="execute",
-        actor_name=actor_name,
-        serialized_args=cloudpickle.dumps(
-            (
-                task.serialized_fn,
-                task.serialized_args,
-                task.serialized_kwargs,
-            )
-        ),
-        serialized_kwargs=cloudpickle.dumps({}),
-    )
-
-    resp = client.call(call)
-
-    if resp.HasField("error"):
-        if resp.error.serialized_exception:
-            # User exception - wrap it so we know not to retry
-            raise UserException(cloudpickle.loads(resp.error.serialized_exception))
-        raise RuntimeError(f"{resp.error.error_type}: {resp.error.message}")
-
-    return cloudpickle.loads(resp.serialized_value)
 
 
 @dataclass
@@ -406,7 +380,7 @@ class WorkerPool:
             results = [f.result() for f in futures]
 
             # Check pool status
-            pool.print_status()
+            status = pool.status()
     """
 
     def __init__(
@@ -443,7 +417,7 @@ class WorkerPool:
 
     def __enter__(self) -> "WorkerPool":
         self._launch_workers()
-        self._wait_for_workers(min_workers=1)
+        self.wait_for_workers()
         return self
 
     def __exit__(self, *_):
@@ -507,40 +481,28 @@ class WorkerPool:
             dispatcher.start()
             self._dispatchers.append(dispatcher)
 
-    def _wait_for_workers(
-        self,
-        min_workers: int = 1,
-        timeout: float = 60.0,
-    ) -> None:
-        """Wait for workers to register.
-
-        Args:
-            min_workers: Minimum number of workers required
-            timeout: Maximum time to wait in seconds
-
-        Raises:
-            TimeoutError: If min_workers not available within timeout
-        """
-        ExponentialBackoff(initial=0.05, maximum=1.0).wait_until_or_raise(
-            lambda: self.size >= min_workers,
-            timeout=timeout,
-            error_message=f"Only {self.size} of {min_workers} workers registered within {timeout}s",
-        )
-
     def wait_for_workers(
         self,
         min_workers: int | None = None,
-        timeout: float = 60.0,
+        timeout: float = 600.0,
     ) -> None:
         """Wait for workers to become available.
 
         Args:
             min_workers: Minimum workers required (default: all workers)
             timeout: Maximum time to wait in seconds
+
+        Raises:
+            TimeoutError: If min_workers not available within timeout
         """
         if min_workers is None:
             min_workers = self._config.num_workers
-        self._wait_for_workers(min_workers=min_workers, timeout=timeout)
+
+        ExponentialBackoff(initial=0.05, maximum=1.0).wait_until_or_raise(
+            lambda: self.size >= min_workers,
+            timeout=timeout,
+            error_message=f"Only {self.size} of {min_workers} workers registered within {timeout}s",
+        )
 
     def submit(
         self,
@@ -628,23 +590,6 @@ class WorkerPool:
             tasks_failed=total_failed,
             worker_details=worker_details,
         )
-
-    def print_status(self) -> None:
-        s = self.status()
-        print(f"WorkerPool[{s.pool_id}]")
-        print(
-            f"  Workers: {s.num_workers} total "
-            f"({s.workers_idle} idle, {s.workers_busy} busy, "
-            f"{s.workers_pending} pending, {s.workers_failed} failed)"
-        )
-        print(f"  Tasks: {s.tasks_queued} queued, " f"{s.tasks_completed} completed, {s.tasks_failed} failed")
-        print("  Worker details:")
-        for w in s.worker_details:
-            task_info = f", task={w['current_task_id']}" if w["current_task_id"] else ""
-            print(
-                f"    {w['worker_id']}: {w['status']}{task_info} "
-                f"(done={w['tasks_completed']}, err={w['tasks_failed']})"
-            )
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the worker pool.
