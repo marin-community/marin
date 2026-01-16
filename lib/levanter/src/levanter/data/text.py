@@ -14,6 +14,7 @@ from itertools import chain
 from typing import (
     Any,
     Dict,
+    Generic,
     List,
     Literal,
     Mapping,
@@ -89,9 +90,9 @@ LEDGER_FILE = "ledger.json"
 DEFAULT_IGNORE_INDEX = -100  # Mirrors pytorch's default ignore index
 
 
-class TokenSeqDataset(AsyncDataset[np.ndarray]):
+class GenericTokenSeqDataset(AsyncDataset[T_co], Generic[T_co]):
     """
-    A dataset that yields sequences of tokens of fixed length from an underlying TreeCache.
+    A dataset that yields fixed-length sequences from an underlying TreeCache.
 
     :param doc_cache: the TreeCache to read from
     :param seq_len: The max length of sequences to emit
@@ -105,13 +106,13 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         self._cached_len: Optional[int] = None
 
     async def async_len(self) -> int:
-        token_arrays = await self._await_token_cache()
+        token_arrays = await self._await_cache()
         return token_arrays.data_size // self.seq_len
 
-    async def _await_token_cache(self) -> JaggedArrayStore:
+    async def _await_cache(self, key: str = "input_ids") -> JaggedArrayStore:
         if self._store is None:
             self._store = self.doc_cache.store
-        return self._store.tree["input_ids"]
+        return self._store.tree[key]
 
     async def final_length_is_known(self) -> bool:
         return await self.doc_cache.final_length_is_known()
@@ -120,23 +121,8 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         return True
 
     async def current_len(self) -> Optional[int]:
-        store = await self._await_token_cache()
+        store = await self._await_cache()
         return store.data_size // self.seq_len
-
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
-        token_arrays = await self._await_token_cache()
-        # logger.info(f"Time to get token cache: {time.time() - time_in}")
-        ds_len = await self.wait_until_len_at_least(max(indices) + 1)
-        if ds_len is not None and ds_len < max(indices) + 1:
-            raise ValueError("Requested indices beyond the end of the dataset")
-        offsets = np.array(indices, dtype=np.int64) * self.seq_len
-        with ts.Batch():
-            out = []
-            for offset in offsets:
-                out.append(token_arrays.data[offset : offset + self.seq_len].read())
-
-        out = await asyncio.gather(*out)
-        return out
 
     async def wait_until_len_at_least(self, length: int) -> int:
         # length is brutally slow to compute, so we cache it
@@ -149,40 +135,27 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         return length
 
 
-class WeightedTokenSeqDataset(AsyncDataset[dict]):
-    """
-    A dataset that yields sequences of tokens and loss weights from a cache.
+class TokenSeqDataset(GenericTokenSeqDataset[np.ndarray]):
+    """A dataset that yields sequences of tokens from a cache."""
 
-    Returns dicts with 'input_ids' and 'loss_weight' arrays of fixed length.
-    """
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
+        token_arrays = await self._await_cache()
+        ds_len = await self.wait_until_len_at_least(max(indices) + 1)
+        if ds_len is not None and ds_len < max(indices) + 1:
+            raise ValueError("Requested indices beyond the end of the dataset")
+        offsets = np.array(indices, dtype=np.int64) * self.seq_len
+        with ts.Batch():
+            out = []
+            for offset in offsets:
+                out.append(token_arrays.data[offset : offset + self.seq_len].read())
 
-    def __init__(self, doc_cache: TreeCache[dict], seq_len: int):
-        super().__init__()
-        self.doc_cache = doc_cache
-        self.seq_len = seq_len
-        self._store: Optional[TreeStore] = doc_cache.store
-        self._cached_len: Optional[int] = None
+        return await asyncio.gather(*out)
 
-    async def async_len(self) -> int:
-        token_arrays = await self._await_cache("input_ids")
-        return token_arrays.data_size // self.seq_len
 
-    async def _await_cache(self, key: str) -> JaggedArrayStore:
-        if self._store is None:
-            self._store = self.doc_cache.store
-        return self._store.tree[key]
+class WeightedTokenSeqDataset(GenericTokenSeqDataset[dict[str, np.ndarray]]):
+    """A dataset that yields sequences of tokens and loss weights from a cache."""
 
-    async def final_length_is_known(self) -> bool:
-        return await self.doc_cache.final_length_is_known()
-
-    def is_finite(self) -> bool:
-        return True
-
-    async def current_len(self) -> Optional[int]:
-        store = await self._await_cache("input_ids")
-        return store.data_size // self.seq_len
-
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[dict]:
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[dict[str, np.ndarray]]:
         token_arrays = await self._await_cache("input_ids")
         weight_arrays = await self._await_cache("loss_weight")
 
@@ -203,14 +176,6 @@ class WeightedTokenSeqDataset(AsyncDataset[dict]):
         weights = await asyncio.gather(*weight_reads)
 
         return [{"input_ids": t, "loss_weight": w} for t, w in zip(tokens, weights)]
-
-    async def wait_until_len_at_least(self, length: int) -> int:
-        if self._cached_len is not None and self._cached_len >= length:
-            return self._cached_len
-
-        length = await super().wait_until_len_at_least(length)
-        self._cached_len = length
-        return length
 
 
 class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
