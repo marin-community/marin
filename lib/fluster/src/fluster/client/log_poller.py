@@ -14,15 +14,11 @@
 
 """Log polling utility for streaming job logs."""
 
-from __future__ import annotations
-
 import threading
 from collections.abc import Callable
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from fluster.client.client import FlusterClient, LogEntry
-    from fluster.cluster.types import JobId
+from fluster.client.client import FlusterClient, LogEntry
+from fluster.cluster.types import JobId
 
 
 class LogPoller:

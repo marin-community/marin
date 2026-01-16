@@ -91,3 +91,22 @@ def test_log_poller_collects_logs(local_client, resources):
 
     log_data = [entry.data for entry in collected]
     assert any("Log line 1" in d for d in log_data)
+
+
+def test_wait_with_stream_logs(local_client, resources, caplog):
+    """Verify wait(stream_logs=True) logs output while waiting."""
+    import logging
+
+    entrypoint = Entrypoint.from_callable(logging_job)
+    job_id = local_client.submit(entrypoint, "stream-test", resources)
+
+    with caplog.at_level(logging.INFO, logger="fluster.client.client"):
+        status = local_client.wait(job_id, stream_logs=True)
+
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    log_text = caplog.text
+    assert f"[{job_id}]" in log_text
+    assert "Log line 1" in log_text
+    assert "Log line 2" in log_text
+    assert "Log line 3" in log_text

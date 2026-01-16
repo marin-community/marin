@@ -36,11 +36,14 @@ Example:
     sub_job_id = ctx.client.submit(entrypoint, "sub-job", resources)
 """
 
+import logging
 import os
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -52,8 +55,11 @@ from fluster.cluster.client import (
     RemoteClusterClient,
     get_job_info,
 )
-from fluster.cluster.types import Entrypoint, JobId, Namespace
+from fluster.cluster.types import Entrypoint, is_job_finished, JobId, Namespace
 from fluster.rpc import cluster_pb2
+from fluster.time_utils import ExponentialBackoff
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Log Entry
@@ -605,6 +611,8 @@ class FlusterClient:
         job_id: JobId,
         timeout: float = 300.0,
         poll_interval: float = 2.0,
+        *,
+        stream_logs: bool = False,
     ) -> cluster_pb2.JobStatus:
         """Wait for job to complete.
 
@@ -612,6 +620,7 @@ class FlusterClient:
             job_id: Job ID to wait for
             timeout: Maximum time to wait in seconds
             poll_interval: Maximum time between status checks
+            stream_logs: If True, stream logs to stdout while waiting
 
         Returns:
             Final JobStatus
@@ -619,7 +628,39 @@ class FlusterClient:
         Raises:
             TimeoutError: If job doesn't complete within timeout
         """
-        return self._cluster.wait_for_job(job_id, timeout, poll_interval)
+        if not stream_logs:
+            return self._cluster.wait_for_job(job_id, timeout, poll_interval)
+
+        last_timestamp_ms = 0
+        start = time.monotonic()
+        backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
+
+        while True:
+            # Fetch and emit logs since last check
+            try:
+                logs = self.fetch_logs(job_id, start_ms=last_timestamp_ms)
+                for entry in logs:
+                    last_timestamp_ms = max(last_timestamp_ms, entry.timestamp_ms)
+                    _print_log_entry(job_id, entry)
+            except ValueError:
+                pass  # Job not yet scheduled
+
+            # Check job status
+            status = self._cluster.get_job_status(job_id)
+            if is_job_finished(status.state):
+                # Final drain to catch any remaining logs
+                try:
+                    for entry in self.fetch_logs(job_id, start_ms=last_timestamp_ms):
+                        _print_log_entry(job_id, entry)
+                except ValueError:
+                    pass
+                return status
+
+            elapsed = time.monotonic() - start
+            if elapsed >= timeout:
+                raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
+
+            time.sleep(backoff.next_interval())
 
     def terminate(self, job_id: JobId) -> None:
         """Terminate a running job.
@@ -714,6 +755,13 @@ class FlusterClient:
             wait: If True, wait for pending jobs to complete (local mode only)
         """
         self._cluster.shutdown(wait=wait)
+
+
+def _print_log_entry(job_id: JobId, entry: LogEntry) -> None:
+    """Log a job log entry."""
+    ts = datetime.fromtimestamp(entry.timestamp_ms / 1000, tz=timezone.utc)
+    ts_str = ts.strftime("%H:%M:%S")
+    logger.info("[%s][%s] %s", job_id, ts_str, entry.data)
 
 
 # =============================================================================

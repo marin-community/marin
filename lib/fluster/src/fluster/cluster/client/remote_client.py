@@ -58,6 +58,16 @@ class RemoteClusterClient:
             address=controller_address,
             timeout_ms=timeout_ms,
         )
+        self._worker_clients: dict[str, WorkerServiceClientSync] = {}
+
+    def _get_worker_client(self, worker_address: str) -> WorkerServiceClientSync:
+        """Get or create a cached worker client for the given address."""
+        if worker_address not in self._worker_clients:
+            self._worker_clients[worker_address] = WorkerServiceClientSync(
+                address=f"http://{worker_address}",
+                timeout_ms=self._timeout_ms,
+            )
+        return self._worker_clients[worker_address]
 
     def submit_job(
         self,
@@ -237,14 +247,15 @@ class RemoteClusterClient:
         return list(response.jobs)
 
     def shutdown(self, wait: bool = True) -> None:
-        """Shutdown the client.
-
-        No-op for RemoteClusterClient - the RPC client doesn't hold resources.
+        """Shutdown the client and release resources.
 
         Args:
-            wait: Ignored
+            wait: Ignored (kept for interface compatibility)
         """
         del wait
+        for client in self._worker_clients.values():
+            client.close()
+        self._worker_clients.clear()
 
     def fetch_logs(
         self,
@@ -270,20 +281,14 @@ class RemoteClusterClient:
         if not status.worker_address:
             raise ValueError(f"Job {job_id} has no worker assigned (state: {cluster_pb2.JobState.Name(status.state)})")
 
-        worker_client = WorkerServiceClientSync(
-            address=f"http://{status.worker_address}",
-            timeout_ms=self._timeout_ms,
+        worker_client = self._get_worker_client(status.worker_address)
+        filter_proto = cluster_pb2.Worker.FetchLogsFilter(
+            start_ms=start_ms,
+            max_lines=max_lines,
         )
-        try:
-            filter_proto = cluster_pb2.Worker.FetchLogsFilter(
-                start_ms=start_ms,
-                max_lines=max_lines,
-            )
-            request = cluster_pb2.Worker.FetchLogsRequest(
-                job_id=job_id,
-                filter=filter_proto,
-            )
-            response = worker_client.fetch_logs(request)
-            return list(response.logs)
-        finally:
-            worker_client.close()
+        request = cluster_pb2.Worker.FetchLogsRequest(
+            job_id=job_id,
+            filter=filter_proto,
+        )
+        response = worker_client.fetch_logs(request)
+        return list(response.logs)
