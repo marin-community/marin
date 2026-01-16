@@ -12,20 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Fluster client package.
-
-This package provides the "smart" client layer for Fluster:
-- FlusterClient: High-level client with context magic (local or remote)
-- FlusterContext: Execution context available in jobs
-- EndpointRegistry: Protocol for actor endpoint registration
-- WorkerPool: Task dispatch to worker pools
-
-For resolver implementations:
-- FixedResolver, GcsResolver: see fluster.actor.resolver
-- ClusterResolver: see fluster.client.resolver
-
-For low-level cluster operations, see fluster.cluster.client.
-"""
+"""High-level client layer with automatic namespace management and job hierarchy."""
 
 from fluster.actor.resolver import (
     FixedResolver,

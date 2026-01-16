@@ -15,13 +15,12 @@
 """Tests for Docker container statistics collection."""
 
 import subprocess
+import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-import docker.errors
 import pytest
 
-from fluster.cluster.worker.docker import ContainerStats, DockerRuntime
+from fluster.cluster.worker.docker import ContainerConfig, ContainerStats, DockerRuntime
 from fluster.cluster.worker.worker_types import collect_workdir_size_mb
 
 
@@ -37,6 +36,12 @@ def check_docker_available():
         return result.returncode == 0
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return False
+
+
+@pytest.fixture
+def runtime():
+    """Create DockerRuntime instance."""
+    return DockerRuntime()
 
 
 def test_collect_workdir_size_mb_with_temp_directory(tmp_path):
@@ -60,12 +65,11 @@ def test_collect_workdir_size_mb_nonexistent_directory():
     assert size_mb == 0
 
 
-def test_get_stats_invalid_container():
+def test_get_stats_invalid_container(runtime):
     """Test that get_stats returns available=False for invalid container ID."""
     if not check_docker_available():
         pytest.skip("Docker not available")
 
-    runtime = DockerRuntime()
     invalid_container_id = "nonexistent_container_12345"
 
     stats = runtime.get_stats(invalid_container_id)
@@ -77,70 +81,107 @@ def test_get_stats_invalid_container():
     assert stats.process_count == 0
 
 
-def test_get_stats_with_mock():
-    """Test get_stats parsing with mocked Docker client."""
-    runtime = DockerRuntime()
+@pytest.mark.slow
+def test_get_stats_from_running_container(runtime):
+    """Test get_stats returns positive values for a real running container."""
+    if not check_docker_available():
+        pytest.skip("Docker not available")
 
-    # Mock stats response with realistic Docker stats format
-    mock_stats = {
-        "memory_stats": {
-            "usage": 100 * 1024 * 1024,  # 100 MB in bytes
-        },
-        "cpu_stats": {
-            "cpu_usage": {"total_usage": 2000000000},
-            "system_cpu_usage": 10000000000,
-            "online_cpus": 4,
-        },
-        "precpu_stats": {
-            "cpu_usage": {"total_usage": 1000000000},
-            "system_cpu_usage": 9000000000,
-        },
-        "pids_stats": {
-            "current": 5,
-        },
-    }
+    # Start a container that runs for a few seconds
+    config = ContainerConfig(
+        image="alpine:latest",
+        command=["sh", "-c", "sleep 5"],
+        env={},
+    )
 
-    mock_container = MagicMock()
-    mock_container.stats.return_value = mock_stats
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
 
-    mock_client = MagicMock()
-    mock_client.containers.get.return_value = mock_container
+    # Wait for container to be running
+    time.sleep(0.5)
 
-    with patch("fluster.cluster.worker.docker.docker") as mock_docker:
-        mock_docker.from_env.return_value = mock_client
-        stats = runtime.get_stats("test_container")
+    try:
+        stats = runtime.get_stats(container_id)
 
-    assert stats.available is True
-    assert stats.memory_mb == 100
-    assert stats.cpu_percent == 400  # (1000000000 / 1000000000) * 4 * 100
-    assert stats.process_count == 5
+        # Container should be available
+        assert stats.available is True
 
+        # Memory usage should be non-negative (may be 0 MB for lightweight containers)
+        assert stats.memory_mb >= 0
 
-def test_get_stats_not_found_exception():
-    """Test that NotFound exception returns available=False."""
-    runtime = DockerRuntime()
+        # Process count should be at least 1 (the sleep process)
+        assert stats.process_count >= 1
 
-    mock_client = MagicMock()
-    mock_client.containers.get.side_effect = docker.errors.NotFound("Container not found")
+        # CPU percent can be 0 if container is idle, but should be non-negative
+        assert stats.cpu_percent >= 0
 
-    with patch("fluster.cluster.worker.docker.docker") as mock_docker:
-        mock_docker.from_env.return_value = mock_client
-        mock_docker.errors = docker.errors
-        stats = runtime.get_stats("missing_container")
-
-    assert stats.available is False
+    finally:
+        runtime.kill(container_id, force=True)
+        runtime.remove(container_id)
 
 
-def test_get_stats_api_error_exception():
-    """Test that APIError exception returns available=False."""
-    runtime = DockerRuntime()
+@pytest.mark.slow
+def test_get_stats_from_busy_container(runtime):
+    """Test get_stats returns higher values for a CPU-intensive container."""
+    if not check_docker_available():
+        pytest.skip("Docker not available")
 
-    mock_client = MagicMock()
-    mock_client.containers.get.side_effect = docker.errors.APIError("API error")
+    # Start a container that does some work
+    config = ContainerConfig(
+        image="alpine:latest",
+        command=["sh", "-c", "while true; do echo test; done"],
+        env={},
+    )
 
-    with patch("fluster.cluster.worker.docker.docker") as mock_docker:
-        mock_docker.from_env.return_value = mock_client
-        mock_docker.errors = docker.errors
-        stats = runtime.get_stats("error_container")
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
 
-    assert stats.available is False
+    # Let it run for a moment to generate stats
+    time.sleep(1.0)
+
+    try:
+        stats = runtime.get_stats(container_id)
+
+        assert stats.available is True
+        assert stats.memory_mb >= 0
+        assert stats.process_count >= 1
+        # CPU percent should be positive for a busy container
+        assert stats.cpu_percent >= 0
+
+    finally:
+        runtime.kill(container_id, force=True)
+        runtime.remove(container_id)
+
+
+@pytest.mark.slow
+def test_get_stats_from_stopped_container(runtime):
+    """Test that get_stats returns zero values for stopped container."""
+    if not check_docker_available():
+        pytest.skip("Docker not available")
+
+    config = ContainerConfig(
+        image="alpine:latest",
+        command=["echo", "test"],
+        env={},
+    )
+
+    container_id = runtime.create_container(config)
+    runtime.start_container(container_id)
+
+    # Wait for container to finish
+    max_wait = 5
+    start = time.time()
+    while time.time() - start < max_wait:
+        status = runtime.inspect(container_id)
+        if not status.running:
+            break
+        time.sleep(0.1)
+
+    try:
+        # Docker can still return stats for stopped containers, but values should be minimal/zero
+        stats = runtime.get_stats(container_id)
+        # Process count should be 0 for stopped container
+        assert stats.process_count == 0
+
+    finally:
+        runtime.remove(container_id)

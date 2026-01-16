@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Docker container runtime and image builder implementations."""
+"""Docker runtime with cgroups v2 resource limits and BuildKit image caching."""
 
 # TODO - set things up some memray/pyspy/etc work as expected
 # these need to be installed at least, and then need maybe some permissions
@@ -35,8 +35,6 @@ from fluster.cluster.worker.worker_types import JobLogs, LogLine
 
 @dataclass
 class ContainerConfig:
-    """Configuration for container execution."""
-
     image: str
     command: list[str]
     env: dict[str, str]
@@ -64,13 +62,11 @@ class ContainerConfig:
             return value
 
     def get_cpu_millicores(self) -> int | None:
-        """Get CPU millicores from ResourceSpec."""
         if not self.resources or not self.resources.cpu:
             return None
-        return self.resources.cpu * 1000  # Convert cores to millicores
+        return self.resources.cpu * 1000
 
     def get_memory_mb(self) -> int | None:
-        """Get memory in MB from ResourceSpec."""
         if not self.resources or not self.resources.memory:
             return None
         return self._parse_memory_mb(self.resources.memory)
@@ -78,8 +74,6 @@ class ContainerConfig:
 
 @dataclass
 class ContainerResult:
-    """Result of container execution."""
-
     container_id: str
     exit_code: int
     started_at: float
@@ -121,8 +115,6 @@ class ContainerStatus:
 
 @dataclass
 class ImageInfo:
-    """Information about a container image."""
-
     tag: str
     created_at: str
 
@@ -135,33 +127,19 @@ class ImageInfo:
 class ContainerRuntime(Protocol):
     """Protocol for container runtimes (Docker, Firecracker, Podman, etc.)."""
 
-    def create_container(self, config: ContainerConfig) -> str:
-        """Create container and return container_id."""
-        ...
+    def create_container(self, config: ContainerConfig) -> str: ...
 
-    def start_container(self, container_id: str) -> None:
-        """Start a created container (non-blocking)."""
-        ...
+    def start_container(self, container_id: str) -> None: ...
 
-    def inspect(self, container_id: str) -> ContainerStatus:
-        """Check container status."""
-        ...
+    def inspect(self, container_id: str) -> ContainerStatus: ...
 
-    def kill(self, container_id: str, force: bool = False) -> None:
-        """Kill container (SIGTERM or SIGKILL)."""
-        ...
+    def kill(self, container_id: str, force: bool = False) -> None: ...
 
-    def remove(self, container_id: str) -> None:
-        """Remove stopped container."""
-        ...
+    def remove(self, container_id: str) -> None: ...
 
-    def get_logs(self, container_id: str) -> list[LogLine]:
-        """Fetch logs from container."""
-        ...
+    def get_logs(self, container_id: str) -> list[LogLine]: ...
 
-    def get_stats(self, container_id: str) -> ContainerStats:
-        """Collect container resource statistics."""
-        ...
+    def get_stats(self, container_id: str) -> ContainerStats: ...
 
 
 class ImageBuilder(Protocol):
@@ -173,36 +151,23 @@ class ImageBuilder(Protocol):
         dockerfile_content: str,
         tag: str,
         job_logs: JobLogs | None = None,
-    ) -> None:
-        """Build image from context directory."""
-        ...
+    ) -> None: ...
 
-    def exists(self, tag: str) -> bool:
-        """Check if image exists locally."""
-        ...
+    def exists(self, tag: str) -> bool: ...
 
-    def remove(self, tag: str) -> None:
-        """Remove image."""
-        ...
+    def remove(self, tag: str) -> None: ...
 
-    def list_images(self, pattern: str) -> list[ImageInfo]:
-        """List images matching pattern."""
-        ...
+    def list_images(self, pattern: str) -> list[ImageInfo]: ...
 
 
 class DockerRuntime:
     """Execute containers via Docker CLI with cgroups v2 resource limits.
 
-    Security hardening:
-    - no-new-privileges
-    - cap-drop ALL
-
-    Uses subprocess.run() for synchronous container lifecycle operations, and the Docker
-    Python library for stats/logs retrieval.
+    Security hardening: no-new-privileges, cap-drop ALL.
+    Uses subprocess for lifecycle, Docker Python SDK for stats/logs.
     """
 
     def create_container(self, config: ContainerConfig) -> str:
-        """Create container with cgroups v2 resource limits."""
         cmd = [
             "docker",
             "create",
@@ -250,7 +215,6 @@ class DockerRuntime:
         return result.stdout.strip()
 
     def start_container(self, container_id: str) -> None:
-        """Start a created container (non-blocking)."""
         result = subprocess.run(
             ["docker", "start", container_id],
             capture_output=True,
@@ -261,7 +225,6 @@ class DockerRuntime:
             raise RuntimeError(f"Failed to start container: {result.stderr}")
 
     def inspect(self, container_id: str) -> ContainerStatus:
-        """Check container status via docker inspect."""
         result = subprocess.run(
             [
                 "docker",
@@ -293,12 +256,6 @@ class DockerRuntime:
             return ContainerStatus(running=False, error=f"Failed to parse inspect output: {e}")
 
     def kill(self, container_id: str, force: bool = False) -> None:
-        """Kill container.
-
-        Args:
-            container_id: Container ID to kill
-            force: Use SIGKILL instead of SIGTERM
-        """
         signal = "SIGKILL" if force else "SIGTERM"
         result = subprocess.run(
             ["docker", "kill", f"--signal={signal}", container_id],
@@ -310,7 +267,6 @@ class DockerRuntime:
             raise RuntimeError(f"Failed to kill container: {result.stderr}")
 
     def remove(self, container_id: str) -> None:
-        """Remove container."""
         result = subprocess.run(
             ["docker", "rm", "-f", container_id],
             capture_output=True,
@@ -321,7 +277,6 @@ class DockerRuntime:
             raise RuntimeError(f"Failed to remove container: {result.stderr}")
 
     def get_logs(self, container_id: str) -> list[LogLine]:
-        """Fetch logs from container."""
         client = docker.from_env()  # type: ignore[attr-defined]
         try:
             container = client.containers.get(container_id)
@@ -347,7 +302,6 @@ class DockerRuntime:
         return logs
 
     def _parse_docker_log_line(self, line: str) -> tuple[datetime, str]:
-        """Parse Docker log line with timestamp."""
         if len(line) > 30 and line[10] == "T":
             z_idx = line.find("Z")
             if 20 < z_idx < 35:
@@ -363,11 +317,10 @@ class DockerRuntime:
         return datetime.now(timezone.utc), line
 
     def get_stats(self, container_id: str) -> ContainerStats:
-        """Collect resource usage from a Docker container."""
         client = docker.from_env()  # type: ignore[attr-defined]
         try:
             container = client.containers.get(container_id)
-            stats = container.stats(decode=True, stream=False)
+            stats = container.stats(stream=False)
 
             # Parse memory usage (bytes to MB)
             memory_bytes = stats.get("memory_stats", {}).get("usage", 0)
@@ -430,7 +383,6 @@ class DockerImageBuilder:
         tag: str,
         job_logs: JobLogs | None = None,
     ) -> None:
-        """Run docker build with BuildKit."""
         dockerfile_path = context / "Dockerfile.fluster"
         dockerfile_path.write_text(dockerfile_content)
 
@@ -479,7 +431,6 @@ class DockerImageBuilder:
             dockerfile_path.unlink(missing_ok=True)
 
     def exists(self, tag: str) -> bool:
-        """Check if image exists locally."""
         result = subprocess.run(
             ["docker", "image", "inspect", tag],
             capture_output=True,
@@ -488,7 +439,6 @@ class DockerImageBuilder:
         return result.returncode == 0
 
     def remove(self, tag: str) -> None:
-        """Remove image."""
         subprocess.run(
             ["docker", "rmi", tag],
             capture_output=True,
@@ -496,7 +446,6 @@ class DockerImageBuilder:
         )
 
     def list_images(self, pattern: str) -> list[ImageInfo]:
-        """List images matching pattern."""
         result = subprocess.run(
             [
                 "docker",

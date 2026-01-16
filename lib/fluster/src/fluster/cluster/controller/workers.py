@@ -12,15 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Worker registry and scheduling for the controller.
-
-This module provides:
-- WorkerConfig: Static worker configuration for v0
-- load_workers_from_config(): Register workers from static config at startup
-- get_committed_resources(): Compute resources committed to running jobs
-- worker_can_fit_job(): Check if worker has capacity for a job
-- find_worker_for_job(): First-fit worker selection with resource matching
-"""
+"""Worker registry and resource-aware scheduling utilities."""
 
 import time
 from dataclasses import dataclass
@@ -55,16 +47,6 @@ def load_workers_from_config(
     state: ControllerState,
     workers: list[WorkerConfig],
 ) -> None:
-    """Register workers from static config.
-
-    Creates ControllerWorker instances from the provided config and adds them
-    to the controller state. Sets last_heartbeat_ms to the current time so
-    workers are considered healthy at startup.
-
-    Args:
-        state: Controller state to update
-        workers: List of worker configurations to register
-    """
     now_ms = int(time.time() * 1000)
 
     for cfg in workers:
@@ -81,19 +63,7 @@ def get_committed_resources(
     state: ControllerState,
     worker: ControllerWorker,
 ) -> tuple[int, int, int]:
-    """Compute resources committed to running jobs on this worker.
-
-    Dynamically sums resources from all jobs in worker.running_jobs.
-    This approach avoids tracking committed resources incrementally and
-    prevents sync issues.
-
-    Args:
-        state: Controller state to look up jobs
-        worker: Worker to compute committed resources for
-
-    Returns:
-        Tuple of (cpu_cores, memory_bytes, gpu_count)
-    """
+    """Compute resources committed to running jobs on this worker."""
     cpu = 0
     memory = 0
     gpu = 0
@@ -117,26 +87,7 @@ def worker_can_fit_job(
 ) -> bool:
     """Check if worker has sufficient available capacity for job.
 
-    Computes available headroom dynamically from running_jobs plus any
-    additional jobs that have been assigned in the current scheduling round
-    but not yet dispatched.
-
-    Checks:
-    1. CPU: job.cpu <= worker.total_cpu - committed_cpu
-    2. Memory: job.memory <= worker.total_memory - committed_memory
-    3. Device type: exact match (GPU job only on GPU worker)
-    4. Device variant: if job specifies variant (not "auto"), worker must match
-    5. GPU count: job.gpu_count <= available_gpus
-
-    Args:
-        state: Controller state for job lookups
-        worker: Worker to check capacity
-        job: Job with resource requirements
-        additional_jobs: Jobs assigned this scheduling round but not yet
-                        reflected in worker.running_jobs
-
-    Returns:
-        True if worker can fit the job
+    Checks CPU, memory, device type, device variant, and GPU count.
     """
     job_resources = job.request.resources
     worker_resources = worker.resources
@@ -193,18 +144,7 @@ def find_worker_for_job(
     state: ControllerState,
     job: ControllerJob,
 ) -> ControllerWorker | None:
-    """Find a worker that can run the given job.
-
-    Returns the first healthy worker with sufficient capacity and matching
-    device type/variant. Uses first-fit strategy.
-
-    Args:
-        state: Controller state containing worker registry
-        job: Job to find a worker for
-
-    Returns:
-        First matching worker, or None if no worker can fit the job
-    """
+    """Find a worker that can run the given job using first-fit strategy."""
     workers = state.get_available_workers()
     for worker in workers:
         if worker_can_fit_job(state, worker, job):

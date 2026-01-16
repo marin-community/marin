@@ -14,8 +14,6 @@
 
 """Actor server implementation for hosting actor instances.
 
-ActorServer hosts actor instances and handles RPC calls.
-
 Example:
     server = ActorServer()
     server.register("my-actor", MyActorClass())
@@ -49,8 +47,6 @@ ActorId = NewType("ActorId", str)
 
 @dataclass
 class RegisteredActor:
-    """An actor registered with the server."""
-
     name: str
     actor_id: ActorId
     instance: Any
@@ -76,7 +72,6 @@ class ActorServer:
 
     @property
     def address(self) -> str:
-        """Get the server address as host:port."""
         port = self._actual_port or self._port
         return f"{self._host}:{port}"
 
@@ -102,7 +97,6 @@ class ActorServer:
 
     async def call(self, request: actor_pb2.ActorCall, ctx: RequestContext) -> actor_pb2.ActorResponse:
         """Handle actor RPC call."""
-        # Find actor
         actor_name = request.actor_name or next(iter(self._actors), "")
         actor = self._actors.get(actor_name)
         if not actor:
@@ -137,7 +131,6 @@ class ActorServer:
             return actor_pb2.ActorResponse(error=error)
 
     async def health_check(self, request: actor_pb2.Empty, ctx: RequestContext) -> actor_pb2.HealthResponse:
-        """Handle health check."""
         return actor_pb2.HealthResponse(healthy=True)
 
     async def list_methods(
@@ -192,7 +185,6 @@ class ActorServer:
         return actor_pb2.ListActorsResponse(actors=actors)
 
     def _create_app(self) -> ActorServiceASGIApplication:
-        """Create the Connect RPC ASGI application for the server."""
         return ActorServiceASGIApplication(service=self)
 
     def serve_background(self, port: int | None = None) -> int:
@@ -205,7 +197,6 @@ class ActorServer:
         Returns:
             Actual port the server is listening on
         """
-        # Determine port: explicit > __init__ > auto-assign
         if port is not None:
             bind_port = port
         elif self._port is not None:
@@ -215,7 +206,6 @@ class ActorServer:
 
         self._app = self._create_app()
 
-        # Find available port if port=0
         if bind_port == 0:
             with socket.socket() as s:
                 s.bind(("", 0))
@@ -235,7 +225,6 @@ class ActorServer:
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
 
-        # Wait for server to be ready with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: server.started,
             timeout=5.0,
@@ -244,6 +233,4 @@ class ActorServer:
         return self._actual_port
 
     def shutdown(self) -> None:
-        """Shutdown the actor server."""
-        # Server shutdown happens automatically when thread exits
         pass

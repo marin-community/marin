@@ -31,13 +31,7 @@ T = TypeVar("T")
 
 @dataclass
 class CallResult:
-    """Result of a single call in a broadcast.
-
-    Attributes:
-        endpoint: The endpoint that was called
-        value: The return value (None if exception occurred)
-        exception: The exception raised (None if successful)
-    """
+    """Result of a single call in a broadcast."""
 
     endpoint: ResolvedEndpoint
     value: Any | None = None
@@ -45,30 +39,16 @@ class CallResult:
 
     @property
     def success(self) -> bool:
-        """Returns True if the call succeeded without exception."""
         return self.exception is None
 
 
 class BroadcastFuture(Generic[T]):
-    """Future representing results from a broadcast call to multiple endpoints.
-
-    Provides methods to wait for all results, wait for any result, or iterate
-    results as they complete.
-    """
+    """Future representing results from a broadcast call to multiple endpoints."""
 
     def __init__(self, futures: list[tuple[ResolvedEndpoint, Future]]):
-        """Initialize with list of (endpoint, future) pairs."""
         self._futures = futures
 
     def wait_all(self, timeout: float | None = None) -> list[CallResult]:
-        """Wait for all calls to complete and return all results.
-
-        Args:
-            timeout: Total timeout in seconds for all calls
-
-        Returns:
-            List of CallResult, one per endpoint
-        """
         results = []
         for endpoint, future in self._futures:
             try:
@@ -79,17 +59,6 @@ class BroadcastFuture(Generic[T]):
         return results
 
     def wait_any(self, timeout: float | None = None) -> CallResult:
-        """Wait for the first call to complete and return its result.
-
-        Args:
-            timeout: Timeout in seconds
-
-        Returns:
-            CallResult from the first completed call
-
-        Raises:
-            TimeoutError: If no results are ready within timeout
-        """
         for future in as_completed([f for _, f in self._futures], timeout=timeout):
             idx = next(i for i, (_, f) in enumerate(self._futures) if f is future)
             endpoint = self._futures[idx][0]
@@ -101,14 +70,7 @@ class BroadcastFuture(Generic[T]):
         raise TimeoutError("No results within timeout")
 
     def as_completed(self, timeout: float | None = None) -> Iterator[CallResult]:
-        """Iterate over results as they complete.
-
-        Args:
-            timeout: Total timeout in seconds for all calls
-
-        Yields:
-            CallResult for each completed call
-        """
+        """Iterate over results as they complete."""
         endpoint_map = {id(f): ep for ep, f in self._futures}
         for future in as_completed([f for _, f in self._futures], timeout=timeout):
             endpoint = endpoint_map[id(future)]
@@ -149,7 +111,6 @@ class ActorPool(Generic[T]):
         self._executor = ThreadPoolExecutor(max_workers=32)
 
     def _resolve(self) -> ResolveResult:
-        """Resolve endpoints, caching result."""
         result = self._resolver.resolve(self._name)
         with self._lock:
             self._cached_result = result
@@ -169,7 +130,6 @@ class ActorPool(Generic[T]):
             return endpoint
 
     def shutdown(self) -> None:
-        """Shutdown the thread pool executor."""
         self._executor.shutdown(wait=True)
 
     def __enter__(self) -> "ActorPool[T]":
@@ -180,12 +140,10 @@ class ActorPool(Generic[T]):
 
     @property
     def size(self) -> int:
-        """Number of endpoints in the pool."""
         return len(self._resolve().endpoints)
 
     @property
     def endpoints(self) -> list[ResolvedEndpoint]:
-        """List of resolved endpoints."""
         return list(self._resolve().endpoints)
 
     def _call_endpoint(
@@ -195,20 +153,6 @@ class ActorPool(Generic[T]):
         args: tuple,
         kwargs: dict,
     ) -> Any:
-        """Make an RPC call to a specific endpoint.
-
-        Args:
-            endpoint: Target endpoint
-            method_name: Method to call
-            args: Positional arguments
-            kwargs: Keyword arguments
-
-        Returns:
-            Deserialized return value
-
-        Raises:
-            Exception from the remote actor method
-        """
         client = ActorServiceClientSync(
             address=endpoint.url,
             timeout_ms=int(self._timeout * 1000),
@@ -231,31 +175,17 @@ class ActorPool(Generic[T]):
         return cloudpickle.loads(resp.serialized_value)
 
     def call(self) -> "_PoolCallProxy[T]":
-        """Create a proxy for round-robin calls.
-
-        Returns:
-            Proxy that distributes method calls across endpoints
-        """
         return _PoolCallProxy(self)
 
     def broadcast(self) -> "_PoolBroadcastProxy[T]":
-        """Create a proxy for broadcast calls.
-
-        Returns:
-            Proxy that sends method calls to all endpoints
-        """
         return _PoolBroadcastProxy(self)
 
 
 class _PoolCallProxy(Generic[T]):
-    """Proxy for round-robin calls to a pool."""
-
     def __init__(self, pool: ActorPool[T]):
         self._pool = pool
 
     def __getattr__(self, method_name: str) -> Callable[..., Any]:
-        """Create a callable that invokes the method on the next endpoint in round-robin."""
-
         def call(*args, **kwargs):
             endpoint = self._pool._get_next_endpoint()
             return self._pool._call_endpoint(endpoint, method_name, args, kwargs)
@@ -264,14 +194,10 @@ class _PoolCallProxy(Generic[T]):
 
 
 class _PoolBroadcastProxy(Generic[T]):
-    """Proxy for broadcast calls to all endpoints in a pool."""
-
     def __init__(self, pool: ActorPool[T]):
         self._pool = pool
 
     def __getattr__(self, method_name: str) -> Callable[..., BroadcastFuture]:
-        """Create a callable that invokes the method on all endpoints in parallel."""
-
         def broadcast(*args, **kwargs) -> BroadcastFuture:
             result = self._pool._resolve()
             futures = []

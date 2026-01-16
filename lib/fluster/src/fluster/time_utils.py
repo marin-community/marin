@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Time utilities for polling and waiting with exponential backoff."""
 
 import random
 import time
@@ -21,9 +20,6 @@ from collections.abc import Callable
 
 class ExponentialBackoff:
     """Exponential backoff with jitter for polling/retry loops.
-
-    Each call to `next_interval()` returns an increasing interval up to maximum.
-    Call `reset()` to start over (e.g., after success).
 
     Example - manual loop:
         backoff = ExponentialBackoff(initial=0.1, maximum=2.0)
@@ -65,7 +61,6 @@ class ExponentialBackoff:
         self._attempt = 0
 
     def next_interval(self) -> float:
-        """Return the next backoff interval and increment internal counter."""
         interval = self._initial * (self._factor**self._attempt)
         interval = min(interval, self._maximum)
 
@@ -77,14 +72,10 @@ class ExponentialBackoff:
         return interval
 
     def reset(self) -> None:
-        """Reset the backoff counter to start from initial interval."""
         self._attempt = 0
 
     def wait_until(self, condition: Callable[[], bool], timeout: float) -> bool:
         """Wait for a condition to become true with exponential backoff.
-
-        Polls the condition function with increasing intervals until it returns True
-        or the timeout is reached. Starts with fast polling and slows down over time.
 
         Args:
             condition: Callable that returns True when the wait should end
@@ -116,6 +107,5 @@ class ExponentialBackoff:
         timeout: float,
         error_message: str,
     ) -> None:
-        """Wait for condition, raising TimeoutError if not met."""
         if not self.wait_until(condition, timeout):
             raise TimeoutError(error_message)

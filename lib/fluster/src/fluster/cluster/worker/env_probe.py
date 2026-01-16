@@ -12,15 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Environment probing for worker registration.
-
-Probes the worker environment to collect metadata for registration with the controller:
-- Hostname and IP address
-- TPU environment variables (TPU_NAME, TPU_WORKER_HOSTNAMES, etc.)
-- GPU info via nvidia-smi
-- GCE instance metadata (instance name, zone)
-- System resources (CPU count, memory)
-"""
+"""Environment probing for worker registration."""
 
 import logging
 import os
@@ -37,8 +29,7 @@ logger = logging.getLogger(__name__)
 def _probe_gpu_info() -> tuple[int, str, int]:
     """Probe GPU info via nvidia-smi.
 
-    Returns:
-        Tuple of (gpu_count, gpu_name, gpu_memory_mb). Returns (0, "", 0) if no GPU.
+    Returns (0, "", 0) if no GPU.
     """
     try:
         result = subprocess.run(
@@ -67,8 +58,7 @@ def _probe_gpu_info() -> tuple[int, str, int]:
 def _probe_gce_metadata() -> tuple[str, str]:
     """Query GCE metadata server.
 
-    Returns:
-        Tuple of (instance_name, zone). Returns ("", "") if not on GCE.
+    Returns ("", "") if not on GCE.
     """
     try:
         headers = {"Metadata-Flavor": "Google"}
@@ -91,7 +81,6 @@ def _probe_gce_metadata() -> tuple[str, str]:
 
 
 def _get_memory_total_bytes() -> int:
-    """Get total system memory in bytes."""
     try:
         with open("/proc/meminfo") as f:
             for line in f:
@@ -104,7 +93,6 @@ def _get_memory_total_bytes() -> int:
 
 
 def _get_ip_address() -> str:
-    """Get the worker's IP address."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
@@ -114,12 +102,6 @@ def _get_ip_address() -> str:
 
 
 def probe_worker_environment() -> cluster_pb2.WorkerMetadata:
-    """Probe the current environment for worker registration.
-
-    Returns:
-        WorkerMetadata proto with all detected environment information.
-    """
-    # Basic info
     hostname = socket.gethostname()
     ip_address = _get_ip_address()
     cpu_count = os.cpu_count() or 1
@@ -166,14 +148,6 @@ def probe_worker_environment() -> cluster_pb2.WorkerMetadata:
 
 
 def build_resource_spec(metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec:
-    """Build a ResourceSpec proto from worker metadata.
-
-    Args:
-        metadata: WorkerMetadata from probe_worker_environment()
-
-    Returns:
-        A ResourceSpec with detected resources.
-    """
     memory_gb = metadata.memory_bytes // (1024**3)
 
     resources = cluster_pb2.ResourceSpec(
@@ -199,15 +173,11 @@ def build_resource_spec(metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.Res
 
 
 class EnvironmentProvider(Protocol):
-    """Protocol for worker environment probing. Implement this to customize resource reporting."""
+    """Protocol for worker environment probing."""
 
-    def probe(self) -> cluster_pb2.WorkerMetadata:
-        """Probe and return worker metadata."""
-        ...
+    def probe(self) -> cluster_pb2.WorkerMetadata: ...
 
-    def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec:
-        """Build resource spec from metadata."""
-        ...
+    def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec: ...
 
 
 class DefaultEnvironmentProvider:

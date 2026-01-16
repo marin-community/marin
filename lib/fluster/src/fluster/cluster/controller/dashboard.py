@@ -12,14 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""HTTP dashboard for controller visibility with Connect RPC mounting.
-
-Provides:
-- Web dashboard at / with auto-refresh
-- REST API at /api/* for dashboard consumption
-- Health endpoint at /health
-- Connect RPC at /fluster.cluster.ControllerService/*
-"""
+"""HTTP dashboard with Connect RPC, web UI at /, and REST API at /api/*."""
 
 # TODO: observability, gregate stats over jobs , log to stable storage
 
@@ -38,16 +31,13 @@ from fluster.rpc.cluster_connect import ControllerServiceWSGIApplication
 class FakeRequestContext:
     """Minimal stub RequestContext for internal REST-to-RPC bridging.
 
-    The ControllerDashboard translates REST API calls to RPC method calls,
-    which require a RequestContext parameter. Since the RPC methods never
-    actually access the context, this minimal stub satisfies the type signature.
+    RPC methods never actually access the context, so this satisfies the type signature.
     """
 
     pass
 
 
 def _job_state_name(state: int) -> str:
-    """Convert job state integer to human-readable name."""
     state_map: dict[int, str] = {
         cluster_pb2.JOB_STATE_PENDING: "pending",
         cluster_pb2.JOB_STATE_BUILDING: "building",
@@ -678,12 +668,7 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
 
 
 class ControllerDashboard:
-    """HTTP dashboard with Connect RPC and web UI.
-
-    Connect RPC is mounted at /fluster.cluster.ControllerService
-    Web dashboard at /
-    REST API for dashboard at /api/*
-    """
+    """HTTP dashboard with Connect RPC and web UI."""
 
     def __init__(
         self,
@@ -703,7 +688,6 @@ class ControllerDashboard:
         return self._port
 
     def _create_app(self) -> Starlette:
-        """Create Starlette application with all routes."""
         rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
@@ -725,11 +709,9 @@ class ControllerDashboard:
         return Starlette(routes=routes)
 
     def _dashboard(self, _request: Request) -> HTMLResponse:
-        """Serve web dashboard HTML."""
         return HTMLResponse(DASHBOARD_HTML)
 
     def _api_stats(self, _request: Request) -> JSONResponse:
-        """Return aggregated statistics for the dashboard."""
         ctx = FakeRequestContext()
         jobs_response = self._service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), ctx)
         workers = self._state.list_all_workers()
@@ -770,7 +752,6 @@ class ControllerDashboard:
         )
 
     def _api_actions(self, _request: Request) -> JSONResponse:
-        """Return recent actions log."""
         actions = self._state.get_recent_actions(limit=50)
         return JSONResponse(
             [
@@ -786,7 +767,6 @@ class ControllerDashboard:
         )
 
     def _api_workers(self, _request: Request) -> JSONResponse:
-        """Return all workers with status."""
         workers = self._state.list_all_workers()
         return JSONResponse(
             [
@@ -807,7 +787,6 @@ class ControllerDashboard:
         )
 
     def _api_jobs(self, _request: Request) -> JSONResponse:
-        """Return all jobs with status."""
         jobs = self._state.list_all_jobs()
         return JSONResponse(
             [
@@ -834,7 +813,6 @@ class ControllerDashboard:
         )
 
     def _api_job_attempts(self, request: Request) -> JSONResponse:
-        """Return attempt history for a job."""
         job_id = request.path_params["job_id"]
         job = self._state.get_job(JobId(job_id))
         if not job:
@@ -871,7 +849,6 @@ class ControllerDashboard:
         return JSONResponse(attempts)
 
     def _api_endpoints(self, _request: Request) -> JSONResponse:
-        """Return all active endpoints for RUNNING jobs."""
         endpoints = []
         for ep in self._state._endpoints.values():
             job = self._state.get_job(ep.job_id)
@@ -888,7 +865,6 @@ class ControllerDashboard:
         return JSONResponse(endpoints)
 
     def _job_detail_page(self, request: Request) -> HTMLResponse:
-        """Serve job detail page - fetches from worker via JS."""
         job_id = request.path_params["job_id"]
         job = self._state.get_job(JobId(job_id))
         worker_address = ""
@@ -899,7 +875,6 @@ class ControllerDashboard:
         return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", job_id).replace("{{worker_address}}", worker_address))
 
     def _health(self, _request: Request) -> JSONResponse:
-        """Return health check status."""
         workers = self._state.list_all_workers()
         jobs = self._state.list_all_jobs()
         healthy_count = sum(1 for w in workers if w.healthy)
@@ -914,13 +889,11 @@ class ControllerDashboard:
         )
 
     def run(self) -> None:
-        """Run server (blocking)."""
         import uvicorn
 
         uvicorn.run(self._app, host=self._host, port=self._port)
 
     async def run_async(self) -> None:
-        """Run server asynchronously (for use with asyncio.create_task)."""
         import uvicorn
 
         config = uvicorn.Config(self._app, host=self._host, port=self._port)
@@ -928,6 +901,5 @@ class ControllerDashboard:
         await self._server.serve()
 
     async def shutdown(self) -> None:
-        """Shutdown the async server gracefully."""
         if self._server:
             self._server.should_exit = True

@@ -12,12 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Resource parsing and comparison utilities.
-
-This module provides helpers for parsing memory strings (e.g., "8g", "512m"),
-extracting device types and variants from DeviceConfig, and other resource-related
-utilities used by the scheduler for resource-aware job matching.
-"""
+"""Resource parsing and comparison utilities for scheduler resource matching."""
 
 import humanfriendly
 
@@ -56,14 +51,6 @@ def parse_memory_string(memory_str: str) -> int:
 
 
 def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
-    """Extract device type from DeviceConfig.
-
-    Args:
-        device: DeviceConfig protobuf message
-
-    Returns:
-        "cpu", "gpu", or "tpu"
-    """
     if device.HasField("cpu"):
         return "cpu"
     elif device.HasField("gpu"):
@@ -74,14 +61,6 @@ def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
 
 
 def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
-    """Extract device variant from DeviceConfig.
-
-    Args:
-        device: DeviceConfig protobuf message
-
-    Returns:
-        Variant string (e.g., "A100", "v5litepod-16") or None if not specified
-    """
     if device.HasField("gpu"):
         return device.gpu.variant if device.gpu.variant else None
     elif device.HasField("tpu"):
@@ -90,14 +69,6 @@ def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
 
 
 def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
-    """Get GPU count from DeviceConfig.
-
-    Args:
-        device: DeviceConfig protobuf message
-
-    Returns:
-        Number of GPUs (0 if not a GPU device)
-    """
     if device.HasField("gpu"):
         return device.gpu.count or 1
     return 0

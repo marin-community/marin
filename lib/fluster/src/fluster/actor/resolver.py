@@ -12,17 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Core types and resolver implementations for the actor system.
-
-This module defines the fundamental types used throughout the actor system:
-- Resolver: Protocol for actor name resolution
-- ResolvedEndpoint: A single resolved endpoint for an actor
-- ResolveResult: Result containing one or more endpoints
-
-Resolver implementations:
-- FixedResolver: Static endpoint configuration (for testing)
-- GcsResolver: Discovery via GCP VM instance metadata tags
-"""
+"""Core types and resolver implementations for the actor system."""
 
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -30,13 +20,7 @@ from typing import Protocol
 
 @dataclass
 class ResolvedEndpoint:
-    """A single resolved endpoint for an actor.
-
-    Attributes:
-        url: Full URL to the actor endpoint (e.g., "http://host:port")
-        actor_id: Unique identifier for this actor instance
-        metadata: Optional metadata associated with the endpoint
-    """
+    """A single resolved endpoint for an actor."""
 
     url: str
     actor_id: str
@@ -45,19 +29,13 @@ class ResolvedEndpoint:
 
 @dataclass
 class ResolveResult:
-    """Result of resolving an actor name to endpoints.
-
-    Attributes:
-        name: The actor name that was resolved
-        endpoints: List of resolved endpoints (empty if not found)
-    """
+    """Result of resolving an actor name to endpoints."""
 
     name: str
     endpoints: list[ResolvedEndpoint] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
-        """Returns True if no endpoints were found."""
         return len(self.endpoints) == 0
 
     def first(self) -> ResolvedEndpoint:
@@ -77,25 +55,13 @@ class ResolveResult:
 class Resolver(Protocol):
     """Protocol for resolving actor names to endpoints.
 
-    Implementations of this protocol discover actor endpoints by name.
-    The resolver is responsible for any namespace prefixing or discovery logic.
-
     Implementations:
     - FixedResolver: Static endpoint mapping
     - GcsResolver: Discovers via GCS VM metadata
     - ClusterResolver: Resolves via cluster controller (lives in fluster.client)
     """
 
-    def resolve(self, name: str) -> ResolveResult:
-        """Resolve an actor name to endpoints.
-
-        Args:
-            name: Actor name to resolve
-
-        Returns:
-            ResolveResult with zero or more endpoints
-        """
-        ...
+    def resolve(self, name: str) -> ResolveResult: ...
 
 
 class FixedResolver:
@@ -106,11 +72,7 @@ class FixedResolver:
     """
 
     def __init__(self, endpoints: dict[str, str | list[str]]):
-        """Initialize with a mapping of actor names to URLs.
-
-        Args:
-            endpoints: Mapping of actor name to URL or list of URLs
-        """
+        """Initialize with a mapping of actor names to URLs."""
         self._endpoints: dict[str, list[str]] = {}
         for name, urls in endpoints.items():
             if isinstance(urls, str):
@@ -119,30 +81,16 @@ class FixedResolver:
                 self._endpoints[name] = list(urls)
 
     def resolve(self, name: str) -> ResolveResult:
-        """Resolve actor name to endpoints.
-
-        Args:
-            name: Actor name to resolve
-
-        Returns:
-            ResolveResult with configured endpoints
-        """
         urls = self._endpoints.get(name, [])
         endpoints = [ResolvedEndpoint(url=url, actor_id=f"fixed-{name}-{i}") for i, url in enumerate(urls)]
         return ResolveResult(name=name, endpoints=endpoints)
 
 
 class GcsApi(Protocol):
-    """Protocol for GCS Compute API operations."""
-
-    def list_instances(self, project: str, zone: str) -> list[dict]:
-        """List VM instances with metadata."""
-        ...
+    def list_instances(self, project: str, zone: str) -> list[dict]: ...
 
 
 class RealGcsApi:
-    """Real GCS API using google-cloud-compute."""
-
     def list_instances(self, project: str, zone: str) -> list[dict]:
         from google.cloud import compute_v1
 
@@ -170,8 +118,6 @@ class RealGcsApi:
 
 
 class MockGcsApi:
-    """Mock GCS API for testing."""
-
     def __init__(self, instances: list[dict] | None = None):
         self._instances = instances or []
 
@@ -185,24 +131,12 @@ class MockGcsApi:
 class GcsResolver:
     """Resolver using GCS VM instance metadata tags.
 
-    Discovers actor endpoints by querying GCP VM instance metadata. This is purely
-    an infrastructure discovery mechanism - it finds all running instances with
-    matching actor metadata.
+    Discovers actor endpoints by querying GCP VM instance metadata. Unlike
+    ClusterResolver, this does NOT do namespace prefixing. Use this for
+    static VM-based deployments where namespace isolation is not needed.
 
-    Instances must have metadata tags in the format:
-    - `fluster_actor_<name>`: port number for the actor
-
-    Only RUNNING instances are considered for resolution.
-
-    Note: Unlike ClusterResolver, GcsResolver does NOT do namespace prefixing.
-    It's an infrastructure discovery mechanism that returns all instances with
-    matching actor metadata tags. Use this for static VM-based deployments where
-    namespace isolation is not needed.
-
-    Args:
-        project: GCP project ID
-        zone: GCP zone (e.g., "us-central1-a")
-        api: GcsApi implementation (defaults to RealGcsApi)
+    Instances must have metadata tags: `fluster_actor_<name>` = port number.
+    Only RUNNING instances are considered.
     """
 
     ACTOR_PREFIX = "fluster_actor_"
@@ -218,17 +152,6 @@ class GcsResolver:
         self._api = api or RealGcsApi()
 
     def resolve(self, name: str) -> ResolveResult:
-        """Resolve actor name to endpoints via GCS instance metadata.
-
-        Discovers all running instances with matching actor metadata.
-        No namespace prefixing is applied.
-
-        Args:
-            name: Actor name to resolve
-
-        Returns:
-            ResolveResult with matching endpoints from RUNNING instances
-        """
         endpoints = []
 
         instances = self._api.list_instances(self._project, self._zone)

@@ -29,11 +29,9 @@ logger = logging.getLogger(__name__)
 
 
 class BundleProvider(Protocol):
-    """Protocol for bundle retrieval. Mock this for testing."""
+    """Protocol for bundle retrieval."""
 
-    def get_bundle(self, gcs_path: str, expected_hash: str | None = None) -> Path:
-        """Download/retrieve bundle and return path to extracted directory."""
-        ...
+    def get_bundle(self, gcs_path: str, expected_hash: str | None = None) -> Path: ...
 
 
 class BundleCache:
@@ -57,19 +55,9 @@ class BundleCache:
         self._extracts_dir.mkdir(parents=True, exist_ok=True)
 
     def _path_to_key(self, gcs_path: str) -> str:
-        """Convert GCS path to cache key (hash)."""
         return hashlib.sha256(gcs_path.encode()).hexdigest()[:16]
 
     def get_bundle(self, gcs_path: str, expected_hash: str | None = None) -> Path:
-        """Get bundle path, downloading if needed.
-
-        Args:
-            gcs_path: gs://bucket/path/bundle.zip or file:///local/path.zip
-            expected_hash: Optional SHA256 hash for verification
-
-        Returns:
-            Path to extracted bundle directory
-        """
         key = self._path_to_key(gcs_path)
         extract_path = self._extracts_dir / key
 
@@ -105,14 +93,11 @@ class BundleCache:
             return extract_path
 
     def _download(self, gcs_path: str, local_path: Path) -> None:
-        """Synchronous download implementation."""
-        # fsspec handles gs://, file://, and other protocols
         with fsspec.open(gcs_path, "rb") as src:
             with open(local_path, "wb") as dst:
                 dst.write(src.read())
 
     def _extract(self, zip_path: Path, extract_path: Path) -> None:
-        """Synchronous extraction implementation with zip slip protection."""
         extract_path.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(zip_path, "r") as zf:
             # Validate all paths to prevent zip slip attacks
@@ -123,7 +108,6 @@ class BundleCache:
             zf.extractall(extract_path)
 
     def _compute_hash(self, path: Path) -> str:
-        """Synchronous hash computation implementation."""
         h = hashlib.sha256()
         with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(65536), b""):
@@ -131,7 +115,6 @@ class BundleCache:
         return h.hexdigest()
 
     def _evict_old_bundles(self) -> None:
-        """LRU eviction when over max_bundles."""
         extracts = list(self._extracts_dir.iterdir())
         if len(extracts) <= self._max_bundles:
             return

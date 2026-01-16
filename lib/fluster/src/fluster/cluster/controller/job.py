@@ -12,15 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Self-contained Job with state transition logic.
-
-The Job class owns its state machine and retry tracking. State transitions
-are handled via the transition() method, which updates internal state and
-returns information about what happened (e.g., whether to retry).
-
-This design is testable in isolation - no ControllerState coupling.
-The caller (Controller) coordinates external systems (queue, worker tracking).
-"""
+"""Self-contained Job with state transition logic and retry tracking."""
 
 from dataclasses import dataclass, field
 from enum import Enum
@@ -39,10 +31,7 @@ class TransitionResult(Enum):
 
 @dataclass
 class JobAttempt:
-    """Record of a single job execution attempt.
-
-    Preserves all state from an attempt so historical data is never lost.
-    """
+    """Record of a single job execution attempt."""
 
     attempt_id: int
     worker_id: WorkerId | None = None
@@ -105,16 +94,12 @@ class Job:
     # --- State Transitions ---
 
     def mark_dispatched(self, worker_id: WorkerId, now_ms: int) -> None:
-        """Mark job as dispatched to a worker.
-
-        Called BEFORE the RPC - worker may complete before RPC returns.
-        """
+        """Mark job as dispatched to a worker. Called BEFORE the RPC."""
         self.state = cluster_pb2.JOB_STATE_RUNNING
         self.worker_id = worker_id
         self.started_at_ms = now_ms
 
     def revert_dispatch(self) -> None:
-        """Revert dispatch state after failed RPC."""
         self.state = cluster_pb2.JOB_STATE_PENDING
         self.worker_id = None
         self.started_at_ms = None
@@ -182,11 +167,7 @@ class Job:
         error: str | None,
         exit_code: int | None,
     ) -> TransitionResult:
-        """Handle failure with retry logic.
-
-        Increments counter, checks if retry possible, either resets for
-        retry or marks as terminal failure.
-        """
+        """Handle failure with retry logic. Either resets for retry or marks as terminal failure."""
         if is_worker_failure:
             self.preemption_count += 1
             can_retry = self.preemption_count <= self.max_retries_preemption
@@ -206,11 +187,7 @@ class Job:
             return TransitionResult.EXCEEDED_RETRY_LIMIT
 
     def _reset_for_retry(self, *, is_worker_failure: bool) -> None:
-        """Reset state for retry attempt, preserving history.
-
-        Args:
-            is_worker_failure: Whether this retry is due to worker failure (preemption)
-        """
+        """Reset state for retry attempt, preserving history."""
         # Save current attempt to history if it was actually started
         if self.started_at_ms is not None:
             self.attempts.append(
@@ -240,7 +217,6 @@ class Job:
     # --- State Queries ---
 
     def is_finished(self) -> bool:
-        """Check if job has reached terminal state."""
         return self.state in (
             cluster_pb2.JOB_STATE_SUCCEEDED,
             cluster_pb2.JOB_STATE_FAILED,
@@ -250,16 +226,13 @@ class Job:
         )
 
     def can_retry_failure(self) -> bool:
-        """Check if job has failure retries remaining."""
         return self.failure_count < self.max_retries_failure
 
     def can_retry_preemption(self) -> bool:
-        """Check if job has preemption retries remaining."""
         return self.preemption_count < self.max_retries_preemption
 
     @property
     def total_attempts(self) -> int:
-        """Total number of attempts (completed + current)."""
         return len(self.attempts) + 1
 
 

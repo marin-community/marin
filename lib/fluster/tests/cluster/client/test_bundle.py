@@ -70,25 +70,3 @@ def test_bundle_creator_uses_git_files_when_available(workspace):
         assert "pyproject.toml" in names
         assert "src/main.py" in names
         assert not any("__pycache__" in n for n in names)
-
-
-def test_should_exclude_pycache(workspace):
-    creator = BundleCreator(workspace)
-    assert creator._should_exclude(workspace / "__pycache__" / "test.pyc")
-
-
-def test_should_exclude_git_directory(workspace):
-    creator = BundleCreator(workspace)
-    assert creator._should_exclude(workspace / ".git" / "config")
-
-
-def test_should_exclude_venv(workspace):
-    creator = BundleCreator(workspace)
-    assert creator._should_exclude(workspace / ".venv" / "bin" / "python")
-    assert creator._should_exclude(workspace / "venv" / "bin" / "python")
-
-
-def test_should_not_exclude_regular_files(workspace):
-    creator = BundleCreator(workspace)
-    assert not creator._should_exclude(workspace / "src" / "main.py")
-    assert not creator._should_exclude(workspace / "pyproject.toml")

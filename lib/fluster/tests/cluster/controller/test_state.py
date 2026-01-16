@@ -19,7 +19,7 @@ import threading
 import pytest
 
 from fluster.rpc import cluster_pb2
-from fluster.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
+from fluster.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState, ControllerWorker
 from fluster.cluster.types import JobId, WorkerId
 
 
@@ -178,22 +178,6 @@ def test_controller_state_thread_safety(make_job_request):
         popped_count += 1
 
     assert popped_count == expected_count, f"Expected {expected_count} jobs, got {popped_count}"
-
-
-def test_controller_state_job_retrieval(make_job_request):
-    """Test job retrieval by ID."""
-    state = ControllerState()
-    job = ControllerJob(job_id=JobId("j1"), request=make_job_request("job1"), submitted_at_ms=12345)
-    state.add_job(job)
-
-    # Retrieve by ID
-    retrieved = state.get_job(JobId("j1"))
-    assert retrieved is not None
-    assert retrieved.job_id == "j1"
-    assert retrieved.submitted_at_ms == 12345
-
-    # Non-existent job returns None
-    assert state.get_job(JobId("nonexistent")) is None
 
 
 def test_controller_state_multiple_gangs(make_job_request):
@@ -382,22 +366,546 @@ def test_controller_state_get_children_only_returns_direct_not_grandchildren(mak
     assert children[0].job_id == "parent"
 
 
-def test_controller_job_parent_job_id_field(make_job_request):
-    """Verify ControllerJob properly stores parent_job_id."""
+# =============================================================================
+# Endpoint Registry Tests
+# =============================================================================
+
+
+def test_add_and_lookup_endpoint():
+    """Test basic endpoint registration and lookup."""
+    state = ControllerState()
+
+    # Create a running job first
     job = ControllerJob(
-        job_id=JobId("child-job"),
-        request=make_job_request("child"),
-        parent_job_id=JobId("parent-job"),
+        job_id=JobId("ns-1"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+    )
+    state.add_job(job)
+
+    # Register endpoint with prefixed name
+    ep = ControllerEndpoint(
+        endpoint_id="ep-1",
+        name="ns-1/my-actor",
+        address="10.0.0.1:8080",
+        job_id=JobId("ns-1"),
+    )
+    state.add_endpoint(ep)
+
+    # Lookup by full prefixed name
+    results = state.lookup_endpoints("ns-1/my-actor")
+    assert len(results) == 1
+    assert results[0].address == "10.0.0.1:8080"
+    assert results[0].endpoint_id == "ep-1"
+
+
+def test_endpoint_not_returned_for_non_running_job():
+    """Test that endpoints for non-RUNNING jobs are filtered out."""
+    state = ControllerState()
+
+    # Create a completed job
+    job = ControllerJob(
+        job_id=JobId("ns-1"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
+        state=cluster_pb2.JOB_STATE_SUCCEEDED,
+    )
+    state.add_job(job)
+
+    ep = ControllerEndpoint(
+        endpoint_id="ep-1",
+        name="ns-1/my-actor",
+        address="10.0.0.1:8080",
+        job_id=JobId("ns-1"),
+    )
+    state.add_endpoint(ep)
+
+    # Should not return endpoint because job is not running
+    results = state.lookup_endpoints("ns-1/my-actor")
+    assert len(results) == 0
+
+
+def test_transition_job_to_terminal_removes_endpoints():
+    """Test that transition_job removes endpoints when job reaches terminal state."""
+    state = ControllerState()
+
+    job = ControllerJob(
+        job_id=JobId("ns-1"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+    )
+    state.add_job(job)
+
+    ep = ControllerEndpoint(
+        endpoint_id="ep-1",
+        name="ns-1/my-actor",
+        address="10.0.0.1:8080",
+        job_id=JobId("ns-1"),
+    )
+    state.add_endpoint(ep)
+
+    # Verify endpoint is visible
+    results = state.lookup_endpoints("ns-1/my-actor")
+    assert len(results) == 1
+
+    # Transition to terminal state via transition_job
+    from fluster.cluster.controller.job import TransitionResult
+
+    result, removed = state.transition_job(JobId("ns-1"), cluster_pb2.JOB_STATE_SUCCEEDED, now_ms=1000)
+
+    assert result == TransitionResult.COMPLETE
+    assert len(removed) == 1
+    assert removed[0].endpoint_id == "ep-1"
+
+    # Endpoint should be gone
+    results = state.lookup_endpoints("ns-1/my-actor")
+    assert len(results) == 0
+
+
+def test_namespace_isolation_via_prefix():
+    """Test that namespace isolation works via name prefixing."""
+    state = ControllerState()
+
+    job1 = ControllerJob(
+        job_id=JobId("ns-1"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test1"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+    )
+    job2 = ControllerJob(
+        job_id=JobId("ns-2"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+    )
+    state.add_job(job1)
+    state.add_job(job2)
+
+    # Same actor name, different namespace prefixes
+    ep1 = ControllerEndpoint(
+        endpoint_id="ep-1",
+        name="ns-1/actor",
+        address="10.0.0.1:8080",
+        job_id=JobId("ns-1"),
+    )
+    ep2 = ControllerEndpoint(
+        endpoint_id="ep-2",
+        name="ns-2/actor",
+        address="10.0.0.2:8080",
+        job_id=JobId("ns-2"),
+    )
+    state.add_endpoint(ep1)
+    state.add_endpoint(ep2)
+
+    # Each namespace prefix only sees its own endpoint
+    results_ns1 = state.lookup_endpoints("ns-1/actor")
+    assert len(results_ns1) == 1
+    assert results_ns1[0].address == "10.0.0.1:8080"
+
+    results_ns2 = state.lookup_endpoints("ns-2/actor")
+    assert len(results_ns2) == 1
+    assert results_ns2[0].address == "10.0.0.2:8080"
+
+
+def test_list_endpoints_by_prefix():
+    """Test prefix-based endpoint listing."""
+    state = ControllerState()
+
+    job = ControllerJob(
+        job_id=JobId("ns-1"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+    )
+    state.add_job(job)
+
+    # Register multiple endpoints with shared prefix
+    ep1 = ControllerEndpoint(
+        endpoint_id="ep-1",
+        name="ns-1/inference/model-a",
+        address="10.0.0.1:8080",
+        job_id=JobId("ns-1"),
+    )
+    ep2 = ControllerEndpoint(
+        endpoint_id="ep-2",
+        name="ns-1/inference/model-b",
+        address="10.0.0.2:8080",
+        job_id=JobId("ns-1"),
+    )
+    ep3 = ControllerEndpoint(
+        endpoint_id="ep-3",
+        name="ns-1/training/main",
+        address="10.0.0.3:8080",
+        job_id=JobId("ns-1"),
+    )
+    state.add_endpoint(ep1)
+    state.add_endpoint(ep2)
+    state.add_endpoint(ep3)
+
+    # List by prefix (includes namespace)
+    results = state.list_endpoints_by_prefix("ns-1/inference/")
+    assert len(results) == 2
+    names = {r.name for r in results}
+    assert names == {"ns-1/inference/model-a", "ns-1/inference/model-b"}
+
+    results_training = state.list_endpoints_by_prefix("ns-1/training/")
+    assert len(results_training) == 1
+    assert results_training[0].name == "ns-1/training/main"
+
+    # Listing all in namespace
+    results_all = state.list_endpoints_by_prefix("ns-1/")
+    assert len(results_all) == 3
+
+
+def test_multiple_endpoints_for_same_name():
+    """Test that multiple endpoints can be registered for the same name."""
+    state = ControllerState()
+
+    job1 = ControllerJob(
+        job_id=JobId("ns-1/worker-1"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test1"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+    )
+    job2 = ControllerJob(
+        job_id=JobId("ns-1/worker-2"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+    )
+    state.add_job(job1)
+    state.add_job(job2)
+
+    # Register multiple endpoints with same name (for load balancing)
+    ep1 = ControllerEndpoint(
+        endpoint_id="ep-1",
+        name="ns-1/inference",
+        address="10.0.0.1:8080",
+        job_id=JobId("ns-1/worker-1"),
+    )
+    ep2 = ControllerEndpoint(
+        endpoint_id="ep-2",
+        name="ns-1/inference",
+        address="10.0.0.2:8080",
+        job_id=JobId("ns-1/worker-2"),
+    )
+    state.add_endpoint(ep1)
+    state.add_endpoint(ep2)
+
+    results = state.lookup_endpoints("ns-1/inference")
+    assert len(results) == 2
+    addresses = {r.address for r in results}
+    assert addresses == {"10.0.0.1:8080", "10.0.0.2:8080"}
+
+
+def test_remove_endpoint_by_id():
+    """Test explicit endpoint removal by ID."""
+    state = ControllerState()
+
+    job = ControllerJob(
+        job_id=JobId("ns-1"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+    )
+    state.add_job(job)
+
+    ep = ControllerEndpoint(
+        endpoint_id="ep-1",
+        name="ns-1/my-actor",
+        address="10.0.0.1:8080",
+        job_id=JobId("ns-1"),
+    )
+    state.add_endpoint(ep)
+
+    # Remove by ID
+    removed = state.remove_endpoint("ep-1")
+    assert removed is not None
+    assert removed.endpoint_id == "ep-1"
+
+    # Should no longer be found
+    results = state.lookup_endpoints("ns-1/my-actor")
+    assert len(results) == 0
+
+    # Removing again should be idempotent
+    removed_again = state.remove_endpoint("ep-1")
+    assert removed_again is None
+
+
+def test_pending_job_endpoints_not_returned():
+    """Test that endpoints for PENDING jobs are not returned."""
+    state = ControllerState()
+
+    job = ControllerJob(
+        job_id=JobId("ns-1"),
+        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
+        state=cluster_pb2.JOB_STATE_PENDING,
+    )
+    state.add_job(job)
+
+    ep = ControllerEndpoint(
+        endpoint_id="ep-1",
+        name="ns-1/my-actor",
+        address="10.0.0.1:8080",
+        job_id=JobId("ns-1"),
+    )
+    state.add_endpoint(ep)
+
+    # Should not return because job is pending
+    results = state.lookup_endpoints("ns-1/my-actor")
+    assert len(results) == 0
+
+    # Transition to running
+    job.state = cluster_pb2.JOB_STATE_RUNNING
+
+    # Now should be visible
+    results = state.lookup_endpoints("ns-1/my-actor")
+    assert len(results) == 1
+
+
+# =============================================================================
+# transition_job Tests
+# =============================================================================
+
+
+def test_transition_job_retry_requeues_and_unassigns(make_job_request, make_resource_spec):
+    """Test that transition_job re-queues job and unassigns worker on SHOULD_RETRY."""
+    from fluster.cluster.controller.job import TransitionResult
+
+    state = ControllerState()
+
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        resources=make_resource_spec(),
+    )
+    state.add_worker(worker)
+
+    job = ControllerJob(
+        job_id=JobId("j1"),
+        request=make_job_request("job1"),
+        max_retries_failure=2,
+    )
+    state.add_job(job)
+
+    # Dispatch job
+    job.mark_dispatched(WorkerId("w1"), now_ms=1000)
+    state.assign_job_to_worker(WorkerId("w1"), JobId("j1"))
+    state.remove_from_queue(JobId("j1"))
+
+    # Verify job not in queue and worker has it
+    pending = state.peek_pending_jobs()
+    assert len(pending) == 0
+    assert JobId("j1") in worker.running_jobs
+
+    # Transition to FAILED (with retries available)
+    result, removed = state.transition_job(
+        JobId("j1"),
+        cluster_pb2.JOB_STATE_FAILED,
+        now_ms=2000,
+        error="Test failure",
     )
 
-    assert job.parent_job_id == "parent-job"
+    assert result == TransitionResult.SHOULD_RETRY
+    assert removed == []  # No endpoints to remove
+
+    # Job should be re-queued and unassigned from worker
+    pending = state.peek_pending_jobs()
+    assert len(pending) == 1
+    assert pending[0].job_id == JobId("j1")
+    assert JobId("j1") not in worker.running_jobs
 
 
-def test_controller_job_parent_job_id_defaults_to_none(make_job_request):
-    """Verify ControllerJob parent_job_id defaults to None for root jobs."""
+def test_transition_job_removes_from_queue_on_unschedulable(make_job_request):
+    """Test that transition_job removes job from queue when UNSCHEDULABLE."""
+    from fluster.cluster.controller.job import TransitionResult
+
+    state = ControllerState()
+
     job = ControllerJob(
-        job_id=JobId("root-job"),
-        request=make_job_request("root"),
+        job_id=JobId("j1"),
+        request=make_job_request("job1"),
+    )
+    state.add_job(job)
+
+    # Verify job is in queue
+    pending = state.peek_pending_jobs()
+    assert len(pending) == 1
+    assert pending[0].job_id == JobId("j1")
+
+    # Transition to UNSCHEDULABLE
+    result, removed = state.transition_job(
+        JobId("j1"),
+        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+        now_ms=2000,
     )
 
-    assert job.parent_job_id is None
+    assert result == TransitionResult.COMPLETE
+    assert removed == []  # No endpoints registered
+
+    # Job should be removed from queue
+    pending = state.peek_pending_jobs()
+    assert len(pending) == 0
+
+    # Job should be in terminal state
+    retrieved_job = state.get_job(JobId("j1"))
+    assert retrieved_job is not None
+    assert retrieved_job.state == cluster_pb2.JOB_STATE_UNSCHEDULABLE
+    assert retrieved_job.is_finished()
+
+
+# =============================================================================
+# Job Lifecycle Integration Tests
+# =============================================================================
+
+
+def test_job_success_cleans_up_endpoints(make_job_request, make_resource_spec):
+    """When job succeeds, endpoints are cleaned up and worker is unassigned."""
+    from fluster.cluster.controller.job import TransitionResult
+
+    state = ControllerState()
+
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        resources=make_resource_spec(),
+    )
+    state.add_worker(worker)
+
+    job = ControllerJob(job_id=JobId("j1"), request=make_job_request("job1"))
+    state.add_job(job)
+
+    job.mark_dispatched(WorkerId("w1"), now_ms=1000)
+    state.assign_job_to_worker(WorkerId("w1"), JobId("j1"))
+
+    ep = ControllerEndpoint(
+        endpoint_id="ep1",
+        name="j1/my-actor",
+        address="10.0.0.1:8080",
+        job_id=JobId("j1"),
+    )
+    state.add_endpoint(ep)
+
+    # Verify endpoint visible while running
+    results = state.lookup_endpoints("j1/my-actor")
+    assert len(results) == 1
+
+    # Job succeeds via transition_job
+    result, removed = state.transition_job(JobId("j1"), cluster_pb2.JOB_STATE_SUCCEEDED, now_ms=2000)
+
+    assert result == TransitionResult.COMPLETE
+    assert len(removed) == 1
+
+    # Verify cleanup
+    assert state.lookup_endpoints("j1/my-actor") == []
+    assert JobId("j1") not in worker.running_jobs
+
+
+def test_job_failure_with_retry_unassigns_worker(make_job_request, make_resource_spec):
+    """Job failure with retry unassigns worker and resets job to PENDING."""
+    from fluster.cluster.controller.job import TransitionResult
+
+    state = ControllerState()
+
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        resources=make_resource_spec(),
+    )
+    state.add_worker(worker)
+
+    job = ControllerJob(
+        job_id=JobId("j1"),
+        request=make_job_request("job1"),
+        max_retries_failure=1,
+    )
+    state.add_job(job)
+
+    # First attempt
+    job.mark_dispatched(WorkerId("w1"), now_ms=1000)
+    state.assign_job_to_worker(WorkerId("w1"), JobId("j1"))
+
+    # First failure - should retry
+    result = job.transition(cluster_pb2.JOB_STATE_FAILED, now_ms=2000)
+    assert result == TransitionResult.SHOULD_RETRY
+
+    # Unassign from worker (simulating what controller does)
+    state.unassign_job_from_worker(WorkerId("w1"), JobId("j1"))
+
+    # Worker unassigned and job reset to PENDING for retry
+    assert JobId("j1") not in worker.running_jobs
+    assert job.state == cluster_pb2.JOB_STATE_PENDING
+    assert job.worker_id is None
+
+
+@pytest.mark.parametrize(
+    "terminal_state",
+    [
+        cluster_pb2.JOB_STATE_SUCCEEDED,
+        cluster_pb2.JOB_STATE_KILLED,
+        cluster_pb2.JOB_STATE_WORKER_FAILED,
+    ],
+)
+def test_terminal_states_clean_up_endpoints(make_job_request, terminal_state):
+    """All terminal states clean up job endpoints."""
+    state = ControllerState()
+
+    job = ControllerJob(
+        job_id=JobId("j1"),
+        request=make_job_request("job1"),
+        state=cluster_pb2.JOB_STATE_RUNNING,
+    )
+    state.add_job(job)
+
+    ep = ControllerEndpoint(
+        endpoint_id="ep1",
+        name="j1/actor",
+        address="a:1",
+        job_id=JobId("j1"),
+    )
+    state.add_endpoint(ep)
+
+    # Transition to terminal state via transition_job
+    state.transition_job(JobId("j1"), terminal_state, now_ms=1000, error="terminated")
+
+    assert state.lookup_endpoints("j1/actor") == []
+
+
+def test_worker_timeout_job_cleanup(make_job_request, make_resource_spec):
+    """Worker timeout triggers proper job cleanup including endpoints."""
+    from fluster.cluster.controller.job import TransitionResult
+
+    state = ControllerState()
+
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        resources=make_resource_spec(),
+        last_heartbeat_ms=0,
+    )
+    state.add_worker(worker)
+
+    job = ControllerJob(
+        job_id=JobId("j1"),
+        request=make_job_request("job1"),
+        max_retries_preemption=0,
+    )
+    state.add_job(job)
+
+    job.mark_dispatched(WorkerId("w1"), now_ms=1000)
+    state.assign_job_to_worker(WorkerId("w1"), JobId("j1"))
+
+    ep = ControllerEndpoint(
+        endpoint_id="ep1",
+        name="j1/actor",
+        address="a:1",
+        job_id=JobId("j1"),
+    )
+    state.add_endpoint(ep)
+
+    # Simulate worker timeout via transition_job
+    result, removed = state.transition_job(
+        JobId("j1"),
+        cluster_pb2.JOB_STATE_WORKER_FAILED,
+        now_ms=60000,
+        is_worker_failure=True,
+        error="Worker timed out",
+    )
+    assert result == TransitionResult.EXCEEDED_RETRY_LIMIT
+    assert len(removed) == 1
+
+    assert state.lookup_endpoints("j1/actor") == []
+    assert JobId("j1") not in worker.running_jobs

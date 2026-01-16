@@ -12,12 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""RPC error handling utilities with full traceback support.
-
-Provides a context manager and utilities for consistent error handling
-across ConnectRPC services, ensuring full Python tracebacks are captured
-and attached to RPC errors for debugging.
-"""
+"""RPC error handling utilities with full traceback support."""
 
 import time
 import traceback
@@ -34,9 +29,6 @@ def rpc_error_handler(
     code: Code = Code.INTERNAL,
 ) -> Generator[None, None, None]:
     """Context manager for consistent RPC error handling with full tracebacks.
-
-    Catches exceptions and re-raises as ConnectError with structured ErrorDetails
-    containing the full traceback.
 
     Usage:
         with rpc_error_handler("launching job"):
@@ -71,7 +63,6 @@ def connect_error_with_traceback(
     # Import here to avoid circular import during module load
     from fluster.rpc import errors_pb2
 
-    # Build ErrorDetails proto
     details = errors_pb2.ErrorDetails(
         message=message,
         timestamp_ms=int(time.time() * 1000),

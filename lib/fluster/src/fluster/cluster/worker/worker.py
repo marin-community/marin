@@ -12,22 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unified worker managing all components and lifecycle.
-
-The Worker class encapsulates all worker components (caches, runtime, service,
-dashboard) and provides a clean interface for lifecycle management. It directly
-owns job state and execution logic.
-
-Example:
-    config = WorkerConfig(port=8081)
-    worker = Worker(config)
-    worker.start()
-    try:
-        # Use worker
-        job_id = worker.submit_job(request)
-    finally:
-        worker.stop()
-"""
+"""Unified worker managing all components and lifecycle."""
 
 import base64
 import logging
@@ -72,11 +57,7 @@ def _rewrite_address_for_container(address: str) -> str:
 
 
 class PortAllocator:
-    """Allocate ephemeral ports for jobs.
-
-    Tracks allocated ports to avoid conflicts.
-    Ports are released when jobs terminate.
-    """
+    """Allocate ephemeral ports for jobs."""
 
     def __init__(self, port_range: tuple[int, int] = (30000, 40000)):
         self._range = port_range
@@ -84,7 +65,6 @@ class PortAllocator:
         self._lock = threading.Lock()
 
     def allocate(self, count: int = 1) -> list[int]:
-        """Allocate N unused ports."""
         with self._lock:
             ports = []
             for _ in range(count):
@@ -94,13 +74,11 @@ class PortAllocator:
             return ports
 
     def release(self, ports: list[int]) -> None:
-        """Release allocated ports."""
         with self._lock:
             for port in ports:
                 self._allocated.discard(port)
 
     def _find_free_port(self) -> int:
-        """Find an unused port in range."""
         for port in range(self._range[0], self._range[1]):
             if port in self._allocated:
                 continue
@@ -110,7 +88,6 @@ class PortAllocator:
         raise RuntimeError("No free ports available")
 
     def _is_port_free(self, port: int) -> bool:
-        """Check if port is free on host."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
                 s.bind(("", port))
@@ -121,19 +98,7 @@ class PortAllocator:
 
 @dataclass
 class WorkerConfig:
-    """Worker configuration.
-
-    Args:
-        host: Host to bind to (default: "127.0.0.1")
-        port: Port to bind to (default: 0 for ephemeral)
-        cache_dir: Cache directory for bundles and images (default: temp directory)
-        registry: Docker registry for images (default: "localhost:5000")
-        max_concurrent_jobs: Maximum concurrent jobs (default: 10)
-        port_range: Port range for job ports (default: (30000, 40000))
-        controller_address: Controller URL for endpoint registration (default: None)
-        worker_id: Worker ID (default: None)
-        poll_interval_seconds: Interval between container status checks (default: 5.0)
-    """
+    """Worker configuration."""
 
     host: str = "127.0.0.1"
     port: int = 0
@@ -147,19 +112,7 @@ class WorkerConfig:
 
 
 class Worker:
-    """Unified worker managing all components and lifecycle.
-
-    Directly owns job state and execution logic, following the Controller pattern.
-
-    Example:
-        config = WorkerConfig(port=8081)
-        worker = Worker(config)
-        worker.start()
-        try:
-            job_id = worker.submit_job(request)
-        finally:
-            worker.stop()
-    """
+    """Unified worker managing all components and lifecycle."""
 
     def __init__(
         self,
@@ -170,16 +123,6 @@ class Worker:
         container_runtime: ContainerRuntime | None = None,
         environment_provider: EnvironmentProvider | None = None,
     ):
-        """Initialize worker components.
-
-        Args:
-            config: Worker configuration
-            cache_dir: Override cache directory from config
-            bundle_provider: Optional bundle provider for testing
-            image_provider: Optional image provider for testing
-            container_runtime: Optional container runtime for testing
-            environment_provider: Optional environment provider for resource reporting
-        """
         self._config = config
 
         # Setup cache directory
@@ -230,7 +173,6 @@ class Worker:
         self._controller_client: ControllerServiceClientSync | None = None
 
     def start(self) -> None:
-        """Start worker server and heartbeat loop."""
         self._server_thread = threading.Thread(
             target=self._run_server,
             daemon=True,
@@ -259,8 +201,6 @@ class Worker:
             self._heartbeat_thread.start()
 
     def stop(self) -> None:
-        """Stop worker server and cleanup all containers."""
-        # Stop heartbeat thread
         self._stop_heartbeat.set()
         if self._heartbeat_thread:
             self._heartbeat_thread.join(timeout=5.0)
@@ -287,7 +227,6 @@ class Worker:
                 pass
 
     def _run_server(self) -> None:
-        """Run worker server (blocking, for thread)."""
         try:
             config = uvicorn.Config(
                 self._dashboard._app,
@@ -301,8 +240,6 @@ class Worker:
             print(f"Worker server error: {e}")
 
     def _heartbeat_loop(self) -> None:
-        """Background loop: register with retry, then send periodic heartbeats."""
-        # Probe environment once using the configured provider
         metadata = self._environment_provider.probe()
         resources = self._environment_provider.build_resource_spec(metadata)
 
@@ -354,7 +291,6 @@ class Worker:
                 logger.warning(f"Heartbeat failed: {e}")
 
     def _report_job_state(self, job: "Job") -> None:
-        """Report job state change to controller."""
         if not self._controller_client or not self._worker_id:
             return
 
@@ -375,23 +311,6 @@ class Worker:
     # Job management methods
 
     def submit_job(self, request: cluster_pb2.Worker.RunJobRequest) -> str:
-        """Submit job for execution.
-
-        Returns job_id immediately, execution happens in background.
-
-        Fluster auto-injects system environment variables (these override user-provided values):
-        - FLUSTER_JOB_ID: The job's unique identifier
-        - FLUSTER_ATTEMPT_ID: Which attempt this is (0-indexed)
-        - FLUSTER_WORKER_ID: ID of the worker running this job
-        - FLUSTER_CONTROLLER_ADDRESS: Controller URL for endpoint registration
-        - FLUSTER_BUNDLE_GCS_PATH: Bundle path for sub-job workspace inheritance
-        - FLUSTER_BIND_HOST: Host address for binding servers (0.0.0.0 for Docker, 127.0.0.1 otherwise)
-        - FLUSTER_PORT_<NAME>: Allocated port numbers (e.g., FLUSTER_PORT_HTTP)
-        - FRAY_PORT_MAPPING: All port mappings as "name:port,name:port"
-
-        User-provided environment variables (including FLUSTER_NAMESPACE for actors) are
-        passed through from the RunJobRequest.environment.env_vars.
-        """
         job_id = request.job_id or str(uuid.uuid4())
         attempt_id = request.attempt_id
 
@@ -425,7 +344,6 @@ class Worker:
         return job_id
 
     def _execute_job(self, job: Job) -> None:
-        """Execute job through all phases with integrated stats collection."""
         import sys
 
         try:
@@ -509,10 +427,6 @@ class Worker:
             for name, port in job.ports.items():
                 env[f"FLUSTER_PORT_{name.upper()}"] = str(port)
 
-            if job.ports:
-                port_mapping = ",".join(f"{name}:{port}" for name, port in job.ports.items())
-                env["FRAY_PORT_MAPPING"] = port_mapping
-
             config = ContainerConfig(
                 image=build_result.image_tag,
                 command=command,
@@ -548,8 +462,6 @@ class Worker:
                         config.ports = job.ports
                         for name, port in job.ports.items():
                             config.env[f"FLUSTER_PORT_{name.upper()}"] = str(port)
-                        if job.ports:
-                            config.env["FRAY_PORT_MAPPING"] = ",".join(f"{n}:{p}" for n, p in job.ports.items())
 
                         # Try to remove failed container if it was created
                         if container_id:
@@ -660,18 +572,6 @@ class Worker:
                     shutil.rmtree(job.workdir, ignore_errors=True)
 
     def _build_command(self, entrypoint, ports: dict[str, int]) -> list[str]:
-        """Build command to run entrypoint.
-
-        Serializes the raw callable/args/kwargs tuple. Ports are passed via
-        FLUSTER_PORT_<NAME> environment variables set by the worker.
-
-        The thunk executes user code directly. If user code calls fluster_ctx(),
-        it lazily creates context from FLUSTER_* environment variables.
-
-        Args:
-            entrypoint: Job entrypoint dataclass
-            ports: Allocated ports mapping (name -> port) - passed via env vars
-        """
         del ports  # Ports are passed via FLUSTER_PORT_* env vars, not serialized
 
         data = (entrypoint.callable, entrypoint.args, entrypoint.kwargs)
@@ -691,18 +591,12 @@ with open('/workdir/_result.pkl', 'wb') as f:
         return ["python", "-c", thunk]
 
     def get_job(self, job_id: str) -> Job | None:
-        """Get job by ID."""
         return self._jobs.get(job_id)
 
     def list_jobs(self) -> list[Job]:
-        """List all jobs."""
         return list(self._jobs.values())
 
     def kill_job(self, job_id: str, term_timeout_ms: int = 5000) -> bool:
-        """Kill a running job by setting should_stop flag.
-
-        The poll loop in _execute_job will handle the actual termination.
-        """
         job = self._jobs.get(job_id)
         if not job:
             return False
@@ -744,18 +638,6 @@ with open('/workdir/_result.pkl', 'wb') as f:
         return True
 
     def get_logs(self, job_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]:
-        """Get logs for a job.
-
-        Combines build logs (from job.logs) with container logs (from Docker).
-
-        Args:
-            job_id: Job ID
-            start_line: Starting line number. If negative, returns last N lines
-                       (e.g., start_line=-100 returns last 100 lines for tailing).
-
-        Returns:
-            List of log entries sorted by timestamp
-        """
         job = self._jobs.get(job_id)
         if not job:
             return []
@@ -777,9 +659,6 @@ with open('/workdir/_result.pkl', 'wb') as f:
 
         return logs[start_line:]
 
-    # Properties
-
     @property
     def url(self) -> str:
-        """Worker URL."""
         return f"http://{self._config.host}:{self._config.port}"

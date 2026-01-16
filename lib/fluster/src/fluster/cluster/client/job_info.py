@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Job metadata available to cluster operations.
-
-This module provides a lightweight JobInfo container with just the essential
-metadata about the current job execution. This is a "dumb" metadata holder -
-it doesn't contain client instances or context logic.
+"""Lightweight job metadata container without client instances or context logic.
 
 For the full FlusterContext with client/registry/resolver, use fluster.client.
 """
@@ -30,15 +26,7 @@ from dataclasses import dataclass, field
 class JobInfo:
     """Minimal job metadata available in cluster operations.
 
-    This is a "dumb" metadata container - just facts about the current job.
     For full context with client/registry/resolver, use fluster.client.FlusterContext.
-
-    Attributes:
-        job_id: Full hierarchical job ID (e.g., "root/worker-0")
-        attempt_id: Attempt number for this job execution (0-based)
-        worker_id: Identifier for the worker executing this job
-        controller_address: Controller URL (e.g., "http://localhost:8080")
-        ports: Allocated ports by name (e.g., {"actor": 50001})
     """
 
     job_id: str
@@ -54,9 +42,6 @@ _job_info: ContextVar[JobInfo | None] = ContextVar("job_info", default=None)
 
 def get_job_info() -> JobInfo | None:
     """Get current job info from contextvar or environment.
-
-    First checks the contextvar (set by local execution), then falls back
-    to environment variables (set by remote workers).
 
     Returns:
         JobInfo if available, None otherwise
@@ -79,20 +64,10 @@ def get_job_info() -> JobInfo | None:
 
 
 def set_job_info(info: JobInfo) -> None:
-    """Set job info in contextvar (used by local execution).
-
-    Args:
-        info: Job metadata to set
-    """
     _job_info.set(info)
 
 
 def _parse_ports_from_env(env: dict[str, str] | None = None) -> dict[str, int]:
-    """Parse port allocations from FLUSTER_PORT_* variables.
-
-    Args:
-        env: Dict to parse from. Defaults to os.environ.
-    """
     source = env if env is not None else os.environ
     ports = {}
     for key, value in source.items():

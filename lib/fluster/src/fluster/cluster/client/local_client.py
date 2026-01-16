@@ -14,9 +14,9 @@
 
 """Local cluster client using real Controller/Worker with in-process execution.
 
-This module provides LocalClusterClient, which spins up a real Controller and Worker
-but executes jobs in-process using threads instead of Docker containers. This ensures
-local execution follows the same code path as production cluster execution.
+Spins up a real Controller and Worker but executes jobs in-process using threads
+instead of Docker containers, ensuring local execution follows the same code path
+as production cluster execution.
 """
 
 import base64
@@ -47,7 +47,6 @@ from fluster.rpc.cluster_connect import ControllerServiceClientSync
 
 
 def _find_free_port() -> int:
-    """Find an available port."""
     with socket.socket() as s:
         s.bind(("", 0))
         return s.getsockname()[1]
@@ -59,8 +58,6 @@ def _find_free_port() -> int:
 
 
 class LocalEnvironmentProvider:
-    """Environment provider for local execution with high resource availability."""
-
     def __init__(self, cpu: int = 1000, memory_gb: int = 1000):
         self._cpu = cpu
         self._memory_gb = memory_gb
@@ -82,8 +79,6 @@ class LocalEnvironmentProvider:
 
 @dataclass
 class _LocalContainer:
-    """Simulates a container executing a job function in-process."""
-
     config: ContainerConfig
     _thread: threading.Thread | None = field(default=None, repr=False)
     _running: bool = False
@@ -93,7 +88,6 @@ class _LocalContainer:
     _killed: threading.Event = field(default_factory=threading.Event)
 
     def start(self):
-        """Execute the job function in a background thread."""
         self._running = True
         self._thread = threading.Thread(target=self._execute, daemon=True)
         self._thread.start()
@@ -139,7 +133,6 @@ class _LocalContainer:
             self._capture_output(stderr_capture, "stderr")
 
     def _capture_output(self, capture: io.StringIO, source: str) -> None:
-        """Capture output lines from StringIO buffer into logs."""
         capture.seek(0)
         for line in capture:
             line = line.rstrip("\n")
@@ -153,7 +146,6 @@ class _LocalContainer:
                 )
 
     def _extract_entrypoint(self, script: str):
-        """Extract pickled (fn, args, kwargs) from the thunk script."""
         match = re.search(r"base64\.b64decode\('([^']+)'\)\)", script)
         if match:
             encoded = match.group(1)
@@ -171,8 +163,6 @@ class _LocalContainer:
 
 
 class _LocalContainerRuntime(ContainerRuntime):
-    """Container runtime that executes jobs in-process without Docker."""
-
     def __init__(self):
         self._containers: dict[str, _LocalContainer] = {}
 
@@ -212,8 +202,6 @@ class _LocalContainerRuntime(ContainerRuntime):
 
 
 class _LocalBundleProvider:
-    """Returns a fake bundle path without downloading."""
-
     def __init__(self, bundle_path: Path):
         self._bundle_path = bundle_path
 
@@ -223,8 +211,6 @@ class _LocalBundleProvider:
 
 
 class _LocalImageProvider:
-    """Skips image building, returns a fake result."""
-
     def build(
         self,
         bundle_path: Path,
@@ -267,7 +253,6 @@ class LocalClusterClient:
         worker: Worker,
         remote_client: RemoteClusterClient,
     ):
-        """Private constructor. Use create() instead."""
         self._temp_dir = temp_dir
         self._controller = controller
         self._worker = worker
@@ -350,7 +335,6 @@ class LocalClusterClient:
 
     @staticmethod
     def _wait_for_worker_registration(controller_address: str, timeout: float = 5.0) -> None:
-        """Wait for worker to register with controller."""
         temp_client = ControllerServiceClientSync(
             address=controller_address,
             timeout_ms=30000,
@@ -367,8 +351,7 @@ class LocalClusterClient:
             temp_client.close()
 
     def shutdown(self, wait: bool = True) -> None:
-        """Stop controller and worker."""
-        del wait  # always clean shutdown
+        del wait
         self._remote_client.shutdown()
         self._worker.stop()
         self._controller.stop()
@@ -383,7 +366,6 @@ class LocalClusterClient:
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,
     ) -> None:
-        """Submit a job to the local cluster via RPC."""
         self._remote_client.submit_job(
             job_id=job_id,
             entrypoint=entrypoint,
@@ -394,7 +376,6 @@ class LocalClusterClient:
         )
 
     def get_job_status(self, job_id: str) -> cluster_pb2.JobStatus:
-        """Get job status via RPC."""
         return self._remote_client.get_job_status(job_id)
 
     def wait_for_job(
@@ -403,11 +384,9 @@ class LocalClusterClient:
         timeout: float = 300.0,
         poll_interval: float = 2.0,
     ) -> cluster_pb2.JobStatus:
-        """Wait for job to complete with exponential backoff polling."""
         return self._remote_client.wait_for_job(job_id, timeout=timeout, poll_interval=poll_interval)
 
     def terminate_job(self, job_id: str) -> None:
-        """Terminate a running job via RPC."""
         self._remote_client.terminate_job(job_id)
 
     def register_endpoint(
@@ -417,19 +396,15 @@ class LocalClusterClient:
         job_id: str,
         metadata: dict[str, str] | None = None,
     ) -> str:
-        """Register an endpoint via RPC."""
         return self._remote_client.register_endpoint(name=name, address=address, job_id=job_id, metadata=metadata)
 
     def unregister_endpoint(self, endpoint_id: str) -> None:
-        """Unregister an endpoint (no-op, controller auto-cleans on job termination)."""
         self._remote_client.unregister_endpoint(endpoint_id)
 
     def list_endpoints(self, prefix: str) -> list[cluster_pb2.Controller.Endpoint]:
-        """List endpoints matching a prefix via RPC."""
         return self._remote_client.list_endpoints(prefix)
 
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
-        """List all jobs via RPC."""
         return self._remote_client.list_jobs()
 
     def fetch_logs(
@@ -439,5 +414,4 @@ class LocalClusterClient:
         start_ms: int = 0,
         max_lines: int = 0,
     ) -> list[cluster_pb2.Worker.LogEntry]:
-        """Fetch logs for a job."""
         return self._remote_client.fetch_logs(job_id, start_ms=start_ms, max_lines=max_lines)

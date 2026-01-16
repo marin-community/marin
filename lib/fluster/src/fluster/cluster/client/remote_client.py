@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""RPC-based cluster client implementation.
-
-This module provides RemoteClusterClient, which implements the ClusterClient
-protocol by talking to the controller via RPC.
-"""
+"""RPC-based cluster client implementation."""
 
 import time
 
@@ -31,8 +27,7 @@ from fluster.time_utils import ExponentialBackoff
 class RemoteClusterClient:
     """Cluster client via RPC to controller.
 
-    This is a "dumb" implementation - all parameters are explicit, no context magic.
-    Takes full job IDs, full endpoint names, etc.
+    All parameters are explicit, no context magic. Takes full job IDs, full endpoint names, etc.
     """
 
     def __init__(
@@ -61,7 +56,6 @@ class RemoteClusterClient:
         self._worker_clients: dict[str, WorkerServiceClientSync] = {}
 
     def _get_worker_client(self, worker_address: str) -> WorkerServiceClientSync:
-        """Get or create a cached worker client for the given address."""
         if worker_address not in self._worker_clients:
             self._worker_clients[worker_address] = WorkerServiceClientSync(
                 address=f"http://{worker_address}",
@@ -78,16 +72,6 @@ class RemoteClusterClient:
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,
     ) -> None:
-        """Submit a job to the cluster via RPC.
-
-        Args:
-            job_id: Full hierarchical job ID (e.g., "root/worker-0")
-            entrypoint: Job entrypoint (callable + args/kwargs)
-            resources: Resource requirements
-            environment: Environment configuration
-            ports: Port names to allocate (e.g., ["actor", "metrics"])
-            scheduling_timeout_seconds: Maximum time to wait for scheduling (0 = no timeout)
-        """
         serialized = cloudpickle.dumps(entrypoint)
 
         env_config = cluster_pb2.EnvironmentConfig(
@@ -127,14 +111,6 @@ class RemoteClusterClient:
         self._client.launch_job(request)
 
     def get_job_status(self, job_id: str) -> cluster_pb2.JobStatus:
-        """Get job status via RPC.
-
-        Args:
-            job_id: Full job ID
-
-        Returns:
-            JobStatus proto with current state
-        """
         request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         response = self._client.get_job_status(request)
         return response.job
@@ -175,11 +151,6 @@ class RemoteClusterClient:
             time.sleep(min(interval, remaining))
 
     def terminate_job(self, job_id: str) -> None:
-        """Terminate a running job via RPC.
-
-        Args:
-            job_id: Full job ID
-        """
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
         self._client.terminate_job(request)
 
@@ -190,17 +161,6 @@ class RemoteClusterClient:
         job_id: str,
         metadata: dict[str, str] | None = None,
     ) -> str:
-        """Register an endpoint via RPC.
-
-        Args:
-            name: Full endpoint name (with namespace prefix if needed)
-            address: Address where actor is listening (host:port)
-            job_id: Job ID that owns this endpoint
-            metadata: Optional metadata
-
-        Returns:
-            Endpoint ID assigned by controller
-        """
         request = cluster_pb2.Controller.RegisterEndpointRequest(
             name=name,
             address=address,
@@ -224,34 +184,16 @@ class RemoteClusterClient:
         del endpoint_id
 
     def list_endpoints(self, prefix: str) -> list[cluster_pb2.Controller.Endpoint]:
-        """List endpoints matching a prefix via RPC.
-
-        Args:
-            prefix: Name prefix to match (e.g., "abc123/")
-
-        Returns:
-            List of matching endpoints
-        """
         request = cluster_pb2.Controller.ListEndpointsRequest(prefix=prefix)
         response = self._client.list_endpoints(request)
         return list(response.endpoints)
 
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
-        """List all jobs via RPC.
-
-        Returns:
-            List of JobStatus protos
-        """
         request = cluster_pb2.Controller.ListJobsRequest()
         response = self._client.list_jobs(request)
         return list(response.jobs)
 
     def shutdown(self, wait: bool = True) -> None:
-        """Shutdown the client and release resources.
-
-        Args:
-            wait: Ignored (kept for interface compatibility)
-        """
         del wait
         for client in self._worker_clients.values():
             client.close()

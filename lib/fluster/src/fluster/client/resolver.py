@@ -12,13 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Namespace-aware resolver for actor discovery via cluster controller.
-
-This module provides ClusterResolver, which queries the controller's endpoint
-registry with automatic namespace prefixing based on FlusterContext.
-
-For static resolvers (FixedResolver, GcsResolver), see fluster.actor.resolver.
-"""
+"""Namespace-aware resolver for actor discovery via cluster controller."""
 
 from fluster.actor.resolver import ResolvedEndpoint, ResolveResult
 from fluster.cluster.types import Namespace
@@ -29,12 +23,7 @@ from fluster.rpc.cluster_connect import ControllerServiceClientSync
 class ClusterResolver:
     """Resolver backed by the cluster controller's endpoint registry.
 
-    Queries the controller's ListEndpoints RPC to discover actor endpoints
-    registered by running jobs. Automatically prefixes names with the namespace
-    derived from the current FlusterContext.
-
-    The namespace prefix is computed dynamically from the current FlusterContext,
-    so a single resolver instance can be shared across jobs.
+    Automatically prefixes names with namespace derived from FlusterContext.
 
     Args:
         controller_address: Controller URL (e.g., "http://localhost:8080")
@@ -54,7 +43,6 @@ class ClusterResolver:
         )
 
     def _namespace_prefix(self) -> str:
-        """Get namespace prefix from current FlusterContext."""
         from fluster.client.client import get_fluster_ctx
 
         ctx = get_fluster_ctx()
@@ -64,10 +52,6 @@ class ClusterResolver:
 
     def resolve(self, name: str) -> ResolveResult:
         """Resolve actor name to endpoints via controller.
-
-        The name is auto-prefixed with the namespace before lookup.
-        For example, resolving "calculator" with namespace "abc123" looks up
-        "abc123/calculator".
 
         Args:
             name: Actor name to resolve (will be prefixed with namespace)

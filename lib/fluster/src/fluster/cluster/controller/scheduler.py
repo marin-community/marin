@@ -12,17 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pure job scheduler with shallow interface.
-
-This module provides the Scheduler class, which implements job-to-worker matching
-logic without any threading, dispatch, or state mutation. The scheduler takes
-inputs (pending jobs, workers, current time) and returns outputs (assignments,
-timed-out jobs). All side effects are the caller's responsibility.
-
-This design follows the "shallow interface" pattern: the scheduler is a pure
-function-like object that can be easily tested and composed without mocking
-threads or callbacks.
-"""
+"""Pure job-to-worker matching without threading, dispatch, or state mutation."""
 
 import logging
 from dataclasses import dataclass, field
@@ -37,9 +27,6 @@ logger = logging.getLogger(__name__)
 class ScheduleResult:
     """Result of a scheduling attempt.
 
-    Contains the job-to-worker assignments that the caller should dispatch,
-    and jobs that have exceeded their scheduling timeout.
-
     Args:
         assignments: List of (job, worker) pairs to dispatch
         timed_out_jobs: Jobs that exceeded their scheduling_timeout_seconds
@@ -50,25 +37,9 @@ class ScheduleResult:
 
 
 class Scheduler:
-    """Pure job-to-worker matching logic.
-
-    The scheduler matches pending jobs to available workers based on resource
-    requirements and availability. It does NOT:
-    - Dispatch jobs (caller does this)
-    - Modify state (caller does this)
-    - Run any threads (Controller owns threading)
-
-    This is a stateless utility class - all inputs are passed to find_assignments()
-    and all outputs are returned in ScheduleResult.
-    """
+    """Pure job-to-worker matching logic. Does not dispatch jobs, modify state, or run threads."""
 
     def __init__(self, state: ControllerState):
-        """Initialize scheduler with controller state for resource lookups.
-
-        Args:
-            state: Controller state used for looking up job resources when
-                   computing committed resources on workers.
-        """
         self._state = state
 
     def find_assignments(
@@ -127,7 +98,6 @@ class Scheduler:
         return result
 
     def _is_job_timed_out(self, job: ControllerJob, now_ms: int) -> bool:
-        """Check if job has exceeded its scheduling timeout."""
         timeout_seconds = job.request.scheduling_timeout_seconds
         if timeout_seconds <= 0:
             return False
@@ -144,16 +114,8 @@ class Scheduler:
     ) -> ControllerWorker | None:
         """Find first worker that can fit the job.
 
-        Takes into account both jobs already running on each worker AND jobs
-        assigned earlier in this scheduling round (tracked in assigned_jobs_by_worker).
-
-        Args:
-            job: Job to find a worker for
-            workers: Available workers to consider
-            assigned_jobs_by_worker: Jobs assigned in this round, by worker_id
-
-        Returns:
-            First matching worker, or None if no worker can fit the job
+        Accounts for both jobs already running on each worker AND jobs assigned earlier
+        in this scheduling round (tracked in assigned_jobs_by_worker).
         """
         for worker in workers:
             if not worker.healthy:

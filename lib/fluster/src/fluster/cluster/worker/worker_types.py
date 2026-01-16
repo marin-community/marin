@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Internal worker types for job tracking and statistics collection."""
+"""Internal worker types for job tracking."""
 
 import subprocess
 import threading
@@ -29,14 +29,7 @@ from fluster.rpc.cluster_pb2 import JobState
 
 
 def collect_workdir_size_mb(workdir: Path) -> int:
-    """Calculate workdir size in MB using du -sm command.
-
-    Args:
-        workdir: Path to directory to measure
-
-    Returns:
-        Directory size in megabytes, or 0 if directory doesn't exist
-    """
+    """Calculate workdir size in MB using du -sm."""
     if not workdir.exists():
         return 0
 
@@ -57,8 +50,6 @@ def collect_workdir_size_mb(workdir: Path) -> int:
 
 
 class LogLine(BaseModel):
-    """A single log line with timestamp and source."""
-
     timestamp: datetime
     source: str  # "build", "stdout", "stderr"
     data: str
@@ -76,8 +67,6 @@ class LogLine(BaseModel):
 
 
 class JobLogs(BaseModel):
-    """All logs for a job, stored as structured data."""
-
     lines: list[LogLine] = []
 
     def add(self, source: str, data: str) -> None:
@@ -86,8 +75,6 @@ class JobLogs(BaseModel):
 
 @dataclass(kw_only=True)
 class Job:
-    """Internal job tracking state."""
-
     job_id: str
     attempt_id: int = 0
     request: cluster_pb2.Worker.RunJobRequest
@@ -132,14 +119,6 @@ class Job:
         error: str | None = None,
         exit_code: int | None = None,
     ) -> None:
-        """Transition to a new state with appropriate side effects.
-
-        Args:
-            state: Target state
-            message: Progress message (only retained in BUILDING state)
-            error: Error message (for FAILED state)
-            exit_code: Process exit code (for terminal states)
-        """
         self.status = state
         self.status_message = message
         if is_job_finished(state):
@@ -150,7 +129,6 @@ class Job:
                 self.exit_code = exit_code
 
     def to_proto(self) -> cluster_pb2.JobStatus:
-        """Convert job to JobStatus proto."""
         return cluster_pb2.JobStatus(
             job_id=self.job_id,
             state=self.status,

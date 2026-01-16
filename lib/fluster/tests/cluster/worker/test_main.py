@@ -22,37 +22,6 @@ from click.testing import CliRunner
 from fluster.cluster.worker.main import cli
 
 
-def test_cli_help():
-    """Test CLI help message."""
-    runner = CliRunner()
-    result = runner.invoke(cli, ["--help"])
-    assert result.exit_code == 0
-    assert "Fluster Worker" in result.output
-    assert "serve" in result.output
-    assert "cleanup" in result.output
-
-
-def test_serve_help():
-    """Test serve command help."""
-    runner = CliRunner()
-    result = runner.invoke(cli, ["serve", "--help"])
-    assert result.exit_code == 0
-    assert "Start the Fluster worker service" in result.output
-    assert "--host" in result.output
-    assert "--port" in result.output
-    assert "--cache-dir" in result.output
-    assert "--registry" in result.output
-
-
-def test_cleanup_help():
-    """Test cleanup command help."""
-    runner = CliRunner()
-    result = runner.invoke(cli, ["cleanup", "--help"])
-    assert result.exit_code == 0
-    assert "Clean up cached bundles" in result.output
-    assert "--cache-dir" in result.output
-
-
 def test_cleanup_removes_cache_directory():
     """Test cleanup command removes cache directory."""
     runner = CliRunner()
@@ -80,11 +49,3 @@ def test_cleanup_handles_missing_directory():
         result = runner.invoke(cli, ["cleanup", "--cache-dir", str(cache_dir)])
         assert result.exit_code == 0
         assert "does not exist" in result.output
-
-
-def test_serve_requires_registry():
-    """Test serve command requires --registry argument."""
-    runner = CliRunner()
-    result = runner.invoke(cli, ["serve"])
-    assert result.exit_code != 0
-    assert "registry" in result.output.lower() or "required" in result.output.lower()

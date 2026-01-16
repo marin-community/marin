@@ -26,8 +26,6 @@ from fluster.cluster.worker.worker_types import JobLogs
 
 @dataclass
 class VenvCacheEntry:
-    """Cached venv metadata."""
-
     deps_hash: str
     created_at: float
     size_bytes: int
@@ -46,7 +44,6 @@ class VenvCache:
     """
 
     def compute_deps_hash(self, bundle_path: Path) -> str:
-        """Compute hash from pyproject.toml + uv.lock."""
         h = hashlib.sha256()
         for fname in ["pyproject.toml", "uv.lock"]:
             fpath = bundle_path / fname
@@ -57,8 +54,6 @@ class VenvCache:
 
 @dataclass
 class BuildResult:
-    """Result of Docker image build."""
-
     image_tag: str
     deps_hash: str
     build_time_ms: int
@@ -66,7 +61,7 @@ class BuildResult:
 
 
 class ImageProvider(Protocol):
-    """Protocol for Docker image management. Mock this for testing."""
+    """Protocol for Docker image management."""
 
     def build(
         self,
@@ -76,9 +71,7 @@ class ImageProvider(Protocol):
         job_id: str,
         deps_hash: str,
         job_logs: JobLogs | None = None,
-    ) -> BuildResult:
-        """Build Docker image for job. Returns cached image if deps_hash matches."""
-        ...
+    ) -> BuildResult: ...
 
 
 DOCKERFILE_TEMPLATE = """FROM {base_image}
@@ -155,10 +148,6 @@ class ImageCache:
         deps_hash: str,
         job_logs: JobLogs | None = None,
     ) -> BuildResult:
-        """Build Docker image for job.
-
-        Returns cached image if deps_hash matches.
-        """
         if self._registry:
             image_tag = f"{self._registry}/fluster-job-{job_id}:{deps_hash[:8]}"
         else:
@@ -195,11 +184,6 @@ class ImageCache:
         )
 
     def _evict_old_images(self) -> None:
-        """Remove oldest fluster images when over limit.
-
-        Sorts by Docker's created_at timestamp with tag as tiebreaker for
-        deterministic ordering when timestamps are identical.
-        """
         if self._registry:
             pattern = f"{self._registry}/fluster-job-*"
         else:

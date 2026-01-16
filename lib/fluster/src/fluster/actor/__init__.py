@@ -14,14 +14,6 @@
 
 """Actor system for distributed RPC.
 
-This module provides the core actor infrastructure:
-- ActorServer: Host actor instances and handle RPC calls
-- ActorClient: Call remote actors via a resolver
-- ActorPool: Load-balanced and broadcast calls to multiple actors
-- Resolver: Protocol for actor name resolution
-- FixedResolver: Static endpoint configuration (for testing)
-- GcsResolver: Discovery via GCP VM instance metadata
-
 For ClusterResolver (namespace-aware controller-based resolution),
 see fluster.client.resolver.
 """

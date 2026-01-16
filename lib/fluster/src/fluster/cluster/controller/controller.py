@@ -12,22 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unified Controller class for managing all controller components.
-
-Provides a single Controller class that encapsulates and manages the lifecycle
-of all controller components:
-- ControllerState: In-memory job and worker state
-- Scheduler: Pure scheduling logic (shallow interface)
-- WorkerHealthTracker: Worker health logic (shallow interface)
-- ControllerServiceImpl: RPC service implementation
-- ControllerDashboard: Web dashboard and HTTP server
-
-The Controller owns the background thread that drives scheduling and heartbeat
-loops, calling the shallow Scheduler and WorkerHealthTracker as needed.
-
-This simplifies controller initialization and ensures consistent lifecycle
-management across all components.
-"""
+"""Unified controller managing background scheduling and worker health checks."""
 
 import logging
 import threading
@@ -41,7 +26,7 @@ import uvicorn
 from fluster.time_utils import ExponentialBackoff
 
 from fluster.cluster.controller.dashboard import ControllerDashboard
-from fluster.cluster.controller.job import Job, TransitionResult
+from fluster.cluster.controller.job import Job
 from fluster.cluster.controller.scheduler import ScheduleResult, Scheduler
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerState, ControllerWorker
@@ -54,8 +39,7 @@ logger = logging.getLogger(__name__)
 class WorkerClient(Protocol):
     """Protocol for worker RPC client.
 
-    This matches the WorkerServiceClientSync signature (client-side).
-    The server Protocol (WorkerServiceSync) has different signatures.
+    Matches client-side WorkerServiceClientSync signature. The server Protocol has different signatures.
     """
 
     def run_job(
@@ -80,11 +64,7 @@ class WorkerClient(Protocol):
 
 
 class WorkerStubFactory(Protocol):
-    """Factory for getting worker RPC stubs.
-
-    This protocol allows injecting mock stubs for testing. In production,
-    use DefaultWorkerStubFactory which creates real RPC clients.
-    """
+    """Factory for getting worker RPC stubs. Allows injecting mock stubs for testing."""
 
     def get_stub(self, address: str) -> WorkerClient:
         """Get a worker stub for the given address.
@@ -102,7 +82,6 @@ class DefaultWorkerStubFactory:
     """Default factory that creates real RPC client stubs."""
 
     def get_stub(self, address: str) -> WorkerClient:
-        """Create a real RPC client for the given address."""
         return WorkerServiceClientSync(
             address=f"http://{address}",
             timeout_ms=10000,
@@ -131,17 +110,7 @@ class ControllerConfig:
 class Controller:
     """Unified controller managing all components and lifecycle.
 
-    Encapsulates all controller components and provides a clean API for
-    job submission, status queries, and worker registration. The controller
-    handles all background threads and ensures proper cleanup on shutdown.
-
-    Components managed:
-    - ControllerState: Thread-safe state for jobs, workers, and endpoints
-    - Scheduler: Pure job-to-worker matching (shallow interface)
-    - ControllerServiceImpl: RPC service implementation
-    - ControllerDashboard: Web dashboard and HTTP server
-
-    The Controller owns a single background loop that periodically:
+    Owns a single background loop that periodically:
     1. Runs the scheduler to find job assignments
     2. Dispatches assigned jobs to workers
     3. Checks worker health via heartbeats
@@ -164,8 +133,7 @@ class Controller:
 
     Args:
         config: Controller configuration
-        worker_stub_factory: Factory for creating worker RPC stubs. Use
-            DefaultWorkerStubFactory for production or inject a mock for testing.
+        worker_stub_factory: Factory for creating worker RPC stubs
     """
 
     def __init__(
@@ -173,12 +141,6 @@ class Controller:
         config: ControllerConfig,
         worker_stub_factory: WorkerStubFactory,
     ):
-        """Initialize controller components.
-
-        Args:
-            config: Controller configuration
-            worker_stub_factory: Factory for creating worker RPC stubs
-        """
         self._config = config
         self._stub_factory = worker_stub_factory
 
@@ -218,11 +180,7 @@ class Controller:
         self._wake_event.set()
 
     def start(self) -> None:
-        """Start all background components.
-
-        Starts the main controller loop and dashboard server.
-        Both run in background daemon threads.
-        """
+        """Start main controller loop and dashboard server in background daemon threads."""
         self._stop = False
 
         # Start main controller loop
@@ -246,23 +204,14 @@ class Controller:
         )
 
     def stop(self) -> None:
-        """Stop all background components gracefully.
-
-        Signals the loop to stop, wakes it, and waits for termination.
-        The dashboard server stops automatically when the daemon thread exits.
-        """
+        """Stop all background components gracefully."""
         self._stop = True
         self._wake_event.set()
         if self._loop_thread:
             self._loop_thread.join(timeout=5.0)
 
     def _run_loop(self) -> None:
-        """Main controller loop.
-
-        Runs scheduling and worker timeout checks. Uses an event for wake
-        signaling to allow immediate scheduling after job submissions or
-        worker registrations.
-        """
+        """Main controller loop running scheduling and worker timeout checks."""
         while not self._stop:
             # Wait for wake signal or timeout (use scheduler interval)
             self._wake_event.wait(timeout=self._config.scheduler_interval_seconds)
@@ -278,11 +227,7 @@ class Controller:
             self._check_worker_timeouts()
 
     def _run_scheduling(self) -> None:
-        """Run one scheduling cycle.
-
-        Gets pending jobs and available workers, calls the scheduler to
-        find assignments, then dispatches each assignment.
-        """
+        """Run one scheduling cycle."""
         now_ms = int(time.time() * 1000)
         pending_jobs = self._state.peek_pending_jobs()
         workers = self._state.get_available_workers()
@@ -294,12 +239,7 @@ class Controller:
         self._apply_schedule_result(result, now_ms)
 
     def _apply_schedule_result(self, result: ScheduleResult, now_ms: int) -> None:
-        """Apply scheduling results: dispatch jobs and handle timeouts.
-
-        Args:
-            result: ScheduleResult from scheduler
-            now_ms: Current timestamp in milliseconds
-        """
+        """Apply scheduling results: dispatch jobs and handle timeouts."""
         for job in result.timed_out_jobs:
             self._mark_job_unschedulable(job, now_ms)
 
@@ -311,8 +251,6 @@ class Controller:
 
         All state is set BEFORE the RPC call. The worker reports all state
         transitions (BUILDING, RUNNING, SUCCEEDED, etc.) via ReportJobState.
-
-        On failure: resets state and marks worker unhealthy.
         """
         # Job updates its own state BEFORE RPC - worker may complete before RPC returns
         job.mark_dispatched(worker.worker_id, now_ms)
@@ -363,14 +301,11 @@ class Controller:
             )
 
     def _mark_job_unschedulable(self, job: Job, now_ms: int) -> None:
-        """Mark job as unschedulable and remove from queue."""
         logger.warning(
             f"Job {job.job_id} exceeded scheduling timeout "
             f"({job.request.scheduling_timeout_seconds}s), marking as UNSCHEDULABLE"
         )
-        job.transition(cluster_pb2.JOB_STATE_UNSCHEDULABLE, now_ms)
-        self._state.remove_from_queue(job.job_id)
-        self._state.finalize_job(job.job_id, unassign_worker=False)
+        self._state.transition_job(job.job_id, cluster_pb2.JOB_STATE_UNSCHEDULABLE, now_ms)
         self._state.log_action(
             "job_unschedulable",
             job_id=job.job_id,
@@ -378,12 +313,7 @@ class Controller:
         )
 
     def _check_worker_timeouts(self) -> None:
-        """Mark workers as unhealthy if they haven't sent heartbeat recently.
-
-        Workers send periodic heartbeats to the controller. If a worker hasn't
-        sent a heartbeat within worker_timeout_seconds, it's marked unhealthy
-        and its running jobs are failed for retry.
-        """
+        """Mark workers as unhealthy if they haven't sent heartbeat within worker_timeout_seconds."""
         now_ms = int(time.time() * 1000)
         timeout_ms = int(self._config.worker_timeout_seconds * 1000)
 
@@ -401,25 +331,15 @@ class Controller:
 
                 # Retry jobs that were running on the timed-out worker
                 for job_id in list(worker.running_jobs):
-                    job = self._state.get_job(job_id)
-                    if not job:
-                        continue
-
-                    result = job.transition(
+                    self._state.transition_job(
+                        job_id,
                         cluster_pb2.JOB_STATE_WORKER_FAILED,
                         now_ms,
                         is_worker_failure=True,
                         error=f"Worker {worker.worker_id} timed out",
                     )
 
-                    if result == TransitionResult.SHOULD_RETRY:
-                        self._state.add_to_queue(job)
-                        self._state.unassign_job_from_worker(worker.worker_id, job_id)
-                    elif job.is_finished():
-                        self._state.finalize_job(job_id)
-
     def _run_server(self) -> None:
-        """Run dashboard server (blocking, for thread)."""
         try:
             config = uvicorn.Config(
                 self._dashboard._app,
@@ -438,31 +358,14 @@ class Controller:
         self,
         request: cluster_pb2.Controller.LaunchJobRequest,
     ) -> cluster_pb2.Controller.LaunchJobResponse:
-        """Submit a job to the controller.
-
-        Creates a new job, adds it to the queue, and wakes the scheduler
-        to attempt immediate dispatch.
-
-        Args:
-            request: Job launch request with entrypoint and resources
-
-        Returns:
-            LaunchJobResponse containing the assigned job_id
-        """
+        """Submit a job to the controller."""
         return self._service.launch_job(request, None)
 
     def get_job_status(
         self,
         job_id: str,
     ) -> cluster_pb2.Controller.GetJobStatusResponse:
-        """Get the status of a job.
-
-        Args:
-            job_id: Job identifier
-
-        Returns:
-            GetJobStatusResponse with current job status
-        """
+        """Get the status of a job."""
         request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         return self._service.get_job_status(request, None)
 
@@ -470,33 +373,14 @@ class Controller:
         self,
         request: cluster_pb2.Controller.RegisterWorkerRequest,
     ) -> cluster_pb2.Controller.RegisterWorkerResponse:
-        """Register a worker with the controller.
-
-        Adds the worker to the registry and wakes the scheduler to
-        potentially dispatch pending jobs.
-
-        Args:
-            request: Worker registration request
-
-        Returns:
-            RegisterWorkerResponse with acceptance status
-        """
+        """Register a worker with the controller."""
         return self._service.register_worker(request, None)
 
     def terminate_job(
         self,
         job_id: str,
     ) -> cluster_pb2.Empty:
-        """Terminate a running job.
-
-        Marks the job as killed in the controller state.
-
-        Args:
-            job_id: Job identifier
-
-        Returns:
-            Empty response
-        """
+        """Terminate a running job."""
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
         return self._service.terminate_job(request, None)
 
@@ -504,18 +388,8 @@ class Controller:
 
     @property
     def state(self) -> ControllerState:
-        """Access to controller state (for advanced usage).
-
-        Returns:
-            The controller's internal state
-        """
         return self._state
 
     @property
     def url(self) -> str:
-        """Controller URL.
-
-        Returns:
-            HTTP URL for the controller dashboard and RPC service
-        """
         return f"http://{self._config.host}:{self._config.port}"

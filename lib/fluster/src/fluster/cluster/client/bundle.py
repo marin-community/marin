@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Workspace bundle creation for job submission.
-
-This module provides BundleCreator for packaging workspace directories
-into zip files that can be sent to workers.
-"""
+"""Workspace bundle creation for job submission."""
 
 import logging
 import subprocess
@@ -29,9 +25,6 @@ logger = logging.getLogger(__name__)
 
 def _get_git_non_ignored_files(workspace: Path) -> set[Path] | None:
     """Get files that are not ignored by git.
-
-    Uses git ls-files to get both tracked files and untracked files that
-    would not be ignored by .gitignore rules.
 
     Returns None if git is not available or this isn't a git repo.
     """
@@ -60,19 +53,10 @@ class BundleCreator:
     """
 
     def __init__(self, workspace: Path):
-        """Initialize bundle creator.
-
-        Args:
-            workspace: Path to workspace directory containing pyproject.toml
-        """
         self._workspace = workspace
 
     def create_bundle(self) -> bytes:
         """Create a workspace bundle.
-
-        Creates a zip file containing the workspace directory contents.
-        Uses git to determine which files to include (respecting .gitignore),
-        falling back to pattern-based exclusion if git is not available.
 
         Returns:
             Bundle as bytes (zip file contents)
@@ -93,7 +77,6 @@ class BundleCreator:
             return bundle_path.read_bytes()
 
     def _should_exclude(self, path: Path) -> bool:
-        """Check if a file should be excluded from the bundle."""
         exclude_patterns = {
             "__pycache__",
             ".git",

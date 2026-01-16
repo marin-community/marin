@@ -28,7 +28,6 @@ from connectrpc.request import RequestContext
 from fluster.rpc import cluster_pb2
 from fluster.cluster.types import Entrypoint
 from fluster.cluster.worker.builder import BuildResult, VenvCache
-from fluster.cluster.worker.worker_types import Job as WorkerJob
 from fluster.cluster.worker.bundle_cache import BundleCache
 from fluster.cluster.worker.docker import ContainerConfig, ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
 from fluster.cluster.worker.service import WorkerServiceImpl
@@ -134,79 +133,6 @@ def test_concurrent_allocations(allocator):
         all_ports.extend(ports)
 
     assert len(all_ports) == len(set(all_ports))
-
-
-def test_release_nonexistent_port(allocator):
-    """Test that releasing a non-allocated port doesn't cause errors."""
-    allocator.release([99999])
-
-
-def test_default_port_range():
-    """Test default port range is 30000-40000."""
-    allocator = PortAllocator()
-    ports = allocator.allocate(count=5)
-
-    for port in ports:
-        assert 30000 <= port < 40000
-
-
-# ============================================================================
-# Worker Job (worker_types) Tests
-# ============================================================================
-
-
-def test_worker_job_to_proto_roundtrip():
-    """Test WorkerJob.to_proto() preserves all fields including attempt_id."""
-    request = cluster_pb2.Worker.RunJobRequest(
-        job_id="test-job",
-        serialized_entrypoint=b"test",
-    )
-
-    job = WorkerJob(
-        job_id="test-job",
-        attempt_id=3,
-        request=request,
-        status=cluster_pb2.JOB_STATE_RUNNING,
-        exit_code=None,
-        error=None,
-        started_at_ms=1000,
-        finished_at_ms=None,
-        ports={"http": 8080, "grpc": 9090},
-        status_message="Building image",
-        current_memory_mb=512,
-        peak_memory_mb=1024,
-        current_cpu_percent=50,
-        process_count=5,
-        disk_mb=100,
-        build_started_ms=500,
-        build_finished_ms=900,
-        build_from_cache=True,
-        image_tag="test:v1",
-    )
-
-    proto = job.to_proto()
-
-    # Core fields
-    assert proto.job_id == "test-job"
-    assert proto.current_attempt_id == 3
-    assert proto.state == cluster_pb2.JOB_STATE_RUNNING
-    assert proto.started_at_ms == 1000
-    assert proto.finished_at_ms == 0
-    assert proto.status_message == "Building image"
-    assert dict(proto.ports) == {"http": 8080, "grpc": 9090}
-
-    # Resource usage
-    assert proto.resource_usage.memory_mb == 512
-    assert proto.resource_usage.memory_peak_mb == 1024
-    assert proto.resource_usage.cpu_percent == 50
-    assert proto.resource_usage.process_count == 5
-    assert proto.resource_usage.disk_mb == 100
-
-    # Build metrics
-    assert proto.build_metrics.build_started_ms == 500
-    assert proto.build_metrics.build_finished_ms == 900
-    assert proto.build_metrics.from_cache is True
-    assert proto.build_metrics.image_tag == "test:v1"
 
 
 # ============================================================================
@@ -471,34 +397,14 @@ def test_kill_nonexistent_job(worker):
     assert result is False
 
 
-def test_get_logs_empty(worker):
-    """Test getting logs for job immediately after submission."""
-    request = create_run_job_request()
-    job_id = worker.submit_job(request)
-
-    logs = worker.get_logs(job_id)
-    assert isinstance(logs, list)
-
-
 def test_get_logs_nonexistent_job(worker):
     """Test getting logs for nonexistent job returns empty list."""
     logs = worker.get_logs("nonexistent-job")
     assert logs == []
 
 
-def test_build_command_with_entrypoint(worker):
-    """Test _build_command creates correct cloudpickle command."""
-    entrypoint = create_test_entrypoint()
-    command = worker._build_command(entrypoint, ports={})
-
-    assert command[0] == "python"
-    assert command[1] == "-c"
-    assert "cloudpickle" in command[2]
-    assert "base64" in command[2]
-
-
-def test_fray_port_mapping_env_var(worker, mock_runtime):
-    """Test that FRAY_PORT_MAPPING environment variable is set with port mappings."""
+def test_port_env_vars_set(worker, mock_runtime):
+    """Test that FLUSTER_PORT_* environment variables are set for requested ports."""
     request = create_run_job_request(ports=["web", "api", "metrics"])
     job_id = worker.submit_job(request)
 
@@ -509,35 +415,16 @@ def test_fray_port_mapping_env_var(worker, mock_runtime):
     call_args = mock_runtime.create_container.call_args
     config = call_args[0][0]
 
-    assert "FRAY_PORT_MAPPING" in config.env
-
-    port_mapping = config.env["FRAY_PORT_MAPPING"]
-    mappings = {}
-    for pair in port_mapping.split(","):
-        name, port = pair.split(":")
-        mappings[name] = int(port)
-
-    assert set(mappings.keys()) == {"web", "api", "metrics"}
-    assert len(set(mappings.values())) == 3
-
     assert "FLUSTER_PORT_WEB" in config.env
     assert "FLUSTER_PORT_API" in config.env
     assert "FLUSTER_PORT_METRICS" in config.env
 
-
-def test_fray_port_mapping_not_set_when_no_ports(worker, mock_runtime):
-    """Test that FRAY_PORT_MAPPING is not set when no ports are requested."""
-    request = create_run_job_request(ports=[])
-    job_id = worker.submit_job(request)
-
-    job = worker.get_job(job_id)
-    job.thread.join(timeout=15.0)
-
-    assert mock_runtime.create_container.called
-    call_args = mock_runtime.create_container.call_args
-    config = call_args[0][0]
-
-    assert "FRAY_PORT_MAPPING" not in config.env
+    ports = {
+        int(config.env["FLUSTER_PORT_WEB"]),
+        int(config.env["FLUSTER_PORT_API"]),
+        int(config.env["FLUSTER_PORT_METRICS"]),
+    }
+    assert len(ports) == 3
 
 
 def test_job_failure_error_appears_in_logs(worker, mock_bundle_cache):

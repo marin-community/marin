@@ -58,7 +58,6 @@ class LogPoller:
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
-        """Start polling for logs in background thread."""
         if self._thread is not None:
             return
 

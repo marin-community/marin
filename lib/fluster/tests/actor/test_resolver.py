@@ -12,9 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for resolver functionality."""
+"""Tests for resolver functionality.
 
-from fluster.actor.resolver import FixedResolver
+This module tests all resolver implementations in fluster.actor.resolver:
+- FixedResolver: Static endpoint mapping
+- GcsResolver: Discovery via GCP VM instance metadata
+"""
+
+from fluster.actor.resolver import FixedResolver, GcsResolver, MockGcsApi
 from fluster.actor.client import ActorClient
 from fluster.actor.server import ActorServer
 
@@ -22,6 +27,9 @@ from fluster.actor.server import ActorServer
 class Echo:
     def echo(self, msg: str) -> str:
         return f"echo: {msg}"
+
+
+# FixedResolver tests
 
 
 def test_fixed_resolver_single():
@@ -52,3 +60,145 @@ def test_client_with_resolver():
     client = ActorClient(resolver, "echo")
 
     assert client.echo("hello") == "echo: hello"
+
+
+# GcsResolver tests
+#
+# GcsResolver discovers actors via GCP VM instance metadata tags. Unlike
+# ClusterResolver, it does NOT use namespace prefixing - it returns all
+# instances with matching actor metadata.
+
+
+def test_gcs_resolver_finds_actors():
+    """GcsResolver finds actors via metadata tags."""
+    api = MockGcsApi(
+        [
+            {
+                "name": "worker-1",
+                "internal_ip": "10.0.0.1",
+                "status": "RUNNING",
+                "metadata": {
+                    "fluster_actor_inference": "8080",
+                },
+            },
+        ]
+    )
+    resolver = GcsResolver("project", "zone", api=api)
+    result = resolver.resolve("inference")
+
+    assert len(result.endpoints) == 1
+    assert "10.0.0.1:8080" in result.first().url
+    assert result.first().actor_id == "gcs-worker-1-inference"
+    assert result.first().metadata == {"instance": "worker-1"}
+
+
+def test_gcs_resolver_ignores_non_running():
+    """GcsResolver only considers RUNNING instances."""
+    api = MockGcsApi(
+        [
+            {
+                "name": "worker-1",
+                "internal_ip": "10.0.0.1",
+                "status": "TERMINATED",
+                "metadata": {
+                    "fluster_actor_inference": "8080",
+                },
+            },
+        ]
+    )
+    resolver = GcsResolver("project", "zone", api=api)
+    result = resolver.resolve("inference")
+
+    assert result.is_empty
+
+
+def test_gcs_resolver_multiple_instances():
+    """GcsResolver finds actors across multiple instances."""
+    api = MockGcsApi(
+        [
+            {
+                "name": "worker-1",
+                "internal_ip": "10.0.0.1",
+                "status": "RUNNING",
+                "metadata": {
+                    "fluster_actor_inference": "8080",
+                },
+            },
+            {
+                "name": "worker-2",
+                "internal_ip": "10.0.0.2",
+                "status": "RUNNING",
+                "metadata": {
+                    "fluster_actor_inference": "8080",
+                },
+            },
+        ]
+    )
+    resolver = GcsResolver("project", "zone", api=api)
+    result = resolver.resolve("inference")
+
+    assert len(result.endpoints) == 2
+    urls = {ep.url for ep in result.endpoints}
+    assert "http://10.0.0.1:8080" in urls
+    assert "http://10.0.0.2:8080" in urls
+
+
+def test_gcs_resolver_no_matching_actor():
+    """GcsResolver returns empty when no actor matches."""
+    api = MockGcsApi(
+        [
+            {
+                "name": "worker-1",
+                "internal_ip": "10.0.0.1",
+                "status": "RUNNING",
+                "metadata": {
+                    "fluster_actor_training": "8080",
+                },
+            },
+        ]
+    )
+    resolver = GcsResolver("project", "zone", api=api)
+    result = resolver.resolve("inference")
+
+    assert result.is_empty
+
+
+def test_gcs_resolver_missing_internal_ip():
+    """GcsResolver skips instances without internal IP."""
+    api = MockGcsApi(
+        [
+            {
+                "name": "worker-1",
+                "internal_ip": None,
+                "status": "RUNNING",
+                "metadata": {
+                    "fluster_actor_inference": "8080",
+                },
+            },
+        ]
+    )
+    resolver = GcsResolver("project", "zone", api=api)
+    result = resolver.resolve("inference")
+
+    assert result.is_empty
+
+
+def test_gcs_resolver_result_includes_name():
+    """GcsResolver includes the actor name in ResolveResult."""
+    api = MockGcsApi(
+        [
+            {
+                "name": "worker-1",
+                "internal_ip": "10.0.0.1",
+                "status": "RUNNING",
+                "metadata": {
+                    "fluster_actor_inference": "8080",
+                },
+            },
+        ]
+    )
+    resolver = GcsResolver("project", "zone", api=api)
+    result = resolver.resolve("inference")
+
+    assert result.name == "inference"
+    assert len(result.endpoints) == 1

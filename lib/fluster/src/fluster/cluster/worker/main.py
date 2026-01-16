@@ -12,12 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Click-based CLI for the Fluster worker daemon.
-
-Provides two commands:
-- serve: Start the worker service
-- cleanup: Remove cached bundles, venvs, and images
-"""
+"""Click-based CLI for the Fluster worker daemon."""
 
 import shutil
 from pathlib import Path

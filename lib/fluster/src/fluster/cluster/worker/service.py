@@ -12,11 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""WorkerService RPC implementation using Connect RPC.
-
-Implements the WorkerService protocol defined in cluster.proto.
-Provides job execution, status, logs, and health monitoring endpoints.
-"""
+"""WorkerService RPC implementation using Connect RPC."""
 
 import re
 import time
@@ -32,10 +28,7 @@ from fluster.rpc.errors import rpc_error_handler
 
 
 class JobProvider(Protocol):
-    """Protocol for job management operations.
-
-    Implemented by Worker to provide job lifecycle management.
-    """
+    """Protocol for job management operations."""
 
     def submit_job(self, request: cluster_pb2.Worker.RunJobRequest) -> str: ...
     def get_job(self, job_id: str) -> Job | None: ...
@@ -45,16 +38,7 @@ class JobProvider(Protocol):
 
 
 class WorkerServiceImpl:
-    """Implementation of WorkerService RPC interface.
-
-    Provides endpoints for:
-    - run_job: Submit job for execution
-    - get_job_status: Query job status
-    - list_jobs: List jobs (optionally filtered)
-    - fetch_logs: Get logs with filtering
-    - kill_job: Terminate job
-    - health_check: Worker health status
-    """
+    """Implementation of WorkerService RPC interface."""
 
     def __init__(self, provider: JobProvider):
         self._provider = provider
@@ -65,7 +49,6 @@ class WorkerServiceImpl:
         request: cluster_pb2.Worker.RunJobRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.Worker.RunJobResponse:
-        """Submit job for execution."""
         with rpc_error_handler("running job"):
             job_id = self._provider.submit_job(request)
             job = self._provider.get_job(job_id)
@@ -83,7 +66,6 @@ class WorkerServiceImpl:
         request: cluster_pb2.Worker.GetJobStatusRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.JobStatus:
-        """Get job status."""
         job = self._provider.get_job(request.job_id)
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
@@ -98,7 +80,6 @@ class WorkerServiceImpl:
         _request: cluster_pb2.Worker.ListJobsRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.Worker.ListJobsResponse:
-        """List all jobs on this worker."""
         jobs = self._provider.list_jobs()
         return cluster_pb2.Worker.ListJobsResponse(
             jobs=[job.to_proto() for job in jobs],
@@ -109,15 +90,6 @@ class WorkerServiceImpl:
         request: cluster_pb2.Worker.FetchLogsRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.Worker.FetchLogsResponse:
-        """Fetch job logs with filtering.
-
-        Supports:
-        - start_line: Line offset. Negative values for tailing (e.g., -100 for last 100 lines)
-        - start_ms/end_ms: Time range filter
-        - regex: Content filter
-        - max_lines: Limit results
-        """
-        # Get logs with start_line handling (negative = tail)
         start_line = request.filter.start_line if request.filter.start_line else 0
         logs = self._provider.get_logs(request.job_id, start_line=start_line)
 
@@ -150,8 +122,6 @@ class WorkerServiceImpl:
         request: cluster_pb2.Worker.KillJobRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.Empty:
-        """Kill running job."""
-        # Check if job exists first
         job = self._provider.get_job(request.job_id)
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
@@ -174,7 +144,6 @@ class WorkerServiceImpl:
         _request: cluster_pb2.Empty,
         _ctx: RequestContext,
     ) -> cluster_pb2.Worker.HealthResponse:
-        """Worker health status."""
         jobs = self._provider.list_jobs()
         running = sum(1 for j in jobs if j.status == cluster_pb2.JOB_STATE_RUNNING)
 

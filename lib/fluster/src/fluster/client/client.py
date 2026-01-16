@@ -12,15 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""High-level Fluster client with context magic.
-
-This module provides:
-- FlusterContext: Execution context available in jobs via fluster_ctx()
-- FlusterClient: High-level client with job hierarchy and namespace magic
-- EndpointRegistry: Protocol for actor endpoint registration
-- Namespace-aware resolvers and registries
-
-For raw cluster operations without magic, use fluster.cluster.client directly.
+"""High-level client with automatic job hierarchy and namespace-based actor discovery.
 
 Example:
     # In job code:
@@ -216,10 +208,6 @@ _fluster_context: ContextVar[FlusterContext | None] = ContextVar(
 def fluster_ctx() -> FlusterContext:
     """Get or create FlusterContext from environment.
 
-    On first call (when context is not set), automatically creates context
-    from FLUSTER_* environment variables. This enables worker thunks to
-    skip explicit context setup.
-
     Returns:
         Current FlusterContext
     """
@@ -246,9 +234,6 @@ def get_fluster_ctx() -> FlusterContext | None:
 def fluster_ctx_scope(ctx: FlusterContext) -> Generator[FlusterContext, None, None]:
     """Set the fluster context for the duration of this scope.
 
-    This is used internally by FlusterClient to inject context before
-    executing job entrypoints.
-
     Args:
         ctx: Context to set for this scope
 
@@ -258,8 +243,6 @@ def fluster_ctx_scope(ctx: FlusterContext) -> Generator[FlusterContext, None, No
     Example:
         ctx = FlusterContext(job_id="my-namespace/job-1", worker_id="worker-1")
         with fluster_ctx_scope(ctx):
-            # fluster_ctx() now returns ctx
-            # ctx.namespace returns Namespace("my-namespace")
             my_job_function()
     """
     token = _fluster_context.set(ctx)
@@ -293,10 +276,7 @@ class LocalClientConfig:
 
 
 class EndpointRegistry(Protocol):
-    """Protocol for registering actor endpoints.
-
-    Implementations handle namespace prefixing automatically based on job context.
-    """
+    """Protocol for registering actor endpoints with automatic namespace prefixing."""
 
     def register(
         self,
@@ -326,10 +306,7 @@ class EndpointRegistry(Protocol):
 
 
 class NamespacedEndpointRegistry:
-    """Endpoint registry that auto-prefixes names with namespace.
-
-    Wraps a cluster client and uses FlusterContext to determine namespace prefix.
-    """
+    """Endpoint registry that auto-prefixes names with namespace from FlusterContext."""
 
     def __init__(self, cluster: LocalClusterClient | RemoteClusterClient):
         self._cluster = cluster
@@ -382,16 +359,12 @@ class NamespacedEndpointRegistry:
 
 
 class NamespacedResolver:
-    """Resolver that auto-prefixes names with namespace.
-
-    Wraps a cluster client and uses FlusterContext to determine namespace prefix.
-    """
+    """Resolver that auto-prefixes names with namespace from FlusterContext."""
 
     def __init__(self, cluster: LocalClusterClient | RemoteClusterClient):
         self._cluster = cluster
 
     def _namespace_prefix(self) -> str:
-        """Get namespace prefix from current FlusterContext."""
         ctx = get_fluster_ctx()
         if ctx is None:
             raise RuntimeError("No FlusterContext - must be called from within a job")
@@ -431,16 +404,7 @@ class NamespacedResolver:
 
 
 class FlusterClient:
-    """High-level Fluster client with context magic.
-
-    Wraps a cluster client (local or remote) and adds:
-    - Job hierarchy support (auto-prefixes job names with parent job_id)
-    - Namespace-aware endpoint registry
-    - Namespace-aware resolver
-
-    Use factory methods to create instances:
-    - FlusterClient.local() for local thread-based execution
-    - FlusterClient.remote() for RPC-based cluster execution
+    """High-level client with automatic job hierarchy and namespace-based actor discovery.
 
     Example:
         # Local execution
@@ -469,9 +433,6 @@ class FlusterClient:
     @classmethod
     def local(cls, config: LocalClientConfig | None = None) -> "FlusterClient":
         """Create a FlusterClient for local execution using real Controller/Worker.
-
-        Spins up a real Controller and Worker with in-process execution (no Docker).
-        This ensures local execution follows the same code path as production clusters.
 
         Args:
             config: Configuration for local execution
@@ -523,23 +484,16 @@ class FlusterClient:
         return cls(cluster)
 
     def __enter__(self) -> "FlusterClient":
-        """Context manager entry."""
         return self
 
     def __exit__(self, *_) -> None:
-        """Context manager exit."""
         self.shutdown()
 
     @property
     def endpoint_registry(self) -> EndpointRegistry:
-        """Get the namespace-aware endpoint registry."""
         return self._registry
 
     def resolver(self) -> Resolver:
-        """Get a namespace-aware resolver for actor discovery.
-
-        The resolver uses the namespace derived from the current job context.
-        """
         return self._resolver
 
     def submit(
@@ -552,10 +506,6 @@ class FlusterClient:
         scheduling_timeout_seconds: int = 0,
     ) -> JobId:
         """Submit a job with automatic job_id hierarchy.
-
-        The name is combined with the current job's name (if any) to form a
-        hierarchical identifier. For example, if the current job is "my-exp"
-        and you submit with name="worker-0", the full name becomes "my-exp/worker-0".
 
         Args:
             entrypoint: Job entrypoint (callable + args/kwargs)
@@ -735,8 +685,6 @@ class FlusterClient:
     ) -> list[LogEntry]:
         """Fetch logs for a job.
 
-        Routes the request to the correct worker based on job assignment.
-
         Args:
             job_id: Job ID to fetch logs for
             start_ms: Only return logs after this timestamp (exclusive, for incremental polling)
@@ -770,16 +718,7 @@ def _print_log_entry(job_id: JobId, entry: LogEntry) -> None:
 
 
 def create_context_from_env() -> FlusterContext:
-    """Create FlusterContext from environment variables.
-
-    Used by workers to set up context when executing job entrypoints.
-    Reads:
-    - FLUSTER_JOB_ID
-    - FLUSTER_ATTEMPT_ID
-    - FLUSTER_WORKER_ID
-    - FLUSTER_CONTROLLER_ADDRESS
-    - FLUSTER_BUNDLE_GCS_PATH (for sub-job workspace inheritance)
-    - FLUSTER_PORT_<NAME> (e.g., FLUSTER_PORT_ACTOR -> ports["actor"])
+    """Create FlusterContext from FLUSTER_* environment variables.
 
     Returns:
         Configured FlusterContext

@@ -120,3 +120,37 @@ def test_list_jobs_filter_by_prefix(local_client, resources):
     assert "exp-a-job" in job_ids
     assert "exp-b-job" in job_ids
     assert "other-job" not in job_ids
+
+
+def test_terminate_prefix_basic(local_client, resources):
+    """Verify terminate_prefix terminates matching jobs."""
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+
+    # Submit jobs with different prefixes
+    local_client.submit(entrypoint, "exp-a-job1", resources)
+    local_client.submit(entrypoint, "exp-a-job2", resources)
+    local_client.submit(entrypoint, "exp-b-job1", resources)
+
+    # Terminate exp-a jobs
+    terminated = local_client.terminate_prefix("exp-a")
+
+    assert len(terminated) == 2
+    assert "exp-a-job1" in terminated
+    assert "exp-a-job2" in terminated
+    assert "exp-b-job1" not in terminated
+
+
+def test_terminate_prefix_excludes_finished(local_client, resources):
+    """Verify terminate_prefix skips finished jobs by default."""
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+
+    job_id = local_client.submit(entrypoint, "finished-test", resources)
+    local_client.wait(job_id)  # Wait for completion
+
+    # Job should be SUCCEEDED now
+    status = local_client.status(job_id)
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    # terminate_prefix should not include it
+    terminated = local_client.terminate_prefix("finished-test")
+    assert job_id not in terminated

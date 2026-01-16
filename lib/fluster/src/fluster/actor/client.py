@@ -87,10 +87,6 @@ class ActorClient:
     def _resolve(self) -> ResolveResult:
         """Resolve actor name with exponential backoff retry.
 
-        Retries resolution with exponential backoff until either:
-        - Endpoints are found (success)
-        - Timeout is reached (raises TimeoutError)
-
         Returns:
             ResolveResult with at least one endpoint
 
@@ -144,7 +140,6 @@ class ActorClient:
         self._client_url = None
 
     def _get_client(self, url: str) -> ActorServiceClientSync:
-        """Get or create a client for the given URL."""
         if self._client is None or self._client_url != url:
             self._client = ActorServiceClientSync(
                 address=url,
@@ -158,14 +153,11 @@ class ActorClient:
 
 
 class _RpcMethod:
-    """Represents a single RPC method call."""
-
     def __init__(self, client: ActorClient, method_name: str):
         self._client = client
         self._method_name = method_name
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        """Execute the RPC call."""
         result = self._client._resolve()
         if result.is_empty:
             raise RuntimeError(f"No endpoints found for actor '{self._client._name}'")

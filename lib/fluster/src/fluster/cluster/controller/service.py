@@ -12,21 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Controller RPC service implementation.
-
-This module provides the ControllerServiceImpl class, which implements the
-RPC handlers for the ControllerService. It handles:
-- Job submission (launch_job)
-- Job status queries (get_job_status)
-- Job termination (terminate_job)
-- Job listing (list_jobs)
-- Worker registration (register_worker)
-- Worker listing (list_workers)
-- Endpoint registry operations (register/unregister/lookup/list endpoints)
-
-The service layer is thin, delegating most logic to the ControllerState and
-Scheduler. It focuses on proto message conversion and error handling.
-"""
+"""Controller RPC service implementation handling job and worker operations."""
 
 import logging
 import time
@@ -38,7 +24,7 @@ from connectrpc.code import Code
 
 from connectrpc.errors import ConnectError
 
-from fluster.cluster.controller.job import Job, TransitionResult
+from fluster.cluster.controller.job import Job
 from fluster.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerWorker
 from fluster.cluster.types import JobId, WorkerId
 from fluster.rpc import cluster_pb2
@@ -50,16 +36,11 @@ logger = logging.getLogger(__name__)
 class SchedulerProtocol(Protocol):
     """Protocol for scheduler operations used by ControllerServiceImpl."""
 
-    def wake(self) -> None:
-        """Signal scheduler to run immediately."""
-        ...
+    def wake(self) -> None: ...
 
 
 class ControllerServiceImpl:
     """ControllerService RPC implementation.
-
-    Provides HTTP handlers for job management operations. Each method accepts
-    a protobuf request message and returns a protobuf response message.
 
     Args:
         state: Controller state containing jobs and workers
@@ -240,10 +221,7 @@ class ControllerServiceImpl:
         return cluster_pb2.Empty()
 
     def _terminate_job_tree(self, job: Job) -> None:
-        """Recursively terminate a job and all its descendants (depth-first).
-
-        Children are terminated before the parent to ensure proper cascade.
-        """
+        """Recursively terminate a job and all its descendants (depth-first)."""
         # First, terminate all children recursively
         children = self._state.get_children(job.job_id)
         for child in children:
@@ -255,8 +233,12 @@ class ControllerServiceImpl:
 
         # TODO: Send kill to worker
         now_ms = int(time.time() * 1000)
-        job.transition(cluster_pb2.JOB_STATE_KILLED, now_ms, error="Terminated by user")
-        self._state.finalize_job(job.job_id)
+        self._state.transition_job(
+            job.job_id,
+            cluster_pb2.JOB_STATE_KILLED,
+            now_ms,
+            error="Terminated by user",
+        )
         self._state.log_action("job_killed", job_id=job.job_id)
 
     def list_jobs(
@@ -264,10 +246,6 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.ListJobsRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListJobsResponse:
-        """List all jobs.
-
-        Returns a list of all jobs in the controller, regardless of state.
-        """
         jobs = []
         for j in self._state.list_all_jobs():
             worker_address = ""
@@ -295,19 +273,7 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.RegisterWorkerRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.RegisterWorkerResponse:
-        """Register a new worker or process a heartbeat from an existing worker.
-
-        Workers send periodic heartbeats via this endpoint. If the worker already
-        exists, we update its heartbeat timestamp and metadata. If it's a new
-        worker, we add it to the registry and wake the scheduler.
-
-        Args:
-            request: Worker registration request (also used as heartbeat)
-            ctx: Request context (unused in v0)
-
-        Returns:
-            RegisterWorkerResponse with acceptance status
-        """
+        """Register a new worker or process a heartbeat from an existing worker."""
         now_ms = int(time.time() * 1000)
         worker_id = WorkerId(request.worker_id)
 
@@ -343,18 +309,6 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.ListWorkersRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListWorkersResponse:
-        """List all registered workers.
-
-        Returns health status for all workers in the controller, including
-        healthy and unhealthy workers.
-
-        Args:
-            request: List workers request (currently ignored)
-            ctx: Request context (unused in v0)
-
-        Returns:
-            ListWorkersResponse with worker health statuses
-        """
         workers = [
             cluster_pb2.Controller.WorkerHealthStatus(
                 worker_id=w.worker_id,
@@ -372,18 +326,7 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.ReportJobStateRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ReportJobStateResponse:
-        """Report job state change from worker.
-
-        Workers call this when jobs transition to terminal states (SUCCEEDED, FAILED, KILLED).
-        The controller updates its job state and removes the job from the worker's running set.
-
-        Args:
-            request: Job state report from worker
-            ctx: Request context (unused in v0)
-
-        Returns:
-            ReportJobStateResponse (empty)
-        """
+        """Report job state change from worker."""
         job_id = JobId(request.job_id)
         worker_id = WorkerId(request.worker_id)
 
@@ -412,24 +355,16 @@ class ControllerServiceImpl:
             )
             return cluster_pb2.Controller.ReportJobStateResponse()
 
-        # Job handles its own state transition
+        # Transition job and handle all side effects
         now_ms = request.finished_at_ms or int(time.time() * 1000)
-        result = job.transition(
+        self._state.transition_job(
+            job_id,
             request.state,
             now_ms,
             is_worker_failure=False,
             error=request.error or None,
             exit_code=request.exit_code,
         )
-
-        # Controller coordinates external systems based on result
-        if result == TransitionResult.SHOULD_RETRY:
-            # Job will retry - add back to queue, unassign from worker
-            self._state.add_to_queue(job)
-            self._state.unassign_job_from_worker(worker_id, job_id)
-        elif job.is_finished():
-            # Job finished - finalize handles endpoints and worker cleanup
-            self._state.finalize_job(job_id)
 
         self._state.log_action(
             "job_completed",
@@ -449,22 +384,9 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.RegisterEndpointResponse:
         """Register a service endpoint.
 
-        Validates that the job exists before registering. Endpoints are
-        automatically removed when jobs terminate.
-
-        Note: Endpoints are registered regardless of job state, but they only
-        become visible to clients (via lookup/list) when the job is RUNNING.
-        This avoids race conditions between container startup and state reporting.
-
-        Args:
-            request: Endpoint registration request
-            ctx: Request context (unused)
-
-        Returns:
-            RegisterEndpointResponse with assigned endpoint_id
-
-        Raises:
-            ConnectError: If job is not found
+        Endpoints are registered regardless of job state, but only become visible to clients
+        (via lookup/list) when the job is RUNNING. This avoids race conditions between
+        container startup and state reporting.
         """
         with rpc_error_handler("registering endpoint"):
             endpoint_id = str(uuid.uuid4())
@@ -495,18 +417,7 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.UnregisterEndpointRequest,
         ctx: Any,
     ) -> cluster_pb2.Empty:
-        """Unregister a service endpoint.
-
-        Removes an endpoint from the registry. This is idempotent - no error
-        if the endpoint doesn't exist.
-
-        Args:
-            request: Endpoint unregistration request
-            ctx: Request context (unused)
-
-        Returns:
-            Empty response
-        """
+        """Unregister a service endpoint. Idempotent."""
         endpoint = self._state.remove_endpoint(request.endpoint_id)
         if endpoint:
             self._state.log_action(
@@ -521,18 +432,7 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.LookupEndpointRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.LookupEndpointResponse:
-        """Look up a service endpoint by name.
-
-        Returns the first endpoint matching the full prefixed name.
-        Only endpoints for RUNNING jobs are returned.
-
-        Args:
-            request: Lookup request with full prefixed name (e.g., "abc123/my-actor")
-            ctx: Request context (unused)
-
-        Returns:
-            LookupEndpointResponse with first matching endpoint (empty if not found)
-        """
+        """Look up a service endpoint by name. Only endpoints for RUNNING jobs are returned."""
         endpoints = self._state.lookup_endpoints(request.name)
         if not endpoints:
             logger.debug("Endpoint lookup found no results: name=%s", request.name)
@@ -554,20 +454,7 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.ListEndpointsRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListEndpointsResponse:
-        """List endpoints by name prefix.
-
-        Returns all endpoints matching the prefix.
-        Only endpoints for RUNNING jobs are returned.
-
-        Prefix is expected to include the namespace (e.g., "abc123/" or "abc123/my-actor").
-
-        Args:
-            request: List request with prefix (includes namespace)
-            ctx: Request context (unused)
-
-        Returns:
-            ListEndpointsResponse with matching endpoints
-        """
+        """List endpoints by name prefix. Only endpoints for RUNNING jobs are returned."""
         endpoints = self._state.list_endpoints_by_prefix(request.prefix)
         return cluster_pb2.Controller.ListEndpointsResponse(
             endpoints=[

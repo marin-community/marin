@@ -14,12 +14,6 @@
 
 """Core types for the fluster cluster layer.
 
-This module contains:
-- Type aliases for IDs (JobId, WorkerId, etc.)
-- Helper functions for working with proto types
-- TPU topology information for scheduling
-- Entrypoint dataclass for job execution
-
 Wire-format types (ResourceSpec, JobStatus, etc.) are defined in cluster.proto.
 """
 
@@ -30,7 +24,6 @@ from typing import Any, NewType
 
 from fluster.rpc import cluster_pb2
 
-# Type aliases for clarity
 JobId = NewType("JobId", str)
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
@@ -80,7 +73,6 @@ class Namespace(str):
 
 
 def is_job_finished(state: int) -> bool:
-    """Check if job has reached terminal state."""
     return state in (
         cluster_pb2.JOB_STATE_SUCCEEDED,
         cluster_pb2.JOB_STATE_FAILED,
@@ -95,15 +87,7 @@ JobState = cluster_pb2.JobState
 
 @dataclass(frozen=True)
 class TpuTopologyInfo:
-    """TPU topology configuration.
-
-    Args:
-        name: TPU type name (e.g., "v5litepod-16", "v4-8")
-        chip_count: Total number of TPU chips
-        host_count: Number of physical hosts
-        vm_count: Number of VMs in the pod
-        chips_per_vm: Number of chips per VM
-    """
+    """TPU topology configuration."""
 
     name: str
     chip_count: int
@@ -160,24 +144,11 @@ TPU_TOPOLOGIES: list[TpuTopologyInfo] = [
 
 
 def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
-    """Get TPU topology by type name.
-
-    Args:
-        tpu_type: TPU type name (e.g., "v5litepod-16", "v4-8")
-
-    Returns:
-        TpuTopologyInfo for the given type
-
-    Raises:
-        ValueError: If TPU type is unknown
-    """
+    """Get TPU topology by type name."""
     for config in TPU_TOPOLOGIES:
         if config.name == tpu_type:
             return config
     raise ValueError(f"Unknown TPU type: {tpu_type}")
-
-
-# Job Entrypoint
 
 
 @dataclass
@@ -186,11 +157,6 @@ class Entrypoint:
 
     A callable with args/kwargs that will be executed by the worker.
     The callable must be picklable (via cloudpickle).
-
-    Args:
-        callable: Python callable to execute
-        args: Positional arguments to pass
-        kwargs: Keyword arguments to pass
 
     Example:
         entrypoint = Entrypoint.from_callable(my_func, arg1, arg2, key=val)
@@ -202,11 +168,7 @@ class Entrypoint:
 
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
-        """Create an Entrypoint from a callable with args/kwargs."""
         return cls(callable=fn, args=args, kwargs=kwargs)
-
-
-# Helper functions for creating proto messages
 
 
 def create_environment(

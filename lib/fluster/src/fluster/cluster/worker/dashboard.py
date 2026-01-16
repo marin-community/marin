@@ -12,16 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""HTTP dashboard with Connect RPC and web UI for worker monitoring.
-
-The WorkerDashboard provides:
-- Connect RPC at /fluster.cluster.WorkerService
-- Web dashboard at / with live job statistics
-- REST API at /api/* for dashboard consumption
-
-REST endpoints are implemented by calling the canonical RPC methods and
-converting proto responses to JSON for browser consumption.
-"""
+"""HTTP dashboard with Connect RPC and web UI for worker monitoring."""
 
 import uvicorn
 from starlette.applications import Starlette
@@ -38,9 +29,7 @@ from fluster.cluster.worker.service import WorkerServiceImpl
 class FakeRequestContext:
     """Minimal stub RequestContext for internal REST-to-RPC bridging.
 
-    The WorkerDashboard translates REST API calls to RPC method calls,
-    which require a RequestContext parameter. Since the RPC methods never
-    actually access the context, this minimal stub satisfies the type signature.
+    RPC methods require a RequestContext parameter but never access it.
     """
 
     pass
@@ -222,12 +211,7 @@ JOB_DETAIL_HTML = """
 
 
 class WorkerDashboard:
-    """HTTP dashboard with Connect RPC and web UI.
-
-    Connect RPC is mounted at /fluster.cluster.WorkerService
-    Web dashboard at /
-    REST API for dashboard at /api/*
-    """
+    """HTTP dashboard with Connect RPC and web UI."""
 
     def __init__(
         self,
@@ -246,8 +230,6 @@ class WorkerDashboard:
         return self._port
 
     def _create_app(self) -> Starlette:
-        """Create Starlette application with all routes."""
-        # Use WSGI application for sync RPC handlers, wrapped for ASGI compatibility
         rpc_wsgi_app = WorkerServiceWSGIApplication(service=self._service)
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
@@ -266,17 +248,13 @@ class WorkerDashboard:
         return Starlette(routes=routes)
 
     def _dashboard(self, _request: Request) -> HTMLResponse:
-        """Serve web dashboard HTML."""
         return HTMLResponse(DASHBOARD_HTML)
 
     def _job_detail_page(self, request: Request) -> HTMLResponse:
-        """Serve detailed job view page."""
         job_id = request.path_params["job_id"]
         return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", job_id))
 
     def _stats(self, _request: Request) -> JSONResponse:
-        """Return job statistics by status."""
-        # Call canonical RPC method
         ctx = FakeRequestContext()
         response = self._service.list_jobs(cluster_pb2.Worker.ListJobsRequest(), ctx)
         jobs = response.jobs
@@ -300,8 +278,6 @@ class WorkerDashboard:
         )
 
     def _list_jobs(self, _request: Request) -> JSONResponse:
-        """List all jobs as JSON."""
-        # Call canonical RPC method
         ctx = FakeRequestContext()
         response = self._service.list_jobs(cluster_pb2.Worker.ListJobsRequest(), ctx)
         jobs = response.jobs
@@ -331,10 +307,7 @@ class WorkerDashboard:
         )
 
     def _get_job(self, request: Request) -> JSONResponse:
-        """Get single job by ID."""
         job_id = request.path_params["job_id"]
-
-        # Call canonical RPC method
         ctx = FakeRequestContext()
         try:
             job = self._service.get_job_status(cluster_pb2.Worker.GetJobStatusRequest(job_id=job_id), ctx)
@@ -374,17 +347,10 @@ class WorkerDashboard:
         )
 
     def _get_logs(self, request: Request) -> JSONResponse:
-        """Get logs with optional tail and source parameters."""
         job_id = request.path_params["job_id"]
-
-        # Support ?tail=N for last N lines
         tail = request.query_params.get("tail")
         start_line = -int(tail) if tail else 0
-
-        # Support ?source=stdout|stderr|build for filtering
         source = request.query_params.get("source")
-
-        # Call canonical RPC method
         ctx = FakeRequestContext()
         log_filter = cluster_pb2.Worker.FetchLogsFilter(start_line=start_line)
         try:
@@ -411,7 +377,6 @@ class WorkerDashboard:
         return JSONResponse(logs)
 
     def _status_name(self, status: cluster_pb2.JobState) -> str:
-        """Convert status enum to string name."""
         status_map = {
             cluster_pb2.JOB_STATE_PENDING: "pending",
             cluster_pb2.JOB_STATE_BUILDING: "building",
@@ -423,13 +388,11 @@ class WorkerDashboard:
         return status_map.get(status, "unknown")
 
     def run(self) -> None:
-        """Run server (blocking)."""
         import uvicorn
 
         uvicorn.run(self._app, host=self._host, port=self._port)
 
     async def run_async(self) -> None:
-        """Run server asynchronously (for use with asyncio.create_task)."""
         import uvicorn
 
         config = uvicorn.Config(self._app, host=self._host, port=self._port)
@@ -437,6 +400,5 @@ class WorkerDashboard:
         await self._server.serve()
 
     async def shutdown(self) -> None:
-        """Shutdown the async server gracefully."""
         if self._server:
             self._server.should_exit = True

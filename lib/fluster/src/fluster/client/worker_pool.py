@@ -124,14 +124,7 @@ class PoolStatus:
 
 
 class TaskExecutorActor:
-    """Actor that executes arbitrary callables.
-
-    This is the server-side component of WorkerPool. Each worker job runs
-    one of these actors to execute tasks dispatched by the pool.
-
-    The callable and arguments are received as cloudpickle-serialized bytes.
-    The return value is returned raw - ActorServer handles serialization.
-    """
+    """Actor that executes arbitrary callables received as cloudpickle-serialized bytes."""
 
     def execute(
         self,
@@ -147,11 +140,10 @@ class TaskExecutorActor:
             serialized_kwargs: cloudpickle-serialized dict of keyword args
 
         Returns:
-            The return value of calling fn(*args, **kwargs).
-            ActorServer handles serialization of this value.
+            The return value of calling fn(*args, **kwargs)
 
         Raises:
-            Any exception raised by the callable (propagated to client).
+            Any exception raised by the callable
         """
         fn = cloudpickle.loads(serialized_callable)
         args = cloudpickle.loads(serialized_args)
@@ -160,16 +152,7 @@ class TaskExecutorActor:
 
 
 def worker_job_entrypoint(pool_id: str, worker_index: int) -> None:
-    """Job entrypoint that starts a TaskExecutor actor with a unique name.
-
-    This function is called when a worker job starts. It:
-    1. Gets cluster configuration from FlusterContext
-    2. Starts an ActorServer with a TaskExecutorActor
-    3. Registers the endpoint with the controller
-    4. Runs forever, serving requests
-
-    Each worker registers with a unique name so the client can target
-    specific idle workers when dispatching tasks.
+    """Job entrypoint that starts a TaskExecutor actor.
 
     Args:
         pool_id: Unique identifier for the worker pool
@@ -202,17 +185,13 @@ def worker_job_entrypoint(pool_id: str, worker_index: int) -> None:
 
 
 class WorkerDispatcher:
-    """Dispatch thread for a single worker.
+    """Dispatch thread for a single worker with automatic retry on infrastructure failures.
 
-    Handles endpoint discovery and task dispatch in a dedicated thread.
     State transitions:
     - PENDING: Poll resolver for endpoint registration
     - IDLE: Wait for task from queue
     - BUSY: Execute task on worker endpoint
     - FAILED: Worker has failed, thread exits
-
-    On infrastructure failure (connection error), the task is re-queued for
-    another worker if retries remain. User exceptions propagate immediately.
     """
 
     def __init__(
@@ -233,9 +212,6 @@ class WorkerDispatcher:
         self._discover_backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
 
     def start(self) -> None:
-        """Start the dispatch thread."""
-        # If context was provided, run the thread in that context so it inherits
-        # ContextVars (like FlusterContext) from the parent thread.
         if self._context is not None:
             self._thread = threading.Thread(
                 target=self._context.run,
@@ -252,16 +228,13 @@ class WorkerDispatcher:
         self._thread.start()
 
     def stop(self) -> None:
-        """Signal the dispatch thread to stop."""
         self._shutdown.set()
 
     def join(self, timeout: float | None = None) -> None:
-        """Wait for the dispatch thread to finish."""
         if self._thread:
             self._thread.join(timeout=timeout)
 
     def _run(self) -> None:
-        """Main dispatch loop."""
         while not self._shutdown.is_set():
             if self.state.status == WorkerStatus.PENDING:
                 self._discover_endpoint()
@@ -275,7 +248,6 @@ class WorkerDispatcher:
                 self._execute_task(task)
 
     def _discover_endpoint(self) -> None:
-        """Poll resolver for endpoint registration with exponential backoff."""
         result = self._resolver.resolve(self.state.worker_name)
         if not result.is_empty:
             endpoint = result.first()
@@ -391,12 +363,7 @@ class WorkerPoolConfig:
 
 @dataclass
 class WorkerFuture(Generic[T]):
-    """Future representing an in-flight task.
-
-    Wraps a concurrent.futures.Future with a simpler interface.
-    ActorClient handles cloudpickle deserialization, so result() returns
-    the value directly.
-    """
+    """Future representing an in-flight task."""
 
     _future: Future
     _fn_name: str
@@ -417,22 +384,16 @@ class WorkerFuture(Generic[T]):
         return self._future.result(timeout=timeout)
 
     def done(self) -> bool:
-        """Check if the task has completed."""
         return self._future.done()
 
     def exception(self) -> BaseException | None:
-        """Get the exception if the task failed, None otherwise."""
         if not self._future.done():
             return None
         return self._future.exception()
 
 
 class WorkerPool:
-    """Pool of stateless workers for task dispatch with idle worker targeting.
-
-    WorkerPool manages a set of worker jobs that execute arbitrary callables.
-    Each worker registers with a unique name, and tasks are dispatched only
-    to idle workers. Tasks queue internally when all workers are busy.
+    """Pool of stateless workers for task dispatch.
 
     Usage:
         with WorkerPool(client, config) as pool:
@@ -481,37 +442,30 @@ class WorkerPool:
         self._resolver: Resolver | None = resolver
 
     def __enter__(self) -> "WorkerPool":
-        """Start workers and wait for at least one to register."""
         self._launch_workers()
         self._wait_for_workers(min_workers=1)
         return self
 
     def __exit__(self, *_):
-        """Shutdown all workers."""
         self.shutdown(wait=False)
 
     @property
     def pool_id(self) -> str:
-        """Unique identifier for this pool."""
         return self._pool_id
 
     @property
     def size(self) -> int:
-        """Number of workers that have registered (IDLE or BUSY)."""
         return sum(1 for w in self._workers.values() if w.status in (WorkerStatus.IDLE, WorkerStatus.BUSY))
 
     @property
     def idle_count(self) -> int:
-        """Number of idle workers ready for tasks."""
         return sum(1 for w in self._workers.values() if w.status == WorkerStatus.IDLE)
 
     @property
     def job_ids(self) -> list[JobId]:
-        """List of worker job IDs."""
         return list(self._job_ids)
 
     def _launch_workers(self) -> None:
-        """Launch worker jobs and start dispatch threads."""
         if self._resolver is None:
             self._resolver = self._client.resolver()
 
@@ -558,7 +512,7 @@ class WorkerPool:
         min_workers: int = 1,
         timeout: float = 60.0,
     ) -> None:
-        """Wait for workers to register with exponential backoff.
+        """Wait for workers to register.
 
         Args:
             min_workers: Minimum number of workers required
@@ -595,9 +549,6 @@ class WorkerPool:
         **kwargs: Any,
     ) -> WorkerFuture[T]:
         """Submit a task for execution.
-
-        Tasks are queued internally and dispatched to idle workers.
-        Returns immediately with a Future that resolves when the task completes.
 
         Args:
             fn: Callable to execute
@@ -644,7 +595,6 @@ class WorkerPool:
         return [self.submit(fn, item) for item in items]
 
     def status(self) -> PoolStatus:
-        """Get current pool status."""
         workers_by_status = {s: 0 for s in WorkerStatus}
         total_completed = 0
         total_failed = 0
@@ -680,7 +630,6 @@ class WorkerPool:
         )
 
     def print_status(self) -> None:
-        """Print current pool status to stdout."""
         s = self.status()
         print(f"WorkerPool[{s.pool_id}]")
         print(

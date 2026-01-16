@@ -12,13 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Cluster client layer - "dumb" cluster operations with explicit parameters.
-
-This package provides low-level cluster clients without context magic:
-- RemoteClusterClient: RPC-based implementation (talks to controller)
-- LocalClusterClient: local thread-based implementation
-- JobInfo: minimal job metadata (contextvar + environment variables)
-- BundleCreator: workspace packaging for job submission
+"""Low-level cluster clients without context magic.
 
 For high-level operations with context magic, use fluster.client.
 """
