@@ -18,8 +18,8 @@ from iris.actor.resolver import (
     FixedResolver,
     GcsResolver,
     ResolvedEndpoint,
-    ResolveResult,
     Resolver,
+    ResolveResult,
 )
 from iris.client.client import (
     EndpointRegistry,
@@ -28,9 +28,9 @@ from iris.client.client import (
     LocalClientConfig,
     LogEntry,
     create_context_from_env,
+    get_iris_ctx,
     iris_ctx,
     iris_ctx_scope,
-    get_iris_ctx,
 )
 from iris.client.log_poller import LogPoller
 from iris.client.resolver import ClusterResolver
@@ -40,9 +40,9 @@ __all__ = [
     "ClusterResolver",
     "EndpointRegistry",
     "FixedResolver",
+    "GcsResolver",
     "IrisClient",
     "IrisContext",
-    "GcsResolver",
     "LocalClientConfig",
     "LogEntry",
     "LogPoller",
@@ -52,7 +52,7 @@ __all__ = [
     "WorkerPool",
     "WorkerPoolConfig",
     "create_context_from_env",
+    "get_iris_ctx",
     "iris_ctx",
     "iris_ctx_scope",
-    "get_iris_ctx",
 ]

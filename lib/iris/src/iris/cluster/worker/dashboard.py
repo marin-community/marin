@@ -72,7 +72,9 @@ DASHBOARD_HTML = """
         const started = j.started_at ? new Date(j.started_at).toLocaleString() : '-';
         const finished = j.finished_at ? new Date(j.finished_at).toLocaleString() : '-';
         const exitCode = j.exit_code !== null && j.exit_code !== undefined ? j.exit_code : '-';
-        const jobDisplay = j.attempt_id > 0 ? `${j.job_id.slice(0, 8)}... (attempt ${j.attempt_id})` : `${j.job_id.slice(0, 8)}...`;
+        const jobDisplay = j.attempt_id > 0
+          ? `${j.job_id.slice(0, 8)}... (attempt ${j.attempt_id})`
+          : `${j.job_id.slice(0, 8)}...`;
         return `<tr>
           <td><a href="/job/${j.job_id}" class="job-link" target="_blank">${jobDisplay}</a></td>
           <td class="status-${j.status}">${j.status}</td>
@@ -85,7 +87,8 @@ DASHBOARD_HTML = """
         </tr>`;
       }).join('');
       document.getElementById('jobs').innerHTML =
-        '<tr><th>ID</th><th>Status</th><th>Exit</th><th>Memory</th><th>CPU</th><th>Started</th><th>Finished</th><th>Error</th></tr>' + tbody;
+        '<tr><th>ID</th><th>Status</th><th>Exit</th><th>Memory</th><th>CPU</th>' +
+        '<th>Started</th><th>Finished</th><th>Error</th></tr>' + tbody;
     }
     refresh();
     setInterval(refresh, 5000);
@@ -107,9 +110,12 @@ JOB_DETAIL_HTML = """
     .status-succeeded { color: green; font-weight: bold; }
     .status-failed { color: red; font-weight: bold; }
     .tabs { display: flex; border-bottom: 2px solid #4CAF50; }
-    .tab { padding: 10px 20px; cursor: pointer; background: #f0f0f0; margin-right: 2px; border: 1px solid #ddd; border-bottom: none; border-radius: 5px 5px 0 0; }
+    .tab { padding: 10px 20px; cursor: pointer; background: #f0f0f0; margin-right: 2px;
+           border: 1px solid #ddd; border-bottom: none; border-radius: 5px 5px 0 0; }
     .tab.active { background: #4CAF50; color: white; }
-    .tab-content { display: none; padding: 15px; border: 1px solid #ddd; max-height: 500px; overflow-y: auto; background: #f9f9f9; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
+    .tab-content { display: none; padding: 15px; border: 1px solid #ddd; max-height: 500px;
+                   overflow-y: auto; background: #f9f9f9; font-family: monospace;
+                   font-size: 12px; white-space: pre-wrap; }
     .tab-content.active { display: block; }
     .metrics { display: flex; gap: 30px; flex-wrap: wrap; }
     .metric { text-align: center; padding: 10px; }
@@ -171,11 +177,16 @@ JOB_DETAIL_HTML = """
       `;
 
       document.getElementById('resources').innerHTML = `
-        <div class="metric"><div class="metric-value">${job.resources.memory_mb}</div><div class="metric-label">Memory (MB)</div></div>
-        <div class="metric"><div class="metric-value">${job.resources.memory_peak_mb}</div><div class="metric-label">Peak Memory (MB)</div></div>
-        <div class="metric"><div class="metric-value">${job.resources.cpu_percent}%</div><div class="metric-label">CPU</div></div>
-        <div class="metric"><div class="metric-value">${job.resources.process_count}</div><div class="metric-label">Processes</div></div>
-        <div class="metric"><div class="metric-value">${job.resources.disk_mb}</div><div class="metric-label">Disk (MB)</div></div>
+        <div class="metric"><div class="metric-value">${job.resources.memory_mb}</div>
+          <div class="metric-label">Memory (MB)</div></div>
+        <div class="metric"><div class="metric-value">${job.resources.memory_peak_mb}</div>
+          <div class="metric-label">Peak Memory (MB)</div></div>
+        <div class="metric"><div class="metric-value">${job.resources.cpu_percent}%</div>
+          <div class="metric-label">CPU</div></div>
+        <div class="metric"><div class="metric-value">${job.resources.process_count}</div>
+          <div class="metric-label">Processes</div></div>
+        <div class="metric"><div class="metric-value">${job.resources.disk_mb}</div>
+          <div class="metric-label">Disk (MB)</div></div>
       `;
 
       const buildDuration = job.build.duration_ms > 0 ? (job.build.duration_ms / 1000).toFixed(2) + 's' : '-';
@@ -186,7 +197,9 @@ JOB_DETAIL_HTML = """
       `;
 
       const logs = await fetch(`/api/jobs/${jobId}/logs`).then(r => r.json());
-      const format = (logs) => logs.map(l => `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.data}`).join('\\n') || 'No logs';
+      const format = (logs) => logs.map(l =>
+        `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.data}`
+      ).join('\\n') || 'No logs';
       document.getElementById('log-all').textContent = format(logs);
       document.getElementById('log-stdout').textContent = format(logs.filter(l => l.source === 'stdout'));
       document.getElementById('log-stderr').textContent = format(logs.filter(l => l.source === 'stderr'));
