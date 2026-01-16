@@ -672,7 +672,7 @@ def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]
         profiler=True,
     )
 
-    run_name = f"hacktx_{size}_gdn_{seq_len}_flash_ch_{model_cfg.gdn_chunk_size}_seg_{model_cfg.gdn_segment_size}_fp32_b_{batch}_v5p32"
+    run_name = f"hacktx_{size}_gdn_{seq_len}_ch_{model_cfg.gdn_chunk_size}_seg_{model_cfg.gdn_segment_size}_fp32_v5p32"
     desc = f"Hackable Transformer ({size}) w/ hybrid Gated DeltaNet and standard attention layers (Muon)"
     cfg = SpeedrunConfig(author=AUTHOR, description=desc, model_config=model_cfg, train_config=train)
     return run_name, cfg
@@ -695,7 +695,8 @@ if __name__ == "__main__":
     ###
 
 
-    sizes = ["130m", "300m", "520m", "1_2b"]
+    # sizes = ["130m", "300m", "520m", "1_2b"]
+    sizes = ["520m", "1_2b"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
     sink = False
     steps = []
