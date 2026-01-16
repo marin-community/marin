@@ -235,9 +235,9 @@ fork-strategy = "fewest"
 
 [manifest]
 members = [
-    "fluster",
     "fray",
     "haliax",
+    "iris",
     "levanter",
     "marin",
     "marin-root",
@@ -1966,61 +1966,6 @@ wheels = [
 ]
 
 [[package]]
-name = "fluster"
-version = "0.1.0"
-source = { editable = "lib/fluster" }
-dependencies = [
-    { name = "cloudpickle" },
-    { name = "connect-python" },
-    { name = "fsspec" },
-    { name = "httpx" },
-    { name = "humanfriendly" },
-    { name = "pydantic" },
-    { name = "starlette" },
-    { name = "typing-extensions" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.dev-dependencies]
-demo = [
-    { name = "click" },
-    { name = "ipykernel" },
-    { name = "jupyter" },
-    { name = "nbconvert" },
-]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-timeout" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cloudpickle", specifier = ">=3.1.2" },
-    { name = "connect-python", git = "https://github.com/connectrpc/connect-python.git?rev=5342eacecef85e52717604ee5ac7e03a1e16c7ac" },
-    { name = "fsspec", specifier = ">=2024.0.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "humanfriendly", specifier = ">=10.0" },
-    { name = "pydantic", specifier = ">=2.12.5" },
-    { name = "starlette", specifier = ">=0.50.0" },
-    { name = "typing-extensions", specifier = ">=4.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
-]
-
-[package.metadata.requires-dev]
-demo = [
-    { name = "click", specifier = ">=8.3.1" },
-    { name = "ipykernel", specifier = ">=7.1.0" },
-    { name = "jupyter", specifier = ">=1.1.1" },
-    { name = "nbconvert", specifier = ">=7.16.6" },
-]
-dev = [
-    { name = "pytest", specifier = ">=8.3.2" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-timeout" },
-]
-
-[[package]]
 name = "fonttools"
 version = "4.61.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3024,6 +2969,61 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/4c/ae/c5ce1edc1afe042eadb445e95b0671b03cee61895264357956e61c0d2ac0/ipywidgets-8.1.8.tar.gz", hash = "sha256:61f969306b95f85fba6b6986b7fe45d73124d1d9e3023a8068710d47a22ea668", size = 116739, upload-time = "2025-11-01T21:18:12.393Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/56/6d/0d9848617b9f753b87f214f1c682592f7ca42de085f564352f10f0843026/ipywidgets-8.1.8-py3-none-any.whl", hash = "sha256:ecaca67aed704a338f88f67b1181b58f821ab5dc89c1f0f5ef99db43c1c2921e", size = 139808, upload-time = "2025-11-01T21:18:10.956Z" },
+]
+
+[[package]]
+name = "iris"
+version = "0.1.0"
+source = { editable = "lib/iris" }
+dependencies = [
+    { name = "cloudpickle" },
+    { name = "connect-python" },
+    { name = "fsspec" },
+    { name = "httpx" },
+    { name = "humanfriendly" },
+    { name = "pydantic" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.dev-dependencies]
+demo = [
+    { name = "click" },
+    { name = "ipykernel" },
+    { name = "jupyter" },
+    { name = "nbconvert" },
+]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cloudpickle", specifier = ">=3.1.2" },
+    { name = "connect-python", git = "https://github.com/connectrpc/connect-python.git?rev=5342eacecef85e52717604ee5ac7e03a1e16c7ac" },
+    { name = "fsspec", specifier = ">=2024.0.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "humanfriendly", specifier = ">=10.0" },
+    { name = "pydantic", specifier = ">=2.12.5" },
+    { name = "starlette", specifier = ">=0.50.0" },
+    { name = "typing-extensions", specifier = ">=4.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
+]
+
+[package.metadata.requires-dev]
+demo = [
+    { name = "click", specifier = ">=8.3.1" },
+    { name = "ipykernel", specifier = ">=7.1.0" },
+    { name = "jupyter", specifier = ">=1.1.1" },
+    { name = "nbconvert", specifier = ">=7.16.6" },
+]
+dev = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
 ]
 
 [[package]]
@@ -4597,9 +4597,9 @@ name = "marin-root"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "fluster" },
     { name = "fray" },
     { name = "haliax" },
+    { name = "iris" },
     { name = "levanter" },
     { name = "marin" },
     { name = "zephyr" },
@@ -4607,9 +4607,9 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fluster", editable = "lib/fluster" },
     { name = "fray", editable = "lib/fray" },
     { name = "haliax", editable = "lib/haliax" },
+    { name = "iris", editable = "lib/iris" },
     { name = "levanter", editable = "lib/levanter" },
     { name = "marin", editable = "lib/marin" },
     { name = "zephyr", editable = "lib/zephyr" },

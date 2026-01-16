@@ -9,7 +9,7 @@ description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
-    "fluster",
+    "iris",
     "fray",
     "haliax",
     "levanter",
@@ -26,7 +26,7 @@ override-dependencies = [
 
 [tool.uv.workspace]
 members = [
-    "lib/fluster",
+    "lib/iris",
     "lib/fray",
     "lib/haliax",
     "lib/levanter",
@@ -35,7 +35,7 @@ members = [
 ]
 
 [tool.uv.sources]
-fluster = { workspace = true }
+iris = { workspace = true }
 fray = { workspace = true }
 haliax = { workspace = true }
 levanter = { workspace = true }
@@ -70,7 +70,7 @@ ignore = ["F722", "B008", "UP015", "A005", "I001"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
-"lib/fluster/src/fluster/cluster/worker/dashboard.py" = ["E501"]
+"lib/iris/src/iris/cluster/worker/dashboard.py" = ["E501"]
 
 
 [tool.mypy]
@@ -82,7 +82,7 @@ exclude = ["marin/", "scripts/"]
 
 # Pyrefly type checker configuration
 [tool.pyrefly]
-project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py", "lib/fluster/**/*.py", "lib/fray/**/*.py", "lib/haliax/**/*.py", "lib/zephyr/**/*.py"]
+project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py", "lib/iris/**/*.py", "lib/fray/**/*.py", "lib/haliax/**/*.py", "lib/zephyr/**/*.py"]
 
 # Explicitly tell Pyrefly where our editable packages live so it resolves imports
 # against the library sources instead of the top-level `src` directory, which only
