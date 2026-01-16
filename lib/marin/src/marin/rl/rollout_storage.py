@@ -65,6 +65,17 @@ class StorageType(Enum):
     IN_MEMORY = "in_memory"
 
 
+@dataclass
+class RolloutWriteMetrics:
+    """Metrics for rollout write operations."""
+
+    serialize_time_seconds: float = 0.0
+    write_time_seconds: float = 0.0
+    total_time_seconds: float = 0.0
+    size_bytes: int = 0
+    batch_count: int = 0
+
+
 # Global registry for named in-memory queues
 _MEMORY_QUEUES: dict[str, "InMemoryRolloutQueue"] = {}
 
@@ -213,14 +224,31 @@ class FileRolloutReader(RolloutReader):
 
     def read_all_available(self) -> list[RolloutBatch]:
         """Read all currently available batches without blocking."""
+        start_time = time.time()
         batches = []
         available_files = self._get_available_files()
+        list_time = time.time()
 
+        files_read = 0
+        total_read_time = 0.0
         for file_path in available_files:
             if file_path not in self._read_files:
                 self._read_files.add(file_path)
+                read_start = time.time()
                 with self.fs.open(file_path, "rb") as f:
                     batches.append(pickle.load(f))
+                total_read_time += time.time() - read_start
+                files_read += 1
+
+        total_time = time.time() - start_time
+        if files_read > 0:
+            logger.info(
+                "GCS read: files=%d, list=%.3fs, read=%.3fs, total=%.3fs",
+                files_read,
+                list_time - start_time,
+                total_read_time,
+                total_time,
+            )
 
         return batches
 
@@ -248,7 +276,22 @@ class FileRolloutWriter(RolloutWriter):
 
         self._batch_counter = 0
 
+        # Metrics tracking
+        self._last_write_metrics = RolloutWriteMetrics()
+        self._cumulative_metrics = RolloutWriteMetrics()
+
         logger.info(f"Initialized file rollout writer at {path} (hostname: {self.hostname})")
+
+    def get_metrics(self) -> dict[str, float]:
+        """Get write metrics for logging."""
+        return {
+            "rollout_storage/last_serialize_time": self._last_write_metrics.serialize_time_seconds,
+            "rollout_storage/last_write_time": self._last_write_metrics.write_time_seconds,
+            "rollout_storage/last_total_time": self._last_write_metrics.total_time_seconds,
+            "rollout_storage/last_size_bytes": self._last_write_metrics.size_bytes,
+            "rollout_storage/cumulative_write_time": self._cumulative_metrics.write_time_seconds,
+            "rollout_storage/cumulative_batch_count": self._cumulative_metrics.batch_count,
+        }
 
     def _ensure_directories(self):
         """Ensure output directory structure exists."""
@@ -261,11 +304,21 @@ class FileRolloutWriter(RolloutWriter):
 
     def write_batch(self, batch: RolloutBatch) -> None:
         """Write batch to storage with all required fields."""
+        start_time = time.time()
         timestamp = time.time()
 
         batch_path = self._get_batch_path(timestamp, self._batch_counter)
+
+        # Serialize to bytes first to measure serialization time
+        serialize_start = time.time()
+        serialized = pickle.dumps(batch)
+        serialize_time = time.time() - serialize_start
+
+        # Write to GCS/storage
+        write_start = time.time()
         with self.fs.open(batch_path, "wb") as f:
-            pickle.dump(batch, f)
+            f.write(serialized)
+        write_time = time.time() - write_start
 
         self._file_queue.append(batch_path)
         if len(self._file_queue) > self.max_rollout_files:
@@ -275,7 +328,31 @@ class FileRolloutWriter(RolloutWriter):
             except Exception as e:
                 logger.warning(f"Failed to delete stale rollout file {stale_file}: {e}")
 
-        logger.debug(f"Wrote batch {batch_path}")
+        total_time = time.time() - start_time
+        size_bytes = len(serialized)
+
+        # Update metrics tracking
+        self._last_write_metrics = RolloutWriteMetrics(
+            serialize_time_seconds=serialize_time,
+            write_time_seconds=write_time,
+            total_time_seconds=total_time,
+            size_bytes=size_bytes,
+            batch_count=1,
+        )
+        self._cumulative_metrics.serialize_time_seconds += serialize_time
+        self._cumulative_metrics.write_time_seconds += write_time
+        self._cumulative_metrics.total_time_seconds += total_time
+        self._cumulative_metrics.size_bytes += size_bytes
+        self._cumulative_metrics.batch_count += 1
+
+        logger.info(
+            "GCS write: serialize=%.3fs, write=%.3fs, total=%.3fs, size=%.2fMB, path=%s",
+            serialize_time,
+            write_time,
+            total_time,
+            size_bytes / (1024 * 1024),
+            batch_path.split("/")[-1],
+        )
         self._batch_counter += 1
 
     def clear_queue(self) -> None:
