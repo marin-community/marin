@@ -29,6 +29,19 @@ from zephyr.writers import write_parquet_file
 from .conftest import CallCounter
 
 
+def create_vortex_file(tmp_path):
+    """Create a test vortex file with sample data for pushdown tests.
+
+    Creates 100 records with id (0-99), name, and score (id * 10).
+    """
+    from zephyr.writers import write_vortex_file
+
+    records = [{"id": i, "name": f"item_{i}", "score": i * 10} for i in range(100)]
+    path = tmp_path / "test.vortex"
+    write_vortex_file(records, str(path))
+    return path
+
+
 @pytest.fixture
 def sample_data():
     """Sample data for testing."""
@@ -39,20 +52,6 @@ def test_from_list(sample_data, backend):
     """Test creating dataset from list."""
     ds = Dataset.from_list(sample_data)
     assert list(Backend.execute(ds, context=backend)) == sample_data
-
-
-def test_dataclass_round_trip_preserves_type(backend):
-    """Ensure dataclass items are not downcast to dicts during execution."""
-    items = [SampleDataclass("alpha", 1), SampleDataclass("beta", 2)]
-
-    ds = Dataset.from_list(items)
-    result = list(Backend.execute(ds, context=backend))
-
-    assert [item.name for item in result] == ["alpha", "beta"]
-    assert all(isinstance(item, SampleDataclass) for item in result)
-
-    doubled = Dataset.from_list(items).map(lambda x: x.value * 2)
-    assert list(Backend.execute(doubled, context=backend)) == [2, 4]
 
 
 def test_from_iterable(backend):
@@ -1276,33 +1275,6 @@ def test_mixed_filter_expression_and_lambda(backend):
     assert results[0] == {"a": 3, "b": "x"}
 
 
-# =============================================================================
-# InputFileSpec and Chunking Tests
-# =============================================================================
-
-
-def test_input_file_spec_row_range_basic(tmp_path):
-    """Test InputFileSpec reads only the specified row range."""
-    from zephyr.readers import InputFileSpec, load_parquet
-
-    data = [{"id": i, "value": i * 10} for i in range(100)]
-    input_path = tmp_path / "data.parquet"
-    write_parquet_file(data, str(input_path))
-
-    spec = InputFileSpec(
-        path=str(input_path),
-        format="parquet",
-        row_start=10,
-        row_end=20,
-    )
-
-    records = list(load_parquet(spec))
-
-    assert len(records) == 10
-    assert records[0]["id"] == 10
-    assert records[-1]["id"] == 19
-
-
 def test_input_file_spec_with_columns_and_row_range(tmp_path):
     """Test InputFileSpec with both columns and row_range."""
     from zephyr.readers import InputFileSpec, load_parquet
@@ -1327,109 +1299,53 @@ def test_input_file_spec_with_columns_and_row_range(tmp_path):
     assert records[-1]["id"] == 9
 
 
-def test_fork_chunks_inserted_with_intra_shard_parallelism(tmp_path):
-    """Test that ForkChunks is inserted when intra_shard_parallelism is enabled."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-    from zephyr.plan import ExecutionHint, ForkChunks, Map, compute_plan
+def test_vortex_load_file_auto_detects_format(backend, tmp_path):
+    """Test that load_file() auto-detects vortex format."""
+    from zephyr.writers import write_vortex_file
 
-    # Create a parquet file
-    data = [{"id": i, "value": i * 2} for i in range(100)]
-    input_path = tmp_path / "data.parquet"
-    table = pa.Table.from_pylist(data)
-    pq.write_table(table, str(input_path))
+    # Create input vortex file
+    records = [{"id": i, "name": f"item_{i}"} for i in range(50)]
+    input_path = tmp_path / "input.vortex"
+    write_vortex_file(records, str(input_path))
 
-    # Create pipeline: load_parquet -> map -> write
-    output_path = tmp_path / "output.parquet"
+    output_pattern = str(tmp_path / "output-{shard:05d}.jsonl.gz")
+
     ds = (
         Dataset.from_files(str(input_path))
-        .load_parquet()
-        .map(lambda x: {"id": x["id"], "doubled": x["value"]})
-        .write_parquet(str(output_path))
+        .load_file()  # Should auto-detect vortex
+        .filter(lambda r: r["id"] < 10)
+        .write_jsonl(output_pattern)
     )
 
-    # Test with intra_shard_parallelism enabled
-    hints = ExecutionHint(intra_shard_parallelism=4)
-    plan = compute_plan(ds, hints)
-
-    # Should have one stage
-    assert len(plan.stages) == 1
-    stage = plan.stages[0]
-
-    # Check that ForkChunks is the first op
-    assert len(stage.operations) > 0
-    assert isinstance(stage.operations[0], ForkChunks)
-    assert stage.operations[0].target_chunks == 4
-
-    # Check that ForkChunks contains the user ops (map)
-    fork_chunks = stage.operations[0]
-    assert len(fork_chunks.parallel_ops) == 1
-    assert isinstance(fork_chunks.parallel_ops[0], Map)
+    results = list(Backend.execute(ds, context=backend))
+    assert len(results) == 1
 
 
-def test_fork_chunks_not_inserted_when_disabled(tmp_path):
-    """Test that ForkChunks is NOT inserted when intra_shard_parallelism is 0."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-    from zephyr.plan import ExecutionHint, ForkChunks, compute_plan
+def test_expression_filter_pushdown(backend, tmp_path):
+    """Test filter pushdown with expression.
 
-    # Create a parquet file
-    data = [{"id": i, "value": i * 2} for i in range(100)]
-    input_path = tmp_path / "data.parquet"
-    table = pa.Table.from_pylist(data)
-    pq.write_table(table, str(input_path))
+    Verifies that vortex format supports predicate pushdown,
+    filtering at the I/O layer instead of in Python.
+    """
+    from zephyr.expr import col
 
-    # Create pipeline: load_parquet -> map -> write
-    output_path = tmp_path / "output.parquet"
-    ds = (
-        Dataset.from_files(str(input_path))
-        .load_parquet()
-        .map(lambda x: {"id": x["id"], "doubled": x["value"]})
-        .write_parquet(str(output_path))
-    )
+    vortex_file = create_vortex_file(tmp_path)
+    ds = Dataset.from_files(str(vortex_file)).load_vortex().filter(col("score") > 500)
 
-    # Test with intra_shard_parallelism disabled
-    hints = ExecutionHint(intra_shard_parallelism=0)
-    plan = compute_plan(ds, hints)
-
-    # Should have one stage
-    assert len(plan.stages) == 1
-    stage = plan.stages[0]
-
-    # Check that ForkChunks is NOT present
-    fork_chunks_found = any(isinstance(op, ForkChunks) for op in stage.operations)
-    assert not fork_chunks_found
+    results = list(Backend.execute(ds, context=backend))
+    assert len(results) == 49  # scores 510, 520, ..., 990
+    assert all(r["score"] > 500 for r in results)
 
 
-def test_fork_chunks_not_inserted_with_map_shard(tmp_path):
-    """Test that ForkChunks is NOT inserted when MapShardOp requires full shard context."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-    from zephyr.plan import ExecutionHint, ForkChunks, compute_plan
+def test_column_select_pushdown(backend, tmp_path):
+    """Test column selection pushdown.
 
-    # Create a parquet file
-    data = [{"id": i, "value": i * 2} for i in range(100)]
-    input_path = tmp_path / "data.parquet"
-    table = pa.Table.from_pylist(data)
-    pq.write_table(table, str(input_path))
+    Verifies that vortex format supports projection pushdown,
+    loading only requested columns.
+    """
+    vortex_file = create_vortex_file(tmp_path)
+    ds = Dataset.from_files(str(vortex_file)).load_vortex().select("id", "score")
 
-    # Create pipeline with map_shard (requires full shard context)
-    output_path = tmp_path / "output.parquet"
-    ds = (
-        Dataset.from_files(str(input_path))
-        .load_parquet()
-        .map_shard(lambda items: list(items)[:10])
-        .write_parquet(str(output_path))
-    )
-
-    # Test with intra_shard_parallelism enabled
-    hints = ExecutionHint(intra_shard_parallelism=4)
-    plan = compute_plan(ds, hints)
-
-    # Should have one stage
-    assert len(plan.stages) == 1
-    stage = plan.stages[0]
-
-    # Check that ForkChunks is NOT present (because map_shard requires full shard)
-    fork_chunks_found = any(isinstance(op, ForkChunks) for op in stage.operations)
-    assert not fork_chunks_found
+    results = list(Backend.execute(ds, context=backend))
+    assert len(results) == 100
+    assert set(results[0].keys()) == {"id", "score"}

@@ -41,6 +41,7 @@ from zephyr.plan import (
     compute_plan,
     run_stage,
 )
+from zephyr.storage import DEFAULT_SPILL_THRESHOLD_BYTES, StorageManager
 
 logger = logging.getLogger(__name__)
 
@@ -67,38 +68,21 @@ class Shard:
 
     idx: int  # Shard index (e.g., 0 of 50)
     chunks: list[Chunk]
-    context: JobContext
 
     @property
     def count(self) -> int:
         """Total number of items across all chunks."""
         return sum(c.count for c in self.chunks)
 
-    def iter_chunks(self) -> Iterator[list]:
-        """Iterate over chunks (each chunk is a list of items)."""
+    def iter_chunks(self) -> Iterator:
+        """Iterate over chunks (each chunk is an iterable of items)."""
         for chunk in self.chunks:
-            data = self.context.get(chunk.data)
-            yield data
+            yield chunk.data
 
     def __iter__(self):
         """Flat map over all chunks."""
         for chunk_data in self.iter_chunks():
             yield from chunk_data
-
-    @staticmethod
-    def from_single_ref(ref: Any, context: JobContext, idx: int, count: int) -> Shard:
-        """Wrap a single ref as a Shard.
-
-        Args:
-            ref: Reference to wrap (type depends on context)
-            context: Execution context for get operations
-            idx: Shard index
-            count: Number of items in the ref
-
-        Returns:
-            Shard containing the single ref
-        """
-        return Shard(idx=idx, chunks=[Chunk(count=count, data=ref)], context=context)
 
 
 def format_shard_path(pattern: str, shard_idx: int, total: int) -> str:
@@ -134,29 +118,28 @@ def reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
     if not shards:
         return []
 
-    context = shards[0].context
     all_chunks = [chunk for shard in shards for chunk in shard.chunks]
 
     if not all_chunks:
         return []
 
     chunk_groups = np.array_split(all_chunks, num_shards)  # type: ignore
-    return [
-        Shard(idx=idx, chunks=list(group), context=context) for idx, group in enumerate(chunk_groups) if len(group) > 0
-    ]
+    return [Shard(idx=idx, chunks=list(group)) for idx, group in enumerate(chunk_groups) if len(group) > 0]
 
 
 class Backend:
-    def __init__(self, context: JobContext, config: BackendConfig):
+    def __init__(self, context: JobContext, config: BackendConfig, storage: StorageManager):
         """Initialize backend with execution context and configuration.
 
         Args:
             context: Execution context providing put/get/run/wait primitives
             config: Backend configuration
+            storage: Storage manager for chunk serialization
         """
         self.context = context
         self.config = config
         self.dry_run = config.dry_run
+        self.storage = storage
 
     @staticmethod
     def execute(
@@ -166,16 +149,20 @@ class Backend:
         verbose: bool = False,
         max_parallelism: int = 1024,
         dry_run: bool = False,
+        storage_path: str | None = None,
+        spill_threshold_bytes: int | None = None,
     ) -> Sequence[T]:
         """Execute a dataset and return results.
 
         Args:
             dataset: Dataset to execute
             context: JobContext to use for execution. If None, uses get_default_job_ctx()
-            hints: Execution hints (chunk_size, intra_shard_parallelism, etc.)
+            hints: Execution hints (chunk_size, etc.)
             verbose: Print additional logging and optimization stats
             max_parallelism: Maximum number of concurrent tasks
             dry_run: If True, show optimization plan without executing
+            storage_path: Base path for intermediate storage. Defaults to MARIN_PREFIX/tmp.
+            spill_threshold_bytes: Size threshold for spilling to storage. Defaults to 1MB.
 
         Returns:
             Sequence of results
@@ -190,15 +177,20 @@ class Backend:
         if context is None:
             context = get_default_job_ctx()
         config = BackendConfig(max_parallelism=max_parallelism, dry_run=dry_run)
-        backend = Backend(context, config)
 
-        plan = compute_plan(dataset, hints)
-        if verbose:
-            backend._print_plan(dataset.operations, plan)
-        if dry_run:
-            return []
+        if spill_threshold_bytes is None:
+            spill_threshold_bytes = DEFAULT_SPILL_THRESHOLD_BYTES
 
-        return list(backend._execute_plan(plan, hints))
+        with StorageManager(storage_path, spill_threshold_bytes) as storage:
+            backend = Backend(context, config, storage)
+
+            plan = compute_plan(dataset, hints)
+            if verbose:
+                backend._print_plan(dataset.operations, plan)
+            if dry_run:
+                return []
+
+            return list(backend._execute_plan(plan, hints))
 
     def _print_plan(self, original_ops: list, plan: PhysicalPlan) -> None:
         """Print the physical plan showing shard count and operation fusion.
@@ -252,6 +244,8 @@ class Backend:
         Returns:
             List of Shards ready for processing, one per unique shard_idx
         """
+        from zephyr.storage import InlineRef
+
         # Group by shard_idx
         items_by_shard: dict[int, list[SourceItem]] = defaultdict(list)
         for item in source_items:
@@ -264,10 +258,10 @@ class Backend:
 
             chunks = []
             for item in items:
-                # Pass the data field directly to the first operation
-                chunks.append(Chunk(count=1, data=self.context.put([item.data])))
+                # Use InlineRef so Shards are pickle-able for Ray workers
+                chunks.append(Chunk(count=1, data=InlineRef(data=[item.data])))
 
-            shards.append(Shard(idx=shard_idx, chunks=chunks, context=self.context))
+            shards.append(Shard(idx=shard_idx, chunks=chunks))
 
         return shards
 
@@ -301,8 +295,13 @@ class Backend:
         # Compute aux shards for joins
         aux_shards_per_shard = self._compute_join_aux_shards(stage, shards, hints)
 
-        # Single execution path - ForkChunks handles parallelism internally
-        return self._execute_shard_parallel(stage.operations, shards, aux_shards_per_shard, hints)
+        # Execute stage
+        result = self._execute_shard_parallel(stage.operations, shards, aux_shards_per_shard, hints)
+
+        # Advance storage stage counter for next stage
+        self.storage.next_stage()
+
+        return result
 
     def _compute_join_aux_shards(
         self,
@@ -366,45 +365,53 @@ class Backend:
     ) -> dict[int, list[tuple[ChunkHeader, Any]]]:
         """Run stage tasks for contexts, return results grouped by output shard_idx.
 
+        Workers return list[tuple[ChunkHeader, ChunkRef]] directly. The controller
+        collects these refs without materializing data.
+
         Args:
             contexts: List of StageContext to process
             operations: Physical operations to execute
 
         Returns:
-            Dict mapping shard_idx -> list of (header, data_ref) tuples.
+            Dict mapping shard_idx -> list of (header, ChunkRef) tuples.
         """
         results_by_shard: dict[int, list[tuple[ChunkHeader, Any]]] = defaultdict(list)
 
         if not contexts:
             return results_by_shard
 
-        active_gens: list[tuple[Any, StageContext]] = []
+        active: dict[int, Any] = {}
         queued = list(contexts)
+        task_counter = 0
 
         # Start initial batch
-        while len(active_gens) < self.config.max_parallelism and queued:
+        while len(active) < self.config.max_parallelism and queued:
             ctx = queued.pop(0)
-            active_gens.append((self.context.run(run_stage, ctx, operations), ctx))
+            future = self.context.run(run_stage, ctx, operations)
+            active[task_counter] = future
+            task_counter += 1
 
-        # Process results
-        while active_gens or queued:
-            gen_objs = [g for g, _ in active_gens]
-            ready, _ = self.context.wait(gen_objs, num_returns=1)
+        # Collect results
+        while active or queued:
+            futures = list(active.values())
+            ready, _ = self.context.wait(futures, num_returns=1)
 
-            for ready_gen in ready:
-                # Find matching entry
-                for g, ctx in active_gens:
-                    if g is ready_gen:
-                        try:
-                            header = self.context.get(next(ready_gen))
-                            data_ref = next(ready_gen)
-                            results_by_shard[header.shard_idx].append((header, data_ref))
-                        except StopIteration:
-                            active_gens.remove((g, ctx))
-                            if queued:
-                                next_ctx = queued.pop(0)
-                                active_gens.append((self.context.run(run_stage, next_ctx, operations), next_ctx))
-                        break
+            for ready_future in ready:
+                # Find and remove matching entry
+                task_id = next(tid for tid, f in active.items() if f is ready_future)
+                del active[task_id]
+
+                # Workers return list of (header, ChunkRef) tuples directly
+                result_pairs = self.context.get(ready_future)
+                for header, ref in result_pairs:
+                    results_by_shard[header.shard_idx].append((header, ref))
+
+                # Start next task if available
+                if queued:
+                    next_ctx = queued.pop(0)
+                    next_future = self.context.run(run_stage, next_ctx, operations)
+                    active[task_counter] = next_future
+                    task_counter += 1
 
         return results_by_shard
 
@@ -417,6 +424,8 @@ class Backend:
     ) -> list[Shard]:
         """Execute operations on shards with one task per shard.
 
+        Workers make spill decisions and return ChunkRefs (InlineRef or StorageRef).
+
         Args:
             operations: Physical operations to execute
             shards: List of input Shards
@@ -424,7 +433,7 @@ class Backend:
             hints: Execution hints
 
         Returns:
-            List of output Shards assembled from streamed chunks
+            List of output Shards assembled from worker-returned ChunkRefs
         """
         if aux_shards_per_shard is None:
             aux_shards_per_shard = [{} for _ in range(len(shards))]
@@ -433,14 +442,18 @@ class Backend:
 
         total = len(shards)
 
+        # Stage storage path for workers to spill chunks
+        stage_path = f"{self.storage.job_path}/stage_{self.storage._stage_idx}"
+
         contexts = [
             StageContext(
                 shard=shard,
                 shard_idx=shard_idx,
                 total_shards=total,
                 chunk_size=hints.chunk_size,
+                storage_path=stage_path,
+                spill_threshold_bytes=self.storage.spill_threshold_bytes,
                 aux_shards=aux_shards,
-                execution_context=self.context,
             )
             for shard_idx, (shard, aux_shards) in enumerate(zip(shards, aux_shards_per_shard, strict=True))
         ]
@@ -459,13 +472,12 @@ class Backend:
         shards = []
         for idx in range(num_output_shards):
             if idx not in results:
-                shards.append(Shard(idx=idx, chunks=[], context=self.context))
+                shards.append(Shard(idx=idx, chunks=[]))
             else:
                 shards.append(
                     Shard(
                         idx=idx,
                         chunks=[Chunk(header.count, data_ref) for header, data_ref in results[idx]],
-                        context=self.context,
                     )
                 )
 
