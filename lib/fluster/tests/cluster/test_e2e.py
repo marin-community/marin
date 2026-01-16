@@ -17,179 +17,32 @@
 Tests the full job lifecycle through real Controller<->Worker RPC.
 Jobs execute in-process (no Docker) for fast, reliable CI.
 
-This file is self-contained - all test infrastructure is defined here.
+Uses the same local providers as LocalClusterClient for consistency.
 """
 
-import base64
-import re
 import socket
 import tempfile
-import threading
 import time
 import uuid
-from dataclasses import dataclass, field
 from pathlib import Path
 
-import cloudpickle
 import pytest
 
 from fluster.client import FlusterClient
+from fluster.cluster.client.local_client import (
+    LocalEnvironmentProvider,
+    _LocalBundleProvider,
+    _LocalContainerRuntime,
+    _LocalImageProvider,
+)
 from fluster.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
 from fluster.cluster.types import Entrypoint
-from fluster.cluster.worker.builder import BuildResult, ImageCache
+from fluster.cluster.worker.builder import ImageCache
 from fluster.cluster.worker.bundle_cache import BundleCache
-from fluster.cluster.worker.docker import ContainerConfig, ContainerStats, ContainerStatus, DockerRuntime
+from fluster.cluster.worker.docker import DockerRuntime
 from fluster.cluster.worker.worker import Worker, WorkerConfig
-from fluster.cluster.worker.worker_types import LogLine
 from fluster.rpc import cluster_pb2
 from fluster.rpc.cluster_connect import ControllerServiceClientSync
-
-# =============================================================================
-# Mock Infrastructure
-# =============================================================================
-
-
-@dataclass
-class MockContainer:
-    """Simulates a container executing a job function in-process."""
-
-    config: ContainerConfig
-    _thread: threading.Thread | None = field(default=None, repr=False)
-    _running: bool = False
-    _exit_code: int | None = None
-    _error: str | None = None
-    _logs: list[LogLine] = field(default_factory=list)
-    _killed: threading.Event = field(default_factory=threading.Event)
-
-    def start(self):
-        """Execute the job function in a background thread."""
-        self._running = True
-        self._thread = threading.Thread(target=self._execute, daemon=True)
-        self._thread.start()
-
-    def _execute(self):
-        import os
-
-        original_env = {}
-        try:
-            # Set environment variables from container config
-            for key, value in self.config.env.items():
-                original_env[key] = os.environ.get(key)
-                os.environ[key] = value
-
-            # Extract encoded data from command (command is ['python', '-c', script])
-            script = self.config.command[2]
-            fn, args, kwargs = self._extract_entrypoint(script)
-
-            # Check if killed before executing
-            if self._killed.is_set():
-                self._exit_code = 137
-                return
-
-            # Execute the function
-            fn(*args, **kwargs)
-            self._exit_code = 0
-
-        except Exception as e:
-            self._error = str(e)
-            self._exit_code = 1
-        finally:
-            self._running = False
-            # Restore original environment
-            for key, original_value in original_env.items():
-                if original_value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = original_value
-
-    def _extract_entrypoint(self, script: str):
-        """Extract pickled (fn, args, kwargs) from the thunk script."""
-        match = re.search(r"base64\.b64decode\('([^']+)'\)\)", script)
-        if match:
-            encoded = match.group(1)
-            return cloudpickle.loads(base64.b64decode(encoded))
-        raise ValueError("Could not extract entrypoint from command")
-
-    def kill(self):
-        self._killed.set()
-        # Give thread a moment to notice
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=0.5)
-        if self._running:
-            self._running = False
-            self._exit_code = 137
-
-
-class InProcessContainerRuntime:
-    """Container runtime that executes jobs in-process without Docker.
-
-    Implements the ContainerRuntime protocol for testing.
-    """
-
-    def __init__(self):
-        self._containers: dict[str, MockContainer] = {}
-
-    def create_container(self, config: ContainerConfig) -> str:
-        container_id = f"mock-{uuid.uuid4().hex[:8]}"
-        self._containers[container_id] = MockContainer(config=config)
-        return container_id
-
-    def start_container(self, container_id: str) -> None:
-        self._containers[container_id].start()
-
-    def inspect(self, container_id: str) -> ContainerStatus:
-        c = self._containers.get(container_id)
-        if not c:
-            return ContainerStatus(running=False, exit_code=1, error="container not found")
-        return ContainerStatus(
-            running=c._running,
-            exit_code=c._exit_code,
-            error=c._error,
-        )
-
-    def kill(self, container_id: str, force: bool = False) -> None:
-        if container_id in self._containers:
-            self._containers[container_id].kill()
-
-    def remove(self, container_id: str) -> None:
-        self._containers.pop(container_id, None)
-
-    def get_logs(self, container_id: str) -> list[LogLine]:
-        c = self._containers.get(container_id)
-        return c._logs if c else []
-
-    def get_stats(self, container_id: str) -> ContainerStats:
-        return ContainerStats(memory_mb=100, cpu_percent=10, process_count=1, available=True)
-
-
-class MockBundleProvider:
-    """Returns a fake bundle path without downloading."""
-
-    def __init__(self, bundle_path: Path):
-        self._bundle_path = bundle_path
-
-    def get_bundle(self, gcs_path: str, expected_hash: str | None = None) -> Path:
-        return self._bundle_path
-
-
-class MockImageProvider:
-    """Skips image building, returns a fake result."""
-
-    def build(
-        self,
-        bundle_path: Path,
-        base_image: str,
-        extras: list[str],
-        job_id: str,
-        deps_hash: str,
-        job_logs=None,
-    ) -> BuildResult:
-        return BuildResult(
-            image_tag="mock:latest",
-            deps_hash=deps_hash,
-            build_time_ms=0,
-            from_cache=True,
-        )
 
 
 def find_free_port() -> int:
@@ -261,10 +114,13 @@ class E2ECluster:
             bundle_provider = BundleCache(cache_path, max_bundles=10)
             image_provider = ImageCache(cache_path, registry="", max_images=10)
             container_runtime = DockerRuntime()
+            environment_provider = None  # Use default (probe real system)
         else:
-            bundle_provider = MockBundleProvider(fake_bundle)
-            image_provider = MockImageProvider()
-            container_runtime = InProcessContainerRuntime()
+            bundle_provider = _LocalBundleProvider(fake_bundle)
+            image_provider = _LocalImageProvider()
+            container_runtime = _LocalContainerRuntime()
+            # 4 CPUs to match test expectations for resource scheduling tests
+            environment_provider = LocalEnvironmentProvider(cpu=4, memory_gb=8)
 
         # Start Workers
         for i in range(self._num_workers):
@@ -285,6 +141,7 @@ class E2ECluster:
                 bundle_provider=bundle_provider,
                 image_provider=image_provider,
                 container_runtime=container_runtime,
+                environment_provider=environment_provider,
             )
             worker.start()
             self._workers.append(worker)
@@ -536,21 +393,171 @@ class TestPorts:
     """Test port allocation and forwarding."""
 
     def test_port_allocation(self, test_cluster):
-        """Ports are allocated and passed via environment."""
+        """Ports are allocated and passed via JobInfo."""
 
         def port_job():
-            import os
+            from fluster.cluster.client import get_job_info
 
-            # Verify ports are set - raise if missing so job fails
-            http_port = os.environ.get("FLUSTER_PORT_HTTP")
-            grpc_port = os.environ.get("FLUSTER_PORT_GRPC")
-            if not http_port or not grpc_port:
-                raise ValueError(f"Ports not set: http={http_port}, grpc={grpc_port}")
+            info = get_job_info()
+            if info is None:
+                raise ValueError("JobInfo not available")
+            # Verify ports are set
+            if "http" not in info.ports or "grpc" not in info.ports:
+                raise ValueError(f"Ports not set: {info.ports}")
             # Verify they're valid port numbers
-            int(http_port)
-            int(grpc_port)
+            assert info.ports["http"] > 0
+            assert info.ports["grpc"] > 0
 
         job_id = test_cluster.submit(port_job, name="port-job", ports=["http", "grpc"])
         status = test_cluster.wait(job_id, timeout=30)
         # Job succeeds only if ports were correctly passed
+        assert status["state"] == "JOB_STATE_SUCCEEDED", f"Job failed: {status}"
+
+
+# =============================================================================
+# Tests: JobInfo Context
+# =============================================================================
+
+
+class TestJobInfo:
+    """Test JobInfo contextvar is available in jobs."""
+
+    def test_job_info_contextvar(self, test_cluster):
+        """JobInfo is available via contextvar with correct job_id and worker_id."""
+
+        def test_fn():
+            from fluster.cluster.client import get_job_info
+
+            info = get_job_info()
+            assert info is not None
+            assert info.job_id == "test-job-info"
+            assert info.worker_id is not None
+            assert "actor" in info.ports
+            return info.job_id
+
+        job_id = test_cluster.submit(test_fn, name="test-job-info", ports=["actor"])
+        status = test_cluster.wait(job_id, timeout=30)
+        assert status["state"] == "JOB_STATE_SUCCEEDED"
+
+    def test_job_info_with_multiple_ports(self, test_cluster):
+        """JobInfo contains all allocated ports and they are unique."""
+
+        def test_fn():
+            from fluster.cluster.client import get_job_info
+
+            info = get_job_info()
+            assert info is not None
+            assert "actor" in info.ports
+            assert "metrics" in info.ports
+            assert "custom" in info.ports
+            # Ports should be unique
+            port_values = list(info.ports.values())
+            assert len(port_values) == len(set(port_values))
+            return info.ports
+
+        job_id = test_cluster.submit(test_fn, name="test-job-ports", ports=["actor", "metrics", "custom"])
+        status = test_cluster.wait(job_id, timeout=30)
+        assert status["state"] == "JOB_STATE_SUCCEEDED"
+
+
+# =============================================================================
+# Tests: Endpoints
+# =============================================================================
+
+
+class TestEndpoints:
+    """Test endpoint registration from within jobs."""
+
+    def test_endpoint_registration_from_job(self, test_cluster):
+        """Job can register endpoints that are visible externally."""
+
+        def register_endpoint_job():
+            import time
+
+            from fluster.cluster.client import get_job_info
+            from fluster.rpc import cluster_pb2
+            from fluster.rpc.cluster_connect import ControllerServiceClientSync
+
+            info = get_job_info()
+            if info is None:
+                raise ValueError("JobInfo not available")
+            if not info.controller_address:
+                raise ValueError("controller_address not set in JobInfo")
+
+            client = ControllerServiceClientSync(address=info.controller_address, timeout_ms=5000)
+            try:
+                # Register an endpoint
+                request = cluster_pb2.Controller.RegisterEndpointRequest(
+                    name="test/actor1",
+                    address="localhost:5000",
+                    job_id=info.job_id,
+                    metadata={"type": "actor"},
+                )
+                response = client.register_endpoint(request)
+                assert response.endpoint_id
+
+                # List endpoints to verify
+                list_request = cluster_pb2.Controller.ListEndpointsRequest(prefix="test/")
+                list_response = client.list_endpoints(list_request)
+                assert len(list_response.endpoints) == 1
+                assert list_response.endpoints[0].name == "test/actor1"
+                assert list_response.endpoints[0].metadata["type"] == "actor"
+
+                # Keep job alive briefly so endpoint stays registered
+                time.sleep(0.5)
+            finally:
+                client.close()
+
+        job_id = test_cluster.submit(register_endpoint_job, name="endpoint-job")
+        status = test_cluster.wait(job_id, timeout=30)
+        assert status["state"] == "JOB_STATE_SUCCEEDED", f"Job failed: {status}"
+
+    def test_endpoint_prefix_matching(self, test_cluster):
+        """Endpoint prefix matching works correctly."""
+
+        def register_multiple_endpoints():
+            import time
+
+            from fluster.cluster.client import get_job_info
+            from fluster.rpc import cluster_pb2
+            from fluster.rpc.cluster_connect import ControllerServiceClientSync
+
+            info = get_job_info()
+            if info is None:
+                raise ValueError("JobInfo not available")
+            if not info.controller_address:
+                raise ValueError("controller_address not set in JobInfo")
+            client = ControllerServiceClientSync(address=info.controller_address, timeout_ms=5000)
+            try:
+                # Register endpoints with various prefixes
+                for name, addr in [
+                    ("ns1/actor1", "host1:5000"),
+                    ("ns1/actor2", "host2:5001"),
+                    ("ns1/service/actor3", "host3:5002"),
+                    ("ns2/actor1", "host4:5003"),
+                ]:
+                    request = cluster_pb2.Controller.RegisterEndpointRequest(
+                        name=name,
+                        address=addr,
+                        job_id=info.job_id,
+                    )
+                    client.register_endpoint(request)
+
+                # Test prefix matching
+                ns1_all = client.list_endpoints(cluster_pb2.Controller.ListEndpointsRequest(prefix="ns1/"))
+                assert len(ns1_all.endpoints) == 3
+
+                ns1_service = client.list_endpoints(cluster_pb2.Controller.ListEndpointsRequest(prefix="ns1/service/"))
+                assert len(ns1_service.endpoints) == 1
+                assert ns1_service.endpoints[0].name == "ns1/service/actor3"
+
+                ns2 = client.list_endpoints(cluster_pb2.Controller.ListEndpointsRequest(prefix="ns2/"))
+                assert len(ns2.endpoints) == 1
+
+                time.sleep(0.5)
+            finally:
+                client.close()
+
+        job_id = test_cluster.submit(register_multiple_endpoints, name="prefix-job")
+        status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED", f"Job failed: {status}"

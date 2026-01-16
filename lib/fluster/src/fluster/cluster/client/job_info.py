@@ -87,10 +87,15 @@ def set_job_info(info: JobInfo) -> None:
     _job_info.set(info)
 
 
-def _parse_ports_from_env() -> dict[str, int]:
-    """Parse port allocations from FLUSTER_PORT_* environment variables."""
+def _parse_ports_from_env(env: dict[str, str] | None = None) -> dict[str, int]:
+    """Parse port allocations from FLUSTER_PORT_* variables.
+
+    Args:
+        env: Dict to parse from. Defaults to os.environ.
+    """
+    source = env if env is not None else os.environ
     ports = {}
-    for key, value in os.environ.items():
+    for key, value in source.items():
         if key.startswith("FLUSTER_PORT_"):
             port_name = key[len("FLUSTER_PORT_") :].lower()
             ports[port_name] = int(value)

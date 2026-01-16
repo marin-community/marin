@@ -51,6 +51,7 @@ from fluster.cluster.worker.builder import ImageCache, ImageProvider, VenvCache
 from fluster.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from fluster.cluster.worker.dashboard import WorkerDashboard
 from fluster.cluster.worker.docker import ContainerConfig, ContainerRuntime, DockerRuntime
+from fluster.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider
 from fluster.cluster.worker.service import WorkerServiceImpl
 from fluster.cluster.worker.worker_types import Job, collect_workdir_size_mb
 
@@ -167,6 +168,7 @@ class Worker:
         bundle_provider: BundleProvider | None = None,
         image_provider: ImageProvider | None = None,
         container_runtime: ContainerRuntime | None = None,
+        environment_provider: EnvironmentProvider | None = None,
     ):
         """Initialize worker components.
 
@@ -176,6 +178,7 @@ class Worker:
             bundle_provider: Optional bundle provider for testing
             image_provider: Optional image provider for testing
             container_runtime: Optional container runtime for testing
+            environment_provider: Optional environment provider for resource reporting
         """
         self._config = config
 
@@ -202,6 +205,7 @@ class Worker:
             max_images=50,
         )
         self._runtime = container_runtime or DockerRuntime()
+        self._environment_provider = environment_provider or DefaultEnvironmentProvider()
         self._port_allocator = PortAllocator(config.port_range)
 
         # Job state
@@ -298,11 +302,9 @@ class Worker:
 
     def _heartbeat_loop(self) -> None:
         """Background loop: register with retry, then send periodic heartbeats."""
-        from fluster.cluster.worker.env_probe import build_resource_spec, probe_worker_environment
-
-        # Probe environment once
-        metadata = probe_worker_environment()
-        resources = build_resource_spec(metadata)
+        # Probe environment once using the configured provider
+        metadata = self._environment_provider.probe()
+        resources = self._environment_provider.build_resource_spec(metadata)
 
         # Generate worker ID if not provided
         if not self._worker_id:
@@ -383,6 +385,7 @@ class Worker:
         - FLUSTER_WORKER_ID: ID of the worker running this job
         - FLUSTER_CONTROLLER_ADDRESS: Controller URL for endpoint registration
         - FLUSTER_BUNDLE_GCS_PATH: Bundle path for sub-job workspace inheritance
+        - FLUSTER_BIND_HOST: Host address for binding servers (0.0.0.0 for Docker, 127.0.0.1 otherwise)
         - FLUSTER_PORT_<NAME>: Allocated port numbers (e.g., FLUSTER_PORT_HTTP)
         - FRAY_PORT_MAPPING: All port mappings as "name:port,name:port"
 
@@ -486,11 +489,21 @@ class Worker:
                 env["FLUSTER_WORKER_ID"] = self._config.worker_id
 
             if self._config.controller_address:
-                env["FLUSTER_CONTROLLER_ADDRESS"] = _rewrite_address_for_container(self._config.controller_address)
+                # Only rewrite localhost addresses for Docker containers
+                if isinstance(self._runtime, DockerRuntime):
+                    env["FLUSTER_CONTROLLER_ADDRESS"] = _rewrite_address_for_container(self._config.controller_address)
+                else:
+                    env["FLUSTER_CONTROLLER_ADDRESS"] = self._config.controller_address
 
             # Inject bundle path for sub-job inheritance
             if job.request.bundle_gcs_path:
                 env["FLUSTER_BUNDLE_GCS_PATH"] = job.request.bundle_gcs_path
+
+            # Inject bind host - 0.0.0.0 for Docker (so port mapping works), 127.0.0.1 otherwise
+            if isinstance(self._runtime, DockerRuntime):
+                env["FLUSTER_BIND_HOST"] = "0.0.0.0"
+            else:
+                env["FLUSTER_BIND_HOST"] = "127.0.0.1"
 
             # Inject allocated ports
             for name, port in job.ports.items():

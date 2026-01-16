@@ -27,6 +27,7 @@ import os
 import socket
 import subprocess
 import urllib.request
+from typing import Protocol
 
 from fluster.rpc import cluster_pb2
 
@@ -195,3 +196,25 @@ def build_resource_spec(metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.Res
         )
 
     return resources
+
+
+class EnvironmentProvider(Protocol):
+    """Protocol for worker environment probing. Implement this to customize resource reporting."""
+
+    def probe(self) -> cluster_pb2.WorkerMetadata:
+        """Probe and return worker metadata."""
+        ...
+
+    def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec:
+        """Build resource spec from metadata."""
+        ...
+
+
+class DefaultEnvironmentProvider:
+    """Default implementation that probes real system resources."""
+
+    def probe(self) -> cluster_pb2.WorkerMetadata:
+        return probe_worker_environment()
+
+    def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec:
+        return build_resource_spec(metadata)

@@ -30,7 +30,6 @@ Usage:
     uv run python examples/demo_cluster.py --docker
 """
 
-import base64
 import os
 import re
 import socket
@@ -40,20 +39,23 @@ import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
-import cloudpickle
 
 from fluster.client import FlusterClient
+from fluster.cluster.client.local_client import (
+    LocalEnvironmentProvider,
+    _LocalBundleProvider,
+    _LocalContainerRuntime,
+    _LocalImageProvider,
+)
 from fluster.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
 from fluster.cluster.types import Entrypoint
-from fluster.cluster.worker.builder import BuildResult, ImageCache
+from fluster.cluster.worker.builder import ImageCache
 from fluster.cluster.worker.bundle_cache import BundleCache
-from fluster.cluster.worker.docker import ContainerConfig, ContainerStats, ContainerStatus, DockerRuntime
+from fluster.cluster.worker.docker import DockerRuntime
 from fluster.cluster.worker.worker import Worker, WorkerConfig
-from fluster.cluster.worker.worker_types import LogLine
 from fluster.rpc import cluster_pb2
 from fluster.rpc.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
 
@@ -68,158 +70,37 @@ def find_free_port() -> int:
         return s.getsockname()[1]
 
 
-# =============================================================================
-# Mock Infrastructure (from test_e2e.py for in-process execution)
-# =============================================================================
+def cleanup_docker_containers() -> None:
+    """Clean up any orphaned fluster Docker containers from previous runs."""
+    # Find all containers with fluster-related images
+    result = subprocess.run(
+        ["docker", "ps", "-aq", "--filter", "ancestor=fluster-job"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        container_ids = result.stdout.strip().split("\n")
+        for cid in container_ids:
+            if cid:
+                subprocess.run(["docker", "rm", "-f", cid], capture_output=True, check=False)
 
-
-@dataclass
-class MockContainer:
-    """Simulates a container executing a job function in-process."""
-
-    config: ContainerConfig
-    _thread: threading.Thread | None = field(default=None, repr=False)
-    _running: bool = False
-    _exit_code: int | None = None
-    _error: str | None = None
-    _logs: list[LogLine] = field(default_factory=list)
-    _killed: threading.Event = field(default_factory=threading.Event)
-
-    def start(self):
-        """Execute the job function in a background thread."""
-        self._running = True
-        self._thread = threading.Thread(target=self._execute, daemon=True)
-        self._thread.start()
-
-    def _execute(self):
-        original_env = {}
-        try:
-            # Set environment variables from container config
-            for key, value in self.config.env.items():
-                original_env[key] = os.environ.get(key)
-                os.environ[key] = value
-
-            # Extract encoded data from command (command is ['python', '-c', script])
-            script = self.config.command[2]
-            fn, args, kwargs = self._extract_entrypoint(script)
-
-            # Check if killed before executing
-            if self._killed.is_set():
-                self._exit_code = 137
-                return
-
-            # Execute the function
-            fn(*args, **kwargs)
-            self._exit_code = 0
-
-        except Exception as e:
-            self._error = str(e)
-            self._exit_code = 1
-        finally:
-            self._running = False
-            # Restore original environment
-            for key, original_value in original_env.items():
-                if original_value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = original_value
-
-    def _extract_entrypoint(self, script: str):
-        """Extract pickled (fn, args, kwargs) from the thunk script."""
-        match = re.search(r"base64\.b64decode\('([^']+)'\)\)", script)
-        if match:
-            encoded = match.group(1)
-            return cloudpickle.loads(base64.b64decode(encoded))
-        raise ValueError("Could not extract entrypoint from command")
-
-    def kill(self):
-        self._killed.set()
-        # Give thread a moment to notice
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=0.5)
-        if self._running:
-            self._running = False
-            self._exit_code = 137
-
-
-class InProcessContainerRuntime:
-    """Container runtime that executes jobs in-process without Docker.
-
-    Implements the ContainerRuntime protocol for testing.
-    """
-
-    def __init__(self):
-        self._containers: dict[str, MockContainer] = {}
-
-    def create_container(self, config: ContainerConfig) -> str:
-        container_id = f"mock-{uuid.uuid4().hex[:8]}"
-        self._containers[container_id] = MockContainer(config=config)
-        return container_id
-
-    def start_container(self, container_id: str) -> None:
-        self._containers[container_id].start()
-
-    def inspect(self, container_id: str) -> ContainerStatus:
-        c = self._containers.get(container_id)
-        if not c:
-            return ContainerStatus(running=False, exit_code=1, error="container not found")
-        return ContainerStatus(
-            running=c._running,
-            exit_code=c._exit_code,
-            error=c._error,
-        )
-
-    def kill(self, container_id: str, force: bool = False) -> None:
-        del force  # unused
-        if container_id in self._containers:
-            self._containers[container_id].kill()
-
-    def remove(self, container_id: str) -> None:
-        self._containers.pop(container_id, None)
-
-    def get_logs(self, container_id: str) -> list[LogLine]:
-        c = self._containers.get(container_id)
-        return c._logs if c else []
-
-    def get_stats(self, container_id: str) -> ContainerStats:
-        del container_id  # unused
-        return ContainerStats(memory_mb=100, cpu_percent=10, process_count=1, available=True)
-
-
-class MockBundleProvider:
-    """Returns a fake bundle path without downloading."""
-
-    def __init__(self, bundle_path: Path):
-        self._bundle_path = bundle_path
-
-    def get_bundle(self, gcs_path: str, expected_hash: str | None = None) -> Path:
-        del gcs_path, expected_hash  # unused
-        return self._bundle_path
-
-
-class MockImageProvider:
-    """Skips image building, returns a fake result."""
-
-    def build(
-        self,
-        bundle_path: Path,
-        base_image: str,
-        extras: list[str],
-        job_id: str,
-        deps_hash: str,
-        job_logs=None,
-    ) -> BuildResult:
-        del bundle_path, base_image, extras, job_id, job_logs  # unused
-        return BuildResult(
-            image_tag="mock:latest",
-            deps_hash=deps_hash,
-            build_time_ms=0,
-            from_cache=True,
-        )
+    # Also clean up any containers with fluster in the name
+    result = subprocess.run(
+        ["docker", "ps", "-aq", "--filter", "name=fluster"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        container_ids = result.stdout.strip().split("\n")
+        for cid in container_ids:
+            if cid:
+                subprocess.run(["docker", "rm", "-f", cid], capture_output=True, check=False)
 
 
 # =============================================================================
-# Log Poller (from cluster_example.py)
+# Log Poller
 # =============================================================================
 
 
@@ -347,6 +228,10 @@ class DemoCluster:
 
     def __enter__(self):
         """Start controller and worker."""
+        # Clean up any orphaned containers from previous runs
+        if self._use_docker:
+            cleanup_docker_containers()
+
         self._temp_dir = tempfile.TemporaryDirectory(prefix="demo_cluster_")
         temp_path = Path(self._temp_dir.name)
         bundle_dir = temp_path / "bundles"
@@ -382,10 +267,12 @@ class DemoCluster:
             bundle_provider = BundleCache(cache_path, max_bundles=10)
             image_provider = ImageCache(cache_path, registry="", max_images=10)
             container_runtime = DockerRuntime()
+            environment_provider = None  # Use default (probe real system)
         else:
-            bundle_provider = MockBundleProvider(fake_bundle)
-            image_provider = MockImageProvider()
-            container_runtime = InProcessContainerRuntime()
+            bundle_provider = _LocalBundleProvider(fake_bundle)
+            image_provider = _LocalImageProvider()
+            container_runtime = _LocalContainerRuntime()
+            environment_provider = LocalEnvironmentProvider(cpu=1000, memory_gb=1000)
 
         # Start Workers
         for i in range(self._num_workers):
@@ -406,6 +293,7 @@ class DemoCluster:
                 bundle_provider=bundle_provider,
                 image_provider=image_provider,
                 container_runtime=container_runtime,
+                environment_provider=environment_provider,
             )
             worker.start()
             self._workers.append(worker)
@@ -682,7 +570,46 @@ class DemoCluster:
             return True
         except CellExecutionError as e:
             print(f"Notebook execution failed: {e}")
+            self._dump_docker_logs()
             return False
+
+    def _dump_docker_logs(self):
+        """Dump Docker container logs to help debug failures."""
+        if not self._use_docker:
+            return
+
+        print("\n" + "=" * 60)
+        print("DOCKER CONTAINER LOGS (for debugging)")
+        print("=" * 60)
+
+        # List recent containers
+        result = subprocess.run(
+            ["docker", "ps", "-a", "--format", "{{.ID}}\t{{.Image}}\t{{.Status}}", "-n", "10"],
+            capture_output=True,
+            text=True,
+        )
+        print("\nRecent containers:")
+        print(result.stdout)
+
+        # Get logs from containers that look like fluster jobs
+        result = subprocess.run(
+            ["docker", "ps", "-a", "--format", "{{.ID}}", "-n", "10"],
+            capture_output=True,
+            text=True,
+        )
+        for cid in result.stdout.strip().split("\n")[:5]:
+            if cid:
+                logs = subprocess.run(
+                    ["docker", "logs", "--tail", "100", cid],
+                    capture_output=True,
+                    text=True,
+                )
+                output = logs.stdout or logs.stderr
+                if output and output.strip():
+                    print(f"\n--- Container {cid} ---")
+                    print(output)
+
+        print("=" * 60)
 
 
 @click.command()

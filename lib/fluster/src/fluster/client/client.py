@@ -434,7 +434,10 @@ class FlusterClient:
 
     @classmethod
     def local(cls, config: LocalClientConfig | None = None) -> "FlusterClient":
-        """Create a FlusterClient for local thread-based execution.
+        """Create a FlusterClient for local execution using real Controller/Worker.
+
+        Spins up a real Controller and Worker with in-process execution (no Docker).
+        This ensures local execution follows the same code path as production clusters.
 
         Args:
             config: Configuration for local execution
