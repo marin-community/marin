@@ -39,11 +39,13 @@ from fluster.client.client import (
     FlusterClient,
     FlusterContext,
     LocalClientConfig,
+    LogEntry,
     create_context_from_env,
     fluster_ctx,
     fluster_ctx_scope,
     get_fluster_ctx,
 )
+from fluster.client.log_poller import LogPoller
 from fluster.client.resolver import ClusterResolver
 from fluster.client.worker_pool import WorkerPool, WorkerPoolConfig
 
@@ -55,6 +57,8 @@ __all__ = [
     "FlusterContext",
     "GcsResolver",
     "LocalClientConfig",
+    "LogEntry",
+    "LogPoller",
     "ResolveResult",
     "ResolvedEndpoint",
     "Resolver",

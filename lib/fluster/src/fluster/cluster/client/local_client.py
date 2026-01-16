@@ -144,11 +144,13 @@ class _LocalContainer:
         for line in capture:
             line = line.rstrip("\n")
             if line:
-                self._logs.append(LogLine(
-                    timestamp=datetime.now(timezone.utc),
-                    source=source,
-                    data=line,
-                ))
+                self._logs.append(
+                    LogLine(
+                        timestamp=datetime.now(timezone.utc),
+                        source=source,
+                        data=line,
+                    )
+                )
 
     def _extract_entrypoint(self, script: str):
         """Extract pickled (fn, args, kwargs) from the thunk script."""

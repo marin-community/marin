@@ -36,14 +36,13 @@ import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import uuid
 from pathlib import Path
 
 import click
 
-from fluster.client import FlusterClient
+from fluster.client import FlusterClient, LogPoller
 from fluster.cluster.client.local_client import (
     LocalEnvironmentProvider,
     _LocalBundleProvider,
@@ -57,7 +56,7 @@ from fluster.cluster.worker.bundle_cache import BundleCache
 from fluster.cluster.worker.docker import DockerRuntime
 from fluster.cluster.worker.worker import Worker, WorkerConfig
 from fluster.rpc import cluster_pb2
-from fluster.rpc.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
+from fluster.rpc.cluster_connect import ControllerServiceClientSync
 
 # The fluster project root (lib/fluster/) - used as workspace for the example
 FLUSTER_ROOT = Path(__file__).parent.parent
@@ -97,86 +96,6 @@ def cleanup_docker_containers() -> None:
         for cid in container_ids:
             if cid:
                 subprocess.run(["docker", "rm", "-f", cid], capture_output=True, check=False)
-
-
-# =============================================================================
-# Log Poller
-# =============================================================================
-
-
-class LogPoller:
-    """Background thread that polls for job logs and prints them."""
-
-    def __init__(
-        self,
-        job_id: str,
-        worker_address: str,
-        poll_interval: float = 1.0,
-        prefix: str = "",
-    ):
-        """Initialize log poller.
-
-        Args:
-            job_id: Job ID to poll logs for
-            worker_address: Worker RPC address (e.g., "http://127.0.0.1:8080")
-            poll_interval: How often to poll for new logs (in seconds)
-            prefix: Optional prefix to add to log lines (e.g., "[calculator] ")
-        """
-        self._job_id = job_id
-        self._worker_address = worker_address
-        self._poll_interval = poll_interval
-        self._prefix = prefix
-        self._last_timestamp_ms = 0
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self):
-        """Start polling for logs in background thread."""
-        if self._thread is not None:
-            return  # Already started
-
-        def _poll():
-            client = WorkerServiceClientSync(address=self._worker_address, timeout_ms=5000)
-
-            while not self._stop_event.is_set():
-                try:
-                    # Build filter with timestamp for incremental fetching
-                    filter_proto = cluster_pb2.Worker.FetchLogsFilter()
-                    if self._last_timestamp_ms > 0:
-                        filter_proto.start_ms = self._last_timestamp_ms
-
-                    request = cluster_pb2.Worker.FetchLogsRequest(
-                        job_id=self._job_id,
-                        filter=filter_proto,
-                    )
-                    response = client.fetch_logs(request)
-
-                    for entry in response.logs:
-                        # Update last seen timestamp
-                        if entry.timestamp_ms > self._last_timestamp_ms:
-                            self._last_timestamp_ms = entry.timestamp_ms
-
-                        # Print log with prefix
-                        print(f"{self._prefix}{entry.data}", flush=True)
-
-                except (ConnectionError, OSError):
-                    # Expected when worker is starting or job doesn't exist yet
-                    pass
-
-                # Wait for next poll interval
-                self._stop_event.wait(self._poll_interval)
-
-        self._thread = threading.Thread(target=_poll, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        """Stop polling thread."""
-        if self._thread is None:
-            return
-
-        self._stop_event.set()
-        self._thread.join(timeout=2.0)
-        self._thread = None
 
 
 # =============================================================================
@@ -408,7 +327,10 @@ class DemoCluster:
         if job_id in self._log_pollers:
             return  # Already polling
 
-        poller = LogPoller(job_id, self.worker_url, poll_interval, prefix)
+        def handler(entry):
+            print(f"{prefix}{entry.data}", flush=True)
+
+        poller = LogPoller(self.get_client(), job_id, handler, poll_interval)
         poller.start()
         self._log_pollers[job_id] = poller
 

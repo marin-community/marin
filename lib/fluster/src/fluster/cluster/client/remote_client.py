@@ -24,7 +24,7 @@ import cloudpickle
 
 from fluster.cluster.types import Entrypoint, is_job_finished
 from fluster.rpc import cluster_pb2
-from fluster.rpc.cluster_connect import ControllerServiceClientSync
+from fluster.rpc.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
 from fluster.time_utils import ExponentialBackoff
 
 
@@ -226,6 +226,16 @@ class RemoteClusterClient:
         response = self._client.list_endpoints(request)
         return list(response.endpoints)
 
+    def list_jobs(self) -> list[cluster_pb2.JobStatus]:
+        """List all jobs via RPC.
+
+        Returns:
+            List of JobStatus protos
+        """
+        request = cluster_pb2.Controller.ListJobsRequest()
+        response = self._client.list_jobs(request)
+        return list(response.jobs)
+
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the client.
 
@@ -235,3 +245,45 @@ class RemoteClusterClient:
             wait: Ignored
         """
         del wait
+
+    def fetch_logs(
+        self,
+        job_id: str,
+        *,
+        start_ms: int = 0,
+        max_lines: int = 0,
+    ) -> list[cluster_pb2.Worker.LogEntry]:
+        """Fetch logs for a job, routing to the correct worker.
+
+        Args:
+            job_id: Job ID to fetch logs for
+            start_ms: Only return logs after this timestamp (exclusive, for incremental polling)
+            max_lines: Maximum number of lines to return (0 = unlimited)
+
+        Returns:
+            List of LogEntry protos
+
+        Raises:
+            ValueError: If job has no worker assigned (not yet scheduled)
+        """
+        status = self.get_job_status(job_id)
+        if not status.worker_address:
+            raise ValueError(f"Job {job_id} has no worker assigned (state: {cluster_pb2.JobState.Name(status.state)})")
+
+        worker_client = WorkerServiceClientSync(
+            address=f"http://{status.worker_address}",
+            timeout_ms=self._timeout_ms,
+        )
+        try:
+            filter_proto = cluster_pb2.Worker.FetchLogsFilter(
+                start_ms=start_ms,
+                max_lines=max_lines,
+            )
+            request = cluster_pb2.Worker.FetchLogsRequest(
+                job_id=job_id,
+                filter=filter_proto,
+            )
+            response = worker_client.fetch_logs(request)
+            return list(response.logs)
+        finally:
+            worker_client.close()

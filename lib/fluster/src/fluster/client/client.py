@@ -56,6 +56,34 @@ from fluster.cluster.types import Entrypoint, JobId, Namespace
 from fluster.rpc import cluster_pb2
 
 # =============================================================================
+# Log Entry
+# =============================================================================
+
+
+@dataclass
+class LogEntry:
+    """A single log line from a job.
+
+    Attributes:
+        timestamp_ms: Unix timestamp in milliseconds
+        source: Log source - "stdout", "stderr", or "build"
+        data: Log line content
+    """
+
+    timestamp_ms: int
+    source: str
+    data: str
+
+    @classmethod
+    def from_proto(cls, proto: cluster_pb2.Worker.LogEntry) -> "LogEntry":
+        return cls(
+            timestamp_ms=proto.timestamp_ms,
+            source=proto.source,
+            data=proto.data,
+        )
+
+
+# =============================================================================
 # Context Management
 # =============================================================================
 
@@ -446,11 +474,10 @@ class FlusterClient:
             FlusterClient wrapping LocalClusterClient
         """
         cfg = config or LocalClientConfig()
-        cluster = LocalClusterClient(
+        cluster = LocalClusterClient.create(
             max_workers=cfg.max_workers,
             port_range=cfg.port_range,
         )
-        cluster.start()
         return cls(cluster)
 
     @classmethod
@@ -601,6 +628,84 @@ class FlusterClient:
             job_id: Job ID to terminate
         """
         self._cluster.terminate_job(job_id)
+
+    def list_jobs(
+        self,
+        *,
+        states: list[cluster_pb2.JobState] | None = None,
+        prefix: str | None = None,
+    ) -> list[cluster_pb2.JobStatus]:
+        """List jobs with optional filtering.
+
+        Args:
+            states: If provided, only return jobs in these states
+            prefix: If provided, only return jobs whose job_id starts with this prefix
+
+        Returns:
+            List of JobStatus matching the filters
+        """
+        all_jobs = self._cluster.list_jobs()
+        result = []
+        for job in all_jobs:
+            if states is not None and job.state not in states:
+                continue
+            if prefix is not None and not job.job_id.startswith(prefix):
+                continue
+            result.append(job)
+        return result
+
+    def terminate_prefix(
+        self,
+        prefix: str,
+        *,
+        exclude_finished: bool = True,
+    ) -> list[JobId]:
+        """Terminate all jobs matching a prefix.
+
+        Args:
+            prefix: Job ID prefix to match (e.g., "my-experiment/")
+            exclude_finished: If True, skip jobs already in terminal states
+
+        Returns:
+            List of job IDs that were terminated
+        """
+        terminal_states = {
+            cluster_pb2.JOB_STATE_SUCCEEDED,
+            cluster_pb2.JOB_STATE_FAILED,
+            cluster_pb2.JOB_STATE_KILLED,
+            cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+        }
+
+        jobs = self.list_jobs(prefix=prefix)
+        terminated = []
+        for job in jobs:
+            if exclude_finished and job.state in terminal_states:
+                continue
+            self.terminate(JobId(job.job_id))
+            terminated.append(JobId(job.job_id))
+        return terminated
+
+    def fetch_logs(
+        self,
+        job_id: JobId,
+        *,
+        start_ms: int = 0,
+        max_lines: int = 0,
+    ) -> list[LogEntry]:
+        """Fetch logs for a job.
+
+        Routes the request to the correct worker based on job assignment.
+
+        Args:
+            job_id: Job ID to fetch logs for
+            start_ms: Only return logs after this timestamp (exclusive, for incremental polling)
+            max_lines: Maximum number of lines to return (0 = unlimited)
+
+        Returns:
+            List of LogEntry objects
+        """
+        log_protos = self._cluster.fetch_logs(job_id, start_ms=start_ms, max_lines=max_lines)
+        return [LogEntry.from_proto(p) for p in log_protos]
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the client.

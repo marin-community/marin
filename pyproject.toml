@@ -82,7 +82,7 @@ exclude = ["marin/", "scripts/"]
 
 # Pyrefly type checker configuration
 [tool.pyrefly]
-project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"]
+project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py", "lib/fluster/**/*.py", "lib/fray/**/*.py", "lib/haliax/**/*.py", "lib/zephyr/**/*.py"]
 
 # Explicitly tell Pyrefly where our editable packages live so it resolves imports
 # against the library sources instead of the top-level `src` directory, which only
