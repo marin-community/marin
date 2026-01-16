@@ -111,6 +111,9 @@ RUN --mount=type=cache,id=fluster-uv-global,sharing=locked,target=/opt/uv-cache 
 
 # Use the venv python
 ENV PATH="/app/.venv/bin:$PATH"
+
+# Always install cloudpickle - required by fluster to unpickle job entrypoints
+RUN uv pip install cloudpickle
 """
 
 
