@@ -412,16 +412,19 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
     )
 
     def pre_jit(x):
+        # IMPORTANT: keep this host-only.
+        #
+        # In multi-process TPU meshes, constructing JAX arrays here (e.g. via `jnp.zeros`) can produce
+        # non-fully-addressable arrays, which then crash inside `make_array_from_callback` when it
+        # attempts to `device_put` across the global device set.
         if jax.process_index() == source:
-            inp = np.array(x)
+            inp = np.asarray(x)
         else:
-            inp = jnp.zeros(x.shape, dtype=x.dtype)
+            inp = np.zeros(x.shape, dtype=x.dtype)
 
         shape = (len(jax.devices()),) + inp.shape
-        inp = jnp.expand_dims(inp, axis=0)
-        out = jax.make_array_from_callback(shape, sharding, lambda _: inp)
-
-        return out
+        inp = np.expand_dims(inp, axis=0)
+        return jax.make_array_from_callback(shape, sharding, lambda _: inp)
 
     def in_jit(x, pspec):
         if isinstance(x, hax.NamedArray):
