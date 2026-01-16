@@ -26,7 +26,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from fluster.cluster.worker.builder import BuildResult, ImageCache, VenvCache
-from fluster.cluster.worker.bundle import BundleCache
+from fluster.cluster.worker.bundle_cache import BundleCache
 from fluster.cluster.worker.dashboard import WorkerDashboard
 from fluster.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime
 from fluster.cluster.worker.service import WorkerServiceImpl

@@ -14,58 +14,52 @@
 
 """Fluster client package.
 
-This package provides the core client interfaces for Fluster:
-- ClusterClient: Protocol for cluster operations
-- EndpointRegistry: Protocol for actor endpoint registration
+This package provides the "smart" client layer for Fluster:
+- FlusterClient: High-level client with context magic (local or remote)
 - FlusterContext: Execution context available in jobs
-- LocalClient: Thread-based local execution
-- RpcClusterClient: RPC-based cluster execution
+- EndpointRegistry: Protocol for actor endpoint registration
+- WorkerPool: Task dispatch to worker pools
+
+For resolver implementations:
+- FixedResolver, GcsResolver: see fluster.actor.resolver
+- ClusterResolver: see fluster.client.resolver
+
+For low-level cluster operations, see fluster.cluster.client.
 """
 
-# Import context first - it has no dependencies on actor/resolver
-from fluster.client.context import (
+from fluster.actor.resolver import (
+    FixedResolver,
+    GcsResolver,
+    ResolvedEndpoint,
+    ResolveResult,
+    Resolver,
+)
+from fluster.client.client import (
+    EndpointRegistry,
+    FlusterClient,
     FlusterContext,
+    LocalClientConfig,
     create_context_from_env,
     fluster_ctx,
     fluster_ctx_scope,
     get_fluster_ctx,
 )
-from fluster.client.protocols import (
-    ClusterClient,
-    EndpointRegistry,
-    ResolvedEndpoint,
-    ResolveResult,
-    Resolver,
-)
-
-
-def __getattr__(name: str):
-    """Lazy import for classes that would cause circular imports."""
-    if name == "LocalClient":
-        from fluster.client.local_client import LocalClient
-
-        return LocalClient
-    if name == "LocalClientConfig":
-        from fluster.client.local_client import LocalClientConfig
-
-        return LocalClientConfig
-    if name == "RpcClusterClient":
-        from fluster.client.rpc_client import RpcClusterClient
-
-        return RpcClusterClient
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
+from fluster.client.resolver import ClusterResolver
+from fluster.client.worker_pool import WorkerPool, WorkerPoolConfig
 
 __all__ = [
-    "ClusterClient",
+    "ClusterResolver",
     "EndpointRegistry",
+    "FixedResolver",
+    "FlusterClient",
     "FlusterContext",
-    "LocalClient",
+    "GcsResolver",
     "LocalClientConfig",
     "ResolveResult",
     "ResolvedEndpoint",
     "Resolver",
-    "RpcClusterClient",
+    "WorkerPool",
+    "WorkerPoolConfig",
     "create_context_from_env",
     "fluster_ctx",
     "fluster_ctx_scope",

@@ -40,7 +40,7 @@ from typing import Any
 
 import cloudpickle
 
-from fluster.actor.types import Resolver, ResolveResult
+from fluster.actor.resolver import Resolver, ResolveResult
 from fluster.rpc import actor_pb2
 from fluster.rpc.actor_connect import ActorServiceClientSync
 

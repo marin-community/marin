@@ -83,7 +83,8 @@ resolver = ClusterResolver(cluster.controller_url, namespace=Namespace("default"
 `ClusterResolver` now requires `FlusterContext` (derives namespace from context). For external clients, query the controller directly and use `FixedResolver`:
 
 ```python
-from fluster.actor import ActorClient, FixedResolver
+from fluster.actor import ActorClient
+from fluster.client.resolver import FixedResolver
 
 # Query controller for all endpoints
 list_request = cluster_pb2.Controller.ListEndpointsRequest(prefix="")

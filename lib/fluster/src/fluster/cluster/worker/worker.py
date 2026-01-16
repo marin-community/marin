@@ -48,7 +48,7 @@ from fluster.time_utils import wait_until
 from fluster.rpc.cluster_connect import ControllerServiceClientSync
 from fluster.rpc.errors import format_exception_with_traceback
 from fluster.cluster.worker.builder import ImageCache, ImageProvider, VenvCache
-from fluster.cluster.worker.bundle import BundleCache, BundleProvider
+from fluster.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from fluster.cluster.worker.dashboard import WorkerDashboard
 from fluster.cluster.worker.docker import ContainerConfig, ContainerRuntime, DockerRuntime
 from fluster.cluster.worker.service import WorkerServiceImpl

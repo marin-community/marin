@@ -33,11 +33,11 @@ from pathlib import Path
 import cloudpickle
 import pytest
 
-from fluster.client import RpcClusterClient
+from fluster.client import FlusterClient
 from fluster.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
 from fluster.cluster.types import Entrypoint
 from fluster.cluster.worker.builder import BuildResult, ImageCache
-from fluster.cluster.worker.bundle import BundleCache
+from fluster.cluster.worker.bundle_cache import BundleCache
 from fluster.cluster.worker.docker import ContainerConfig, ContainerStats, ContainerStatus, DockerRuntime
 from fluster.cluster.worker.worker import Worker, WorkerConfig
 from fluster.cluster.worker.worker_types import LogLine
@@ -223,7 +223,7 @@ class E2ECluster:
         self._worker_ids: list[str] = []
         self._worker_ports: list[int] = []
         self._controller_client: ControllerServiceClientSync | None = None
-        self._rpc_client: RpcClusterClient | None = None
+        self._rpc_client: FlusterClient | None = None
 
     def __enter__(self):
         self._temp_dir = tempfile.TemporaryDirectory(prefix="test_cluster_")
@@ -362,9 +362,9 @@ class E2ECluster:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
         self._controller_client.terminate_job(request)
 
-    def get_client(self) -> RpcClusterClient:
+    def get_client(self) -> FlusterClient:
         if self._rpc_client is None:
-            self._rpc_client = RpcClusterClient(
+            self._rpc_client = FlusterClient.remote(
                 f"http://127.0.0.1:{self._controller_port}",
                 workspace=Path(__file__).parent.parent.parent,  # lib/fluster
             )

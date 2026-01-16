@@ -14,7 +14,7 @@
 
 """Tests for resolver functionality."""
 
-from fluster.actor import FixedResolver
+from fluster.actor.resolver import FixedResolver
 from fluster.actor.client import ActorClient
 from fluster.actor.server import ActorServer
 

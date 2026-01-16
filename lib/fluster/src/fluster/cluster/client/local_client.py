@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Local in-process cluster operations implementation.
+"""Local in-process cluster client implementation.
 
-This module provides LocalClusterOperations, which implements the ClusterOperations
+This module provides LocalClusterClient, which implements the ClusterClient
 protocol using in-process threads for job execution.
 """
 
@@ -55,8 +55,8 @@ class _LocalEndpoint:
     metadata: dict[str, str]
 
 
-class LocalClusterOperations:
-    """Cluster operations for local/thread-based execution.
+class LocalClusterClient:
+    """Cluster client for local/thread-based execution.
 
     This is a "dumb" implementation - all parameters are explicit, no context magic.
     Jobs run in threads with JobInfo contextvar injection.
@@ -112,6 +112,7 @@ class LocalClusterOperations:
         resources: cluster_pb2.ResourceSpec,
         environment: cluster_pb2.EnvironmentConfig | None = None,
         ports: list[str] | None = None,
+        scheduling_timeout_seconds: int = 0,
     ) -> None:
         """Submit a job for local execution in a thread.
 
@@ -121,9 +122,11 @@ class LocalClusterOperations:
             resources: Resource requirements (ignored in local mode)
             environment: Environment configuration (ignored in local mode)
             ports: Port names to allocate (e.g., ["actor"])
+            scheduling_timeout_seconds: Ignored in local mode (jobs start immediately)
         """
+        del scheduling_timeout_seconds  # Unused in local execution
         if self._executor is None:
-            raise RuntimeError("LocalClusterOperations not started. Call start() first.")
+            raise RuntimeError("LocalClusterClient not started. Call start() first.")
 
         # Allocate requested ports
         allocated_ports = {port_name: self._allocate_port() for port_name in ports or []}

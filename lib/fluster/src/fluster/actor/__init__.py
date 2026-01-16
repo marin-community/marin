@@ -19,28 +19,26 @@ This module provides the core actor infrastructure:
 - ActorClient: Call remote actors via a resolver
 - ActorPool: Load-balanced and broadcast calls to multiple actors
 - Resolver: Protocol for actor name resolution
+- FixedResolver: Static endpoint configuration (for testing)
+- GcsResolver: Discovery via GCP VM instance metadata
 
-Resolver implementations (ClusterResolver, FixedResolver, etc.) have been moved to
-fluster.client.protocols temporarily (will be reorganized in Step 3).
-
-For backwards compatibility, they are re-exported here.
+For ClusterResolver (namespace-aware controller-based resolution),
+see fluster.client.resolver.
 """
 
 from fluster.actor.client import ActorClient, RetryConfig
 from fluster.actor.pool import ActorPool, BroadcastFuture, CallResult
-from fluster.actor.server import ActorId, ActorServer
-from fluster.actor.types import ResolveResult, ResolvedEndpoint, Resolver
-
-# Temporary backwards compatibility: re-export resolver implementations from client.protocols
-# TODO(Step 3): Remove these once all code imports from client.protocols
-from fluster.client.protocols import (
-    ClusterResolver,
+from fluster.actor.resolver import (
     FixedResolver,
     GcsApi,
     GcsResolver,
     MockGcsApi,
     RealGcsApi,
+    ResolvedEndpoint,
+    ResolveResult,
+    Resolver,
 )
+from fluster.actor.server import ActorId, ActorServer
 
 __all__ = [
     "ActorClient",
@@ -49,7 +47,6 @@ __all__ = [
     "ActorServer",
     "BroadcastFuture",
     "CallResult",
-    "ClusterResolver",
     "FixedResolver",
     "GcsApi",
     "GcsResolver",

@@ -18,10 +18,13 @@ This module provides BundleCreator for packaging workspace directories
 into zip files that can be sent to workers.
 """
 
+import logging
 import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _get_git_non_ignored_files(workspace: Path) -> set[Path] | None:
@@ -41,7 +44,8 @@ def _get_git_non_ignored_files(workspace: Path) -> set[Path] | None:
             check=True,
         )
         return {workspace / line for line in result.stdout.splitlines() if line}
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        logger.debug("Git not available, using pattern-based exclusion: %s", e)
         return None
 
 

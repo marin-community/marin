@@ -22,7 +22,7 @@ from typing import Any, Generic, TypeVar
 
 import cloudpickle
 
-from fluster.actor.types import ResolveResult, ResolvedEndpoint, Resolver
+from fluster.actor.resolver import ResolvedEndpoint, ResolveResult, Resolver
 from fluster.rpc import actor_pb2
 from fluster.rpc.actor_connect import ActorServiceClientSync
 

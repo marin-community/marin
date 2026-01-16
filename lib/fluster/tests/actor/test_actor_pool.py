@@ -14,7 +14,7 @@
 
 """Tests for ActorPool round-robin and broadcast functionality."""
 
-from fluster.actor import FixedResolver
+from fluster.actor.resolver import FixedResolver
 from fluster.actor.pool import ActorPool
 from fluster.actor.server import ActorServer
 

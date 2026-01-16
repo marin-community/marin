@@ -18,7 +18,7 @@ import hashlib
 import zipfile
 
 import pytest
-from fluster.cluster.worker.bundle import BundleCache
+from fluster.cluster.worker.bundle_cache import BundleCache
 
 
 @pytest.fixture

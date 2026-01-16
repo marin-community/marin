@@ -14,25 +14,25 @@
 
 """Cluster client layer - "dumb" cluster operations with explicit parameters.
 
-This package provides low-level cluster operations without context magic:
-- ClusterOperations protocol: defines the interface for cluster operations
-- RpcClusterOperations: RPC-based implementation (talks to controller)
-- LocalClusterOperations: local thread-based implementation
+This package provides low-level cluster clients without context magic:
+- RemoteClusterClient: RPC-based implementation (talks to controller)
+- LocalClusterClient: local thread-based implementation
 - JobInfo: minimal job metadata (contextvar + environment variables)
+- BundleCreator: workspace packaging for job submission
 
 For high-level operations with context magic, use fluster.client.
 """
 
+from fluster.cluster.client.bundle import BundleCreator
 from fluster.cluster.client.job_info import JobInfo, get_job_info, set_job_info
-from fluster.cluster.client.local import LocalClusterOperations
-from fluster.cluster.client.protocols import ClusterOperations
-from fluster.cluster.client.rpc import RpcClusterOperations
+from fluster.cluster.client.local_client import LocalClusterClient
+from fluster.cluster.client.remote_client import RemoteClusterClient
 
 __all__ = [
-    "ClusterOperations",
+    "BundleCreator",
     "JobInfo",
-    "LocalClusterOperations",
-    "RpcClusterOperations",
+    "LocalClusterClient",
+    "RemoteClusterClient",
     "get_job_info",
     "set_job_info",
 ]

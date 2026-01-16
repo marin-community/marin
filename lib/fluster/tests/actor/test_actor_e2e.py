@@ -16,7 +16,8 @@
 
 import pytest
 
-from fluster.actor import ActorClient, ActorServer, FixedResolver
+from fluster.actor import ActorClient, ActorServer
+from fluster.actor.resolver import FixedResolver
 from fluster.client import FlusterContext, fluster_ctx, fluster_ctx_scope
 
 

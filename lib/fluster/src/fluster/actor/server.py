@@ -14,18 +14,12 @@
 
 """Actor server implementation for hosting actor instances.
 
-ActorServer hosts actor instances and handles RPC calls. It is a "dumb" server
-that just serves actors - no automatic registration or context dependencies.
+ActorServer hosts actor instances and handles RPC calls.
 
 Example:
-    # Create and start server
     server = ActorServer()
     server.register("my-actor", MyActorClass())
     port = server.serve_background()
-
-    # For registration with cluster, use fluster.client helpers:
-    # from fluster.client.registration import register_actor_server
-    # register_actor_server(server, "my-actor", port)
 """
 
 import inspect
@@ -65,11 +59,7 @@ class RegisteredActor:
 
 
 class ActorServer:
-    """Server for hosting actor instances and handling RPC calls.
-
-    A "dumb" server that just serves actors - no automatic registration
-    or context magic. Use fluster.client helpers for registration.
-    """
+    """Server for hosting actor instances and handling RPC calls."""
 
     def __init__(self, host: str = "0.0.0.0", port: int | None = None):
         """Initialize the actor server.
@@ -256,10 +246,6 @@ class ActorServer:
         return self._actual_port
 
     def shutdown(self) -> None:
-        """Shutdown the actor server.
-
-        Note: If you registered this server with a cluster endpoint registry,
-        you should unregister it separately using the registry's unregister() method.
-        """
+        """Shutdown the actor server."""
         # Server shutdown happens automatically when thread exits
         pass

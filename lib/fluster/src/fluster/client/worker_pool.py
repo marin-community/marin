@@ -21,10 +21,9 @@ jobs that can execute any callable.
 
 Example:
     from pathlib import Path
-    from fluster.worker_pool import WorkerPool, WorkerPoolConfig
-    from fluster.client import RpcClusterClient
+    from fluster.client import FlusterClient, WorkerPool, WorkerPoolConfig
 
-    client = RpcClusterClient("http://controller:8080", workspace=Path("./my-project"))
+    client = FlusterClient.remote("http://controller:8080", workspace=Path("./my-project"))
 
     config = WorkerPoolConfig(
         num_workers=3,
@@ -37,6 +36,7 @@ Example:
         results = [f.result() for f in futures]
 """
 
+import logging
 import threading
 import time
 import uuid
@@ -49,14 +49,15 @@ from typing import Any, Generic, TypeVar
 
 import cloudpickle
 
+from fluster.actor import ActorServer
+from fluster.actor.resolver import Resolver
+from fluster.client.client import FlusterClient, fluster_ctx
+from fluster.cluster.types import Entrypoint, JobId
+from fluster.rpc import actor_pb2, cluster_pb2
+from fluster.rpc.actor_connect import ActorServiceClientSync
 from fluster.time_utils import ExponentialBackoff, wait_until_with_exception
 
-from fluster.rpc import actor_pb2, cluster_pb2
-from fluster.actor import ActorServer
-from fluster.actor.types import Resolver
-from fluster.rpc.actor_connect import ActorServiceClientSync
-from fluster.client import ClusterClient, fluster_ctx
-from fluster.cluster.types import Entrypoint, JobId
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -187,6 +188,8 @@ def worker_job_entrypoint(pool_id: str, worker_index: int) -> None:
     actual_port = server.serve_background()
 
     # Register endpoint with registry
+    if ctx.registry is None:
+        raise RuntimeError("No registry available - are you running in a cluster context?")
     address = f"localhost:{actual_port}"
     ctx.registry.register(worker_name, address, {"job_id": ctx.job_id})
     print(f"ActorServer started and registered on port {actual_port}")
@@ -283,6 +286,8 @@ class WorkerDispatcher:
         self.state.current_task_id = task.task_id
 
         try:
+            if self.state.endpoint_url is None:
+                raise RuntimeError(f"Worker {self.state.worker_id} has no endpoint URL")
             result = _call_worker_endpoint(
                 endpoint_url=self.state.endpoint_url,
                 actor_name=self.state.worker_name,
@@ -432,7 +437,7 @@ class WorkerPool:
 
     def __init__(
         self,
-        client: ClusterClient,
+        client: FlusterClient,
         config: WorkerPoolConfig,
         timeout: float = 30.0,
         resolver: Resolver | None = None,
@@ -440,7 +445,7 @@ class WorkerPool:
         """Create a worker pool.
 
         Args:
-            client: ClusterClient for launching worker jobs
+            client: FlusterClient for launching worker jobs
             config: Pool configuration (workers, resources, etc.)
             timeout: RPC timeout in seconds for worker calls
             resolver: Optional resolver override (for testing)
@@ -702,5 +707,5 @@ class WorkerPool:
         for job_id in self._job_ids:
             try:
                 self._client.terminate(job_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to terminate worker job %s: %s", job_id, e)

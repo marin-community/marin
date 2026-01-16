@@ -41,15 +41,16 @@ src/fluster/
 │   ├── client.py            # Actor method invocation
 │   ├── pool.py              # Multi-endpoint management
 │   ├── resolver.py          # Endpoint discovery
-│   ├── server.py            # Actor hosting
-│   └── types.py             # Core types
+│   └── server.py            # Actor hosting
+├── client/                   # High-level client layer
+│   ├── client.py            # FlusterClient and FlusterContext
+│   ├── resolver.py          # ClusterResolver
+│   └── worker_pool.py       # Task dispatch
 ├── cluster/                  # Cluster orchestration
 │   ├── controller/          # Controller service
 │   ├── worker/              # Worker service
-│   ├── client.py            # Client interface
-│   └── types.py             # Shared types
+│   └── client/              # Low-level cluster clients
 ├── proto/                    # Protocol definitions
-├── worker_pool.py           # Task dispatch
 └── *_pb2.py, *_connect.py   # Generated RPC code
 ```
 
@@ -64,18 +65,18 @@ src/fluster/
 ### Submitting a Job
 
 ```python
-from fluster.cluster import RpcClusterClient, Entrypoint, create_environment
-from fluster.cluster_pb2 import ResourceSpec
+from fluster.client import FlusterClient
+from fluster.cluster.types import Entrypoint
+from fluster.rpc.cluster_pb2 import ResourceSpec
 
 def my_task():
     print("Hello from fluster!")
 
-client = RpcClusterClient("http://controller:8080")
+client = FlusterClient.remote("http://controller:8080", workspace=Path("."))
 job_id = client.submit(
     name="my-job",
-    entrypoint=Entrypoint(callable=my_task),
+    entrypoint=Entrypoint.from_callable(my_task),
     resources=ResourceSpec(cpu=1, memory="2GB"),
-    environment=create_environment(),
 )
 client.wait(job_id)
 ```
@@ -83,13 +84,13 @@ client.wait(job_id)
 ### Running an Actor Server
 
 ```python
-from fluster.actor import ActorServer, ActorContext
+from fluster.actor import ActorServer
 
 class InferenceActor:
-    def predict(self, ctx: ActorContext, data: list) -> list:
+    def predict(self, data: list) -> list:
         return [x * 2 for x in data]
 
-server = ActorServer(controller_address="http://controller:8080")
+server = ActorServer(host="127.0.0.1")
 server.register("inference", InferenceActor())
 server.serve()
 ```
@@ -97,7 +98,8 @@ server.serve()
 ### Calling Actors
 
 ```python
-from fluster.actor import ActorPool, ClusterResolver
+from fluster.actor import ActorPool
+from fluster.client.resolver import ClusterResolver
 
 resolver = ClusterResolver("http://controller:8080")
 pool: ActorPool = resolver.lookup("inference")
@@ -109,10 +111,10 @@ result = pool.call().predict([1, 2, 3])
 ### Using WorkerPool for Task Dispatch
 
 ```python
-from fluster.worker_pool import WorkerPool, WorkerPoolConfig
-from fluster.cluster import RpcClusterClient
+from fluster.client import FlusterClient, WorkerPool, WorkerPoolConfig
+from fluster.rpc.cluster_pb2 import ResourceSpec
 
-client = RpcClusterClient("http://controller:8080")
+client = FlusterClient.remote("http://controller:8080", workspace=Path("."))
 config = WorkerPoolConfig(num_workers=10, resources=ResourceSpec(cpu=2))
 pool = WorkerPool(client, config)
 

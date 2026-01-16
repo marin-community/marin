@@ -12,7 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Endpoint registry for service discovery.
-
-TODO: Implement in Stage 5
-"""
+"""Tests for client layer."""

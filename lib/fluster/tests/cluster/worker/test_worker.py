@@ -29,7 +29,7 @@ from fluster.rpc import cluster_pb2
 from fluster.cluster.types import Entrypoint
 from fluster.cluster.worker.builder import BuildResult, VenvCache
 from fluster.cluster.worker.worker_types import Job as WorkerJob
-from fluster.cluster.worker.bundle import BundleCache
+from fluster.cluster.worker.bundle_cache import BundleCache
 from fluster.cluster.worker.docker import ContainerConfig, ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
 from fluster.cluster.worker.service import WorkerServiceImpl
 from fluster.cluster.worker.worker import PortAllocator, Worker, WorkerConfig

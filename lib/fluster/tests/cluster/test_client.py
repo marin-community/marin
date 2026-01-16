@@ -16,7 +16,7 @@
 
 import pytest
 
-from fluster.client import LocalClient, LocalClientConfig
+from fluster.client import FlusterClient, LocalClientConfig
 from fluster.cluster.types import Entrypoint
 from fluster.rpc import cluster_pb2
 
@@ -34,12 +34,10 @@ def resources():
 
 @pytest.fixture
 def local_client():
-    """Create a LocalClient for testing."""
+    """Create a FlusterClient for testing."""
     config = LocalClientConfig(max_workers=2)
-    client = LocalClient(config)
-    client.__enter__()
-    yield client
-    client.__exit__(None, None, None)
+    with FlusterClient.local(config) as client:
+        yield client
 
 
 def test_submit_rejects_name_with_slash(local_client, resources):

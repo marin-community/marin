@@ -12,57 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Resolver implementations for actor discovery.
+"""Namespace-aware resolver for actor discovery via cluster controller.
 
-This module provides implementations of the actor.types.Resolver protocol:
-- FixedResolver: Static endpoint configuration (for testing)
-- ClusterResolver: Dynamic discovery via cluster controller RPC
-- GcsResolver: Discovery via GCP VM instance metadata tags
+This module provides ClusterResolver, which queries the controller's endpoint
+registry with automatic namespace prefixing based on FlusterContext.
 
-These resolvers add the "smart" namespace-aware layer on top of cluster
-endpoint operations.
+For static resolvers (FixedResolver, GcsResolver), see fluster.actor.resolver.
 """
 
-from typing import Protocol
-
-from fluster.actor.types import ResolvedEndpoint, ResolveResult
+from fluster.actor.resolver import ResolvedEndpoint, ResolveResult
 from fluster.cluster.types import Namespace
 from fluster.rpc import cluster_pb2
 from fluster.rpc.cluster_connect import ControllerServiceClientSync
-
-
-class FixedResolver:
-    """Resolver with statically configured endpoints.
-
-    Used for testing or when endpoints are known ahead of time.
-    Does not use namespace prefixing since endpoints are static.
-    """
-
-    def __init__(self, endpoints: dict[str, str | list[str]]):
-        """Initialize with a mapping of actor names to URLs.
-
-        Args:
-            endpoints: Mapping of actor name to URL or list of URLs
-        """
-        self._endpoints: dict[str, list[str]] = {}
-        for name, urls in endpoints.items():
-            if isinstance(urls, str):
-                self._endpoints[name] = [urls]
-            else:
-                self._endpoints[name] = list(urls)
-
-    def resolve(self, name: str) -> ResolveResult:
-        """Resolve actor name to endpoints.
-
-        Args:
-            name: Actor name to resolve
-
-        Returns:
-            ResolveResult with configured endpoints
-        """
-        urls = self._endpoints.get(name, [])
-        endpoints = [ResolvedEndpoint(url=url, actor_id=f"fixed-{name}-{i}") for i, url in enumerate(urls)]
-        return ResolveResult(name=name, endpoints=endpoints)
 
 
 class ClusterResolver:
@@ -94,7 +55,7 @@ class ClusterResolver:
 
     def _namespace_prefix(self) -> str:
         """Get namespace prefix from current FlusterContext."""
-        from fluster.client.context import get_fluster_ctx
+        from fluster.client.client import get_fluster_ctx
 
         ctx = get_fluster_ctx()
         if ctx is None:
@@ -132,128 +93,5 @@ class ClusterResolver:
             for ep in resp.endpoints
             if ep.name == prefixed_name
         ]
-
-        return ResolveResult(name=name, endpoints=endpoints)
-
-
-class GcsApi(Protocol):
-    """Protocol for GCS Compute API operations."""
-
-    def list_instances(self, project: str, zone: str) -> list[dict]:
-        """List VM instances with metadata."""
-        ...
-
-
-class RealGcsApi:
-    """Real GCS API using google-cloud-compute."""
-
-    def list_instances(self, project: str, zone: str) -> list[dict]:
-        from google.cloud import compute_v1
-
-        client = compute_v1.InstancesClient()
-        instances = []
-        for instance in client.list(project=project, zone=zone):
-            metadata = {}
-            if instance.metadata and instance.metadata.items:
-                for item in instance.metadata.items:
-                    metadata[item.key] = item.value
-
-            internal_ip = None
-            if instance.network_interfaces:
-                internal_ip = instance.network_interfaces[0].network_i_p
-
-            instances.append(
-                {
-                    "name": instance.name,
-                    "internal_ip": internal_ip,
-                    "metadata": metadata,
-                    "status": instance.status,
-                }
-            )
-        return instances
-
-
-class MockGcsApi:
-    """Mock GCS API for testing."""
-
-    def __init__(self, instances: list[dict] | None = None):
-        self._instances = instances or []
-
-    def set_instances(self, instances: list[dict]) -> None:
-        self._instances = instances
-
-    def list_instances(self, project: str, zone: str) -> list[dict]:
-        return self._instances
-
-
-class GcsResolver:
-    """Resolver using GCS VM instance metadata tags.
-
-    Discovers actor endpoints by querying GCP VM instance metadata. This is purely
-    an infrastructure discovery mechanism - it finds all running instances with
-    matching actor metadata.
-
-    Instances must have metadata tags in the format:
-    - `fluster_actor_<name>`: port number for the actor
-
-    Only RUNNING instances are considered for resolution.
-
-    Note: Unlike ClusterResolver, GcsResolver does NOT do namespace prefixing.
-    It's an infrastructure discovery mechanism that returns all instances with
-    matching actor metadata tags. Use this for static VM-based deployments where
-    namespace isolation is not needed.
-
-    Args:
-        project: GCP project ID
-        zone: GCP zone (e.g., "us-central1-a")
-        api: GcsApi implementation (defaults to RealGcsApi)
-    """
-
-    ACTOR_PREFIX = "fluster_actor_"
-
-    def __init__(
-        self,
-        project: str,
-        zone: str,
-        api: GcsApi | None = None,
-    ):
-        self._project = project
-        self._zone = zone
-        self._api = api or RealGcsApi()
-
-    def resolve(self, name: str) -> ResolveResult:
-        """Resolve actor name to endpoints via GCS instance metadata.
-
-        Discovers all running instances with matching actor metadata.
-        No namespace prefixing is applied.
-
-        Args:
-            name: Actor name to resolve
-
-        Returns:
-            ResolveResult with matching endpoints from RUNNING instances
-        """
-        endpoints = []
-
-        instances = self._api.list_instances(self._project, self._zone)
-
-        for instance in instances:
-            if instance.get("status") != "RUNNING":
-                continue
-
-            metadata = instance.get("metadata", {})
-
-            actor_key = f"{self.ACTOR_PREFIX}{name}"
-            if actor_key in metadata:
-                port = metadata[actor_key]
-                ip = instance.get("internal_ip")
-                if ip:
-                    endpoints.append(
-                        ResolvedEndpoint(
-                            url=f"http://{ip}:{port}",
-                            actor_id=f"gcs-{instance['name']}-{name}",
-                            metadata={"instance": instance["name"]},
-                        )
-                    )
 
         return ResolveResult(name=name, endpoints=endpoints)

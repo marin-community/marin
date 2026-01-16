@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""RPC-based cluster operations implementation.
+"""RPC-based cluster client implementation.
 
-This module provides RpcClusterOperations, which implements the ClusterOperations
+This module provides RemoteClusterClient, which implements the ClusterClient
 protocol by talking to the controller via RPC.
 """
 
@@ -28,8 +28,8 @@ from fluster.rpc.cluster_connect import ControllerServiceClientSync
 from fluster.time_utils import ExponentialBackoff
 
 
-class RpcClusterOperations:
-    """Cluster operations via RPC to controller.
+class RemoteClusterClient:
+    """Cluster client via RPC to controller.
 
     This is a "dumb" implementation - all parameters are explicit, no context magic.
     Takes full job IDs, full endpoint names, etc.
@@ -66,6 +66,7 @@ class RpcClusterOperations:
         resources: cluster_pb2.ResourceSpec,
         environment: cluster_pb2.EnvironmentConfig | None = None,
         ports: list[str] | None = None,
+        scheduling_timeout_seconds: int = 0,
     ) -> None:
         """Submit a job to the cluster via RPC.
 
@@ -75,6 +76,7 @@ class RpcClusterOperations:
             resources: Resource requirements
             environment: Environment configuration
             ports: Port names to allocate (e.g., ["actor", "metrics"])
+            scheduling_timeout_seconds: Maximum time to wait for scheduling (0 = no timeout)
         """
         serialized = cloudpickle.dumps(entrypoint)
 
@@ -99,6 +101,7 @@ class RpcClusterOperations:
                 bundle_gcs_path=self._bundle_gcs_path,
                 ports=ports or [],
                 parent_job_id=parent_job_id,
+                scheduling_timeout_seconds=scheduling_timeout_seconds,
             )
         else:
             request = cluster_pb2.Controller.LaunchJobRequest(
@@ -109,6 +112,7 @@ class RpcClusterOperations:
                 bundle_blob=self._bundle_blob or b"",
                 ports=ports or [],
                 parent_job_id=parent_job_id,
+                scheduling_timeout_seconds=scheduling_timeout_seconds,
             )
         self._client.launch_job(request)
 
@@ -221,3 +225,13 @@ class RpcClusterOperations:
         request = cluster_pb2.Controller.ListEndpointsRequest(prefix=prefix)
         response = self._client.list_endpoints(request)
         return list(response.endpoints)
+
+    def shutdown(self, wait: bool = True) -> None:
+        """Shutdown the client.
+
+        No-op for RemoteClusterClient - the RPC client doesn't hold resources.
+
+        Args:
+            wait: Ignored
+        """
+        del wait

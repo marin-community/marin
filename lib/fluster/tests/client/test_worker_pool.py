@@ -29,11 +29,9 @@ import cloudpickle
 import pytest
 from connectrpc.errors import ConnectError
 
-from fluster.rpc import cluster_pb2
 from fluster.actor import ActorServer
 from fluster.actor.resolver import FixedResolver
-from fluster.cluster.types import Entrypoint, JobId
-from fluster.worker_pool import (
+from fluster.client.worker_pool import (
     PendingTask,
     TaskExecutorActor,
     WorkerDispatcher,
@@ -42,6 +40,8 @@ from fluster.worker_pool import (
     WorkerState,
     WorkerStatus,
 )
+from fluster.cluster.types import Entrypoint, JobId
+from fluster.rpc import cluster_pb2
 
 # =============================================================================
 # Unit tests for TaskExecutorActor

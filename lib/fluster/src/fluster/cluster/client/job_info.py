@@ -18,7 +18,7 @@ This module provides a lightweight JobInfo container with just the essential
 metadata about the current job execution. This is a "dumb" metadata holder -
 it doesn't contain client instances or context logic.
 
-For the full FlusterContext with client/registry/resolver, use fluster.client.context.
+For the full FlusterContext with client/registry/resolver, use fluster.client.
 """
 
 import os

@@ -12,19 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for local cluster operations."""
+"""Tests for LocalClusterClient."""
 
 import pytest
 
-from fluster.cluster.client import LocalClusterOperations, get_job_info
+from fluster.cluster.client import LocalClusterClient, get_job_info
 from fluster.cluster.types import Entrypoint, is_job_finished
 from fluster.rpc import cluster_pb2
 
 
 @pytest.fixture
 def local_ops():
-    """Create and start a LocalClusterOperations instance."""
-    ops = LocalClusterOperations(max_workers=2)
+    """Create and start a LocalClusterClient instance."""
+    ops = LocalClusterClient(max_workers=2)
     ops.start()
     yield ops
     ops.shutdown()
