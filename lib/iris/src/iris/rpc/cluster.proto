@@ -127,11 +127,14 @@ message TpuDevice {
 
 // Unified resource specification for jobs
 // Used by both controller (for scheduling) and worker (for enforcement)
+// All resource quantities are in machine-readable units (bytes, cores).
+// Human-readable parsing (e.g., "8g") should be done at the client layer
+// using create_resource_spec() from iris.cluster.types.
 message ResourceSpec {
   // Compute resources
   int32 cpu = 1;              // Number of CPU cores
-  string memory = 2;          // RAM (e.g., "8g", "16g", "128m")
-  string disk = 3;            // Disk space (e.g., "1g", "100g")
+  int64 memory_bytes = 4;     // RAM in bytes
+  int64 disk_bytes = 9;       // Disk space in bytes
 
   // Device configuration
   DeviceConfig device = 5;

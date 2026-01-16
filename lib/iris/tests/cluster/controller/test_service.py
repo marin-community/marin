@@ -23,7 +23,7 @@ from connectrpc.errors import ConnectError
 from iris.rpc import cluster_pb2
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerJob, ControllerState
-from iris.cluster.types import JobId, WorkerId
+from iris.cluster.types import JobId, WorkerId, create_resource_spec
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def make_job_request():
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",
-            resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
+            resources=create_resource_spec(cpu=1, memory="1g"),
             environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         )
 
@@ -42,11 +42,11 @@ def make_job_request():
 
 
 @pytest.fixture
-def make_resource_spec():
+def make_resource_spec_fixture():
     """Create a minimal ResourceSpec for testing."""
 
     def _make() -> cluster_pb2.ResourceSpec:
-        return cluster_pb2.ResourceSpec(cpu=1, memory="1g", disk="10g")
+        return create_resource_spec(cpu=1, memory="1g", disk="10g")
 
     return _make
 
@@ -272,7 +272,7 @@ def test_launch_job_rejects_empty_name(service, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="",  # Empty name
         serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
+        resources=create_resource_spec(cpu=1, memory="1g"),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
     )
 
@@ -303,12 +303,12 @@ def test_terminate_pending_job(service, state, make_job_request):
     assert job.finished_at_ms is not None
 
 
-def test_register_worker(service, state, make_resource_spec):
+def test_register_worker(service, state, make_resource_spec_fixture):
     """Verify register_worker adds worker to state."""
     request = cluster_pb2.Controller.RegisterWorkerRequest(
         worker_id="w1",
         address="host1:8080",
-        resources=make_resource_spec(),
+        resources=make_resource_spec_fixture(),
     )
 
     response = service.register_worker(request, None)
@@ -320,12 +320,12 @@ def test_register_worker(service, state, make_resource_spec):
     assert worker.healthy is True
 
 
-def test_register_worker_logs_action(service, state, make_resource_spec):
+def test_register_worker_logs_action(service, state, make_resource_spec_fixture):
     """Verify register_worker logs an action."""
     request = cluster_pb2.Controller.RegisterWorkerRequest(
         worker_id="w1",
         address="host1:8080",
-        resources=make_resource_spec(),
+        resources=make_resource_spec_fixture(),
     )
 
     service.register_worker(request, None)
@@ -336,7 +336,7 @@ def test_register_worker_logs_action(service, state, make_resource_spec):
     assert actions[0].worker_id == "w1"
 
 
-def test_list_workers_returns_all(service, state, make_resource_spec):
+def test_list_workers_returns_all(service, state, make_resource_spec_fixture):
     """Verify list_workers returns all workers."""
     from iris.cluster.controller.state import ControllerWorker
 
@@ -345,7 +345,7 @@ def test_list_workers_returns_all(service, state, make_resource_spec):
         worker = ControllerWorker(
             worker_id=WorkerId(f"w{i}"),
             address=f"host{i}:8080",
-            resources=make_resource_spec(),
+            resources=make_resource_spec_fixture(),
             healthy=(i != 1),  # w1 is unhealthy
         )
         state.add_worker(worker)
@@ -406,7 +406,7 @@ def test_launch_job_with_parent_job_id(service, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="child-job",
         serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
+        resources=create_resource_spec(cpu=1, memory="1g"),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         parent_job_id="parent-123",
     )
@@ -423,7 +423,7 @@ def test_launch_job_without_parent_job_id(service, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="root-job",
         serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
+        resources=create_resource_spec(cpu=1, memory="1g"),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
     )
 

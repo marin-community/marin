@@ -28,7 +28,7 @@ from iris.cluster.controller.state import (
     ControllerState,
     ControllerWorker,
 )
-from iris.cluster.types import JobId, WorkerId
+from iris.cluster.types import JobId, WorkerId, create_resource_spec
 
 
 @pytest.fixture
@@ -54,14 +54,14 @@ def job_request():
     return cluster_pb2.Controller.LaunchJobRequest(
         name="test-job",
         serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpec(cpu=2, memory="4g"),
+        resources=create_resource_spec(cpu=2, memory="4g"),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
     )
 
 
 @pytest.fixture
 def resource_spec():
-    return cluster_pb2.ResourceSpec(cpu=4, memory="8g", disk="100g")
+    return create_resource_spec(cpu=4, memory="8g", disk="100g")
 
 
 def test_stats_counts_building_separately_from_running(client, state, job_request):

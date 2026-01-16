@@ -67,7 +67,7 @@ src/iris/
 ```python
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint
-from iris.rpc.cluster_pb2 import ResourceSpec
+from iris.cluster.types import create_resource_spec
 
 def my_task():
     print("Hello from iris!")
@@ -76,7 +76,7 @@ client = IrisClient.remote("http://controller:8080", workspace=Path("."))
 job_id = client.submit(
     name="my-job",
     entrypoint=Entrypoint.from_callable(my_task),
-    resources=ResourceSpec(cpu=1, memory="2GB"),
+    resources=create_resource_spec(cpu=1, memory="2GB"),
 )
 client.wait(job_id)
 ```

@@ -20,7 +20,7 @@ import pytest
 
 from iris.rpc import cluster_pb2
 from iris.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState, ControllerWorker
-from iris.cluster.types import JobId, WorkerId
+from iris.cluster.types import JobId, WorkerId, create_resource_spec
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def make_job_request():
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",
-            resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
+            resources=create_resource_spec(cpu=1, memory="1g"),
             environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         )
 
@@ -43,7 +43,7 @@ def make_resource_spec():
     """Create a minimal ResourceSpec for testing."""
 
     def _make() -> cluster_pb2.ResourceSpec:
-        return cluster_pb2.ResourceSpec(cpu=1, memory="1g", disk="10g")
+        return create_resource_spec(cpu=1, memory="1g", disk="10g")
 
     return _make
 

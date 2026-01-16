@@ -160,22 +160,22 @@ class TpuDevice(_message.Message):
     def __init__(self, variant: _Optional[str] = ..., topology: _Optional[str] = ...) -> None: ...
 
 class ResourceSpec(_message.Message):
-    __slots__ = ("cpu", "memory", "disk", "device", "replicas", "preemptible", "regions")
+    __slots__ = ("cpu", "memory_bytes", "disk_bytes", "device", "replicas", "preemptible", "regions")
     CPU_FIELD_NUMBER: _ClassVar[int]
-    MEMORY_FIELD_NUMBER: _ClassVar[int]
-    DISK_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
+    DISK_BYTES_FIELD_NUMBER: _ClassVar[int]
     DEVICE_FIELD_NUMBER: _ClassVar[int]
     REPLICAS_FIELD_NUMBER: _ClassVar[int]
     PREEMPTIBLE_FIELD_NUMBER: _ClassVar[int]
     REGIONS_FIELD_NUMBER: _ClassVar[int]
     cpu: int
-    memory: str
-    disk: str
+    memory_bytes: int
+    disk_bytes: int
     device: DeviceConfig
     replicas: int
     preemptible: bool
     regions: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, cpu: _Optional[int] = ..., memory: _Optional[str] = ..., disk: _Optional[str] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., preemptible: _Optional[bool] = ..., regions: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., preemptible: _Optional[bool] = ..., regions: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
     __slots__ = ("workspace", "pip_packages", "env_vars", "extras")

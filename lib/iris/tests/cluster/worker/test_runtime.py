@@ -20,6 +20,7 @@ import time
 import pytest
 
 from iris.rpc import cluster_pb2
+from iris.cluster.types import create_resource_spec
 from iris.cluster.worker.docker import ContainerConfig, DockerRuntime
 
 
@@ -162,7 +163,7 @@ def test_resource_limits_memory(runtime):
         pytest.skip("Docker not available")
 
     # Set memory limit to 256 MB
-    resources = cluster_pb2.ResourceSpec(memory="256m")
+    resources = create_resource_spec(memory="256m")
     config = ContainerConfig(
         image="alpine:latest",
         command=["echo", "test"],
@@ -201,7 +202,7 @@ def test_resource_limits_combined(runtime):
     if not check_docker_available():
         pytest.skip("Docker not available")
 
-    resources = cluster_pb2.ResourceSpec(cpu=1, memory="512m")
+    resources = create_resource_spec(cpu=1, memory="512m")
     config = ContainerConfig(
         image="alpine:latest",
         command=["echo", "test"],

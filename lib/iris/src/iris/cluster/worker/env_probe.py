@@ -180,11 +180,9 @@ class DefaultEnvironmentProvider:
         )
 
     def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec:
-        memory_gb = metadata.memory_bytes // (1024**3)
-
         resources = cluster_pb2.ResourceSpec(
             cpu=metadata.cpu_count,
-            memory=f"{memory_gb}g",
+            memory_bytes=metadata.memory_bytes,
         )
 
         # Add TPU device if detected

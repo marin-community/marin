@@ -222,6 +222,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return div.innerHTML;
     }
 
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
     async function refresh() {
       try {
         const [stats, actions, workers, jobs, endpoints] = await Promise.all([
@@ -262,7 +270,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             ? `<a href="http://${escapeHtml(w.address)}/" class="worker-link" target="_blank">${wid}</a>`
             : wid;
           const cpu = w.resources ? w.resources.cpu : '-';
-          const memory = w.resources ? (w.resources.memory || '-') : '-';
+          const memBytes = w.resources ? (w.resources.memory_bytes || 0) : 0;
+          const memory = memBytes ? formatBytes(memBytes) : '-';
           return `<tr>
             <td>${workerLink}</td>
             <td class="${healthClass}">${w.healthy ? 'Yes' : 'No'}</td>
@@ -280,8 +289,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const jobsHtml = jobs.map(j => {
           const jid = escapeHtml(j.job_id);
           const jobLink = `<a href="/job/${jid}" class="job-link">${jid.slice(0,8)}...</a>`;
+          const jobMemBytes = j.resources ? (j.resources.memory_bytes || 0) : 0;
           const resources = j.resources
-            ? `${j.resources.cpu} CPU, ${j.resources.memory || '-'}` : '-';
+            ? `${j.resources.cpu} CPU, ${jobMemBytes ? formatBytes(jobMemBytes) : '-'}` : '-';
           return `<tr>
             <td>${jobLink}</td>
             <td>${escapeHtml(j.name)}</td>
@@ -779,7 +789,7 @@ class ControllerDashboard:
                     "last_heartbeat_ms": w.last_heartbeat_ms,
                     "resources": {
                         "cpu": w.resources.cpu if w.resources else 0,
-                        "memory": w.resources.memory if w.resources else "",
+                        "memory_bytes": w.resources.memory_bytes if w.resources else 0,
                     },
                 }
                 for w in workers
@@ -805,7 +815,7 @@ class ControllerDashboard:
                     "preemption_count": j.preemption_count,
                     "resources": {
                         "cpu": j.request.resources.cpu if j.request.resources else 0,
-                        "memory": j.request.resources.memory if j.request.resources else "",
+                        "memory_bytes": j.request.resources.memory_bytes if j.request.resources else 0,
                     },
                 }
                 for j in jobs

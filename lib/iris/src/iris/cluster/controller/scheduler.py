@@ -21,7 +21,6 @@ from iris.cluster.controller.resources import (
     get_device_type,
     get_device_variant,
     get_gpu_count,
-    parse_memory_string,
 )
 from iris.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
 from iris.cluster.types import WorkerId
@@ -47,8 +46,7 @@ def worker_can_fit_job(capacity: WorkerCapacity, job: ControllerJob) -> bool:
     if res.cpu > capacity.available_cpu:
         return False
 
-    job_memory = parse_memory_string(res.memory)
-    if job_memory > capacity.available_memory:
+    if res.memory_bytes > capacity.available_memory:
         return False
 
     job_device_type = get_device_type(res.device)
@@ -69,7 +67,7 @@ def deduct_job_from_capacity(capacity: WorkerCapacity, job: ControllerJob) -> No
     """Deduct job's resources from capacity (mutates capacity)."""
     res = job.request.resources
     capacity.available_cpu -= res.cpu
-    capacity.available_memory -= parse_memory_string(res.memory)
+    capacity.available_memory -= res.memory_bytes
     capacity.available_gpus -= get_gpu_count(res.device)
 
 
@@ -79,7 +77,7 @@ def compute_worker_capacity(state: ControllerState, worker: ControllerWorker) ->
     res = worker.resources
     return WorkerCapacity(
         available_cpu=res.cpu - committed_cpu,
-        available_memory=parse_memory_string(res.memory) - committed_mem,
+        available_memory=res.memory_bytes - committed_mem,
         available_gpus=get_gpu_count(res.device) - committed_gpu,
         device_type=get_device_type(res.device),
         device_variant=get_device_variant(res.device),
@@ -156,10 +154,10 @@ class Scheduler:
                     break
             else:
                 logger.debug(
-                    "No suitable worker for job %s (cpu=%d, memory=%s)",
+                    "No suitable worker for job %s (cpu=%d, memory_bytes=%d)",
                     job.job_id,
                     job.request.resources.cpu,
-                    job.request.resources.memory,
+                    job.request.resources.memory_bytes,
                 )
 
         if transaction.assignments or transaction.timed_out_jobs:

@@ -26,7 +26,7 @@ import pytest
 from connectrpc.request import RequestContext
 
 from iris.rpc import cluster_pb2
-from iris.cluster.types import Entrypoint
+from iris.cluster.types import Entrypoint, create_resource_spec
 from iris.cluster.worker.builder import BuildResult, VenvCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import ContainerConfig, ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
@@ -249,10 +249,7 @@ def create_run_job_request(job_id: str = "test-job-1", ports: list[str] | None =
         extras=["dev"],
     )
 
-    resources = cluster_pb2.ResourceSpec(
-        cpu=2,
-        memory="4g",
-    )
+    resources = create_resource_spec(cpu=2, memory="4g")
 
     return cluster_pb2.Worker.RunJobRequest(
         job_id=job_id,
@@ -610,10 +607,7 @@ def create_integration_run_job_request(bundle_path: str, job_id: str):
         environment=cluster_pb2.EnvironmentConfig(
             workspace="/app",
         ),
-        resources=cluster_pb2.ResourceSpec(
-            cpu=1,
-            memory="512m",
-        ),
+        resources=create_resource_spec(cpu=1, memory="512m"),
     )
 
 

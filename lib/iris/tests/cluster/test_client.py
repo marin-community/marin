@@ -18,7 +18,7 @@ import pytest
 from connectrpc.errors import ConnectError
 
 from iris.client import IrisClient, LocalClientConfig
-from iris.cluster.types import Entrypoint
+from iris.cluster.types import Entrypoint, create_resource_spec
 from iris.rpc import cluster_pb2
 
 
@@ -30,7 +30,7 @@ def dummy_entrypoint():
 @pytest.fixture
 def resources():
     """Create minimal ResourceSpec for testing."""
-    return cluster_pb2.ResourceSpec(cpu=1, memory="1g")
+    return create_resource_spec(cpu=1, memory="1g")
 
 
 @pytest.fixture

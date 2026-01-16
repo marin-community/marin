@@ -16,9 +16,7 @@
 
 import pytest
 
-from iris.cluster.controller.resources import (
-    parse_memory_string,
-)
+from iris.cluster.types import create_resource_spec, parse_memory_string
 
 
 @pytest.mark.parametrize(
@@ -56,3 +54,19 @@ def test_parse_memory_string_invalid():
         parse_memory_string("invalid")
     with pytest.raises(ValueError):
         parse_memory_string("8x")
+
+
+def test_create_resource_spec_with_string_memory():
+    """Verify create_resource_spec parses human-readable memory strings to bytes."""
+    spec = create_resource_spec(cpu=4, memory="8g", disk="100g")
+    assert spec.cpu == 4
+    assert spec.memory_bytes == 8 * 1024**3
+    assert spec.disk_bytes == 100 * 1024**3
+
+
+def test_create_resource_spec_with_int_memory():
+    """Verify create_resource_spec accepts raw byte values."""
+    spec = create_resource_spec(cpu=2, memory=1024, disk=2048)
+    assert spec.cpu == 2
+    assert spec.memory_bytes == 1024
+    assert spec.disk_bytes == 2048
