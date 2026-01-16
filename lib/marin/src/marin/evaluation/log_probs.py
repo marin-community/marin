@@ -16,7 +16,6 @@
 This file uses Levanter to compute validation losses and entropies.
 """
 
-import dataclasses
 import os
 from dataclasses import dataclass
 
@@ -31,14 +30,11 @@ from levanter.models.lm_model import LmConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.executor import ExecutorStep, InputName, this_output_path
-from marin.utilities.executor_utils import ckpt_path_to_step_name
-
 
 @dataclass
 class EvalLmConfig:
     """
-    Configuration for visualizing log probabilities of a language model.
+    Configuration for evaluating log probabilities of a language model.
     """
 
     name: str | None
@@ -47,58 +43,17 @@ class EvalLmConfig:
     datasets: LMMixtureDatasetConfig
     resource_config: ResourceConfig
     per_device_batch_size: int = 4
-    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
+    output_path: str = ""
     checkpoint_is_hf: bool = False
     """Whether the checkpoint is in HF format."""
 
     log_entropy: bool = True
-    """ Whether to log entropies of the model. """
+    """Whether to log entropies of the model."""
 
     max_samples_per_dataset: int | None = None
 
     wandb_tags: list[str] | None = None
     """Tags to add to the wandb run."""
-
-
-def default_lm_log_probs(
-    checkpoint: str | InputName,
-    model: LmConfig,
-    data: LMMixtureDatasetConfig,
-    resource_config: ResourceConfig,
-    checkpoint_is_hf: bool,
-    per_device_batch_size: int = 4,
-    max_samples_per_dataset: int | None = None,
-    name: str | None = None,
-    wandb_tags: list[str] | None = None,
-) -> ExecutorStep:
-    """
-    Creates a step to evaluate log probabilities of a language model.
-    Args:
-        checkpoint:  The checkpoint to evaluate.
-        model:  The model configuration.
-        data: The data to evaluate on.
-        resource_config: The resource configuration.
-        checkpoint_is_hf:  Whether the checkpoint is in HF format.
-    """
-    if not name:
-        name = ckpt_path_to_step_name(checkpoint)
-    executor_name = f"analysis/log_probs/{name}"
-    return ExecutorStep(
-        name=executor_name,
-        fn=evaluate_lm_log_probs,
-        config=EvalLmConfig(
-            name=name,
-            checkpoint_path=checkpoint,  # type: ignore
-            model=model,
-            datasets=data,
-            log_entropy=True,
-            resource_config=resource_config,
-            checkpoint_is_hf=checkpoint_is_hf,
-            per_device_batch_size=per_device_batch_size,
-            max_samples_per_dataset=max_samples_per_dataset,
-            wandb_tags=wandb_tags,
-        ),
-    )
 
 
 def do_eval_lm(config: LevanterEvalLmConfig) -> None:

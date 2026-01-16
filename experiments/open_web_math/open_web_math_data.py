@@ -17,22 +17,25 @@ Downloads the open-web-math dataset
 (https://huggingface.co/datasets/open-web-math/open-web-math) to GCS.
 """
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
+from marin.execution import step, deferred, output, executor_main, versioned
+
+download_hf = deferred(_download_hf)
 
 ############################################################
 # download open-web-math dataset
-open_web_math_raw = ExecutorStep(
-    name="raw/open-web-math",
-    fn=download_hf,
-    config=DownloadConfig(
+@step(name="raw/open-web-math")
+def open_web_math_raw_creator():
+    return download_hf(DownloadConfig(
         hf_dataset_id="open-web-math/open-web-math",
         revision=versioned("fde8ef8"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=output(),
         wait_for_completion=False,
-    ),
-    override_output_path="raw/open-web-math-fde8ef8",
-)
+    ))
+
+
+open_web_math_raw = open_web_math_raw_creator(override_output_path="raw/open-web-math-fde8ef8")
 
 ############################################################
 

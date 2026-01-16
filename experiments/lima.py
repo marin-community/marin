@@ -21,11 +21,12 @@ import os
 from dataclasses import dataclass
 
 from marin.download.huggingface.download_hf import DownloadConfig as HfDownloadConfig
-from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import (
-    ExecutorStep,
+from marin.download.huggingface.download_hf import download_hf as _download_hf
+from marin.execution import (
+    deferred,
     executor_main,
-    this_output_path,
+    output,
+    step,
     versioned,
 )
 from marin.processing.tokenize.data_configs import TokenizerStep
@@ -34,21 +35,21 @@ from zephyr import Backend, Dataset, load_jsonl
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 
-lima = (
-    ExecutorStep(
-        name="raw/lima",
-        fn=download_hf,
-        config=HfDownloadConfig(
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
+
+
+@step(name="raw/lima")
+def lima():
+    return download_hf(
+        HfDownloadConfig(
             hf_dataset_id=versioned("GAIR/lima"),
             revision=versioned("68958e9"),
-            gcs_output_path=this_output_path(),
+            gcs_output_path=output(),
             hf_urls_glob=["*.jsonl"],
             wait_for_completion=True,
-        ),
+        )
     )
-    .with_output_path("raw/lima-68958e9")
-    .cd("68958e9")
-)
 
 
 @dataclass
@@ -56,6 +57,7 @@ class LimaConversationsToTextConfig:
     """Configuration for converting LIMA conversations to plain text."""
 
     raw_lima: str
+    output_path: str
 
 
 def convert_to_text(record):
@@ -70,9 +72,9 @@ def convert_to_text(record):
     return None
 
 
-def convert_lima_conversations(config: LimaConversationsToTextConfig):
+def _convert_lima_conversations(config: LimaConversationsToTextConfig):
     input_path = os.path.join(config.raw_lima, "train.jsonl")
-    output_path = os.path.join(config.raw_lima.replace("lima", "lima_text"), "train.jsonl")
+    output_path = os.path.join(config.output_path, "train.jsonl")
 
     pipeline = (
         Dataset.from_files(input_path)
@@ -84,19 +86,25 @@ def convert_lima_conversations(config: LimaConversationsToTextConfig):
     Backend.execute(pipeline)
 
 
-lima_text = ExecutorStep(
-    name="raw/lima_text",
-    fn=convert_lima_conversations,
-    config=LimaConversationsToTextConfig(raw_lima=lima),
-).with_output_path("raw/lima_text-68958e9/68958e9")
+convert_lima_conversations = deferred(_convert_lima_conversations)
 
 
-def lima_tokenized(tokenizer: str = llama3_tokenizer, is_validation: bool = True) -> dict[str, TokenizerStep]:
-    """Return steps to tokenize the LIMA validation set using both train and test splits."""
+@step(name="raw/lima_text")
+def lima_text():
+    return convert_lima_conversations(
+        LimaConversationsToTextConfig(
+            raw_lima=lima(),
+            output_path=output(),
+        )
+    )
 
+
+@step(name="lima/tokenized")
+def lima_tokenized(tokenizer: str = llama3_tokenizer, is_validation: bool = True):
+    """Tokenize the LIMA validation set using both train and test splits."""
     return default_tokenize(
         name="lima_text",
-        dataset=lima_text.cd("train.jsonl"),
+        dataset=lima_text().with_output_path("raw/lima_text-68958e9/68958e9").cd("train.jsonl"),
         tokenizer=tokenizer,
         is_validation=is_validation,
     )

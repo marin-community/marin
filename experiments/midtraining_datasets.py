@@ -15,30 +15,37 @@
 from experiments.common_pile.tokenize_common_pile import stackv2_edu_filtered
 from experiments.defaults import default_download, default_tokenize
 from experiments.llama import llama3_tokenizer
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution import versioned
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
+from marin.execution import deferred, output, step, versioned
+from marin.execution.executor import ExecutorStep
 from marin.processing.tokenize import lm_mixture_data_config
-from marin.transform.common_pile.filter_by_extension import (
-    FilterByMetadataExtensionConfig,
-    filter_dataset_by_metadata_extension,
-)
-from marin.transform.medical.lavita_to_dolma import LavitaToDolmaConfig, convert_lavita_split_to_dolma
+from marin.transform.common_pile.filter_by_extension import FilterByMetadataExtensionConfig
+from marin.transform.common_pile.filter_by_extension import filter_dataset_by_metadata_extension as _filter_dataset_by_metadata_extension
+from marin.transform.medical.lavita_to_dolma import LavitaToDolmaConfig
+from marin.transform.medical.lavita_to_dolma import convert_lavita_split_to_dolma as _convert_lavita_split_to_dolma
+
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
+filter_dataset_by_metadata_extension = deferred(_filter_dataset_by_metadata_extension)
+convert_lavita_split_to_dolma = deferred(_convert_lavita_split_to_dolma)
 
 finemath_commit_hash = "8f233cf"
-finemath = ExecutorStep(
-    name="raw/finemath",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="HuggingFaceTB/finemath",
-        revision=finemath_commit_hash,
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
-)
 
 
-finemath_3_plus = finemath.cd("finemath-3plus")
+@step(name="raw/finemath")
+def finemath():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="HuggingFaceTB/finemath",
+            revision=finemath_commit_hash,
+            gcs_output_path=output(),
+            wait_for_completion=True,
+        )
+    )
+
+
+finemath_3_plus = finemath().cd("finemath-3plus")
 finemath_3_plus_tokenized = default_tokenize(
     name="finemath_3_plus",
     dataset=finemath_3_plus,
@@ -47,20 +54,21 @@ finemath_3_plus_tokenized = default_tokenize(
 
 STACKV2_EDU_PYTHON_EXTENSIONS = (".py", ".pyw", ".pyi")
 
-stackv2_edu_filtered_python = ExecutorStep(
-    name="documents/common_pile/stackv2_edu_filtered_python",
-    fn=filter_dataset_by_metadata_extension,
-    config=FilterByMetadataExtensionConfig(
-        input_path=stackv2_edu_filtered,
-        output_path=this_output_path(),
-        allowed_extensions=STACKV2_EDU_PYTHON_EXTENSIONS,
-        input_glob="stack-edu-*.json.gz",
-    ),
-)
+
+@step(name="documents/common_pile/stackv2_edu_filtered_python")
+def stackv2_edu_filtered_python():
+    return filter_dataset_by_metadata_extension(
+        FilterByMetadataExtensionConfig(
+            input_path=stackv2_edu_filtered,
+            output_path=output(),
+            allowed_extensions=STACKV2_EDU_PYTHON_EXTENSIONS,
+            input_glob="stack-edu-*.json.gz",
+        )
+    )
 
 stackv2_edu_filtered_python_tokenized = default_tokenize(
     name="common_pile_stackv2_edu_filtered_python",
-    dataset=stackv2_edu_filtered_python,
+    dataset=stackv2_edu_filtered_python(),
     tokenizer=llama3_tokenizer,
 )
 
@@ -162,77 +170,89 @@ lavita_medical_qa_datasets = default_download(
     override_output_path="raw/lavita_medical_qa",
 )
 
-lavita_pubmed = ExecutorStep(
-    name="documents/lavita_pubmed",
-    fn=convert_lavita_split_to_dolma,
-    config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="pubmed-qa", split="train"
-    ),
-)
+@step(name="documents/lavita_pubmed")
+def lavita_pubmed():
+    return convert_lavita_split_to_dolma(
+        LavitaToDolmaConfig(
+            input_path=lavita_medical_qa_datasets,
+            output_path=output(),
+            subset="pubmed-qa",
+            split="train",
+        )
+    )
 
-lavita_medmcqa = ExecutorStep(
-    name="documents/lavita_medmcqa",
-    fn=convert_lavita_split_to_dolma,
-    config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="medmcqa", split="train"
-    ),
-)
+@step(name="documents/lavita_medmcqa")
+def lavita_medmcqa():
+    return convert_lavita_split_to_dolma(
+        LavitaToDolmaConfig(
+            input_path=lavita_medical_qa_datasets,
+            output_path=output(),
+            subset="medmcqa",
+            split="train",
+        )
+    )
 
-lavita_allprocessed = ExecutorStep(
-    name="documents/lavita_allprocessed",
-    fn=convert_lavita_split_to_dolma,
-    config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets,
-        output_path=this_output_path(),
-        subset="all-processed",
-        split="train",
-    ),
-)
+@step(name="documents/lavita_allprocessed")
+def lavita_allprocessed():
+    return convert_lavita_split_to_dolma(
+        LavitaToDolmaConfig(
+            input_path=lavita_medical_qa_datasets,
+            output_path=output(),
+            subset="all-processed",
+            split="train",
+        )
+    )
 
-lavita_pubmed_validation = ExecutorStep(
-    name="documents/lavita_pubmed_validation",
-    fn=convert_lavita_split_to_dolma,
-    config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="pubmed-qa", split="validation"
-    ),
-)
+@step(name="documents/lavita_pubmed_validation")
+def lavita_pubmed_validation():
+    return convert_lavita_split_to_dolma(
+        LavitaToDolmaConfig(
+            input_path=lavita_medical_qa_datasets,
+            output_path=output(),
+            subset="pubmed-qa",
+            split="validation",
+        )
+    )
 
-lavita_medmcqa_validation = ExecutorStep(
-    name="documents/lavita_medmcqa_validation",
-    fn=convert_lavita_split_to_dolma,
-    config=LavitaToDolmaConfig(
-        input_path=lavita_medical_qa_datasets, output_path=this_output_path(), subset="medmcqa", split="validation"
-    ),
-)
+@step(name="documents/lavita_medmcqa_validation")
+def lavita_medmcqa_validation():
+    return convert_lavita_split_to_dolma(
+        LavitaToDolmaConfig(
+            input_path=lavita_medical_qa_datasets,
+            output_path=output(),
+            subset="medmcqa",
+            split="validation",
+        )
+    )
 
 lavita_allprocessed_tokenized = default_tokenize(
     "tokenized/lavita_allprocessed",
-    lavita_allprocessed,
+    lavita_allprocessed(),
     tokenizer=llama3_tokenizer,
 )
 
 lavita_medmcqa_tokenized = default_tokenize(
     "tokenized/lavita_medmcqa",
-    lavita_medmcqa,
+    lavita_medmcqa(),
     tokenizer=llama3_tokenizer,
 )
 
 lavita_pubmedqa_tokenized = default_tokenize(
     "tokenized/lavita_pubmedqa",
-    lavita_pubmed,
+    lavita_pubmed(),
     tokenizer=llama3_tokenizer,
 )
 
 lavita_pubmedqa_validation_tokenized = default_tokenize(
     "tokenized/lavita_pubmedqa_validation",
-    lavita_pubmed_validation,
+    lavita_pubmed_validation(),
     tokenizer=llama3_tokenizer,
     is_validation=True,
 )
 
 lavita_medmcqa_validation_tokenized = default_tokenize(
     "tokenized/lavita_medmcqa_validation",
-    lavita_medmcqa_validation,
+    lavita_medmcqa_validation(),
     tokenizer=llama3_tokenizer,
     is_validation=True,
 )

@@ -40,7 +40,7 @@ from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_components
 from fray.cluster import ResourceConfig
-from marin.execution import executor_main, output_path_of
+from marin.execution import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 PHASE_3_START = 160_000
@@ -95,7 +95,7 @@ bison_cooldown_mixture = lm_varying_mixture_data_config(
 
 DECAY_FRACTION = (PHASE_3_END - PHASE_3_START) / PHASE_3_END
 
-qwen_phase2_checkpoint_for_phase3 = marin_32b_qwen.cd(f"checkpoints/step-{PHASE_3_START}").nonblocking()
+qwen_phase2_checkpoint_for_phase3 = (marin_32b_qwen / f"checkpoints/step-{PHASE_3_START}").nonblocking()
 
 bison_train_config = dataclasses.replace(
     qwen_32b_warmstart_train,
@@ -145,7 +145,7 @@ tootsie_32b_cooldown_bison = default_train(
 
 # Loss Spiked, see if flat LR works. (Will: It doesn't but preserving for posterity)
 
-qwen_phase3_checkpoint_for_phase4 = tootsie_32b_cooldown_bison.cd("checkpoints/step-190000").nonblocking()
+qwen_phase3_checkpoint_for_phase4 = (tootsie_32b_cooldown_bison / "checkpoints/step-190000").nonblocking()
 
 bison_train_config_flat = dataclasses.replace(
     bison_train_config,
@@ -194,7 +194,7 @@ for model, revision in baselines:
     model_instance = download_model_step(ModelConfig(hf_repo_id=model, hf_revision=revision))
     baseline_evals.extend(
         default_base_eval(
-            output_path_of(model_instance),
+            model_instance,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
             run_generation_evals=False,
             discover_latest_checkpoint=False,

@@ -21,7 +21,7 @@ import logging
 from experiments.llama import llama_300m
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, step
 from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
@@ -48,9 +48,14 @@ speedrun_config = SpeedrunConfig(
 
 speedrun_config.print_run_info()
 
-if __name__ == "__main__":
-    executor_main(
-        steps=default_speedrun(
-            "llama_300m_run", config=speedrun_config, override_output_path="checkpoints/speedrun/llama_300m_run-e76a8f"
-        )
+
+@step(name="speedrun/llama_300m_run/all")
+def run_llama_300m():
+    """Entry point for Llama 300M training."""
+    default_speedrun(
+        "llama_300m_run", config=speedrun_config, override_output_path="checkpoints/speedrun/llama_300m_run-e76a8f"
     )
+
+
+if __name__ == "__main__":
+    executor_main(steps=[run_llama_300m()], description="300M param model based on Llama architecture")

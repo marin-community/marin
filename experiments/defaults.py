@@ -52,15 +52,16 @@ from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.execution import deferred, output, step, versioned
 from marin.execution.executor import (
     ExecutorStep,
-    InputName,
+    StepRef,
     VersionedValue,
     ensure_versioned,
     get_executor_step,
-    this_output_path,
     unwrap_versioned_value,
 )
 from marin.processing.tokenize import (
@@ -69,25 +70,30 @@ from marin.processing.tokenize import (
     TokenizerStep,
     add_validation_sets_to_mixture,
     lm_data_config,
-    tokenize,
 )
+from marin.processing.tokenize import tokenize as _tokenize
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
-from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
-from marin.training.training import (
-    TrainLmOnPodConfig,
-    run_levanter_train_lm,
-)
+
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
+tokenize = deferred(_tokenize)
+
+from marin.scaling_laws.scaling_laws import ScalingLawConfig
+from marin.training.training import TrainLmOnPodConfig
 
 logger = logging.getLogger("ray")
 
 
+@step(
+    name="{name}",
+    description="Download {hf_dataset_id} revision {revision}",
+)
 def default_download(
     name: str,
     hf_dataset_id: str,
     revision: str,
-    override_output_path: str | None = None,
     **kwargs: Any,
-) -> InputName:
+) -> StepRef:
     """
     Download a HuggingFace dataset and upload it to a specified path with default configuration.
 
@@ -97,45 +103,41 @@ def default_download(
         hf_dataset_id: The HuggingFace dataset ID to download. As `$ORG/$DATASET` on HF Hub
         revision: The revision of the dataset to download.
             Short Commit Hash from HF Dataset Repo (7 characters)
-        override_output_path: Optional. The output path for the dataset.
         **kwargs: Additional keyword arguments that are passed to the download config.
 
     The final output data will reside in '{output_path}/{revision}'.
     """
-
-    step = ExecutorStep(
-        name=name,
-        description=f"Download {hf_dataset_id} revision {revision}",
-        fn=download_hf,
-        config=DownloadConfig(
+    return download_hf(
+        DownloadConfig(
             hf_dataset_id=hf_dataset_id,
             revision=revision,
-            gcs_output_path=this_output_path(),
+            gcs_output_path=output(),
             wait_for_completion=True,
             **kwargs,
-        ),
-        override_output_path=override_output_path,
+        )
     )
 
-    return step.as_input_name()
 
-
+@step(
+    name="tokenized/{name}",
+    description="Tokenize raw text using the {tokenizer} tokenizer.",
+)
 def default_tokenize(
     name: str,
-    dataset: InputName | ExecutorStep | str | HfDatasetSpec,
+    dataset: StepRef | ExecutorStep | str | HfDatasetSpec,
     tokenizer: str,
     format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
     *,
     sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
-) -> ExecutorStep:
+) -> StepRef:
     """
     Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
 
     Args:
         name: The name of the tokenized dataset. This is used to form the output path for the executor step.
             `tokenized/` will be prepended to the name.
-        dataset:  The dataset to tokenize. This can be an InputName, ExecutorStep, a string as a
+        dataset:  The dataset to tokenize. This can be a StepRef, ExecutorStep, a string as a
             path to the dataset or a HuggingFace dataset ID, or ``HfDatasetSpec`` to specify a
             dataset with a particular subset name.
         tokenizer: string HuggingFace tokenizer name. Should be the same as you intend to use in the tokenizer
@@ -147,43 +149,43 @@ def default_tokenize(
         sample_count: Optional limit on the number of samples to tokenize per shard. If ``None``, tokenize everything.
         is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
     Returns:
-        An ExecutorStep that represents the tokenized dataset.
+        A StepRef that represents the tokenized dataset.
     """
+    # If dataset is a StepRef or ExecutorStep, call it to get the value
+    if isinstance(dataset, (StepRef, ExecutorStep)):
+        resolved_dataset = dataset
+    else:
+        resolved_dataset = dataset
 
     # sniff out if it's a HuggingFace dataset
     if isinstance(dataset, HfDatasetSpec):
         config = HfTokenizeConfig(
             id=dataset.id,
             name=dataset.name,
-            cache_path=this_output_path(),
+            cache_path=output(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
-    elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
+    elif isinstance(resolved_dataset, str) and resolved_dataset.count("/") == 1 and not fsspec_utils.exists(resolved_dataset):
         config = HfTokenizeConfig(
-            id=dataset,
-            cache_path=this_output_path(),
+            id=resolved_dataset,
+            cache_path=output(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
     else:
         config = TokenizeConfig(
-            train_paths=[dataset] if not is_validation else [],
-            validation_paths=[dataset] if is_validation else [],
-            cache_path=this_output_path(),
+            train_paths=[resolved_dataset] if not is_validation else [],
+            validation_paths=[resolved_dataset] if is_validation else [],
+            cache_path=output(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
 
-    return ExecutorStep(
-        name=os.path.join("tokenized", name),
-        description=f"Tokenize raw text using the {tokenizer} tokenizer.",
-        fn=tokenize,
-        config=config,
-    )
+    return tokenize(config)
 
 
 @lru_cache  # LRU to make the executor happier
@@ -199,7 +201,7 @@ def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> di
 
 def simulated_epoching_train(
     name: str,
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     target_budget: int,
@@ -213,7 +215,7 @@ def simulated_epoching_train(
 
     Args:
         name:  The name of the training run. Will form the basis of the output path for the executor step.
-        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        tokenized:  The tokenized data to train on. This can be a StepRef, ExecutorStep, or LMMixtureDatasetConfig.
         model_config: Levanter LmConfig for the model to train.
         train_config: SimpleTrainConfig for the training run.
         target_budget: Target token budget to simulate.
@@ -248,7 +250,7 @@ def simulated_epoching_train(
 
 def default_train(
     name: str,
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     tags: Sequence[str] = (),
@@ -261,7 +263,7 @@ def default_train(
 
     Args:
         name:  The name of the training run. Will form the basis of the output path for the executor step.
-        tokenized:  The tokenized data to train on. This can be an InputName, ExecutorStep, or LMMixtureDatasetConfig.
+        tokenized:  The tokenized data to train on. This can be a StepRef, ExecutorStep, or LMMixtureDatasetConfig.
         model_config: Levanter LmConfig for the model to train.
         train_config: SimpleTrainConfig for the training run.
         tags: Any additional tags to add to the Wandb tracker.
@@ -408,33 +410,38 @@ def default_train(
     # Create the pod config
     pod_config = train_config.resources
 
-    # Create the full config
-    config = TrainLmOnPodConfig(
-        train_config=inner_config,
-        resources=pod_config,
-        output_path=this_output_path(),
-    )
+    model_config_unwrapped = unwrap_versioned_value(model_config)
 
-    model_config = unwrap_versioned_value(model_config)
+    # Import here to avoid circular dependency
+    from marin.training.training import run_levanter_train_lm as _run_levanter_train_lm
+    run_levanter_train_lm = deferred(_run_levanter_train_lm)
 
-    return ExecutorStep(
+    @step(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
+            f"Train a {compute_num_parameters(model_config_unwrapped, vocab_size):,} parameter model for "
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
             f"{train_length} (train_seq_len) "
             f"= {total_examples * train_length} tokens."
         ),
-        fn=run_levanter_train_lm,
-        config=config,
         override_output_path=override_output_path,
     )
+    def _train():
+        return run_levanter_train_lm(
+            TrainLmOnPodConfig(
+                train_config=inner_config,
+                resources=pod_config,
+                output_path=output(),
+            )
+        )
+
+    return _train()
 
 
 def default_sft(
     name: str,
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
     model_config: LlamaConfig,
     sft_config: SimpleSFTConfig,
     tags: Sequence[str] = (),
@@ -448,7 +455,7 @@ def default_sft(
     Args:
         name: The name of the training run, forms the basis of the output path.
         tokenized: The tokenized data to train on:
-                  - For single dataset: an InputName or ExecutorStep for a tokenized dataset.
+                  - For single dataset: a StepRef or ExecutorStep for a tokenized dataset.
                   - For mixture: a LMMixtureDatasetConfig with multiple datasets.
         model_config: Levanter LlamaConfig for the model architecture to train.
         sft_config: Configuration for the SFT training process.
@@ -564,7 +571,7 @@ def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
     )
 
 
-def _impute_checkpoint_step(checkpoint_path: str | InputName) -> int:
+def _impute_checkpoint_step(checkpoint_path: str | StepRef) -> int:
     """
     Extracts the checkpoint step from a checkpoint path.
     Args:
@@ -573,8 +580,10 @@ def _impute_checkpoint_step(checkpoint_path: str | InputName) -> int:
     Returns:
 
     """
-    if isinstance(checkpoint_path, InputName):
-        checkpoint_path = checkpoint_path.name
+    if isinstance(checkpoint_path, StepRef):
+        if checkpoint_path._step is None:
+            raise ValueError("Cannot extract checkpoint step from output reference")
+        checkpoint_path = checkpoint_path._step.name
     imputed_checkpoint_steps = checkpoint_path.index("step-")
     imputed_checkpoint_step = int(checkpoint_path[imputed_checkpoint_steps + len("step-") :])
     return imputed_checkpoint_step
@@ -592,7 +601,7 @@ def _get_vocab_size(pretraining_data):
 
 
 def _prepare_data_config(
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
     use_default_validation: bool,
 ) -> LMMixtureDatasetConfig:
     """
@@ -609,7 +618,7 @@ def _prepare_data_config(
     else:
         validation_sets = {}
 
-    if isinstance(tokenized, InputName | ExecutorStep):
+    if isinstance(tokenized, StepRef | ExecutorStep):
         pretraining_data = lm_data_config(
             training_set=tokenized,
             validation_sets=validation_sets,
@@ -623,7 +632,7 @@ def _prepare_data_config(
     return pretraining_data
 
 
-def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig) -> str:
+def _get_tokenizer_for_train(tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig) -> str:
     match tokenized:
         case LMMixtureDatasetConfig(tokenizer=tokenizer):
             pass
@@ -631,7 +640,7 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
             tokenizer = config.tokenizer
         case ExecutorStep(config=HfTokenizeConfig(tokenizer=tokenizer)):
             pass
-        case InputName(step=ExecutorStep(config)) if isinstance(config, TokenizeConfigBase):
+        case StepRef(_step=ExecutorStep(config=config)) if isinstance(config, TokenizeConfigBase):
             tokenizer = config.tokenizer
         case _:
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
@@ -640,8 +649,8 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
 
 
 def default_scaling_law_pred(
-    ladder_runs: Sequence[ExecutorStep | InputName | str],
-    pred_run: ExecutorStep | InputName | str | None = None,
+    ladder_runs: Sequence[ExecutorStep | StepRef | str],
+    pred_run: ExecutorStep | StepRef | str | None = None,
     task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb",),
     task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] | None = None,
 ):
@@ -664,14 +673,20 @@ def default_scaling_law_pred(
     else:
         name = "projection"
 
-    return ExecutorStep(
-        name=f"""scaling_laws/{name}""",
-        fn=run_scaling_law_analysis,
-        config=ScalingLawConfig(
-            name=name,
-            ladder_model_steps=ladder_steps_or_ids,
-            pred_model_step=pred_run_or_id,
-            task_losses=task_losses,
-            task_accuracies=task_accuracies,
-        ),
-    )
+    # Import here to avoid circular dependency
+    from marin.scaling_laws.scaling_laws import run_scaling_law_analysis as _run_scaling_law_analysis
+    run_scaling_law_analysis_fn = deferred(_run_scaling_law_analysis)
+
+    @step(name=f"""scaling_laws/{name}""")
+    def _scaling_law():
+        return run_scaling_law_analysis_fn(
+            ScalingLawConfig(
+                name=name,
+                ladder_model_steps=ladder_steps_or_ids,
+                pred_model_step=pred_run_or_id,
+                task_losses=task_losses,
+                task_accuracies=task_accuracies,
+            )
+        )
+
+    return _scaling_law()

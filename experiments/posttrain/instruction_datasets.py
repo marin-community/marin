@@ -56,22 +56,29 @@ from typing import Any
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
+from marin.execution import step, deferred, output
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
-    output_path_of,
-    this_output_path,
+    StepRef,
     versioned,
 )
 from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
-    convert_conversation_to_dolma,
+)
+from marin.transform.conversation.conversation_to_dolma import (
+    convert_conversation_to_dolma as _convert_conversation_to_dolma,
 )
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
-    transform_hf_dataset,
 )
+from marin.transform.conversation.transform_conversation import (
+    transform_hf_dataset as _transform_hf_dataset,
+)
+
+convert_conversation_to_dolma = deferred(_convert_conversation_to_dolma)
+transform_hf_dataset = deferred(_transform_hf_dataset)
 
 SMOLTALK2_SPLITS = [
     "LongAlign_64k_Qwen3_32B_yarn_131k_think",
@@ -557,7 +564,8 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     return dataset_name
 
 
-def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorStep:
+@step(name="documents")
+def transform_dataset_step(dataset_cfg: InstructionDatasetConfig):
     """ExecutorStep that preprocesses the input dataset into a canonicalized format for SFT training."""
     adapter = dataset_cfg.adapter
     output_name = dataset_cfg.name if dataset_cfg.name is not None else dataset_cfg.hf_dataset_id
@@ -585,23 +593,16 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
         -{adapter_signature_str}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
-    transform_step = ExecutorStep(
-        name=f"documents/{output_name}",
-        fn=transform_hf_dataset,
-        config=TransformSFTDatasetConfig(
-            source=versioned(dataset_cfg.hf_dataset_id),
-            revision=versioned(dataset_cfg.revision),
-            output_path=this_output_path(),
-            metadata_columns=versioned(dataset_cfg.metadata_columns),
-            adapter=versioned(adapter),
-            subsets=versioned(dataset_cfg.subsets),
-            splits=versioned(dataset_cfg.splits),
-            max_parallelism=dataset_cfg.max_parallelism,
-        ),
-        override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
-    )
-
-    return transform_step
+    return transform_hf_dataset(TransformSFTDatasetConfig(
+        source=versioned(dataset_cfg.hf_dataset_id),
+        revision=versioned(dataset_cfg.revision),
+        output_path=output(),
+        metadata_columns=versioned(dataset_cfg.metadata_columns),
+        adapter=versioned(adapter),
+        subsets=versioned(dataset_cfg.subsets),
+        splits=versioned(dataset_cfg.splits),
+        max_parallelism=dataset_cfg.max_parallelism,
+    ))
 
 
 def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = None) -> ExecutorStep:
@@ -619,11 +620,11 @@ def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = N
     return transform_dataset_step(config)
 
 
-tulu_3_in_dolma = ExecutorStep(
-    name="dolma/tulu_3_in_dolma",
-    fn=convert_conversation_to_dolma,
-    config=ConversationToDolmaConfig(output_path_of(get_instruction_dataset("allenai/tulu-3-sft-mixture"))),
-)
+@step(name="dolma/tulu_3_in_dolma")
+def _tulu_3_in_dolma_step():
+    return convert_conversation_to_dolma(ConversationToDolmaConfig(get_instruction_dataset("allenai/tulu-3-sft-mixture")))
+
+tulu_3_in_dolma = _tulu_3_in_dolma_step()
 
 
 # levanter treats validation and  training as separate so we tokenize twice. Not ideal, but fine here.
@@ -639,10 +640,15 @@ tulu3_flat_llama_tokenized_as_train = default_tokenize(
 ).with_output_path("tokenized/tulu_sft-349fb7/")
 
 
-if __name__ == "__main__":
-    all_steps = []
+@step(name="posttrain/instruction_datasets/all")
+def prepare_all_instruction_datasets():
+    """Entry point that prepares all instruction datasets."""
     for config in INSTRUCTION_DATASET_NAME_TO_CONFIG.values():
-        transformed_dataset = transform_dataset_step(config)
-        all_steps.append(transformed_dataset)
+        transform_dataset_step(config)
 
-    executor_main(steps=all_steps)
+
+if __name__ == "__main__":
+    executor_main(
+        steps=[prepare_all_instruction_datasets()],
+        description="Prepare all instruction datasets for supervised fine-tuning"
+    )

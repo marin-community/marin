@@ -42,7 +42,8 @@ Notes
 import logging
 from dataclasses import dataclass
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution import deferred, output
+from marin.execution.executor import executor_main, StepRef, step
 from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 
 from experiments.midtraining_datasets import finemath_3_plus
@@ -77,6 +78,7 @@ class DatasetConfig:
     """Name of the text field in the parquet file."""
 
 
+@deferred
 def run_train_test_overlap(config: DeconConfig) -> str:
     logger.info(f"Starting train-test overlap dedupe with config: {config}")
     decontaminate(config)
@@ -96,24 +98,34 @@ DATASET_CONFIGS = [
 ]
 
 
-def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
-    dedupe_config = DeconConfig(
-        input_path=dataset_config.path,
-        output_path=this_output_path(),
-        decontaminate_source=EVAL_DATASET_STEPS,
-        attribute_name="ngram_overlap",
-        false_positive_rate=1e-20,
-        ngram=DEFAULT_NGRAM_CONFIG,
-        processes=1024,
-        mode=DeconMode.TRAIN_TEST_OVERLAP,
-        text_field=dataset_config.text_field,
+@step(name="train_test_overlap/dolma/total/{name}")
+def _build_step_impl(
+    name: str,
+    dataset_path: StepRef,
+    eval_datasets: list[StepRef],
+    text_field: str,
+) -> StepRef:
+    return run_train_test_overlap(
+        DeconConfig(
+            input_path=dataset_path,
+            output_path=output(),
+            decontaminate_source=eval_datasets,
+            attribute_name="ngram_overlap",
+            false_positive_rate=1e-20,
+            ngram=DEFAULT_NGRAM_CONFIG,
+            processes=1024,
+            mode=DeconMode.TRAIN_TEST_OVERLAP,
+            text_field=text_field,
+        )
     )
 
-    return ExecutorStep(
-        name=f"train_test_overlap/dolma/total/{dataset_config.name}",
-        fn=run_train_test_overlap,
-        config=dedupe_config,
-        description=f"Run dedupe train-test overlap on {dataset_config.name}",
+
+def build_step(dataset_config: DatasetConfig) -> StepRef:
+    return _build_step_impl(
+        name=dataset_config.name,
+        dataset_path=dataset_config.path,
+        eval_datasets=EVAL_DATASET_STEPS,
+        text_field=dataset_config.text_field,
     )
 
 

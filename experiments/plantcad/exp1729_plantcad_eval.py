@@ -33,7 +33,8 @@ from datasets import Dataset, load_dataset
 from huggingface_hub import HfApi
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution import StepRef, step, deferred, output
+from marin.execution.executor import executor_main, versioned
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
@@ -422,7 +423,7 @@ def evaluate_conservation_scores(scores: ConservationResult) -> dict[str, float]
 # -----------------------------------------------------------------------------
 # Main evaluation function
 # -----------------------------------------------------------------------------
-def run_plantcad_evaluation(config: DnaEvalConfig) -> dict:
+def _run_plantcad_evaluation(config: DnaEvalConfig) -> dict:
     """Run PlantCAD model evaluation on conservation prediction."""
     logger.info("🧬 PlantCAD Model Evaluation")
     logger.info("=" * 64)
@@ -513,22 +514,23 @@ def run_plantcad_evaluation(config: DnaEvalConfig) -> dict:
     return output_data
 
 
+run_plantcad_evaluation = deferred(_run_plantcad_evaluation)
+
+
 # -----------------------------------------------------------------------------
 # Experiment setup
 # -----------------------------------------------------------------------------
-checkpoint_path = "hf://plantcad/marin_exp1729__pcv1_600m_c512__checkpoints/local_store/checkpoints/plantcad-train-600m-r16-a1bc43/hf/step-26782"
-evaluation_step = ExecutorStep(
-    name="plantcad-eval",
-    fn=run_plantcad_evaluation,
-    config=DnaEvalConfig(
+@step(name="plantcad-eval")
+def evaluation_step():
+    checkpoint_path = "hf://plantcad/marin_exp1729__pcv1_600m_c512__checkpoints/local_store/checkpoints/plantcad-train-600m-r16-a1bc43/hf/step-26782"
+    return run_plantcad_evaluation(DnaEvalConfig(
         checkpoint_path=versioned(checkpoint_path),
-        output_path=this_output_path(),
-    ),
-)
+        output_path=output(),
+    ))
 
 
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    executor_main(steps=[evaluation_step])
+    executor_main(steps=[evaluation_step()])

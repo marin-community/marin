@@ -32,7 +32,7 @@ from experiments.evals.task_configs import (
 )
 from experiments.models import qwen3_32b
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, step
 
 from experiments.tootsie.exp1529_32b_mantis_cooldown import tootsie_32b_cooldown_mantis as marin_32b
 
@@ -56,17 +56,20 @@ TASK_CONFIGS = (
     + SPECIALIZED_TASKS
 )
 
-if __name__ == "__main__":
-    # Comprehensive evaluation suite for multiple models
-    eval_steps = []
-
+@step(name="evals/lm-harness/all")
+def run_lm_eval_harness():
+    """Entry point for comprehensive LM Evaluation Harness testing."""
     for model in MODELS_TO_EVALUATE:
-        eval_steps.append(
-            default_eval(
-                step=model,
-                resource_config=ResourceConfig.with_tpu("v5p-8"),
-                evals=TASK_CONFIGS,
-                discover_latest_checkpoint=False,
-            )
-        )
-    executor_main(steps=eval_steps)
+        default_eval(
+            step=model,
+            resource_config=ResourceConfig.with_tpu("v5p-8"),
+            evals=TASK_CONFIGS,
+            discover_latest_checkpoint=False,
+        )()
+
+
+if __name__ == "__main__":
+    executor_main(
+        steps=[run_lm_eval_harness()],
+        description="Comprehensive LM Evaluation Harness Testing across multiple models.",
+    )

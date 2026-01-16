@@ -22,9 +22,11 @@ The goal was to see if there were any structural differences in the log probabil
 from experiments.defaults import default_validation_sets
 from experiments.posttrain.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
 from experiments.tootsie.exp600_tootsie import llama3_tokenizer, llama_8b
-from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs
-from marin.execution.executor import ExecutorStep, executor_main, versioned
+from marin.evaluation.visualize import VizLmConfig, visualize_lm_log_probs as _visualize_lm_log_probs
+from marin.execution import step, deferred, executor_main, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
+
+visualize_lm_log_probs = deferred(_visualize_lm_log_probs)
 
 # We compare the models in CHECKPOINTS to Meta's Llama 3.1 8B  base model.
 COMPARISON_MODEL = "meta-llama/Meta-Llama-3.1-8B"
@@ -54,24 +56,27 @@ eval_sets = {
 tulu_3_in_dolma = mixture_for_evaluation(eval_sets)
 
 
+@step(name="analysis/viz-compare/{checkpoint_name}")
+def _viz_compare_step_impl(checkpoint: str, checkpoint_name: str):
+    return visualize_lm_log_probs(VizLmConfig(
+        checkpoint_path=checkpoint,
+        model=llama_8b,
+        datasets=tulu_3_in_dolma,
+        num_docs_per_dataset=32,
+        comparison_model_path=COMPARISON_MODEL,
+        comparison_is_hf=True,
+    ))
+
+
 all_steps = []
 
 for checkpoint in CHECKPOINTS:
-    name = _path_to_step_name(checkpoint)
-    all_steps.append(
-        ExecutorStep(
-            name=name,
-            fn=visualize_lm_log_probs,
-            config=VizLmConfig(
-                checkpoint_path=checkpoint,
-                model=llama_8b,
-                datasets=tulu_3_in_dolma,
-                num_docs_per_dataset=32,
-                comparison_model_path=COMPARISON_MODEL,
-                comparison_is_hf=True,
-            ),
-        )
-    )
+    full_name = _path_to_step_name(checkpoint)
+    # Extract just the checkpoint name part (after "analysis/viz-compare/")
+    checkpoint_name = full_name.split("/", 2)[-1]
+
+    viz_step = _viz_compare_step_impl(checkpoint=checkpoint, checkpoint_name=checkpoint_name)
+    all_steps.append(viz_step)
 
 if __name__ == "__main__":
     executor_main(

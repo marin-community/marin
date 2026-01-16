@@ -20,13 +20,18 @@ https://huggingface.co/datasets/allenai/paloma
 
 import os.path
 
-from marin.download.huggingface.download_hf import DownloadConfig as HfDownloadConfig, download_hf
+from marin.download.huggingface.download_hf import DownloadConfig as HfDownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution import deferred, executor_main, output, step, versioned
+from marin.execution.executor import ExecutorStep
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
+
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 
@@ -52,21 +57,20 @@ PALOMA_DATASETS_TO_DIR = {
     "wikitext_103": "wikitext_103",
 }
 
-paloma = (
-    ExecutorStep(
-        name="raw/paloma",
-        fn=download_hf,
-        config=HfDownloadConfig(
+@step(name="raw/paloma")
+def create_paloma_config():
+    return download_hf(
+        HfDownloadConfig(
             hf_dataset_id=versioned("allenai/paloma"),
             revision=versioned("65cd6fc"),
-            gcs_output_path=this_output_path(),
+            gcs_output_path=output(),
             wait_for_completion=True,
             append_sha_to_path=True,
-        ),
+        )
     )
-    .with_output_path("raw/paloma-fc6827")
-    .cd("65cd6fc")
-)
+
+
+paloma = create_paloma_config().with_output_path("raw/paloma-fc6827").cd("65cd6fc")
 
 
 def paloma_tokenized(
@@ -90,5 +94,14 @@ def paloma_tokenized(
     return paloma_steps
 
 
+@step(name="paloma/all")
+def run_paloma_experiment():
+    """Entry point that downloads and tokenizes all Paloma datasets."""
+    paloma()  # download step
+    # Call each tokenized step
+    for name, step in paloma_tokenized().items():
+        pass  # The step is already traced when created
+
+
 if __name__ == "__main__":
-    executor_main(steps=[paloma, *paloma_tokenized().values()])
+    executor_main(steps=[run_paloma_experiment()], description="Download and tokenize Paloma")

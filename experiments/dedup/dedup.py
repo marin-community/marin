@@ -22,86 +22,105 @@ Usage:
 
 import logging
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, InputName, executor_main
-from marin.processing.classification.deduplication.pipeline import DedupeConfig, DedupMode, deduplicate
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
+from marin.execution import deferred, executor_main, output, step
+from marin.processing.classification.deduplication.pipeline import DedupeConfig, DedupMode
+from marin.processing.classification.deduplication.pipeline import deduplicate as _deduplicate
 
 logger = logging.getLogger(__name__)
 
-
-fineweb_edu_small_2 = ExecutorStep(
-    name="raw_fineweb_edu_small_2",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="HuggingFaceFW/fineweb-edu",
-        revision="3c452cb",
-        hf_urls_glob=["sample/10BT/000_00000.parquet", "sample/10BT/001_00000.parquet"],
-    ),
-)
-
-fineweb_edu_small_1 = ExecutorStep(
-    name="raw_fineweb_edu_small_1",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="HuggingFaceFW/fineweb-edu",
-        revision="3c452cb",
-        hf_urls_glob=["sample/10BT/000_00000.parquet"],
-    ),
-)
-
-fineweb_edu_small_10bt = ExecutorStep(
-    name="raw_fineweb_edu_small_10bt",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="HuggingFaceFW/fineweb-edu",
-        revision="3c452cb",
-        hf_urls_glob=["sample/10BT/*.parquet"],
-    ),
-)
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
+deduplicate = deferred(_deduplicate)
 
 
-def run_dedup(config: DedupeConfig) -> str:
-    logger.info(f"Starting dedupe with config: {config}")
+@step(name="raw_fineweb_edu_small_2")
+def raw_fineweb_edu_small_2():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="HuggingFaceFW/fineweb-edu",
+            revision="3c452cb",
+            hf_urls_glob=["sample/10BT/000_00000.parquet", "sample/10BT/001_00000.parquet"],
+        )
+    )
 
-    deduplicate(config)
 
-    logger.info(f"Dedupe completed! Results written to {config.output_path}")
-    return config.output_path
+@step(name="raw_fineweb_edu_small_1")
+def raw_fineweb_edu_small_1():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="HuggingFaceFW/fineweb-edu",
+            revision="3c452cb",
+            hf_urls_glob=["sample/10BT/000_00000.parquet"],
+        )
+    )
 
 
-def build_dedup_step(dataset: InputName, max_parallelism: int) -> ExecutorStep:
-    """
-    Builds a deduplication step for the given dataset.
+@step(name="raw_fineweb_edu_small_10bt")
+def raw_fineweb_edu_small_10bt():
+    return download_hf(
+        DownloadConfig(
+            hf_dataset_id="HuggingFaceFW/fineweb-edu",
+            revision="3c452cb",
+            hf_urls_glob=["sample/10BT/*.parquet"],
+        )
+    )
 
-    Args:
-        dataset: The input dataset to deduplicate.
-        max_parallelism: Maximum parallelism for Zephyr tasks.
-    """
+
+@step(name="dedup_raw_fineweb_edu_small_1")
+def dedup_fineweb_edu_small_1():
+    dataset = raw_fineweb_edu_small_1()
     input_path = dataset.cd("sample/10BT")
 
-    config = DedupeConfig(
-        input_path=input_path,
-        mode=DedupMode.EXACT_PARAGRAPH_DEDUPLICATE,
-        processes=max_parallelism,
-    )
-
-    return ExecutorStep(
-        name=f"dedup_{dataset.name}",
-        fn=run_dedup,
-        config=config,
-        description=f"Run dedupe on {dataset.name}",
+    return deduplicate(
+        DedupeConfig(
+            input_path=input_path,
+            output_path=output(),
+            mode=DedupMode.EXACT_PARAGRAPH_DEDUPLICATE,
+            processes=7,
+        )
     )
 
 
-STEPS = [
-    build_dedup_step(fineweb_edu_small_1, max_parallelism=7),
-    build_dedup_step(fineweb_edu_small_2, max_parallelism=7),
-    build_dedup_step(fineweb_edu_small_10bt, max_parallelism=1024),
-]
+@step(name="dedup_raw_fineweb_edu_small_2")
+def dedup_fineweb_edu_small_2():
+    dataset = raw_fineweb_edu_small_2()
+    input_path = dataset.cd("sample/10BT")
+
+    return deduplicate(
+        DedupeConfig(
+            input_path=input_path,
+            output_path=output(),
+            mode=DedupMode.EXACT_PARAGRAPH_DEDUPLICATE,
+            processes=7,
+        )
+    )
+
+
+@step(name="dedup_raw_fineweb_edu_small_10bt")
+def dedup_fineweb_edu_small_10bt():
+    dataset = raw_fineweb_edu_small_10bt()
+    input_path = dataset.cd("sample/10BT")
+
+    return deduplicate(
+        DedupeConfig(
+            input_path=input_path,
+            output_path=output(),
+            mode=DedupMode.EXACT_PARAGRAPH_DEDUPLICATE,
+            processes=1024,
+        )
+    )
+
+
+@step(name="dedup/all")
+def run_all_dedup():
+    """Entry point that runs all dedup experiments."""
+    dedup_fineweb_edu_small_1()
+    dedup_fineweb_edu_small_2()
+    dedup_fineweb_edu_small_10bt()
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    executor_main(
-        steps=STEPS,
-        description="Run dedupe",
-    )
+    executor_main(steps=[run_all_dedup()], description="Run dedupe")

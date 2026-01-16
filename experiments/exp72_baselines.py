@@ -23,8 +23,12 @@ from experiments.defaults import default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config, llama_300m, llama_300m_train_config
 from experiments.pretraining_datasets.simple import downloads, tokenized
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, lm_data_config, lm_mixture_data_config, tokenize
+from marin.execution import step, StepContext, StepRef, executor_main, versioned, deferred, output
+from marin.processing.tokenize import TokenizeConfig, lm_data_config, lm_mixture_data_config
+from marin.processing.tokenize import tokenize as _tokenize
+
+# Mark library functions as deferred
+tokenize = deferred(_tokenize)
 
 slimpajama_6b_tokenized = tokenized["slimpajama_6b"]
 slimpajama_6b_config = lm_data_config(slimpajama_6b_tokenized, permutation_type="linear")
@@ -35,17 +39,16 @@ slimpajama_6b_model = default_train(
     train_config=llama_300m_train_config,
 )
 
-slimpajama_tokenized = ExecutorStep(
-    name=os.path.join("tokenized", "SlimPajama-627B"),
-    fn=tokenize,
-    config=TokenizeConfig(
+@step(name=os.path.join("tokenized", "SlimPajama-627B"))
+def slimpajama_tokenized():
+    return tokenize(TokenizeConfig(
         train_paths=[downloads["slimpajama"].cd("train")],
         validation_paths=[downloads["slimpajama"].cd("validation")],
-        cache_path=this_output_path(),
+        cache_path=output(),
         tokenizer=versioned(llama3_tokenizer),
-    ),
-)
-slimpajama_config = lm_data_config(slimpajama_tokenized, permutation_type="linear")
+    ))
+
+slimpajama_config = lm_data_config(slimpajama_tokenized(), permutation_type="linear")
 slimpajama_model = default_train(
     name="SlimPajama-627B-1.4b",
     tokenized=slimpajama_config,
@@ -77,13 +80,16 @@ nemotron_cc_model = default_train(
 
 ############################################################
 
+@step(name="baselines/all")
+def run_all_baselines():
+    """Entry point for baseline model training experiments."""
+    slimpajama_6b_model()
+    slimpajama_model()
+    fineweb_edu_model()
+    nemotron_cc_model()
+
 if __name__ == "__main__":
     executor_main(
-        steps=[
-            slimpajama_6b_model,
-            slimpajama_model,
-            fineweb_edu_model,
-            nemotron_cc_model,
-        ],
+        steps=[run_all_baselines()],
         description="Train 1.4B models on standard datasets (SlimPajama 6B, SlimPajama, FineWebEdu, Nemotron-CC).",
     )

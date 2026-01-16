@@ -40,6 +40,7 @@ from experiments.defaults import default_train
 from experiments.llama import llama_13b, llama_24b, llama_56b
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
+from marin.execution import step
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
@@ -246,13 +247,19 @@ llama_56b_tootsie = default_train(
 )
 
 
+@step(name="tootsie/exp859/big_tootsies")
+def run_big_tootsies_experiment():
+    """Entry point for Big Tootsies training experiment (13B and 22B models)."""
+    return [
+        llama_13b_tootsie_phase1,
+        llama_22b_tootsie_phase1,
+        llama_13b_tootsie_ema_warmstart,
+        llama_22b_tootsie_ema_warmstart,
+    ]
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=[
-            llama_13b_tootsie_phase1,
-            llama_22b_tootsie_phase1,
-            llama_13b_tootsie_ema_warmstart,
-            llama_22b_tootsie_ema_warmstart,
-        ],
+        steps=[run_big_tootsies_experiment()],
         description="Train some models on DCLM using WSD-S, switching to EMA.",
     )

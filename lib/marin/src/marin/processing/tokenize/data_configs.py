@@ -23,7 +23,7 @@ import transformers
 from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
 
 from marin.execution import unwrap_versioned_value
-from marin.execution.executor import ExecutorStep, InputName, output_path_of
+from marin.execution.executor import ExecutorStep, StepRef
 from marin.processing.tokenize.tokenize import TokenizeConfig
 from marin.utils import load_tokenizer_with_backoff
 
@@ -44,11 +44,11 @@ def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_r
     if isinstance(step, TokenizeConfig):
         return step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
     else:
-        return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
+        return step.config.as_lm_dataset_source_config(step, include_raw_paths=include_raw_paths)
 
 
 def lm_data_config(
-    training_set: TokenizerStep | InputName,
+    training_set: TokenizerStep | StepRef,
     permutation_type: PermutationType = "feistel",
     *,
     validation_sets: dict[str, TokenizerStep] | None = None,
@@ -268,7 +268,7 @@ def add_validation_sets_to_mixture(
     Adds validation sets to a mixture config. Works with both fixed and varying mixture weights.
     """
     valid_configs = {
-        name: step.config.as_lm_dataset_source_config(output_path_of(step)) for name, step in validation_sets.items()
+        name: step.config.as_lm_dataset_source_config(step) for name, step in validation_sets.items()
     }
     new_configs = {
         **config.configs,

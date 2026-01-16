@@ -28,7 +28,7 @@ from experiments.defaults import default_train
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName
+from marin.execution.executor import ExecutorStep, StepRef
 
 DEFAULT_MODEL_CONFIG = LlamaConfig(
     max_seq_len=4096,
@@ -57,7 +57,7 @@ WS_EMA_DEFAULT_TRAIN_CONFIG = SimpleTrainConfig(
 
 def scaling_law_suite(
     sweep_name: str,
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
     widths: Sequence[int] = (512, 768, 1024, 1536, 2048),
     base_model_config: LlamaConfig = llama_1_4b,
     tags: Sequence[str] = (),

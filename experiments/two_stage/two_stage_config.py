@@ -30,10 +30,13 @@ from experiments.evals.task_configs import convert_to_levanter_task_config
 from experiments.two_stage.data import data_dict
 from experiments.two_stage.models import model_dict
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution import step, deferred, output
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig, lm_varying_mixture_data_config
 from fray.cluster import ResourceConfig
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.training import TrainLmOnPodConfig
+from marin.training.training import run_levanter_train_lm as _run_levanter_train_lm
+
+run_levanter_train_lm = deferred(_run_levanter_train_lm)
 
 
 @dataclass
@@ -352,7 +355,7 @@ class TwoStageConfig:
         return TrainLmOnPodConfig(
             train_config=self.build_train_lm_config(),
             resources=self.build_pod_config(),
-            output_path=this_output_path(),
+            output_path=None,
         )
 
     def __hash__(self):
@@ -365,19 +368,12 @@ class TwoStageConfig:
         return hash(self) == hash(other)
 
 
-def two_stage_train_step(two_stage_config: TwoStageConfig) -> ExecutorStep:
+@step(name="checkpoints/two_stage/{name}")
+def _two_stage_train_impl(name: str, two_stage_config: TwoStageConfig):
     train_lm_on_pod_config = two_stage_config.build_train_lm_on_pod_config()
+    train_lm_on_pod_config.output_path = output()
+    return run_levanter_train_lm(train_lm_on_pod_config)
 
-    executor_step_name = os.path.join("checkpoints", "two_stage", two_stage_config.build_name())
 
-    return ExecutorStep(
-        name=executor_step_name,
-        override_output_path=executor_step_name,
-        fn=run_levanter_train_lm,
-        description=f"Train a model for "
-        f"{two_stage_config.num_train_steps} (steps) * "
-        f"{two_stage_config.train_batch_size} (batch_size) * "
-        f"{two_stage_config.model_config.max_seq_len} (seq_len) "
-        f"= {two_stage_config.total_tokens:,} tokens.",
-        config=train_lm_on_pod_config,
-    )
+def two_stage_train_step(two_stage_config: TwoStageConfig):
+    return _two_stage_train_impl(name=two_stage_config.build_name(), two_stage_config=two_stage_config)
