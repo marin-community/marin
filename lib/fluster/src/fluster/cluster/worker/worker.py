@@ -384,6 +384,10 @@ class Worker:
             job.build_from_cache = build_result.from_cache
             job.image_tag = build_result.image_tag
 
+            # Protect image from eviction while job is running
+            if self._image_cache:
+                self._image_cache.protect(build_result.image_tag)
+
             # Phase 3: Create and start container
             job.transition_to(cluster_pb2.JOB_STATE_RUNNING)
 
@@ -470,6 +474,9 @@ class Worker:
             if not job.cleanup_done:
                 job.cleanup_done = True
                 self._port_allocator.release(list(job.ports.values()))
+                # Unprotect image from eviction now that job is done
+                if self._image_cache and job.image_tag:
+                    self._image_cache.unprotect(job.image_tag)
                 # Keep container around for log retrieval via docker logs
                 # Remove working directory (no longer needed since logs come from Docker)
                 if job.workdir and job.workdir.exists():

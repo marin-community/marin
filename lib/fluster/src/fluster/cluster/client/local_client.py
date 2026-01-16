@@ -228,6 +228,14 @@ class _LocalImageProvider:
             from_cache=True,
         )
 
+    def protect(self, tag: str) -> None:
+        """No-op for local provider (no eviction)."""
+        del tag
+
+    def unprotect(self, tag: str) -> None:
+        """No-op for local provider (no eviction)."""
+        del tag
+
 
 # =============================================================================
 # LocalClusterClient

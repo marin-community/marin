@@ -66,6 +66,14 @@ class ImageProvider(Protocol):
         job_logs: JobLogs | None = None,
     ) -> BuildResult: ...
 
+    def protect(self, tag: str) -> None:
+        """Mark an image as protected from eviction (used by a running job)."""
+        ...
+
+    def unprotect(self, tag: str) -> None:
+        """Remove protection from an image (job completed)."""
+        ...
+
 
 DOCKERFILE_TEMPLATE = """FROM {base_image}
 
@@ -124,13 +132,26 @@ class ImageCache:
         self,
         cache_dir: Path,
         registry: str,
-        max_images: int = 50,
+        max_images: int = 100,
     ):
         self._cache_dir = cache_dir / "images"
         self._registry = registry
         self._max_images = max_images
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._docker = DockerImageBuilder(registry)
+        # Refcount of images currently in use by jobs (should not be evicted)
+        self._image_refcounts: dict[str, int] = {}
+
+    def protect(self, tag: str) -> None:
+        """Increment refcount for an image (job using it)."""
+        self._image_refcounts[tag] = self._image_refcounts.get(tag, 0) + 1
+
+    def unprotect(self, tag: str) -> None:
+        """Decrement refcount for an image (job done with it)."""
+        if tag in self._image_refcounts:
+            self._image_refcounts[tag] -= 1
+            if self._image_refcounts[tag] <= 0:
+                del self._image_refcounts[tag]
 
     def build(
         self,
@@ -186,8 +207,14 @@ class ImageCache:
         if len(images) <= self._max_images:
             return
 
+        # Filter out protected images (in use by running jobs)
+        evictable = [img for img in images if img.tag not in self._image_refcounts]
+
+        if len(evictable) <= self._max_images:
+            return
+
         # Sort by created_at (oldest first), with tag as tiebreaker for determinism
-        images.sort(key=lambda x: (x.created_at, x.tag))
-        to_remove = images[: len(images) - self._max_images]
+        evictable.sort(key=lambda x: (x.created_at, x.tag))
+        to_remove = evictable[: len(evictable) - self._max_images]
         for image in to_remove:
             self._docker.remove(image.tag)

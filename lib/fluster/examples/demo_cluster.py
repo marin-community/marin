@@ -148,8 +148,8 @@ class DemoCluster:
 
         # Select providers based on use_docker flag
         if self._use_docker:
-            bundle_provider = BundleCache(cache_path, max_bundles=10)
-            image_provider = ImageCache(cache_path, registry="", max_images=10)
+            bundle_provider = BundleCache(cache_path, max_bundles=100)
+            image_provider = ImageCache(cache_path, registry="", max_images=100)
             container_runtime = DockerRuntime()
             environment_provider = None  # Use default (probe real system)
         else:
@@ -405,11 +405,6 @@ class DemoCluster:
             return True
         except CellExecutionError as e:
             print(f"Notebook execution failed: {e}")
-            for job in self.client.list_jobs():
-                print(f"  {job.id}: {job.state}")
-                # fetch logs
-                for log_entry in self.client.fetch_logs(job.id):
-                    logger.info("Log: %s", log_entry.data)
             return False
 
 
@@ -418,12 +413,25 @@ class DemoCluster:
 @click.option("--no-browser", is_flag=True, help="Don't auto-open browser for Jupyter")
 @click.option("--validate-only", is_flag=True, help="Run seed jobs and exit (for CI)")
 @click.option("--test-notebook", is_flag=True, help="Run notebook programmatically and validate (for CI)")
-def main(docker: bool, no_browser: bool, validate_only: bool, test_notebook: bool):
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
+def main(docker: bool, no_browser: bool, validate_only: bool, test_notebook: bool, verbose: bool):
     """Launch demo cluster with Jupyter notebook.
 
     By default, runs jobs in-process (no Docker required). Use --docker for
     real container execution.
     """
+    # Enable verbose logging if requested or if running test-notebook
+    if verbose or test_notebook:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        )
+    else:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        )
+
     mode = "Docker" if docker else "in-process"
     print(f"Starting demo cluster ({mode} mode)...")
 
