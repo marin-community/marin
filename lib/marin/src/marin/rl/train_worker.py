@@ -308,7 +308,8 @@ class TrainWorker:
             self.replay_buffer.set_current_step(-1)
 
             # Wait for initial rollouts to ensure we have baseline measurements
-            self._wait_for_initial_rollouts()
+            if not self._wait_for_initial_rollouts():
+                raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
 
             self._configure_training_hooks(trainer)
 

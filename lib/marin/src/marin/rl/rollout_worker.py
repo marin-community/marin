@@ -629,13 +629,26 @@ class RolloutWorker:
 
         # For inflight weight updates, wait for first weights before generating rollouts
         if self.config.inflight_weight_updates:
-            logger.info("Waiting for first weight transfer before starting inference...")
-            while not self._first_weights_received.wait(timeout=10.0):
+            max_wait_time = self.config.weight_transfer.max_weight_transfer_wait_time
+            logger.info(
+                "Waiting for first weight transfer before starting inference (timeout %.1fs)...",
+                max_wait_time,
+            )
+            start_time = time.time()
+            while True:
+                if self._first_weights_received.wait(timeout=10.0):
+                    break
+
                 if not self._running:
                     logger.info("Shutdown requested while waiting for first weights")
                     self._shutdown_complete.set()
                     return
-                logger.info("Still waiting for first weight transfer...")
+
+                elapsed = time.time() - start_time
+                if max_wait_time - elapsed <= 0:
+                    raise RuntimeError("Timed out waiting for initial weight transfer.")
+
+                logger.info("Still waiting for first weight transfer (elapsed: %.1fs)", elapsed)
             logger.info("First weights received, starting inference loop")
 
         step = 0
