@@ -50,8 +50,6 @@ class VizLmConfig:
     comparison_model_path: str | None = None
     comparison_is_hf: bool = False
 
-    local_model_dir: str = "/opt/gcsfuse_mount/models"
-
 
 def main(config: VizLmConfig):
     levanter.initialize(config)

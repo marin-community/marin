@@ -119,7 +119,7 @@ def _infer_model_name_for_path(model_path: str) -> str:
     return "_".join(model_path.split("/")[-2:])
 
 
-def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[str, str]:
+def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[str, InputName | str]:
     """
     Extract the model name and path from a step.
     """
@@ -127,9 +127,21 @@ def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[s
         model_step_path = output_path_of(step, "hf" if "gcsfuse" not in step.name else "")
         name = step.name
     elif isinstance(step, InputName):
-        model_step_path = output_path_of(step.step, "hf" if "gcsfuse" not in step.step.name else "")
+        # `InputName.hardcoded(...)` has `step.step is None`; treat it as a direct path.
         if step.step is None:
-            raise ValueError(f"Hardcoded path {step.name} is not part of the pipeline")
+            if step.name is None:
+                raise ValueError("Invalid InputName: both `step` and `name` are None.")
+            model_step_path = step.name
+            name = _infer_model_name_for_path(step.name)
+        else:
+            # If `name` is already set, the InputName refers to a specific subpath under the step's output.
+            # Otherwise default to the HF export directory (except for gcsfuse mounts).
+            model_step_path = (
+                step
+                if step.name is not None
+                else output_path_of(step.step, "hf" if "gcsfuse" not in step.step.name else "")
+            )
+            name = step.step.name
     elif isinstance(step, str):
         model_step_path = step
         name = _infer_model_name_for_path(step)

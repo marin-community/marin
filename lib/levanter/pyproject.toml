@@ -114,6 +114,8 @@ test = [
   "httpx>=0.28.1",
   "pytest-profiling>=1.8.1",
   "trackio>=0.5.0",
+  # need this or else the resolver gets a bad version
+  "numba>=0.62.1"
 ]
 
 docs = [

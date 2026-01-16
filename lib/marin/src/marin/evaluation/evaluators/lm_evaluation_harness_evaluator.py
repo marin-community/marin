@@ -426,7 +426,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             # NOTE(chris): This is not supported on TPUs
             # set_cuda_visible_devices()
             # Download the model from GCS or HuggingFace
-            model_name_or_path: str = self.download_model(model)
+            model_name_or_path, model = self.resolve_model_name_or_path(model)
 
             # Set HuggingFace offline mode environment variables AFTER model download
             # to prevent vLLM's EngineCore subprocess from trying to contact HuggingFace

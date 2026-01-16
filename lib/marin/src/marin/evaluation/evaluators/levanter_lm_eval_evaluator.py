@@ -16,7 +16,6 @@ import dataclasses
 import json
 import logging
 import os
-import shutil
 import contextlib
 
 import fsspec
@@ -109,7 +108,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         # Run the harness with the model and the specified evals
 
         try:
-            model_name_or_path: str = self.download_model_if_necessary(model)
+            model_name_or_path: str = self.model_name_or_path(model)
             name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
             logger.info(f"WandB Run Name: {name}")
             logger.info(f"Running eval harness on model: {model_name_or_path}")
@@ -144,7 +143,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             model_path = model_name_or_path
 
             logger.info(f"Model path: {model_path}")
-            logger.info(f"Levanter Cache Path: {LevanterTpuEvaluator.CACHE_PATH}")
             logger.info(f"Model name: {model.name}")
             logger.info(f"model_name_or_path: {model_name_or_path}")
 
@@ -266,9 +264,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         finally:
             # Clean up resources
             self.cleanup(model)
-
-            if os.path.exists(LevanterTpuEvaluator.CACHE_PATH) and "gcsfuse" not in LevanterTpuEvaluator.CACHE_PATH:
-                shutil.rmtree(LevanterTpuEvaluator.CACHE_PATH)
 
 
 def _json_default(value):
