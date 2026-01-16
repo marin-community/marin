@@ -620,7 +620,9 @@ class Curriculum:
 
 def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
     job_ctx = get_default_job_ctx()
-    actor = job_ctx.create_actor(Curriculum, config, name=config.actor_name, get_if_exists=True, preemptible=False)
+    actor = job_ctx.create_actor(
+        Curriculum, config, name=config.actor_name, get_if_exists=True, preemptible=False, num_cpus=0
+    )
 
     # Auto-restore from checkpoint if path provided
     if checkpoint_path:
