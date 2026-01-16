@@ -435,9 +435,10 @@ class ArrowFlightServer(WeightTransferServer):
 
             barrier_sync()
 
-        except Exception as e:
+        except Exception:
             self.metrics.failed_transfers += 1
-            logger.error(f"Failed to serve weights {weight_id} via Arrow Flight: {e}")
+            logger.exception(f"Failed to serve weights {weight_id} via Arrow Flight")
+            raise
 
     def cleanup(self) -> None:
         """Cleanup Flight server resources."""
