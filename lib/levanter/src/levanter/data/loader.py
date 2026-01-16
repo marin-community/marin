@@ -46,7 +46,6 @@ Ex = TypeVar("Ex")
 _TensorSliceIndex = tuple[slice, ...]
 logger = logging.getLogger(__name__)
 
-
 # NOTE: In general there are a lot of different indices flying around. Here's a quick guide:
 # - `step` or `batch_number` or `bn` is the training step or batch number
 # - `global` indices refer to the index into the datastore
@@ -136,7 +135,7 @@ class DataLoader(Iterable[Ex]):
 
             initial_example = blocking_wait(self.data_store.getitem_async(0))
             self._ex_leaves, self._ex_structure = jax.tree.flatten(initial_example, is_leaf=is_named_array)
-            self._padding_example = _make_padding_example(initial_example)
+            self._padding_example = self._make_padding_example(initial_example)
 
         if not self._allow_non_divisible_batch_size:
             self._check_batch_size_divisibility()
@@ -232,6 +231,11 @@ class DataLoader(Iterable[Ex]):
         total_length = blocking_wait(self.data_store.current_len())
         step = self.scheduler.find_step_containing_offset(total_length) + 1
         return step
+
+    def _make_padding_example(self, ex: Ex) -> Ex:
+        """Create a padding example for incomplete batches. Can be overridden by subclasses."""
+        with local_cpu_mesh():
+            return tree_zeros_like(ex)
 
 
 class DataLoaderIterator(Iterator[Ex]):
@@ -629,11 +633,6 @@ def check_sharded_consistency(tree: PyTree, check_disjoint_indices_are_different
 
     for leaf in jtu.tree_leaves(tree):
         check_array(leaf)
-
-
-def _make_padding_example(ex: Ex) -> Ex:
-    with local_cpu_mesh():
-        return tree_zeros_like(ex)
 
 
 def _round_to_nearest_multiple(x: int, multiple: int) -> int:

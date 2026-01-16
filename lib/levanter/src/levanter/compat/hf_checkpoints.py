@@ -41,6 +41,7 @@ from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidati
 from jax import ShapeDtypeStruct
 from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
+from jax.sharding import NamedSharding
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from tqdm_loggable.auto import tqdm
@@ -306,7 +307,10 @@ def _to_state_dict_with_dtype(
                 logger.debug(f"Skipping dtype conversion for non-floating point array {k} with dtype {v.dtype}")
 
     # deshard. We could be smarter here and use a process mesh or host offloading, but this is simpler for now
-    state_dict = jax.lax.with_sharding_constraint(state_dict, PartitionSpec())
+    mesh = get_concrete_mesh()
+    if mesh is not None and mesh.shape:
+        sharding = NamedSharding(mesh, PartitionSpec())
+        state_dict = jax.lax.with_sharding_constraint(state_dict, sharding)
 
     return state_dict
 
@@ -713,7 +717,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         # Vocab: first we have to resize the vocab as loaded from the checkpoint
         tokenizer_Vocab = self.Vocab
-        Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
+        # For multimodal models like LlavaOnevision, vocab_size is in text_config
+        hf_vocab_size = getattr(hf_config, "vocab_size", None)
+        if hf_vocab_size is None and hasattr(hf_config, "text_config"):
+            hf_vocab_size = hf_config.text_config.vocab_size
+        if hf_vocab_size is None:
+            raise ValueError("Could not find vocab_size in hf_config or hf_config.text_config")
+        Vocab = tokenizer_Vocab.resize(hf_vocab_size)
 
         # TODO: in an ideal world, we would only load the part of the array we needed, but
         # AFAICT neither torch state dicts nor safetensors support this.

@@ -161,6 +161,33 @@ class QwenDecoderLayer(eqx.Module):
 
         return QwenDecoderLayer(config, attn, mlp, ln_1, ln_2)
 
+    def decode(
+        self,
+        x: NamedArray,
+        kv_cache,
+        batch_info,
+        pos_ids: NamedArray,
+        *,
+        key=None,
+    ):
+        """Paged decode for a single layer with KV cache."""
+
+        k_attn, k_mlp = maybe_rng_split(key, 2)
+
+        # Self attention with paged KV cache
+        residual = x
+        x = self.input_layernorm(x)
+        attn_output, kv_cache = self.self_attn.paged_decode(x, kv_cache, batch_info, pos_ids=pos_ids, key=k_attn)
+        x = residual + attn_output
+
+        # MLP
+        residual = x
+        x = self.post_attention_layernorm(x)
+        mlp_output = self.mlp(x, key=k_mlp)
+        output = residual + mlp_output
+
+        return output, kv_cache
+
     @named_call
     def __call__(
         self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
