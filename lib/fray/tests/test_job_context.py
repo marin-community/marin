@@ -39,6 +39,12 @@ def test_context_run(job_context):
     assert job_context.get(future) == 10
 
 
+def test_context_run_with_name(job_context):
+    """Run accepts optional name parameter for task debugging."""
+    future = job_context.run(lambda x: x * 2, 5, name="test_task")
+    assert job_context.get(future) == 10
+
+
 def test_context_wait(job_context):
     futures = [job_context.run(lambda x: x, i) for i in range(5)]
     ready, pending = job_context.wait(futures, num_returns=2)
