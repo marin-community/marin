@@ -15,24 +15,23 @@
 # nodryrun
 import logging
 
-from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.llama import llama3_tokenizer
+from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
 from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
-from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
 
-nemotron_cc_steps = tokenize_nemotron(tokenizer=llama3_tokenizer)
+nemotron_cc_steps = tokenize_nemotron_steps(tokenizer=llama3_tokenizer)
 nemotron_cc_mixture = lm_mixture_data_config(
     components=nemotron_cc_steps,
     weights=NEMOTRON_WEIGHTS,
     permutation_type="linear",
 )
-
 # Full Mixtral 8x7B configuration using ragged-dot MoE kernels.
 mixtral_8x7b_ragged = MixtralConfig(
     seq_len=512,
@@ -57,11 +56,14 @@ speedrun_config = SpeedrunConfig(
         affiliation="Marin Project",
         url=None,
     ),
-    description="Train a Mixtral 8x7B MoE model (ragged dot) for 20 steps on Nemotron-CC tokens.",
+    description=(
+        "Train a Mixtral 8x7B MoE model (ragged dot) for 20 steps on the Nemotron-CC tokenized cache hosted in "
+        "gs://marin-us-east5, using global batch size 128, seq_len 512, and a 32k cross-entropy block size."
+    ),
     model_config=mixtral_8x7b_ragged,
     train_config=SimpleTrainConfig(
-        resources=ResourceConfig.with_tpu(tpu_type="v5p-64"),
-        train_batch_size=32,
+        resources=ResourceConfig.with_tpu("v5p-64", slice_count=1),
+        train_batch_size=128,
         num_train_steps=20,
         learning_rate=3e-4,
         weight_decay=0.1,
@@ -80,4 +82,4 @@ if __name__ == "__main__":
         speedrun_config.train_config.num_train_steps,
         mixtral_8x7b_ragged.cross_entropy_block_size,
     )
-    executor_main(steps=default_speedrun("mixtral_8x7b_ragged_speedrun_bs32_seq512_v5p-64", speedrun_config))
+    executor_main(steps=default_speedrun("mixtral_8x7b_ragged_speedrun_bs128_seq512_v5p64", speedrun_config))

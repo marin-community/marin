@@ -12,9 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Ragged-dot Mixtral MoE speedrun with larger expert count."""
-
 # nodryrun
+import logging
 
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.custom_mixtral import MixtralConfig
@@ -22,9 +21,10 @@ from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
-TRAIN_BATCH_SIZE = 256
+logger = logging.getLogger("ray")
 
-moe_300m_config = MixtralConfig(
+# Configuration that uses RAGGED DOT (default behavior)
+moe_300m_config_ragged = MixtralConfig(
     seq_len=1024,
     hidden_dim=768,
     intermediate_dim=768,
@@ -35,9 +35,10 @@ moe_300m_config = MixtralConfig(
     scan_layers=True,
     n_routed_experts=32,
     num_experts_per_tok=4,
-    use_gmm=False,
-    lbl_coef=None,
-    rzl_coef=None,
+    use_gmm=False,  # This ensures ragged dot is used (default behavior)
+    # Disable MoE auxiliary loss logging to prevent JAX tracer leaks
+    lbl_coef=None,  # disables load balancing loss logging
+    rzl_coef=None,  # disables router z-loss logging
 )
 
 speedrun_config = SpeedrunConfig(
@@ -46,11 +47,11 @@ speedrun_config = SpeedrunConfig(
         affiliation="Stanford University",
         url="https://stanford.edu/~pranshu",
     ),
-    description="Training a 300M Mixtral-style MoE model on TPU v4-8 with ragged-dot experts (32 experts).",
-    model_config=moe_300m_config,
+    description="Training a 300M parameter Mixtral-style MoE model on a TPU with Ragged Dot (baseline)",
+    model_config=moe_300m_config_ragged,
     train_config=SimpleTrainConfig(
         ResourceConfig.with_tpu("v4-8", slice_count=1),
-        train_batch_size=TRAIN_BATCH_SIZE,
+        train_batch_size=256,
         num_train_steps=4000,
         learning_rate=5e-4,
         weight_decay=0.1,
@@ -59,4 +60,9 @@ speedrun_config = SpeedrunConfig(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun("pranshu_mixtral_moe_ragged2_v4_8", speedrun_config))
+    # Add logging to confirm ragged dot is being used
+    logger.info("Running Mixtral with Ragged Dot MoE layers from custom_mixtral.py")
+    logger.info(f"Model type: {moe_300m_config_ragged.model_type}")
+    logger.info(f"Using GMM: {moe_300m_config_ragged.use_gmm}")
+
+    executor_main(steps=default_speedrun("pranshu_mixtral_300m_ragged_run2", speedrun_config))
