@@ -64,8 +64,14 @@ def test_actor_exception_propagation():
         client.divide(1, 0)
 
 
+@pytest.mark.skip(reason="Context injection removed in Step 1 - ActorServer is now 'dumb'. Will be handled in Step 3.")
 def test_actor_context_injection():
-    """Test that FlusterContext is properly injected and accessible."""
+    """Test that FlusterContext is properly injected and accessible.
+
+    NOTE: This test is disabled as part of the actor layer cleanup (Step 1).
+    ActorServer no longer automatically injects context. Context management
+    will be handled by higher-level helpers in fluster.client (Step 3).
+    """
     ctx = FlusterContext(
         job_id="test-job-123",
         worker_id="test-worker",

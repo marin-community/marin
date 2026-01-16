@@ -19,7 +19,7 @@ GCP VM instance metadata tags. Unlike ClusterResolver, it does NOT use
 namespace prefixing - it returns all instances with matching actor metadata.
 """
 
-from fluster.actor.resolver import GcsResolver, MockGcsApi
+from fluster.actor import GcsResolver, MockGcsApi
 
 
 def test_gcs_resolver_finds_actors():

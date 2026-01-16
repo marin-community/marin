@@ -12,32 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Resolver types and implementations for actor discovery.
+"""Resolver implementations for actor discovery.
 
-The core types (Resolver, ResolvedEndpoint, ResolveResult) are defined in
-fluster.client.protocols and re-exported here for backwards compatibility.
+This module provides implementations of the actor.types.Resolver protocol:
+- FixedResolver: Static endpoint configuration (for testing)
+- ClusterResolver: Dynamic discovery via cluster controller RPC
+- GcsResolver: Discovery via GCP VM instance metadata tags
+
+These resolvers add the "smart" namespace-aware layer on top of cluster
+endpoint operations.
 """
 
 from typing import Protocol
 
-from fluster.client import get_fluster_ctx
-from fluster.client.protocols import ResolvedEndpoint, ResolveResult, Resolver
+from fluster.actor.types import ResolvedEndpoint, ResolveResult
 from fluster.cluster.types import Namespace
 from fluster.rpc import cluster_pb2
 from fluster.rpc.cluster_connect import ControllerServiceClientSync
-
-# Re-export for backwards compatibility
-__all__ = [
-    "ClusterResolver",
-    "FixedResolver",
-    "GcsApi",
-    "GcsResolver",
-    "MockGcsApi",
-    "RealGcsApi",
-    "ResolveResult",
-    "ResolvedEndpoint",
-    "Resolver",
-]
 
 
 class FixedResolver:
@@ -103,6 +94,8 @@ class ClusterResolver:
 
     def _namespace_prefix(self) -> str:
         """Get namespace prefix from current FlusterContext."""
+        from fluster.client.context import get_fluster_ctx
+
         ctx = get_fluster_ctx()
         if ctx is None:
             raise RuntimeError("No FlusterContext - must be called from within a job")

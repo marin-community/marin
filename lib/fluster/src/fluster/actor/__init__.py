@@ -12,21 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Actor system for distributed RPC."""
+"""Actor system for distributed RPC.
 
-from fluster.actor.client import ActorClient
+This module provides the core actor infrastructure:
+- ActorServer: Host actor instances and handle RPC calls
+- ActorClient: Call remote actors via a resolver
+- ActorPool: Load-balanced and broadcast calls to multiple actors
+- Resolver: Protocol for actor name resolution
+
+Resolver implementations (ClusterResolver, FixedResolver, etc.) have been moved to
+fluster.client.protocols temporarily (will be reorganized in Step 3).
+
+For backwards compatibility, they are re-exported here.
+"""
+
+from fluster.actor.client import ActorClient, RetryConfig
 from fluster.actor.pool import ActorPool, BroadcastFuture, CallResult
-from fluster.actor.resolver import (
+from fluster.actor.server import ActorId, ActorServer
+from fluster.actor.types import ResolveResult, ResolvedEndpoint, Resolver
+
+# Temporary backwards compatibility: re-export resolver implementations from client.protocols
+# TODO(Step 3): Remove these once all code imports from client.protocols
+from fluster.client.protocols import (
     ClusterResolver,
     FixedResolver,
     GcsApi,
     GcsResolver,
     MockGcsApi,
-    ResolveResult,
-    ResolvedEndpoint,
-    Resolver,
+    RealGcsApi,
 )
-from fluster.actor.server import ActorId, ActorServer
 
 __all__ = [
     "ActorClient",
@@ -40,7 +54,9 @@ __all__ = [
     "GcsApi",
     "GcsResolver",
     "MockGcsApi",
+    "RealGcsApi",
     "ResolveResult",
     "ResolvedEndpoint",
     "Resolver",
+    "RetryConfig",
 ]

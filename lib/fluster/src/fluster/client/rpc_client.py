@@ -27,9 +27,9 @@ from pathlib import Path
 
 import cloudpickle
 
-from fluster.actor.resolver import ClusterResolver, Resolver
+from fluster.actor.types import Resolver
 from fluster.client.context import get_fluster_ctx
-from fluster.client.protocols import EndpointRegistry
+from fluster.client.protocols import ClusterResolver, EndpointRegistry
 from fluster.cluster.types import Entrypoint, JobId, Namespace
 from fluster.rpc import cluster_pb2
 from fluster.rpc.cluster_connect import ControllerServiceClientSync

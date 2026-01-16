@@ -28,7 +28,7 @@ import uvicorn
 
 from connectrpc.request import RequestContext
 
-from fluster.actor.resolver import ClusterResolver
+from fluster.actor import ClusterResolver
 from fluster.cluster.controller.service import ControllerServiceImpl
 from fluster.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState
 from fluster.cluster.types import JobId

@@ -42,9 +42,9 @@ import os
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from fluster.client.protocols import ClusterClient, EndpointRegistry, Resolver
+from fluster.cluster.client.job_info import JobInfo
 from fluster.cluster.types import Namespace
 
 
@@ -59,6 +59,9 @@ class FlusterContext:
     same namespace (the root job's ID). This makes namespace an actor-only concept
     that doesn't need to be explicitly passed around.
 
+    This wraps the cluster.client.job_info.JobInfo with additional smart features
+    like client/registry references.
+
     Attributes:
         job_id: Unique identifier for this job (hierarchical: "root/parent/child")
         attempt_id: Attempt number for this job execution (0-based)
@@ -71,9 +74,13 @@ class FlusterContext:
     job_id: str
     attempt_id: int = 0
     worker_id: str | None = None
-    client: ClusterClient | None = None
-    registry: EndpointRegistry | None = None
-    ports: dict[str, int] = field(default_factory=dict)
+    client: "ClusterClient | None" = None
+    registry: "EndpointRegistry | None" = None
+    ports: dict[str, int] | None = None
+
+    def __post_init__(self):
+        if self.ports is None:
+            object.__setattr__(self, "ports", {})
 
     @property
     def namespace(self) -> Namespace:
@@ -117,7 +124,7 @@ class FlusterContext:
         return self.ports[name]
 
     @property
-    def resolver(self) -> Resolver:
+    def resolver(self) -> "Resolver":
         """Get a resolver for actor discovery.
 
         The resolver uses the namespace derived from this context's job ID.
@@ -128,6 +135,31 @@ class FlusterContext:
         if self.client is None:
             raise RuntimeError("No client available in context")
         return self.client.resolver()
+
+    @staticmethod
+    def from_job_info(
+        info: JobInfo,
+        client: "ClusterClient | None" = None,
+        registry: "EndpointRegistry | None" = None,
+    ) -> "FlusterContext":
+        """Create FlusterContext from JobInfo.
+
+        Args:
+            info: JobInfo from cluster layer
+            client: Optional ClusterClient instance
+            registry: Optional EndpointRegistry instance
+
+        Returns:
+            FlusterContext with metadata from JobInfo
+        """
+        return FlusterContext(
+            job_id=info.job_id,
+            attempt_id=info.attempt_id,
+            worker_id=info.worker_id,
+            client=client,
+            registry=registry,
+            ports=dict(info.ports),
+        )
 
 
 # Module-level ContextVar for the current fluster context
@@ -208,40 +240,31 @@ def create_context_from_env() -> FlusterContext:
     Returns:
         Configured FlusterContext
     """
-    job_id = os.environ.get("FLUSTER_JOB_ID", "")
-    attempt_id = int(os.environ.get("FLUSTER_ATTEMPT_ID", "0"))
-    worker_id = os.environ.get("FLUSTER_WORKER_ID")
-    controller_address = os.environ.get("FLUSTER_CONTROLLER_ADDRESS")
-    bundle_gcs_path = os.environ.get("FLUSTER_BUNDLE_GCS_PATH")
+    from fluster.cluster.client.job_info import get_job_info
 
-    # Read ports from FLUSTER_PORT_* env vars
-    ports = {}
-    for key, value in os.environ.items():
-        if key.startswith("FLUSTER_PORT_"):
-            port_name = key[len("FLUSTER_PORT_") :].lower()
-            ports[port_name] = int(value)
+    # Get job info from environment
+    job_info = get_job_info()
+    if job_info is None:
+        # If no job info available, create minimal context
+        return FlusterContext(job_id="")
 
+    # Set up client and registry if controller address is available
     client = None
     registry = None
-    if controller_address:
+    if job_info.controller_address:
         from fluster.client.rpc_client import RpcClusterClient, RpcEndpointRegistry
         from fluster.rpc.cluster_connect import ControllerServiceClientSync
 
+        bundle_gcs_path = os.environ.get("FLUSTER_BUNDLE_GCS_PATH")
+
         rpc_client = ControllerServiceClientSync(
-            address=controller_address,
+            address=job_info.controller_address,
             timeout_ms=30000,
         )
         client = RpcClusterClient(
-            controller_address=controller_address,
+            controller_address=job_info.controller_address,
             bundle_gcs_path=bundle_gcs_path,
         )
         registry = RpcEndpointRegistry(rpc_client)
 
-    return FlusterContext(
-        job_id=job_id,
-        attempt_id=attempt_id,
-        worker_id=worker_id,
-        client=client,
-        registry=registry,
-        ports=ports,
-    )
+    return FlusterContext.from_job_info(job_info, client=client, registry=registry)

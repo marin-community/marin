@@ -53,7 +53,7 @@ from fluster.time_utils import ExponentialBackoff, wait_until_with_exception
 
 from fluster.rpc import actor_pb2, cluster_pb2
 from fluster.actor import ActorServer
-from fluster.actor.resolver import Resolver
+from fluster.actor.types import Resolver
 from fluster.rpc.actor_connect import ActorServiceClientSync
 from fluster.client import ClusterClient, fluster_ctx
 from fluster.cluster.types import Entrypoint, JobId

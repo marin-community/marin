@@ -14,22 +14,18 @@
 
 """Actor server implementation for hosting actor instances.
 
-ActorServer hosts actor instances and handles RPC calls. It integrates with
-FlusterContext for:
-- Getting allocated ports via ctx.get_port("actor")
-- Registering endpoints via ctx.registry
+ActorServer hosts actor instances and handles RPC calls. It is a "dumb" server
+that just serves actors - no automatic registration or context dependencies.
 
 Example:
-    # In a job entrypoint:
+    # Create and start server
     server = ActorServer()
     server.register("my-actor", MyActorClass())
-    server.serve_and_register("my-actor")  # Uses fluster_ctx() for port + registration
+    port = server.serve_background()
 
-    # Actor methods can access context via fluster_ctx():
-    class MyActor:
-        def my_method(self):
-            ctx = fluster_ctx()
-            print(f"Running in job {ctx.job_id}")
+    # For registration with cluster, use fluster.client helpers:
+    # from fluster.client.registration import register_actor_server
+    # register_actor_server(server, "my-actor", port)
 """
 
 import inspect
@@ -45,11 +41,11 @@ from typing import Any, NewType
 import cloudpickle
 import uvicorn
 
-from fluster.rpc import actor_pb2
-from fluster.time_utils import wait_until
-from fluster.rpc.actor_connect import ActorServiceASGIApplication
-from fluster.client import FlusterContext, fluster_ctx_scope, get_fluster_ctx
 from connectrpc.request import RequestContext
+
+from fluster.rpc import actor_pb2
+from fluster.rpc.actor_connect import ActorServiceASGIApplication
+from fluster.time_utils import wait_until
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +67,8 @@ class RegisteredActor:
 class ActorServer:
     """Server for hosting actor instances and handling RPC calls.
 
-    Integrates with FlusterContext for port allocation and endpoint registration.
-    Actor methods can access the context via fluster_ctx().
+    A "dumb" server that just serves actors - no automatic registration
+    or context magic. Use fluster.client helpers for registration.
     """
 
     def __init__(self, host: str = "0.0.0.0", port: int | None = None):
@@ -80,17 +76,13 @@ class ActorServer:
 
         Args:
             host: Host address to bind to
-            port: Port to bind to. If None, uses ctx.get_port("actor") from
-                  the FlusterContext when serve_and_register() is called.
-                  Use 0 for auto-assign without context.
+            port: Port to bind to. If None or 0, auto-assigns a free port.
         """
         self._host = host
         self._port = port
         self._actors: dict[str, RegisteredActor] = {}
-        self._fluster_context: FlusterContext | None = None
         self._app: ActorServiceASGIApplication | None = None
         self._actual_port: int | None = None
-        self._endpoint_id: str | None = None
 
     @property
     def address(self) -> str:
@@ -142,12 +134,7 @@ class ActorServer:
             args = cloudpickle.loads(request.serialized_args) if request.serialized_args else ()
             kwargs = cloudpickle.loads(request.serialized_kwargs) if request.serialized_kwargs else {}
 
-            # Run method with FlusterContext if available
-            if self._fluster_context:
-                with fluster_ctx_scope(self._fluster_context):
-                    result = method(*args, **kwargs)
-            else:
-                result = method(*args, **kwargs)
+            result = method(*args, **kwargs)
 
             return actor_pb2.ActorResponse(serialized_value=cloudpickle.dumps(result))
 
@@ -222,25 +209,17 @@ class ActorServer:
         """Start server in background thread.
 
         Args:
-            port: Port to bind to. If None, uses self._port (which may have
-                  been set in __init__ or will use ctx.get_port("actor")).
+            port: Port to bind to. If None, uses self._port from __init__.
+                  If that's also None or 0, auto-assigns a free port.
 
         Returns:
             Actual port the server is listening on
         """
-        # Get context if available
-        self._fluster_context = get_fluster_ctx()
-
-        # Determine port: explicit > __init__ > context > auto-assign
+        # Determine port: explicit > __init__ > auto-assign
         if port is not None:
             bind_port = port
         elif self._port is not None:
             bind_port = self._port
-        elif self._fluster_context:
-            try:
-                bind_port = self._fluster_context.get_port("actor")
-            except KeyError:
-                bind_port = 0  # Auto-assign
         else:
             bind_port = 0  # Auto-assign
 
@@ -254,6 +233,7 @@ class ActorServer:
         else:
             self._actual_port = bind_port
 
+        assert self._actual_port is not None
         config = uvicorn.Config(
             self._app,
             host=self._host,
@@ -276,15 +256,10 @@ class ActorServer:
         return self._actual_port
 
     def shutdown(self) -> None:
-        """Unregister endpoint from registry.
+        """Shutdown the actor server.
 
-        Call this when shutting down the actor server cleanly.
-        Note: The controller also automatically cleans up endpoints when jobs terminate.
+        Note: If you registered this server with a cluster endpoint registry,
+        you should unregister it separately using the registry's unregister() method.
         """
-        if self._endpoint_id and self._fluster_context and self._fluster_context.registry:
-            try:
-                self._fluster_context.registry.unregister(self._endpoint_id)
-                logger.info(f"Unregistered endpoint {self._endpoint_id}")
-            except Exception as e:
-                logger.warning(f"Failed to unregister endpoint: {e}")
-            self._endpoint_id = None
+        # Server shutdown happens automatically when thread exits
+        pass
