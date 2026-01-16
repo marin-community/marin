@@ -519,7 +519,7 @@ def sync_global_devices(name: str):
 
 
 def sharded_tree_size(
-    tree, mesh: Optional[Mesh] | None = None, mapping: ResourceMapping | None = None
+    tree, mesh: Optional[haliax.partitioning.MeshLike] | None = None, mapping: ResourceMapping | None = None
 ) -> int:
     """
     Returns the size of a sharded tree, in bytes. If the tree is sharded, this returns the size of a per-device shard.

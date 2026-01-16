@@ -18,19 +18,12 @@ import json
 import os
 import shutil
 import traceback
-import subprocess
-import time
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
 from fray.cluster.ray.deps import build_runtime_env_for_packages
-from marin.evaluation.evaluators.debug_logging import (
-    log_tokenizer_details,
-    log_vllm_initialization,
-    log_sample_generation,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -63,63 +56,17 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 # Some libtpu builds also respect TPU_MIN_LOG_LEVEL for their own logging.
                 # Conventionally: 0=INFO, 1=WARNING, 2=ERROR, 3=FATAL; we set 2 to hide INFO/WARNING.
                 "TPU_MIN_LOG_LEVEL": "2",
-                # Prevent vLLM's EngineCore subprocess from trying to contact HuggingFace Hub
-                # for local model paths. Without these, vLLM may try to validate local paths
-                # as HuggingFace repo IDs, causing "Repo id must be in the form..." errors.
-                "HF_HUB_OFFLINE": "1",
-                "TRANSFORMERS_OFFLINE": "1",
-                "HF_DATASETS_OFFLINE": "1",
             },  # Human eval tests code from the model which requires permission to run
         )
-
-    def download_model(self, model: ModelConfig) -> str:
-        """
-        Download the model and ensure we get a local path for vLLM.
-        """
-        print(f"Downloading model: {model.name}, path: {model.path}")
-        print(f"Cache path: {VllmTpuEvaluator.CACHE_PATH}")
-
-        local_path = os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
-        print(f"Local download path: {local_path}")
-
-        try:
-            downloaded_path: str | None = model.ensure_downloaded(local_path=local_path)
-            print(f"Download result: {downloaded_path}")
-        except Exception as e:
-            print(f"Download failed with exception: {e}")
-            downloaded_path = None
-
-        # Check if the local path exists even if ensure_downloaded returned None
-        if downloaded_path is None and os.path.exists(local_path):
-            print(f"Local path exists even though ensure_downloaded returned None: {local_path}")
-            downloaded_path = local_path
-
-        # For vLLM, we MUST have a local path, not a model name
-        if downloaded_path is None:
-            print(f"Final check - local_path exists: {os.path.exists(local_path)}")
-            if os.path.exists(local_path):
-                print(f"Using existing local path: {local_path}")
-                return local_path
-            else:
-                raise ValueError(
-                    f"Failed to download model {model.name} to local path {local_path}. \
-                        vLLM requires a local filesystem path. Model path: {model.path}"
-                )
-
-        print(f"Final model path: {downloaded_path}")
-        return downloaded_path
 
     def cleanup(self, model: ModelConfig) -> None:
         """
         Clean up TPU resources and model checkpoint to prevent Ray runtime env cleanup issues.
         """
         print("Cleaning up TPU resources and model checkpoint...")
-
         try:
-
             # Clean up model checkpoint
             model.destroy()
-
             print("Cleanup completed successfully")
         except Exception as e:
             print(f"Cleanup failed: {e}")
@@ -428,24 +375,6 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             # Download the model from GCS or HuggingFace
             model_name_or_path, model = self.resolve_model_name_or_path(model)
 
-            # Set HuggingFace offline mode environment variables AFTER model download
-            # to prevent vLLM's EngineCore subprocess from trying to contact HuggingFace
-            # Hub for local model paths. Without these, vLLM may try to validate local
-            # paths as HuggingFace repo IDs, causing "Repo id must be in the form..." errors.
-            os.environ["HF_HUB_OFFLINE"] = "1"
-            os.environ["TRANSFORMERS_OFFLINE"] = "1"
-            os.environ["HF_DATASETS_OFFLINE"] = "1"
-            logger.info("Set HuggingFace offline mode environment variables")
-
-            # === DEBUG LOGGING: Check tokenizer ===
-            try:
-                from transformers import AutoTokenizer
-                logger.info("Loading tokenizer for inspection...")
-                tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-                log_tokenizer_details(tokenizer, model.name)
-            except Exception as e:
-                logger.error(f"Failed to inspect tokenizer: {e}")
-
             # Build model args string first to get engine_kwargs
             engine_kwargs = dict(model.engine_kwargs) if model.engine_kwargs else {}
             
@@ -511,8 +440,6 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 logger.info(f"Setting max_gen_toks={max_gen_toks_value} in model_args for lm-eval")
             pretrained_args = ",".join(pretrained_args_parts)
             logger.info(f"Final model_args string: {pretrained_args}")
-            # === DEBUG LOGGING: Log vLLM initialization ===
-            log_vllm_initialization(model_name_or_path, pretrained_args, engine_kwargs)
 
             # === MONKEY PATCH resolve_hf_chat_template ===
             # This MUST happen before any lm_eval imports that might load vllm_causallms.
@@ -603,87 +530,6 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 }
                 # wandb_config_args_dict = simple_parse_args_string("")
                 wandb_logger = WandbLogger(init_args=wandb_args_dict)
-
-                # Remove XLA_FLAGS that were meant for GPU - not needed on TPU
-                # os.environ["XLA_FLAGS"] = (
-                #     "--xla_gpu_enable_async_all_gather=false --xla_gpu_enable_async_all_reduce=false"
-                # )
-                # os.environ["XLA_USE_BF16"] = "1"
-
-                # === MONKEY PATCH ===
-                # We have the issue that lm-eval's importlib.metadata.version("vllm") check fails.
-                # Thus, we create minimal vllm package metadata to satisfy lm-eval's importlib.metadata.version("vllm") check
-                import site
-                site_packages = site.getsitepackages()[0] if site.getsitepackages() else None
-                if site_packages:
-                    vllm_dist_info = os.path.join(site_packages, "vllm-0.11.1.dist-info")
-                    if not os.path.exists(vllm_dist_info):
-                        os.makedirs(vllm_dist_info, exist_ok=True)
-                        metadata_content = "Metadata-Version: 2.1\nName: vllm\nVersion: 0.11.1\n"
-                        with open(os.path.join(vllm_dist_info, "METADATA"), "w") as f:
-                            f.write(metadata_content)
-                        logger.info(f"Created vllm package metadata at {vllm_dist_info}")
-
-                # === MONKEY PATCH: Log sample prompts and responses ===
-                try:
-                    import lm_eval.models.vllm_causallms as vllm_module
-
-                    # Find the vLLM wrapper class
-                    vllm_wrapper_class = None
-                    for attr_name in dir(vllm_module):
-                        attr = getattr(vllm_module, attr_name)
-                        if isinstance(attr, type) and hasattr(attr, 'generate_until'):
-                            vllm_wrapper_class = attr
-                            break
-
-                    if vllm_wrapper_class:
-                        original_generate_until = vllm_wrapper_class.generate_until
-                        logged_samples = {"count": 0}  # Track how many we've logged
-
-                        def patched_generate_until_with_logging(self, requests):
-                            # Log first 3 samples
-                            if logged_samples["count"] < 3:
-                                for i, request in enumerate(requests[:3 - logged_samples["count"]]):
-                                    try:
-                                        # Extract context (the prompt)
-                                        if hasattr(request, 'args') and len(request.args) >= 2:
-                                            context = request.args[0]
-                                            logger.info(f"\n{'='*80}")
-                                            logger.info(f"SAMPLE REQUEST {logged_samples['count'] + 1}")
-                                            logger.info(f"{'='*80}")
-                                            logger.info(f"Context type: {type(context)}")
-                                            logger.info(f"Context: {context[:1000]}")  # First 1000 chars
-                                            if len(str(context)) > 1000:
-                                                logger.info(f"... (truncated, full length: {len(str(context))})")
-                                            logger.info(f"{'='*80}\n")
-                                    except Exception as e:
-                                        logger.debug(f"Could not log request: {e}")
-
-                            # Call original method
-                            results = original_generate_until(self, requests)
-
-                            # Log first 3 responses
-                            if logged_samples["count"] < 3 and results:
-                                for i, result in enumerate(results[:3 - logged_samples["count"]]):
-                                    try:
-                                        logger.info(f"\n{'='*80}")
-                                        logger.info(f"SAMPLE RESPONSE {logged_samples['count'] + 1}")
-                                        logger.info(f"{'='*80}")
-                                        logger.info(f"Result type: {type(result)}")
-                                        logger.info(f"Result: {str(result)[:2000]}")  # First 2000 chars
-                                        if len(str(result)) > 2000:
-                                            logger.info(f"... (truncated, full length: {len(str(result))})")
-                                        logger.info(f"{'='*80}\n")
-                                        logged_samples["count"] += 1
-                                    except Exception as e:
-                                        logger.debug(f"Could not log result: {e}")
-
-                            return results
-
-                        vllm_wrapper_class.generate_until = patched_generate_until_with_logging
-                        logger.info("Successfully patched generate_until for logging")
-                except Exception as e:
-                    logger.warning(f"Failed to patch generate_until for logging: {e}")
 
                 # Note: max_gen_toks is passed to lm-eval via model_args.
                 # The vLLM wrapper in lm-eval should extract it from model_args before initializing vLLM.

@@ -102,19 +102,3 @@ class EvaluationConfig:
     """
     Tags to add to the wandb run.
     """
-
-    max_length: int | None = None
-    """
-    Maximum total length (prompt + generation) during evaluation.
-    """
-
-    print_every_n: int | None = None
-    """
-    Print decoded tokens every N tokens during Levanter generation. If 0 or None, disable printing.
-    """
-
-    depends_on: "InputName | None" = None
-    """
-    Optional dependency on another step. Used to serialize execution of steps.
-    This field is only used by the executor to establish dependencies and is not used during evaluation.
-    """

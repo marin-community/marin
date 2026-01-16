@@ -588,7 +588,7 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
     output_path = OutputName("compiled_results")
 
     return ExecutorStep(
-        name="scratch/chiheem/compile_results",
+        name="evaluation/lm_evaluation_harness/compile_results",
         fn=_compile_results_fn,
         config={"input_paths": input_paths, "output_path": output_path, "seeds": SEEDS},
         description="Compile results from multiple lm-eval steps into a single DataFrame",

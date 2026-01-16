@@ -16,7 +16,6 @@ import logging
 from abc import ABC
 
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
-from fray.cluster.ray.deps import build_runtime_env_for_packages
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
@@ -53,8 +52,6 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
-        max_length: int | None = None,
-        generation_kwargs: dict | None = None,
     ) -> None:
         """
         Launches the evaluation run with Fray.

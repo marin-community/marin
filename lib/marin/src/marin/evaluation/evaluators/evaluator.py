@@ -110,7 +110,6 @@ class Evaluator(ABC):
         resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
-        max_length: int | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -133,7 +132,6 @@ class Evaluator(ABC):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
-        max_length: int | None = None,
     ) -> None:
         """What to run to evaluate."""
         pass

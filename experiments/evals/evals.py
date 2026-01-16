@@ -57,7 +57,6 @@ def evaluate_lm_evaluation_harness(
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
     generation_params: dict | None = None,
-    depends_on: "ExecutorStep | None" = None,
     seed: int | None = None,
 ) -> ExecutorStep:
     """
@@ -68,22 +67,14 @@ def evaluate_lm_evaluation_harness(
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
         generation_params (dict | None): Generation parameters for vLLM (temperature, max_tokens, etc.)
-        depends_on (ExecutorStep | None): Optional step to depend on for serial execution.
         seed (int | None): Optional seed for reproducibility. If provided, appended to step name after task.
     """
-    from marin.execution.executor import InputName
-
     suffix = '_'.join([e.name for e in evals])
 
     # Build step name: {model_name}-{task}-seed{N} (seed appended after task if provided)
     step_name = f"evaluation/lm_evaluation_harness/{model_name}-{suffix}"
     if seed is not None:
         step_name = f"{step_name}-seed{seed}"
-
-    # Create dependency InputName if depends_on is specified
-    depends_on_input = None
-    if depends_on is not None:
-        depends_on_input = InputName(step=depends_on, name=None, block_on_step=True)
 
     return ExecutorStep(
         name=step_name,
@@ -102,7 +93,6 @@ def evaluate_lm_evaluation_harness(
             apply_chat_template=apply_chat_template,
             wandb_tags=wandb_tags,
             generation_params=generation_params,
-            depends_on=depends_on_input,
         ),
     )
 
@@ -158,8 +148,6 @@ def evaluate_levanter_lm_evaluation_harness(
     resource_config: ResourceConfig,
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
-    max_length: int | None = None,
-    print_every_n: int | None = None,
     discover_latest_checkpoint: bool = True,
     generation_kwargs: dict | None = None,
 ) -> ExecutorStep:
@@ -182,8 +170,6 @@ def evaluate_levanter_lm_evaluation_harness(
             max_eval_instances=versioned(max_eval_instances),
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
-            max_length=max_length,
-            print_every_n=print_every_n,
             generation_params=generation_kwargs,
             wandb_tags=["lm-eval", f"{model_name}"] + [eval_task.name for eval_task in evals],
         ),

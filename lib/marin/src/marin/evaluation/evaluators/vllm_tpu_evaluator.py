@@ -20,7 +20,6 @@ from abc import ABC
 from typing import ClassVar
 from urllib.parse import urlparse
 
-import ray
 import requests
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 from fray.cluster.ray.deps import build_runtime_env_for_packages
@@ -175,7 +174,6 @@ class VllmTpuEvaluator(Evaluator, ABC):
         max_eval_instances: int | None = None,
         resource_config: ResourceConfig | None = None,
         wandb_tags: list[str] | None = None,
-        max_length: int | None = None,
         generation_params: dict | None = None,
     ) -> None:
         """

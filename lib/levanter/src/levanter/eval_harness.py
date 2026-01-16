@@ -170,6 +170,7 @@ class _LmEvalHarnessWorker:
         self.model = model
         self.axis_resources = axis_resources
         self.mp = mp
+        self.max_packed_segments = max_packed_segments
         self._generation_kwargs = generation_kwargs or {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
         self.sample_logging_config = sample_logging_config or SampleLoggingConfig()
         self.profiler_config = profiler_config or ProfilerConfig()
@@ -755,33 +756,16 @@ class LevanterHarnessLM(TemplateLM):
                 max_stop_seqs = max(max_stop_seqs, num_stop_seqs)
                 max_stop_tokens = max(max_stop_tokens, num_stop_tokens)
 
-        # Calculate max_seqs_in_prefill for batching requests
-        # num_primary in _prefill_prompts counts requests, not sequences, so we need
-        # at least len(requests) capacity.
-        # We need to reduce max_seqs to avoid TPU shared memory (smem) exhaustion in the
-        # ragged_paged_attention kernel. The kernel is compiled with static shapes based on
-        # max_seqs, so even if we only use 16 sequences, the kernel still allocates for max_seqs.
-        # Since we're batching at the request level (max_seqs_in_prefill=16), we can safely
-        # reduce max_seqs to match. This reduces smem usage without affecting functionality.
-        num_requests = len(prompt_token_lists)
-        # Reduce max_seqs to avoid smem exhaustion - the kernel allocates smem based on this
-        # We only use max_seqs_in_prefill sequences per batch anyway, so this is safe
-        # Using 16 matches max_seqs_in_prefill to minimize smem usage while still supporting our batching
-        max_seqs = 16  # Reduced from 256 to avoid smem exhaustion in ragged_paged_attention kernel
-        # Cap at 16 to avoid smem exhaustion - we batch requests across multiple engine.generate() calls
-        max_seqs_in_prefill = min(num_requests, max_seqs, 16)
-
         # [ChiHeem,2025-10-06] TODO: Pass this from marin to allow users to
         # optimize the inference based on hardware and model.
         engine_cfg = InferenceEngineConfig(
             max_stop_seqs=max_stop_seqs,
             max_stop_tokens=max_stop_tokens,
             max_seq_len=max_length,
-            max_seqs=max_seqs,
-            max_seqs_in_prefill=max_seqs_in_prefill,
-            page_size=256,
+            max_seqs=256,
+            page_size=8,
             compute_dtype=jnp.bfloat16,
-            hbm_utilization=0.7,  # Reduced from default 0.9 to leave more headroom for model weights
+            hbm_utilization=0.5,
         )
         engine = InferenceEngine.from_model_with_config(
             model=self.leader.model, tokenizer=self.tokenizer, config=engine_cfg
@@ -827,95 +811,43 @@ class LevanterHarnessLM(TemplateLM):
 
         # Pass the callback to the engine if profiling is enabled
         step_callback = decode_step_callback if self.profiler_config.enabled else None
-        # Expand each request so every generation is treated as an independent request.
-        expanded_requests: list[GenRequest] = []
-        request_mapping: list[tuple[int, int]] = []  # (original_request_idx, clone_idx)
-        for orig_idx, req in enumerate(gen_requests):
-            n_generations = max(1, int(req.n_generations))
-            for clone_idx in range(n_generations):
-                clone_params = dataclasses.replace(
-                    req.decode_params, key=jrandom.fold_in(req.decode_params.key, clone_idx)
-                )
-                expanded_requests.append(
-                    GenRequest(
-                        prompt_tokens=req.prompt_tokens,
-                        request_id=len(expanded_requests),
-                        decode_params=clone_params,
-                        n_generations=1,
-                    )
-                )
-                request_mapping.append((orig_idx, clone_idx))
+        result = engine.generate(
+            gen_requests,
+            step_callback=step_callback,
+        )
 
-        if not expanded_requests:
-            logger.warning("No generation requests were constructed; returning empty outputs.")
-            return ["" for _ in prompt_token_lists]
-
-        # Process expanded requests in batches to fit within engine limits.
-        batch_size = max(1, max_seqs_in_prefill)
-        clone_outputs: list[str] = ["" for _ in expanded_requests]
-
-        for batch_start in range(0, len(expanded_requests), batch_size):
-            batch_requests = expanded_requests[batch_start : batch_start + batch_size]
-            result = engine.generate(batch_requests, step_callback=step_callback)
-
-            expected = len(batch_requests)
-            if len(result.tokens) != expected:
-                logger.warning(
-                    "Batch %d-%d: expected %d outputs but received %d",
-                    batch_start,
-                    batch_start + len(batch_requests) - 1,
-                    expected,
-                    len(result.tokens),
-                )
-
-            for local_idx, global_idx in enumerate(range(batch_start, batch_start + len(batch_requests))):
-                orig_idx, _ = request_mapping[global_idx]
-                gen_kwargs = processed_kwargs_list[orig_idx]
-                if local_idx < len(result.tokens):
-                    full_tokens = result.tokens[local_idx]
-                    text = self.tokenizer.decode(full_tokens, skip_special_tokens=True)
-                    text = postprocess_generated_text(
-                        text, gen_kwargs.get("until"), None  # think_end_token - could be made configurable if needed
-                    )
-                else:
-                    text = ""
-                    logger.warning(
-                        "Missing tokens for expanded request %d (batch index %d); storing empty string",
-                        global_idx,
-                        local_idx,
-                    )
-                clone_outputs[global_idx] = text
-
-        # Group clone outputs back to their original requests (sorted by clone index).
-        collected_outputs: list[list[tuple[int, str]]] = [[] for _ in prompt_token_lists]
-        for global_idx, text in enumerate(clone_outputs):
-            orig_idx, clone_idx = request_mapping[global_idx]
-            collected_outputs[orig_idx].append((clone_idx, text))
-
+        # Decode first generation per request (LM Harness expects one string per request)
         outputs: list[str] = []
+        output_idx = 0
         for i, (toks, gen_kwargs) in enumerate(zip(prompt_token_lists, processed_kwargs_list)):
-            clone_texts = collected_outputs[i]
-            if not clone_texts:
-                outputs.append("")
-                logger.warning(f"Request {i} produced no outputs after regrouping; returning empty string.")
-                continue
+            # Consume one sequence output per request
+            if output_idx < len(result.tokens):
+                full_tokens = result.tokens[output_idx]
+                # Engine tokens are generated tokens only (prompt not included)
+                text = self.tokenizer.decode(full_tokens, skip_special_tokens=True)
 
-            clone_texts.sort(key=lambda item: item[0])
-            text = clone_texts[0][1]
-            outputs.append(text)
+                # Post-process the generated text using the imported utility function
+                text = postprocess_generated_text(
+                    text, gen_kwargs.get("until"), None  # think_end_token - could be made configurable if needed
+                )
+                outputs.append(text)
+                output_idx += 1  # consume one generation per request
+            else:
+                text = ""
+                logger.info(f"Generation {i} - No tokens available, using empty string")
+                outputs.append(text)
 
             current_task = getattr(self, "_current_task", "generation_task")
             bucket = self._prepare_bucket(current_task)
             if bucket is not None:
                 prompt_text = self.tokenizer.decode(toks, skip_special_tokens=False)
-                bucket.append({"prompt": prompt_text, "generation": text})
-
-        if not any(text.strip() for text in outputs):
-            logger.error(
-                "All generations for this batch are empty. "
-                "This usually indicates the model stopped immediately or an upstream allocation failure."
-            )
-            raise RuntimeError("Generation produced empty outputs for every request.")
+                bucket.append(
+                    {
+                        "prompt": prompt_text,
+                        "generation": text,
+                    }
+                )
+        # print(f'{outputs=}')
 
         # Stop profiler if it was started during generation
         self._stop_profiler_if_needed()
@@ -1088,6 +1020,7 @@ class LmEvalHarnessConfig:
                     this_tasks.update(tasks.get_task_dict(task, manager))
                 else:
                     our_name = task.get("task_alias", task["task"]) if isinstance(task, dict) else task
+                    assert isinstance(our_name, str)
                     our_name = our_name.replace(" ", "_")
                     tasks_for_this_task_spec = self._get_task_and_rename(manager, our_name, task)
                     for k, v in tasks_for_this_task_spec.items():
