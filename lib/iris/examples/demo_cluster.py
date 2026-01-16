@@ -50,7 +50,7 @@ from iris.cluster.client.local_client import (
     _LocalImageProvider,
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
-from iris.cluster.types import Entrypoint, JobId
+from iris.cluster.types import Entrypoint, JobId, create_resource_spec
 from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import DockerRuntime
@@ -245,7 +245,7 @@ class DemoCluster:
         """Submit a job to the cluster."""
         entrypoint = Entrypoint.from_callable(fn, *args, **kwargs)
         environment = cluster_pb2.EnvironmentConfig(workspace="/app", env_vars={})
-        resources = cluster_pb2.ResourceSpec(cpu=cpu, memory=memory)
+        resources = create_resource_spec(cpu=cpu, memory=memory)
         return self.client.submit(
             entrypoint=entrypoint,
             name=name or fn.__name__,

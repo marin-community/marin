@@ -45,6 +45,48 @@ interesting behavior of the class, but not betray the implementation details.
 
 (You may of course _instantiate_ the concrete class for testing.)
 
+## Dependency Injection (DI-lite)
+
+Iris uses lightweight constructor injection for testability and pluggability.
+See `docs/di-cleanup.md` for current state and cleanup tasks.
+
+### When to Inject
+
+Apply DI when:
+1. **External environment impact**: Network, filesystem, subprocess, hardware
+2. **Simulating failures or time**: Things difficult to control in tests
+
+Skip DI for purely computational code with no side effects.
+
+### Pattern
+
+```python
+class FooProvider(Protocol):
+    def do_thing(self) -> Result: ...
+
+class OsFooProvider:  # Context-specific name, not "DefaultFooProvider"
+    def do_thing(self) -> Result:
+        # Real implementation
+        ...
+
+class Consumer:
+    def __init__(self, foo: FooProvider | None = None):
+        self._foo = foo or OsFooProvider()
+```
+
+### Naming
+
+- **Protocol**: `FooProvider` (e.g., `BundleProvider`, `ImageProvider`)
+- **Production impl**: Context-specific name (e.g., `BundleCache`, `DockerRuntime`, `GcsResolver`)
+- **Test fake**: `MockFoo` or `FakeFoo` — prefer fakes with real logic over `Mock(spec=...)`
+
+### Ground Rules
+
+1. Constructor signature: Always `foo: FooProvider | None = None` (optional with default)
+2. Prefer fakes with real logic over mocks with stubbed returns
+3. One protocol per responsibility — don't combine unrelated operations
+4. The injection point should be at the right abstraction level (e.g., inject `Resolver`, not `GcsApi`)
+
 ## Imports
 
 Don't use TYPE_CHECKING. Use the real import. If there is a circular dependency:

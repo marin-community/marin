@@ -386,7 +386,7 @@ class ControllerState:
         Returns:
             (cpu, memory_bytes, gpu_count) tuple of committed resources
         """
-        from iris.cluster.controller.resources import get_gpu_count, parse_memory_string
+        from iris.cluster.controller.resources import get_gpu_count
 
         with self._lock:
             cpu = 0
@@ -398,7 +398,7 @@ class ControllerState:
                 if job:
                     resources = job.request.resources
                     cpu += resources.cpu
-                    memory += parse_memory_string(resources.memory)
+                    memory += resources.memory_bytes
                     gpu += get_gpu_count(resources.device)
 
             return cpu, memory, gpu

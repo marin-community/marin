@@ -27,7 +27,7 @@ Example:
 
     config = WorkerPoolConfig(
         num_workers=3,
-        resources=cluster_pb2.ResourceSpec(cpu=1, memory="512m"),
+        resources=create_resource_spec(cpu=1, memory="512m"),
     )
 
     with WorkerPool(client, config) as pool:

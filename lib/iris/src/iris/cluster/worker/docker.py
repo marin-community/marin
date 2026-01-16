@@ -41,32 +41,15 @@ class ContainerConfig:
     mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
     ports: dict[str, int] = field(default_factory=dict)  # name -> host_port
 
-    def _parse_memory_mb(self, memory_str: str) -> int:
-        """Parse memory string like '8g', '128m' to MB."""
-        # TODO humansomething parser
-        match = re.match(r"^(\d+)([gmk]?)$", memory_str.lower())
-        if not match:
-            raise ValueError(f"Invalid memory format: {memory_str}")
-
-        value, unit = match.groups()
-        value = int(value)
-
-        if unit == "g":
-            return value * 1024
-        elif unit == "k":
-            return value // 1024
-        else:  # 'm' or no unit (assume MB)
-            return value
-
     def get_cpu_millicores(self) -> int | None:
         if not self.resources or not self.resources.cpu:
             return None
         return self.resources.cpu * 1000
 
     def get_memory_mb(self) -> int | None:
-        if not self.resources or not self.resources.memory:
+        if not self.resources or not self.resources.memory_bytes:
             return None
-        return self._parse_memory_mb(self.resources.memory)
+        return self.resources.memory_bytes // (1024 * 1024)
 
 
 @dataclass

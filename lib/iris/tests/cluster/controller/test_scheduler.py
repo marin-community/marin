@@ -23,10 +23,10 @@ import time
 
 import pytest
 
-from iris.rpc import cluster_pb2
 from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
-from iris.cluster.types import JobId, WorkerId
+from iris.cluster.types import JobId, WorkerId, create_resource_spec
+from iris.rpc import cluster_pb2
 
 
 @pytest.fixture
@@ -42,7 +42,7 @@ def make_job_request():
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",
-            resources=cluster_pb2.ResourceSpec(cpu=cpu, memory=memory),
+            resources=create_resource_spec(cpu=cpu, memory=memory),
             environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
             scheduling_timeout_seconds=scheduling_timeout_seconds,
         )
@@ -51,11 +51,11 @@ def make_job_request():
 
 
 @pytest.fixture
-def make_resource_spec():
+def make_resource_spec_fixture():
     """Create a ResourceSpec for testing with enough capacity for multiple jobs."""
 
     def _make(cpu: int = 10, memory: str = "10g") -> cluster_pb2.ResourceSpec:
-        return cluster_pb2.ResourceSpec(cpu=cpu, memory=memory, disk="10g")
+        return create_resource_spec(cpu=cpu, memory=memory, disk="10g")
 
     return _make
 
@@ -72,9 +72,9 @@ def scheduler(state):
     return Scheduler(state)
 
 
-def test_scheduler_finds_assignment_for_job(scheduler, state, make_job_request, make_resource_spec):
+def test_scheduler_finds_assignment_for_job(scheduler, state, make_job_request, make_resource_spec_fixture):
     """Verify scheduler assigns job to available worker."""
-    worker = ControllerWorker(WorkerId("w1"), "addr", make_resource_spec())
+    worker = ControllerWorker(WorkerId("w1"), "addr", make_resource_spec_fixture())
     state.add_worker(worker)
 
     job = ControllerJob(JobId("j1"), request=make_job_request())
@@ -106,12 +106,12 @@ def test_scheduler_returns_empty_when_no_workers(scheduler, state, make_job_requ
     assert len(result.timed_out_jobs) == 0
 
 
-def test_scheduler_assigns_multiple_jobs_to_worker(scheduler, state, make_job_request, make_resource_spec):
+def test_scheduler_assigns_multiple_jobs_to_worker(scheduler, state, make_job_request, make_resource_spec_fixture):
     """Verify scheduler can assign multiple jobs to one worker."""
     worker = ControllerWorker(
         WorkerId("w1"),
         "addr",
-        make_resource_spec(cpu=10, memory="10g"),
+        make_resource_spec_fixture(cpu=10, memory="10g"),
     )
     state.add_worker(worker)
 
@@ -133,13 +133,13 @@ def test_scheduler_assigns_multiple_jobs_to_worker(scheduler, state, make_job_re
     assert assigned_job_ids == {job1.job_id, job2.job_id, job3.job_id}
 
 
-def test_scheduler_skips_jobs_that_dont_fit(scheduler, state, make_job_request, make_resource_spec):
+def test_scheduler_skips_jobs_that_dont_fit(scheduler, state, make_job_request, make_resource_spec_fixture):
     """Verify scheduler skips jobs that don't fit and continues to next."""
     # Worker with 4 CPUs
     worker = ControllerWorker(
         WorkerId("w1"),
         "addr",
-        cluster_pb2.ResourceSpec(cpu=4, memory="16g"),
+        create_resource_spec(cpu=4, memory="16g"),
     )
     state.add_worker(worker)
 
@@ -161,9 +161,9 @@ def test_scheduler_skips_jobs_that_dont_fit(scheduler, state, make_job_request, 
     assert result.assignments[0][0] == job2
 
 
-def test_scheduler_detects_timed_out_jobs(scheduler, state, make_resource_spec):
+def test_scheduler_detects_timed_out_jobs(scheduler, state, make_resource_spec_fixture):
     """Verify scheduler identifies jobs that exceeded scheduling timeout."""
-    worker = ControllerWorker(WorkerId("w1"), "addr", make_resource_spec(cpu=2))
+    worker = ControllerWorker(WorkerId("w1"), "addr", make_resource_spec_fixture(cpu=2))
     state.add_worker(worker)
 
     # Job that requires 100 CPUs (will never fit) with 1 second timeout
@@ -171,7 +171,7 @@ def test_scheduler_detects_timed_out_jobs(scheduler, state, make_resource_spec):
     job_request = cluster_pb2.Controller.LaunchJobRequest(
         name="impossible-job",
         serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpec(cpu=100, memory="1g"),
+        resources=create_resource_spec(cpu=100, memory="1g"),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         scheduling_timeout_seconds=1,
     )
@@ -193,16 +193,16 @@ def test_scheduler_detects_timed_out_jobs(scheduler, state, make_resource_spec):
     assert result.timed_out_jobs[0] == job
 
 
-def test_scheduler_no_timeout_when_zero(scheduler, state, make_resource_spec):
+def test_scheduler_no_timeout_when_zero(scheduler, state, make_resource_spec_fixture):
     """Verify job with scheduling_timeout_seconds=0 never times out."""
-    worker = ControllerWorker(WorkerId("w1"), "addr", make_resource_spec(cpu=2))
+    worker = ControllerWorker(WorkerId("w1"), "addr", make_resource_spec_fixture(cpu=2))
     state.add_worker(worker)
 
     # Job that can't fit but has no timeout (0)
     job_request = cluster_pb2.Controller.LaunchJobRequest(
         name="no-timeout-job",
         serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpec(cpu=100, memory="1g"),
+        resources=create_resource_spec(cpu=100, memory="1g"),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         scheduling_timeout_seconds=0,  # No timeout
     )
@@ -224,10 +224,12 @@ def test_scheduler_no_timeout_when_zero(scheduler, state, make_resource_spec):
     assert len(result.timed_out_jobs) == 0
 
 
-def test_scheduler_respects_worker_capacity_across_assignments(scheduler, state, make_job_request, make_resource_spec):
+def test_scheduler_respects_worker_capacity_across_assignments(
+    scheduler, state, make_job_request, make_resource_spec_fixture
+):
     """Verify scheduler tracks capacity used by earlier assignments in same cycle."""
     # Worker with 4 CPUs
-    worker = ControllerWorker(WorkerId("w1"), "addr", make_resource_spec(cpu=4))
+    worker = ControllerWorker(WorkerId("w1"), "addr", make_resource_spec_fixture(cpu=4))
     state.add_worker(worker)
 
     # Submit 4 jobs, each requiring 2 CPUs
@@ -246,10 +248,10 @@ def test_scheduler_respects_worker_capacity_across_assignments(scheduler, state,
     assert len(result.assignments) == 2
 
 
-def test_scheduler_skips_unhealthy_workers(scheduler, state, make_job_request, make_resource_spec):
+def test_scheduler_skips_unhealthy_workers(scheduler, state, make_job_request, make_resource_spec_fixture):
     """Verify scheduler ignores unhealthy workers."""
-    healthy_worker = ControllerWorker(WorkerId("w1"), "addr1", make_resource_spec())
-    unhealthy_worker = ControllerWorker(WorkerId("w2"), "addr2", make_resource_spec())
+    healthy_worker = ControllerWorker(WorkerId("w1"), "addr1", make_resource_spec_fixture())
+    unhealthy_worker = ControllerWorker(WorkerId("w2"), "addr2", make_resource_spec_fixture())
     unhealthy_worker.healthy = False
 
     state.add_worker(healthy_worker)
@@ -269,10 +271,10 @@ def test_scheduler_skips_unhealthy_workers(scheduler, state, make_job_request, m
     assert result.assignments[0][1] == healthy_worker
 
 
-def test_scheduler_considers_running_jobs_for_capacity(scheduler, state, make_job_request, make_resource_spec):
+def test_scheduler_considers_running_jobs_for_capacity(scheduler, state, make_job_request, make_resource_spec_fixture):
     """Verify scheduler accounts for jobs already running on workers."""
     # Worker with 4 CPUs
-    worker = ControllerWorker(WorkerId("w1"), "addr", make_resource_spec(cpu=4))
+    worker = ControllerWorker(WorkerId("w1"), "addr", make_resource_spec_fixture(cpu=4))
     state.add_worker(worker)
 
     # Add a running job that uses 3 CPUs
@@ -298,11 +300,11 @@ def test_scheduler_considers_running_jobs_for_capacity(scheduler, state, make_jo
     assert len(result.assignments) == 0
 
 
-def test_scheduler_assigns_to_multiple_workers(scheduler, state, make_job_request, make_resource_spec):
+def test_scheduler_assigns_to_multiple_workers(scheduler, state, make_job_request, make_resource_spec_fixture):
     """Verify scheduler can assign jobs across multiple workers."""
     # Two workers with 2 CPUs each
-    worker1 = ControllerWorker(WorkerId("w1"), "addr1", make_resource_spec(cpu=2))
-    worker2 = ControllerWorker(WorkerId("w2"), "addr2", make_resource_spec(cpu=2))
+    worker1 = ControllerWorker(WorkerId("w1"), "addr1", make_resource_spec_fixture(cpu=2))
+    worker2 = ControllerWorker(WorkerId("w2"), "addr2", make_resource_spec_fixture(cpu=2))
     state.add_worker(worker1)
     state.add_worker(worker2)
 

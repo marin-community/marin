@@ -40,7 +40,7 @@ from iris.client.worker_pool import (
     WorkerState,
     WorkerStatus,
 )
-from iris.cluster.types import Entrypoint, JobId
+from iris.cluster.types import Entrypoint, JobId, create_resource_spec
 from iris.rpc import cluster_pb2
 
 # =============================================================================
@@ -451,7 +451,7 @@ def worker_pool_harness():
     client = MockClusterClient()
     config = WorkerPoolConfig(
         num_workers=num_workers,
-        resources=cluster_pb2.ResourceSpec(cpu=1, memory="512m"),
+        resources=create_resource_spec(cpu=1, memory="512m"),
         max_retries=1,
     )
     pool = WorkerPool(client, config, timeout=5.0)

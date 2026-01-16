@@ -73,7 +73,7 @@ class LocalEnvironmentProvider:
     def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec:
         return cluster_pb2.ResourceSpec(
             cpu=metadata.cpu_count,
-            memory=f"{metadata.memory_bytes // (1024**3)}g",
+            memory_bytes=metadata.memory_bytes,
         )
 
 
