@@ -266,8 +266,17 @@ ws = regex.compile(r"\s")
 class BaseBatchTokenizer(BatchProcessor[dict, dict]):
     """Base class for tokenizer-based batch processors."""
 
-    tokenizer: HfTokenizer
-    override_resources: dict | None
+    def __init__(
+        self,
+        tokenizer: HfTokenizer,
+        text_field: str = "text",
+        *,
+        override_resources=None,
+    ):
+        _maybe_force_tokenizer_parallelism(tokenizer)
+        self.tokenizer = tokenizer
+        self.text_field = text_field
+        self.override_resources = override_resources
 
     @property
     def num_cpus(self) -> int:
@@ -303,10 +312,7 @@ class BatchTokenizer(BaseBatchTokenizer):
         padding=False,
         max_length=None,
     ):
-        _maybe_force_tokenizer_parallelism(tokenizer)
-        self.tokenizer = tokenizer
-        self.text_field = text_field
-        self.override_resources = override_resources
+        super().__init__(tokenizer, text_field, override_resources=override_resources)
         self.return_attention_mask = return_attention_mask
         self.padding = padding
         if max_length is not None:
@@ -485,7 +491,10 @@ class DNABatchTokenizer(BaseBatchTokenizer):
     - Uppercase (ACGT): weight = 1.0
     - Lowercase (acgt): weight = soft_mask_weight
 
-    Assumes a character-level tokenizer (1:1 character-to-token mapping).
+    Assumptions:
+    - Character-level tokenizer (1:1 character-to-token mapping)
+    - All sequences have the same length (no padding/truncation)
+    - Model context size matches sequence length (see experiment configs)
     """
 
     def __init__(
@@ -493,54 +502,24 @@ class DNABatchTokenizer(BaseBatchTokenizer):
         tokenizer: HfTokenizer,
         text_field: str = "seq",
         soft_mask_weight: float = 1.0,
-        enforce_eos: bool = True,
         *,
         override_resources=None,
     ):
-        _maybe_force_tokenizer_parallelism(tokenizer)
-        self.tokenizer = tokenizer
-        self.text_field = text_field
+        super().__init__(tokenizer, text_field, override_resources=override_resources)
         self.soft_mask_weight = soft_mask_weight
-        self.override_resources = override_resources
-
-        # Check if tokenizer appends eos
-        if tokenizer.eos_token_id is None:
-            enforce_eos = False
-
-        if enforce_eos:
-            input_ids = tokenizer("A")["input_ids"]
-            should_append_eos = input_ids[-1] != tokenizer.eos_token_id
-        else:
-            should_append_eos = False
-
-        self._need_to_add_eos = should_append_eos
 
     def __call__(self, batch: Sequence[dict]) -> list[dict]:
         results = []
-
         for example in batch:
             text = example[self.text_field]
-
-            # Compute per-character loss weights based on case
-            # Uppercase = 1.0, lowercase = soft_mask_weight
             loss_weight = [1.0 if c.isupper() else self.soft_mask_weight for c in text]
-
-            # Tokenize the sequence (tokenizer handles case normalization)
             encoding = self.tokenizer(text, return_attention_mask=False, verbose=False)
-            input_ids = encoding["input_ids"]
-
-            # Handle EOS token
-            if self._need_to_add_eos:
-                input_ids = input_ids + [self.tokenizer.eos_token_id]
-                loss_weight = loss_weight + [1.0]  # EOS gets full weight
-
             results.append(
                 {
-                    "input_ids": np.array(input_ids, dtype=np.int32),
+                    "input_ids": np.array(encoding["input_ids"], dtype=np.int32),
                     "loss_weight": np.array(loss_weight, dtype=np.float32),
                 }
             )
-
         return results
 
     @property
@@ -556,7 +535,6 @@ class DNABatchTokenizer(BaseBatchTokenizer):
             "tokenizer": self.tokenizer.name_or_path,
             "vocab_size": len(self.tokenizer),
             "soft_mask_weight": self.soft_mask_weight,
-            "append_eos": self._need_to_add_eos,
         }
 
 
@@ -819,7 +797,6 @@ def preprocessor_for_format(
                 tokenizer,
                 text_field=key,
                 soft_mask_weight=weight,
-                enforce_eos=enforce_eos,
             )
         case _:
             raise ValueError(f"Unknown format {format}")
