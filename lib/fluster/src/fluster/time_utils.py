@@ -22,14 +22,24 @@ from collections.abc import Callable
 class ExponentialBackoff:
     """Exponential backoff with jitter for polling/retry loops.
 
-    Each call to `next_interval()` returns an increasing interval up to max_interval.
+    Each call to `next_interval()` returns an increasing interval up to maximum.
     Call `reset()` to start over (e.g., after success).
 
-    Example:
+    Example - manual loop:
         backoff = ExponentialBackoff(initial=0.1, maximum=2.0)
         while not done:
             try_operation()
             time.sleep(backoff.next_interval())
+
+    Example - wait for condition:
+        ExponentialBackoff().wait_until(lambda: server.ready, timeout=30.0)
+
+    Example - wait with custom backoff:
+        ExponentialBackoff(initial=0.1, maximum=5.0).wait_until_or_raise(
+            lambda: connection.established,
+            timeout=60.0,
+            error_message="Connection failed",
+        )
     """
 
     def __init__(
@@ -70,73 +80,42 @@ class ExponentialBackoff:
         """Reset the backoff counter to start from initial interval."""
         self._attempt = 0
 
+    def wait_until(self, condition: Callable[[], bool], timeout: float) -> bool:
+        """Wait for a condition to become true with exponential backoff.
 
-def wait_until(
-    condition: Callable[[], bool],
-    timeout: float,
-    initial_interval: float = 0.05,
-    max_interval: float = 1.0,
-    backoff_factor: float = 1.5,
-    jitter_factor: float = 0.1,
-) -> bool:
-    """Wait for a condition to become true with exponential backoff.
+        Polls the condition function with increasing intervals until it returns True
+        or the timeout is reached. Starts with fast polling and slows down over time.
 
-    Polls the condition function with increasing intervals until it returns True
-    or the timeout is reached. Starts with fast polling and slows down over time.
+        Args:
+            condition: Callable that returns True when the wait should end
+            timeout: Maximum time to wait in seconds
 
-    Args:
-        condition: Callable that returns True when the wait should end
-        timeout: Maximum time to wait in seconds
-        initial_interval: Starting poll interval in seconds
-        max_interval: Maximum poll interval in seconds
-        backoff_factor: Multiplier for interval each iteration
-        jitter_factor: Random jitter as fraction of interval
+        Returns:
+            True if condition was met, False if timeout expired
+        """
+        start = time.monotonic()
 
-    Returns:
-        True if condition was met, False if timeout expired
-    """
-    backoff = ExponentialBackoff(
-        initial=initial_interval,
-        maximum=max_interval,
-        factor=backoff_factor,
-        jitter=jitter_factor,
-    )
+        while True:
+            if condition():
+                return True
 
-    start = time.monotonic()
+            elapsed = time.monotonic() - start
+            if elapsed >= timeout:
+                return False
 
-    while True:
-        if condition():
-            return True
+            interval = self.next_interval()
+            remaining = timeout - elapsed
+            interval = min(interval, remaining)
 
-        elapsed = time.monotonic() - start
-        if elapsed >= timeout:
-            return False
+            if interval > 0:
+                time.sleep(interval)
 
-        interval = backoff.next_interval()
-        remaining = timeout - elapsed
-        interval = min(interval, remaining)
-
-        if interval > 0:
-            time.sleep(interval)
-
-
-def wait_until_with_exception(
-    condition: Callable[[], bool],
-    timeout: float,
-    error_message: str,
-    initial_interval: float = 0.05,
-    max_interval: float = 1.0,
-    backoff_factor: float = 1.5,
-) -> None:
-    """Wait for condition, raising TimeoutError if not met.
-
-    Same as wait_until but raises instead of returning False.
-    """
-    if not wait_until(
-        condition,
-        timeout,
-        initial_interval=initial_interval,
-        max_interval=max_interval,
-        backoff_factor=backoff_factor,
-    ):
-        raise TimeoutError(error_message)
+    def wait_until_or_raise(
+        self,
+        condition: Callable[[], bool],
+        timeout: float,
+        error_message: str,
+    ) -> None:
+        """Wait for condition, raising TimeoutError if not met."""
+        if not self.wait_until(condition, timeout):
+            raise TimeoutError(error_message)

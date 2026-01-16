@@ -39,7 +39,7 @@ from connectrpc.request import RequestContext
 
 from fluster.rpc import actor_pb2
 from fluster.rpc.actor_connect import ActorServiceASGIApplication
-from fluster.time_utils import wait_until
+from fluster.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -236,11 +236,9 @@ class ActorServer:
         thread.start()
 
         # Wait for server to be ready with exponential backoff
-        wait_until(
+        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: server.started,
             timeout=5.0,
-            initial_interval=0.05,
-            max_interval=0.5,
         )
 
         return self._actual_port

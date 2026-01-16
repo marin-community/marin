@@ -55,7 +55,7 @@ from fluster.client.client import FlusterClient, fluster_ctx
 from fluster.cluster.types import Entrypoint, JobId
 from fluster.rpc import actor_pb2, cluster_pb2
 from fluster.rpc.actor_connect import ActorServiceClientSync
-from fluster.time_utils import ExponentialBackoff, wait_until_with_exception
+from fluster.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -553,12 +553,10 @@ class WorkerPool:
         Raises:
             TimeoutError: If min_workers not available within timeout
         """
-        wait_until_with_exception(
+        ExponentialBackoff(initial=0.05, maximum=1.0).wait_until_or_raise(
             lambda: self.size >= min_workers,
             timeout=timeout,
             error_message=f"Only {self.size} of {min_workers} workers registered within {timeout}s",
-            initial_interval=0.05,
-            max_interval=1.0,
         )
 
     def wait_for_workers(

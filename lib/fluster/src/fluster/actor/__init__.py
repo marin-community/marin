@@ -26,7 +26,7 @@ For ClusterResolver (namespace-aware controller-based resolution),
 see fluster.client.resolver.
 """
 
-from fluster.actor.client import ActorClient, RetryConfig
+from fluster.actor.client import ActorClient
 from fluster.actor.pool import ActorPool, BroadcastFuture, CallResult
 from fluster.actor.resolver import (
     FixedResolver,
@@ -55,5 +55,4 @@ __all__ = [
     "ResolveResult",
     "ResolvedEndpoint",
     "Resolver",
-    "RetryConfig",
 ]

@@ -38,7 +38,7 @@ from typing import Protocol
 
 import uvicorn
 
-from fluster.time_utils import wait_until
+from fluster.time_utils import ExponentialBackoff
 
 from fluster.cluster.controller.dashboard import ControllerDashboard
 from fluster.cluster.controller.job import Job, TransitionResult
@@ -240,11 +240,9 @@ class Controller:
         self._server_thread.start()
 
         # Wait for server startup with exponential backoff
-        wait_until(
+        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server is not None and self._server.started,
             timeout=5.0,
-            initial_interval=0.05,
-            max_interval=0.5,
         )
 
     def stop(self) -> None:

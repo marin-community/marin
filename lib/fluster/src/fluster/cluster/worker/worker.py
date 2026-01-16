@@ -44,7 +44,7 @@ import cloudpickle
 import uvicorn
 
 from fluster.rpc import cluster_pb2
-from fluster.time_utils import wait_until
+from fluster.time_utils import ExponentialBackoff
 from fluster.rpc.cluster_connect import ControllerServiceClientSync
 from fluster.rpc.errors import format_exception_with_traceback
 from fluster.cluster.worker.builder import ImageCache, ImageProvider, VenvCache
@@ -234,11 +234,9 @@ class Worker:
         self._server_thread.start()
 
         # Wait for server startup with exponential backoff
-        wait_until(
+        ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server is not None and self._server.started,
             timeout=5.0,
-            initial_interval=0.05,
-            max_interval=0.5,
         )
 
         # Create controller client synchronously (before any jobs can be dispatched)
@@ -715,11 +713,9 @@ with open('/workdir/_result.pkl', 'wb') as f:
 
                 # Wait for graceful shutdown with exponential backoff
                 running_states = (cluster_pb2.JOB_STATE_RUNNING, cluster_pb2.JOB_STATE_BUILDING)
-                stopped = wait_until(
+                stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
                     lambda: job.status not in running_states,
                     timeout=term_timeout_ms / 1000,
-                    initial_interval=0.05,
-                    max_interval=0.5,
                 )
 
                 # Force kill if graceful shutdown timed out

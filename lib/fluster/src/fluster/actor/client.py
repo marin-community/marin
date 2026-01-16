@@ -20,22 +20,22 @@ automatic retry logic. When an actor name cannot be resolved immediately
 backoff until the timeout is reached.
 
 Typical actor startup: 2-8 seconds (Docker container + server initialization).
-Default timeout (30s) and retry config handle this gracefully.
+Default timeout (30s) handles this gracefully.
 
 Example:
     resolver = ClusterResolver("http://controller:8080")
     client = ActorClient(resolver, "my-actor")
     result = client.some_method(arg1, arg2)  # Retries until actor found
 
-Custom retry behavior:
-    retry_config = RetryConfig(initial_delay=0.2, max_delay=5.0)
-    client = ActorClient(resolver, "my-actor", retry_config=retry_config)
+Custom backoff behavior:
+    client = ActorClient(
+        resolver, "my-actor",
+        initial_backoff=0.2, max_backoff=5.0,
+    )
 """
 
 import logging
-import random
 import time
-from dataclasses import dataclass
 from typing import Any
 
 import cloudpickle
@@ -43,63 +43,9 @@ import cloudpickle
 from fluster.actor.resolver import Resolver, ResolveResult
 from fluster.rpc import actor_pb2
 from fluster.rpc.actor_connect import ActorServiceClientSync
+from fluster.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class RetryConfig:
-    """Configuration for exponential backoff retry when resolving actors.
-
-    When an actor name cannot be resolved, the client retries with
-    exponentially increasing delays until the timeout is reached.
-
-    Attributes:
-        initial_delay: Initial retry delay in seconds
-        max_delay: Maximum delay between retries in seconds
-        backoff_factor: Multiplier for exponential backoff
-        jitter_factor: Random jitter as fraction of delay (e.g., 0.25 = ±25%)
-    """
-
-    initial_delay: float = 0.1
-    max_delay: float = 2.0
-    backoff_factor: float = 2.0
-    jitter_factor: float = 0.25
-
-    def __post_init__(self):
-        if self.initial_delay <= 0:
-            raise ValueError("initial_delay must be positive")
-        if self.max_delay < self.initial_delay:
-            raise ValueError("max_delay must be >= initial_delay")
-        if self.backoff_factor < 1.0:
-            raise ValueError("backoff_factor must be >= 1.0")
-        if not 0 <= self.jitter_factor < 1.0:
-            raise ValueError("jitter_factor must be in [0, 1)")
-
-
-def calculate_next_delay(attempt: int, config: RetryConfig) -> float:
-    """Calculate next retry delay with exponential backoff and jitter.
-
-    Args:
-        attempt: Retry attempt number (0-indexed)
-        config: Retry configuration
-
-    Returns:
-        Delay in seconds before next retry
-    """
-    # Exponential: initial * (backoff^attempt)
-    delay = config.initial_delay * (config.backoff_factor**attempt)
-
-    # Cap at max_delay
-    delay = min(delay, config.max_delay)
-
-    # Add jitter: random in [delay*(1-jitter), delay*(1+jitter)]
-    if config.jitter_factor > 0:
-        jitter_range = delay * config.jitter_factor
-        delay = delay + random.uniform(-jitter_range, jitter_range)
-        delay = max(0.001, delay)  # Keep positive
-
-    return delay
 
 
 class ActorClient:
@@ -110,7 +56,10 @@ class ActorClient:
         resolver: Resolver,
         name: str,
         timeout: float = 30.0,
-        retry_config: RetryConfig | None = None,
+        initial_backoff: float = 0.1,
+        max_backoff: float = 2.0,
+        backoff_factor: float = 2.0,
+        backoff_jitter: float = 0.25,
     ):
         """Initialize the actor client.
 
@@ -119,12 +68,18 @@ class ActorClient:
             name: Name of the actor to invoke
             timeout: Total timeout in seconds for resolution + RPC calls.
                 When resolving, retries continue until this timeout is reached.
-            retry_config: Retry configuration. If None, uses default RetryConfig().
+            initial_backoff: Initial retry delay in seconds
+            max_backoff: Maximum delay between retries in seconds
+            backoff_factor: Multiplier for exponential backoff
+            backoff_jitter: Random jitter as fraction of delay (e.g., 0.25 = ±25%)
         """
         self._resolver = resolver
         self._name = name
         self._timeout = timeout
-        self._retry_config = retry_config or RetryConfig()
+        self._initial_backoff = initial_backoff
+        self._max_backoff = max_backoff
+        self._backoff_factor = backoff_factor
+        self._backoff_jitter = backoff_jitter
         self._cached_result: ResolveResult | None = None
         self._client: ActorServiceClientSync | None = None
         self._client_url: str | None = None
@@ -142,20 +97,22 @@ class ActorClient:
         Raises:
             TimeoutError: If no endpoints found within timeout
         """
-        # Check cache first
         if self._cached_result is not None and not self._cached_result.is_empty:
             return self._cached_result
 
-        # Retry loop with exponential backoff
+        backoff = ExponentialBackoff(
+            initial=self._initial_backoff,
+            maximum=self._max_backoff,
+            factor=self._backoff_factor,
+            jitter=self._backoff_jitter,
+        )
         start_time = time.monotonic()
         attempt = 0
 
         while True:
-            # Try to resolve
             result = self._resolver.resolve(self._name)
 
             if not result.is_empty:
-                # Success! Cache and return
                 self._cached_result = result
                 if attempt > 0:
                     logger.debug(
@@ -164,20 +121,13 @@ class ActorClient:
                     )
                 return result
 
-            # Check timeout
             elapsed = time.monotonic() - start_time
             if elapsed >= self._timeout:
-                raise TimeoutError(
-                    f"Failed to resolve actor '{self._name}' after {self._timeout}s " f"({attempt} retries)"
-                )
+                raise TimeoutError(f"Failed to resolve actor '{self._name}' after {self._timeout}s ({attempt} retries)")
 
-            # Calculate next delay with exponential backoff + jitter
-            delay = calculate_next_delay(attempt, self._retry_config)
-
-            # Adjust delay to not exceed timeout
+            delay = backoff.next_interval()
             remaining = self._timeout - elapsed
-            if delay > remaining:
-                delay = remaining
+            delay = min(delay, remaining)
 
             if delay > 0:
                 logger.debug(
