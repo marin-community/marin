@@ -382,7 +382,11 @@ class ArrowFlightServer(WeightTransferServer):
         self.metrics = WeightTransferServerMetrics()
         self._ctx = get_default_job_ctx()
         self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
+            ArrowFlightCoordinator,
+            name=self.config.coordinator_name,
+            get_if_exists=True,
+            preemptible=False,
+            num_cpus=0,
         )
         logger.info("Started Arrow Flight weight transfer with config: %s", self.config)
 
@@ -435,9 +439,10 @@ class ArrowFlightServer(WeightTransferServer):
 
             barrier_sync()
 
-        except Exception as e:
+        except Exception:
             self.metrics.failed_transfers += 1
-            logger.error(f"Failed to serve weights {weight_id} via Arrow Flight: {e}")
+            logger.exception(f"Failed to serve weights {weight_id} via Arrow Flight")
+            raise
 
     def cleanup(self) -> None:
         """Cleanup Flight server resources."""
@@ -478,7 +483,11 @@ class ArrowFlightClient(WeightTransferClient):
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
         self._ctx = get_default_job_ctx()
         self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
+            ArrowFlightCoordinator,
+            name=self.config.coordinator_name,
+            get_if_exists=True,
+            preemptible=False,
+            num_cpus=0,
         )
 
     def _connect_to_servers(self, new_locations) -> bool:

@@ -5,7 +5,7 @@ import os
 
 from fsspec import AbstractFileSystem
 
-from levanter.compat.hf_checkpoints import load_tokenizer
+from levanter.compat.hf_checkpoints import _patch_hf_hub_download, load_tokenizer
 from levanter.utils.hf_utils import byte_length_of_token
 from test_utils import skip_if_hf_model_not_accessible
 
@@ -28,6 +28,17 @@ def test_load_tokenizer_in_memory_fs():
         )
     tokenizer = load_tokenizer("memory://foo/")
     assert len(tokenizer) == 5027
+
+
+def test_model_info_patch_for_fsspec_urls():
+    """transformers calls model_info() in _patch_mistral_regex to check if a model is a base Mistral model."""
+    import huggingface_hub
+
+    with _patch_hf_hub_download():
+        # This should NOT raise or make a network call - it should return a mock
+        result = huggingface_hub.hf_api.model_info("memory://some/path")
+        assert result.id == "monkeypatched"
+        assert result.tags is None
 
 
 @skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
