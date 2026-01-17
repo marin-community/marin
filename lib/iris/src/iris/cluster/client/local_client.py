@@ -70,8 +70,8 @@ class LocalEnvironmentProvider:
             memory_bytes=self._memory_gb * 1024**3,
         )
 
-    def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec:
-        return cluster_pb2.ResourceSpec(
+    def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpecProto:
+        return cluster_pb2.ResourceSpecProto(
             cpu=metadata.cpu_count,
             memory_bytes=metadata.memory_bytes,
         )
@@ -368,7 +368,7 @@ class LocalClusterClient:
         self,
         job_id: str,
         entrypoint: Entrypoint,
-        resources: cluster_pb2.ResourceSpec,
+        resources: cluster_pb2.ResourceSpecProto,
         environment: cluster_pb2.EnvironmentConfig | None = None,
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,

@@ -39,7 +39,7 @@ class WorkerConfig:
 
     worker_id: str
     address: str
-    resources: cluster_pb2.ResourceSpec
+    resources: cluster_pb2.ResourceSpecProto
 
 
 @dataclass
@@ -59,7 +59,7 @@ class ControllerWorker:
 
     worker_id: WorkerId
     address: str
-    resources: cluster_pb2.ResourceSpec
+    resources: cluster_pb2.ResourceSpecProto
     metadata: cluster_pb2.WorkerMetadata | None = None
 
     # Health tracking
@@ -311,7 +311,7 @@ class ControllerState:
         self,
         worker_id: WorkerId,
         now_ms: int,
-        resources: cluster_pb2.ResourceSpec | None = None,
+        resources: cluster_pb2.ResourceSpecProto | None = None,
         metadata: cluster_pb2.WorkerMetadata | None = None,
     ) -> bool:
         with self._lock:
@@ -386,7 +386,7 @@ class ControllerState:
         Returns:
             (cpu, memory_bytes, gpu_count) tuple of committed resources
         """
-        from iris.cluster.controller.resources import get_gpu_count
+        from iris.cluster.controller.scheduler import get_gpu_count
 
         with self._lock:
             cpu = 0

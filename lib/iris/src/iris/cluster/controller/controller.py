@@ -271,7 +271,7 @@ class Controller:
                     env_vars=dict(job.request.environment.env_vars),
                 ),
                 bundle_gcs_path=job.request.bundle_gcs_path,
-                resources=cluster_pb2.ResourceSpec(
+                resources=cluster_pb2.ResourceSpecProto(
                     cpu=job.request.resources.cpu,
                     memory_bytes=job.request.resources.memory_bytes,
                 ),

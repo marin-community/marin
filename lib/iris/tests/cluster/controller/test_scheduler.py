@@ -25,7 +25,7 @@ import pytest
 
 from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
-from iris.cluster.types import JobId, WorkerId, create_resource_spec
+from iris.cluster.types import JobId, WorkerId
 from iris.rpc import cluster_pb2
 
 
@@ -36,13 +36,13 @@ def make_job_request():
     def _make(
         name: str = "test-job",
         cpu: int = 1,
-        memory: str = "1g",
+        memory_bytes: int = 1024**3,
         scheduling_timeout_seconds: int = 0,
     ) -> cluster_pb2.Controller.LaunchJobRequest:
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",
-            resources=create_resource_spec(cpu=cpu, memory=memory),
+            resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
             environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
             scheduling_timeout_seconds=scheduling_timeout_seconds,
         )
@@ -54,8 +54,8 @@ def make_job_request():
 def make_resource_spec_fixture():
     """Create a ResourceSpec for testing with enough capacity for multiple jobs."""
 
-    def _make(cpu: int = 10, memory: str = "10g") -> cluster_pb2.ResourceSpec:
-        return create_resource_spec(cpu=cpu, memory=memory, disk="10g")
+    def _make(cpu: int = 10, memory_bytes: int = 10 * 1024**3) -> cluster_pb2.ResourceSpecProto:
+        return cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes, disk_bytes=10 * 1024**3)
 
     return _make
 
@@ -111,7 +111,7 @@ def test_scheduler_assigns_multiple_jobs_to_worker(scheduler, state, make_job_re
     worker = ControllerWorker(
         WorkerId("w1"),
         "addr",
-        make_resource_spec_fixture(cpu=10, memory="10g"),
+        make_resource_spec_fixture(cpu=10, memory_bytes=10 * 1024**3),
     )
     state.add_worker(worker)
 
@@ -139,7 +139,7 @@ def test_scheduler_skips_jobs_that_dont_fit(scheduler, state, make_job_request, 
     worker = ControllerWorker(
         WorkerId("w1"),
         "addr",
-        create_resource_spec(cpu=4, memory="16g"),
+        cluster_pb2.ResourceSpecProto(cpu=4, memory_bytes=16 * 1024**3),
     )
     state.add_worker(worker)
 
@@ -171,7 +171,7 @@ def test_scheduler_detects_timed_out_jobs(scheduler, state, make_resource_spec_f
     job_request = cluster_pb2.Controller.LaunchJobRequest(
         name="impossible-job",
         serialized_entrypoint=b"test",
-        resources=create_resource_spec(cpu=100, memory="1g"),
+        resources=cluster_pb2.ResourceSpecProto(cpu=100, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         scheduling_timeout_seconds=1,
     )
@@ -202,7 +202,7 @@ def test_scheduler_no_timeout_when_zero(scheduler, state, make_resource_spec_fix
     job_request = cluster_pb2.Controller.LaunchJobRequest(
         name="no-timeout-job",
         serialized_entrypoint=b"test",
-        resources=create_resource_spec(cpu=100, memory="1g"),
+        resources=cluster_pb2.ResourceSpecProto(cpu=100, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         scheduling_timeout_seconds=0,  # No timeout
     )

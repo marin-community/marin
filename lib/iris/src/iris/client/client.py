@@ -500,7 +500,7 @@ class IrisClient:
         self,
         entrypoint: Entrypoint,
         name: str,
-        resources: cluster_pb2.ResourceSpec,
+        resources: cluster_pb2.ResourceSpecProto,
         environment: cluster_pb2.EnvironmentConfig | None = None,
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,

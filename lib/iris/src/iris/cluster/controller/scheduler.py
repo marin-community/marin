@@ -17,15 +17,35 @@
 import logging
 from dataclasses import dataclass, field
 
-from iris.cluster.controller.resources import (
-    get_device_type,
-    get_device_variant,
-    get_gpu_count,
-)
 from iris.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
 from iris.cluster.types import WorkerId
+from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
+
+
+def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
+    if device.HasField("cpu"):
+        return "cpu"
+    elif device.HasField("gpu"):
+        return "gpu"
+    elif device.HasField("tpu"):
+        return "tpu"
+    return "cpu"  # Default to CPU if no device specified
+
+
+def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
+    if device.HasField("gpu"):
+        return device.gpu.variant if device.gpu.variant else None
+    elif device.HasField("tpu"):
+        return device.tpu.variant if device.tpu.variant else None
+    return None
+
+
+def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
+    if device.HasField("gpu"):
+        return device.gpu.count or 1
+    return 0
 
 
 @dataclass

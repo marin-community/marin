@@ -25,7 +25,6 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
-from iris.cluster.types import create_resource_spec
 from iris.cluster.worker.builder import BuildResult, ImageCache, VenvCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.dashboard import WorkerDashboard
@@ -151,7 +150,7 @@ def create_run_job_request(job_id: str = "test-job-1", ports: list[str] | None =
         extras=["dev"],
     )
 
-    resources = create_resource_spec(cpu=2, memory="4g")
+    resources = cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3)
 
     return cluster_pb2.Worker.RunJobRequest(
         job_id=job_id,

@@ -102,7 +102,7 @@ message JobAttempt {
 // RESOURCE SPECIFICATION
 // ============================================================================
 
-// Device configuration - used in ResourceSpec
+// Device configuration - used in ResourceSpecProto
 message DeviceConfig {
   oneof device {
     CpuDevice cpu = 1;
@@ -128,9 +128,8 @@ message TpuDevice {
 // Unified resource specification for jobs
 // Used by both controller (for scheduling) and worker (for enforcement)
 // All resource quantities are in machine-readable units (bytes, cores).
-// Human-readable parsing (e.g., "8g") should be done at the client layer
-// using create_resource_spec() from iris.cluster.types.
-message ResourceSpec {
+// Clients should create a ResourceSpec dataclass and call .to_proto().
+message ResourceSpecProto {
   // Compute resources
   int32 cpu = 1;              // Number of CPU cores
   int64 memory_bytes = 4;     // RAM in bytes
@@ -200,7 +199,7 @@ message Controller {
   message LaunchJobRequest {
     string name = 1;
     bytes serialized_entrypoint = 2;   // cloudpickle(Entrypoint)
-    ResourceSpec resources = 3;         // Full resource specification
+    ResourceSpecProto resources = 3;        // Full resource specification
     EnvironmentConfig environment = 4;  // Environment configuration
 
     // Bundle information - either provide gcs_path OR blob (not both)
@@ -248,7 +247,7 @@ message Controller {
   message WorkerInfo {
     string worker_id = 1;
     string address = 2;              // host:port for WorkerService
-    ResourceSpec resources = 3;      // Worker capabilities
+    ResourceSpecProto resources = 3;     // Worker capabilities
     int64 registered_at_ms = 4;
     WorkerMetadata metadata = 5;
   }
@@ -256,7 +255,7 @@ message Controller {
   message RegisterWorkerRequest {
     string worker_id = 1;
     string address = 2;
-    ResourceSpec resources = 3;
+    ResourceSpecProto resources = 3;
     WorkerMetadata metadata = 4;
   }
 
@@ -348,7 +347,7 @@ message Worker {
     string bundle_gcs_path = 4;        // gs://bucket/path/bundle.zip
 
     // Resource specification
-    ResourceSpec resources = 6;
+    ResourceSpecProto resources = 6;
 
     int32 timeout_seconds = 8;
 
