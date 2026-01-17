@@ -15,7 +15,6 @@ import haliax.partitioning
 import jax
 import numpy as np
 from haliax import is_named_array
-from haliax._src.util import index_where
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceAxis, ResourceMapping
 from jax import numpy as jnp
@@ -399,50 +398,51 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
      2. Then, inside jit, we select the source'th element of the array, then reshard with the out_axis_specs
 
     """
-    current_mesh: jax.sharding.Mesh = hax.partitioning._get_mesh()
+    # NOTE: Prior implementations attempted to use `jax.make_array_from_callback` with a `NamedSharding` constructed
+    # from the active training mesh. On multi-host TPU, that can crash with "not fully addressable" / "not addressable
+    # sharding" errors. Instead, we broadcast using a temporary mesh over ("processes", "local_devices") and a
+    # reduction across the sharded "processes" axis, then reshard to `out_axis_specs`.
 
-    axis_names = current_mesh.axis_names
+    def _normalize_out_spec(spec: Any) -> Any:
+        if isinstance(spec, PartitionSpec):
+            resolved_mesh = haliax.partitioning._get_mesh()
+            return NamedSharding(resolved_mesh, spec)
+        return spec
 
-    valid_device_for_process = index_where(lambda d: d.host_id == source, current_mesh.devices.flatten())
-    sharding = NamedSharding(
-        current_mesh,
-        PartitionSpec(
-            axis_names,
-        ),
-    )
+    if jax.process_count() == 1:
 
-    def pre_jit(x):
-        # IMPORTANT: keep this host-only.
-        #
-        # In multi-process TPU meshes, constructing JAX arrays here (e.g. via `jnp.zeros`) can produce
-        # non-fully-addressable arrays, which then crash inside `make_array_from_callback` when it
-        # attempts to `device_put` across the global device set.
+        def in_jit_single(x_leaf: Any, spec: Any) -> Any:
+            arr = x_leaf.array if isinstance(x_leaf, hax.NamedArray) else x_leaf
+            spec = _normalize_out_spec(spec)
+            if spec is not None:
+                arr = jax.lax.with_sharding_constraint(arr, spec)
+            return hax.named(arr, x_leaf.axis_names) if isinstance(x_leaf, hax.NamedArray) else arr
+
+        return eqx.filter_jit(jax.tree.map)(in_jit_single, x, out_axis_specs, is_leaf=is_named_array)
+
+    devices: np.ndarray = np.array(jax.devices()).reshape(jax.process_count(), jax.local_device_count())
+    global_mesh = Mesh(devices, ("processes", "local_devices"))
+    in_pspec = PartitionSpec("processes")
+
+    def pre_jit(x_leaf: Any) -> jax.Array:
+        arr = x_leaf.array if isinstance(x_leaf, hax.NamedArray) else x_leaf
         if jax.process_index() == source:
-            inp = np.asarray(x)
+            host = np.asarray(arr)
         else:
-            inp = np.zeros(x.shape, dtype=x.dtype)
+            host = np.zeros(arr.shape, dtype=arr.dtype)
+        host = np.expand_dims(host, axis=0)
+        return host_local_array_to_global_array(host, global_mesh, in_pspec)
 
-        shape = (len(jax.devices()),) + inp.shape
-        inp = np.expand_dims(inp, axis=0)
-        return jax.make_array_from_callback(shape, sharding, lambda _: inp)
+    def in_jit(x_global: jax.Array, spec: Any, x_leaf: Any) -> Any:
+        arr = jnp.sum(x_global, axis=0)
+        spec = _normalize_out_spec(spec)
+        if spec is not None:
+            arr = jax.lax.with_sharding_constraint(arr, spec)
+        return hax.named(arr, x_leaf.axis_names) if isinstance(x_leaf, hax.NamedArray) else arr
 
-    def in_jit(x, pspec):
-        if isinstance(x, hax.NamedArray):
-            arr = x.array
-        else:
-            arr = x
-        arr = jax.lax.with_sharding_constraint(arr[valid_device_for_process], pspec)
-
-        if isinstance(x, hax.NamedArray):
-            return hax.named(arr, x.axis_names)
-        else:
-            return arr
-
-    x = jax.tree.map(pre_jit, x)
-    # q = eqx.filter_jit(jax.tree.map).lower(in_jit, x, out_axis_specs, is_leaf=is_named_array).as_text()
-    out = eqx.filter_jit(jax.tree.map)(in_jit, x, out_axis_specs, is_leaf=is_named_array)
-
-    return out
+    x_global = jax.tree.map(pre_jit, x, is_leaf=is_named_array)
+    out_axis_specs = jax.tree.map(_normalize_out_spec, out_axis_specs)
+    return eqx.filter_jit(jax.tree.map)(in_jit, x_global, out_axis_specs, x, is_leaf=is_named_array)
 
 
 def tree_broadcast_to(prefix: PyTree[L], t: T, *, is_leaf: Optional[Callable[[Any], bool]] = None) -> T:
