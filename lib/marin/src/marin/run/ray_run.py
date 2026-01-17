@@ -43,6 +43,39 @@ logger = logging.getLogger(__name__)
 
 REMOTE_DASHBOARD_URL = "http://127.0.0.1:8265"
 
+_REDACT_VALUE = "<redacted>"
+_SENSITIVE_ENV_KEYS = {
+    "WANDB_API_KEY",
+    "HF_TOKEN",
+    "RAY_AUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GITHUB_TOKEN",
+}
+
+
+def _redact_env_vars(env_vars: dict) -> dict:
+    """Return a shallow-copied env var dict with sensitive values redacted."""
+    redacted = dict(env_vars)
+    for key in list(redacted.keys()):
+        if key in _SENSITIVE_ENV_KEYS or re.search(r"(TOKEN|SECRET|PASSWORD|API_KEY)$", key):
+            if redacted.get(key):
+                redacted[key] = _REDACT_VALUE
+    return redacted
+
+
+def _redact_runtime_env(runtime_env: dict) -> dict:
+    """Redact env var values inside a Ray runtime env dict."""
+    redacted = dict(runtime_env)
+    env_vars = redacted.get("env_vars")
+    if isinstance(env_vars, dict):
+        redacted["env_vars"] = _redact_env_vars(env_vars)
+    return redacted
+
 
 def _maybe_enable_ray_token_auth(*, require_token: bool) -> None:
     """Enable token auth client-side.
@@ -141,7 +174,7 @@ async def submit_and_track_job(
 
     logger.info(f"Submitting job with entrypoint: {entrypoint}")
     logger.info(f"Extras: {extra}")
-    logger.info(f"env_vars: {json.dumps(env_vars, indent=4)}")
+    logger.info(f"env_vars: {json.dumps(_redact_env_vars(env_vars), indent=4)}")
 
     runtime_dict = {
         "working_dir": current_dir,
@@ -159,11 +192,11 @@ async def submit_and_track_job(
     runtime_dict = build_runtime_env_for_packages(extra=[*extra_list], env_vars=env_vars) | runtime_dict
 
     logger.info(
-        f"Terminal command: \n"
-        f"ray job submit "
-        f"--runtime-env-json '{json.dumps(runtime_dict)}' "
-        f"--submission-id '{submission_id} "
-        f" -- {entrypoint}"
+        "Terminal command:\n"
+        "ray job submit "
+        f"--runtime-env-json '{json.dumps(_redact_runtime_env(runtime_dict))}' "
+        f"--submission-id '{submission_id}' "
+        f"-- {entrypoint}"
     )
 
     # Submit the job with runtime environment and entrypoint
