@@ -239,7 +239,6 @@ class Worker:
 
     def _heartbeat_loop(self) -> None:
         metadata = self._environment_provider.probe()
-        resources = self._environment_provider.build_resource_spec(metadata)
 
         # Generate worker ID if not provided
         if not self._worker_id:
@@ -256,7 +255,6 @@ class Worker:
         request = cluster_pb2.Controller.RegisterWorkerRequest(
             worker_id=self._worker_id,
             address=f"{address_host}:{self._config.port}",
-            resources=resources,
             metadata=metadata,
         )
 

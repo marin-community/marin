@@ -52,6 +52,30 @@ def make_resource_spec_fixture():
 
 
 @pytest.fixture
+def make_worker_metadata():
+    """Create WorkerMetadata for testing."""
+
+    def _make(
+        cpu: int = 10,
+        memory_bytes: int = 10 * 1024**3,
+        disk_bytes: int = 10 * 1024**3,
+    ) -> cluster_pb2.WorkerMetadata:
+        device = cluster_pb2.DeviceConfig()
+        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+
+        return cluster_pb2.WorkerMetadata(
+            hostname="test-worker",
+            ip_address="127.0.0.1",
+            cpu_count=cpu,
+            memory_bytes=memory_bytes,
+            disk_bytes=disk_bytes,
+            device=device,
+        )
+
+    return _make
+
+
+@pytest.fixture
 def state():
     """Create a fresh ControllerState for each test."""
     return ControllerState()
@@ -303,12 +327,12 @@ def test_terminate_pending_job(service, state, make_job_request):
     assert job.finished_at_ms is not None
 
 
-def test_register_worker(service, state, make_resource_spec_fixture):
+def test_register_worker(service, state, make_worker_metadata):
     """Verify register_worker adds worker to state."""
     request = cluster_pb2.Controller.RegisterWorkerRequest(
         worker_id="w1",
         address="host1:8080",
-        resources=make_resource_spec_fixture(),
+        metadata=make_worker_metadata(),
     )
 
     response = service.register_worker(request, None)
@@ -320,12 +344,12 @@ def test_register_worker(service, state, make_resource_spec_fixture):
     assert worker.healthy is True
 
 
-def test_register_worker_logs_action(service, state, make_resource_spec_fixture):
+def test_register_worker_logs_action(service, state, make_worker_metadata):
     """Verify register_worker logs an action."""
     request = cluster_pb2.Controller.RegisterWorkerRequest(
         worker_id="w1",
         address="host1:8080",
-        resources=make_resource_spec_fixture(),
+        metadata=make_worker_metadata(),
     )
 
     service.register_worker(request, None)
@@ -336,7 +360,7 @@ def test_register_worker_logs_action(service, state, make_resource_spec_fixture)
     assert actions[0].worker_id == "w1"
 
 
-def test_list_workers_returns_all(service, state, make_resource_spec_fixture):
+def test_list_workers_returns_all(service, state, make_worker_metadata):
     """Verify list_workers returns all workers."""
     from iris.cluster.controller.state import ControllerWorker
 
@@ -345,7 +369,7 @@ def test_list_workers_returns_all(service, state, make_resource_spec_fixture):
         worker = ControllerWorker(
             worker_id=WorkerId(f"w{i}"),
             address=f"host{i}:8080",
-            resources=make_resource_spec_fixture(),
+            metadata=make_worker_metadata(),
             healthy=(i != 1),  # w1 is unhealthy
         )
         state.add_worker(worker)

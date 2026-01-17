@@ -281,7 +281,6 @@ class ControllerServiceImpl:
         if self._state.update_worker_heartbeat(
             worker_id,
             now_ms,
-            resources=request.resources,
             metadata=request.metadata,
         ):
             return cluster_pb2.Controller.RegisterWorkerResponse(accepted=True)
@@ -290,7 +289,6 @@ class ControllerServiceImpl:
         worker = ControllerWorker(
             worker_id=worker_id,
             address=request.address,
-            resources=request.resources,
             metadata=request.metadata,
             last_heartbeat_ms=now_ms,
         )

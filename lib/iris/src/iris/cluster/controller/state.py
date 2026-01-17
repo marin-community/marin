@@ -34,12 +34,12 @@ class WorkerConfig:
     Args:
         worker_id: Unique worker identifier
         address: Worker RPC address (host:port)
-        resources: Worker's available resources
+        metadata: Worker environment metadata
     """
 
     worker_id: str
     address: str
-    resources: cluster_pb2.ResourceSpecProto
+    metadata: cluster_pb2.WorkerMetadata
 
 
 @dataclass
@@ -49,8 +49,7 @@ class ControllerWorker:
     Args:
         worker_id: Unique worker identifier
         address: Worker RPC address (host:port)
-        resources: Worker's available resources
-        metadata: Worker environment metadata (TPU vars, GPU info, etc.)
+        metadata: Worker environment metadata (includes cpu, memory, device, disk)
         healthy: Whether worker is currently healthy
         consecutive_failures: Number of consecutive heartbeat failures
         last_heartbeat_ms: Timestamp of last successful heartbeat
@@ -59,8 +58,7 @@ class ControllerWorker:
 
     worker_id: WorkerId
     address: str
-    resources: cluster_pb2.ResourceSpecProto
-    metadata: cluster_pb2.WorkerMetadata | None = None
+    metadata: cluster_pb2.WorkerMetadata
 
     # Health tracking
     healthy: bool = True
@@ -311,7 +309,6 @@ class ControllerState:
         self,
         worker_id: WorkerId,
         now_ms: int,
-        resources: cluster_pb2.ResourceSpecProto | None = None,
         metadata: cluster_pb2.WorkerMetadata | None = None,
     ) -> bool:
         with self._lock:
@@ -320,8 +317,6 @@ class ControllerState:
                 return False
             worker.last_heartbeat_ms = now_ms
             worker.healthy = True
-            if resources is not None:
-                worker.resources = resources
             if metadata is not None:
                 worker.metadata = metadata
             return True
@@ -410,7 +405,7 @@ class ControllerState:
             worker = ControllerWorker(
                 worker_id=WorkerId(cfg.worker_id),
                 address=cfg.address,
-                resources=cfg.resources,
+                metadata=cfg.metadata,
                 last_heartbeat_ms=now_ms,
             )
             self.add_worker(worker)
