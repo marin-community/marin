@@ -159,23 +159,23 @@ class TpuDevice(_message.Message):
     topology: str
     def __init__(self, variant: _Optional[str] = ..., topology: _Optional[str] = ...) -> None: ...
 
-class ResourceSpec(_message.Message):
-    __slots__ = ("cpu", "memory", "disk", "device", "replicas", "preemptible", "regions")
+class ResourceSpecProto(_message.Message):
+    __slots__ = ("cpu", "memory_bytes", "disk_bytes", "device", "replicas", "preemptible", "regions")
     CPU_FIELD_NUMBER: _ClassVar[int]
-    MEMORY_FIELD_NUMBER: _ClassVar[int]
-    DISK_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
+    DISK_BYTES_FIELD_NUMBER: _ClassVar[int]
     DEVICE_FIELD_NUMBER: _ClassVar[int]
     REPLICAS_FIELD_NUMBER: _ClassVar[int]
     PREEMPTIBLE_FIELD_NUMBER: _ClassVar[int]
     REGIONS_FIELD_NUMBER: _ClassVar[int]
     cpu: int
-    memory: str
-    disk: str
+    memory_bytes: int
+    disk_bytes: int
     device: DeviceConfig
     replicas: int
     preemptible: bool
     regions: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, cpu: _Optional[int] = ..., memory: _Optional[str] = ..., disk: _Optional[str] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., preemptible: _Optional[bool] = ..., regions: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., preemptible: _Optional[bool] = ..., regions: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
     __slots__ = ("workspace", "pip_packages", "env_vars", "extras")
@@ -197,11 +197,13 @@ class EnvironmentConfig(_message.Message):
     def __init__(self, workspace: _Optional[str] = ..., pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class WorkerMetadata(_message.Message):
-    __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone")
+    __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "disk_bytes", "device", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone")
     HOSTNAME_FIELD_NUMBER: _ClassVar[int]
     IP_ADDRESS_FIELD_NUMBER: _ClassVar[int]
     CPU_COUNT_FIELD_NUMBER: _ClassVar[int]
     MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
+    DISK_BYTES_FIELD_NUMBER: _ClassVar[int]
+    DEVICE_FIELD_NUMBER: _ClassVar[int]
     TPU_NAME_FIELD_NUMBER: _ClassVar[int]
     TPU_WORKER_HOSTNAMES_FIELD_NUMBER: _ClassVar[int]
     TPU_WORKER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -215,6 +217,8 @@ class WorkerMetadata(_message.Message):
     ip_address: str
     cpu_count: int
     memory_bytes: int
+    disk_bytes: int
+    device: DeviceConfig
     tpu_name: str
     tpu_worker_hostnames: str
     tpu_worker_id: str
@@ -224,7 +228,7 @@ class WorkerMetadata(_message.Message):
     gpu_memory_mb: int
     gce_instance_name: str
     gce_zone: str
-    def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ...) -> None: ...
+    def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ...) -> None: ...
 
 class Controller(_message.Message):
     __slots__ = ()
@@ -242,7 +246,7 @@ class Controller(_message.Message):
         PARENT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
         name: str
         serialized_entrypoint: bytes
-        resources: ResourceSpec
+        resources: ResourceSpecProto
         environment: EnvironmentConfig
         bundle_gcs_path: str
         bundle_hash: str
@@ -250,7 +254,7 @@ class Controller(_message.Message):
         scheduling_timeout_seconds: int
         ports: _containers.RepeatedScalarFieldContainer[str]
         parent_job_id: str
-        def __init__(self, name: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout_seconds: _Optional[int] = ..., ports: _Optional[_Iterable[str]] = ..., parent_job_id: _Optional[str] = ...) -> None: ...
+        def __init__(self, name: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout_seconds: _Optional[int] = ..., ports: _Optional[_Iterable[str]] = ..., parent_job_id: _Optional[str] = ...) -> None: ...
     class LaunchJobResponse(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -282,29 +286,25 @@ class Controller(_message.Message):
         jobs: _containers.RepeatedCompositeFieldContainer[JobStatus]
         def __init__(self, jobs: _Optional[_Iterable[_Union[JobStatus, _Mapping]]] = ...) -> None: ...
     class WorkerInfo(_message.Message):
-        __slots__ = ("worker_id", "address", "resources", "registered_at_ms", "metadata")
+        __slots__ = ("worker_id", "address", "metadata", "registered_at_ms")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
         ADDRESS_FIELD_NUMBER: _ClassVar[int]
-        RESOURCES_FIELD_NUMBER: _ClassVar[int]
+        METADATA_FIELD_NUMBER: _ClassVar[int]
         REGISTERED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-        METADATA_FIELD_NUMBER: _ClassVar[int]
         worker_id: str
         address: str
-        resources: ResourceSpec
-        registered_at_ms: int
         metadata: WorkerMetadata
-        def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., registered_at_ms: _Optional[int] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ...) -> None: ...
+        registered_at_ms: int
+        def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ..., registered_at_ms: _Optional[int] = ...) -> None: ...
     class RegisterWorkerRequest(_message.Message):
-        __slots__ = ("worker_id", "address", "resources", "metadata")
+        __slots__ = ("worker_id", "address", "metadata")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
         ADDRESS_FIELD_NUMBER: _ClassVar[int]
-        RESOURCES_FIELD_NUMBER: _ClassVar[int]
         METADATA_FIELD_NUMBER: _ClassVar[int]
         worker_id: str
         address: str
-        resources: ResourceSpec
         metadata: WorkerMetadata
-        def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ...) -> None: ...
+        def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ...) -> None: ...
     class RegisterWorkerResponse(_message.Message):
         __slots__ = ("accepted", "controller_address")
         ACCEPTED_FIELD_NUMBER: _ClassVar[int]
@@ -439,11 +439,11 @@ class Worker(_message.Message):
         serialized_entrypoint: bytes
         environment: EnvironmentConfig
         bundle_gcs_path: str
-        resources: ResourceSpec
+        resources: ResourceSpecProto
         timeout_seconds: int
         ports: _containers.RepeatedScalarFieldContainer[str]
         attempt_id: int
-        def __init__(self, job_id: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., timeout_seconds: _Optional[int] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ...) -> None: ...
+        def __init__(self, job_id: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout_seconds: _Optional[int] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ...) -> None: ...
     class RunJobResponse(_message.Message):
         __slots__ = ("job_id", "state")
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
