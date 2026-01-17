@@ -36,7 +36,7 @@ from iris.cluster.client.local_client import (
     _LocalImageProvider,
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
-from iris.cluster.types import Entrypoint
+from iris.cluster.types import EnvironmentSpec, Entrypoint, ResourceSpec
 from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import DockerRuntime
@@ -176,8 +176,8 @@ class E2ECluster:
         **kwargs,
     ) -> str:
         entrypoint = Entrypoint.from_callable(fn, *args, **kwargs)
-        environment = cluster_pb2.EnvironmentConfig(workspace="/app", env_vars={})
-        resources = cluster_pb2.ResourceSpec(cpu=cpu, memory=memory)
+        environment = EnvironmentSpec(workspace="/app")
+        resources = ResourceSpec(cpu=cpu, memory=memory)
         return self.get_client().submit(
             entrypoint=entrypoint,
             name=name or fn.__name__,
@@ -273,8 +273,8 @@ class TestJobLifecycle:
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
-    def test_concurrent_jobs(self, test_cluster):
-        """Multiple jobs run concurrently."""
+    def test_multiple_jobs_complete(self, test_cluster):
+        """Multiple jobs complete successfully."""
 
         def fast_job(n):
             return n * 2

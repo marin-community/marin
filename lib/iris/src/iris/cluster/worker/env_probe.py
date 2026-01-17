@@ -102,6 +102,15 @@ def _get_ip_address() -> str:
         return "127.0.0.1"
 
 
+def _get_disk_bytes() -> int:
+    """Get available disk space in bytes."""
+    try:
+        stat = os.statvfs("/")
+        return stat.f_bavail * stat.f_frsize
+    except Exception:
+        return 100 * 1024**3  # Default 100GB
+
+
 def collect_workdir_size_mb(workdir: Path) -> int:
     """Calculate workdir size in MB using du -sm."""
     if not workdir.exists():
@@ -128,8 +137,6 @@ class EnvironmentProvider(Protocol):
 
     def probe(self) -> cluster_pb2.WorkerMetadata: ...
 
-    def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec: ...
-
 
 class DefaultEnvironmentProvider:
     """Default implementation that probes real system resources."""
@@ -139,6 +146,7 @@ class DefaultEnvironmentProvider:
         ip_address = _get_ip_address()
         cpu_count = os.cpu_count() or 1
         memory_bytes = _get_memory_total_bytes()
+        disk_bytes = _get_disk_bytes()
 
         # TPU environment variables
         tpu_name = os.environ.get("TPU_NAME", "")
@@ -151,6 +159,20 @@ class DefaultEnvironmentProvider:
 
         # GCE metadata
         gce_instance_name, gce_zone = _probe_gce_metadata()
+
+        # Build device config
+        device = cluster_pb2.DeviceConfig()
+        if tpu_name:
+            device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=tpu_name))
+        elif gpu_count > 0:
+            device.gpu.CopyFrom(
+                cluster_pb2.GpuDevice(
+                    variant=gpu_name or "auto",
+                    count=gpu_count,
+                )
+            )
+        else:
+            device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
 
         memory_gb = memory_bytes // (1024**3)
         logger.info(
@@ -168,6 +190,7 @@ class DefaultEnvironmentProvider:
             ip_address=ip_address,
             cpu_count=cpu_count,
             memory_bytes=memory_bytes,
+            disk_bytes=disk_bytes,
             tpu_name=tpu_name,
             tpu_worker_hostnames=tpu_worker_hostnames,
             tpu_worker_id=tpu_worker_id,
@@ -177,28 +200,5 @@ class DefaultEnvironmentProvider:
             gpu_memory_mb=gpu_memory_mb,
             gce_instance_name=gce_instance_name,
             gce_zone=gce_zone,
+            device=device,
         )
-
-    def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec:
-        memory_gb = metadata.memory_bytes // (1024**3)
-
-        resources = cluster_pb2.ResourceSpec(
-            cpu=metadata.cpu_count,
-            memory=f"{memory_gb}g",
-        )
-
-        # Add TPU device if detected
-        if metadata.tpu_name:
-            resources.device.CopyFrom(cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant=metadata.tpu_name)))
-        # Add GPU device if detected
-        elif metadata.gpu_count > 0:
-            resources.device.CopyFrom(
-                cluster_pb2.DeviceConfig(
-                    gpu=cluster_pb2.GpuDevice(
-                        variant=metadata.gpu_name or "auto",
-                        count=metadata.gpu_count,
-                    )
-                )
-            )
-
-        return resources
