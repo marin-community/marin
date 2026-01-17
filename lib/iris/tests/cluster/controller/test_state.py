@@ -24,7 +24,7 @@ from iris.cluster.types import JobId, WorkerId
 
 
 @pytest.fixture
-def make_job_request():
+def job_request():
     """Create a minimal LaunchJobRequest for testing."""
 
     def _make(name: str = "test-job") -> cluster_pb2.Controller.LaunchJobRequest:
@@ -39,7 +39,7 @@ def make_job_request():
 
 
 @pytest.fixture
-def make_resource_spec():
+def resource_spec():
     """Create a minimal ResourceSpec for testing."""
 
     def _make() -> cluster_pb2.ResourceSpecProto:
@@ -49,7 +49,7 @@ def make_resource_spec():
 
 
 @pytest.fixture
-def make_worker_metadata():
+def worker_metadata():
     """Create WorkerMetadata for testing."""
 
     def _make(
@@ -72,11 +72,11 @@ def make_worker_metadata():
     return _make
 
 
-def test_controller_state_fifo_order(make_job_request):
+def test_controller_state_fifo_order(job_request):
     """Verify jobs are returned in FIFO order."""
     state = ControllerState()
-    job1 = ControllerJob(job_id=JobId("j1"), request=make_job_request("job1"), submitted_at_ms=100)
-    job2 = ControllerJob(job_id=JobId("j2"), request=make_job_request("job2"), submitted_at_ms=200)
+    job1 = ControllerJob(job_id=JobId("j1"), request=job_request("job1"), submitted_at_ms=100)
+    job2 = ControllerJob(job_id=JobId("j2"), request=job_request("job2"), submitted_at_ms=200)
     state.add_job(job1)
     state.add_job(job2)
 
@@ -93,12 +93,12 @@ def test_controller_state_fifo_order(make_job_request):
     assert state.pop_next_pending() is None
 
 
-def test_controller_state_skip_non_pending(make_job_request):
+def test_controller_state_skip_non_pending(job_request):
     """Verify pop_next_pending skips jobs that are not in PENDING state."""
     state = ControllerState()
-    job1 = ControllerJob(job_id=JobId("j1"), request=make_job_request("job1"))
+    job1 = ControllerJob(job_id=JobId("j1"), request=job_request("job1"))
     job1.state = cluster_pb2.JOB_STATE_RUNNING  # Already started
-    job2 = ControllerJob(job_id=JobId("j2"), request=make_job_request("job2"))
+    job2 = ControllerJob(job_id=JobId("j2"), request=job_request("job2"))
     state.add_job(job1)
     state.add_job(job2)
 
@@ -111,11 +111,11 @@ def test_controller_state_skip_non_pending(make_job_request):
     assert state.pop_next_pending() is None
 
 
-def test_controller_state_worker_operations(make_worker_metadata):
+def test_controller_state_worker_operations(worker_metadata):
     """Test add/get/list workers."""
     state = ControllerState()
-    worker1 = ControllerWorker(worker_id=WorkerId("w1"), address="host1:8080", metadata=make_worker_metadata())
-    worker2 = ControllerWorker(worker_id=WorkerId("w2"), address="host2:8080", metadata=make_worker_metadata())
+    worker1 = ControllerWorker(worker_id=WorkerId("w1"), address="host1:8080", metadata=worker_metadata())
+    worker2 = ControllerWorker(worker_id=WorkerId("w2"), address="host2:8080", metadata=worker_metadata())
 
     # Add workers
     state.add_worker(worker1)
@@ -139,12 +139,12 @@ def test_controller_state_worker_operations(make_worker_metadata):
     assert available[0].worker_id == "w2"
 
 
-def test_controller_state_gang_tracking(make_job_request):
+def test_controller_state_gang_tracking(job_request):
     """Verify gang jobs are tracked correctly."""
     state = ControllerState()
-    job1 = ControllerJob(job_id=JobId("j1"), request=make_job_request("job1"), gang_id="gang1")
-    job2 = ControllerJob(job_id=JobId("j2"), request=make_job_request("job2"), gang_id="gang1")
-    job3 = ControllerJob(job_id=JobId("j3"), request=make_job_request("job3"), gang_id="gang2")
+    job1 = ControllerJob(job_id=JobId("j1"), request=job_request("job1"), gang_id="gang1")
+    job2 = ControllerJob(job_id=JobId("j2"), request=job_request("job2"), gang_id="gang1")
+    job3 = ControllerJob(job_id=JobId("j3"), request=job_request("job3"), gang_id="gang2")
 
     state.add_job(job1)
     state.add_job(job2)
@@ -164,7 +164,7 @@ def test_controller_state_gang_tracking(make_job_request):
     assert state.get_gang_jobs("nonexistent") == []
 
 
-def test_controller_state_thread_safety(make_job_request):
+def test_controller_state_thread_safety(job_request):
     """Verify concurrent access doesn't corrupt state."""
     state = ControllerState()
     num_threads = 10
@@ -180,7 +180,7 @@ def test_controller_state_thread_safety(make_job_request):
             # Add jobs
             for i in range(jobs_per_thread):
                 job_id = f"t{thread_id}_j{i}"
-                job = ControllerJob(job_id=JobId(job_id), request=make_job_request(f"job-{job_id}"))
+                job = ControllerJob(job_id=JobId(job_id), request=job_request(f"job-{job_id}"))
                 state.add_job(job)
         except Exception as e:
             errors.append(e)
@@ -204,7 +204,7 @@ def test_controller_state_thread_safety(make_job_request):
     assert popped_count == expected_count, f"Expected {expected_count} jobs, got {popped_count}"
 
 
-def test_controller_state_multiple_gangs(make_job_request):
+def test_controller_state_multiple_gangs(job_request):
     """Test tracking multiple gangs simultaneously."""
     state = ControllerState()
 
@@ -213,7 +213,7 @@ def test_controller_state_multiple_gangs(make_job_request):
         gang_id = f"gang{gang_num}"
         for job_num in range(gang_num + 1):  # gang0 has 1 job, gang1 has 2, etc.
             job_id = JobId(f"g{gang_num}_j{job_num}")
-            job = ControllerJob(job_id=job_id, request=make_job_request(f"job-{job_id}"), gang_id=gang_id)
+            job = ControllerJob(job_id=job_id, request=job_request(f"job-{job_id}"), gang_id=gang_id)
             state.add_job(job)
 
     # Verify each gang has correct number of jobs
@@ -226,10 +226,10 @@ def test_controller_state_multiple_gangs(make_job_request):
         ), f"Gang {gang_id} should have {expected_count} jobs, got {len(gang_jobs)}"
 
 
-def test_controller_state_requeue_job(make_job_request):
+def test_controller_state_requeue_job(job_request):
     """Test that jobs can be re-queued by calling add_job again."""
     state = ControllerState()
-    job = ControllerJob(job_id=JobId("j1"), request=make_job_request("job1"))
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"))
 
     # Add job
     state.add_job(job)
@@ -320,30 +320,30 @@ def test_controller_state_action_log_bounded():
 # =============================================================================
 
 
-def test_controller_state_get_children_returns_direct_children(make_job_request):
+def test_controller_state_get_children_returns_direct_children(job_request):
     """Verify get_children returns only direct children of a parent job."""
     state = ControllerState()
 
     # Create parent job
-    parent = ControllerJob(job_id=JobId("parent"), request=make_job_request("parent"))
+    parent = ControllerJob(job_id=JobId("parent"), request=job_request("parent"))
     state.add_job(parent)
 
     # Create child jobs
     child1 = ControllerJob(
         job_id=JobId("child1"),
-        request=make_job_request("child1"),
+        request=job_request("child1"),
         parent_job_id=JobId("parent"),
     )
     child2 = ControllerJob(
         job_id=JobId("child2"),
-        request=make_job_request("child2"),
+        request=job_request("child2"),
         parent_job_id=JobId("parent"),
     )
     state.add_job(child1)
     state.add_job(child2)
 
     # Create an unrelated job with no parent
-    unrelated = ControllerJob(job_id=JobId("unrelated"), request=make_job_request("unrelated"))
+    unrelated = ControllerJob(job_id=JobId("unrelated"), request=job_request("unrelated"))
     state.add_job(unrelated)
 
     # Get children of parent
@@ -352,32 +352,32 @@ def test_controller_state_get_children_returns_direct_children(make_job_request)
     assert {c.job_id for c in children} == {"child1", "child2"}
 
 
-def test_controller_state_get_children_returns_empty_for_no_children(make_job_request):
+def test_controller_state_get_children_returns_empty_for_no_children(job_request):
     """Verify get_children returns empty list when job has no children."""
     state = ControllerState()
 
     # Create a job with no children
-    job = ControllerJob(job_id=JobId("lonely"), request=make_job_request("lonely"))
+    job = ControllerJob(job_id=JobId("lonely"), request=job_request("lonely"))
     state.add_job(job)
 
     children = state.get_children(JobId("lonely"))
     assert children == []
 
 
-def test_controller_state_get_children_only_returns_direct_not_grandchildren(make_job_request):
+def test_controller_state_get_children_only_returns_direct_not_grandchildren(job_request):
     """Verify get_children only returns direct children, not grandchildren."""
     state = ControllerState()
 
     # Create a 3-level hierarchy: grandparent -> parent -> child
-    grandparent = ControllerJob(job_id=JobId("grandparent"), request=make_job_request("grandparent"))
+    grandparent = ControllerJob(job_id=JobId("grandparent"), request=job_request("grandparent"))
     parent = ControllerJob(
         job_id=JobId("parent"),
-        request=make_job_request("parent"),
+        request=job_request("parent"),
         parent_job_id=JobId("grandparent"),
     )
     child = ControllerJob(
         job_id=JobId("child"),
-        request=make_job_request("child"),
+        request=job_request("child"),
         parent_job_id=JobId("parent"),
     )
     state.add_job(grandparent)
@@ -685,7 +685,7 @@ def test_pending_job_endpoints_not_returned():
 # =============================================================================
 
 
-def test_transition_job_retry_requeues_and_unassigns(make_job_request, make_worker_metadata):
+def test_transition_job_retry_requeues_and_unassigns(job_request, worker_metadata):
     """Test that transition_job re-queues job and unassigns worker on SHOULD_RETRY."""
     from iris.cluster.controller.job import TransitionResult
 
@@ -694,13 +694,13 @@ def test_transition_job_retry_requeues_and_unassigns(make_job_request, make_work
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
         address="host:8080",
-        metadata=make_worker_metadata(),
+        metadata=worker_metadata(),
     )
     state.add_worker(worker)
 
     job = ControllerJob(
         job_id=JobId("j1"),
-        request=make_job_request("job1"),
+        request=job_request("job1"),
         max_retries_failure=2,
     )
     state.add_job(job)
@@ -732,7 +732,7 @@ def test_transition_job_retry_requeues_and_unassigns(make_job_request, make_work
     assert JobId("j1") not in worker.running_jobs
 
 
-def test_transition_job_removes_from_queue_on_unschedulable(make_job_request):
+def test_transition_job_removes_from_queue_on_unschedulable(job_request):
     """Test that transition_job removes job from queue when UNSCHEDULABLE."""
     from iris.cluster.controller.job import TransitionResult
 
@@ -740,7 +740,7 @@ def test_transition_job_removes_from_queue_on_unschedulable(make_job_request):
 
     job = ControllerJob(
         job_id=JobId("j1"),
-        request=make_job_request("job1"),
+        request=job_request("job1"),
     )
     state.add_job(job)
 
@@ -775,7 +775,7 @@ def test_transition_job_removes_from_queue_on_unschedulable(make_job_request):
 # =============================================================================
 
 
-def test_job_success_cleans_up_endpoints(make_job_request, make_worker_metadata):
+def test_job_success_cleans_up_endpoints(job_request, worker_metadata):
     """When job succeeds, endpoints are cleaned up and worker is unassigned."""
     from iris.cluster.controller.job import TransitionResult
 
@@ -784,11 +784,11 @@ def test_job_success_cleans_up_endpoints(make_job_request, make_worker_metadata)
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
         address="host:8080",
-        metadata=make_worker_metadata(),
+        metadata=worker_metadata(),
     )
     state.add_worker(worker)
 
-    job = ControllerJob(job_id=JobId("j1"), request=make_job_request("job1"))
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"))
     state.add_job(job)
 
     job.mark_dispatched(WorkerId("w1"), now_ms=1000)
@@ -817,7 +817,7 @@ def test_job_success_cleans_up_endpoints(make_job_request, make_worker_metadata)
     assert JobId("j1") not in worker.running_jobs
 
 
-def test_job_failure_with_retry_unassigns_worker(make_job_request, make_worker_metadata):
+def test_job_failure_with_retry_unassigns_worker(job_request, worker_metadata):
     """Job failure with retry unassigns worker and resets job to PENDING via transition_job."""
     from iris.cluster.controller.job import TransitionResult
 
@@ -826,13 +826,13 @@ def test_job_failure_with_retry_unassigns_worker(make_job_request, make_worker_m
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
         address="host:8080",
-        metadata=make_worker_metadata(),
+        metadata=worker_metadata(),
     )
     state.add_worker(worker)
 
     job = ControllerJob(
         job_id=JobId("j1"),
-        request=make_job_request("job1"),
+        request=job_request("job1"),
         max_retries_failure=1,
     )
     state.add_job(job)
@@ -859,13 +859,13 @@ def test_job_failure_with_retry_unassigns_worker(make_job_request, make_worker_m
         cluster_pb2.JOB_STATE_WORKER_FAILED,
     ],
 )
-def test_terminal_states_clean_up_endpoints(make_job_request, terminal_state):
+def test_terminal_states_clean_up_endpoints(job_request, terminal_state):
     """All terminal states clean up job endpoints."""
     state = ControllerState()
 
     job = ControllerJob(
         job_id=JobId("j1"),
-        request=make_job_request("job1"),
+        request=job_request("job1"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     state.add_job(job)
@@ -884,7 +884,7 @@ def test_terminal_states_clean_up_endpoints(make_job_request, terminal_state):
     assert state.lookup_endpoints("j1/actor") == []
 
 
-def test_worker_timeout_job_cleanup(make_job_request, make_worker_metadata):
+def test_worker_timeout_job_cleanup(job_request, worker_metadata):
     """Worker timeout triggers proper job cleanup including endpoints."""
     from iris.cluster.controller.job import TransitionResult
 
@@ -893,14 +893,14 @@ def test_worker_timeout_job_cleanup(make_job_request, make_worker_metadata):
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
         address="host:8080",
-        metadata=make_worker_metadata(),
+        metadata=worker_metadata(),
         last_heartbeat_ms=0,
     )
     state.add_worker(worker)
 
     job = ControllerJob(
         job_id=JobId("j1"),
-        request=make_job_request("job1"),
+        request=job_request("job1"),
         max_retries_preemption=0,
     )
     state.add_job(job)

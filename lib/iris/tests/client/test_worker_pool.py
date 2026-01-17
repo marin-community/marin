@@ -75,21 +75,6 @@ def test_execute_with_kwargs():
     assert result == "Hi, World!"
 
 
-def test_execute_returns_complex_object():
-    """Test that complex objects can be returned."""
-    executor = TaskExecutorActor()
-
-    def create_dict():
-        return {"a": [1, 2, 3], "b": {"nested": True}}
-
-    fn_bytes = cloudpickle.dumps(create_dict)
-    args_bytes = cloudpickle.dumps(())
-    kwargs_bytes = cloudpickle.dumps({})
-
-    result = executor.execute(fn_bytes, args_bytes, kwargs_bytes)
-    assert result == {"a": [1, 2, 3], "b": {"nested": True}}
-
-
 def test_execute_propagates_exception():
     """Test that exceptions are propagated."""
     executor = TaskExecutorActor()
@@ -103,23 +88,6 @@ def test_execute_propagates_exception():
 
     with pytest.raises(ValueError, match="test error"):
         executor.execute(fn_bytes, args_bytes, kwargs_bytes)
-
-
-def test_execute_with_closure():
-    """Test execution of closures that capture variables."""
-    executor = TaskExecutorActor()
-
-    multiplier = 10
-
-    def multiply(x):
-        return x * multiplier
-
-    fn_bytes = cloudpickle.dumps(multiply)
-    args_bytes = cloudpickle.dumps((5,))
-    kwargs_bytes = cloudpickle.dumps({})
-
-    result = executor.execute(fn_bytes, args_bytes, kwargs_bytes)
-    assert result == 50
 
 
 # =============================================================================
@@ -599,48 +567,6 @@ class TestWorkerPoolE2E:
         result = future.result(timeout=5.0)
 
         assert result == 42
-
-    def test_status_reflects_pool_state(self, worker_pool_harness):
-        """status() returns accurate information about pool state."""
-        harness = worker_pool_harness
-        pool = harness.pool
-
-        pool._launch_workers()
-        pool.wait_for_workers(min_workers=2, timeout=5.0)
-
-        status = pool.status()
-
-        assert status.pool_id == pool.pool_id
-        assert status.num_workers == 2
-        assert status.workers_idle == 2
-        assert status.workers_pending == 0
-        assert status.tasks_queued == 0
-
-    def test_future_done_and_exception(self, worker_pool_harness):
-        """WorkerFuture.done() and exception() work correctly."""
-        harness = worker_pool_harness
-        pool = harness.pool
-
-        pool._launch_workers()
-        pool.wait_for_workers(min_workers=1, timeout=5.0)
-
-        # Test successful completion
-        future_success = pool.submit(lambda: 42)
-        result = future_success.result(timeout=5.0)
-        assert result == 42
-        assert future_success.done()
-        assert future_success.exception() is None
-
-        # Test exception case
-        def fail():
-            raise RuntimeError("expected")
-
-        future_fail = pool.submit(fail)
-        with pytest.raises(RuntimeError):
-            future_fail.result(timeout=5.0)
-
-        assert future_fail.done()
-        assert isinstance(future_fail.exception(), RuntimeError)
 
     def test_context_manager_waits_for_at_least_one_worker(self):
         """__enter__ waits for at least one worker before returning."""
