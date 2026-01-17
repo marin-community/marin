@@ -51,6 +51,12 @@ def _load_real_data_split():
     return load_dataset(HF_DATASET, split="real_data")
 
 
+@lru_cache(maxsize=1)
+def _load_interleaved_split():
+    """Cache the interleaved split to avoid repeated downloads."""
+    return load_dataset(HF_DATASET, split="interleaved")
+
+
 def get_single_image() -> PILImage.Image:
     """Get a single test image from HF dataset.
 
@@ -84,6 +90,20 @@ def get_real_data(num_samples: int = 20):
     return ds.select(range(min(num_samples, len(ds))))
 
 
+def get_interleaved_data(num_samples: int = 18):
+    """Get interleaved test data from HF dataset.
+
+    Args:
+        num_samples: Number of samples to return (default 18, max 18).
+
+    Returns:
+        HuggingFace Dataset with messages and images columns.
+        Contains single-image QA, multi-image (2-4 images), and caption samples.
+    """
+    ds = _load_interleaved_split()
+    return ds.select(range(min(num_samples, len(ds))))
+
+
 def get_single_image_conversations():
     """Get single image QA conversations.
 
@@ -106,7 +126,7 @@ def get_test_conversation(split: str = "single_image", index: int = 0) -> dict:
     """Get a specific test conversation.
 
     Args:
-        split: One of "single_image", "multi_image", or "real_data".
+        split: One of "single_image", "multi_image", "real_data", or "interleaved".
         index: Index of the sample to return.
 
     Returns:
@@ -118,8 +138,10 @@ def get_test_conversation(split: str = "single_image", index: int = 0) -> dict:
         ds = _load_multi_image_split()
     elif split == "real_data":
         ds = _load_real_data_split()
+    elif split == "interleaved":
+        ds = _load_interleaved_split()
     else:
-        raise ValueError(f"Unknown split: {split}. Use 'single_image', 'multi_image', or 'real_data'.")
+        raise ValueError(f"Unknown split: {split}. Use 'single_image', 'multi_image', 'real_data', or 'interleaved'.")
 
     return ds[index]
 
@@ -129,6 +151,7 @@ def clear_cache():
     _load_single_image_split.cache_clear()
     _load_multi_image_split.cache_clear()
     _load_real_data_split.cache_clear()
+    _load_interleaved_split.cache_clear()
 
 
 # =============================================================================
@@ -206,6 +229,9 @@ DEFAULT_GRID_PINPOINTS = [
     [1152, 1152],
 ]
 
+# Single-patch grid pinpoints for disable_anyres mode (1 patch per image)
+SINGLE_PATCH_GRID_PINPOINTS = [[384, 384]]
+
 
 def _create_processors(
     model_name: str,
@@ -215,12 +241,40 @@ def _create_processors(
     patch_size: int,
     vision_feature_height: int,
     add_generation_prompt: bool = False,
+    disable_anyres: bool = False,
+    num_images: int = 1,
 ):
     """Create HF and Levanter processors for test data preparation.
+
+    Args:
+        model_name: HuggingFace model name for processor.
+        grid_pinpoints: Grid resolutions for anyres processing.
+        max_length: Maximum sequence length for tokenization.
+        max_num_patches: Maximum number of patches for anyres.
+        patch_size: Size of each image patch.
+        vision_feature_height: Vision encoder output tokens per spatial dim.
+        add_generation_prompt: Whether to add generation prompt.
+        disable_anyres: If True, disable anyres processing and use single resolution only.
+                        Each image uses only its base patch (num_images patches total).
+        num_images: Number of images (used when disable_anyres=True for multi-image).
 
     Returns:
         Tuple of (hf_processor, lev_batch_processor)
     """
+    # Handle disable_anyres mode
+    if disable_anyres:
+        # For disable_anyres, each image only contributes its base patch
+        # Single image: 1 patch, Multi-image: num_images patches
+        effective_max_num_patches = max(0, num_images - 1)  # total_patches = num_images
+        effective_grid_pinpoints = [[patch_size, patch_size]]  # Single resolution
+        max_image_tiles = num_images  # One tile per image
+        effective_vision_aspect_ratio = "single"  # Disable anyres in HF processor
+    else:
+        effective_max_num_patches = max_num_patches
+        effective_grid_pinpoints = grid_pinpoints
+        max_image_tiles = max_num_patches + 1  # e.g., 10 for anyres_max_9
+        effective_vision_aspect_ratio = None  # Use model config default
+
     # Try to import custom processor first (for proper do_pad support)
     try:
         from levanter.data.image import create_custom_processor
@@ -229,16 +283,18 @@ def _create_processors(
         hf_processor = create_custom_processor(
             model_name,
             do_pad=True,
-            image_grid_pinpoints=grid_pinpoints,
-            max_image_tiles=max_num_patches + 1,  # e.g., 10 for anyres_max_9
+            image_grid_pinpoints=effective_grid_pinpoints,
+            max_image_tiles=max_image_tiles,
+            vision_aspect_ratio=effective_vision_aspect_ratio,
         )
 
         # Levanter processor with do_pad=True (padding, fixed shape)
         lev_processor = create_custom_processor(
             model_name,
             do_pad=True,
-            image_grid_pinpoints=grid_pinpoints,
-            max_image_tiles=max_num_patches + 1,
+            image_grid_pinpoints=effective_grid_pinpoints,
+            max_image_tiles=max_image_tiles,
+            vision_aspect_ratio=effective_vision_aspect_ratio,
         )
     except ImportError:
         # Fallback to standard AutoProcessor
@@ -254,8 +310,8 @@ def _create_processors(
         processor=lev_processor,
         max_length=max_length,
         padding=True,
-        max_num_patches=max_num_patches,
-        grid_pinpoints=grid_pinpoints,
+        max_num_patches=effective_max_num_patches,
+        grid_pinpoints=effective_grid_pinpoints,
         patch_size=patch_size,
         vision_feature_height=vision_feature_height,
         add_generation_prompt=add_generation_prompt,
@@ -274,6 +330,7 @@ def prepare_test_data(
     patch_size: int = 384,
     vision_feature_height: int = 27,
     add_generation_prompt: bool = False,
+    disable_anyres: bool = False,
 ) -> list[TestDataPair]:
     """
     Prepare test data pairs for HF vs Levanter comparison.
@@ -295,6 +352,8 @@ def prepare_test_data(
         patch_size: Size of each image patch (default 384)
         vision_feature_height: Vision encoder output tokens per spatial dim (default 27 = 384/14)
         add_generation_prompt: Whether to add generation prompt (default False)
+        disable_anyres: If True, disable anyres processing and use single resolution only.
+                        This uses only the base patch (1 patch total) instead of tiling.
 
     Returns:
         List of TestDataPair, one per sample index
@@ -329,6 +388,7 @@ def prepare_test_data(
         patch_size=patch_size,
         vision_feature_height=vision_feature_height,
         add_generation_prompt=add_generation_prompt,
+        disable_anyres=disable_anyres,
     )
 
     results = []
@@ -396,6 +456,7 @@ def prepare_test_data_single(
     patch_size: int = 384,
     vision_feature_height: int = 27,
     add_generation_prompt: bool = False,
+    disable_anyres: bool = False,
 ) -> TestDataPair:
     """
     Prepare a single test data pair from messages and images directly.
@@ -412,6 +473,8 @@ def prepare_test_data_single(
         patch_size: Size of each image patch
         vision_feature_height: Vision encoder output tokens per spatial dim
         add_generation_prompt: Whether to add generation prompt (default False)
+        disable_anyres: If True, disable anyres processing and use single resolution only.
+                        This uses only the base patch (1 patch total) instead of tiling.
 
     Returns:
         TestDataPair with both HF and Levanter formats
@@ -438,6 +501,7 @@ def prepare_test_data_single(
         patch_size=patch_size,
         vision_feature_height=vision_feature_height,
         add_generation_prompt=add_generation_prompt,
+        disable_anyres=disable_anyres,
     )
 
     # --- HF Processing (NO padding - HF model uses dynamic shapes) ---
@@ -463,6 +527,12 @@ def prepare_test_data_single(
     if not (isinstance(hf_pixel_values, np.ndarray) and hf_pixel_values.ndim == 5 and is_multi_image):
         hf_pixel_values = hf_pixel_values[0]
         hf_image_sizes = hf_image_sizes[0]
+
+    # When disable_anyres=True for single image, only use base patch (first patch)
+    # HF processor always produces base + anyres patches for single image due to need_patching logic
+    # Multi-image already produces 1 patch per image (no anyres), so no truncation needed
+    if disable_anyres and not is_multi_image and hf_pixel_values.shape[0] > 1:
+        hf_pixel_values = hf_pixel_values[0:1]  # Keep as (1, C, H, W)
 
     hf_data = HFProcessedData(
         input_ids=hf_processed["input_ids"][0],

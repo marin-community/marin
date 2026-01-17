@@ -67,7 +67,7 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - per_device_parallelism: samples processed per device at a time (limited by memory)
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
-PER_DEVICE_PARALLELISM = 1  # 1 sample per device (memory-safe for VLM with large images)
+PER_DEVICE_PARALLELISM = 4  # 1 sample per device (memory-safe for VLM with large images)
 GRADIENT_ACCUMULATION_STEPS = 4  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
@@ -91,7 +91,7 @@ vision_config = SiglipVisionConfig(
 
 # Language model: Qwen3-1.7B
 text_config = Qwen3Config(
-    max_seq_len=8192,
+    max_seq_len=2048,
     hidden_dim=2048,
     intermediate_dim=6144,
     num_heads=16,
@@ -111,7 +111,7 @@ vlm_config = LlavaOnevisionConfig(
     vision_aspect_ratio="anyres_max_9",
     # Set disable_anyres=True to use single resolution (base patch only).
     # This reduces memory usage and speeds up training but may lose image details.
-    disable_anyres=False,
+    disable_anyres=True,
 )
 
 # ============================================================================
@@ -144,7 +144,7 @@ data_config = ImageMixtureDatasetConfig(
     configs={"train": data_source},
     train_weights={"train": 1.0},
     use_cache=False,  # Streaming mode (no disk caching)
-    max_length=8192,  # Match model's max_seq_len to avoid truncation issues
+    max_length=2048,  # Match model's max_seq_len to avoid truncation issues
 )
 
 # ============================================================================

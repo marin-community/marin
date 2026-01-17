@@ -860,18 +860,23 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         return np.concatenate([base_indices, grid_indices])
 
-    def _pad_pixel_values(self, pixel_values: np.ndarray, valid_patches: int) -> Tuple[np.ndarray, np.ndarray]:
+    def _pad_pixel_values(
+        self, pixel_values: np.ndarray, valid_patches: int, min_total_patches: Optional[int] = None
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """Pad pixel_values to fixed TOTAL_PATCHES size and create grid_mask.
 
         Args:
             pixel_values: Image patches array of shape (actual_patches, C, H, W)
             valid_patches: Number of patches to mark as valid in grid_mask
+            min_total_patches: Minimum total patches for consistent batching (e.g., max images in batch)
 
         Returns:
             Tuple of (padded_pixel_values, grid_mask)
         """
         assert self.max_num_patches is not None
-        total_patches = self.max_num_patches + 1  # +1 for base patch
+        base_total = self.max_num_patches + 1  # +1 for base patch
+        # For mixed batches: ensure total_patches >= max images in batch
+        total_patches = max(base_total, min_total_patches) if min_total_patches else base_total
         actual_patches = pixel_values.shape[0]
 
         # Create grid_mask: True for valid patches, False for padding
@@ -1103,6 +1108,10 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         # cumsum gives end indices: [n0, n0+n1, n0+n1+n2, ...]
         cum_images = np.cumsum(images_per_example)
 
+        # Compute max images in batch for consistent padding in disable_anyres mode
+        # This ensures all examples have the same total_patches for proper batching
+        max_num_images_in_batch = int(max(images_per_example)) if len(images_per_example) > 0 else 1
+
         # Build output list
         out: list[ImageTextDict] = []
         for i in range(batch_size):
@@ -1123,7 +1132,9 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                     pixel_values = pv[pv_start]
                     if self.max_num_patches is not None:
                         pixel_values, grid_mask = self._pad_pixel_values(
-                            pixel_values, valid_patches=pixel_values.shape[0]
+                            pixel_values,
+                            valid_patches=pixel_values.shape[0],
+                            min_total_patches=max_num_images_in_batch,
                         )
                 else:
                     # Multiple images: only use base patch (first patch) from each image
@@ -1131,7 +1142,11 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                     base_patches = [pv[j][0] for j in range(pv_start, pv_end)]
                     pixel_values = np.stack(base_patches, axis=0)  # (num_images, C, H, W)
                     if self.max_num_patches is not None:
-                        pixel_values, grid_mask = self._pad_pixel_values(pixel_values, valid_patches=num_images)
+                        pixel_values, grid_mask = self._pad_pixel_values(
+                            pixel_values,
+                            valid_patches=num_images,
+                            min_total_patches=max_num_images_in_batch,
+                        )
             else:
                 pixel_values = None
 
@@ -1144,32 +1159,37 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             else:
                 image_sizes = None
 
-            # Compute unpad_indices only for single-image anyres case
-            # Multi-image doesn't use anyres (each image is just 1 base patch)
-            # Skip when max_num_patches=0 (disable_anyres mode - only base patch, no grid)
+            # Compute unpad_indices for image feature reordering
+            # - For anyres mode (single image): compute proper unpad indices based on grid shape
+            # - For disable_anyres mode or multi-image: keep None, model uses grid_mask for validity
             use_anyres = self.max_num_patches is None or self.max_num_patches > 0
-            if num_images == 1 and has_image_sizes and self.grid_pinpoints and self.vision_feature_height and use_anyres:
-                assert image_sizes is not None  # Guarded by has_image_sizes
-                orig_height, orig_width = int(image_sizes[0, 0]), int(image_sizes[0, 1])
-                gh, gw = self._compute_grid_shape((orig_height, orig_width))
+            if num_images > 0 and self.vision_feature_height:
                 patches_height = patches_width = self.vision_feature_height
                 features_per_patch = patches_height * patches_width
-                unpad_indices_raw = self._compute_unpad_indices_for_image(
-                    orig_height=orig_height,
-                    orig_width=orig_width,
-                    patches_height=patches_height,
-                    patches_width=patches_width,
-                    scale_height=gh,
-                    scale_width=gw,
-                    features_per_patch=features_per_patch,
-                )
-                # Pad unpad_indices to fixed size for consistent array shapes
-                if self.max_num_patches is not None:
-                    max_features = (self.max_num_patches + 1) * features_per_patch
-                    unpad_indices = np.zeros(max_features, dtype=np.int32)
-                    unpad_indices[: len(unpad_indices_raw)] = unpad_indices_raw
-                else:
-                    unpad_indices = unpad_indices_raw
+
+                if num_images == 1 and has_image_sizes and self.grid_pinpoints and use_anyres:
+                    # Single image with anyres: compute proper unpad indices based on grid shape
+                    assert image_sizes is not None  # Guarded by has_image_sizes
+                    orig_height, orig_width = int(image_sizes[0, 0]), int(image_sizes[0, 1])
+                    gh, gw = self._compute_grid_shape((orig_height, orig_width))
+                    unpad_indices_raw = self._compute_unpad_indices_for_image(
+                        orig_height=orig_height,
+                        orig_width=orig_width,
+                        patches_height=patches_height,
+                        patches_width=patches_width,
+                        scale_height=gh,
+                        scale_width=gw,
+                        features_per_patch=features_per_patch,
+                    )
+                    # Pad unpad_indices to fixed size for consistent array shapes
+                    if self.max_num_patches is not None:
+                        max_features = (self.max_num_patches + 1) * features_per_patch
+                        unpad_indices = np.zeros(max_features, dtype=np.int32)
+                        unpad_indices[: len(unpad_indices_raw)] = unpad_indices_raw
+                    else:
+                        unpad_indices = unpad_indices_raw
+                # else: multi-image or disable_anyres - keep unpad_indices = None
+                # Model uses grid_mask to determine which patches are valid
 
             # Compute combined_mask and position_ids on CPU
             features_per_patch = (
@@ -3030,7 +3050,13 @@ DEFAULT_IMAGE_GRID_PINPOINTS = [
 ]
 
 
-def create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=None, max_image_tiles=None):
+def create_custom_processor(
+    model_name,
+    do_pad=True,
+    image_grid_pinpoints=None,
+    max_image_tiles=None,
+    vision_aspect_ratio=None,
+):
     """
     Create a LlavaOnevisionProcessor with custom do_pad setting.
 
@@ -3041,6 +3067,8 @@ def create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=None, 
         max_image_tiles: Maximum number of image tiles (including base) for padding mode.
                          For anyres_max_9, this would be 10 (9 + 1 base).
                          Required when using padding_mode=True when calling the processor.
+        vision_aspect_ratio: Optional aspect ratio mode. Use "single" to disable anyres
+                             and only output base patch. If None, uses model config default.
     """
     from transformers import AutoTokenizer, AutoConfig, AutoImageProcessor, AutoProcessor
 
@@ -3067,13 +3095,17 @@ def create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=None, 
     patch_size = config.vision_config.patch_size  # e.g., 14
     num_image_tokens = (image_size // patch_size) ** 2  # e.g., 729
 
+    # Use provided vision_aspect_ratio or fall back to config
+    # "single" disables anyres and only outputs base patch
+    effective_vision_aspect_ratio = vision_aspect_ratio if vision_aspect_ratio else config.vision_aspect_ratio
+
     # Create the custom processor with required parameters
     processor = LlavaOnevisionProcessor(
         image_processor=image_processor,
         tokenizer=tokenizer,
         num_image_tokens=num_image_tokens,
         vision_feature_select_strategy=config.vision_feature_select_strategy,
-        vision_aspect_ratio=config.vision_aspect_ratio,
+        vision_aspect_ratio=effective_vision_aspect_ratio,
         chat_template=chat_template,
         max_image_tiles=max_image_tiles,
     )
