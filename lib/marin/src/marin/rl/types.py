@@ -27,6 +27,7 @@ from dataclasses import dataclass
 import equinox as eqx
 import haliax.haxtyping as ht
 import jax
+import numpy as np
 from haliax import NamedArray
 
 
@@ -37,6 +38,8 @@ class RolloutStats:
     episode_reward: float
     env_example_id: str
     lesson_id: str
+    temperature: float
+    top_k: int | None
 
 
 @dataclass(frozen=True)
@@ -62,23 +65,35 @@ class Rollout(eqx.Module):
     env_example_id: str
     """An identifier for the example used to initialize the environment."""
 
-    prompt_tokens: jax.Array
+    prompt_tokens: np.ndarray
     """Array of (prompt_length,) token IDs representing the input prompt."""
 
-    response_tokens: jax.Array
+    response_tokens: np.ndarray
     """Array of (response_length,) token IDs representing the generated response."""
 
-    response_logprobs: jax.Array
+    response_logprobs: np.ndarray
     """Array of (response_length,) log probabilities for each generated token."""
 
-    token_rewards: jax.Array
+    token_rewards: np.ndarray
     """The reward assigned to each generated token."""
 
     episode_reward: float
     """The overall reward for the episode."""
 
+    temperature: float
+    """The temperature used to sample the response."""
+
+    top_k: int | None
+    """The top_k used to sample the response."""
+
+    is_truncated: bool
+    """True if the rollout was truncated due to length. False otherwise."""
+
     metadata: RolloutMetadata = RolloutMetadata()
     """Metadata about when/where this rollout was generated."""
+
+    correctness_reward: float | None = None
+    """The reward for the correctness of the response."""
 
 
 class RolloutGroup(eqx.Module):
@@ -110,6 +125,10 @@ class TrainingBatch(eqx.Module):
     loss_weights: ht.Float[NamedArray, "batch position"]
     loss_masks: ht.Int[NamedArray, "batch position"]
     policy_logprobs: ht.Float[NamedArray, "batch position"]
+    temperature: ht.Float[NamedArray, "batch"]  # noqa: F821
+    top_k: ht.Int[NamedArray, "batch"]  # noqa: F821
+    truncated: jax.Array  # [batch] # Make this haxtyped array?
+    max_output_tokens: int
 
     def __len__(self) -> int:
         return self.input_ids.axis_size("batch")
