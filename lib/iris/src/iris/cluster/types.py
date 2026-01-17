@@ -16,6 +16,7 @@
 
 This module provides Python types for the Iris cluster API:
 - ResourceSpec: Dataclass for specifying job resources with human-readable values
+- EnvironmentSpec: Dataclass for specifying job environment configuration
 - Entrypoint: Callable wrapper for job execution
 - Namespace: Type-safe namespace identifier
 
@@ -97,6 +98,43 @@ class ResourceSpec:
         if self.device is not None:
             spec.device.CopyFrom(self.device)
         return spec
+
+
+@dataclass
+class EnvironmentSpec:
+    """Environment specification for jobs.
+
+    Default environment variables (automatically set if not overridden):
+    - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
+    - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
+    - HF_TOKEN: from os.environ (if set)
+    - WANDB_API_KEY: from os.environ (if set)
+    """
+
+    workspace: str | None = None
+    pip_packages: Sequence[str] | None = None
+    env_vars: dict[str, str] | None = None
+    extras: Sequence[str] | None = None
+
+    def to_proto(self) -> cluster_pb2.EnvironmentConfig:
+        """Convert to wire format with sensible defaults applied."""
+        workspace = self.workspace if self.workspace is not None else os.getcwd()
+
+        default_env_vars = {
+            "HF_DATASETS_TRUST_REMOTE_CODE": "1",
+            "TOKENIZERS_PARALLELISM": "false",
+            "HF_TOKEN": os.getenv("HF_TOKEN"),
+            "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+        }
+
+        merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
+
+        return cluster_pb2.EnvironmentConfig(
+            workspace=workspace,
+            pip_packages=list(self.pip_packages or []),
+            env_vars=merged_env_vars,
+            extras=list(self.extras or []),
+        )
 
 
 class Namespace(str):
@@ -239,49 +277,3 @@ class Entrypoint:
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
         return cls(callable=fn, args=args, kwargs=kwargs)
-
-
-def create_environment(
-    workspace: str | None = None,
-    pip_packages: Sequence[str] | None = None,
-    env_vars: dict[str, str] | None = None,
-    extras: Sequence[str] | None = None,
-) -> cluster_pb2.EnvironmentConfig:
-    """Create an EnvironmentConfig proto with sensible defaults.
-
-    Default environment variables:
-    - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
-    - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
-    - HF_TOKEN: from os.environ (if set)
-    - WANDB_API_KEY: from os.environ (if set)
-
-    Args:
-        workspace: Path to workspace root (default: current directory)
-        pip_packages: Additional pip packages to install
-        env_vars: Custom environment variables (merged with defaults)
-        extras: Extra dependency groups for uv
-
-    Returns:
-        EnvironmentConfig proto message with defaults applied
-    """
-    if workspace is None:
-        workspace = os.getcwd()
-
-    default_env_vars = {
-        "HF_DATASETS_TRUST_REMOTE_CODE": "1",
-        "TOKENIZERS_PARALLELISM": "false",
-        "HF_TOKEN": os.getenv("HF_TOKEN"),
-        "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
-    }
-
-    # Filter out None values and merge with user-provided vars
-    merged_env_vars = {k: v for k, v in {**default_env_vars, **(env_vars or {})}.items() if v is not None}
-
-    config = cluster_pb2.EnvironmentConfig(
-        workspace=workspace,
-        pip_packages=list(pip_packages or []),
-        env_vars=merged_env_vars,
-        extras=list(extras or []),
-    )
-
-    return config

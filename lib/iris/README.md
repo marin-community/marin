@@ -75,7 +75,7 @@ client = IrisClient.remote("http://controller:8080", workspace=Path("."))
 job_id = client.submit(
     name="my-job",
     entrypoint=Entrypoint.from_callable(my_task),
-    resources=ResourceSpec(cpu=1, memory="2GB").to_proto(),
+    resources=ResourceSpec(cpu=1, memory="2GB"),
 )
 client.wait(job_id)
 ```
