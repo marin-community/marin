@@ -168,11 +168,13 @@ message EnvironmentConfig {
 
 // Typed metadata about a worker's environment, collected at registration.
 message WorkerMetadata {
-  // Basic info
+  // Basic compute resources
   string hostname = 1;
   string ip_address = 2;
   int32 cpu_count = 3;
   int64 memory_bytes = 4;
+  int64 disk_bytes = 5;
+  DeviceConfig device = 6;
 
   // TPU environment (from TPU_* env vars)
   string tpu_name = 10;                    // TPU_NAME
@@ -247,16 +249,14 @@ message Controller {
   message WorkerInfo {
     string worker_id = 1;
     string address = 2;              // host:port for WorkerService
-    ResourceSpecProto resources = 3;     // Worker capabilities
+    WorkerMetadata metadata = 3;
     int64 registered_at_ms = 4;
-    WorkerMetadata metadata = 5;
   }
 
   message RegisterWorkerRequest {
     string worker_id = 1;
     string address = 2;
-    ResourceSpecProto resources = 3;
-    WorkerMetadata metadata = 4;
+    WorkerMetadata metadata = 3;
   }
 
   message RegisterWorkerResponse {

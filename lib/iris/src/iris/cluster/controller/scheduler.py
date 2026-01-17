@@ -94,13 +94,13 @@ def deduct_job_from_capacity(capacity: WorkerCapacity, job: ControllerJob) -> No
 def compute_worker_capacity(state: ControllerState, worker: ControllerWorker) -> WorkerCapacity:
     """Compute current available capacity for a worker."""
     committed_cpu, committed_mem, committed_gpu = state.get_committed_resources(worker)
-    res = worker.resources
+    metadata = worker.metadata
     return WorkerCapacity(
-        available_cpu=res.cpu - committed_cpu,
-        available_memory=res.memory_bytes - committed_mem,
-        available_gpus=get_gpu_count(res.device) - committed_gpu,
-        device_type=get_device_type(res.device),
-        device_variant=get_device_variant(res.device),
+        available_cpu=metadata.cpu_count - committed_cpu,
+        available_memory=metadata.memory_bytes - committed_mem,
+        available_gpus=get_gpu_count(metadata.device) - committed_gpu,
+        device_type=get_device_type(metadata.device),
+        device_variant=get_device_variant(metadata.device),
     )
 
 

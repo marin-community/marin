@@ -788,8 +788,8 @@ class ControllerDashboard:
                     "consecutive_failures": w.consecutive_failures,
                     "last_heartbeat_ms": w.last_heartbeat_ms,
                     "resources": {
-                        "cpu": w.resources.cpu if w.resources else 0,
-                        "memory_bytes": w.resources.memory_bytes if w.resources else 0,
+                        "cpu": w.metadata.cpu_count,
+                        "memory_bytes": w.metadata.memory_bytes,
                     },
                 }
                 for w in workers

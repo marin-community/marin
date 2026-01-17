@@ -48,6 +48,30 @@ def make_resource_spec():
     return _make
 
 
+@pytest.fixture
+def make_worker_metadata():
+    """Create WorkerMetadata for testing."""
+
+    def _make(
+        cpu: int = 10,
+        memory_bytes: int = 10 * 1024**3,
+        disk_bytes: int = 10 * 1024**3,
+    ) -> cluster_pb2.WorkerMetadata:
+        device = cluster_pb2.DeviceConfig()
+        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+
+        return cluster_pb2.WorkerMetadata(
+            hostname="test-worker",
+            ip_address="127.0.0.1",
+            cpu_count=cpu,
+            memory_bytes=memory_bytes,
+            disk_bytes=disk_bytes,
+            device=device,
+        )
+
+    return _make
+
+
 def test_controller_state_fifo_order(make_job_request):
     """Verify jobs are returned in FIFO order."""
     state = ControllerState()
@@ -87,11 +111,11 @@ def test_controller_state_skip_non_pending(make_job_request):
     assert state.pop_next_pending() is None
 
 
-def test_controller_state_worker_operations(make_resource_spec):
+def test_controller_state_worker_operations(make_worker_metadata):
     """Test add/get/list workers."""
     state = ControllerState()
-    worker1 = ControllerWorker(worker_id=WorkerId("w1"), address="host1:8080", resources=make_resource_spec())
-    worker2 = ControllerWorker(worker_id=WorkerId("w2"), address="host2:8080", resources=make_resource_spec())
+    worker1 = ControllerWorker(worker_id=WorkerId("w1"), address="host1:8080", metadata=make_worker_metadata())
+    worker2 = ControllerWorker(worker_id=WorkerId("w2"), address="host2:8080", metadata=make_worker_metadata())
 
     # Add workers
     state.add_worker(worker1)
@@ -661,7 +685,7 @@ def test_pending_job_endpoints_not_returned():
 # =============================================================================
 
 
-def test_transition_job_retry_requeues_and_unassigns(make_job_request, make_resource_spec):
+def test_transition_job_retry_requeues_and_unassigns(make_job_request, make_worker_metadata):
     """Test that transition_job re-queues job and unassigns worker on SHOULD_RETRY."""
     from iris.cluster.controller.job import TransitionResult
 
@@ -670,7 +694,7 @@ def test_transition_job_retry_requeues_and_unassigns(make_job_request, make_reso
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
         address="host:8080",
-        resources=make_resource_spec(),
+        metadata=make_worker_metadata(),
     )
     state.add_worker(worker)
 
@@ -751,7 +775,7 @@ def test_transition_job_removes_from_queue_on_unschedulable(make_job_request):
 # =============================================================================
 
 
-def test_job_success_cleans_up_endpoints(make_job_request, make_resource_spec):
+def test_job_success_cleans_up_endpoints(make_job_request, make_worker_metadata):
     """When job succeeds, endpoints are cleaned up and worker is unassigned."""
     from iris.cluster.controller.job import TransitionResult
 
@@ -760,7 +784,7 @@ def test_job_success_cleans_up_endpoints(make_job_request, make_resource_spec):
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
         address="host:8080",
-        resources=make_resource_spec(),
+        metadata=make_worker_metadata(),
     )
     state.add_worker(worker)
 
@@ -793,7 +817,7 @@ def test_job_success_cleans_up_endpoints(make_job_request, make_resource_spec):
     assert JobId("j1") not in worker.running_jobs
 
 
-def test_job_failure_with_retry_unassigns_worker(make_job_request, make_resource_spec):
+def test_job_failure_with_retry_unassigns_worker(make_job_request, make_worker_metadata):
     """Job failure with retry unassigns worker and resets job to PENDING via transition_job."""
     from iris.cluster.controller.job import TransitionResult
 
@@ -802,7 +826,7 @@ def test_job_failure_with_retry_unassigns_worker(make_job_request, make_resource
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
         address="host:8080",
-        resources=make_resource_spec(),
+        metadata=make_worker_metadata(),
     )
     state.add_worker(worker)
 
@@ -860,7 +884,7 @@ def test_terminal_states_clean_up_endpoints(make_job_request, terminal_state):
     assert state.lookup_endpoints("j1/actor") == []
 
 
-def test_worker_timeout_job_cleanup(make_job_request, make_resource_spec):
+def test_worker_timeout_job_cleanup(make_job_request, make_worker_metadata):
     """Worker timeout triggers proper job cleanup including endpoints."""
     from iris.cluster.controller.job import TransitionResult
 
@@ -869,7 +893,7 @@ def test_worker_timeout_job_cleanup(make_job_request, make_resource_spec):
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
         address="host:8080",
-        resources=make_resource_spec(),
+        metadata=make_worker_metadata(),
         last_heartbeat_ms=0,
     )
     state.add_worker(worker)

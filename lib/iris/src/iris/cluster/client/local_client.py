@@ -63,17 +63,16 @@ class LocalEnvironmentProvider:
         self._memory_gb = memory_gb
 
     def probe(self) -> cluster_pb2.WorkerMetadata:
+        device = cluster_pb2.DeviceConfig()
+        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+
         return cluster_pb2.WorkerMetadata(
             hostname="local",
             ip_address="127.0.0.1",
             cpu_count=self._cpu,
             memory_bytes=self._memory_gb * 1024**3,
-        )
-
-    def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpecProto:
-        return cluster_pb2.ResourceSpecProto(
-            cpu=metadata.cpu_count,
-            memory_bytes=metadata.memory_bytes,
+            disk_bytes=100 * 1024**3,  # Default 100GB for local
+            device=device,
         )
 
 
