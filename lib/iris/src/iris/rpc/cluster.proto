@@ -102,7 +102,7 @@ message JobAttempt {
 // RESOURCE SPECIFICATION
 // ============================================================================
 
-// Device configuration - used in ResourceSpec
+// Device configuration - used in ResourceSpecProto
 message DeviceConfig {
   oneof device {
     CpuDevice cpu = 1;
@@ -127,11 +127,13 @@ message TpuDevice {
 
 // Unified resource specification for jobs
 // Used by both controller (for scheduling) and worker (for enforcement)
-message ResourceSpec {
+// All resource quantities are in machine-readable units (bytes, cores).
+// Clients should create a ResourceSpec dataclass and call .to_proto().
+message ResourceSpecProto {
   // Compute resources
   int32 cpu = 1;              // Number of CPU cores
-  string memory = 2;          // RAM (e.g., "8g", "16g", "128m")
-  string disk = 3;            // Disk space (e.g., "1g", "100g")
+  int64 memory_bytes = 4;     // RAM in bytes
+  int64 disk_bytes = 9;       // Disk space in bytes
 
   // Device configuration
   DeviceConfig device = 5;
@@ -166,11 +168,13 @@ message EnvironmentConfig {
 
 // Typed metadata about a worker's environment, collected at registration.
 message WorkerMetadata {
-  // Basic info
+  // Basic compute resources
   string hostname = 1;
   string ip_address = 2;
   int32 cpu_count = 3;
   int64 memory_bytes = 4;
+  int64 disk_bytes = 5;
+  DeviceConfig device = 6;
 
   // TPU environment (from TPU_* env vars)
   string tpu_name = 10;                    // TPU_NAME
@@ -197,7 +201,7 @@ message Controller {
   message LaunchJobRequest {
     string name = 1;
     bytes serialized_entrypoint = 2;   // cloudpickle(Entrypoint)
-    ResourceSpec resources = 3;         // Full resource specification
+    ResourceSpecProto resources = 3;        // Full resource specification
     EnvironmentConfig environment = 4;  // Environment configuration
 
     // Bundle information - either provide gcs_path OR blob (not both)
@@ -245,16 +249,14 @@ message Controller {
   message WorkerInfo {
     string worker_id = 1;
     string address = 2;              // host:port for WorkerService
-    ResourceSpec resources = 3;      // Worker capabilities
+    WorkerMetadata metadata = 3;
     int64 registered_at_ms = 4;
-    WorkerMetadata metadata = 5;
   }
 
   message RegisterWorkerRequest {
     string worker_id = 1;
     string address = 2;
-    ResourceSpec resources = 3;
-    WorkerMetadata metadata = 4;
+    WorkerMetadata metadata = 3;
   }
 
   message RegisterWorkerResponse {
@@ -345,7 +347,7 @@ message Worker {
     string bundle_gcs_path = 4;        // gs://bucket/path/bundle.zip
 
     // Resource specification
-    ResourceSpec resources = 6;
+    ResourceSpecProto resources = 6;
 
     int32 timeout_seconds = 8;
 
