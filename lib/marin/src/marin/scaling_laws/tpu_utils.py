@@ -29,7 +29,7 @@ HBM_PER_CHIP_GIB = 95
 CORES_PER_CHIP = 2
 """Number of cores per TPU v5p chip."""
 
-V5P_CORE_OPTIONS = [8, 16, 32, 128, 256, 512, 1024, 2048]
+V5P_CORE_OPTIONS = [8, 16, 32, 64, 128, 256, 512, 1024, 2048]
 """Available TPU v5p core configurations (slice sizes)."""
 
 

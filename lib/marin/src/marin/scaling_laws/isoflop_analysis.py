@@ -183,7 +183,7 @@ class ScalingRecipe(Protocol):
     vocab_size: int
     """Vocabulary size for the tokenizer used with this recipe."""
 
-    def estimate_memory_bytes(self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN) -> int:
+    def estimate_memory_bytes(self, candidate: CandidateConfig) -> int:
         """Estimate memory usage in bytes for training a candidate configuration."""
         ...
 

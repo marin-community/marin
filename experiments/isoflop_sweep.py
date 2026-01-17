@@ -322,21 +322,45 @@ class Marin2025Recipe:
     def estimate_memory_bytes(
         self,
         candidate: CandidateConfig,
-        seq_len: int = DEFAULT_SEQ_LEN,
         optim_mult: int = 3,
         dtype_size: int = 4,
         fudge_factor: float = 2.0,
     ) -> int:
-        """Estimate float32 memory usage in bytes for training."""
+        """Estimate memory usage in bytes for training.
+
+        Accounts for:
+        - Parameters + optimizer state (master weights, momentum, variance)
+        - Activation memory including attention O(seq²) term
+        - Embedding table memory
+        """
         model_config = candidate.model_config
         batch_size = candidate.batch_size
-
+        seq_len = model_config.max_seq_len
+        hidden = model_config.hidden_dim
+        intermediate = getattr(model_config, "intermediate_dim", hidden * self.mlp_ratio)
+        layers = model_config.num_layers
+        # Parameters + optimizer (master weights + momentum + variance in fp32)
         param_count = model_config.total_trainable_params(self.vocab_size)
         param_bytes = param_count * optim_mult * dtype_size
-        act_bytes = (batch_size * model_config.max_seq_len) * (
-            (model_config.hidden_dim * model_config.num_layers) + self.vocab_size * fudge_factor
-        )
-        total_bytes = param_bytes + act_bytes
+
+        # Activation memory per layer (bf16 = 2 bytes)
+        # - Hidden states: batch * seq * hidden
+        # - Attention Q/K/V/O: batch * seq * hidden * 4 (flash attention is O(seq), not O(seq²))
+        # - MLP intermediate: batch * seq * intermediate
+        hidden_act = batch_size * seq_len * hidden * 2
+        attn_act = batch_size * seq_len * hidden * 4 * 2  # Q, K, V, output tensors (flash attn)
+        mlp_act = batch_size * seq_len * intermediate * 2
+        per_layer_act = hidden_act + attn_act + mlp_act
+
+        # Activation memory scales with layers. Even with gradient checkpointing,
+        # we need significant memory for recomputation and gradient storage.
+        # Empirically, memory scales roughly as layers * 0.75 for large models.
+        act_bytes = per_layer_act * max(layers * 3 // 4, 4)
+
+        # Embedding table (often not sharded well)
+        embed_bytes = self.vocab_size * hidden * 2
+
+        total_bytes = param_bytes + act_bytes + embed_bytes
         return int(total_bytes * fudge_factor)
 
     def build_model_configs(
@@ -590,7 +614,7 @@ def create_isoflop_sweep_steps(
     # Create ExecutorSteps for each candidate configuration
     for candidate in candidates:
         model_config = candidate.model_config
-        estimated_memory = recipe.estimate_memory_bytes(candidate, seq_len)
+        estimated_memory = recipe.estimate_memory_bytes(candidate)
         tpu_type = pick_v5p_type(estimated_memory)
 
         # Use local naming with architecture details for backward compatibility

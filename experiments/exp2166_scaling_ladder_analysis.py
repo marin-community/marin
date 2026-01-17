@@ -52,9 +52,10 @@ from experiments.llama import llama3_tokenizer
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.scaling_laws import ScalingFit, predict_optimal_config
-from marin.scaling_laws.tpu_utils import pick_v5p_type
+from marin.scaling_laws.tpu_utils import pick_v5p_type, HBM_PER_CHIP_GIB
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Get training steps from the isoflop sweep
@@ -65,6 +66,7 @@ TARGET_BUDGETS: list[float] = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20, 1e21, 1
 EXPERIMENT_NAME = "exp2166-scaling-ladder-nemotron-validation"
 LABEL = "nemo-wider-depth-adapt"
 SEQ_LEN = 4096
+MAX_TPU_TYPE = "v5p-64"  # Cap TPU size; use gradient accumulation for larger models
 
 
 @dataclass(frozen=True)
@@ -122,15 +124,46 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
         )
 
     params = candidate.model_config.total_trainable_params(MARIN_2025_RECIPE.vocab_size)
-    logger.info(
-        f"Training with optimal config for {config.target_budget:.2e} FLOPs:\n"
-        f"  params={params:.2e}\n"
-        f"  tokens={candidate.tokens:.2e}"
+    estimated_memory = MARIN_2025_RECIPE.estimate_memory_bytes(candidate)
+
+    # Compute TPU type and gradient accumulation settings
+    max_cores = int(MAX_TPU_TYPE.split("-")[1])
+    num_chips = max_cores // 2
+    max_memory = num_chips * HBM_PER_CHIP_GIB * 1024**3
+
+    per_device_parallelism: int | None = None
+    if estimated_memory <= max_memory:
+        # Fits without gradient accumulation
+        tpu_type = pick_v5p_type(estimated_memory)
+    else:
+        # Need gradient accumulation to fit in MAX_TPU_TYPE
+        tpu_type = MAX_TPU_TYPE
+        microbatch_size = candidate.batch_size
+        while (microbatch_size / candidate.batch_size) * estimated_memory > max_memory:
+            microbatch_size //= 2
+        if microbatch_size < num_chips:
+            raise ValueError(
+                f"Cannot fit model in {MAX_TPU_TYPE}: need microbatch >= {num_chips}, got {microbatch_size}"
+            )
+        per_device_parallelism = microbatch_size // num_chips
+
+    print(
+        f"Optimal config for {config.target_budget:.2e} FLOPs:\n"
+        f"  hidden_dim={candidate.model_config.hidden_dim}, layers={candidate.model_config.num_layers}\n"
+        f"  params={params:.2e}, tokens={candidate.tokens:.2e}\n"
+        f"  batch_size={candidate.batch_size}, train_steps={candidate.train_steps}\n"
+        f"  estimated_memory={estimated_memory / 1e9:.2f} GB -> {tpu_type}\n"
+        f"  per_device_parallelism={per_device_parallelism or 'None (no grad accum)'}"
     )
 
-    estimated_memory = MARIN_2025_RECIPE.estimate_memory_bytes(candidate, SEQ_LEN)
-    tpu_type = pick_v5p_type(estimated_memory)
-    logger.info(f"Estimated memory: {estimated_memory / 1e9:.2f} GB, TPU type: {tpu_type}")
+    # For very large models, use aggressive gradient checkpointing to reduce memory
+    # Following exp1295_32b.py pattern: offload only carries, not inputs
+    model_config = candidate.model_config
+    if config.target_budget >= 1e21:
+        from haliax import ScanCheckpointPolicy
+
+        model_config = replace(model_config, gradient_checkpointing=ScanCheckpointPolicy(save_carries="offload"))
+        logger.info("Using offload carries gradient checkpointing for large model")
 
     # Build TrainLmConfig directly (like old run_scaling_ladder_rung)
     # config.tokenized is already processed by executor's instantiate_config
@@ -168,6 +201,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=candidate.batch_size,
+            per_device_parallelism=per_device_parallelism if per_device_parallelism else -1,
             num_train_steps=candidate.train_steps,
             steps_per_eval=1000,
             checkpointer=CheckpointerConfig(
@@ -183,7 +217,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
             allow_nondivisible_batch_size=True,
         ),
         train_seq_len=SEQ_LEN,
-        model=candidate.model_config,
+        model=model_config,
         optimizer=candidate.optimizer_config,
     )
 
