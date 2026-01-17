@@ -273,8 +273,8 @@ class TestJobLifecycle:
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
-    def test_concurrent_jobs(self, test_cluster):
-        """Multiple jobs run concurrently."""
+    def test_multiple_jobs_complete(self, test_cluster):
+        """Multiple jobs complete successfully."""
 
         def fast_job(n):
             return n * 2

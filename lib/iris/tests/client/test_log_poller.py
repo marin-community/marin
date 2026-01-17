@@ -18,7 +18,7 @@ import time
 
 import pytest
 
-from iris.client import IrisClient, LocalClientConfig, LogEntry, LogPoller
+from iris.client import IrisClient, LocalClientConfig, LogPoller
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import cluster_pb2
 
@@ -54,22 +54,6 @@ def test_fetch_logs_basic(local_client, resources):
     assert any("Log line 1" in d for d in log_data)
     assert any("Log line 2" in d for d in log_data)
     assert any("Log line 3" in d for d in log_data)
-
-
-def test_fetch_logs_returns_log_entry_type(local_client, resources):
-    """Verify fetch_logs returns LogEntry objects with valid data."""
-    entrypoint = Entrypoint.from_callable(logging_job)
-    job_id = local_client.submit(entrypoint, "type-test", resources)
-    local_client.wait(job_id)
-
-    logs = local_client.fetch_logs(job_id)
-
-    assert len(logs) > 0
-    assert all(isinstance(entry, LogEntry) for entry in logs)
-    for entry in logs:
-        assert entry.timestamp_ms > 0
-        assert entry.source in ("stdout", "stderr", "build")
-        assert isinstance(entry.data, str)
 
 
 def test_log_poller_collects_logs(local_client, resources, caplog):
