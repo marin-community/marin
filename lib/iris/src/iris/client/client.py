@@ -47,7 +47,7 @@ from iris.cluster.client import (
     RemoteClusterClient,
     get_job_info,
 )
-from iris.cluster.types import Entrypoint, is_job_finished, JobId, Namespace
+from iris.cluster.types import EnvironmentSpec, Entrypoint, is_job_finished, JobId, Namespace, ResourceSpec
 from iris.rpc import cluster_pb2
 from iris.time_utils import ExponentialBackoff
 
@@ -500,8 +500,8 @@ class IrisClient:
         self,
         entrypoint: Entrypoint,
         name: str,
-        resources: cluster_pb2.ResourceSpecProto,
-        environment: cluster_pb2.EnvironmentConfig | None = None,
+        resources: ResourceSpec,
+        environment: EnvironmentSpec | None = None,
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,
     ) -> JobId:
@@ -534,11 +534,15 @@ class IrisClient:
         else:
             job_id = JobId(name)
 
+        # Convert to wire format
+        resources_proto = resources.to_proto()
+        environment_proto = environment.to_proto() if environment else None
+
         self._cluster.submit_job(
             job_id=job_id,
             entrypoint=entrypoint,
-            resources=resources,
-            environment=environment,
+            resources=resources_proto,
+            environment=environment_proto,
             ports=ports,
             scheduling_timeout_seconds=scheduling_timeout_seconds,
         )

@@ -30,7 +30,7 @@ def dummy_entrypoint():
 @pytest.fixture
 def resources():
     """Create minimal ResourceSpec for testing."""
-    return ResourceSpec(cpu=1, memory="1g").to_proto()
+    return ResourceSpec(cpu=1, memory="1g")
 
 
 @pytest.fixture

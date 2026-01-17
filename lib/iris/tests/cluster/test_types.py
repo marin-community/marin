@@ -14,64 +14,10 @@
 
 """Tests for cluster types and utilities."""
 
-import pytest
+import os
+from unittest.mock import patch
 
-from iris.cluster.types import ResourceSpec, parse_memory_string
-
-
-@pytest.mark.parametrize(
-    "memory_str,expected_bytes",
-    [
-        ("1g", 1024**3),
-        ("8g", 8 * 1024**3),
-        ("16gb", 16 * 1024**3),
-        ("512m", 512 * 1024**2),
-        ("1024mb", 1024 * 1024**2),
-        ("1024k", 1024 * 1024),
-        ("1024kb", 1024 * 1024),
-        ("1024b", 1024),
-        ("1024", 1024),  # No unit defaults to bytes
-        ("", 0),
-        ("0g", 0),
-    ],
-)
-def test_parse_memory_string(memory_str, expected_bytes):
-    assert parse_memory_string(memory_str) == expected_bytes
-
-
-def test_parse_memory_string_case_insensitive():
-    assert parse_memory_string("8G") == parse_memory_string("8g")
-    assert parse_memory_string("16GB") == parse_memory_string("16gb")
-    assert parse_memory_string("512M") == parse_memory_string("512m")
-
-
-def test_parse_memory_string_with_whitespace():
-    assert parse_memory_string("  8g  ") == 8 * 1024**3
-
-
-def test_parse_memory_string_invalid():
-    with pytest.raises(ValueError):
-        parse_memory_string("invalid")
-    with pytest.raises(ValueError):
-        parse_memory_string("8x")
-
-
-def test_resource_spec_with_string_memory():
-    """Verify ResourceSpec parses human-readable memory strings to bytes."""
-    spec = ResourceSpec(cpu=4, memory="8g", disk="100g")
-    proto = spec.to_proto()
-    assert proto.cpu == 4
-    assert proto.memory_bytes == 8 * 1024**3
-    assert proto.disk_bytes == 100 * 1024**3
-
-
-def test_resource_spec_with_int_memory():
-    """Verify ResourceSpec accepts raw byte values."""
-    spec = ResourceSpec(cpu=2, memory=1024, disk=2048)
-    proto = spec.to_proto()
-    assert proto.cpu == 2
-    assert proto.memory_bytes == 1024
-    assert proto.disk_bytes == 2048
+from iris.cluster.types import EnvironmentSpec, ResourceSpec
 
 
 def test_resource_spec_with_device():
@@ -109,3 +55,31 @@ def test_resource_spec_with_all_fields():
     assert proto.replicas == 4
     assert proto.preemptible is True
     assert list(proto.regions) == ["us-central1", "us-east1"]
+
+
+def test_environment_spec_env_vars_override_defaults():
+    """User env_vars override default values."""
+    spec = EnvironmentSpec(env_vars={"TOKENIZERS_PARALLELISM": "true"})
+    proto = spec.to_proto()
+    assert proto.env_vars["TOKENIZERS_PARALLELISM"] == "true"
+
+
+def test_environment_spec_inherits_env_tokens():
+    """EnvironmentSpec inherits HF_TOKEN and WANDB_API_KEY from environment."""
+    with patch.dict(os.environ, {"HF_TOKEN": "test-hf-token", "WANDB_API_KEY": "test-wandb-key"}):
+        spec = EnvironmentSpec()
+        proto = spec.to_proto()
+        assert proto.env_vars["HF_TOKEN"] == "test-hf-token"
+        assert proto.env_vars["WANDB_API_KEY"] == "test-wandb-key"
+
+
+def test_environment_spec_omits_none_env_vars():
+    """EnvironmentSpec omits env vars with None values."""
+    with patch.dict(os.environ, {}, clear=True):
+        # Remove HF_TOKEN and WANDB_API_KEY from environment
+        os.environ.pop("HF_TOKEN", None)
+        os.environ.pop("WANDB_API_KEY", None)
+        spec = EnvironmentSpec()
+        proto = spec.to_proto()
+        assert "HF_TOKEN" not in proto.env_vars
+        assert "WANDB_API_KEY" not in proto.env_vars

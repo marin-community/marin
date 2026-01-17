@@ -39,7 +39,7 @@ def local_client():
 
 @pytest.fixture
 def resources():
-    return ResourceSpec(cpu=1, memory="1g").to_proto()
+    return ResourceSpec(cpu=1, memory="1g")
 
 
 def test_fetch_logs_basic(local_client, resources):

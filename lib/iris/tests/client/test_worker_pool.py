@@ -40,7 +40,7 @@ from iris.client.worker_pool import (
     WorkerState,
     WorkerStatus,
 )
-from iris.cluster.types import Entrypoint, JobId, ResourceSpec
+from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
 from iris.rpc import cluster_pb2
 
 # =============================================================================
@@ -359,7 +359,7 @@ class MockJob:
     job_id: JobId
     name: str
     entrypoint: Entrypoint
-    resources: cluster_pb2.ResourceSpecProto
+    resources: ResourceSpec
 
 
 class MockClusterClient:
@@ -381,8 +381,8 @@ class MockClusterClient:
         self,
         entrypoint: Entrypoint,
         name: str,
-        resources: cluster_pb2.ResourceSpecProto,
-        environment: cluster_pb2.EnvironmentConfig | None = None,
+        resources: ResourceSpec,
+        environment: EnvironmentSpec | None = None,
         ports: list[str] | None = None,
     ) -> JobId:
         job_id = JobId(f"mock-job-{self._job_counter}")
@@ -451,7 +451,7 @@ def worker_pool_harness():
     client = MockClusterClient()
     config = WorkerPoolConfig(
         num_workers=num_workers,
-        resources=ResourceSpec(cpu=1, memory="512m").to_proto(),
+        resources=ResourceSpec(cpu=1, memory="512m"),
         max_retries=1,
     )
     pool = WorkerPool(client, config, timeout=5.0)
@@ -655,7 +655,7 @@ class TestWorkerPoolE2E:
         client = MockClusterClient()
         config = WorkerPoolConfig(
             num_workers=1,
-            resources=cluster_pb2.ResourceSpecProto(cpu=1),
+            resources=ResourceSpec(cpu=1),
         )
         pool = WorkerPool(client, config, timeout=5.0, resolver=FixedResolver(endpoints))
         pool._pool_id = "ctxtest"
@@ -697,7 +697,7 @@ class TestWorkerPoolRetry:
         client = MockClusterClient()
         config = WorkerPoolConfig(
             num_workers=2,
-            resources=cluster_pb2.ResourceSpecProto(cpu=1),
+            resources=ResourceSpec(cpu=1),
             max_retries=2,
         )
 
@@ -732,7 +732,7 @@ class TestWorkerPoolRetry:
         client = MockClusterClient()
         config = WorkerPoolConfig(
             num_workers=1,
-            resources=cluster_pb2.ResourceSpecProto(cpu=1),
+            resources=ResourceSpec(cpu=1),
             max_retries=0,  # No retries
         )
 
