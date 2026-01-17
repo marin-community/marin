@@ -14,7 +14,12 @@
 
 """Core types for the iris cluster layer.
 
-Wire-format types (ResourceSpec, JobStatus, etc.) are defined in cluster.proto.
+This module provides Python types for the Iris cluster API:
+- ResourceSpec: Dataclass for specifying job resources with human-readable values
+- Entrypoint: Callable wrapper for job execution
+- Namespace: Type-safe namespace identifier
+
+Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.proto.
 """
 
 import os
@@ -62,49 +67,36 @@ def parse_memory_string(memory_str: str) -> int:
         raise ValueError(str(e)) from e
 
 
-def create_resource_spec(
-    cpu: int = 0,
-    memory: str | int = 0,
-    disk: str | int = 0,
-    device: cluster_pb2.DeviceConfig | None = None,
-    replicas: int = 0,
-    preemptible: bool = False,
-    regions: Sequence[str] | None = None,
-) -> cluster_pb2.ResourceSpec:
-    """Create a ResourceSpec with human-readable memory/disk values.
+@dataclass
+class ResourceSpec:
+    """Resource specification for jobs.
 
-    This is the primary way to construct ResourceSpec at the client layer.
-    It accepts human-readable strings like "8g" or "512m" and converts them
-    to machine-readable bytes for the proto.
-
-    Args:
-        cpu: Number of CPU cores
-        memory: RAM as human-readable string ("8g") or bytes (int)
-        disk: Disk space as human-readable string ("100g") or bytes (int)
-        device: Device configuration (CPU/GPU/TPU)
-        replicas: Number of replicas/slices
-        preemptible: Whether the job can be preempted
-        regions: Preferred cloud regions
-
-    Returns:
-        ResourceSpec proto with memory_bytes and disk_bytes populated
+    Accepts human-readable memory/disk values (e.g., "8g", "512m").
     """
-    memory_bytes = memory if isinstance(memory, int) else parse_memory_string(memory)
-    disk_bytes = disk if isinstance(disk, int) else parse_memory_string(disk)
 
-    spec = cluster_pb2.ResourceSpec(
-        cpu=cpu,
-        memory_bytes=memory_bytes,
-        disk_bytes=disk_bytes,
-        replicas=replicas,
-        preemptible=preemptible,
-        regions=list(regions or []),
-    )
+    cpu: int = 0
+    memory: str | int = 0  # "8g" or bytes
+    disk: str | int = 0
+    device: cluster_pb2.DeviceConfig | None = None
+    replicas: int = 0
+    preemptible: bool = False
+    regions: Sequence[str] | None = None
 
-    if device is not None:
-        spec.device.CopyFrom(device)
-
-    return spec
+    def to_proto(self) -> cluster_pb2.ResourceSpecProto:
+        """Convert to wire format."""
+        memory_bytes = self.memory if isinstance(self.memory, int) else parse_memory_string(self.memory)
+        disk_bytes = self.disk if isinstance(self.disk, int) else parse_memory_string(self.disk)
+        spec = cluster_pb2.ResourceSpecProto(
+            cpu=self.cpu,
+            memory_bytes=memory_bytes,
+            disk_bytes=disk_bytes,
+            replicas=self.replicas,
+            preemptible=self.preemptible,
+            regions=list(self.regions or []),
+        )
+        if self.device is not None:
+            spec.device.CopyFrom(self.device)
+        return spec
 
 
 class Namespace(str):

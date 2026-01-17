@@ -36,7 +36,7 @@ from iris.cluster.client.local_client import (
     _LocalImageProvider,
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
-from iris.cluster.types import Entrypoint, create_resource_spec
+from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import DockerRuntime
@@ -177,7 +177,7 @@ class E2ECluster:
     ) -> str:
         entrypoint = Entrypoint.from_callable(fn, *args, **kwargs)
         environment = cluster_pb2.EnvironmentConfig(workspace="/app", env_vars={})
-        resources = create_resource_spec(cpu=cpu, memory=memory)
+        resources = ResourceSpec(cpu=cpu, memory=memory).to_proto()
         return self.get_client().submit(
             entrypoint=entrypoint,
             name=name or fn.__name__,

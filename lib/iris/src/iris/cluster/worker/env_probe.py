@@ -128,7 +128,7 @@ class EnvironmentProvider(Protocol):
 
     def probe(self) -> cluster_pb2.WorkerMetadata: ...
 
-    def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec: ...
+    def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpecProto: ...
 
 
 class DefaultEnvironmentProvider:
@@ -179,8 +179,8 @@ class DefaultEnvironmentProvider:
             gce_zone=gce_zone,
         )
 
-    def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpec:
-        resources = cluster_pb2.ResourceSpec(
+    def build_resource_spec(self, metadata: cluster_pb2.WorkerMetadata) -> cluster_pb2.ResourceSpecProto:
+        resources = cluster_pb2.ResourceSpecProto(
             cpu=metadata.cpu_count,
             memory_bytes=metadata.memory_bytes,
         )

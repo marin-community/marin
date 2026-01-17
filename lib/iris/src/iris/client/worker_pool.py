@@ -22,12 +22,13 @@ jobs that can execute any callable.
 Example:
     from pathlib import Path
     from iris.client import IrisClient, WorkerPool, WorkerPoolConfig
+    from iris.cluster.types import ResourceSpec
 
     client = IrisClient.remote("http://controller:8080", workspace=Path("./my-project"))
 
     config = WorkerPoolConfig(
         num_workers=3,
-        resources=create_resource_spec(cpu=1, memory="512m"),
+        resources=ResourceSpec(cpu=1, memory="512m").to_proto(),
     )
 
     with WorkerPool(client, config) as pool:
@@ -329,7 +330,7 @@ class WorkerPoolConfig:
     """
 
     num_workers: int
-    resources: cluster_pb2.ResourceSpec
+    resources: cluster_pb2.ResourceSpecProto
     environment: cluster_pb2.EnvironmentConfig | None = None
     name_prefix: str = "worker"
     max_retries: int = 0

@@ -23,7 +23,7 @@ from connectrpc.errors import ConnectError
 from iris.rpc import cluster_pb2
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerJob, ControllerState
-from iris.cluster.types import JobId, WorkerId, create_resource_spec
+from iris.cluster.types import JobId, WorkerId
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def make_job_request():
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",
-            resources=create_resource_spec(cpu=1, memory="1g"),
+            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         )
 
@@ -45,8 +45,8 @@ def make_job_request():
 def make_resource_spec_fixture():
     """Create a minimal ResourceSpec for testing."""
 
-    def _make() -> cluster_pb2.ResourceSpec:
-        return create_resource_spec(cpu=1, memory="1g", disk="10g")
+    def _make() -> cluster_pb2.ResourceSpecProto:
+        return cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, disk_bytes=10 * 1024**3)
 
     return _make
 
@@ -272,7 +272,7 @@ def test_launch_job_rejects_empty_name(service, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="",  # Empty name
         serialized_entrypoint=b"test",
-        resources=create_resource_spec(cpu=1, memory="1g"),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
     )
 
@@ -406,7 +406,7 @@ def test_launch_job_with_parent_job_id(service, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="child-job",
         serialized_entrypoint=b"test",
-        resources=create_resource_spec(cpu=1, memory="1g"),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         parent_job_id="parent-123",
     )
@@ -423,7 +423,7 @@ def test_launch_job_without_parent_job_id(service, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="root-job",
         serialized_entrypoint=b"test",
-        resources=create_resource_spec(cpu=1, memory="1g"),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
     )
 

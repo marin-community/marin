@@ -36,7 +36,7 @@ class ContainerConfig:
     command: list[str]
     env: dict[str, str]
     workdir: str = "/app"
-    resources: cluster_pb2.ResourceSpec | None = None
+    resources: cluster_pb2.ResourceSpecProto | None = None
     timeout_seconds: int | None = None
     mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
     ports: dict[str, int] = field(default_factory=dict)  # name -> host_port

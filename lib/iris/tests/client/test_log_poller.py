@@ -19,7 +19,7 @@ import time
 import pytest
 
 from iris.client import IrisClient, LocalClientConfig, LogEntry, LogPoller
-from iris.cluster.types import Entrypoint, create_resource_spec
+from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import cluster_pb2
 
 
@@ -39,7 +39,7 @@ def local_client():
 
 @pytest.fixture
 def resources():
-    return create_resource_spec(cpu=1, memory="1g")
+    return ResourceSpec(cpu=1, memory="1g").to_proto()
 
 
 def test_fetch_logs_basic(local_client, resources):
