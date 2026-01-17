@@ -224,3 +224,6 @@ gha-creds-*.json
 **/*.jsonl
 scr/*
 .weaver/
+
+# Local host Marin config
+.marin.yaml
