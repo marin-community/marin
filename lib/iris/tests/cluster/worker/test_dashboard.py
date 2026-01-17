@@ -150,10 +150,7 @@ def create_run_job_request(job_id: str = "test-job-1", ports: list[str] | None =
         extras=["dev"],
     )
 
-    resources = cluster_pb2.ResourceSpec(
-        cpu=2,
-        memory="4g",
-    )
+    resources = cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3)
 
     return cluster_pb2.Worker.RunJobRequest(
         job_id=job_id,

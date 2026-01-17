@@ -22,12 +22,13 @@ jobs that can execute any callable.
 Example:
     from pathlib import Path
     from iris.client import IrisClient, WorkerPool, WorkerPoolConfig
+    from iris.cluster.types import ResourceSpec
 
     client = IrisClient.remote("http://controller:8080", workspace=Path("./my-project"))
 
     config = WorkerPoolConfig(
         num_workers=3,
-        resources=cluster_pb2.ResourceSpec(cpu=1, memory="512m"),
+        resources=ResourceSpec(cpu=1, memory="512m"),
     )
 
     with WorkerPool(client, config) as pool:
@@ -55,8 +56,7 @@ from iris.actor import ActorServer
 from iris.actor.client import ActorClient
 from iris.actor.resolver import Resolver
 from iris.client.client import IrisClient, iris_ctx
-from iris.cluster.types import Entrypoint, JobId
-from iris.rpc import cluster_pb2
+from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
 from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -329,8 +329,8 @@ class WorkerPoolConfig:
     """
 
     num_workers: int
-    resources: cluster_pb2.ResourceSpec
-    environment: cluster_pb2.EnvironmentConfig | None = None
+    resources: ResourceSpec
+    environment: EnvironmentSpec | None = None
     name_prefix: str = "worker"
     max_retries: int = 0
 

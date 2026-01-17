@@ -50,18 +50,42 @@ def client(service):
 
 
 @pytest.fixture
+def make_worker_metadata():
+    """Create WorkerMetadata for testing."""
+
+    def _make(
+        cpu: int = 10,
+        memory_bytes: int = 10 * 1024**3,
+        disk_bytes: int = 10 * 1024**3,
+    ) -> cluster_pb2.WorkerMetadata:
+        device = cluster_pb2.DeviceConfig()
+        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+
+        return cluster_pb2.WorkerMetadata(
+            hostname="test-worker",
+            ip_address="127.0.0.1",
+            cpu_count=cpu,
+            memory_bytes=memory_bytes,
+            disk_bytes=disk_bytes,
+            device=device,
+        )
+
+    return _make
+
+
+@pytest.fixture
 def job_request():
     return cluster_pb2.Controller.LaunchJobRequest(
         name="test-job",
         serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpec(cpu=2, memory="4g"),
+        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
     )
 
 
 @pytest.fixture
 def resource_spec():
-    return cluster_pb2.ResourceSpec(cpu=4, memory="8g", disk="100g")
+    return cluster_pb2.ResourceSpecProto(cpu=4, memory_bytes=8 * 1024**3, disk_bytes=100 * 1024**3)
 
 
 def test_stats_counts_building_separately_from_running(client, state, job_request):
@@ -94,16 +118,22 @@ def test_stats_groups_terminal_states_as_completed(client, state, job_request):
     assert stats["jobs_running"] == 0
 
 
-def test_stats_counts_only_healthy_workers(client, state, resource_spec):
+def test_stats_counts_only_healthy_workers(client, state, make_worker_metadata):
     """Healthy worker count excludes unhealthy workers."""
     state.add_worker(
-        ControllerWorker(worker_id=WorkerId("healthy1"), address="h1:8080", resources=resource_spec, healthy=True)
+        ControllerWorker(
+            worker_id=WorkerId("healthy1"), address="h1:8080", metadata=make_worker_metadata(), healthy=True
+        )
     )
     state.add_worker(
-        ControllerWorker(worker_id=WorkerId("healthy2"), address="h2:8080", resources=resource_spec, healthy=True)
+        ControllerWorker(
+            worker_id=WorkerId("healthy2"), address="h2:8080", metadata=make_worker_metadata(), healthy=True
+        )
     )
     state.add_worker(
-        ControllerWorker(worker_id=WorkerId("unhealthy"), address="h3:8080", resources=resource_spec, healthy=False)
+        ControllerWorker(
+            worker_id=WorkerId("unhealthy"), address="h3:8080", metadata=make_worker_metadata(), healthy=False
+        )
     )
 
     stats = client.get("/api/stats").json()
@@ -145,10 +175,12 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     assert endpoints[0]["name"] == "running-svc"
 
 
-def test_job_detail_page_includes_worker_address(client, state, job_request, resource_spec):
+def test_job_detail_page_includes_worker_address(client, state, job_request, make_worker_metadata):
     """Job detail page injects worker address for client-side fetch."""
     state.add_worker(
-        ControllerWorker(worker_id=WorkerId("w1"), address="worker-host:9000", resources=resource_spec, healthy=True)
+        ControllerWorker(
+            worker_id=WorkerId("w1"), address="worker-host:9000", metadata=make_worker_metadata(), healthy=True
+        )
     )
     state.add_job(
         ControllerJob(

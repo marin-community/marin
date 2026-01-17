@@ -14,7 +14,13 @@
 
 """Core types for the iris cluster layer.
 
-Wire-format types (ResourceSpec, JobStatus, etc.) are defined in cluster.proto.
+This module provides Python types for the Iris cluster API:
+- ResourceSpec: Dataclass for specifying job resources with human-readable values
+- EnvironmentSpec: Dataclass for specifying job environment configuration
+- Entrypoint: Callable wrapper for job execution
+- Namespace: Type-safe namespace identifier
+
+Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.proto.
 """
 
 import os
@@ -22,11 +28,113 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, NewType
 
+import humanfriendly
+
 from iris.rpc import cluster_pb2
 
 JobId = NewType("JobId", str)
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
+
+
+def parse_memory_string(memory_str: str) -> int:
+    """Parse human-readable memory string to bytes.
+
+    Supports various formats:
+    - "8G", "8GB", "8 GB", "8 gigabytes"
+    - "512M", "512MB", "512 megabytes"
+    - "1024K", "1024KB", "1024 kilobytes"
+    - Plain numbers treated as bytes
+
+    Args:
+        memory_str: Memory string (e.g., "8g", "16gb", "512m")
+
+    Returns:
+        Memory in bytes
+
+    Raises:
+        ValueError: If format is invalid
+    """
+    if not memory_str:
+        return 0
+
+    memory_str = memory_str.strip()
+    if not memory_str or memory_str == "0":
+        return 0
+
+    try:
+        return humanfriendly.parse_size(memory_str, binary=True)
+    except humanfriendly.InvalidSize as e:
+        raise ValueError(str(e)) from e
+
+
+@dataclass
+class ResourceSpec:
+    """Resource specification for jobs.
+
+    Accepts human-readable memory/disk values (e.g., "8g", "512m").
+    """
+
+    cpu: int = 0
+    memory: str | int = 0  # "8g" or bytes
+    disk: str | int = 0
+    device: cluster_pb2.DeviceConfig | None = None
+    replicas: int = 0
+    preemptible: bool = False
+    regions: Sequence[str] | None = None
+
+    def to_proto(self) -> cluster_pb2.ResourceSpecProto:
+        """Convert to wire format."""
+        memory_bytes = self.memory if isinstance(self.memory, int) else parse_memory_string(self.memory)
+        disk_bytes = self.disk if isinstance(self.disk, int) else parse_memory_string(self.disk)
+        spec = cluster_pb2.ResourceSpecProto(
+            cpu=self.cpu,
+            memory_bytes=memory_bytes,
+            disk_bytes=disk_bytes,
+            replicas=self.replicas,
+            preemptible=self.preemptible,
+            regions=list(self.regions or []),
+        )
+        if self.device is not None:
+            spec.device.CopyFrom(self.device)
+        return spec
+
+
+@dataclass
+class EnvironmentSpec:
+    """Environment specification for jobs.
+
+    Default environment variables (automatically set if not overridden):
+    - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
+    - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
+    - HF_TOKEN: from os.environ (if set)
+    - WANDB_API_KEY: from os.environ (if set)
+    """
+
+    workspace: str | None = None
+    pip_packages: Sequence[str] | None = None
+    env_vars: dict[str, str] | None = None
+    extras: Sequence[str] | None = None
+
+    def to_proto(self) -> cluster_pb2.EnvironmentConfig:
+        """Convert to wire format with sensible defaults applied."""
+        workspace = self.workspace if self.workspace is not None else os.getcwd()
+
+        default_env_vars = {
+            "HF_DATASETS_TRUST_REMOTE_CODE": "1",
+            "TOKENIZERS_PARALLELISM": "false",
+            "HF_TOKEN": os.getenv("HF_TOKEN"),
+            "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+        }
+
+        merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
+
+        return cluster_pb2.EnvironmentConfig(
+            workspace=workspace,
+            pip_packages=list(self.pip_packages or []),
+            env_vars=merged_env_vars,
+            extras=list(self.extras or []),
+        )
 
 
 class Namespace(str):
@@ -169,49 +277,3 @@ class Entrypoint:
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
         return cls(callable=fn, args=args, kwargs=kwargs)
-
-
-def create_environment(
-    workspace: str | None = None,
-    pip_packages: Sequence[str] | None = None,
-    env_vars: dict[str, str] | None = None,
-    extras: Sequence[str] | None = None,
-) -> cluster_pb2.EnvironmentConfig:
-    """Create an EnvironmentConfig proto with sensible defaults.
-
-    Default environment variables:
-    - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
-    - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
-    - HF_TOKEN: from os.environ (if set)
-    - WANDB_API_KEY: from os.environ (if set)
-
-    Args:
-        workspace: Path to workspace root (default: current directory)
-        pip_packages: Additional pip packages to install
-        env_vars: Custom environment variables (merged with defaults)
-        extras: Extra dependency groups for uv
-
-    Returns:
-        EnvironmentConfig proto message with defaults applied
-    """
-    if workspace is None:
-        workspace = os.getcwd()
-
-    default_env_vars = {
-        "HF_DATASETS_TRUST_REMOTE_CODE": "1",
-        "TOKENIZERS_PARALLELISM": "false",
-        "HF_TOKEN": os.getenv("HF_TOKEN"),
-        "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
-    }
-
-    # Filter out None values and merge with user-provided vars
-    merged_env_vars = {k: v for k, v in {**default_env_vars, **(env_vars or {})}.items() if v is not None}
-
-    config = cluster_pb2.EnvironmentConfig(
-        workspace=workspace,
-        pip_packages=list(pip_packages or []),
-        env_vars=merged_env_vars,
-        extras=list(extras or []),
-    )
-
-    return config

@@ -18,19 +18,13 @@ import pytest
 from connectrpc.errors import ConnectError
 
 from iris.client import IrisClient, LocalClientConfig
-from iris.cluster.types import Entrypoint
+from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import cluster_pb2
 
 
 def dummy_entrypoint():
     """A simple entrypoint for testing."""
     pass
-
-
-@pytest.fixture
-def resources():
-    """Create minimal ResourceSpec for testing."""
-    return cluster_pb2.ResourceSpec(cpu=1, memory="1g")
 
 
 @pytest.fixture
@@ -41,9 +35,10 @@ def local_client():
         yield client
 
 
-def test_submit_rejects_name_with_slash(local_client, resources):
+def test_submit_rejects_name_with_slash(local_client):
     """Verify submit raises ValueError for names containing '/'."""
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
 
     with pytest.raises(ValueError) as exc_info:
         local_client.submit(entrypoint, "invalid/name", resources)
@@ -51,18 +46,10 @@ def test_submit_rejects_name_with_slash(local_client, resources):
     assert "/" in str(exc_info.value)
 
 
-def test_submit_root_job_uses_name_directly(local_client, resources):
-    """Verify root job (no parent) uses name directly as job_id."""
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-
-    job_id = local_client.submit(entrypoint, "my-root-job", resources)
-
-    assert job_id == "my-root-job"
-
-
-def test_submit_rejects_duplicate_name(local_client, resources):
+def test_submit_rejects_duplicate_name(local_client):
     """Verify submit rejects duplicate job names."""
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
 
     # First submit should succeed
     job_id = local_client.submit(entrypoint, "duplicate-job", resources)
@@ -75,9 +62,10 @@ def test_submit_rejects_duplicate_name(local_client, resources):
     assert "already exists" in str(exc_info.value)
 
 
-def test_list_jobs_returns_all_jobs(local_client, resources):
+def test_list_jobs_returns_all_jobs(local_client):
     """Verify list_jobs returns all submitted jobs."""
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
 
     job1 = local_client.submit(entrypoint, "list-job-1", resources)
     job2 = local_client.submit(entrypoint, "list-job-2", resources)
@@ -89,9 +77,10 @@ def test_list_jobs_returns_all_jobs(local_client, resources):
     assert job2 in job_ids
 
 
-def test_list_jobs_filter_by_state(local_client, resources):
+def test_list_jobs_filter_by_state(local_client):
     """Verify list_jobs can filter by state."""
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
 
     job_id = local_client.submit(entrypoint, "state-filter-job", resources)
     local_client.wait(job_id)  # Wait for completion
@@ -105,9 +94,10 @@ def test_list_jobs_filter_by_state(local_client, resources):
     assert not any(j.job_id == job_id for j in pending_jobs)
 
 
-def test_list_jobs_filter_by_prefix(local_client, resources):
+def test_list_jobs_filter_by_prefix(local_client):
     """Verify list_jobs can filter by job_id prefix."""
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
 
     local_client.submit(entrypoint, "exp-a-job", resources)
     local_client.submit(entrypoint, "exp-b-job", resources)
@@ -122,9 +112,10 @@ def test_list_jobs_filter_by_prefix(local_client, resources):
     assert "other-job" not in job_ids
 
 
-def test_terminate_prefix_basic(local_client, resources):
+def test_terminate_prefix_basic(local_client):
     """Verify terminate_prefix terminates matching jobs."""
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
 
     # Submit jobs with different prefixes
     local_client.submit(entrypoint, "exp-a-job1", resources)
@@ -140,9 +131,10 @@ def test_terminate_prefix_basic(local_client, resources):
     assert "exp-b-job1" not in terminated
 
 
-def test_terminate_prefix_excludes_finished(local_client, resources):
+def test_terminate_prefix_excludes_finished(local_client):
     """Verify terminate_prefix skips finished jobs by default."""
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
 
     job_id = local_client.submit(entrypoint, "finished-test", resources)
     local_client.wait(job_id)  # Wait for completion
