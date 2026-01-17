@@ -403,19 +403,23 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
     # sharding" errors. Instead, we broadcast using a temporary mesh over ("processes", "local_devices") and a
     # reduction across the sharded "processes" axis, then reshard to `out_axis_specs`.
 
-    def _normalize_out_spec(spec: Any) -> Any:
+    def _maybe_constrain(arr: jax.Array, spec: Any) -> jax.Array:
+        # `jax.jit` (and some multihost contexts) can error if we try to apply a sharding constraint with a sharding
+        # that isn't fully addressable from the current host. In practice, callers like eval-harness pass
+        # `NamedSharding` objects produced from a global mesh; for robustness we avoid constraining in that case and
+        # let downstream `named_jit` / pjitted functions reshard as needed.
+        if spec is None:
+            return arr
         if isinstance(spec, PartitionSpec):
             resolved_mesh = haliax.partitioning._get_mesh()
-            return NamedSharding(resolved_mesh, spec)
-        return spec
+            return jax.lax.with_sharding_constraint(arr, NamedSharding(resolved_mesh, spec))
+        return arr
 
     if jax.process_count() == 1:
 
         def in_jit_single(x_leaf: Any, spec: Any) -> Any:
             arr = x_leaf.array if isinstance(x_leaf, hax.NamedArray) else x_leaf
-            spec = _normalize_out_spec(spec)
-            if spec is not None:
-                arr = jax.lax.with_sharding_constraint(arr, spec)
+            arr = _maybe_constrain(arr, spec)
             return hax.named(arr, x_leaf.axis_names) if isinstance(x_leaf, hax.NamedArray) else arr
 
         return eqx.filter_jit(jax.tree.map)(in_jit_single, x, out_axis_specs, is_leaf=is_named_array)
@@ -435,13 +439,10 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
 
     def in_jit(x_global: jax.Array, spec: Any, x_leaf: Any) -> Any:
         arr = jnp.sum(x_global, axis=0)
-        spec = _normalize_out_spec(spec)
-        if spec is not None:
-            arr = jax.lax.with_sharding_constraint(arr, spec)
+        arr = _maybe_constrain(arr, spec)
         return hax.named(arr, x_leaf.axis_names) if isinstance(x_leaf, hax.NamedArray) else arr
 
     x_global = jax.tree.map(pre_jit, x, is_leaf=is_named_array)
-    out_axis_specs = jax.tree.map(_normalize_out_spec, out_axis_specs)
     return eqx.filter_jit(jax.tree.map)(in_jit, x_global, out_axis_specs, x, is_leaf=is_named_array)
 
 
