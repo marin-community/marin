@@ -12,10 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+# Force JAX to use CPU before any other imports to avoid CUDA errors on non-GPU machines
+os.environ["JAX_PLATFORMS"] = "cpu"
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 import time
 import dspy
 import json
-import os
 import random
 from collections.abc import Callable
 from typing import Any
@@ -173,9 +177,11 @@ if __name__ == "__main__":
 
     # For this script to run in a CI/Sandbox without keys, we check environment variables
     # or assume the user will run this with proper setup.
-
-    start_inference_server(model_path="meta-llama/Meta-Llama-3.1-8B-Instruct", port=8000, device_type="tpu")
-    time.sleep(10)
+    
+    # We are using OpenAI, so we don't need to start a local TPU inference server.
+    # start_inference_server(model_path="meta-llama/Meta-Llama-3.1-8B-Instruct", port=8000, device_type="tpu")
+    # time.sleep(10)
+    
     print("Configuring DSPy...")
     # Configure Retrieval Model
     colbert_url = os.environ.get("COLBERT_SERVER_URL")
@@ -231,11 +237,9 @@ if __name__ == "__main__":
     print(f"Total traces collected: {len(all_traces)}")
     final_dataset = filter_and_sample(all_traces, final_count=3000, max_tokens=4096)
 
-    output_file = "experiments/dspy/format_adaptation_dataset.json"
+    output_file = "experiments/dspy/format_adaptation_dataset.jsonl"
     with open(output_file, "w") as f:
         # Serialize predictions if needed (they are objects)
-        # For simplicity, just dumping inputs/predictions structure
-        serializable = []
         for item in final_dataset:
             # item is a dict (TraceData + dataset key)
             clean_item = {}
@@ -273,8 +277,7 @@ if __name__ == "__main__":
                      clean_item[k] = clean_trace
                 else:
                      clean_item[k] = v
-            serializable.append(clean_item)
-
-        json.dump(serializable, f, indent=2)
+            # Write as JSON line
+            f.write(json.dumps(clean_item) + "\n")
 
     print(f"Saved {len(final_dataset)} trajectories to {output_file}")
