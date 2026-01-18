@@ -1,0 +1,9 @@
+version: v2
+modules:
+  - path: src/iris/rpc
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE
