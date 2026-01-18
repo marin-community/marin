@@ -168,6 +168,11 @@ class Scheduler:
 
             if self._is_task_timed_out(task, job, now_ms):
                 transaction.timed_out_tasks.append(task)
+                self._state.log_action(
+                    "task_timeout",
+                    job_id=task.job_id,
+                    details=f"task={task.task_id} attempt={task.current_attempt_id}",
+                )
                 continue
 
             for worker in workers:
@@ -179,6 +184,11 @@ class Scheduler:
                     transaction.tentatively_assign(task, worker)
                     break
             else:
+                self._state.log_action(
+                    "task_unschedulable",
+                    job_id=task.job_id,
+                    details=f"task={task.task_id} no_worker_has_capacity",
+                )
                 logger.debug(
                     "No suitable worker for task %s (cpu=%d, memory_bytes=%d)",
                     task.task_id,

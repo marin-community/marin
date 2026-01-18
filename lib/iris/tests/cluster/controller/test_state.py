@@ -928,3 +928,274 @@ def test_worker_timeout_task_cleanup(job_request, worker_metadata):
 
     assert state.lookup_endpoints("j1/actor") == []
     assert task.task_id not in worker.running_tasks
+
+
+# =============================================================================
+# Failure Domain Tests
+# =============================================================================
+
+
+def test_failure_domain_kills_remaining_tasks_on_task_failure(worker_metadata):
+    """When one task fails beyond retries, remaining tasks should be killed."""
+    from iris.cluster.controller.task import TaskTransitionResult
+
+    state = ControllerState()
+    now_ms = int(time.time() * 1000)
+
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+    )
+    state.add_worker(worker)
+
+    # Create job with 3 replicas and max_task_failures=0
+    job_request = cluster_pb2.Controller.LaunchJobRequest(
+        name="multi-task-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        max_task_failures=0,
+    )
+    job = Job(job_id=JobId("j1"), request=job_request)
+    tasks = state.add_job(job)
+
+    assert len(tasks) == 3
+
+    # Dispatch task-0 and task-1 to workers, leave task-2 pending
+    tasks[0].mark_dispatched(WorkerId("w1"), now_ms)
+    state.assign_task_to_worker(WorkerId("w1"), tasks[0].task_id)
+    tasks[1].mark_dispatched(WorkerId("w1"), now_ms + 1)
+    state.assign_task_to_worker(WorkerId("w1"), tasks[1].task_id)
+
+    # Task-0 fails (no retries since max_retries_failure=0)
+    result, _ = state.transition_task(
+        tasks[0].task_id,
+        cluster_pb2.TASK_STATE_FAILED,
+        now_ms + 2000,
+        error="Task failed",
+    )
+
+    assert result == TaskTransitionResult.EXCEEDED_RETRY_LIMIT
+    assert tasks[0].state == cluster_pb2.TASK_STATE_FAILED
+
+    # Job should be FAILED
+    assert job.state == cluster_pb2.JOB_STATE_FAILED
+
+    # Task-1 (running) should be KILLED
+    assert tasks[1].state == cluster_pb2.TASK_STATE_KILLED
+    assert tasks[1].error is not None and "max_task_failures" in tasks[1].error
+
+    # Task-2 (pending) should be KILLED
+    assert tasks[2].state == cluster_pb2.TASK_STATE_KILLED
+    assert tasks[2].error is not None and "max_task_failures" in tasks[2].error
+
+
+def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
+    """Job with max_task_failures=1 tolerates one failure before failing."""
+    from iris.cluster.controller.task import TaskTransitionResult
+
+    state = ControllerState()
+    now_ms = int(time.time() * 1000)
+
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+    )
+    state.add_worker(worker)
+
+    # Create job with 3 replicas and max_task_failures=1
+    job_request = cluster_pb2.Controller.LaunchJobRequest(
+        name="tolerant-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        max_task_failures=1,
+    )
+    job = Job(job_id=JobId("j1"), request=job_request)
+    tasks = state.add_job(job)
+
+    # Dispatch all tasks
+    for i, task in enumerate(tasks):
+        task.mark_dispatched(WorkerId("w1"), now_ms + i)
+        state.assign_task_to_worker(WorkerId("w1"), task.task_id)
+
+    # Task-0 fails - job should still be running (1 failure <= 1 allowed)
+    result, _ = state.transition_task(
+        tasks[0].task_id,
+        cluster_pb2.TASK_STATE_FAILED,
+        now_ms + 1000,
+        error="First failure",
+    )
+
+    assert result == TaskTransitionResult.EXCEEDED_RETRY_LIMIT
+    assert tasks[0].state == cluster_pb2.TASK_STATE_FAILED
+    # Job should NOT fail yet because 1 failure <= max_task_failures=1
+    assert job.state == cluster_pb2.JOB_STATE_RUNNING
+
+    # Task-1 succeeds
+    result, _ = state.transition_task(
+        tasks[1].task_id,
+        cluster_pb2.TASK_STATE_SUCCEEDED,
+        now_ms + 2000,
+    )
+
+    assert tasks[1].state == cluster_pb2.TASK_STATE_SUCCEEDED
+    assert job.state == cluster_pb2.JOB_STATE_RUNNING
+
+    # Task-2 fails - now job should fail (2 failures > 1 allowed)
+    result, _ = state.transition_task(
+        tasks[2].task_id,
+        cluster_pb2.TASK_STATE_FAILED,
+        now_ms + 3000,
+        error="Second failure",
+    )
+
+    assert result == TaskTransitionResult.EXCEEDED_RETRY_LIMIT
+    assert tasks[2].state == cluster_pb2.TASK_STATE_FAILED
+    assert job.state == cluster_pb2.JOB_STATE_FAILED
+
+
+def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
+    """Preemptions (worker failures) don't count toward max_task_failures threshold."""
+    from iris.cluster.controller.task import TaskTransitionResult
+
+    state = ControllerState()
+    now_ms = int(time.time() * 1000)
+
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+    )
+    state.add_worker(worker)
+
+    # Create job with 2 replicas and max_task_failures=0
+    job_request = cluster_pb2.Controller.LaunchJobRequest(
+        name="preemption-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=2),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        max_task_failures=0,
+    )
+    job = Job(job_id=JobId("j1"), request=job_request)
+    tasks = state.add_job(job)
+
+    # Dispatch task-0
+    tasks[0].mark_dispatched(WorkerId("w1"), now_ms)
+    tasks[0].max_retries_preemption = 1  # Allow one preemption retry
+    state.assign_task_to_worker(WorkerId("w1"), tasks[0].task_id)
+
+    # Task-0 is preempted (worker failure) - should NOT count toward max_task_failures
+    result, _ = state.transition_task(
+        tasks[0].task_id,
+        cluster_pb2.TASK_STATE_WORKER_FAILED,
+        now_ms + 1000,
+        is_worker_failure=True,
+        error="Worker died",
+    )
+
+    # Should retry due to preemption retry
+    assert result == TaskTransitionResult.SHOULD_RETRY
+    assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
+
+    # Job should still be PENDING, not FAILED
+    assert job.state == cluster_pb2.JOB_STATE_PENDING
+
+
+def test_failure_domain_logs_actions(worker_metadata):
+    """Verify failure domain triggers proper action logging."""
+    state = ControllerState()
+    now_ms = int(time.time() * 1000)
+
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+    )
+    state.add_worker(worker)
+
+    # Create job with 3 replicas and max_task_failures=0
+    job_request = cluster_pb2.Controller.LaunchJobRequest(
+        name="logging-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        max_task_failures=0,
+    )
+    job = Job(job_id=JobId("j1"), request=job_request)
+    tasks = state.add_job(job)
+
+    # Dispatch all tasks
+    for i, task in enumerate(tasks):
+        task.mark_dispatched(WorkerId("w1"), now_ms + i)
+        state.assign_task_to_worker(WorkerId("w1"), task.task_id)
+
+    # Task-0 fails
+    state.transition_task(
+        tasks[0].task_id,
+        cluster_pb2.TASK_STATE_FAILED,
+        now_ms + 1000,
+        error="Task failed",
+    )
+
+    # Check action log
+    actions = state.get_recent_actions()
+    action_types = [a.action for a in actions]
+
+    assert "failure_domain_triggered" in action_types
+    assert "tasks_killed" in action_types
+
+    # Verify failure_domain_triggered details
+    fd_action = next(a for a in actions if a.action == "failure_domain_triggered")
+    assert fd_action.job_id == "j1"
+    assert "failed=1" in fd_action.details
+    assert "max_allowed=0" in fd_action.details
+
+    # Verify tasks_killed details
+    tk_action = next(a for a in actions if a.action == "tasks_killed")
+    assert tk_action.job_id == "j1"
+    assert "killed=2" in tk_action.details
+
+
+def test_all_tasks_succeed_job_succeeds(worker_metadata):
+    """When all tasks succeed, job transitions to SUCCEEDED."""
+    from iris.cluster.controller.task import TaskTransitionResult
+
+    state = ControllerState()
+    now_ms = int(time.time() * 1000)
+
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+    )
+    state.add_worker(worker)
+
+    # Create job with 3 replicas
+    job_request = cluster_pb2.Controller.LaunchJobRequest(
+        name="success-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    job = Job(job_id=JobId("j1"), request=job_request)
+    tasks = state.add_job(job)
+
+    # Dispatch and complete all tasks
+    for i, task in enumerate(tasks):
+        task.mark_dispatched(WorkerId("w1"), now_ms + i)
+        state.assign_task_to_worker(WorkerId("w1"), task.task_id)
+
+        result, _ = state.transition_task(
+            task.task_id,
+            cluster_pb2.TASK_STATE_SUCCEEDED,
+            now_ms + 1000 + i * 100,
+        )
+        assert result == TaskTransitionResult.COMPLETE
+
+    # Job should be SUCCEEDED
+    assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    for task in tasks:
+        assert task.state == cluster_pb2.TASK_STATE_SUCCEEDED

@@ -313,6 +313,11 @@ class ControllerState:
                     job.error = t.error
                     break
             # Kill remaining running/pending tasks (failure domain)
+            self.log_action(
+                "failure_domain_triggered",
+                job_id=job_id,
+                details=f"failed={failed_permanently} max_allowed={max_task_failures}",
+            )
             self._kill_remaining_tasks(job_id, now_ms, "Job exceeded max_task_failures")
         # Job unschedulable if any task is unschedulable
         elif unschedulable > 0:
@@ -333,6 +338,7 @@ class ControllerState:
 
     def _kill_remaining_tasks(self, job_id: JobId, now_ms: int, error: str) -> None:
         """Kill all non-finished tasks in a job (failure domain)."""
+        killed_count = 0
         for task_id in self._tasks_by_job.get(job_id, []):
             task = self._tasks.get(task_id)
             if not task or task.is_finished():
@@ -341,6 +347,7 @@ class ControllerState:
             task.state = cluster_pb2.TASK_STATE_KILLED
             task.finished_at_ms = now_ms
             task.error = error
+            killed_count += 1
 
             self._task_queue = deque(tid for tid in self._task_queue if tid != task_id)
             if task.worker_id:
@@ -348,6 +355,13 @@ class ControllerState:
                 if worker:
                     worker.running_tasks.discard(task_id)
             self._remove_endpoints_for_task(task_id)
+
+        if killed_count > 0:
+            self.log_action(
+                "tasks_killed",
+                job_id=job_id,
+                details=f"killed={killed_count} reason={error}",
+            )
 
     # --- Worker Management ---
 
