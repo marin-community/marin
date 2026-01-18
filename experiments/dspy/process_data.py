@@ -100,7 +100,6 @@ def format_data_for_finetuning(
     return [*input_chat, {"role": "assistant", "content": output_chat}]
 
 
-
 def collect_traces_for_module(
     module: dspy.Module, examples: list[dspy.Example], num_traces: int, metric: Callable
 ) -> list[list[dict[str, str]]]:
