@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from marin.resources import CpuOnlyConfig, GpuConfig, ResourceConfig, TpuPodConfig
+
 from .executor import (
     THIS_OUTPUT_PATH,
     Executor,

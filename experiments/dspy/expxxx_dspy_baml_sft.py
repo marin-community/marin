@@ -39,9 +39,8 @@ from levanter.data.text import ChatLmDatasetFormat
 from experiments.defaults import default_sft, default_tokenize
 from experiments.llama import llama3_instruct_tokenizer, llama_8b
 from experiments.simple_sft_config import SimpleSFTConfig
-from marin.execution.executor import executor_main
+from marin.execution import TpuPodConfig, executor_main
 from marin.processing.tokenize.data_configs import lm_data_config
-from marin import TpuPodConfig
 
 # Default GCS path for trace data - override via command line or modify this variable
 DEFAULT_CHAT_TRAIN_URLS = "gs://marin-us-central2/scratch/dspy-format-adaptation/traces/*.jsonl.gz"
