@@ -88,7 +88,7 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
     target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
     # Use 256 MB chunk size for large files
     chunk_size = 256 * 1024 * 1024
-    max_retries = 10
+    max_retries = 100
 
     # Retry when there is an error, such as hf rate limit
     for attempt in range(max_retries):
@@ -159,7 +159,7 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    Backend.execute(pipeline)
+    Backend.execute(pipeline, max_parallelism=16)
 
     # Write Provenance JSON
     write_provenance_json(

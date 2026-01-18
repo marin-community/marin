@@ -54,10 +54,12 @@ class BackendConfig:
 
     Attributes:
         max_parallelism: Maximum number of concurrent tasks
+        max_retries_preemption: Retries per shard when Ray tasks are preempted
         dry_run: If True, show optimization plan without executing
     """
 
     max_parallelism: int = 1024
+    max_retries_preemption: int = 3
     dry_run: bool = False
 
 
@@ -380,6 +382,7 @@ class Backend:
 
         active_gens: list[tuple[Any, StageContext]] = []
         queued = list(contexts)
+        retries_left = {ctx.shard_idx: self.config.max_retries_preemption for ctx in contexts}
 
         # Start initial batch
         while len(active_gens) < self.config.max_parallelism and queued:
@@ -404,9 +407,63 @@ class Backend:
                             if queued:
                                 next_ctx = queued.pop(0)
                                 active_gens.append((self.context.run(run_stage, next_ctx, operations), next_ctx))
+                        except Exception as exc:
+                            if self._should_retry_preemption(exc, ctx, retries_left):
+                                active_gens.remove((g, ctx))
+                                results_by_shard.pop(ctx.shard_idx, None)
+                                active_gens.append((self.context.run(run_stage, ctx, operations), ctx))
+                            else:
+                                raise
                         break
 
         return results_by_shard
+
+    def _should_retry_preemption(self, exc: Exception, ctx: StageContext, retries_left: dict[int, int]) -> bool:
+        if retries_left.get(ctx.shard_idx, 0) <= 0:
+            return False
+
+        from fray.job import RayContext
+
+        if not isinstance(self.context, RayContext):
+            return False
+
+        if not self._is_ray_preemption_error(exc):
+            return False
+
+        retries_left[ctx.shard_idx] -= 1
+        logger.warning(
+            "Ray task preempted for shard %s; retrying (%d retries left)",
+            ctx.shard_idx,
+            retries_left[ctx.shard_idx],
+            exc_info=exc,
+        )
+        return True
+
+    def _is_ray_preemption_error(self, exc: Exception) -> bool:
+        """Check if a Ray exception indicates worker/node preemption or failure."""
+        from ray.exceptions import (
+            ActorDiedError,
+            ActorUnavailableError,
+            NodeDiedError,
+            OwnerDiedError,
+            RayError,
+            RayTaskError,
+            WorkerCrashedError,
+        )
+
+        if not isinstance(exc, RayError):
+            return False
+
+        # These errors indicate node/worker failures, which we treat as preemption
+        if isinstance(exc, (NodeDiedError, OwnerDiedError, ActorUnavailableError, ActorDiedError, WorkerCrashedError)):
+            return True
+
+        # Timeout errors within RayTaskError often indicate preemption
+        if isinstance(exc, RayTaskError):
+            if isinstance(exc.cause, TimeoutError) or "timed out" in str(exc):
+                return True
+
+        return False
 
     def _execute_shard_parallel(
         self,
