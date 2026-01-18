@@ -15,11 +15,6 @@
 import dspy
 import requests
 
-from openai import AsyncOpenAI
-try:
-    from langprobe import EvaluateBench
-except ImportError:
-    raise ImportError("langprobe is not installed. Please install it to use DspyEvaluator.")
 
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 
@@ -48,7 +43,14 @@ class DspyEvaluator(Evaluator):
         self.endpoint = self._validate_endpoint()
         self.client = AsyncOpenAI(base_url=self.endpoint, api_key="dspy")
         # IMPORTANT: pass keyword arguments correctly
-        self.langprobe = EvaluateBench(**kwargs)
+        self.langprobe = self._make_langprobe(**kwargs)
+
+    def _make_langprobe(self, **kwargs):
+        try:
+            from langprobe import EvaluateBench
+            return EvaluateBench(**kwargs)
+        except ImportError:
+            raise ImportError("langprobe is not installed. Please install it to use DspyEvaluator.")
 
     def _validate_endpoint(self) -> str:
         response = requests.get(self.endpoint + "/health")
