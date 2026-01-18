@@ -60,6 +60,8 @@ class DspyEvaluator(Evaluator):
         model: dspy.Module,
         evals: list[dspy.Example],
         output_path: str,
+        max_eval_instances: int | None = None,
+        wandb_tags: list[str] | None = None,
         optimizer: dspy.Teleprompter = None,
         **kwargs,
     ) -> None:
