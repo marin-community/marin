@@ -1,0 +1,120 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import subprocess
+import sys
+import time
+
+import click
+import requests
+from click import command, option
+
+
+def is_package_installed(package_name: str) -> bool:
+    """Check if a package is installed."""
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "show", package_name],
+            check=True,
+            capture_output=True,
+        )
+
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def ensure_vllm_installed(device_type: str) -> None:
+    """Ensure the correct vLLM package is installed for the given device."""
+
+    if device_type == "tpu":
+        required_package = "vllm-tpu"
+        other_packages = ["vllm", "vllm-cpu"]
+
+    elif device_type == "cpu":
+        # On CPU we rely on the vllm-cpu wheel, which exposes the same
+        # `vllm` Python package and `vllm` CLI entrypoint.
+        required_package = "vllm-cpu"
+        other_packages = ["vllm", "vllm-tpu"]
+
+    else:  # gpu
+        required_package = "vllm"
+        other_packages = ["vllm-tpu", "vllm-cpu"]
+
+    # Correct package already installed
+    if is_package_installed(required_package):
+        print(f"{required_package} is already installed")
+        return
+
+    # Remove incompatible variants, if present
+    for pkg in other_packages:
+        if is_package_installed(pkg):
+            print(f"Uninstalling {pkg}...")
+            subprocess.run(
+                [sys.executable, "-m", "pip", "uninstall", "-y", pkg],
+                check=True,
+            )
+
+    # Install the required backend
+    print(f"Installing {required_package}...")
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", required_package],
+        check=True,
+    )
+    print(f"{required_package} installed successfully")
+
+
+def start_vllm_server(model_path: str, port: int, device_type: str) -> None:
+    """Start a vLLM server as a background process."""
+    ensure_vllm_installed(device_type)
+    command_str = f"vllm serve {model_path} --trust-remote-code --port {port}"
+    print(f"Using {device_type.upper()}, starting vLLM server: {command_str}")
+
+    process = subprocess.Popen(
+        command_str,
+        shell=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    server_url = f"http://127.0.0.1:{port}/v1"
+
+    # Wait for server to be ready
+    while True:
+        try:
+            response = requests.get(f"{server_url}/models", timeout=5)
+            if response.status_code == 200:
+                print(f"vLLM server ready at {server_url} (PID: {process.pid})")
+                break
+        except (requests.ConnectionError, requests.Timeout):
+            time.sleep(2)
+
+
+@command(
+    "host-model",
+    help="Host a model on a local inference server",
+)
+@option("--model-path", type=str, help="Path to the model to host", required=True)
+@option("--port", type=int, help="Port to host the model on", default=8000)
+@option(
+    "--device-type",
+    type=click.Choice(["cpu", "gpu", "tpu"]),
+    help="Type of device to host the model on",
+    default="cpu",
+    show_default=True,
+)
+def start_inference_server(model_path: str, port: int, device_type: str) -> None:
+    """
+    Start a vLLM inference server.
+    """
+    start_vllm_server(model_path, port=port, device_type=device_type)
