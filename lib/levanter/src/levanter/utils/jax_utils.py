@@ -19,7 +19,7 @@ from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceAxis, ResourceMapping
 from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
-from jax.experimental.multihost_utils import host_local_array_to_global_array
+from jax.experimental.multihost_utils import host_local_array_to_global_array, process_allgather
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
 
@@ -520,28 +520,21 @@ def broadcast_one_to_all(in_tree: Any, is_source: bool | None = None) -> Any:
         return jax.tree.map(np.asarray, in_tree)
 
     if is_source is None:
-        is_source = jax.process_index() == 0
+        source_process = 0
+    else:
+        flags = process_allgather(np.asarray(1 if is_source else 0, dtype=np.int32))
+        flags_sum = int(np.sum(flags))
+        if flags_sum != 1:
+            raise ValueError(f"broadcast_one_to_all expected exactly one source process, got sum={flags_sum}.")
+        source_process = int(np.argmax(flags))
 
-    active_mesh = haliax.partitioning._get_mesh()
-    devices: np.ndarray = np.asarray(active_mesh.devices).reshape(jax.process_count(), jax.local_device_count())
-    global_mesh = jax.sharding.Mesh(devices, ("processes", "local_devices"))
-    pspec = PartitionSpec("processes")
+    gathered = process_allgather(jax.tree.map(np.asarray, in_tree))
 
-    def pre_jit(x):
-        if is_source:
-            inp = x
-        else:
-            inp = np.zeros_like(x)
-        inp = np.expand_dims(inp, axis=0)
-        return host_local_array_to_global_array(inp, global_mesh, pspec)
+    def _select_source(x: np.ndarray) -> np.ndarray:
+        # `process_allgather` stacks over a new leading axis (processes).
+        return np.asarray(x[source_process])
 
-    def post_jit(x):
-        return jax.device_get(x.addressable_data(0))
-
-    with haliax.partitioning.set_mesh(global_mesh):
-        in_tree = jax.tree.map(pre_jit, in_tree)
-        out_tree = jax.jit(_psum, out_shardings=jax.sharding.NamedSharding(global_mesh, PartitionSpec()))(in_tree)
-        return jax.tree.map(post_jit, out_tree)
+    return jax.tree.map(_select_source, gathered)
 
 
 def assert_equal(in_tree, fail_message: str = ""):
