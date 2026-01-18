@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from levanter.schedule import IntSchedule
 
-from marin.execution import ResourceConfig
+from fray.cluster import ResourceConfig
 
 
 @dataclass(frozen=True)

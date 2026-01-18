@@ -39,7 +39,10 @@ from levanter.data.text import ChatLmDatasetFormat
 from experiments.defaults import default_sft, default_tokenize
 from experiments.llama import llama3_instruct_tokenizer, llama_8b
 from experiments.simple_sft_config import SimpleSFTConfig
-from marin.execution import TpuPodConfig, executor_main
+# format-adaptation-sft"
+
+from fray.cluster import ResourceConfig, TpuConfig
+from marin.execution import executor_main
 from marin.processing.tokenize.data_configs import lm_data_config
 
 # Default GCS path for trace data - override via command line or modify this variable
@@ -66,7 +69,7 @@ tokenized_data = lm_data_config(tokenize_step, permutation_type="linear")
 
 # SFT configuration
 sft_config = SimpleSFTConfig(
-    resources=TpuPodConfig(tpu_type="v5p-8"),
+    resources=ResourceConfig(device=TpuConfig(type="v5p-8", count=1)),
     train_batch_size=64,
     num_train_steps=5000,
     learning_rate=2e-5,
