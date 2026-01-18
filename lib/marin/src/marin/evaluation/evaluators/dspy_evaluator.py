@@ -187,10 +187,9 @@ class DspyEvaluator(Evaluator):
 
     def evaluate(
         self,
-        modules: dspy.Module,
+        model: dspy.Module,  # <-- IMPORTANT: name must match parent signature ("model")
         dataset: list[dspy.Example],
         optimizer: Any,
-
         **kwargs,
     ) -> Any:
         if self.langprobe is None:
@@ -200,7 +199,7 @@ class DspyEvaluator(Evaluator):
                 "or vendor it into the workspace."
             )
 
-        result = self.langprobe.evaluate(modules, dataset, optimizer, **kwargs)
+        result = self.langprobe.evaluate(model, dataset, optimizer, **kwargs)
 
         texts = self._iter_text_outputs(result)
         fmt_checks = [self._is_format_valid(t) for t in texts] if texts else []
