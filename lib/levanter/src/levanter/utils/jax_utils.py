@@ -400,8 +400,12 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
     """
     # NOTE: Prior implementations attempted to use `jax.make_array_from_callback` with a `NamedSharding` constructed
     # from the active training mesh. On multi-host TPU, that can crash with "not fully addressable" / "not addressable
-    # sharding" errors. Instead, we broadcast using a temporary mesh over ("processes", "local_devices") and a
-    # reduction across the sharded "processes" axis, then reshard to `out_axis_specs`.
+    # sharding" errors.
+    #
+    # We broadcast using a temporary mesh over ("processes", "local_devices") and a reduction across the sharded
+    # "processes" axis. Some callers (notably eval-harness control-plane messages) use `PartitionSpec()` (replicated)
+    # outputs; in that case we intentionally return host-local arrays to avoid device-order mismatches between the
+    # temporary mesh and the active training mesh.
 
     def _maybe_constrain(arr: jax.Array, spec: Any) -> jax.Array:
         # `jax.jit` (and some multihost contexts) can error if we try to apply a sharding constraint with a sharding
@@ -415,6 +419,21 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
             return jax.lax.with_sharding_constraint(arr, NamedSharding(resolved_mesh, spec))
         return arr
 
+    def _replicated_out_specs(specs: Any) -> bool:
+        if specs is None:
+            return True
+        if isinstance(specs, PartitionSpec):
+            return specs == PartitionSpec()
+        leaves = jax.tree_util.tree_leaves(specs, is_leaf=lambda s: isinstance(s, PartitionSpec))
+        if not leaves:
+            return False
+        for leaf in leaves:
+            if leaf is None:
+                continue
+            if not isinstance(leaf, PartitionSpec) or leaf != PartitionSpec():
+                return False
+        return True
+
     if jax.process_count() == 1:
 
         def in_jit_single(x_leaf: Any, spec: Any) -> Any:
@@ -424,7 +443,8 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
 
         return eqx.filter_jit(jax.tree.map)(in_jit_single, x, out_axis_specs, is_leaf=is_named_array)
 
-    devices: np.ndarray = np.array(jax.devices()).reshape(jax.process_count(), jax.local_device_count())
+    active_mesh = haliax.partitioning._get_mesh()
+    devices: np.ndarray = np.asarray(active_mesh.devices).reshape(jax.process_count(), jax.local_device_count())
     global_mesh = Mesh(devices, ("processes", "local_devices"))
     in_pspec = PartitionSpec("processes")
 
@@ -436,6 +456,20 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
             host = np.zeros(arr.shape, dtype=arr.dtype)
         host = np.expand_dims(host, axis=0)
         return host_local_array_to_global_array(host, global_mesh, in_pspec)
+
+    if _replicated_out_specs(out_axis_specs):
+        # Broadcast to all hosts, then materialize host-local arrays. This avoids JAX errors when the active training
+        # mesh uses a device order that differs from `jax.devices()` order (common on multi-host TPU).
+        x_global = jax.tree.map(pre_jit, x, is_leaf=is_named_array)
+        with haliax.partitioning.set_mesh(global_mesh):
+            reduced = jax.jit(_psum, out_shardings=NamedSharding(global_mesh, PartitionSpec()))(x_global)
+
+        def post_jit(x_leaf: Any, x_leaf_orig: Any) -> Any:
+            host_arr = jax.device_get(x_leaf.addressable_data(0))
+            arr = jnp.asarray(host_arr)
+            return hax.named(arr, x_leaf_orig.axis_names) if isinstance(x_leaf_orig, hax.NamedArray) else arr
+
+        return jax.tree.map(post_jit, reduced, x, is_leaf=is_named_array)
 
     def in_jit(x_global: jax.Array, spec: Any, x_leaf: Any) -> Any:
         arr = jnp.sum(x_global, axis=0)
@@ -488,7 +522,8 @@ def broadcast_one_to_all(in_tree: Any, is_source: bool | None = None) -> Any:
     if is_source is None:
         is_source = jax.process_index() == 0
 
-    devices: np.ndarray = np.array(jax.devices()).reshape(jax.process_count(), jax.local_device_count())
+    active_mesh = haliax.partitioning._get_mesh()
+    devices: np.ndarray = np.asarray(active_mesh.devices).reshape(jax.process_count(), jax.local_device_count())
     global_mesh = jax.sharding.Mesh(devices, ("processes", "local_devices"))
     pspec = PartitionSpec("processes")
 

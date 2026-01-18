@@ -37,8 +37,6 @@ import jax.random as jrandom
 import jmp
 import numpy as np
 from haliax import NamedArray
-from jax.sharding import PartitionSpec
-
 import levanter.tracker
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
 from levanter.data.packing import (
@@ -80,7 +78,7 @@ from levanter.data import batched
 from levanter.data.loader import stack_batches
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
+from levanter.utils.jax_utils import broadcast_one_to_all, broadcast_shard, parameter_count, use_cpu_device
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
 
@@ -261,8 +259,9 @@ class _LmEvalHarnessWorker:
                 raise ValueError(f"Unknown message type: {message}")
 
     def _receive_message(self):
-        stop_message = jnp.array(_Message.STOP)
-        message = broadcast_shard(stop_message, PartitionSpec())
+        # Use a host-level broadcast for control-plane messages. These values are consumed on host
+        # (via `.item()`), so we don't need to shard onto the training mesh.
+        message = broadcast_one_to_all(np.array(_Message.STOP))
         return message.item()
 
     def _receive_payload(self):
@@ -274,8 +273,7 @@ class _LmEvalHarnessWorker:
 
     def _send_message(self, message):
         assert jax.process_index() == 0
-        out = broadcast_shard(jnp.array(message), PartitionSpec())
-        return out
+        return broadcast_one_to_all(np.array(message))
 
     def _send_payload(self, payload):
         assert jax.process_index() == 0
