@@ -41,7 +41,7 @@ from experiments.llama import llama3_instruct_tokenizer, llama_8b
 from experiments.simple_sft_config import SimpleSFTConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_data_config
-from marin.resources import TpuPodConfig
+from marin import TpuPodConfig
 
 # Default GCS path for trace data - override via command line or modify this variable
 DEFAULT_CHAT_TRAIN_URLS = "gs://marin-us-central2/scratch/dspy-format-adaptation/traces/*.jsonl.gz"
