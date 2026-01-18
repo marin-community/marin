@@ -89,14 +89,14 @@ class FieldExtraction(dspy.Module):
         p_pred = self.extract_patient(note=note)
         pr_pred = self.extract_practitioner(note=note)
         i_pred = self.extract_immunization(note=note)
-        
+
         # Helper to extract model dump safely
         patient_data = p_pred.patient.model_dump() if p_pred.patient else {}
         patient_data['record_id'] = record_id
-        
+
         practitioner_data = [item.model_dump() for item in pr_pred.practitioner] if pr_pred.practitioner else []
         immunization_data = [item.model_dump() for item in i_pred.immunization] if i_pred.immunization else []
-        
+
         result = {
             "patient": patient_data,
             "practitioner": practitioner_data,

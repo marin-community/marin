@@ -6,8 +6,8 @@ class ClaimVerificationLabel(Enum):
     REFUTES = "Refutes"
 
 class ClaimVerificationSignature(dspy.Signature):
-    """You are a helpful assistant that verifies claims based on the evidence provided. 
-    
+    """You are a helpful assistant that verifies claims based on the evidence provided.
+
     Rules:
     - Run the claim through a series of hops, each hop retrieving a list of evidence passages.
     - The evidence passages are concatenated and used to answer the claim.
@@ -29,7 +29,7 @@ class ClaimVerification(dspy.Module):
 
     def forward(self, claim, evidence: list[str]):
         evidence = []
-        
+
         for hop in range(self.max_hops):
             query = self.generate_query[hop](evidence=evidence, claim=claim).search_query
             passages = self.retrieve(query).passages

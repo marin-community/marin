@@ -10,7 +10,7 @@ class SimplifiedBaleen(dspy.Module):
 
     def forward(self, question):
         context = []
-        
+
         for hop in range(self.max_hops):
             query = self.generate_query[hop](context=context, question=question).search_query
             passages = self.retrieve(query).passages

@@ -27,7 +27,7 @@ def load_hotpotqa():
     # For simplicity using dspy.datasets if available or loading from HF
     dl = DataLoader()
     dataset = dl.from_huggingface(
-        "hotpotqa/hotpot_qa", 
+        "hotpotqa/hotpot_qa",
             "fullwiki",
             split="train",
             input_keys=("question",),
@@ -50,7 +50,7 @@ def load_hover():
 def download_fhir_data(output_path="data/note.json"):
     if os.path.exists(output_path):
         return
-    
+
     url = "https://raw.githubusercontent.com/prrao87/structured-outputs/main/data/note.json"
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     os.system(f"curl -k -L {url} -o {output_path}")
@@ -59,7 +59,7 @@ def load_fhir(file_path="data/note.json"):
     download_fhir_data(file_path)
     with open(file_path, 'r') as f:
         data = json.load(f)
-    
+
     examples = []
     for item in data:
         # item keys: record_id, note
@@ -87,7 +87,7 @@ def format_data_for_finetuning(trace: tuple[Any, dict[str, Any], Prediction], ad
 
 def collect_traces_for_module(module: dspy.Module, examples: List[dspy.Example], num_traces: int, metric: Callable) -> List[List[dict[str, str]]]:
     print(f"Collecting traces for {module.__class__.__name__}...")
-    
+
     # Check if we have enough examples
     # Randomly sample num_traces examples (or all if insufficient)
     if len(examples) >= num_traces:
@@ -126,13 +126,13 @@ def filter_and_sample(traces: List[Dict[str, Any]], final_count: int = 3000, max
             # We use a custom encoder or str() for non-serializable objects
             s = json.dumps(trace, default=lambda x: str(x))
             token_count = len(tokenizer.encode(s))
-            
+
             if token_count <= max_tokens:
                 filtered.append(trace)
         except Exception as e:
             print(f"Error processing trace: {e}")
             continue
-        
+
     if len(filtered) > final_count:
         return random.sample(filtered, final_count)
     return filtered
@@ -148,10 +148,10 @@ if __name__ == "__main__":
     # lm = dspy.LM(model="openai/gpt-4o-mini", max_tokens=1000)
     # colbertv2_wiki17_abstracts = dspy.ColBERTv2(url='http://20.102.90.50:2017/wiki17_abstracts')
     # dspy.settings.configure(lm=lm, rm=colbertv2_wiki17_abstracts)
-    
+
     # For this script to run in a CI/Sandbox without keys, we check environment variables
     # or assume the user will run this with proper setup.
-    
+
     start_inference_server(model_path="meta-llama/Meta-Llama-3.1-8B-Instruct", port=8000, device_type="tpu")
     time.sleep(10)
     print("Configuring DSPy...")
@@ -164,30 +164,30 @@ if __name__ == "__main__":
     hotpot_data = load_hotpotqa()
     hover_data = load_hover()
     fhir_data = load_fhir()
-    
+
     # 2. Modules
     baleen = SimplifiedBaleen()
     claim_verifier = ClaimVerification()
     fhir_module = FieldExtraction()
-    
+
     # 3. Collect Traces
     # Total target 4000-6000
     # Distribute across datasets
-    
+
     all_traces = []
-    
+
     # HotpotQA
     if hotpot_data:
         print(f"Collecting HotpotQA traces ({len(hotpot_data)} available)...")
         traces = collect_traces_for_module(baleen, hotpot_data, num_traces=1, metric=dspy.evaluate.answer_exact_match)
         all_traces.extend([{"dataset": f"hotpotqa_{i}", "chat": t} for i, t in enumerate(traces)])
-        
+
     # HoVer
     if hover_data:
         print(f"Collecting HoVer traces ({len(hover_data)} available)...")
         traces = collect_traces_for_module(claim_verifier, hover_data, num_traces=1, metric=claim_verification_metric)
         all_traces.extend([{"dataset": f"hover_{i}", "chat": t} for i, t in enumerate(traces)])
-        
+
     # FHIR
     if fhir_data:
         print(f"Collecting FHIR traces ({len(fhir_data)} available)...")
@@ -197,7 +197,7 @@ if __name__ == "__main__":
     # 4. Filter and Save
     print(f"Total traces collected: {len(all_traces)}")
     final_dataset = filter_and_sample(all_traces, final_count=3000, max_tokens=4096)
-    
+
     output_file = "experiments/dspy/format_adaptation_dataset.json"
     with open(output_file, "w") as f:
         # Serialize predictions if needed (they are objects)
@@ -241,7 +241,7 @@ if __name__ == "__main__":
                 else:
                      clean_item[k] = v
             serializable.append(clean_item)
-            
+
         json.dump(serializable, f, indent=2)
-        
+
     print(f"Saved {len(final_dataset)} trajectories to {output_file}")
