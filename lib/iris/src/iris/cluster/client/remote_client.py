@@ -223,14 +223,17 @@ class RemoteClusterClient:
         if not status.worker_address:
             raise ValueError(f"Job {job_id} has no worker assigned (state: {cluster_pb2.JobState.Name(status.state)})")
 
+        # For single-task jobs, the task_id is "{job_id}/task-0"
+        task_id = f"{job_id}/task-0"
+
         worker_client = self._get_worker_client(status.worker_address)
         filter_proto = cluster_pb2.Worker.FetchLogsFilter(
             start_ms=start_ms,
             max_lines=max_lines,
         )
-        request = cluster_pb2.Worker.FetchLogsRequest(
-            job_id=job_id,
+        request = cluster_pb2.Worker.FetchTaskLogsRequest(
+            task_id=task_id,
             filter=filter_proto,
         )
-        response = worker_client.fetch_logs(request)
+        response = worker_client.fetch_task_logs(request)
         return list(response.logs)

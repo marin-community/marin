@@ -14,8 +14,9 @@
 
 """HTTP dashboard with Connect RPC, web UI at /, and REST API at /api/*."""
 
-# TODO: observability, gregate stats over jobs , log to stable storage
+# TODO: observability, aggregate stats over jobs, log to stable storage
 
+import uvicorn
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
@@ -277,12 +278,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <td class="${healthClass}">${w.healthy ? 'Yes' : 'No'}</td>
             <td>${cpu}</td>
             <td>${memory}</td>
-            <td>${w.running_jobs}</td>
+            <td>${w.running_tasks}</td>
             <td>${lastHb}</td>
           </tr>`;
         }).join('');
         const workersHeader = '<tr><th>ID</th><th>Healthy</th><th>CPU</th><th>Memory</th>' +
-          '<th>Running Jobs</th><th>Last Heartbeat</th></tr>';
+          '<th>Running Tasks</th><th>Last Heartbeat</th></tr>';
         document.getElementById('workers-table').innerHTML = workersHeader + workersHtml;
 
         // Update jobs table
@@ -691,7 +692,7 @@ class ControllerDashboard:
         self._host = host
         self._port = port
         self._app = self._create_app()
-        self._server = None
+        self._server: uvicorn.Server | None = None
 
     @property
     def port(self) -> int:
@@ -745,7 +746,7 @@ class ControllerDashboard:
         # Count endpoints for running jobs
         endpoints_count = sum(
             1
-            for ep in self._state._endpoints.values()
+            for ep in self._state.list_all_endpoints()
             if (job := self._state.get_job(ep.job_id)) and job.state == cluster_pb2.JOB_STATE_RUNNING
         )
 
@@ -784,7 +785,7 @@ class ControllerDashboard:
                     "worker_id": str(w.worker_id),
                     "address": w.address,
                     "healthy": w.healthy,
-                    "running_jobs": len(w.running_jobs),
+                    "running_tasks": len(w.running_tasks),
                     "consecutive_failures": w.consecutive_failures,
                     "last_heartbeat_ms": w.last_heartbeat_ms,
                     "resources": {
@@ -860,7 +861,7 @@ class ControllerDashboard:
 
     def _api_endpoints(self, _request: Request) -> JSONResponse:
         endpoints = []
-        for ep in self._state._endpoints.values():
+        for ep in self._state.list_all_endpoints():
             job = self._state.get_job(ep.job_id)
             if job and job.state == cluster_pb2.JOB_STATE_RUNNING:
                 endpoints.append(
@@ -899,13 +900,9 @@ class ControllerDashboard:
         )
 
     def run(self) -> None:
-        import uvicorn
-
         uvicorn.run(self._app, host=self._host, port=self._port)
 
     async def run_async(self) -> None:
-        import uvicorn
-
         config = uvicorn.Config(self._app, host=self._host, port=self._port)
         self._server = uvicorn.Server(config)
         await self._server.serve()

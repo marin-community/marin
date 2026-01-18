@@ -19,12 +19,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from threading import RLock
 
-from iris.cluster.controller.job import Job, TransitionResult
-from iris.cluster.types import JobId, WorkerId
+from iris.cluster.controller.job import Job, expand_job_to_tasks
+from iris.cluster.controller.task import Task, TaskTransitionResult
+from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
-
-# Backwards compatibility alias
-ControllerJob = Job
+from iris.time_utils import now_ms
 
 
 @dataclass
@@ -53,7 +52,7 @@ class ControllerWorker:
         healthy: Whether worker is currently healthy
         consecutive_failures: Number of consecutive heartbeat failures
         last_heartbeat_ms: Timestamp of last successful heartbeat
-        running_jobs: Set of job IDs currently running on this worker
+        running_tasks: Set of task IDs currently running on this worker
     """
 
     worker_id: WorkerId
@@ -65,8 +64,8 @@ class ControllerWorker:
     consecutive_failures: int = 0
     last_heartbeat_ms: int = 0
 
-    # Current assignments
-    running_jobs: set[JobId] = field(default_factory=set)
+    # Currently running tasks
+    running_tasks: set[TaskId] = field(default_factory=set)
 
 
 @dataclass
@@ -112,38 +111,245 @@ class ActionLogEntry:
 
 
 class ControllerState:
-    """Thread-safe controller state managing jobs, workers, endpoints, and the job queue."""
+    """Thread-safe controller state managing jobs, tasks, workers, endpoints, and queues."""
 
     def __init__(self):
         self._lock = RLock()
         self._jobs: dict[JobId, Job] = {}
+        self._tasks: dict[TaskId, Task] = {}
+        self._tasks_by_job: dict[JobId, list[TaskId]] = {}
         self._workers: dict[WorkerId, ControllerWorker] = {}
-        self._queue: deque[JobId] = deque()  # FIFO queue of job IDs
+        self._task_queue: deque[TaskId] = deque()  # FIFO queue of task IDs
         self._gangs: dict[str, set[JobId]] = {}  # gang_id -> job_ids
         self._actions: deque[ActionLogEntry] = deque(maxlen=100)  # Recent actions log
         self._endpoints: dict[str, ControllerEndpoint] = {}  # endpoint_id -> endpoint
-        self._endpoints_by_job: dict[JobId, set[str]] = {}  # job_id -> endpoint_ids
+        self._endpoints_by_task: dict[TaskId, set[str]] = {}  # task_id -> endpoint_ids
 
-    def add_job(self, job: Job) -> None:
+    # --- Job Management ---
+
+    def add_job(self, job: Job, tasks: list[Task] | None = None) -> list[Task]:
+        """Add a job to state, automatically creating tasks from replicas.
+
+        If tasks are not provided, they are automatically created based on
+        the job's resources.replicas field (defaulting to 1). Each task gets
+        a unique ID of the form "{job_id}/task-{index}".
+
+        Args:
+            job: The job to add
+            tasks: Pre-created tasks (optional, primarily for testing)
+
+        Returns:
+            List of tasks associated with this job
+        """
         with self._lock:
             self._jobs[job.job_id] = job
-            self._queue.append(job.job_id)
+            self._tasks_by_job[job.job_id] = []
+
+            if tasks is None:
+                tasks = expand_job_to_tasks(job, now_ms())
+
+            for task in tasks:
+                self._tasks[task.task_id] = task
+                self._tasks_by_job[job.job_id].append(task.task_id)
+                self._task_queue.append(task.task_id)
+
             if job.gang_id:
                 self._gangs.setdefault(job.gang_id, set()).add(job.job_id)
+
+            return tasks
 
     def get_job(self, job_id: JobId) -> Job | None:
         with self._lock:
             return self._jobs.get(job_id)
 
-    def pop_next_pending(self) -> Job | None:
-        """Pop next PENDING job from the queue, skipping jobs that have transitioned to other states."""
+    def list_all_jobs(self) -> list[Job]:
         with self._lock:
-            while self._queue:
-                job_id = self._queue.popleft()
-                job = self._jobs.get(job_id)
-                if job and job.state == cluster_pb2.JOB_STATE_PENDING:
-                    return job
-            return None
+            return list(self._jobs.values())
+
+    def get_gang_jobs(self, gang_id: str) -> list[Job]:
+        with self._lock:
+            job_ids = self._gangs.get(gang_id, set())
+            return [self._jobs[jid] for jid in job_ids if jid in self._jobs]
+
+    def get_children(self, job_id: JobId) -> list[Job]:
+        with self._lock:
+            return [job for job in self._jobs.values() if job.parent_job_id == job_id]
+
+    # --- Task Management ---
+
+    def get_task(self, task_id: TaskId) -> Task | None:
+        with self._lock:
+            return self._tasks.get(task_id)
+
+    def get_job_tasks(self, job_id: JobId) -> list[Task]:
+        """Get all tasks for a job."""
+        with self._lock:
+            task_ids = self._tasks_by_job.get(job_id, [])
+            return [self._tasks[tid] for tid in task_ids if tid in self._tasks]
+
+    def peek_pending_tasks(self) -> list[Task]:
+        """Return all PENDING tasks in queue order without removing them."""
+        with self._lock:
+            pending = []
+            for task_id in self._task_queue:
+                task = self._tasks.get(task_id)
+                if task and task.state == cluster_pb2.TASK_STATE_PENDING:
+                    pending.append(task)
+            return pending
+
+    def assign_task_to_worker(self, worker_id: WorkerId, task_id: TaskId) -> bool:
+        """Assign a task to a worker and remove from queue."""
+        with self._lock:
+            worker = self._workers.get(worker_id)
+            if not worker:
+                return False
+            worker.running_tasks.add(task_id)
+            self._task_queue = deque(tid for tid in self._task_queue if tid != task_id)
+            return True
+
+    def rollback_task_assignment(self, worker_id: WorkerId, task: Task) -> None:
+        """Rollback a failed assignment: unassign from worker and re-queue."""
+        with self._lock:
+            worker = self._workers.get(worker_id)
+            if worker:
+                worker.running_tasks.discard(task.task_id)
+            if task.task_id not in self._task_queue:
+                self._task_queue.append(task.task_id)
+
+    def transition_task(
+        self,
+        task_id: TaskId,
+        new_state: int,
+        now_ms: int,
+        *,
+        is_worker_failure: bool = False,
+        error: str | None = None,
+        exit_code: int | None = None,
+    ) -> tuple[TaskTransitionResult, list[ControllerEndpoint]]:
+        """Transition a task and handle all side effects automatically.
+
+        Side effects based on result:
+        - SHOULD_RETRY: Re-queues task, unassigns from worker
+        - Terminal state: Removes from queue, removes endpoints, unassigns from worker,
+                         updates job state
+        """
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return TaskTransitionResult.COMPLETE, []
+
+            worker_id = task.worker_id
+            result = task.transition(
+                new_state,
+                now_ms,
+                is_worker_failure=is_worker_failure,
+                error=error,
+                exit_code=exit_code,
+            )
+
+            removed_endpoints: list[ControllerEndpoint] = []
+            if result == TaskTransitionResult.SHOULD_RETRY:
+                if task.task_id not in self._task_queue:
+                    self._task_queue.append(task.task_id)
+                if worker_id:
+                    worker = self._workers.get(worker_id)
+                    if worker:
+                        worker.running_tasks.discard(task_id)
+            elif task.is_finished():
+                self._task_queue = deque(tid for tid in self._task_queue if tid != task_id)
+                removed_endpoints = self._remove_endpoints_for_task(task_id)
+                if worker_id:
+                    worker = self._workers.get(worker_id)
+                    if worker:
+                        worker.running_tasks.discard(task_id)
+
+                # Update job state based on task states
+                self._update_job_from_tasks(task.job_id, now_ms)
+
+            return result, removed_endpoints
+
+    def _update_job_from_tasks(self, job_id: JobId, now_ms: int) -> None:
+        """Update job state based on aggregate task states.
+
+        Failure policy: Job fails when task failures exceed max_task_failures.
+        - Only counts tasks that exhausted their per-task retries (TASK_STATE_FAILED)
+        - Preemptions (TASK_STATE_WORKER_FAILED) do NOT count toward max_task_failures
+        - max_task_failures=0 means fail on first task failure (default)
+        """
+        job = self._jobs.get(job_id)
+        if not job:
+            return
+
+        tasks = self.get_job_tasks(job_id)
+        if not tasks:
+            return
+
+        # Count task states
+        succeeded = sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_SUCCEEDED)
+        # Only count actual failures (not preemptions) toward max_task_failures
+        failed_permanently = sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_FAILED)
+        killed = sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_KILLED)
+        unschedulable = sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_UNSCHEDULABLE)
+        running = sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_RUNNING)
+
+        max_task_failures = job.request.max_task_failures  # Default 0
+
+        # Job is RUNNING if any task is running
+        if running > 0 and job.state != cluster_pb2.JOB_STATE_RUNNING:
+            job.state = cluster_pb2.JOB_STATE_RUNNING
+            if job.started_at_ms is None:
+                job.started_at_ms = now_ms
+
+        # Job succeeds when all tasks succeed
+        if succeeded == len(tasks):
+            job.state = cluster_pb2.JOB_STATE_SUCCEEDED
+            job.finished_at_ms = now_ms
+        # Job fails when task failures exceed threshold
+        elif failed_permanently > max_task_failures:
+            job.state = cluster_pb2.JOB_STATE_FAILED
+            job.finished_at_ms = now_ms
+            for t in tasks:
+                if t.error and t.state == cluster_pb2.TASK_STATE_FAILED:
+                    job.error = t.error
+                    break
+            # Kill remaining running/pending tasks (failure domain)
+            self._kill_remaining_tasks(job_id, now_ms, "Job exceeded max_task_failures")
+        # Job unschedulable if any task is unschedulable
+        elif unschedulable > 0:
+            job.state = cluster_pb2.JOB_STATE_UNSCHEDULABLE
+            job.finished_at_ms = now_ms
+            for t in tasks:
+                if t.error and t.state == cluster_pb2.TASK_STATE_UNSCHEDULABLE:
+                    job.error = t.error
+                    break
+        # Job killed if any task was killed
+        elif killed > 0:
+            job.state = cluster_pb2.JOB_STATE_KILLED
+            job.finished_at_ms = now_ms
+            for t in tasks:
+                if t.error:
+                    job.error = t.error
+                    break
+
+    def _kill_remaining_tasks(self, job_id: JobId, now_ms: int, error: str) -> None:
+        """Kill all non-finished tasks in a job (failure domain)."""
+        for task_id in self._tasks_by_job.get(job_id, []):
+            task = self._tasks.get(task_id)
+            if not task or task.is_finished():
+                continue
+
+            task.state = cluster_pb2.TASK_STATE_KILLED
+            task.finished_at_ms = now_ms
+            task.error = error
+
+            self._task_queue = deque(tid for tid in self._task_queue if tid != task_id)
+            if task.worker_id:
+                worker = self._workers.get(task.worker_id)
+                if worker:
+                    worker.running_tasks.discard(task_id)
+            self._remove_endpoints_for_task(task_id)
+
+    # --- Worker Management ---
 
     def add_worker(self, worker: ControllerWorker) -> None:
         with self._lock:
@@ -161,22 +367,46 @@ class ControllerState:
         with self._lock:
             return [w for w in self._workers.values() if w.healthy]
 
-    def list_all_jobs(self) -> list[Job]:
-        with self._lock:
-            return list(self._jobs.values())
-
     def list_all_workers(self) -> list[ControllerWorker]:
         with self._lock:
             return list(self._workers.values())
 
-    def get_gang_jobs(self, gang_id: str) -> list[Job]:
+    def mark_worker_unhealthy(self, worker_id: WorkerId) -> ControllerWorker | None:
         with self._lock:
-            job_ids = self._gangs.get(gang_id, set())
-            return [self._jobs[jid] for jid in job_ids if jid in self._jobs]
+            worker = self._workers.get(worker_id)
+            if worker:
+                worker.healthy = False
+            return worker
 
-    def get_children(self, job_id: JobId) -> list[Job]:
+    def update_worker_heartbeat(
+        self,
+        worker_id: WorkerId,
+        now_ms: int,
+        metadata: cluster_pb2.WorkerMetadata | None = None,
+    ) -> bool:
         with self._lock:
-            return [job for job in self._jobs.values() if job.parent_job_id == job_id]
+            worker = self._workers.get(worker_id)
+            if not worker:
+                return False
+            worker.last_heartbeat_ms = now_ms
+            worker.healthy = True
+            if metadata is not None:
+                worker.metadata = metadata
+            return True
+
+    def load_workers_from_config(self, configs: list[WorkerConfig]) -> None:
+        """Load workers from static configuration."""
+        now_ms = int(time.time() * 1000)
+        for cfg in configs:
+            worker = ControllerWorker(
+                worker_id=WorkerId(cfg.worker_id),
+                address=cfg.address,
+                metadata=cfg.metadata,
+                last_heartbeat_ms=now_ms,
+            )
+            self.add_worker(worker)
+
+    # --- Action Log ---
 
     def log_action(
         self,
@@ -200,33 +430,22 @@ class ControllerState:
             actions = list(self._actions)
             return actions[-limit:] if limit < len(actions) else actions
 
-    def peek_pending_jobs(self) -> list[Job]:
-        """Return all PENDING jobs in queue order without removing them."""
-        with self._lock:
-            pending = []
-            for job_id in self._queue:
-                job = self._jobs.get(job_id)
-                if job and job.state == cluster_pb2.JOB_STATE_PENDING:
-                    pending.append(job)
-            return pending
+    # --- Endpoint Management ---
 
-    def _add_to_queue(self, job_id: JobId) -> None:
-        """Internal: add job to queue if not already present. Caller must hold lock."""
-        if job_id not in self._queue:
-            self._queue.append(job_id)
-
-    def add_endpoint(self, endpoint: ControllerEndpoint) -> None:
+    def add_endpoint(self, endpoint: ControllerEndpoint, task_id: TaskId | None = None) -> None:
+        """Add an endpoint, optionally associating it with a task."""
         with self._lock:
             self._endpoints[endpoint.endpoint_id] = endpoint
-            self._endpoints_by_job.setdefault(endpoint.job_id, set()).add(endpoint.endpoint_id)
+            if task_id:
+                self._endpoints_by_task.setdefault(task_id, set()).add(endpoint.endpoint_id)
 
     def remove_endpoint(self, endpoint_id: str) -> ControllerEndpoint | None:
         with self._lock:
             endpoint = self._endpoints.pop(endpoint_id, None)
             if endpoint:
-                job_endpoints = self._endpoints_by_job.get(endpoint.job_id)
-                if job_endpoints:
-                    job_endpoints.discard(endpoint_id)
+                # Remove from task tracking
+                for task_endpoints in self._endpoints_by_task.values():
+                    task_endpoints.discard(endpoint_id)
             return endpoint
 
     def lookup_endpoints(self, name: str) -> list[ControllerEndpoint]:
@@ -254,129 +473,26 @@ class ControllerState:
                     results.append(ep)
             return results
 
-    def remove_endpoints_for_job(self, job_id: JobId) -> list[ControllerEndpoint]:
+    def list_all_endpoints(self) -> list[ControllerEndpoint]:
+        """Return all registered endpoints."""
         with self._lock:
-            return self._remove_endpoints_for_job(job_id)
+            return list(self._endpoints.values())
 
-    def _remove_endpoints_for_job(self, job_id: JobId) -> list[ControllerEndpoint]:
-        endpoint_ids = list(self._endpoints_by_job.get(job_id, []))
+    def _remove_endpoints_for_task(self, task_id: TaskId) -> list[ControllerEndpoint]:
+        """Remove all endpoints associated with a task."""
+        endpoint_ids = list(self._endpoints_by_task.get(task_id, []))
         removed = []
         for eid in endpoint_ids:
             endpoint = self._endpoints.pop(eid, None)
             if endpoint:
-                job_endpoints = self._endpoints_by_job.get(endpoint.job_id)
-                if job_endpoints:
-                    job_endpoints.discard(eid)
                 removed.append(endpoint)
-        self._endpoints_by_job.pop(job_id, None)
+        self._endpoints_by_task.pop(task_id, None)
         return removed
 
-    # --- Worker Mutation Methods ---
-
-    def assign_job_to_worker(self, worker_id: WorkerId, job_id: JobId) -> bool:
-        with self._lock:
-            worker = self._workers.get(worker_id)
-            if not worker:
-                return False
-            worker.running_jobs.add(job_id)
-            self._queue = deque(jid for jid in self._queue if jid != job_id)
-            return True
-
-    def unassign_job_from_worker(self, worker_id: WorkerId, job_id: JobId) -> bool:
-        with self._lock:
-            worker = self._workers.get(worker_id)
-            if not worker:
-                return False
-            worker.running_jobs.discard(job_id)
-            return True
-
-    def rollback_assignment(self, worker_id: WorkerId, job: Job) -> None:
-        """Rollback a failed assignment: unassign from worker and re-queue."""
-        with self._lock:
-            worker = self._workers.get(worker_id)
-            if worker:
-                worker.running_jobs.discard(job.job_id)
-            self._add_to_queue(job.job_id)
-
-    def mark_worker_unhealthy(self, worker_id: WorkerId) -> ControllerWorker | None:
-        with self._lock:
-            worker = self._workers.get(worker_id)
-            if worker:
-                worker.healthy = False
-            return worker
-
-    def update_worker_heartbeat(
-        self,
-        worker_id: WorkerId,
-        now_ms: int,
-        metadata: cluster_pb2.WorkerMetadata | None = None,
-    ) -> bool:
-        with self._lock:
-            worker = self._workers.get(worker_id)
-            if not worker:
-                return False
-            worker.last_heartbeat_ms = now_ms
-            worker.healthy = True
-            if metadata is not None:
-                worker.metadata = metadata
-            return True
-
-    # --- Job Finalization ---
-
-    def transition_job(
-        self,
-        job_id: JobId,
-        new_state: int,
-        now_ms: int,
-        *,
-        is_worker_failure: bool = False,
-        error: str | None = None,
-        exit_code: int | None = None,
-    ) -> tuple[TransitionResult, list[ControllerEndpoint]]:
-        """Transition a job and handle all side effects automatically.
-
-        Side effects based on result:
-        - SHOULD_RETRY: Re-queues job, unassigns from worker
-        - Terminal state: Removes from queue, removes endpoints, unassigns from worker
-        """
-        with self._lock:
-            job = self._jobs.get(job_id)
-            if not job:
-                return TransitionResult.COMPLETE, []
-
-            # Capture worker_id before transition (reset_for_retry clears it)
-            worker_id = job.worker_id
-
-            result = job.transition(
-                new_state,
-                now_ms,
-                is_worker_failure=is_worker_failure,
-                error=error,
-                exit_code=exit_code,
-            )
-
-            removed_endpoints: list[ControllerEndpoint] = []
-            if result == TransitionResult.SHOULD_RETRY:
-                if job.job_id not in self._queue:
-                    self._queue.append(job.job_id)
-                if worker_id:
-                    worker = self._workers.get(worker_id)
-                    if worker:
-                        worker.running_jobs.discard(job_id)
-            elif job.is_finished():
-                self._queue = deque(jid for jid in self._queue if jid != job_id)
-                removed_endpoints = self._remove_endpoints_for_job(job_id)
-                if worker_id:
-                    worker = self._workers.get(worker_id)
-                    if worker:
-                        worker.running_jobs.discard(job_id)
-
-            return result, removed_endpoints
-
-    # --- Resource and Scheduling Methods ---
+    # --- Resource Tracking ---
 
     def get_committed_resources(self, worker: ControllerWorker) -> tuple[int, int, int]:
-        """Compute resources committed to running jobs on this worker.
+        """Compute resources committed to running tasks on this worker.
 
         Returns:
             (cpu, memory_bytes, gpu_count) tuple of committed resources
@@ -388,24 +504,23 @@ class ControllerState:
             memory = 0
             gpu = 0
 
-            for job_id in worker.running_jobs:
-                job = self._jobs.get(job_id)
-                if job:
-                    resources = job.request.resources
-                    cpu += resources.cpu
-                    memory += resources.memory_bytes
-                    gpu += get_gpu_count(resources.device)
+            for task_id in worker.running_tasks:
+                task = self._tasks.get(task_id)
+                if task:
+                    job = self._jobs.get(task.job_id)
+                    if job:
+                        resources = job.request.resources
+                        cpu += resources.cpu
+                        memory += resources.memory_bytes
+                        gpu += get_gpu_count(resources.device)
 
             return cpu, memory, gpu
 
-    def load_workers_from_config(self, configs: list[WorkerConfig]) -> None:
-        """Load workers from static configuration."""
-        now_ms = int(time.time() * 1000)
-        for cfg in configs:
-            worker = ControllerWorker(
-                worker_id=WorkerId(cfg.worker_id),
-                address=cfg.address,
-                metadata=cfg.metadata,
-                last_heartbeat_ms=now_ms,
-            )
-            self.add_worker(worker)
+    def remove_endpoints_for_job(self, job_id: JobId) -> list[ControllerEndpoint]:
+        """Remove all endpoints for a job by removing endpoints for all its tasks."""
+        with self._lock:
+            all_removed = []
+            for task_id in self._tasks_by_job.get(job_id, []):
+                removed = self._remove_endpoints_for_task(task_id)
+                all_removed.extend(removed)
+            return all_removed

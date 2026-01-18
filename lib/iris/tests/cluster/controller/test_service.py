@@ -22,7 +22,8 @@ from connectrpc.errors import ConnectError
 
 from iris.rpc import cluster_pb2
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.state import ControllerJob, ControllerState
+from iris.cluster.controller.job import Job
+from iris.cluster.controller.state import ControllerState
 from iris.cluster.types import JobId, WorkerId
 
 
@@ -119,7 +120,7 @@ def test_launch_job_wakes_scheduler(service, mock_scheduler, job_request):
 def test_get_job_status_returns_status(service, state, job_request):
     """Verify get_job_status returns status for existing job."""
     # Add a job directly to state
-    job = ControllerJob(
+    job = Job(
         job_id=JobId("test-job-id"),
         request=job_request("test-job"),
         state=cluster_pb2.JOB_STATE_RUNNING,
@@ -154,7 +155,7 @@ def test_get_job_status_not_found(service):
 def test_terminate_job_marks_as_killed(service, state, job_request):
     """Verify terminate_job sets job state to KILLED."""
     # Add a running job
-    job = ControllerJob(
+    job = Job(
         job_id=JobId("test-job-id"),
         request=job_request("test-job"),
         state=cluster_pb2.JOB_STATE_RUNNING,
@@ -190,17 +191,17 @@ def test_terminate_job_not_found(service):
 def test_list_jobs_returns_all_jobs(service, state, job_request):
     """Verify list_jobs returns all jobs in state."""
     # Add multiple jobs with different states
-    job1 = ControllerJob(
+    job1 = Job(
         job_id=JobId("job-1"),
         request=job_request("job1"),
         state=cluster_pb2.JOB_STATE_PENDING,
     )
-    job2 = ControllerJob(
+    job2 = Job(
         job_id=JobId("job-2"),
         request=job_request("job2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
-    job3 = ControllerJob(
+    job3 = Job(
         job_id=JobId("job-3"),
         request=job_request("job3"),
         state=cluster_pb2.JOB_STATE_SUCCEEDED,
@@ -228,7 +229,7 @@ def test_list_jobs_returns_all_jobs(service, state, job_request):
 def test_get_job_status_includes_all_fields(service, state, job_request):
     """Verify get_job_status includes all JobStatus fields."""
     # Add a completed job with all fields populated
-    job = ControllerJob(
+    job = Job(
         job_id=JobId("test-job-id"),
         request=job_request("test-job"),
         state=cluster_pb2.JOB_STATE_FAILED,
@@ -300,7 +301,7 @@ def test_launch_job_rejects_empty_name(service, state):
 def test_terminate_pending_job(service, state, job_request):
     """Verify terminate_job works on pending jobs (not just running)."""
     # Add a pending job
-    job = ControllerJob(
+    job = Job(
         job_id=JobId("test-job-id"),
         request=job_request("test-job"),
         state=cluster_pb2.JOB_STATE_PENDING,
@@ -376,7 +377,7 @@ def test_launch_job_logs_action(service, state, job_request):
 def test_terminate_job_logs_action(service, state, job_request):
     """Verify terminate_job logs an action."""
     # Add a running job
-    job = ControllerJob(
+    job = Job(
         job_id=JobId("test-job-id"),
         request=job_request("test-job"),
         state=cluster_pb2.JOB_STATE_RUNNING,
@@ -434,7 +435,7 @@ def test_launch_job_without_parent_job_id(service, state):
 def test_get_job_status_includes_parent_job_id(service, state, job_request):
     """Verify get_job_status returns parent_job_id in response."""
     # Add a job with a parent
-    job = ControllerJob(
+    job = Job(
         job_id=JobId("child-job"),
         request=job_request("child"),
         parent_job_id=JobId("parent-job"),
@@ -450,18 +451,18 @@ def test_get_job_status_includes_parent_job_id(service, state, job_request):
 def test_terminate_job_cascades_to_children(service, state, job_request):
     """Verify terminate_job terminates all children when parent is terminated."""
     # Create parent and child jobs
-    parent = ControllerJob(
+    parent = Job(
         job_id=JobId("parent"),
         request=job_request("parent"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
-    child1 = ControllerJob(
+    child1 = Job(
         job_id=JobId("child1"),
         request=job_request("child1"),
         state=cluster_pb2.JOB_STATE_RUNNING,
         parent_job_id=JobId("parent"),
     )
-    child2 = ControllerJob(
+    child2 = Job(
         job_id=JobId("child2"),
         request=job_request("child2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
@@ -484,18 +485,18 @@ def test_terminate_job_cascades_to_children(service, state, job_request):
 def test_terminate_job_cascades_depth_first(service, state, job_request):
     """Verify terminate_job terminates children before parent (depth-first)."""
     # Create a 3-level hierarchy: grandparent -> parent -> child
-    grandparent = ControllerJob(
+    grandparent = Job(
         job_id=JobId("grandparent"),
         request=job_request("grandparent"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
-    parent = ControllerJob(
+    parent = Job(
         job_id=JobId("parent"),
         request=job_request("parent"),
         state=cluster_pb2.JOB_STATE_RUNNING,
         parent_job_id=JobId("grandparent"),
     )
-    child = ControllerJob(
+    child = Job(
         job_id=JobId("child"),
         request=job_request("child"),
         state=cluster_pb2.JOB_STATE_RUNNING,
@@ -524,18 +525,18 @@ def test_terminate_job_cascades_depth_first(service, state, job_request):
 def test_terminate_job_only_affects_descendants(service, state, job_request):
     """Verify terminate_job does not affect sibling jobs."""
     # Create two sibling jobs under the same parent
-    parent = ControllerJob(
+    parent = Job(
         job_id=JobId("parent"),
         request=job_request("parent"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
-    child1 = ControllerJob(
+    child1 = Job(
         job_id=JobId("child1"),
         request=job_request("child1"),
         state=cluster_pb2.JOB_STATE_RUNNING,
         parent_job_id=JobId("parent"),
     )
-    child2 = ControllerJob(
+    child2 = Job(
         job_id=JobId("child2"),
         request=job_request("child2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
@@ -557,13 +558,13 @@ def test_terminate_job_only_affects_descendants(service, state, job_request):
 
 def test_terminate_job_skips_already_finished_children(service, state, job_request):
     """Verify terminate_job skips children already in terminal state."""
-    parent = ControllerJob(
+    parent = Job(
         job_id=JobId("parent"),
         request=job_request("parent"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
     # Child already succeeded
-    child_succeeded = ControllerJob(
+    child_succeeded = Job(
         job_id=JobId("child-succeeded"),
         request=job_request("child-succeeded"),
         state=cluster_pb2.JOB_STATE_SUCCEEDED,
@@ -571,7 +572,7 @@ def test_terminate_job_skips_already_finished_children(service, state, job_reque
         finished_at_ms=12345,
     )
     # Child still running
-    child_running = ControllerJob(
+    child_running = Job(
         job_id=JobId("child-running"),
         request=job_request("child-running"),
         state=cluster_pb2.JOB_STATE_RUNNING,

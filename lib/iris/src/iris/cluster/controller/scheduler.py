@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pure job-to-worker matching without threading, dispatch, or state mutation."""
+"""Pure task-to-worker matching without threading, dispatch, or state mutation."""
 
 import logging
 from dataclasses import dataclass, field
 
-from iris.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
+from iris.cluster.controller.job import Job
+from iris.cluster.controller.state import ControllerState, ControllerWorker
+from iris.cluster.controller.task import Task
 from iris.cluster.types import WorkerId
 from iris.rpc import cluster_pb2
 
@@ -59,8 +61,8 @@ class WorkerCapacity:
     device_variant: str | None
 
 
-def worker_can_fit_job(capacity: WorkerCapacity, job: ControllerJob) -> bool:
-    """Check if worker capacity can fit job. Pure function, no state."""
+def worker_can_fit_task(capacity: WorkerCapacity, job: Job) -> bool:
+    """Check if worker capacity can fit task. Tasks use the job's resource spec."""
     res = job.request.resources
 
     if res.cpu > capacity.available_cpu:
@@ -83,8 +85,8 @@ def worker_can_fit_job(capacity: WorkerCapacity, job: ControllerJob) -> bool:
     return True
 
 
-def deduct_job_from_capacity(capacity: WorkerCapacity, job: ControllerJob) -> None:
-    """Deduct job's resources from capacity (mutates capacity)."""
+def deduct_task_from_capacity(capacity: WorkerCapacity, job: Job) -> None:
+    """Deduct task's resources from capacity (mutates capacity). Uses job's resource spec."""
     res = job.request.resources
     capacity.available_cpu -= res.cpu
     capacity.available_memory -= res.memory_bytes
@@ -106,20 +108,20 @@ def compute_worker_capacity(state: ControllerState, worker: ControllerWorker) ->
 
 @dataclass
 class SchedulingTransaction:
-    """Accumulates tentative assignments that can be rolled back."""
+    """Accumulates tentative task assignments that can be rolled back."""
 
     state: ControllerState
-    assignments: list[tuple[ControllerJob, ControllerWorker]] = field(default_factory=list)
-    timed_out_jobs: list[ControllerJob] = field(default_factory=list)
+    assignments: list[tuple[Task, ControllerWorker]] = field(default_factory=list)
+    timed_out_tasks: list[Task] = field(default_factory=list)
 
-    def tentatively_assign(self, job: ControllerJob, worker: ControllerWorker) -> None:
-        """Assign job to worker immediately (updates running_jobs and removes from queue)."""
-        self.state.assign_job_to_worker(worker.worker_id, job.job_id)
-        self.assignments.append((job, worker))
+    def tentatively_assign(self, task: Task, worker: ControllerWorker) -> None:
+        """Assign task to worker immediately (updates running_tasks and removes from queue)."""
+        self.state.assign_task_to_worker(worker.worker_id, task.task_id)
+        self.assignments.append((task, worker))
 
-    def rollback_assignment(self, job: ControllerJob, worker: ControllerWorker) -> None:
+    def rollback_assignment(self, task: Task, worker: ControllerWorker) -> None:
         """Rollback a single failed assignment."""
-        self.state.rollback_assignment(worker.worker_id, job)
+        self.state.rollback_task_assignment(worker.worker_id, task)
 
 
 def build_capacity_map(state: ControllerState, workers: list[ControllerWorker]) -> dict[WorkerId, WorkerCapacity]:
@@ -128,72 +130,77 @@ def build_capacity_map(state: ControllerState, workers: list[ControllerWorker]) 
 
 
 class Scheduler:
-    """Pure job-to-worker matching logic. Does not dispatch jobs, modify state, or run threads."""
+    """Pure task-to-worker matching logic. Does not dispatch tasks, modify state, or run threads."""
 
     def __init__(self, state: ControllerState):
         self._state = state
 
     def find_assignments(
         self,
-        pending_jobs: list[ControllerJob],
+        pending_tasks: list[Task],
         workers: list[ControllerWorker],
         now_ms: int,
     ) -> SchedulingTransaction:
-        """Match pending jobs to available workers one at a time.
+        """Match pending tasks to available workers one at a time.
 
-        Uses first-fit algorithm, skipping jobs that don't fit any worker.
-        Also identifies jobs that have exceeded their scheduling timeout.
+        Uses first-fit algorithm, skipping tasks that don't fit any worker.
+        Also identifies tasks that have exceeded their scheduling timeout.
 
-        The algorithm prevents head-of-line blocking: if a large job at the
-        front of the queue doesn't fit, smaller jobs behind it can still be
+        The algorithm prevents head-of-line blocking: if a large task at the
+        front of the queue doesn't fit, smaller tasks behind it can still be
         scheduled.
 
         Args:
-            pending_jobs: Jobs waiting to be scheduled (in FIFO order)
+            pending_tasks: Tasks waiting to be scheduled (in FIFO order)
             workers: Available workers (only healthy ones should be passed)
             now_ms: Current timestamp in milliseconds
 
         Returns:
-            SchedulingTransaction with assignments and timed-out jobs
+            SchedulingTransaction with assignments and timed-out tasks
         """
         transaction = SchedulingTransaction(self._state)
         capacities = build_capacity_map(self._state, workers)
 
-        for job in pending_jobs:
-            if self._is_job_timed_out(job, now_ms):
-                transaction.timed_out_jobs.append(job)
+        for task in pending_tasks:
+            job = self._state.get_job(task.job_id)
+            if not job:
+                continue
+
+            if self._is_task_timed_out(task, job, now_ms):
+                transaction.timed_out_tasks.append(task)
                 continue
 
             for worker in workers:
                 if not worker.healthy:
                     continue
                 capacity = capacities[worker.worker_id]
-                if worker_can_fit_job(capacity, job):
-                    deduct_job_from_capacity(capacity, job)
-                    transaction.tentatively_assign(job, worker)
+                if worker_can_fit_task(capacity, job):
+                    deduct_task_from_capacity(capacity, job)
+                    transaction.tentatively_assign(task, worker)
                     break
             else:
                 logger.debug(
-                    "No suitable worker for job %s (cpu=%d, memory_bytes=%d)",
-                    job.job_id,
+                    "No suitable worker for task %s (cpu=%d, memory_bytes=%d)",
+                    task.task_id,
                     job.request.resources.cpu,
                     job.request.resources.memory_bytes,
                 )
 
-        if transaction.assignments or transaction.timed_out_jobs:
+        if transaction.assignments or transaction.timed_out_tasks:
             logger.debug(
                 "Scheduling cycle: %d pending, %d assigned, %d timed_out",
-                len(pending_jobs),
+                len(pending_tasks),
                 len(transaction.assignments),
-                len(transaction.timed_out_jobs),
+                len(transaction.timed_out_tasks),
             )
         return transaction
 
-    def _is_job_timed_out(self, job: ControllerJob, now_ms: int) -> bool:
+    def _is_task_timed_out(self, task: Task, job: Job, now_ms: int) -> bool:
+        """Check if a task has exceeded its scheduling timeout."""
         timeout_seconds = job.request.scheduling_timeout_seconds
         if timeout_seconds <= 0:
             return False
 
-        pending_duration_ms = now_ms - job.submitted_at_ms
+        pending_duration_ms = now_ms - task.submitted_at_ms
         timeout_ms = timeout_seconds * 1000
         return pending_duration_ms > timeout_ms

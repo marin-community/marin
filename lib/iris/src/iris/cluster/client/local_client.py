@@ -217,9 +217,9 @@ class _LocalImageProvider:
         extras: list[str],
         job_id: str,
         deps_hash: str,
-        job_logs=None,
+        task_logs=None,
     ) -> BuildResult:
-        del bundle_path, base_image, extras, job_id, job_logs
+        del bundle_path, base_image, extras, job_id, task_logs
         return BuildResult(
             image_tag="local:latest",
             deps_hash=deps_hash,

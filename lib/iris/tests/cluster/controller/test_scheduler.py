@@ -12,19 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for job scheduler.
+"""Tests for task scheduler.
 
-The scheduler is a shallow interface that takes inputs (pending jobs, workers,
-current time) and returns outputs (assignments, timed-out jobs). It does not
-dispatch jobs, modify state, or run threads.
+The scheduler is a shallow interface that takes inputs (pending tasks, workers,
+current time) and returns outputs (assignments, timed-out tasks). It does not
+dispatch tasks, modify state, or run threads.
 """
 
 import time
 
 import pytest
 
+from iris.cluster.controller.job import Job, expand_job_to_tasks
 from iris.cluster.controller.scheduler import Scheduler
-from iris.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker
+from iris.cluster.controller.state import ControllerState, ControllerWorker
 from iris.cluster.types import JobId, WorkerId
 from iris.rpc import cluster_pb2
 
@@ -107,42 +108,48 @@ def scheduler(state):
     return Scheduler(state)
 
 
-def test_scheduler_finds_assignment_for_job(scheduler, state, job_request, worker_metadata):
-    """Verify scheduler assigns job to available worker."""
+def _add_job(state, job):
+    """Add a job with auto-expanded tasks."""
+    return state.add_job(job)
+
+
+def test_scheduler_finds_assignment_for_task(scheduler, state, job_request, worker_metadata):
+    """Verify scheduler assigns task to available worker."""
     worker = ControllerWorker(WorkerId("w1"), "addr", worker_metadata())
     state.add_worker(worker)
 
-    job = ControllerJob(JobId("j1"), request=job_request())
-    state.add_job(job)
-
-    pending_jobs = state.peek_pending_jobs()
-    workers = state.get_available_workers()
     now_ms = int(time.time() * 1000)
+    job = Job(JobId("j1"), request=job_request())
+    tasks = _add_job(state, job)
+    task = tasks[0]
 
-    result = scheduler.find_assignments(pending_jobs, workers, now_ms)
+    pending_tasks = state.peek_pending_tasks()
+    workers = state.get_available_workers()
+
+    result = scheduler.find_assignments(pending_tasks, workers, now_ms)
 
     assert len(result.assignments) == 1
-    assert result.assignments[0] == (job, worker)
-    assert len(result.timed_out_jobs) == 0
+    assert result.assignments[0] == (task, worker)
+    assert len(result.timed_out_tasks) == 0
 
 
 def test_scheduler_returns_empty_when_no_workers(scheduler, state, job_request):
     """Verify scheduler returns empty result when no workers available."""
-    job = ControllerJob(JobId("j1"), request=job_request())
-    state.add_job(job)
-
-    pending_jobs = state.peek_pending_jobs()
-    workers = state.get_available_workers()  # Empty
     now_ms = int(time.time() * 1000)
+    job = Job(JobId("j1"), request=job_request())
+    _add_job(state, job)
 
-    result = scheduler.find_assignments(pending_jobs, workers, now_ms)
+    pending_tasks = state.peek_pending_tasks()
+    workers = state.get_available_workers()  # Empty
+
+    result = scheduler.find_assignments(pending_tasks, workers, now_ms)
 
     assert len(result.assignments) == 0
-    assert len(result.timed_out_jobs) == 0
+    assert len(result.timed_out_tasks) == 0
 
 
-def test_scheduler_assigns_multiple_jobs_to_worker(scheduler, state, job_request, worker_metadata):
-    """Verify scheduler can assign multiple jobs to one worker."""
+def test_scheduler_assigns_multiple_tasks_to_worker(scheduler, state, job_request, worker_metadata):
+    """Verify scheduler can assign multiple tasks to one worker."""
     worker = ControllerWorker(
         WorkerId("w1"),
         "addr",
@@ -150,26 +157,26 @@ def test_scheduler_assigns_multiple_jobs_to_worker(scheduler, state, job_request
     )
     state.add_worker(worker)
 
-    job1 = ControllerJob(JobId("j1"), request=job_request(cpu=2))
-    job2 = ControllerJob(JobId("j2"), request=job_request(cpu=2))
-    job3 = ControllerJob(JobId("j3"), request=job_request(cpu=2))
-    state.add_job(job1)
-    state.add_job(job2)
-    state.add_job(job3)
-
-    pending_jobs = state.peek_pending_jobs()
-    workers = state.get_available_workers()
     now_ms = int(time.time() * 1000)
+    job1 = Job(JobId("j1"), request=job_request(cpu=2))
+    job2 = Job(JobId("j2"), request=job_request(cpu=2))
+    job3 = Job(JobId("j3"), request=job_request(cpu=2))
+    tasks1 = _add_job(state, job1)
+    tasks2 = _add_job(state, job2)
+    tasks3 = _add_job(state, job3)
 
-    result = scheduler.find_assignments(pending_jobs, workers, now_ms)
+    pending_tasks = state.peek_pending_tasks()
+    workers = state.get_available_workers()
+
+    result = scheduler.find_assignments(pending_tasks, workers, now_ms)
 
     assert len(result.assignments) == 3
-    assigned_job_ids = {job.job_id for job, _ in result.assignments}
-    assert assigned_job_ids == {job1.job_id, job2.job_id, job3.job_id}
+    assigned_task_ids = {task.task_id for task, _ in result.assignments}
+    assert assigned_task_ids == {tasks1[0].task_id, tasks2[0].task_id, tasks3[0].task_id}
 
 
-def test_scheduler_skips_jobs_that_dont_fit(scheduler, state, job_request, worker_metadata):
-    """Verify scheduler skips jobs that don't fit and continues to next."""
+def test_scheduler_skips_tasks_that_dont_fit(scheduler, state, job_request, worker_metadata):
+    """Verify scheduler skips tasks that don't fit and continues to next."""
     # Worker with 4 CPUs
     worker = ControllerWorker(
         WorkerId("w1"),
@@ -178,26 +185,26 @@ def test_scheduler_skips_jobs_that_dont_fit(scheduler, state, job_request, worke
     )
     state.add_worker(worker)
 
-    # Job 1: needs 8 CPUs (won't fit on 4 CPU worker)
-    job1 = ControllerJob(JobId("j1"), request=job_request(cpu=8))
-    # Job 2: needs 2 CPUs (will fit)
-    job2 = ControllerJob(JobId("j2"), request=job_request(cpu=2))
-    state.add_job(job1)
-    state.add_job(job2)
-
-    pending_jobs = state.peek_pending_jobs()
-    workers = state.get_available_workers()
     now_ms = int(time.time() * 1000)
+    # Job 1: needs 8 CPUs (won't fit on 4 CPU worker)
+    job1 = Job(JobId("j1"), request=job_request(cpu=8))
+    # Job 2: needs 2 CPUs (will fit)
+    job2 = Job(JobId("j2"), request=job_request(cpu=2))
+    _add_job(state, job1)
+    tasks2 = _add_job(state, job2)
 
-    result = scheduler.find_assignments(pending_jobs, workers, now_ms)
+    pending_tasks = state.peek_pending_tasks()
+    workers = state.get_available_workers()
 
-    # Only job2 should be assigned
+    result = scheduler.find_assignments(pending_tasks, workers, now_ms)
+
+    # Only job2's task should be assigned
     assert len(result.assignments) == 1
-    assert result.assignments[0][0] == job2
+    assert result.assignments[0][0] == tasks2[0]
 
 
-def test_scheduler_detects_timed_out_jobs(scheduler, state, worker_metadata):
-    """Verify scheduler identifies jobs that exceeded scheduling timeout."""
+def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
+    """Verify scheduler identifies tasks that exceeded scheduling timeout."""
     worker = ControllerWorker(WorkerId("w1"), "addr", worker_metadata(cpu=2))
     state.add_worker(worker)
 
@@ -210,26 +217,27 @@ def test_scheduler_detects_timed_out_jobs(scheduler, state, worker_metadata):
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         scheduling_timeout_seconds=1,
     )
-    job = ControllerJob(
+    job = Job(
         JobId("j1"),
         request=job_request,
         submitted_at_ms=int(time.time() * 1000) - 2000,  # Submitted 2s ago
     )
-    state.add_job(job)
+    tasks = expand_job_to_tasks(job, int(time.time() * 1000) - 2000)
+    state.add_job(job, tasks)
 
-    pending_jobs = state.peek_pending_jobs()
+    pending_tasks = state.peek_pending_tasks()
     workers = state.get_available_workers()
     now_ms = int(time.time() * 1000)
 
-    result = scheduler.find_assignments(pending_jobs, workers, now_ms)
+    result = scheduler.find_assignments(pending_tasks, workers, now_ms)
 
     assert len(result.assignments) == 0
-    assert len(result.timed_out_jobs) == 1
-    assert result.timed_out_jobs[0] == job
+    assert len(result.timed_out_tasks) == 1
+    assert result.timed_out_tasks[0] == tasks[0]
 
 
 def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
-    """Verify job with scheduling_timeout_seconds=0 never times out."""
+    """Verify task with scheduling_timeout_seconds=0 never times out."""
     worker = ControllerWorker(WorkerId("w1"), "addr", worker_metadata(cpu=2))
     state.add_worker(worker)
 
@@ -241,22 +249,23 @@ def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         scheduling_timeout_seconds=0,  # No timeout
     )
-    job = ControllerJob(
+    job = Job(
         JobId("j1"),
         request=job_request,
         submitted_at_ms=int(time.time() * 1000) - 10000,  # Submitted 10s ago
     )
-    state.add_job(job)
+    tasks = expand_job_to_tasks(job, int(time.time() * 1000) - 10000)
+    state.add_job(job, tasks)
 
-    pending_jobs = state.peek_pending_jobs()
+    pending_tasks = state.peek_pending_tasks()
     workers = state.get_available_workers()
     now_ms = int(time.time() * 1000)
 
-    result = scheduler.find_assignments(pending_jobs, workers, now_ms)
+    result = scheduler.find_assignments(pending_tasks, workers, now_ms)
 
-    # Job should not be in timed_out_jobs (just skipped, no assignment)
+    # Task should not be in timed_out_tasks (just skipped, no assignment)
     assert len(result.assignments) == 0
-    assert len(result.timed_out_jobs) == 0
+    assert len(result.timed_out_tasks) == 0
 
 
 def test_scheduler_respects_worker_capacity_across_assignments(scheduler, state, job_request, worker_metadata):
@@ -265,19 +274,19 @@ def test_scheduler_respects_worker_capacity_across_assignments(scheduler, state,
     worker = ControllerWorker(WorkerId("w1"), "addr", worker_metadata(cpu=4))
     state.add_worker(worker)
 
+    now_ms = int(time.time() * 1000)
     # Submit 4 jobs, each requiring 2 CPUs
     # Only 2 should fit at a time
     for i in range(4):
-        job = ControllerJob(JobId(f"j{i}"), request=job_request(cpu=2))
-        state.add_job(job)
+        job = Job(JobId(f"j{i}"), request=job_request(cpu=2))
+        _add_job(state, job)
 
-    pending_jobs = state.peek_pending_jobs()
+    pending_tasks = state.peek_pending_tasks()
     workers = state.get_available_workers()
-    now_ms = int(time.time() * 1000)
 
-    result = scheduler.find_assignments(pending_jobs, workers, now_ms)
+    result = scheduler.find_assignments(pending_tasks, workers, now_ms)
 
-    # Only first 2 jobs should be assigned (using all 4 CPUs)
+    # Only first 2 tasks should be assigned (using all 4 CPUs)
     assert len(result.assignments) == 2
 
 
@@ -290,68 +299,74 @@ def test_scheduler_skips_unhealthy_workers(scheduler, state, job_request, worker
     state.add_worker(healthy_worker)
     state.add_worker(unhealthy_worker)
 
-    job = ControllerJob(JobId("j1"), request=job_request())
-    state.add_job(job)
+    now_ms = int(time.time() * 1000)
+    job = Job(JobId("j1"), request=job_request())
+    _add_job(state, job)
 
-    pending_jobs = state.peek_pending_jobs()
+    pending_tasks = state.peek_pending_tasks()
     # get_available_workers() already filters unhealthy workers
     workers = state.get_available_workers()
-    now_ms = int(time.time() * 1000)
 
-    result = scheduler.find_assignments(pending_jobs, workers, now_ms)
+    result = scheduler.find_assignments(pending_tasks, workers, now_ms)
 
     assert len(result.assignments) == 1
     assert result.assignments[0][1] == healthy_worker
 
 
-def test_scheduler_considers_running_jobs_for_capacity(scheduler, state, job_request, worker_metadata):
-    """Verify scheduler accounts for jobs already running on workers."""
+def test_scheduler_considers_running_tasks_for_capacity(scheduler, state, job_request, worker_metadata):
+    """Verify scheduler accounts for tasks already running on workers."""
     # Worker with 4 CPUs
     worker = ControllerWorker(WorkerId("w1"), "addr", worker_metadata(cpu=4))
     state.add_worker(worker)
 
-    # Add a running job that uses 3 CPUs
-    running_job = ControllerJob(
+    now_ms = int(time.time() * 1000)
+
+    # Add a running job with a running task that uses 3 CPUs
+    running_job = Job(
         JobId("running"),
         request=job_request(cpu=3),
         state=cluster_pb2.JOB_STATE_RUNNING,
         worker_id=worker.worker_id,
     )
-    state._jobs[running_job.job_id] = running_job
-    worker.running_jobs.add(running_job.job_id)
+    running_tasks = expand_job_to_tasks(running_job, now_ms)
+    # Mark task as running on worker
+    running_tasks[0].state = cluster_pb2.TASK_STATE_RUNNING
+    running_tasks[0].worker_id = worker.worker_id
+    state.add_job(running_job, running_tasks)
+    # Manually assign task to worker
+    worker.running_tasks.add(running_tasks[0].task_id)
 
     # Try to schedule a job that needs 2 CPUs (won't fit, only 1 CPU available)
-    job = ControllerJob(JobId("j1"), request=job_request(cpu=2))
-    state.add_job(job)
+    job = Job(JobId("j1"), request=job_request(cpu=2))
+    _add_job(state, job)
 
-    pending_jobs = state.peek_pending_jobs()
+    pending_tasks = state.peek_pending_tasks()
     workers = state.get_available_workers()
-    now_ms = int(time.time() * 1000)
 
-    result = scheduler.find_assignments(pending_jobs, workers, now_ms)
+    result = scheduler.find_assignments(pending_tasks, workers, now_ms)
 
     assert len(result.assignments) == 0
 
 
 def test_scheduler_assigns_to_multiple_workers(scheduler, state, job_request, worker_metadata):
-    """Verify scheduler can assign jobs across multiple workers."""
+    """Verify scheduler can assign tasks across multiple workers."""
     # Two workers with 2 CPUs each
     worker1 = ControllerWorker(WorkerId("w1"), "addr1", worker_metadata(cpu=2))
     worker2 = ControllerWorker(WorkerId("w2"), "addr2", worker_metadata(cpu=2))
     state.add_worker(worker1)
     state.add_worker(worker2)
 
+    now_ms = int(time.time() * 1000)
     # Three jobs needing 2 CPUs each
     # Two should fit (one on each worker), third won't fit
     for i in range(3):
-        job = ControllerJob(JobId(f"j{i}"), request=job_request(cpu=2))
-        state.add_job(job)
+        job = Job(JobId(f"j{i}"), request=job_request(cpu=2))
+        _add_job(state, job)
 
-    pending_jobs = state.peek_pending_jobs()
+    pending_tasks = state.peek_pending_tasks()
     workers = state.get_available_workers()
-    now_ms = int(time.time() * 1000)
 
-    result = scheduler.find_assignments(pending_jobs, workers, now_ms)
+    result = scheduler.find_assignments(pending_tasks, workers, now_ms)
 
     assert len(result.assignments) == 2
     assigned_workers = {w.worker_id for _, w in result.assignments}

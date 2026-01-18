@@ -17,7 +17,8 @@
 from dataclasses import dataclass, field
 from enum import Enum
 
-from iris.cluster.types import JobId, WorkerId
+from iris.cluster.controller.task import Task
+from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 
 
@@ -285,3 +286,34 @@ def handle_gang_failure(
             to_requeue.append(job)
 
     return to_requeue
+
+
+def expand_job_to_tasks(job: Job, now_ms: int) -> list[Task]:
+    """Expand a job into its constituent tasks based on replicas.
+
+    Jobs with replicas=N expand into N tasks. Each task has a unique ID
+    of the form "{job_id}/task-{index}" where index is 0-based.
+
+    Args:
+        job: The job to expand
+        now_ms: Current timestamp in milliseconds
+
+    Returns:
+        List of Task objects for this job
+    """
+    num_replicas = job.request.resources.replicas or 1
+    tasks = []
+
+    for i in range(num_replicas):
+        task_id = TaskId(f"{job.job_id}/task-{i}")
+        task = Task(
+            task_id=task_id,
+            job_id=job.job_id,
+            task_index=i,
+            max_retries_failure=job.max_retries_failure,
+            max_retries_preemption=job.max_retries_preemption,
+            submitted_at_ms=now_ms,
+        )
+        tasks.append(task)
+
+    return tasks
