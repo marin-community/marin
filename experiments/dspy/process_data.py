@@ -85,7 +85,9 @@ def load_fhir(file_path="data/note.json"):
 # 2. Trace Collection
 # ==========================================
 
-def format_data_for_finetuning(trace: tuple[Any, dict[str, Any], Prediction], adapter: dspy.Adapter) -> list[dict[str, str]]:
+def format_data_for_finetuning(
+    trace: tuple[Any, dict[str, Any], Prediction], adapter: dspy.Adapter
+) -> list[dict[str, str]]:
     pred, inputs, outputs = trace
 
     demos = pred.demos if hasattr(pred, "demos") else []
@@ -98,7 +100,7 @@ def format_data_for_finetuning(trace: tuple[Any, dict[str, Any], Prediction], ad
         signature=pred.signature,
         outputs=outputs.toDict(),
     )
-    return input_chat + [{"role": "assistant", "content": output_chat}]
+    return [*input_chat, {"role": "assistant", "content": output_chat}]
 
 def collect_traces_for_module(
     module: dspy.Module,

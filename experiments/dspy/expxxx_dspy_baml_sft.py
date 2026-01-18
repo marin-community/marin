@@ -23,7 +23,8 @@ The trace data should be stored in GCS as JSONL files with chat format:
 - Messages follow OpenAI chat format: [{"role": "system/user/assistant", "content": "..."}]
 
 If your data is in JSON array format (from process_data.py), convert it to JSONL:
-  python -c "import json; [print(json.dumps(item)) for item in json.load(open('format_adaptation_dataset.json'))]" > traces.jsonl
+  python -c "import json; [print(json.dumps(item)) for item in json.load(open('format_adaptation_dataset.json'))]" \
+  > traces.jsonl
 
 Then upload to GCS:
   gsutil cp traces.jsonl gs://your-bucket/path/to/traces.jsonl

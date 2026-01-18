@@ -59,7 +59,8 @@ class DspyEvaluator(Evaluator):
         self,
         model: dspy.Module,
         evals: list[dspy.Example],
-        optimizer: dspy.Teleprompter,
+        output_path: str,
+        optimizer: dspy.Teleprompter = None,
         **kwargs,
     ) -> None:
         return self.langprobe.evaluate(model, evals, optimizer, **kwargs)

@@ -77,7 +77,7 @@ def _normalize_state(state_val: Any) -> str | None:
         return STATE_ABBR_TO_NAME[state_upper].lower()
 
     state_lower = state_str.lower()
-    for abbr, full_name in STATE_ABBR_TO_NAME.items():
+    for _abbr, full_name in STATE_ABBR_TO_NAME.items():
         if full_name.lower() == state_lower:
             return full_name.lower()
 
