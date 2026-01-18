@@ -33,6 +33,7 @@ import humanfriendly
 from iris.rpc import cluster_pb2
 
 JobId = NewType("JobId", str)
+TaskId = NewType("TaskId", str)
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
 
@@ -190,7 +191,19 @@ def is_job_finished(state: int) -> bool:
     )
 
 
+def is_task_finished(state: int) -> bool:
+    """Check if a task state is terminal."""
+    return state in (
+        cluster_pb2.TASK_STATE_SUCCEEDED,
+        cluster_pb2.TASK_STATE_FAILED,
+        cluster_pb2.TASK_STATE_KILLED,
+        cluster_pb2.TASK_STATE_WORKER_FAILED,
+        cluster_pb2.TASK_STATE_UNSCHEDULABLE,
+    )
+
+
 JobState = cluster_pb2.JobState
+TaskState = cluster_pb2.TaskState
 
 
 @dataclass(frozen=True)

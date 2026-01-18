@@ -2,10 +2,6 @@
 
 This recipe provides a structured workflow for implementing individual stages of a larger design. Each stage should be completed as a focused, reviewable unit of work.
 
-## Purpose
-
-When implementing a multi-stage design, break the work into discrete phases. This recipe guides you through completing a single phase: from verifying assumptions through to a committed, reviewed change.
-
 ## Prerequisites
 
 - Read the top-level design document at `docs/iris-coscheduling.md`
@@ -87,48 +83,6 @@ Once review is complete and all issues are addressed, commit the changes.
 - Ensure the commit message references the stage being implemented
 - Do not include unrelated changes in the commit
 
----
-
-## Stage-Specific Instructions
-
-<!-- Fill in this section with details for the specific stage being implemented -->
-
-### Stage: [STAGE NAME]
-
-**Objective**: [Brief description of what this stage accomplishes]
-
-**Files to Modify**:
-- `path/to/file1.py` - [what changes]
-- `path/to/file2.py` - [what changes]
-
-**New Files to Create**:
-- `path/to/new_file.py` - [purpose]
-
-**Code Snippets**:
-
-```python
-# Example implementation pattern for this stage
-def example_function():
-    pass
-```
-
-**Verification Commands**:
-
-```bash
-# Commands to verify the implementation is correct
-uv run pytest lib/iris/tests/test_specific.py -v
-```
-
-**Dependencies**:
-- [List any stages that must be completed first]
-
-**Acceptance Criteria**:
-- [Specific criteria that indicate this stage is complete]
-
----
-
-## Quality Checklist
-
 Before committing, verify all items:
 
 - [ ] All tests pass (`uv run pytest lib/iris/tests/ -v`)
@@ -138,6 +92,10 @@ Before committing, verify all items:
 - [ ] New code has appropriate test coverage
 - [ ] No unrelated refactors or cleanups included
 - [ ] Commit message clearly describes the change
+
+## Guidelines
+
+Use sub-agents (senior-engineer for complex changes, ml-engineer for simpler modifications) for independent sub-tasks.
 
 ## Troubleshooting
 

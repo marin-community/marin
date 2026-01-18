@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Protocol
 
 from iris.rpc import cluster_pb2
-from iris.cluster.worker.worker_types import JobLogs, LogLine
+from iris.cluster.worker.worker_types import TaskLogs, LogLine
 
 
 @dataclass
@@ -130,7 +130,7 @@ class ImageBuilder(Protocol):
         context: Path,
         dockerfile_content: str,
         tag: str,
-        job_logs: JobLogs | None = None,
+        task_logs: TaskLogs | None = None,
     ) -> None: ...
 
     def exists(self, tag: str) -> bool: ...
@@ -399,14 +399,14 @@ class DockerImageBuilder:
         context: Path,
         dockerfile_content: str,
         tag: str,
-        job_logs: JobLogs | None = None,
+        task_logs: TaskLogs | None = None,
     ) -> None:
         dockerfile_path = context / "Dockerfile.iris"
         dockerfile_path.write_text(dockerfile_content)
 
         try:
-            if job_logs:
-                job_logs.add("build", f"Starting build for image: {tag}")
+            if task_logs:
+                task_logs.add("build", f"Starting build for image: {tag}")
 
             cmd = [
                 "docker",
@@ -428,19 +428,19 @@ class DockerImageBuilder:
                 text=True,
             )
 
-            # Stream output to job_logs
+            # Stream output to task_logs
             if proc.stdout:
                 for line in proc.stdout:
-                    if job_logs:
-                        job_logs.add("build", line.rstrip())
+                    if task_logs:
+                        task_logs.add("build", line.rstrip())
 
             returncode = proc.wait()
 
-            if job_logs:
+            if task_logs:
                 if returncode == 0:
-                    job_logs.add("build", "Build completed successfully")
+                    task_logs.add("build", "Build completed successfully")
                 else:
-                    job_logs.add("build", f"Build failed with exit code {returncode}")
+                    task_logs.add("build", f"Build failed with exit code {returncode}")
 
             if returncode != 0:
                 raise RuntimeError(f"Docker build failed with exit code {returncode}")

@@ -38,7 +38,7 @@ from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, DockerRuntime
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider, collect_workdir_size_mb
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.worker_types import Job
+from iris.cluster.worker.worker_types import Task
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ def _rewrite_address_for_container(address: str) -> str:
 
 
 class PortAllocator:
-    """Allocate ephemeral ports for jobs."""
+    """Allocate ephemeral ports for tasks."""
 
     def __init__(self, port_range: tuple[int, int] = (30000, 40000)):
         self._range = port_range
@@ -150,8 +150,8 @@ class Worker:
         self._environment_provider = environment_provider or DefaultEnvironmentProvider()
         self._port_allocator = PortAllocator(config.port_range)
 
-        # Job state
-        self._jobs: dict[str, Job] = {}
+        # Task state
+        self._tasks: dict[str, Task] = {}
         self._lock = threading.Lock()
 
         self._service = WorkerServiceImpl(self)
@@ -183,7 +183,7 @@ class Worker:
             timeout=5.0,
         )
 
-        # Create controller client synchronously (before any jobs can be dispatched)
+        # Create controller client synchronously (before any tasks can be dispatched)
         if self._config.controller_address:
             self._controller_client = ControllerServiceClientSync(
                 address=self._config.controller_address,
@@ -205,15 +205,15 @@ class Worker:
 
         # Kill and remove all containers
         with self._lock:
-            jobs = list(self._jobs.values())
-        for job in jobs:
-            if job.container_id:
+            tasks = list(self._tasks.values())
+        for task in tasks:
+            if task.container_id:
                 try:
-                    self._runtime.kill(job.container_id, force=True)
+                    self._runtime.kill(task.container_id, force=True)
                 except RuntimeError:
                     pass
                 try:
-                    self._runtime.remove(job.container_id)
+                    self._runtime.remove(task.container_id)
                 except RuntimeError:
                     pass
 
@@ -286,28 +286,35 @@ class Worker:
             except Exception as e:
                 logger.warning(f"Heartbeat failed: {e}")
 
-    def _report_job_state(self, job: "Job") -> None:
+    def _report_task_state(self, task: Task) -> None:
+        """Report task state to controller."""
         if not self._controller_client or not self._worker_id:
             return
 
         try:
-            request = cluster_pb2.Controller.ReportJobStateRequest(
+            request = cluster_pb2.Controller.ReportTaskStateRequest(
                 worker_id=self._worker_id,
-                job_id=job.job_id,
-                attempt_id=job.attempt_id,
-                state=job.status,
-                exit_code=job.exit_code or 0,
-                error=job.error or "",
-                finished_at_ms=job.finished_at_ms or 0,
+                task_id=task.task_id,
+                job_id=task.job_id,
+                task_index=task.task_index,
+                state=task.status,
+                exit_code=task.exit_code or 0,
+                error=task.error or "",
+                finished_at_ms=task.finished_at_ms or 0,
+                attempt_id=task.attempt_id,
             )
-            self._controller_client.report_job_state(request)
+            self._controller_client.report_task_state(request)
         except Exception as e:
-            logger.warning(f"Failed to report job state to controller: {e}")
+            logger.warning(f"Failed to report task state to controller: {e}")
 
-    # Job management methods
+    # Task management methods
 
-    def submit_job(self, request: cluster_pb2.Worker.RunJobRequest) -> str:
-        job_id = request.job_id or str(uuid.uuid4())
+    def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str:
+        """Submit a new task for execution."""
+        task_id = request.task_id
+        job_id = request.job_id
+        task_index = request.task_index
+        num_tasks = request.num_tasks
         attempt_id = request.attempt_id
 
         # Allocate requested ports
@@ -315,54 +322,57 @@ class Worker:
         allocated_ports = self._port_allocator.allocate(len(port_names)) if port_names else []
         ports = dict(zip(port_names, allocated_ports, strict=True))
 
-        # Create job working directory with attempt isolation
-        # Use safe path component for hierarchical job IDs (e.g., "my-exp/worker-0" -> "my-exp__worker-0")
-        safe_job_id = job_id.replace("/", "__")
-        workdir = Path(tempfile.gettempdir()) / "iris-worker" / "jobs" / f"{safe_job_id}_attempt_{attempt_id}"
+        # Create task working directory with attempt isolation
+        # Use safe path component for hierarchical task IDs (e.g., "my-exp/task-0" -> "my-exp__task-0")
+        safe_task_id = task_id.replace("/", "__")
+        workdir = Path(tempfile.gettempdir()) / "iris-worker" / "tasks" / f"{safe_task_id}_attempt_{attempt_id}"
         workdir.mkdir(parents=True, exist_ok=True)
 
-        job = Job(
+        task = Task(
+            task_id=task_id,
             job_id=job_id,
+            task_index=task_index,
+            num_tasks=num_tasks,
             attempt_id=attempt_id,
             request=request,
-            status=cluster_pb2.JOB_STATE_PENDING,
+            status=cluster_pb2.TASK_STATE_PENDING,
             ports=ports,
             workdir=workdir,
         )
 
         with self._lock:
-            self._jobs[job_id] = job
+            self._tasks[task_id] = task
 
         # Start execution in background
-        job.thread = threading.Thread(target=self._execute_job, args=(job,), daemon=True)
-        job.thread.start()
+        task.thread = threading.Thread(target=self._execute_task, args=(task,), daemon=True)
+        task.thread.start()
 
-        return job_id
+        return task_id
 
-    def _execute_job(self, job: Job) -> None:
+    def _execute_task(self, task: Task) -> None:
         import sys
 
         try:
             # Phase 1: Download bundle
-            job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="downloading bundle")
-            job.started_at_ms = int(time.time() * 1000)
+            task.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
+            task.started_at_ms = int(time.time() * 1000)
 
             bundle_path = self._bundle_cache.get_bundle(
-                job.request.bundle_gcs_path,
+                task.request.bundle_gcs_path,
                 expected_hash=None,
             )
 
             # Phase 2: Build image
-            job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="building image")
-            job.build_started_ms = int(time.time() * 1000)
-            env_config = job.request.environment
+            task.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="building image")
+            task.build_started_ms = int(time.time() * 1000)
+            env_config = task.request.environment
             extras = list(env_config.extras)
 
             # Compute deps_hash for caching
             deps_hash = self._venv_cache.compute_deps_hash(bundle_path)
 
-            job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="populating uv cache")
-            job.logs.add("build", "Building Docker image...")
+            task.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="populating uv cache")
+            task.logs.add("build", "Building Docker image...")
 
             # Detect host Python version for container compatibility
             # cloudpickle serializes bytecode which is version-specific
@@ -373,41 +383,41 @@ class Worker:
                 bundle_path=bundle_path,
                 base_image=base_image,
                 extras=extras,
-                job_id=job.job_id,
+                job_id=task.job_id,
                 deps_hash=deps_hash,
-                job_logs=job.logs,
+                task_logs=task.logs,
             )
 
-            job.build_finished_ms = int(time.time() * 1000)
-            job.build_from_cache = build_result.from_cache
-            job.image_tag = build_result.image_tag
+            task.build_finished_ms = int(time.time() * 1000)
+            task.build_from_cache = build_result.from_cache
+            task.image_tag = build_result.image_tag
 
-            # Protect image from eviction while job is running
+            # Protect image from eviction while task is running
             if self._image_cache:
                 self._image_cache.protect(build_result.image_tag)
 
             # Phase 3: Create and start container
-            job.transition_to(cluster_pb2.JOB_STATE_RUNNING)
+            task.transition_to(cluster_pb2.TASK_STATE_RUNNING)
 
             # Deserialize entrypoint
-            entrypoint = cloudpickle.loads(job.request.serialized_entrypoint)
-            command = self._build_command(entrypoint, job.ports)
+            entrypoint = cloudpickle.loads(task.request.serialized_entrypoint)
+            command = self._build_command(entrypoint, task.ports)
 
             # Build environment from user-provided vars + EnvironmentConfig
             env = dict(env_config.env_vars)
 
             # Build iris system environment based on runtime
-            iris_env = self._build_iris_env(job)
+            iris_env = self._build_iris_env(task)
             env.update(iris_env)
 
             config = ContainerConfig(
                 image=build_result.image_tag,
                 command=command,
                 env=env,
-                resources=job.request.resources if job.request.HasField("resources") else None,
-                timeout_seconds=job.request.timeout_seconds or None,
-                ports=job.ports,
-                mounts=[(str(job.workdir), "/workdir", "rw")],
+                resources=task.request.resources if task.request.HasField("resources") else None,
+                timeout_seconds=task.request.timeout_seconds or None,
+                ports=task.ports,
+                mounts=[(str(task.workdir), "/workdir", "rw")],
             )
 
             # Create and start container with retry on port binding failures
@@ -416,24 +426,24 @@ class Worker:
             for attempt in range(max_port_retries):
                 try:
                     container_id = self._runtime.create_container(config)
-                    job.container_id = container_id
+                    task.container_id = container_id
                     self._runtime.start_container(container_id)
                     break
                 except RuntimeError as e:
                     if "address already in use" in str(e) and attempt < max_port_retries - 1:
                         logger.warning(
-                            "Port conflict for job %s, retrying with new ports (attempt %d)", job.job_id, attempt + 2
+                            "Port conflict for task %s, retrying with new ports (attempt %d)", task.task_id, attempt + 2
                         )
-                        job.logs.add("build", f"Port conflict, retrying with new ports (attempt {attempt + 2})")
+                        task.logs.add("build", f"Port conflict, retrying with new ports (attempt {attempt + 2})")
                         # Release current ports and allocate new ones
-                        self._port_allocator.release(list(job.ports.values()))
-                        port_names = list(job.ports.keys())
+                        self._port_allocator.release(list(task.ports.values()))
+                        port_names = list(task.ports.keys())
                         new_ports = self._port_allocator.allocate(len(port_names))
-                        job.ports = dict(zip(port_names, new_ports, strict=True))
+                        task.ports = dict(zip(port_names, new_ports, strict=True))
 
                         # Update config with new ports
-                        config.ports = job.ports
-                        for name, port in job.ports.items():
+                        config.ports = task.ports
+                        for name, port in task.ports.items():
                             config.env[f"IRIS_PORT_{name.upper()}"] = str(port)
 
                         # Try to remove failed container if it was created
@@ -450,56 +460,56 @@ class Worker:
             assert container_id is not None
 
             # Report RUNNING state to controller so endpoints become visible
-            self._report_job_state(job)
+            self._report_task_state(task)
 
-            # Phase 4: Monitor job execution
-            self._monitor_job(job, container_id, config.timeout_seconds)
+            # Phase 4: Monitor task execution
+            self._monitor_task(task, container_id, config.timeout_seconds)
 
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
-            job.logs.add("error", f"Job failed:\n{error_msg}")
-            job.transition_to(cluster_pb2.JOB_STATE_FAILED, error=error_msg)
+            task.logs.add("error", f"Task failed:\n{error_msg}")
+            task.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
-            # Report job state to controller if in terminal state
-            if job.status in (
-                cluster_pb2.JOB_STATE_SUCCEEDED,
-                cluster_pb2.JOB_STATE_FAILED,
-                cluster_pb2.JOB_STATE_KILLED,
+            # Report task state to controller if in terminal state
+            if task.status in (
+                cluster_pb2.TASK_STATE_SUCCEEDED,
+                cluster_pb2.TASK_STATE_FAILED,
+                cluster_pb2.TASK_STATE_KILLED,
             ):
-                self._report_job_state(job)
+                self._report_task_state(task)
 
             # Cleanup: release ports, remove workdir (keep container for logs)
-            if not job.cleanup_done:
-                job.cleanup_done = True
-                self._port_allocator.release(list(job.ports.values()))
-                # Unprotect image from eviction now that job is done
-                if self._image_cache and job.image_tag:
-                    self._image_cache.unprotect(job.image_tag)
+            if not task.cleanup_done:
+                task.cleanup_done = True
+                self._port_allocator.release(list(task.ports.values()))
+                # Unprotect image from eviction now that task is done
+                if self._image_cache and task.image_tag:
+                    self._image_cache.unprotect(task.image_tag)
                 # Keep container around for log retrieval via docker logs
                 # Remove working directory (no longer needed since logs come from Docker)
-                if job.workdir and job.workdir.exists():
-                    shutil.rmtree(job.workdir, ignore_errors=True)
+                if task.workdir and task.workdir.exists():
+                    shutil.rmtree(task.workdir, ignore_errors=True)
 
-    def _monitor_job(self, job: Job, container_id: str, timeout_seconds: int | None) -> None:
-        """Monitor job execution: check status, collect stats, handle timeouts.
+    def _monitor_task(self, task: Task, container_id: str, timeout_seconds: int | None) -> None:
+        """Monitor task execution: check status, collect stats, handle timeouts.
 
         Polls container status at regular intervals until the container stops.
         Collects runtime statistics (CPU, memory, disk) and handles timeout enforcement.
-        Updates job state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
+        Updates task state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
         """
         start_time = time.time()
 
         while True:
             # Check if we should stop
-            if job.should_stop:
-                job.transition_to(cluster_pb2.JOB_STATE_KILLED)
+            if task.should_stop:
+                task.transition_to(cluster_pb2.TASK_STATE_KILLED)
                 break
 
             # Check timeout
             if timeout_seconds and (time.time() - start_time) > timeout_seconds:
                 self._runtime.kill(container_id, force=True)
-                job.transition_to(
-                    cluster_pb2.JOB_STATE_FAILED,
+                task.transition_to(
+                    cluster_pb2.TASK_STATE_FAILED,
                     error="Timeout exceeded",
                     exit_code=-1,
                 )
@@ -509,26 +519,26 @@ class Worker:
             status = self._runtime.inspect(container_id)
             if not status.running:
                 # Read result file only if container succeeded
-                if status.exit_code == 0 and job.workdir:
-                    result_path = job.workdir / "_result.pkl"
+                if status.exit_code == 0 and task.workdir:
+                    result_path = task.workdir / "_result.pkl"
                     if result_path.exists():
                         try:
-                            job.result = result_path.read_bytes()
+                            task.result = result_path.read_bytes()
                         except Exception as e:
-                            job.logs.add("error", f"Failed to read result file: {e}")
+                            task.logs.add("error", f"Failed to read result file: {e}")
 
                 # Container has stopped
                 if status.error:
-                    job.transition_to(
-                        cluster_pb2.JOB_STATE_FAILED,
+                    task.transition_to(
+                        cluster_pb2.TASK_STATE_FAILED,
                         error=status.error,
                         exit_code=status.exit_code or -1,
                     )
                 elif status.exit_code == 0:
-                    job.transition_to(cluster_pb2.JOB_STATE_SUCCEEDED, exit_code=0)
+                    task.transition_to(cluster_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:
-                    job.transition_to(
-                        cluster_pb2.JOB_STATE_FAILED,
+                    task.transition_to(
+                        cluster_pb2.TASK_STATE_FAILED,
                         error=f"Exit code: {status.exit_code}",
                         exit_code=status.exit_code or -1,
                     )
@@ -538,32 +548,35 @@ class Worker:
             try:
                 stats = self._runtime.get_stats(container_id)
                 if stats.available:
-                    job.current_memory_mb = stats.memory_mb
-                    job.current_cpu_percent = stats.cpu_percent
-                    job.process_count = stats.process_count
-                    if stats.memory_mb > job.peak_memory_mb:
-                        job.peak_memory_mb = stats.memory_mb
+                    task.current_memory_mb = stats.memory_mb
+                    task.current_cpu_percent = stats.cpu_percent
+                    task.process_count = stats.process_count
+                    if stats.memory_mb > task.peak_memory_mb:
+                        task.peak_memory_mb = stats.memory_mb
 
-                if job.workdir:
-                    job.disk_mb = collect_workdir_size_mb(job.workdir)
+                if task.workdir:
+                    task.disk_mb = collect_workdir_size_mb(task.workdir)
             except Exception:
-                pass  # Don't fail job on stats collection errors
+                pass  # Don't fail task on stats collection errors
 
             # Sleep before next poll
             time.sleep(self._config.poll_interval_seconds)
 
-    def _build_iris_env(self, job: Job) -> dict[str, str]:
-        """Build Iris system environment variables for the job container.
+    def _build_iris_env(self, task: Task) -> dict[str, str]:
+        """Build Iris system environment variables for the task container.
 
-        Auto-injects job metadata and configuration that jobs need to interact
-        with the Iris cluster (job ID, worker ID, controller address, ports).
+        Auto-injects task metadata and configuration that tasks need to interact
+        with the Iris cluster (task ID, job ID, worker ID, controller address, ports).
         These override user-provided values.
         """
         env = {}
 
-        # Core job metadata
-        env["IRIS_JOB_ID"] = job.job_id
-        env["IRIS_ATTEMPT_ID"] = str(job.attempt_id)
+        # Core task metadata
+        env["IRIS_JOB_ID"] = task.job_id
+        env["IRIS_TASK_ID"] = task.task_id
+        env["IRIS_TASK_INDEX"] = str(task.task_index)
+        env["IRIS_NUM_TASKS"] = str(task.num_tasks)
+        env["IRIS_ATTEMPT_ID"] = str(task.attempt_id)
 
         if self._config.worker_id:
             env["IRIS_WORKER_ID"] = self._config.worker_id
@@ -575,9 +588,9 @@ class Worker:
             else:
                 env["IRIS_CONTROLLER_ADDRESS"] = self._config.controller_address
 
-        # Inject bundle path for sub-job inheritance
-        if job.request.bundle_gcs_path:
-            env["IRIS_BUNDLE_GCS_PATH"] = job.request.bundle_gcs_path
+        # Inject bundle path for sub-task inheritance
+        if task.request.bundle_gcs_path:
+            env["IRIS_BUNDLE_GCS_PATH"] = task.request.bundle_gcs_path
 
         # Inject bind host - 0.0.0.0 for Docker (so port mapping works), 127.0.0.1 otherwise
         if isinstance(self._runtime, DockerRuntime):
@@ -586,7 +599,7 @@ class Worker:
             env["IRIS_BIND_HOST"] = "127.0.0.1"
 
         # Inject allocated ports
-        for name, port in job.ports.items():
+        for name, port in task.ports.items():
             env[f"IRIS_PORT_{name.upper()}"] = str(port)
 
         return env
@@ -610,45 +623,48 @@ with open('/workdir/_result.pkl', 'wb') as f:
 """
         return ["python", "-c", thunk]
 
-    def get_job(self, job_id: str) -> Job | None:
-        return self._jobs.get(job_id)
+    def get_task(self, task_id: str) -> Task | None:
+        """Get a task by ID."""
+        return self._tasks.get(task_id)
 
-    def list_jobs(self) -> list[Job]:
-        return list(self._jobs.values())
+    def list_tasks(self) -> list[Task]:
+        """List all tasks."""
+        return list(self._tasks.values())
 
-    def kill_job(self, job_id: str, term_timeout_ms: int = 5000) -> bool:
-        job = self._jobs.get(job_id)
-        if not job:
+    def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:
+        """Kill a running task."""
+        task = self._tasks.get(task_id)
+        if not task:
             return False
 
         # Check if already in terminal state
-        if job.status not in (
-            cluster_pb2.JOB_STATE_RUNNING,
-            cluster_pb2.JOB_STATE_BUILDING,
-            cluster_pb2.JOB_STATE_PENDING,
+        if task.status not in (
+            cluster_pb2.TASK_STATE_RUNNING,
+            cluster_pb2.TASK_STATE_BUILDING,
+            cluster_pb2.TASK_STATE_PENDING,
         ):
             return False
 
         # Set flag to signal thread to stop
-        job.should_stop = True
+        task.should_stop = True
 
         # If container exists, try to kill it
-        if job.container_id:
+        if task.container_id:
             try:
                 # Send SIGTERM
-                self._runtime.kill(job.container_id, force=False)
+                self._runtime.kill(task.container_id, force=False)
 
                 # Wait for shutdown
-                running_states = (cluster_pb2.JOB_STATE_RUNNING, cluster_pb2.JOB_STATE_BUILDING)
+                running_states = (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
                 stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-                    lambda: job.status not in running_states,
+                    lambda: task.status not in running_states,
                     timeout=term_timeout_ms / 1000,
                 )
 
                 # Force kill if graceful shutdown timed out
                 if not stopped:
                     try:
-                        self._runtime.kill(job.container_id, force=True)
+                        self._runtime.kill(task.container_id, force=True)
                     except RuntimeError:
                         pass
             except RuntimeError:
@@ -657,20 +673,21 @@ with open('/workdir/_result.pkl', 'wb') as f:
 
         return True
 
-    def get_logs(self, job_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]:
-        job = self._jobs.get(job_id)
-        if not job:
+    def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]:
+        """Get logs for a task."""
+        task = self._tasks.get(task_id)
+        if not task:
             return []
 
         logs: list[cluster_pb2.Worker.LogEntry] = []
 
-        # Add build logs from job.logs (these have proper timestamps)
-        for log_line in job.logs.lines:
+        # Add build logs from task.logs (these have proper timestamps)
+        for log_line in task.logs.lines:
             logs.append(log_line.to_proto())
 
         # Fetch container stdout/stderr from Docker if container exists
-        if job.container_id:
-            container_logs = self._runtime.get_logs(job.container_id)
+        if task.container_id:
+            container_logs = self._runtime.get_logs(task.container_id)
             for log_line in container_logs:
                 logs.append(log_line.to_proto())
 
