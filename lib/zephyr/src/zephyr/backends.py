@@ -54,12 +54,10 @@ class BackendConfig:
 
     Attributes:
         max_parallelism: Maximum number of concurrent tasks
-        max_retries_preemption: Retries per shard when Ray tasks are preempted
         dry_run: If True, show optimization plan without executing
     """
 
     max_parallelism: int = 1024
-    max_retries_preemption: int = 3
     dry_run: bool = False
 
 
@@ -400,7 +398,6 @@ class Backend:
 
         active_gens: list[tuple[Any, StageContext]] = []
         queued = list(contexts)
-        retries_left = {ctx.shard_idx: self.config.max_retries_preemption for ctx in contexts}
 
         # Start initial batch
         while len(active_gens) < self.config.max_parallelism and queued:
@@ -426,37 +423,13 @@ class Backend:
                                 next_ctx = queued.pop(0)
                                 active_gens.append((self.context.run(run_stage, next_ctx, operations), next_ctx))
                         except _retryable_errors as exc:
-                            if self._maybe_retry(exc, ctx, retries_left):
-                                active_gens.remove((g, ctx))
-                                results_by_shard.pop(ctx.shard_idx, None)
-                                active_gens.append((self.context.run(run_stage, ctx, operations), ctx))
-                            else:
-                                raise
+                            logger.warning("Ray task preempted for shard %s; retrying", ctx.shard_idx, exc_info=exc)
+                            active_gens.remove((g, ctx))
+                            results_by_shard.pop(ctx.shard_idx, None)
+                            active_gens.append((self.context.run(run_stage, ctx, operations), ctx))
                         break
 
         return results_by_shard
-
-    def _maybe_retry(self, exc: Exception, ctx: StageContext, retries_left: dict[int, int]) -> bool:
-        """Check if we should retry after a Ray preemption error."""
-        from ray.exceptions import RayTaskError
-
-        if retries_left.get(ctx.shard_idx, 0) <= 0:
-            return False
-
-        # RayTaskError is only retryable if it's a timeout
-        if isinstance(exc, RayTaskError):
-            cause = getattr(exc, "cause", None)
-            if not (isinstance(cause, TimeoutError) or "timed out" in str(exc)):
-                return False
-
-        retries_left[ctx.shard_idx] -= 1
-        logger.warning(
-            "Ray task preempted for shard %s; retrying (%d retries left)",
-            ctx.shard_idx,
-            retries_left[ctx.shard_idx],
-            exc_info=exc,
-        )
-        return True
 
     def _execute_shard_parallel(
         self,
