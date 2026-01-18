@@ -132,6 +132,13 @@ def _normalize_address_line(line: Any) -> str | None:
     return str(line).lower().strip()
 
 
+# Field-specific normalizers
+FIELD_NORMALIZERS = {
+    "state": _normalize_state,
+    "birthdate": _normalize_date,
+    "encounter_period": _extract_date_part,
+}
+
 def _compare_values(val1: Any, val2: Any, field_name: str = "") -> bool:
     """Compare two values for equality, handling None and different types."""
     if val1 is None and val2 is None:
@@ -139,21 +146,12 @@ def _compare_values(val1: Any, val2: Any, field_name: str = "") -> bool:
     if val1 is None or val2 is None:
         return False
 
-    # Special handling for state fields
-    if "state" in field_name.lower():
-        norm_val1 = _normalize_state(val1)
-        norm_val2 = _normalize_state(val2)
-        return norm_val1 == norm_val2
-
-    # Special handling for date fields
-    if "birthdate" in field_name.lower():
-        date1 = _normalize_date(val1)
-        date2 = _normalize_date(val2)
-        return date1 == date2
-    elif "encounter_period" in field_name.lower():
-        date1 = _extract_date_part(val1)
-        date2 = _extract_date_part(val2)
-        return date1 == date2
+    # Apply field-specific normalization if applicable
+    for key, normalizer in FIELD_NORMALIZERS.items():
+        if key in field_name.lower():
+            norm_val1 = normalizer(val1)
+            norm_val2 = normalizer(val2)
+            return norm_val1 == norm_val2
 
     # Handle array vs string for address lines
     if isinstance(val1, list) and isinstance(val2, str):
