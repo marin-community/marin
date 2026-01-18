@@ -16,7 +16,10 @@ import dspy
 import requests
 
 from openai import AsyncOpenAI
-from langprobe import EvaluateBench
+try:
+    from langprobe import EvaluateBench
+except ImportError:
+    raise ImportError("langprobe is not installed. Please install it to use DspyEvaluator.")
 
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 
