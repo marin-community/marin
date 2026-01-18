@@ -12,14 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-# Force JAX to use CPU before any other imports to avoid CUDA errors on non-GPU machines
-os.environ["JAX_PLATFORMS"] = "cpu"
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
 import time
 import dspy
 import json
+import os
 import random
 from collections.abc import Callable
 from typing import Any

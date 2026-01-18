@@ -2,11 +2,6 @@
 SFT script for Qwen-4B using DSPy format adaptation trace data.
 """
 
-import os
-# Force JAX to use CPU before any other imports
-os.environ["JAX_PLATFORMS"] = "cpu"
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
 from levanter.data.text import ChatLmDatasetFormat
 from experiments.defaults import default_sft, default_tokenize
 from experiments.dspy.train_qwen_4b_config import QwenSFTConfig
