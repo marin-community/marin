@@ -536,15 +536,14 @@ class LevanterHarnessLM(TemplateLM):
             # Handle profiler start/stop based on step
             self._handle_profiler_step()
 
-            batch = hax.shard(batch, self.axis_resources)
-
+            # These helpers need host-local arrays. Don't call them after sharding, since sharding can produce global
+            # arrays that are not fully addressable on every host.
             segments_this_batch = get_segment_ids_from_batch(
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
-
             padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
-            batch = jax.device_put(batch)
 
+            batch = hax.shard(batch, self.axis_resources)
             batch = jax.device_put(batch)
 
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
