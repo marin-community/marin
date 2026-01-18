@@ -15,6 +15,7 @@ dependencies = [
     "haliax",
     "fray",
     "dspy-ai>=3.1.0",
+    "bm25s>=0.2.14",
 ]
 
 [tool.uv]

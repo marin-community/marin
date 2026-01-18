@@ -177,8 +177,18 @@ if __name__ == "__main__":
     start_inference_server(model_path="meta-llama/Meta-Llama-3.1-8B-Instruct", port=8000, device_type="tpu")
     time.sleep(10)
     print("Configuring DSPy...")
-    colbert_url = os.environ.get("COLBERT_SERVER_URL", "http://20.102.90.50:2017/wiki17_abstracts")
-    rm = dspy.ColBERTv2(url=colbert_url)
+    # Configure Retrieval Model
+    colbert_url = os.environ.get("COLBERT_SERVER_URL")
+    if colbert_url:
+        print(f"Using configured ColBERT server: {colbert_url}")
+        rm = dspy.ColBERTv2(url=colbert_url)
+    else:
+        # Fallback to public demo server with warning
+        default_url = "http://20.102.90.50:2017/wiki17_abstracts"
+        print(f"Warning: COLBERT_SERVER_URL not set. Using public demo server: {default_url}")
+        print("Optionally, set COLBERT_SERVER_URL or implement local BM25S retrieval.")
+        rm = dspy.ColBERTv2(url=default_url)
+
     lm = dspy.LM(model="openai/gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
     dspy.settings.configure(lm=lm, rm=rm, adapter=BAMLAdapter())
 
