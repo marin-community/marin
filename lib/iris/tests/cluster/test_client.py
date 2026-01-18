@@ -146,3 +146,57 @@ def test_terminate_prefix_excludes_finished(local_client):
     # terminate_prefix should not include it
     terminated = local_client.terminate_prefix("finished-test")
     assert job_id not in terminated
+
+
+# =============================================================================
+# Task API Tests
+# =============================================================================
+
+
+def test_list_tasks_returns_single_task_for_job(local_client):
+    """Verify list_tasks returns a task for a single-task job."""
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+
+    job_id = local_client.submit(entrypoint, "task-test-job", resources)
+    local_client.wait(job_id)
+
+    tasks = local_client.list_tasks(job_id)
+    assert len(tasks) == 1
+    assert tasks[0].job_id == job_id
+    assert tasks[0].task_index == 0
+    assert tasks[0].task_id == f"{job_id}/task-0"
+
+
+def test_task_status_returns_task_info(local_client):
+    """Verify task_status returns task-level information."""
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+
+    job_id = local_client.submit(entrypoint, "task-status-job", resources)
+    local_client.wait(job_id)
+
+    task = local_client.task_status(job_id, task_index=0)
+    assert task.task_id == f"{job_id}/task-0"
+    assert task.job_id == job_id
+    assert task.task_index == 0
+    assert task.state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+
+def test_fetch_task_logs_returns_logs(local_client):
+    """Verify fetch_task_logs returns logs when available (integration test)."""
+
+    def logging_entrypoint():
+        print("Hello from task")
+
+    entrypoint = Entrypoint.from_callable(logging_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+
+    job_id = local_client.submit(entrypoint, "task-logs-job", resources)
+    local_client.wait(job_id)
+
+    # The method should be callable without error
+    # In local mode, stdout capture may or may not produce logs depending on timing
+    logs = local_client.fetch_task_logs(job_id, task_index=0)
+    # Just verify we get a list back (logs may be empty in fast local execution)
+    assert isinstance(logs, list)

@@ -102,6 +102,9 @@ class _LocalContainer:
             env = self.config.env
             job_info = JobInfo(
                 job_id=env.get("IRIS_JOB_ID", ""),
+                task_id=env.get("IRIS_TASK_ID"),
+                task_index=int(env.get("IRIS_TASK_INDEX", "0")),
+                num_tasks=int(env.get("IRIS_NUM_TASKS", "1")),
                 attempt_id=int(env.get("IRIS_ATTEMPT_ID", "0")),
                 worker_id=env.get("IRIS_WORKER_ID"),
                 controller_address=env.get("IRIS_CONTROLLER_ADDRESS"),
@@ -421,3 +424,17 @@ class LocalClusterClient:
         max_lines: int = 0,
     ) -> list[cluster_pb2.Worker.LogEntry]:
         return self._remote_client.fetch_logs(job_id, start_ms=start_ms, max_lines=max_lines)
+
+    def get_task_status(self, job_id: str, task_index: int) -> cluster_pb2.TaskStatus:
+        return self._remote_client.get_task_status(job_id, task_index)
+
+    def list_tasks(self, job_id: str) -> list[cluster_pb2.TaskStatus]:
+        return self._remote_client.list_tasks(job_id)
+
+    def fetch_task_logs(
+        self,
+        task_id: str,
+        start_ms: int = 0,
+        max_lines: int = 0,
+    ) -> list[cluster_pb2.Worker.LogEntry]:
+        return self._remote_client.fetch_task_logs(task_id, start_ms, max_lines)

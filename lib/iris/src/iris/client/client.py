@@ -567,6 +567,7 @@ class IrisClient:
         poll_interval: float = 2.0,
         *,
         stream_logs: bool = False,
+        stream_task_index: int | None = None,
     ) -> cluster_pb2.JobStatus:
         """Wait for job to complete.
 
@@ -575,6 +576,8 @@ class IrisClient:
             timeout: Maximum time to wait in seconds
             poll_interval: Maximum time between status checks
             stream_logs: If True, stream logs to stdout while waiting
+            stream_task_index: Which task to stream logs from (default: task 0).
+                Only used when stream_logs=True.
 
         Returns:
             Final JobStatus
@@ -588,14 +591,15 @@ class IrisClient:
         last_timestamp_ms = 0
         start = time.monotonic()
         backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
+        task_idx = stream_task_index if stream_task_index is not None else 0
 
         while True:
             # Fetch and emit logs since last check
             try:
-                logs = self.fetch_logs(job_id, start_ms=last_timestamp_ms)
+                logs = self.fetch_task_logs(job_id, task_idx, start_ms=last_timestamp_ms)
                 for entry in logs:
                     last_timestamp_ms = max(last_timestamp_ms, entry.timestamp_ms)
-                    _print_log_entry(job_id, entry)
+                    _print_log_entry(job_id, entry, task_index=task_idx)
             except ValueError:
                 pass  # Job not yet scheduled
 
@@ -604,8 +608,8 @@ class IrisClient:
             if is_job_finished(status.state):
                 # Final drain to catch any remaining logs
                 try:
-                    for entry in self.fetch_logs(job_id, start_ms=last_timestamp_ms):
-                        _print_log_entry(job_id, entry)
+                    for entry in self.fetch_task_logs(job_id, task_idx, start_ms=last_timestamp_ms):
+                        _print_log_entry(job_id, entry, task_index=task_idx)
                 except ValueError:
                     pass
                 return status
@@ -700,6 +704,52 @@ class IrisClient:
         log_protos = self._cluster.fetch_logs(job_id, start_ms=start_ms, max_lines=max_lines)
         return [LogEntry.from_proto(p) for p in log_protos]
 
+    def task_status(self, job_id: JobId, task_index: int) -> cluster_pb2.TaskStatus:
+        """Get status of a specific task within a job.
+
+        Args:
+            job_id: Job identifier
+            task_index: 0-indexed task number
+
+        Returns:
+            TaskStatus proto containing state, worker assignment, and metrics
+        """
+        return self._cluster.get_task_status(str(job_id), task_index)
+
+    def list_tasks(self, job_id: JobId) -> list[cluster_pb2.TaskStatus]:
+        """List all tasks for a job.
+
+        Args:
+            job_id: Job identifier
+
+        Returns:
+            List of TaskStatus protos, one per task
+        """
+        return self._cluster.list_tasks(str(job_id))
+
+    def fetch_task_logs(
+        self,
+        job_id: JobId,
+        task_index: int,
+        *,
+        start_ms: int = 0,
+        max_lines: int = 0,
+    ) -> list[LogEntry]:
+        """Fetch logs for a specific task.
+
+        Args:
+            job_id: Job identifier
+            task_index: 0-indexed task number
+            start_ms: Only return logs after this timestamp (milliseconds since epoch)
+            max_lines: Maximum number of log lines to return (0 = unlimited)
+
+        Returns:
+            List of LogEntry objects from the task
+        """
+        task_id = f"{job_id}/task-{task_index}"
+        entries = self._cluster.fetch_task_logs(task_id, start_ms, max_lines)
+        return [LogEntry.from_proto(e) for e in entries]
+
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the client.
 
@@ -709,11 +759,14 @@ class IrisClient:
         self._cluster.shutdown(wait=wait)
 
 
-def _print_log_entry(job_id: JobId, entry: LogEntry) -> None:
+def _print_log_entry(job_id: JobId, entry: LogEntry, task_index: int | None = None) -> None:
     """Log a job log entry."""
     ts = datetime.fromtimestamp(entry.timestamp_ms / 1000, tz=timezone.utc)
     ts_str = ts.strftime("%H:%M:%S")
-    logger.info("[%s][%s] %s", job_id, ts_str, entry.data)
+    if task_index is not None:
+        logger.info("[%s/task-%d][%s] %s", job_id, task_index, ts_str, entry.data)
+    else:
+        logger.info("[%s][%s] %s", job_id, ts_str, entry.data)
 
 
 # =============================================================================

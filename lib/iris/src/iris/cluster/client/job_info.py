@@ -30,6 +30,9 @@ class JobInfo:
     """
 
     job_id: str
+    task_id: str | None = None
+    task_index: int = 0
+    num_tasks: int = 1
     attempt_id: int = 0
     worker_id: str | None = None
     controller_address: str | None = None
@@ -55,6 +58,9 @@ def get_job_info() -> JobInfo | None:
     if job_id:
         info = JobInfo(
             job_id=job_id,
+            task_id=os.environ.get("IRIS_TASK_ID"),
+            task_index=int(os.environ.get("IRIS_TASK_INDEX", "0")),
+            num_tasks=int(os.environ.get("IRIS_NUM_TASKS", "1")),
             attempt_id=int(os.environ.get("IRIS_ATTEMPT_ID", "0")),
             worker_id=os.environ.get("IRIS_WORKER_ID"),
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),

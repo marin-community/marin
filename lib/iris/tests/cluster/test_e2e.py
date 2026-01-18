@@ -457,6 +457,23 @@ class TestJobInfo:
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
+    def test_job_info_task_fields(self, test_cluster):
+        """JobInfo contains task fields (task_id, task_index, num_tasks)."""
+
+        def test_fn():
+            from iris.cluster.client import get_job_info
+
+            info = get_job_info()
+            assert info is not None
+            assert info.task_id == "test-task-fields/task-0"
+            assert info.task_index == 0
+            assert info.num_tasks == 1
+            return info.task_id
+
+        job_id = test_cluster.submit(test_fn, name="test-task-fields")
+        status = test_cluster.wait(job_id, timeout=30)
+        assert status["state"] == "JOB_STATE_SUCCEEDED"
+
 
 # =============================================================================
 # Tests: Endpoints
