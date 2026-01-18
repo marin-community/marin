@@ -1,5 +1,6 @@
 import dspy
 
+
 class SimplifiedBaleen(dspy.Module):
     def __init__(self, passages_per_hop=3, max_hops=2):
         super().__init__()

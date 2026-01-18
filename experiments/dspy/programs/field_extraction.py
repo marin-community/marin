@@ -3,14 +3,17 @@ import dspy
 from typing import Literal
 from pydantic import BaseModel, Field
 
+
 class PatientNote(BaseModel):
     record_id: int
     note: str
+
 
 class PersonNameAndTitle(BaseModel):
     family: str | None = Field(default=None, description="surname")
     given: list[str] | None = Field(default=None, description="Given names (first and middle names)")
     prefix: str | None = Field(default=None, description="title of the person, e.g., Dr., Mr., Mrs., Ms.")
+
 
 class Address(BaseModel):
     line: str | None = Field(default=None, alias="street")
@@ -19,24 +22,34 @@ class Address(BaseModel):
     postalCode: str | None
     country: Literal["US"] | None
 
+
 class Practitioner(BaseModel):
     name: PersonNameAndTitle | None
     phone: str | None = Field(default=None, description="Phone number of the healthcare provider")
     email: str | None = Field(default=None, description="Email address of the healthcare provider")
     address: Address | None = Field(default=None, description="Address of the healthcare provider")
 
+
 class Immunization(BaseModel):
     traits: list[str] | None = Field(default=None, description="Text describing the name and traits of the immunization")
-    status: Literal["completed"] | None = Field(default=None, description="If no traits are present, then the status cannot be determined")
+    status: Literal["completed"] | None = Field(
+        default=None, description="If no traits are present, then the status cannot be determined"
+    )
     occurrenceDate: str | None = Field(default=None, description="ISO-8601 format for date")
+
 
 class Substance(BaseModel):
     category: Literal["environment", "food", "medication", "other"]
     name: str | None
-    manifestation: str | None = Field(default=None, description="Text describing the manifestation of the allergy or intolerance")
+    manifestation: str | None = Field(
+        default=None,
+        description="Text describing the manifestation of the allergy or intolerance",
+    )
+
 
 class Allergy(BaseModel):
     substance: list[Substance] = Field(description="Substances the patient is allergic to")
+
 
 class Patient(BaseModel):
     record_id: int | None = Field(default=None)
@@ -50,28 +63,35 @@ class Patient(BaseModel):
     address: Address | None = Field(default=None, description="Residence address of the patient")
     allergy: list[Allergy] | None = Field(default=None)
 
+
 class PatientInfo(dspy.Signature):
     """
     - Do not infer any information that is not explicitly mentioned in the text.
     - If you are unsure about any field, leave it as None.
     """
+
     note: str = dspy.InputField()
     patient: Patient = dspy.OutputField()
+
 
 class PractitionerInfo(dspy.Signature):
     """
     - Do not infer any information that is not explicitly mentioned in the text.
     - If you are unsure about any field, leave it as None.
     """
+
     note: str = dspy.InputField()
     practitioner: list[Practitioner] | None = dspy.OutputField()
+
 
 class ImmunizationInfo(dspy.Signature):
     """
     Extracts immunization information from a patient note.
     """
+
     note: str = dspy.InputField(desc="Immunization info only")
     immunization: list[Immunization] | None = dspy.OutputField()
+
 
 class FieldExtraction(dspy.Module):
     def __init__(self):
@@ -92,14 +112,10 @@ class FieldExtraction(dspy.Module):
 
         # Helper to extract model dump safely
         patient_data = p_pred.patient.model_dump() if p_pred.patient else {}
-        patient_data['record_id'] = record_id
+        patient_data["record_id"] = record_id
 
         practitioner_data = [item.model_dump() for item in pr_pred.practitioner] if pr_pred.practitioner else []
         immunization_data = [item.model_dump() for item in i_pred.immunization] if i_pred.immunization else []
 
-        result = {
-            "patient": patient_data,
-            "practitioner": practitioner_data,
-            "immunization": immunization_data
-        }
+        result = {"patient": patient_data, "practitioner": practitioner_data, "immunization": immunization_data}
         return dspy.Prediction(result=result)

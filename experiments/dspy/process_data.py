@@ -3,7 +3,8 @@ import dspy
 import json
 import os
 import random
-from typing import List, Dict, Any, Callable
+from typing import Any
+from collections.abc import Callable
 from dspy.datasets.dataloader import DataLoader
 from dspy.primitives.prediction import Prediction
 from dspy.teleprompt.bootstrap_trace import bootstrap_trace_data
@@ -22,17 +23,19 @@ tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B-Instruct
 # 1. Data Loading
 # ==========================================
 
+
 def load_hotpotqa():
     # Load HotPotQA (using dspy built-in or HF)
     # For simplicity using dspy.datasets if available or loading from HF
     dl = DataLoader()
     dataset = dl.from_huggingface(
         "hotpotqa/hotpot_qa",
-            "fullwiki",
-            split="train",
-            input_keys=("question",),
+        "fullwiki",
+        split="train",
+        input_keys=("question",),
     )
     return dataset
+
 
 def load_hover():
     # Placeholder for HoVer loading
@@ -43,9 +46,13 @@ def load_hover():
     dataset = dl.from_huggingface(
         "Dzeniks/hover",
         split="train",
-        input_keys=("claim", "evidence",),  # type: ignore
+        input_keys=(
+            "claim",
+            "evidence",
+        ),  # type: ignore
     )
     return dataset
+
 
 def download_fhir_data(output_path="data/note.json"):
     if os.path.exists(output_path):
@@ -55,22 +62,29 @@ def download_fhir_data(output_path="data/note.json"):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     os.system(f"curl -k -L {url} -o {output_path}")
 
+
 def load_fhir(file_path="data/note.json"):
     download_fhir_data(file_path)
-    with open(file_path, 'r') as f:
+    with open(file_path, "r") as f:
         data = json.load(f)
 
     examples = []
     for item in data:
         # item keys: record_id, note
-        examples.append(dspy.Example(note=item['note'], record_id=item['record_id']).with_inputs("note", "record_id"))
+        examples.append(dspy.Example(note=item["note"], record_id=item["record_id"]).with_inputs("note", "record_id"))
     return examples
+
 
 # ==========================================
 # 2. Trace Collection
 # ==========================================
 
-def format_data_for_finetuning(trace: tuple[Any, dict[str, Any], Prediction], adapter: dspy.Adapter) -> list[dict[str, str]]:
+
+def format_data_for_finetuning(
+    trace: tuple[Any, dict[str, Any], Prediction],
+    adapter: dspy.Adapter,
+) -> list[dict[str, str]]:
+
     pred, inputs, outputs = trace
 
     demos = pred.demos if hasattr(pred, "demos") else []
@@ -83,9 +97,13 @@ def format_data_for_finetuning(trace: tuple[Any, dict[str, Any], Prediction], ad
         signature=pred.signature,
         outputs=outputs.toDict(),
     )
-    return input_chat + [{"role": "assistant", "content": output_chat}]
+    return [*input_chat, {"role": "assistant", "content": output_chat}]
 
-def collect_traces_for_module(module: dspy.Module, examples: List[dspy.Example], num_traces: int, metric: Callable) -> List[List[dict[str, str]]]:
+
+
+def collect_traces_for_module(
+    module: dspy.Module, examples: list[dspy.Example], num_traces: int, metric: Callable
+) -> list[list[dict[str, str]]]:
     print(f"Collecting traces for {module.__class__.__name__}...")
 
     # Check if we have enough examples
@@ -116,7 +134,8 @@ def collect_traces_for_module(module: dspy.Module, examples: List[dspy.Example],
 # 3. Filtering and Sampling
 # ==========================================
 
-def filter_and_sample(traces: List[Dict[str, Any]], final_count: int = 3000, max_tokens: int = 2048):
+
+def filter_and_sample(traces: list[dict[str, Any]], final_count: int = 3000, max_tokens: int = 2048):
     filtered = []
     for trace in traces:
         # Serialize trace to string for token counting
@@ -136,6 +155,7 @@ def filter_and_sample(traces: List[Dict[str, Any]], final_count: int = 3000, max
     if len(filtered) > final_count:
         return random.sample(filtered, final_count)
     return filtered
+
 
 # ==========================================
 # Main
@@ -208,38 +228,34 @@ if __name__ == "__main__":
             clean_item = {}
             for k, v in item.items():
                 if k == "prediction":
-                     if hasattr(v, "toDict"):
-                         clean_item[k] = v.toDict()
-                     elif hasattr(v, "__dict__"):
-                         clean_item[k] = vars(v)
-                     else:
-                         clean_item[k] = str(v)
+                    if hasattr(v, "toDict"):
+                        clean_item[k] = v.toDict()
+                    elif hasattr(v, "__dict__"):
+                        clean_item[k] = vars(v)
+                    else:
+                        clean_item[k] = str(v)
                 elif k == "example":
-                     if hasattr(v, "toDict"):
-                         clean_item[k] = v.toDict()
-                     elif hasattr(v, "__dict__"):
-                         clean_item[k] = vars(v)
-                     else:
-                         clean_item[k] = str(v)
+                    if hasattr(v, "toDict"):
+                        clean_item[k] = v.toDict()
+                    elif hasattr(v, "__dict__"):
+                        clean_item[k] = vars(v)
+                    else:
+                        clean_item[k] = str(v)
                 elif k == "trace":
-                     # trace is list of (module, input, prediction)
-                     # We convert to string representation for modules/objects
-                     clean_trace = []
-                     if isinstance(v, list):
-                         for step in v:
-                             if isinstance(step, (list, tuple)) and len(step) >= 3:
-                                 # (module, input, prediction)
-                                 mod, inp, step_pred = step[0], step[1], step[2]
-                                 clean_trace.append({
-                                     "module": str(mod),
-                                     "input": inp,
-                                     "prediction": str(step_pred)
-                                 })
-                             else:
-                                 clean_trace.append(str(step))
-                     clean_item[k] = clean_trace
+                    # trace is list of (module, input, prediction)
+                    # We convert to string representation for modules/objects
+                    clean_trace = []
+                    if isinstance(v, list):
+                        for step in v:
+                            if isinstance(step, (list, tuple)) and len(step) >= 3:
+                                # (module, input, prediction)
+                                mod, inp, step_pred = step[0], step[1], step[2]
+                                clean_trace.append({"module": str(mod), "input": inp, "prediction": str(step_pred)})
+                            else:
+                                clean_trace.append(str(step))
+                    clean_item[k] = clean_trace
                 else:
-                     clean_item[k] = v
+                    clean_item[k] = v
             serializable.append(clean_item)
 
         json.dump(serializable, f, indent=2)

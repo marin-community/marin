@@ -13,9 +13,9 @@ def is_package_installed(package_name: str) -> bool:
         subprocess.run(
             [sys.executable, "-m", "pip", "show", package_name],
             check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
+
         return True
     except subprocess.CalledProcessError:
         return False

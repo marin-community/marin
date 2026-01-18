@@ -1,7 +1,8 @@
 import json
 import os
 import re
-from typing import Any, Callable, Iterable
+from typing import Any
+from collections.abc import Callable, Iterable
 
 import dspy
 import requests

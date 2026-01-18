@@ -1,34 +1,70 @@
 import dspy
 import json
 import os
-from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 MATCH_THRESHOLD = 0.7
 
 # State abbreviation to full name mapping
 STATE_ABBR_TO_NAME = {
-    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
-    "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
-    "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho",
-    "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
-    "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
-    "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
-    "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
-    "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
-    "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
-    "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
-    "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
-    "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
-    "WI": "Wisconsin", "WY": "Wyoming",
+    "AL": "Alabama",
+    "AK": "Alaska",
+    "AZ": "Arizona",
+    "AR": "Arkansas",
+    "CA": "California",
+    "CO": "Colorado",
+    "CT": "Connecticut",
+    "DE": "Delaware",
+    "FL": "Florida",
+    "GA": "Georgia",
+    "HI": "Hawaii",
+    "ID": "Idaho",
+    "IL": "Illinois",
+    "IN": "Indiana",
+    "IA": "Iowa",
+    "KS": "Kansas",
+    "KY": "Kentucky",
+    "LA": "Louisiana",
+    "ME": "Maine",
+    "MD": "Maryland",
+    "MA": "Massachusetts",
+    "MI": "Michigan",
+    "MN": "Minnesota",
+    "MS": "Mississippi",
+    "MO": "Missouri",
+    "MT": "Montana",
+    "NE": "Nebraska",
+    "NV": "Nevada",
+    "NH": "New Hampshire",
+    "NJ": "New Jersey",
+    "NM": "New Mexico",
+    "NY": "New York",
+    "NC": "North Carolina",
+    "ND": "North Dakota",
+    "OH": "Ohio",
+    "OK": "Oklahoma",
+    "OR": "Oregon",
+    "PA": "Pennsylvania",
+    "RI": "Rhode Island",
+    "SC": "South Carolina",
+    "SD": "South Dakota",
+    "TN": "Tennessee",
+    "TX": "Texas",
+    "UT": "Utah",
+    "VT": "Vermont",
+    "VA": "Virginia",
+    "WA": "Washington",
+    "WV": "West Virginia",
+    "WI": "Wisconsin",
+    "WY": "Wyoming",
 }
 
 # Cache for gold standard data
-_gold_data_cache: Dict[int, Dict] | None = None
+_gold_data_cache: dict[int, dict] | None = None
 
 
-def _load_gold_data(gold_path: str | Path = "data/gold.json") -> Dict[int, Dict]:
+def _load_gold_data(gold_path: str | Path = "data/gold.json") -> dict[int, dict]:
     """Load and cache gold standard data."""
     global _gold_data_cache
     if _gold_data_cache is not None:
@@ -52,7 +88,7 @@ def _load_gold_data(gold_path: str | Path = "data/gold.json") -> Dict[int, Dict]
     return _gold_data_cache
 
 
-def _safe_get_nested(data: Dict, path: str, default=None) -> Any:
+def _safe_get_nested(data: dict, path: str, default=None) -> Any:
     """Safely get nested dictionary value using dot notation."""
     keys = path.split(".")
     current = data
@@ -78,7 +114,8 @@ def _normalize_state(state_val: Any) -> str | None:
         return STATE_ABBR_TO_NAME[state_upper].lower()
 
     state_lower = state_str.lower()
-    for abbr, full_name in STATE_ABBR_TO_NAME.items():
+    for _abbr, full_name in STATE_ABBR_TO_NAME.items():
+
         if full_name.lower() == state_lower:
             return full_name.lower()
 
@@ -110,6 +147,7 @@ def _normalize_date(val: Any) -> str | None:
 
     try:
         from datetime import datetime
+
         for fmt in ["%B %d, %Y", "%b %d, %Y", "%m/%d/%Y", "%d/%m/%Y"]:
             try:
                 dt = datetime.strptime(date_str, fmt)
@@ -175,7 +213,7 @@ def _compare_values(val1: Any, val2: Any, field_name: str = "") -> bool:
     return str(val1).lower().strip() == str(val2).lower().strip()
 
 
-def _evaluate_patient_fields(gold_record: Dict, result_record: Dict) -> tuple[int, int]:
+def _evaluate_patient_fields(gold_record: dict, result_record: dict) -> tuple[int, int]:
     """Evaluate patient-level fields. Returns (matches, total)."""
     result_patient = result_record.get("patient", {})
     matches = 0
@@ -216,7 +254,7 @@ def _evaluate_patient_fields(gold_record: Dict, result_record: Dict) -> tuple[in
     return matches, total
 
 
-def _evaluate_practitioner_fields(gold_record: Dict, result_record: Dict) -> tuple[int, int]:
+def _evaluate_practitioner_fields(gold_record: dict, result_record: dict) -> tuple[int, int]:
     """Evaluate practitioner fields. Returns (matches, total)."""
     gold_practitioners = gold_record.get("practitioner")
     result_practitioners = result_record.get("practitioner", [])
@@ -296,7 +334,7 @@ def _evaluate_practitioner_fields(gold_record: Dict, result_record: Dict) -> tup
     return matches, total
 
 
-def _evaluate_immunization_fields(gold_record: Dict, result_record: Dict) -> tuple[int, int]:
+def _evaluate_immunization_fields(gold_record: dict, result_record: dict) -> tuple[int, int]:
     """Evaluate immunization fields. Returns (matches, total)."""
     gold_immunizations = gold_record.get("immunization")
     result_immunizations = result_record.get("immunization", [])
@@ -309,7 +347,7 @@ def _evaluate_immunization_fields(gold_record: Dict, result_record: Dict) -> tup
     return matches, total
 
 
-def _evaluate_allergy_fields(gold_record: Dict, result_record: Dict) -> tuple[int, int]:
+def _evaluate_allergy_fields(gold_record: dict, result_record: dict) -> tuple[int, int]:
     """Evaluate allergy fields. Returns (matches, total)."""
     gold_allergy = gold_record.get("allergy", {})
     result_allergy = result_record.get("patient", {}).get("allergy", [])
@@ -332,11 +370,11 @@ def _evaluate_allergy_fields(gold_record: Dict, result_record: Dict) -> tuple[in
     return matches, total
 
 
-def claim_verification_metric(example: dspy.Example, prediction: dspy.Prediction, trace = None) -> float:
+def claim_verification_metric(example: dspy.Example, prediction: dspy.Prediction, trace=None) -> float:
     return int(example.label == prediction.label_int)
 
 
-def field_extraction_metric(example: dspy.Example, prediction: dspy.Prediction, trace = None) -> float:
+def field_extraction_metric(example: dspy.Example, prediction: dspy.Prediction, trace=None) -> float:
     """
     Evaluate field extraction by comparing prediction with gold standard.
     Returns a score between 0.0 and 1.0 based on field-level accuracy.
@@ -392,6 +430,6 @@ def field_extraction_metric(example: dspy.Example, prediction: dspy.Prediction, 
 
         return (total_matches / total_fields) > MATCH_THRESHOLD
 
-    except Exception as e:
+    except Exception:
         # Return 0.0 on any error
         return 0.0
