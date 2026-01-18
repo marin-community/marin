@@ -178,12 +178,6 @@ def build_runtime_env_for_packages(
     ]
     # Add resiliparse custom index
     requirements_txt.append("--extra-index-url https://marin-community.github.io/chatnoir-resiliparse/simple")
-    # Ray's runtime env installs dependencies into a virtualenv that includes system site-packages.
-    # Without this, `pip` may decide requirements are already satisfied by the base (anaconda) env, which can
-    # lead to ABI mismatches (e.g. pandas compiled against a different numpy) when the job imports those libs.
-    requirements_txt.append("--ignore-installed")
-    # The runtime env installer runs on the cluster; avoid caching large wheels in tight /tmp environments.
-    requirements_txt.append("--no-cache-dir")
 
     torch_pkgs = []
     for pkg in package_spec.package_specs + pip_packages:
@@ -210,5 +204,15 @@ def build_runtime_env_for_packages(
 
     return dict(  # type: ignore[return-value]
         env_vars=env_vars | {"PYTHONPATH": ":".join(python_path)},
-        pip={"packages": req_path, "pip_check": False},
+        pip={
+            "packages": req_path,
+            "pip_check": False,
+            # Ray's runtime env installs into a virtualenv that includes system site-packages. Without
+            # `--ignore-installed`, pip can decide requirements are already satisfied by the base (anaconda) env,
+            # which can lead to ABI mismatches (e.g. pandas compiled against a different numpy).
+            #
+            # Ray's internal pip runtime_env plugin supports `pip_install_options` even though it's not part of the
+            # public `RuntimeEnv(pip=...)` API; we rely on it here for cluster stability.
+            "pip_install_options": ["--disable-pip-version-check", "--no-cache-dir", "--ignore-installed"],
+        },
     )
