@@ -34,6 +34,56 @@ enum JobState {
   JOB_STATE_UNSCHEDULABLE = 8;  // Couldn't be scheduled within timeout
 }
 
+// Task state mirrors job state - a task is a single unit of execution within a job
+// TaskState is identical to JobState but distinct for type safety and clarity
+enum TaskState {
+  TASK_STATE_UNSPECIFIED = 0;
+  TASK_STATE_PENDING = 1;
+  TASK_STATE_BUILDING = 2;
+  TASK_STATE_RUNNING = 3;
+  TASK_STATE_SUCCEEDED = 4;
+  TASK_STATE_FAILED = 5;
+  TASK_STATE_KILLED = 6;
+  TASK_STATE_WORKER_FAILED = 7;
+  TASK_STATE_UNSCHEDULABLE = 8;
+}
+
+// Status of a single task within a job
+message TaskStatus {
+  string task_id = 1;                 // "{job_id}/task-{index}"
+  string job_id = 2;
+  int32 task_index = 3;               // 0-indexed task number
+  TaskState state = 4;
+
+  string worker_id = 5;
+  string worker_address = 6;
+
+  int32 exit_code = 7;
+  string error = 8;
+
+  int64 started_at_ms = 9;
+  int64 finished_at_ms = 10;
+
+  map<string, int32> ports = 11;      // Per-task port allocations
+  ResourceUsage resource_usage = 12;
+  BuildMetrics build_metrics = 13;
+
+  int32 current_attempt_id = 14;
+  repeated TaskAttempt attempts = 15;
+}
+
+// Record of a single task execution attempt
+message TaskAttempt {
+  int32 attempt_id = 1;
+  string worker_id = 2;
+  TaskState state = 3;
+  int32 exit_code = 4;
+  string error = 5;
+  int64 started_at_ms = 6;
+  int64 finished_at_ms = 7;
+  bool is_worker_failure = 8;
+}
+
 message ResourceUsage {
   int64 memory_mb = 1;
   int64 disk_mb = 2;
@@ -81,6 +131,14 @@ message JobStatus {
   repeated JobAttempt attempts = 16;       // History of previous attempts
   int32 failure_count = 17;                // Total job failures
   int32 preemption_count = 18;             // Total preemptions
+
+  // Task information (populated for jobs with replicas > 1)
+  int32 num_tasks = 19;
+  int32 tasks_pending = 20;
+  int32 tasks_running = 21;
+  int32 tasks_succeeded = 22;
+  int32 tasks_failed = 23;
+  repeated TaskStatus tasks = 24;          // Per-task status (optional, controlled by include_tasks)
 }
 
 // Record of a single job execution attempt
@@ -220,6 +278,11 @@ message Controller {
     // Parent job ID for hierarchical job tracking (empty string if root job)
     // Child job IDs are formed as "{parent_job_id}/{name}"
     string parent_job_id = 10;
+
+    // Job-level failure tolerance
+    // A job fails when this many tasks have exhausted their retries (default 0 = fail on first task failure)
+    // Preemptions do not count toward this limit
+    int32 max_task_failures = 11;
   }
 
   message LaunchJobResponse {
@@ -229,6 +292,7 @@ message Controller {
   message GetJobStatusRequest {
     string job_id = 1;
     bool include_result = 2;  // If true, include serialized_result in response
+    bool include_tasks = 3;   // If true, include per-task status in response
   }
 
   message GetJobStatusResponse {
@@ -243,6 +307,24 @@ message Controller {
 
   message ListJobsResponse {
     repeated JobStatus jobs = 1;
+  }
+
+  // --- Task Operations ---
+  message GetTaskStatusRequest {
+    string job_id = 1;
+    int32 task_index = 2;
+  }
+
+  message GetTaskStatusResponse {
+    TaskStatus task = 1;
+  }
+
+  message ListTasksRequest {
+    string job_id = 1;
+  }
+
+  message ListTasksResponse {
+    repeated TaskStatus tasks = 1;
   }
 
   // --- Worker Management ---
@@ -278,18 +360,20 @@ message Controller {
     repeated WorkerHealthStatus workers = 1;
   }
 
-  // --- Job State Reporting (worker -> controller) ---
-  message ReportJobStateRequest {
+  // --- Task State Reporting (worker -> controller) ---
+  message ReportTaskStateRequest {
     string worker_id = 1;
-    string job_id = 2;
-    JobState state = 3;
-    int32 exit_code = 4;
-    string error = 5;
-    int64 finished_at_ms = 6;
-    int32 attempt_id = 7;           // Which attempt completed
+    string task_id = 2;             // Full task ID
+    string job_id = 3;              // Parent job ID (for job-level state aggregation)
+    int32 task_index = 4;
+    TaskState state = 5;
+    int32 exit_code = 6;
+    string error = 7;
+    int64 finished_at_ms = 8;
+    int32 attempt_id = 9;
   }
 
-  message ReportJobStateResponse {}
+  message ReportTaskStateResponse {}
 
   // --- Endpoint Registry ---
   // Endpoints are registered with prefixed names: "{root_job_id}/{actor_name}"
@@ -338,39 +422,35 @@ message Controller {
 // ============================================================================
 
 message Worker {
-  message RunJobRequest {
-    string job_id = 1;
+  message RunTaskRequest {
+    string job_id = 1;              // Parent job ID
+    string task_id = 2;             // Full task ID: "{job_id}/task-{index}"
+    int32 task_index = 3;           // 0-indexed task number
+    int32 num_tasks = 4;            // Total tasks in job (for IRIS_NUM_TASKS)
 
-    // Serialized Python objects and workspace bundle for execution
-    bytes serialized_entrypoint = 2;   // cloudpickle(Entrypoint)
-    EnvironmentConfig environment = 3;  // Environment configuration
-    string bundle_gcs_path = 4;        // gs://bucket/path/bundle.zip
-
-    // Resource specification
-    ResourceSpecProto resources = 6;
-
-    int32 timeout_seconds = 8;
-
-    // Port requests
-    repeated string ports = 9;
-
-    int32 attempt_id = 10;          // Which attempt this is
+    bytes serialized_entrypoint = 5;
+    EnvironmentConfig environment = 6;
+    string bundle_gcs_path = 7;
+    ResourceSpecProto resources = 8;
+    int32 timeout_seconds = 9;
+    repeated string ports = 10;
+    int32 attempt_id = 11;
   }
 
-  message RunJobResponse {
-    string job_id = 1;
-    JobState state = 2;
+  message RunTaskResponse {
+    string task_id = 1;
+    TaskState state = 2;
   }
 
-  message GetJobStatusRequest {
-    string job_id = 1;
+  message GetTaskStatusRequest {
+    string task_id = 1;
     bool include_result = 2;
   }
 
-  message ListJobsRequest {}
+  message ListTasksRequest {}
 
-  message ListJobsResponse {
-    repeated JobStatus jobs = 1;
+  message ListTasksResponse {
+    repeated TaskStatus tasks = 1;
   }
 
   message LogEntry {
@@ -387,24 +467,24 @@ message Worker {
     int64 max_lines = 5;
   }
 
-  message FetchLogsRequest {
-    string job_id = 1;
+  message FetchTaskLogsRequest {
+    string task_id = 1;
     FetchLogsFilter filter = 2;
   }
 
-  message FetchLogsResponse {
+  message FetchTaskLogsResponse {
     repeated LogEntry logs = 1;
   }
 
-  message KillJobRequest {
-    string job_id = 1;
-    int32 term_timeout_ms = 2; // Time to wait for graceful termination before SIGKILL
+  message KillTaskRequest {
+    string task_id = 1;
+    int32 term_timeout_ms = 2;      // Time to wait for graceful termination before SIGKILL
   }
 
   message HealthResponse {
     bool healthy = 1;
     int64 uptime_ms = 2;
-    int32 running_jobs = 3;
+    int32 running_tasks = 3;        // Renamed from running_jobs
   }
 }
 
@@ -419,10 +499,14 @@ service ControllerService {
   rpc TerminateJob(Controller.TerminateJobRequest) returns (Empty);
   rpc ListJobs(Controller.ListJobsRequest) returns (Controller.ListJobsResponse);
 
+  // Task operations
+  rpc GetTaskStatus(Controller.GetTaskStatusRequest) returns (Controller.GetTaskStatusResponse);
+  rpc ListTasks(Controller.ListTasksRequest) returns (Controller.ListTasksResponse);
+
   // Worker management (workers send heartbeats to controller)
   rpc RegisterWorker(Controller.RegisterWorkerRequest) returns (Controller.RegisterWorkerResponse);
   rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
-  rpc ReportJobState(Controller.ReportJobStateRequest) returns (Controller.ReportJobStateResponse);
+  rpc ReportTaskState(Controller.ReportTaskStateRequest) returns (Controller.ReportTaskStateResponse);
 
   // Endpoint registry (generic service discovery)
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
@@ -432,10 +516,10 @@ service ControllerService {
 }
 
 service WorkerService {
-  rpc RunJob(Worker.RunJobRequest) returns (Worker.RunJobResponse);
-  rpc GetJobStatus(Worker.GetJobStatusRequest) returns (JobStatus);
-  rpc ListJobs(Worker.ListJobsRequest) returns (Worker.ListJobsResponse);
-  rpc FetchLogs(Worker.FetchLogsRequest) returns (Worker.FetchLogsResponse);
-  rpc KillJob(Worker.KillJobRequest) returns (Empty);
+  rpc RunTask(Worker.RunTaskRequest) returns (Worker.RunTaskResponse);
+  rpc GetTaskStatus(Worker.GetTaskStatusRequest) returns (TaskStatus);
+  rpc ListTasks(Worker.ListTasksRequest) returns (Worker.ListTasksResponse);
+  rpc FetchTaskLogs(Worker.FetchTaskLogsRequest) returns (Worker.FetchTaskLogsResponse);
+  rpc KillTask(Worker.KillTaskRequest) returns (Empty);
   rpc HealthCheck(Empty) returns (Worker.HealthResponse);
 }
