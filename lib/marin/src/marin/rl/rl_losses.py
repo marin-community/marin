@@ -358,7 +358,11 @@ def rloo_loss_with_importance_sampling(
     # KL regularization
 
     if kl_coef > 0:
-        reference_logprobs = compute_logprobs_fn(reference_model, batch, key)
+        # Always use non-chunked compute_logprobs for reference model to avoid
+        # JAX compilation issues with the custom_vjp in _blockwise_cross_entropy_loss
+        # when called twice in the same JIT-compiled function. Also apply stop_gradient
+        # since we don't need gradients through the reference model.
+        reference_logprobs = jax.lax.stop_gradient(compute_logprobs(reference_model, batch, key))
         reference_logprobs = reference_logprobs * loss_masks_array
         # log_ratio = (current_logprobs - reference_logprobs_array) * loss_masks_array
         kl_penalty = jnp.exp(reference_logprobs - current_logprobs) - (reference_logprobs - current_logprobs) - 1

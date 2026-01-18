@@ -156,6 +156,8 @@ vllm =[
 
 math = ["pylatexenc", "sympy"]
 
+evalplus = ["evalplus"]
+
 [[tool.uv.index]]
 name = "marin-resiliparse"
 url = "https://marin-community.github.io/chatnoir-resiliparse/simple"

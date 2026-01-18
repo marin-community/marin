@@ -459,6 +459,15 @@ wheels = [
 ]
 
 [[package]]
+name = "appdirs"
+version = "1.4.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d7/d8/05696357e0311f5b5c316d7b95f46c669dd9c15aaeecbb48c7d0aeb88c40/appdirs-1.4.4.tar.gz", hash = "sha256:7d5d0167b2b1ba821647616af46a749d1c653740dd0d2415100fe26e27afdf41", size = 13470, upload-time = "2020-05-11T07:59:51.037Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3b/00/2344469e2084fb287c2e0b57b72910309874c3245463acd6cf5e3db69324/appdirs-1.4.4-py2.py3-none-any.whl", hash = "sha256:a841dacd6b99318a741b166adb07e19ee71a274450e68237b4650ca1055ab128", size = 9566, upload-time = "2020-05-11T07:59:49.499Z" },
+]
+
+[[package]]
 name = "appnope"
 version = "0.1.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1477,6 +1486,24 @@ epath = [
 ]
 epy = [
     { name = "typing-extensions" },
+]
+
+[[package]]
+name = "evalplus"
+version = "0.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "appdirs" },
+    { name = "multipledispatch" },
+    { name = "numpy" },
+    { name = "tempdir" },
+    { name = "termcolor" },
+    { name = "tqdm" },
+    { name = "wget" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/85/64/24895f26885a93c67ea714b7110a9fe172c3013600df831de103b5b55f58/evalplus-0.2.1.tar.gz", hash = "sha256:8f7e62d4bb1d77e0080dc125ac6ada02ad554cac3dadd1a426b144ad495dd2a3", size = 570043, upload-time = "2024-04-02T22:16:13.161Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/34/66/5ee90168adc1409d72ef8d9bcb2a548800c98062094111d494feea34b012/evalplus-0.2.1-py3-none-any.whl", hash = "sha256:3de7c8262b1ca332481fd31796971b7bd53449af12d029aefc923b5a08c415ae", size = 35891, upload-time = "2024-04-02T22:16:11.811Z" },
 ]
 
 [[package]]
@@ -4360,6 +4387,9 @@ cpu = [
 eval = [
     { name = "lm-eval", extra = ["math"] },
 ]
+evalplus = [
+    { name = "evalplus" },
+]
 gpu = [
     { name = "jax", extra = ["cuda12"], marker = "extra == 'extra-5-marin-gpu' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
     { name = "torch", version = "2.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
@@ -4468,6 +4498,7 @@ requires-dist = [
     { name = "deepdiff" },
     { name = "draccus", specifier = ">=0.11.5" },
     { name = "dupekit", editable = "lib/dupekit" },
+    { name = "evalplus", marker = "extra == 'evalplus'" },
     { name = "fasteners", specifier = ">=0.19" },
     { name = "flask" },
     { name = "floret" },
@@ -4523,7 +4554,7 @@ requires-dist = [
     { name = "warcio" },
     { name = "zephyr", editable = "lib/zephyr" },
 ]
-provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "vllm", "math"]
+provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "vllm", "math", "evalplus"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5263,6 +5294,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/46/e2/348cd32faad84eaf1d20cce80e2bb0ef8d312c55bca1f7fa9865e7770aaf/multidict-6.7.0-cp312-cp312-win_amd64.whl", hash = "sha256:92abb658ef2d7ef22ac9f8bb88e8b6c3e571671534e029359b6d9e845923eb1b", size = 46073, upload-time = "2025-10-06T14:49:50.28Z" },
     { url = "https://files.pythonhosted.org/packages/25/ec/aad2613c1910dce907480e0c3aa306905830f25df2e54ccc9dea450cb5aa/multidict-6.7.0-cp312-cp312-win_arm64.whl", hash = "sha256:490dab541a6a642ce1a9d61a4781656b346a55c13038f0b1244653828e3a83ec", size = 43226, upload-time = "2025-10-06T14:49:52.304Z" },
     { url = "https://files.pythonhosted.org/packages/b7/da/7d22601b625e241d4f23ef1ebff8acfc60da633c9e7e7922e24d10f592b3/multidict-6.7.0-py3-none-any.whl", hash = "sha256:394fc5c42a333c9ffc3e421a4c85e08580d990e08b99f6bf35b4132114c5dcb3", size = 12317, upload-time = "2025-10-06T14:52:29.272Z" },
+]
+
+[[package]]
+name = "multipledispatch"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fe/3e/a62c3b824c7dec33c4a1578bcc842e6c30300051033a4e5975ed86cc2536/multipledispatch-1.0.0.tar.gz", hash = "sha256:5c839915465c68206c3e9c473357908216c28383b425361e5d144594bf85a7e0", size = 12385, upload-time = "2023-06-27T16:45:11.074Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/c0/00c9809d8b9346eb238a6bbd5f83e846a4ce4503da94a4c08cb7284c325b/multipledispatch-1.0.0-py3-none-any.whl", hash = "sha256:0c53cd8b077546da4e48869f49b13164bebafd0c2a5afceb6bb6a316e7fb46e4", size = 12818, upload-time = "2023-06-27T16:45:09.418Z" },
 ]
 
 [[package]]
@@ -8585,6 +8625,12 @@ wheels = [
 ]
 
 [[package]]
+name = "tempdir"
+version = "0.7.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/dd/b2/b931869a9f9ad9fa14deecbcfc28e514b0755f8b904d9fe48864951b1a60/tempdir-0.7.1.tar.gz", hash = "sha256:689680ed3ba4cc8347a70e67efc25086ce85b53b9d24a1420899c585bbf7ba8e", size = 5890, upload-time = "2016-03-02T16:42:22.066Z" }
+
+[[package]]
 name = "tenacity"
 version = "9.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -10145,6 +10191,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/5a/70/1469ef1d3542ae7c2
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ad/e4/8d97cca767bcc1be76d16fb76951608305561c6e056811587f36cb1316a8/werkzeug-3.1.5-py3-none-any.whl", hash = "sha256:5111e36e91086ece91f93268bb39b4a35c1e6f1feac762c9c822ded0a4e322dc", size = 225025, upload-time = "2026-01-08T17:49:21.859Z" },
 ]
+
+[[package]]
+name = "wget"
+version = "3.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/6a/62e288da7bcda82b935ff0c6cfe542970f04e29c756b0e147251b2fb251f/wget-3.2.zip", hash = "sha256:35e630eca2aa50ce998b9b1a127bb26b30dfee573702782aa982f875e3f16061", size = 10857, upload-time = "2015-10-22T15:26:37.51Z" }
 
 [[package]]
 name = "wheel"
