@@ -375,6 +375,24 @@ class Backend:
         Returns:
             Dict mapping shard_idx -> list of (header, data_ref) tuples.
         """
+        from ray.exceptions import (
+            ActorDiedError,
+            ActorUnavailableError,
+            NodeDiedError,
+            OwnerDiedError,
+            RayTaskError,
+            WorkerCrashedError,
+        )
+
+        _retryable_errors = (
+            ActorDiedError,
+            ActorUnavailableError,
+            NodeDiedError,
+            OwnerDiedError,
+            RayTaskError,
+            WorkerCrashedError,
+        )
+
         results_by_shard: dict[int, list[tuple[ChunkHeader, Any]]] = defaultdict(list)
 
         if not contexts:
@@ -407,8 +425,8 @@ class Backend:
                             if queued:
                                 next_ctx = queued.pop(0)
                                 active_gens.append((self.context.run(run_stage, next_ctx, operations), next_ctx))
-                        except Exception as exc:
-                            if self._should_retry_preemption(exc, ctx, retries_left):
+                        except _retryable_errors as exc:
+                            if self._maybe_retry(exc, ctx, retries_left):
                                 active_gens.remove((g, ctx))
                                 results_by_shard.pop(ctx.shard_idx, None)
                                 active_gens.append((self.context.run(run_stage, ctx, operations), ctx))
@@ -418,56 +436,27 @@ class Backend:
 
         return results_by_shard
 
-    def _should_retry_preemption(self, exc: Exception, ctx: StageContext, retries_left: dict[int, int]) -> bool:
-        try:
-            if retries_left.get(ctx.shard_idx, 0) <= 0:
-                return False
+    def _maybe_retry(self, exc: Exception, ctx: StageContext, retries_left: dict[int, int]) -> bool:
+        """Check if we should retry after a Ray preemption error."""
+        from ray.exceptions import RayTaskError
 
-            from fray.job import RayContext
-
-            if not isinstance(self.context, RayContext):
-                return False
-
-            if not self._is_ray_preemption_error(exc):
-                return False
-
-            retries_left[ctx.shard_idx] -= 1
-            logger.warning(
-                "Ray task preempted for shard %s; retrying (%d retries left)",
-                ctx.shard_idx,
-                retries_left[ctx.shard_idx],
-                exc_info=exc,
-            )
-            return True
-        except Exception:
+        if retries_left.get(ctx.shard_idx, 0) <= 0:
             return False
 
-    def _is_ray_preemption_error(self, exc: Exception) -> bool:
-        """Check if a Ray exception indicates worker/node preemption or failure."""
-        from ray.exceptions import (
-            ActorDiedError,
-            ActorUnavailableError,
-            NodeDiedError,
-            OwnerDiedError,
-            RayError,
-            RayTaskError,
-            WorkerCrashedError,
-        )
-
-        if not isinstance(exc, RayError):
-            return False
-
-        # These errors indicate node/worker failures, which we treat as preemption
-        if isinstance(exc, (NodeDiedError, OwnerDiedError, ActorUnavailableError, ActorDiedError, WorkerCrashedError)):
-            return True
-
-        # Timeout errors within RayTaskError often indicate preemption
+        # RayTaskError is only retryable if it's a timeout
         if isinstance(exc, RayTaskError):
             cause = getattr(exc, "cause", None)
-            if isinstance(cause, TimeoutError) or "timed out" in str(exc):
-                return True
+            if not (isinstance(cause, TimeoutError) or "timed out" in str(exc)):
+                return False
 
-        return False
+        retries_left[ctx.shard_idx] -= 1
+        logger.warning(
+            "Ray task preempted for shard %s; retrying (%d retries left)",
+            ctx.shard_idx,
+            retries_left[ctx.shard_idx],
+            exc_info=exc,
+        )
+        return True
 
     def _execute_shard_parallel(
         self,
