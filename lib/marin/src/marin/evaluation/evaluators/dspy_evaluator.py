@@ -34,7 +34,10 @@ class DspyEvaluator(Evaluator):
         super().__init__()
 
         self.endpoint = endpoint
-        self.output_path = output_path
+        # Append timestamp to output_path to avoid overwriting previous runs
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.output_path = f"{output_path}_{timestamp}"
         self.max_eval_instances = max_eval_instances
         self.wandb_tags = wandb_tags
 
