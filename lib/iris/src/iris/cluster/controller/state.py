@@ -330,14 +330,17 @@ class ControllerState:
                         details=f"failed={failed_count} max_allowed={job.request.max_task_failures}",
                     )
                     self._kill_remaining_tasks(task.job_id, now_ms, "Job exceeded max_task_failures")
-                elif new_job_state in (
-                    cluster_pb2.JOB_STATE_SUCCEEDED,
-                    cluster_pb2.JOB_STATE_KILLED,
-                    cluster_pb2.JOB_STATE_UNSCHEDULABLE,
-                ):
+                elif new_job_state == cluster_pb2.JOB_STATE_SUCCEEDED:
                     job.finished_at_ms = now_ms
-                    if job.error is None:
-                        job.error = self._get_first_task_error(task.job_id)
+                    self.log_action("job_succeeded", job_id=task.job_id)
+                elif new_job_state == cluster_pb2.JOB_STATE_KILLED:
+                    job.finished_at_ms = now_ms
+                    job.error = self._get_first_task_error(task.job_id)
+                    self.log_action("job_killed", job_id=task.job_id)
+                elif new_job_state == cluster_pb2.JOB_STATE_UNSCHEDULABLE:
+                    job.finished_at_ms = now_ms
+                    job.error = self._get_first_task_error(task.job_id)
+                    self.log_action("job_unschedulable", job_id=task.job_id)
 
             return result, removed_endpoints
 

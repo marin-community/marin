@@ -238,8 +238,6 @@ def test_api_jobs_includes_retry_counts(client, state, job_request):
     jobs = client.get("/api/jobs").json()
 
     assert len(jobs) == 1
-    # total_attempts = max(1, failure_count + preemption_count)
-    assert jobs[0]["total_attempts"] == 3
     assert jobs[0]["failure_count"] == 1
     assert jobs[0]["preemption_count"] == 2
 
@@ -262,8 +260,6 @@ def test_api_job_attempts_returns_retry_info(client, state, job_request):
 
     response = client.get("/api/jobs/test-job/attempts").json()
 
-    # total_attempts = max(1, failure_count + preemption_count)
-    assert response["total_attempts"] == 2
     assert response["failure_count"] == 1
     assert response["preemption_count"] == 1
     assert response["current_state"] == "running"

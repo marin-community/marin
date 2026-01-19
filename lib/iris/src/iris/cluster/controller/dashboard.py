@@ -824,7 +824,6 @@ class ControllerDashboard:
                     "submitted_at_ms": j.submitted_at_ms,
                     "started_at_ms": j.started_at_ms,
                     "finished_at_ms": j.finished_at_ms,
-                    "total_attempts": j.total_attempts,
                     "failure_count": j.failure_count,
                     "preemption_count": j.preemption_count,
                     "resources": {
@@ -850,7 +849,6 @@ class ControllerDashboard:
 
         return JSONResponse(
             {
-                "total_attempts": job.total_attempts,
                 "failure_count": job.failure_count,
                 "preemption_count": job.preemption_count,
                 "current_state": _job_state_name(job.state),

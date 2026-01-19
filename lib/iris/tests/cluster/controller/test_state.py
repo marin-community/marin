@@ -100,17 +100,17 @@ def test_controller_state_fifo_order(job_request):
 
 
 def test_controller_state_skip_non_pending(job_request):
-    """Verify peek_pending_tasks skips tasks that are not in PENDING state."""
+    """Verify peek_pending_tasks skips tasks that are not schedulable."""
     state = ControllerState()
     job1 = Job(job_id=JobId("j1"), request=job_request("job1"))
     job2 = Job(job_id=JobId("j2"), request=job_request("job2"))
     tasks1 = _add_job(state, job1)
     _add_job(state, job2)
 
-    # Mark first task as running
-    tasks1[0].state = cluster_pb2.TASK_STATE_RUNNING
+    # Mark first task as running by creating an attempt
+    tasks1[0].create_attempt(WorkerId("w1"), now_ms=1000)
 
-    # Should skip j1's task since it's not PENDING
+    # Should skip j1's task since it's running (has a non-terminal attempt)
     pending = state.peek_pending_tasks()
     assert len(pending) == 1
     assert pending[0].job_id == JobId("j2")

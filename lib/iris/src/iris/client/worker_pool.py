@@ -38,7 +38,6 @@ Example:
 """
 
 import logging
-import os
 import threading
 import time
 import uuid
@@ -178,8 +177,7 @@ def worker_job_entrypoint(pool_id: str) -> None:
     # Register endpoint with registry
     if ctx.registry is None:
         raise RuntimeError("No registry available - are you running in a cluster context?")
-    advertise_host = os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1")
-    address = f"{advertise_host}:{actual_port}"
+    address = f"{job_info.advertise_host}:{actual_port}"
     ctx.registry.register(worker_name, address, {"job_id": ctx.job_id})
     logger.info("ActorServer started and registered on port %d", actual_port)
 

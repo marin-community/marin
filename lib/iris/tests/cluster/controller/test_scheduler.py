@@ -337,7 +337,7 @@ def test_scheduler_considers_running_tasks_for_capacity(scheduler, state, job_re
     )
     running_tasks = expand_job_to_tasks(running_job, now_ms)
     # Mark task as running on worker (creates attempt with worker_id)
-    running_tasks[0].mark_dispatched(worker.worker_id, now_ms)
+    running_tasks[0].create_attempt(worker.worker_id, now_ms)
     state.add_job(running_job, running_tasks)
     # Manually assign task to worker
     worker.running_tasks.add(running_tasks[0].task_id)

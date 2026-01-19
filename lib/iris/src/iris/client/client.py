@@ -37,10 +37,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
-
-if TYPE_CHECKING:
-    from iris.client.client import IrisClient, NamespacedEndpointRegistry
+from typing import Protocol
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
@@ -768,66 +765,6 @@ class IrisClient:
         """
         return self._cluster.get_job_status(job_id)
 
-    def wait(
-        self,
-        job_id: JobId,
-        timeout: float = 300.0,
-        poll_interval: float = 2.0,
-        *,
-        stream_logs: bool = False,
-        stream_task_index: int | None = None,
-    ) -> cluster_pb2.JobStatus:
-        """Wait for job to complete.
-
-        Args:
-            job_id: Job ID to wait for
-            timeout: Maximum time to wait in seconds
-            poll_interval: Maximum time between status checks
-            stream_logs: If True, stream logs to stdout while waiting
-            stream_task_index: Which task to stream logs from (default: task 0).
-                Only used when stream_logs=True.
-
-        Returns:
-            Final JobStatus
-
-        Raises:
-            TimeoutError: If job doesn't complete within timeout
-        """
-        if not stream_logs:
-            return self._cluster.wait_for_job(job_id, timeout, poll_interval)
-
-        last_timestamp_ms = 0
-        start = time.monotonic()
-        backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
-        task_idx = stream_task_index if stream_task_index is not None else 0
-
-        while True:
-            # Fetch and emit logs since last check
-            try:
-                logs = self.fetch_task_logs(job_id, task_idx, start_ms=last_timestamp_ms)
-                for entry in logs:
-                    last_timestamp_ms = max(last_timestamp_ms, entry.timestamp_ms)
-                    _print_log_entry(job_id, entry, task_index=task_idx)
-            except ValueError:
-                pass  # Job not yet scheduled
-
-            # Check job status
-            status = self._cluster.get_job_status(job_id)
-            if is_job_finished(status.state):
-                # Final drain to catch any remaining logs
-                try:
-                    for entry in self.fetch_task_logs(job_id, task_idx, start_ms=last_timestamp_ms):
-                        _print_log_entry(job_id, entry, task_index=task_idx)
-                except ValueError:
-                    pass
-                return status
-
-            elapsed = time.monotonic() - start
-            if elapsed >= timeout:
-                raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
-
-            time.sleep(backoff.next_interval())
-
     def terminate(self, job_id: JobId) -> None:
         """Terminate a running job.
 
@@ -891,26 +828,6 @@ class IrisClient:
             self.terminate(JobId(job.job_id))
             terminated.append(JobId(job.job_id))
         return terminated
-
-    def fetch_logs(
-        self,
-        job_id: JobId,
-        *,
-        start_ms: int = 0,
-        max_lines: int = 0,
-    ) -> list[LogEntry]:
-        """Fetch logs for a job.
-
-        Args:
-            job_id: Job ID to fetch logs for
-            start_ms: Only return logs after this timestamp (exclusive, for incremental polling)
-            max_lines: Maximum number of lines to return (0 = unlimited)
-
-        Returns:
-            List of LogEntry objects
-        """
-        log_protos = self._cluster.fetch_logs(job_id, start_ms=start_ms, max_lines=max_lines)
-        return [LogEntry.from_proto(p) for p in log_protos]
 
     def task_status(self, job_id: JobId, task_index: int) -> cluster_pb2.TaskStatus:
         """Get status of a specific task within a job.

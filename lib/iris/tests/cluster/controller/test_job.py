@@ -220,7 +220,11 @@ def test_retry_count_limits(make_job_request, failure_type, max_retries, expecte
     result = job.transition(state, now_ms=max_retries * 1000 + 500, is_worker_failure=is_worker_failure)
     assert result == TransitionResult.EXCEEDED_RETRY_LIMIT
     assert job.is_finished()
-    assert job.total_attempts == expected_attempts
+    # expected_attempts = max_retries + 1 (original attempt + retries)
+    if failure_type == "job_failure":
+        assert job.failure_count == expected_attempts
+    else:
+        assert job.preemption_count == expected_attempts
 
 
 # --- Gang Scheduling ---
@@ -568,8 +572,8 @@ def test_job_total_attempts_reflects_retry_history(make_job_request):
         max_retries_preemption=3,
     )
 
-    # Fresh job has 1 attempt (the initial one)
-    assert job.total_attempts == 1
+    # Fresh job has no retries yet
+    assert job.total_attempts == 0
 
     # After a failure retry
     job.mark_dispatched(now_ms=1000)

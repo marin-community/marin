@@ -252,33 +252,9 @@ class Job:
         return self.preemption_count < self.max_retries_preemption
 
     @property
-    def current_attempt_id(self) -> int:
-        """Current attempt ID for this job.
-
-        Computed from failure and preemption counts. Jobs don't execute on
-        workers (tasks do), so this is a derived value for API compatibility.
-        """
-        return self.failure_count + self.preemption_count
-
-    @property
-    def attempts(self) -> list:
-        """Historical attempts for this job.
-
-        Returns empty list since jobs no longer track attempt history.
-        Job "attempts" were really task attempts - actual execution happens
-        at the task level, not job level.
-        """
-        return []
-
-    @property
     def total_attempts(self) -> int:
-        """Total number of execution cycles for this job.
-
-        Computed from failure and preemption counts. Each failure or preemption
-        represents one completed attempt. For a fresh job that hasn't failed yet,
-        this returns 1 (the current/initial attempt).
-        """
-        return max(1, self.failure_count + self.preemption_count)
+        """Total number of retries (failure + preemption retries)."""
+        return self.failure_count + self.preemption_count
 
 
 def handle_gang_failure(

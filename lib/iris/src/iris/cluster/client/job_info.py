@@ -36,6 +36,7 @@ class JobInfo:
     attempt_id: int = 0
     worker_id: str | None = None
     controller_address: str | None = None
+    advertise_host: str = "127.0.0.1"
     ports: dict[str, int] = field(default_factory=dict)
 
 
@@ -64,6 +65,7 @@ def get_job_info() -> JobInfo | None:
             attempt_id=int(os.environ.get("IRIS_ATTEMPT_ID", "0")),
             worker_id=os.environ.get("IRIS_WORKER_ID"),
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),
+            advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),
             ports=_parse_ports_from_env(),
         )
         _job_info.set(info)

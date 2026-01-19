@@ -125,9 +125,14 @@ class ControllerServiceImpl:
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        # Build task statuses with attempts
+        # Build task statuses with attempts, aggregate counts in single pass
         task_statuses = []
+        total_failure_count = 0
+        total_preemption_count = 0
         for task in self._state.get_job_tasks(job.job_id):
+            total_failure_count += task.failure_count
+            total_preemption_count += task.preemption_count
+
             worker_address = ""
             if task.worker_id:
                 worker = self._state.get_worker(task.worker_id)
@@ -165,10 +170,6 @@ class ControllerServiceImpl:
                     attempts=attempts,
                 )
             )
-
-        # Aggregate failure and preemption counts from all tasks
-        total_failure_count = sum(task.failure_count for task in self._state.get_job_tasks(job.job_id))
-        total_preemption_count = sum(task.preemption_count for task in self._state.get_job_tasks(job.job_id))
 
         return cluster_pb2.Controller.GetJobStatusResponse(
             job=cluster_pb2.JobStatus(

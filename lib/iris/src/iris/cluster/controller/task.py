@@ -17,10 +17,10 @@
 A Task is the unit of execution: it runs on a single worker, has its own lifecycle,
 and reports its own state. Jobs with replicas=N expand into N tasks.
 
-State ownership follows a clear hierarchy:
-- TaskAttempt owns execution state (timestamps, exit codes, errors)
-- Task state is derived from the current attempt
-- Task tracks retry policy and counts at the task level
+Task owns its state directly. Attempts are pure execution history:
+- PENDING: no attempts, or all attempts are terminal (awaiting retry)
+- RUNNING: last attempt is non-terminal
+- SUCCEEDED/FAILED/KILLED: terminal state, possibly with empty attempts (if killed before dispatch)
 """
 
 from dataclasses import dataclass, field
@@ -100,17 +100,24 @@ class TaskAttempt:
 class Task:
     """Controller's representation of a task within a job.
 
-    Tasks track identity and retry policy. Execution state (worker assignments,
-    timestamps, results) is stored in TaskAttempt objects and accessed via properties.
+    Task owns its state directly - these are dataclass fields, not delegated to attempts.
+    Attempts are pure execution history, tracking each time a task was dispatched to a worker.
 
-    State transitions are handled via handle_attempt_result(), which updates the
-    current attempt's state and returns a TaskTransitionResult indicating what
-    the caller should do.
+    State transitions are handled via handle_attempt_result(), which updates both
+    the attempt and task-level state, returning a TaskTransitionResult indicating
+    what the caller should do.
     """
 
     task_id: TaskId
     job_id: JobId
     task_index: int
+
+    # Task owns its state directly
+    state: int = cluster_pb2.TASK_STATE_PENDING
+    error: str | None = None
+    exit_code: int | None = None
+    started_at_ms: int | None = None
+    finished_at_ms: int | None = None
 
     # Retry policy (immutable after creation)
     max_retries_failure: int = 0
@@ -120,13 +127,13 @@ class Task:
     failure_count: int = 0
     preemption_count: int = 0
 
-    # Attempt tracking
+    # Attempt tracking - pure execution history
     attempts: list[TaskAttempt] = field(default_factory=list)
 
     # Submission timestamp (distinct from attempt start times)
     submitted_at_ms: int = 0
 
-    # --- Properties that delegate to current attempt ---
+    # --- Read-only properties that derive from attempts ---
 
     @property
     def current_attempt(self) -> TaskAttempt | None:
@@ -139,90 +146,16 @@ class Task:
         return len(self.attempts) - 1 if self.attempts else -1
 
     @property
-    def state(self) -> int:
-        """Task state is the state of the current attempt, or PENDING if none."""
-        if not self.attempts:
-            return cluster_pb2.TASK_STATE_PENDING
-        return self.attempts[-1].state
-
-    @state.setter
-    def state(self, value: int) -> None:
-        """Set task state - for backward compatibility, will be removed in Stage 4.
-
-        Creates a synthetic attempt if none exists (e.g., for killing PENDING tasks).
-        """
-        if not self.attempts:
-            # Create a synthetic attempt for tasks that were never dispatched
-            self.attempts.append(TaskAttempt(attempt_id=0, state=value))
-        else:
-            self.attempts[-1].state = value
-
-    @property
     def worker_id(self) -> WorkerId | None:
-        """Worker from current attempt, if any."""
-        if not self.attempts:
-            return None
-        return self.attempts[-1].worker_id
+        """Worker from the most recent attempt, if any.
 
-    @property
-    def started_at_ms(self) -> int | None:
-        """Start time of current attempt."""
-        if not self.attempts:
-            return None
-        return self.attempts[-1].started_at_ms
-
-    @started_at_ms.setter
-    def started_at_ms(self, value: int | None) -> None:
-        """Set start time - for backward compatibility, will be removed in Stage 4."""
-        if not self.attempts:
-            self.attempts.append(TaskAttempt(attempt_id=0, started_at_ms=value))
-        else:
-            self.attempts[-1].started_at_ms = value
-
-    @property
-    def finished_at_ms(self) -> int | None:
-        """Finish time of current attempt."""
-        if not self.attempts:
-            return None
-        return self.attempts[-1].finished_at_ms
-
-    @finished_at_ms.setter
-    def finished_at_ms(self, value: int | None) -> None:
-        """Set finish time - for backward compatibility, will be removed in Stage 4."""
-        if not self.attempts:
-            self.attempts.append(TaskAttempt(attempt_id=0, finished_at_ms=value))
-        else:
-            self.attempts[-1].finished_at_ms = value
-
-    @property
-    def exit_code(self) -> int | None:
-        """Exit code from current attempt."""
-        if not self.attempts:
-            return None
-        return self.attempts[-1].exit_code
-
-    @exit_code.setter
-    def exit_code(self, value: int | None) -> None:
-        """Set exit code - for backward compatibility, will be removed in Stage 4."""
-        if not self.attempts:
-            self.attempts.append(TaskAttempt(attempt_id=0, exit_code=value))
-        else:
-            self.attempts[-1].exit_code = value
-
-    @property
-    def error(self) -> str | None:
-        """Error from current attempt."""
-        if not self.attempts:
-            return None
-        return self.attempts[-1].error
-
-    @error.setter
-    def error(self, value: str | None) -> None:
-        """Set error - for backward compatibility, will be removed in Stage 4."""
-        if not self.attempts:
-            self.attempts.append(TaskAttempt(attempt_id=0, error=value))
-        else:
-            self.attempts[-1].error = value
+        Returns the worker ID from the last attempt regardless of whether
+        the attempt is terminal. This is used for reporting which worker
+        ran (or is running) the task.
+        """
+        if self.attempts:
+            return self.attempts[-1].worker_id
+        return None
 
     # --- Attempt management methods ---
 
@@ -230,6 +163,7 @@ class Task:
         """Create a new attempt for this task.
 
         Called when the scheduler assigns this task to a worker.
+        Updates task state to RUNNING and sets started_at_ms on first attempt.
         Returns the new attempt so caller can track it.
         """
         attempt = TaskAttempt(
@@ -240,16 +174,24 @@ class Task:
             started_at_ms=now_ms,
         )
         self.attempts.append(attempt)
+
+        # Update task-level state
+        self.state = cluster_pb2.TASK_STATE_RUNNING
+        if self.started_at_ms is None:
+            self.started_at_ms = now_ms
+
         return attempt
 
     def revert_attempt(self) -> None:
         """Remove the current attempt if dispatch RPC fails.
 
         Called when we created an attempt but the RPC to dispatch
-        to the worker failed, so we need to undo.
+        to the worker failed, so we need to undo. Resets state to PENDING
+        since create_attempt() set it to RUNNING.
         """
         if self.attempts:
             self.attempts.pop()
+            self.state = cluster_pb2.TASK_STATE_PENDING
 
     def handle_attempt_result(
         self,
@@ -262,10 +204,10 @@ class Task:
     ) -> TaskTransitionResult:
         """Handle a state report for the current attempt.
 
-        Transitions the current attempt's state and handles retry logic:
-        - If retriable failure: returns SHOULD_RETRY (task stays in list, ready for new attempt)
-        - If terminal success: returns COMPLETE
-        - If exhausted retries: returns EXCEEDED_RETRY_LIMIT
+        Updates both the attempt and task-level state. Handles retry logic:
+        - If retriable failure: returns SHOULD_RETRY, task state reflects failure but is schedulable
+        - If terminal success: returns COMPLETE, task state is terminal
+        - If exhausted retries: returns EXCEEDED_RETRY_LIMIT, task state is terminal
 
         Does NOT create new attempts - that's the scheduler's job.
 
@@ -289,7 +231,6 @@ class Task:
             cluster_pb2.TASK_STATE_FAILED,
             cluster_pb2.TASK_STATE_WORKER_FAILED,
         ):
-            # Transition the attempt to the failure state
             attempt.transition(
                 new_state,
                 now_ms,
@@ -297,17 +238,33 @@ class Task:
                 error=error,
                 is_worker_failure=is_worker_failure,
             )
-            return self._handle_failure(is_worker_failure)
+            result = self._handle_failure(is_worker_failure)
+
+            # Update task-level state to reflect the failure
+            self.state = new_state
+            if result == TaskTransitionResult.EXCEEDED_RETRY_LIMIT:
+                # Terminal: record final outcome
+                self.error = error
+                self.exit_code = exit_code
+                self.finished_at_ms = now_ms
+            # For SHOULD_RETRY, we don't set finished_at_ms since task isn't truly finished
+            return result
 
         # For success, set exit_code to 0 if not provided
         if new_state == cluster_pb2.TASK_STATE_SUCCEEDED:
+            final_exit_code = exit_code if exit_code is not None else 0
             attempt.transition(
                 new_state,
                 now_ms,
-                exit_code=exit_code if exit_code is not None else 0,
+                exit_code=final_exit_code,
                 error=error,
                 is_worker_failure=is_worker_failure,
             )
+            # Update task-level state
+            self.state = new_state
+            self.exit_code = final_exit_code
+            self.error = error
+            self.finished_at_ms = now_ms
             return TaskTransitionResult.COMPLETE
 
         # For other terminal states (KILLED, UNSCHEDULABLE)
@@ -322,6 +279,11 @@ class Task:
                 error=actual_error,
                 is_worker_failure=is_worker_failure,
             )
+            # Update task-level state
+            self.state = new_state
+            self.error = actual_error
+            self.exit_code = exit_code
+            self.finished_at_ms = now_ms
             return TaskTransitionResult.COMPLETE
 
         # Non-terminal states (BUILDING, RUNNING)
@@ -332,6 +294,8 @@ class Task:
             error=error,
             is_worker_failure=is_worker_failure,
         )
+        # Update task-level state for non-terminal transitions
+        self.state = new_state
         return TaskTransitionResult.COMPLETE
 
     def _handle_failure(self, is_worker_failure: bool) -> TaskTransitionResult:
@@ -386,55 +350,3 @@ class Task:
     def total_attempts(self) -> int:
         """Total number of attempts."""
         return len(self.attempts)
-
-    # --- Backward compatibility aliases ---
-    # These will be removed once callers are updated (Stages 4+)
-
-    def mark_dispatched(self, worker_id: WorkerId, now_ms: int) -> None:
-        """Alias for create_attempt() - will be removed in Stage 4."""
-        self.create_attempt(worker_id, now_ms)
-
-    def revert_dispatch(self) -> None:
-        """Alias for revert_attempt() - will be removed in Stage 4."""
-        self.revert_attempt()
-
-    def transition(
-        self,
-        new_state: int,
-        now_ms: int,
-        *,
-        is_worker_failure: bool = False,
-        error: str | None = None,
-        exit_code: int | None = None,
-    ) -> TaskTransitionResult:
-        """Backward compatible transition - will be removed in Stage 4.
-
-        Preserves old behavior:
-        - Allows transitioning tasks without attempts (e.g., killing PENDING tasks)
-        - Resets state to PENDING when SHOULD_RETRY
-        The new handle_attempt_result() requires an attempt and keeps it terminal.
-        """
-        # Handle case where task has no attempts (e.g., killing a PENDING task)
-        if not self.attempts:
-            self.state = new_state
-            if new_state in TERMINAL_TASK_STATES:
-                self.finished_at_ms = now_ms
-                self.error = error
-                self.exit_code = exit_code
-            return TaskTransitionResult.COMPLETE
-
-        result = self.handle_attempt_result(
-            new_state,
-            now_ms,
-            is_worker_failure=is_worker_failure,
-            error=error,
-            exit_code=exit_code,
-        )
-        # Preserve old behavior: reset state to PENDING on retry
-        if result == TaskTransitionResult.SHOULD_RETRY:
-            self.state = cluster_pb2.TASK_STATE_PENDING
-            self.started_at_ms = None
-            self.finished_at_ms = None
-            self.error = None
-            self.exit_code = None
-        return result

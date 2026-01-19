@@ -399,15 +399,6 @@ class LocalClusterClient:
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
         return self._remote_client.list_jobs()
 
-    def fetch_logs(
-        self,
-        job_id: str,
-        *,
-        start_ms: int = 0,
-        max_lines: int = 0,
-    ) -> list[cluster_pb2.Worker.LogEntry]:
-        return self._remote_client.fetch_logs(job_id, start_ms=start_ms, max_lines=max_lines)
-
     def get_task_status(self, job_id: str, task_index: int) -> cluster_pb2.TaskStatus:
         return self._remote_client.get_task_status(job_id, task_index)
 

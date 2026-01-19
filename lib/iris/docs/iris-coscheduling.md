@@ -339,8 +339,8 @@ job = client.submit(
     resources=ResourceSpec(cpu=8, memory_gb=32, replicas=4),
 )
 
-# Wait and stream logs from task 0
-status = client.wait(job.job_id, stream_logs=True, stream_task_index=0)
+# Wait and stream logs from all tasks
+status = job.wait(stream_logs=True)
 ```
 
 Note: `max_task_failures` defaults to 0 (fail job if any task fails) and is configured in the proto `LaunchJobRequest.max_task_failures` field.
