@@ -450,11 +450,15 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
 
     def pre_jit(x_leaf: Any) -> jax.Array:
         arr = x_leaf.array if isinstance(x_leaf, hax.NamedArray) else x_leaf
+        # `host_local_array_to_global_array` expects the leading axis to be shardable by the requested mesh axis.
+        # In particular, for `PartitionSpec("processes")` it requires the leading dimension to be divisible by
+        # `jax.process_count()`. Construct a leading "processes" axis explicitly.
+        payload = np.asarray(arr) if jax.process_index() == source else np.zeros(arr.shape, dtype=arr.dtype)
+
+        host = np.zeros((jax.process_count(),) + payload.shape, dtype=payload.dtype)
         if jax.process_index() == source:
-            host = np.asarray(arr)
-        else:
-            host = np.zeros(arr.shape, dtype=arr.dtype)
-        host = np.expand_dims(host, axis=0)
+            host[source] = payload
+
         return host_local_array_to_global_array(host, global_mesh, in_pspec)
 
     if _replicated_out_specs(out_axis_specs):
