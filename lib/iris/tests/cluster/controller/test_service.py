@@ -24,10 +24,10 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.rpc import cluster_pb2
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerState
-from iris.cluster.types import JobId
+from iris.cluster.types import JobId, WorkerId
+from iris.rpc import cluster_pb2
 
 
 @pytest.fixture
@@ -390,8 +390,6 @@ def test_list_workers_returns_all(service, worker_metadata):
 
 def test_report_task_state_transitions_task(service, state, job_request, worker_metadata):
     """Verify report_task_state transitions task and updates job state."""
-    from iris.cluster.types import WorkerId
-
     # Launch job (creates task)
     service.launch_job(job_request("test-job"), None)
 
@@ -433,8 +431,6 @@ def test_report_task_state_transitions_task(service, state, job_request, worker_
 
 def test_report_task_state_validates_attempt_id(service, state, job_request, worker_metadata):
     """Verify report_task_state ignores reports with stale attempt_id."""
-    from iris.cluster.types import WorkerId
-
     # Launch job
     service.launch_job(job_request("test-job"), None)
 
@@ -476,8 +472,6 @@ def test_report_task_state_validates_attempt_id(service, state, job_request, wor
 
 def test_task_retry_preserves_attempt_history(service, state, job_request, worker_metadata):
     """Verify that when a task fails and retries, attempt history is preserved."""
-    from iris.cluster.types import WorkerId
-
     # Launch job with retry enabled
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="retry-job",
@@ -529,8 +523,6 @@ def test_task_retry_preserves_attempt_history(service, state, job_request, worke
 
 def test_stale_worker_report_ignored_after_retry(service, state, job_request, worker_metadata):
     """Verify that after retry, reports from old attempt are ignored."""
-    from iris.cluster.types import WorkerId
-
     # Launch job
     service.launch_job(job_request("test-job"), None)
 
@@ -590,8 +582,6 @@ def test_stale_worker_report_ignored_after_retry(service, state, job_request, wo
 
 def test_job_running_while_tasks_retry(service, state, job_request, worker_metadata):
     """Verify job stays RUNNING while tasks are retrying."""
-    from iris.cluster.types import WorkerId
-
     # Launch job
     service.launch_job(job_request("test-job"), None)
 
@@ -638,8 +628,6 @@ def test_job_running_while_tasks_retry(service, state, job_request, worker_metad
 
 def test_killing_job_with_retrying_task(service, state, job_request, worker_metadata):
     """Verify killing a job with a retrying task terminates properly."""
-    from iris.cluster.types import WorkerId
-
     # Launch job
     service.launch_job(job_request("test-job"), None)
 
@@ -682,8 +670,6 @@ def test_killing_job_with_retrying_task(service, state, job_request, worker_meta
 
 def test_full_lifecycle_submit_fail_retry_succeed(service, state, job_request, worker_metadata):
     """End-to-end test: submit job, fail task, retry, succeed."""
-    from iris.cluster.types import WorkerId
-
     # Launch job
     service.launch_job(job_request("lifecycle-job"), None)
 

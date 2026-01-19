@@ -24,7 +24,13 @@ import time
 
 import pytest
 
-from iris.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState, ControllerWorker
+from iris.cluster.controller.state import (
+    ControllerEndpoint,
+    ControllerJob,
+    ControllerState,
+    ControllerWorker,
+    TaskTransitionResult,
+)
 from iris.cluster.types import JobId, WorkerId
 from iris.rpc import cluster_pb2
 
@@ -229,8 +235,6 @@ def test_controller_state_multiple_gangs(job_request):
 
 def test_controller_state_task_assignment_and_requeue(job_request, worker_metadata):
     """Test task assignment to worker and re-queuing."""
-    from iris.cluster.controller.state import TaskTransitionResult
-
     state = ControllerState()
     now_ms = int(time.time() * 1000)
 
@@ -420,8 +424,6 @@ def test_endpoint_not_returned_for_non_running_job():
 
 def test_transition_task_to_terminal_removes_endpoints(job_request):
     """Test that transition_task removes endpoints when task reaches terminal state."""
-    from iris.cluster.controller.state import TaskTransitionResult
-
     state = ControllerState()
     now_ms = int(time.time() * 1000)
 
@@ -665,8 +667,6 @@ def test_pending_job_endpoints_not_returned():
 
 def test_task_success_updates_job_state(job_request, worker_metadata):
     """When all tasks succeed, job transitions to SUCCEEDED."""
-    from iris.cluster.controller.state import TaskTransitionResult
-
     state = ControllerState()
     now_ms = int(time.time() * 1000)
 
@@ -695,8 +695,6 @@ def test_task_success_updates_job_state(job_request, worker_metadata):
 
 def test_task_failure_updates_job_state(job_request, worker_metadata):
     """When task fails with no retries, job transitions to FAILED."""
-    from iris.cluster.controller.state import TaskTransitionResult
-
     state = ControllerState()
     now_ms = int(time.time() * 1000)
 
@@ -730,8 +728,6 @@ def test_task_failure_updates_job_state(job_request, worker_metadata):
 
 def test_task_failure_with_retry(job_request, worker_metadata):
     """Task failure with retries available requeues task."""
-    from iris.cluster.controller.state import TaskTransitionResult
-
     state = ControllerState()
     now_ms = int(time.time() * 1000)
 
@@ -822,8 +818,6 @@ def test_terminal_states_clean_up_endpoints(job_request, terminal_state):
 
 def test_worker_timeout_task_cleanup(job_request, worker_metadata):
     """Worker timeout triggers proper task cleanup including endpoints."""
-    from iris.cluster.controller.state import TaskTransitionResult
-
     state = ControllerState()
     now_ms = int(time.time() * 1000)
 
@@ -876,8 +870,6 @@ def test_worker_timeout_task_cleanup(job_request, worker_metadata):
 
 def test_failure_domain_kills_remaining_tasks_on_task_failure(worker_metadata):
     """When one task fails beyond retries, remaining tasks should be killed."""
-    from iris.cluster.controller.state import TaskTransitionResult
-
     state = ControllerState()
     now_ms = int(time.time() * 1000)
 
@@ -938,8 +930,6 @@ def test_failure_domain_kills_remaining_tasks_on_task_failure(worker_metadata):
 
 def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
     """Job with max_task_failures=1 tolerates one failure before failing."""
-    from iris.cluster.controller.state import TaskTransitionResult
-
     state = ControllerState()
     now_ms = int(time.time() * 1000)
 
@@ -1004,8 +994,6 @@ def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
 
 def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
     """Preemptions (worker failures) don't count toward max_task_failures threshold."""
-    from iris.cluster.controller.state import TaskTransitionResult
-
     state = ControllerState()
     now_ms = int(time.time() * 1000)
 
@@ -1053,8 +1041,6 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
 
 def test_all_tasks_succeed_job_succeeds(worker_metadata):
     """When all tasks succeed, job transitions to SUCCEEDED."""
-    from iris.cluster.controller.state import TaskTransitionResult
-
     state = ControllerState()
     now_ms = int(time.time() * 1000)
 

@@ -19,6 +19,7 @@ They verify that containers execute callables correctly, handle failures appropr
 and can be managed through their lifecycle.
 """
 
+import signal
 import subprocess
 import sys
 import time
@@ -107,8 +108,6 @@ def test_container_with_failure_exit_code(docker_runtime, test_image):
     """Test container that exits with a non-zero code."""
 
     def exit_with_code(code: int):
-        import sys
-
         sys.exit(code)
 
     config = ContainerConfig(
@@ -140,10 +139,6 @@ def test_kill_with_sigterm(docker_runtime, test_image):
     """Test killing container with SIGTERM allows graceful shutdown."""
 
     def sleep_and_handle_sigterm():
-        import signal
-        import sys
-        import time
-
         def handler(signum, frame):
             sys.exit(0)
 
@@ -176,8 +171,6 @@ def test_kill_with_sigkill(docker_runtime, test_image):
     """Test killing container with SIGKILL (force) stops it immediately."""
 
     def sleep_forever():
-        import time
-
         while True:
             time.sleep(1)
 
@@ -235,8 +228,6 @@ def test_inspect_running_container(docker_runtime, test_image):
     """Test inspect() reports running state correctly for an active container."""
 
     def sleep_forever():
-        import time
-
         while True:
             time.sleep(1)
 
@@ -295,8 +286,6 @@ def test_get_stats_from_running_container(docker_runtime, test_image):
     """Test get_stats returns positive values for a real running container."""
 
     def sleep_seconds(n: int):
-        import time
-
         time.sleep(n)
 
     config = ContainerConfig(

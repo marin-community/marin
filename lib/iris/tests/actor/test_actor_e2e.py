@@ -15,9 +15,11 @@
 """End-to-end tests for actor server and client."""
 
 import pytest
+
 from iris.actor import ActorClient, ActorServer
 from iris.actor.resolver import FixedResolver
 from iris.client import iris_ctx
+from iris.rpc import actor_pb2
 
 
 class Calculator:
@@ -67,8 +69,6 @@ def test_actor_exception_propagation():
 @pytest.mark.asyncio
 async def test_list_actors():
     """Test that list_actors returns registered actors."""
-    from iris.rpc import actor_pb2
-
     server = ActorServer(host="127.0.0.1")
     actor_id1 = server.register("calc", Calculator())
     actor_id2 = server.register("ctx", ContextAwareActor())
@@ -94,8 +94,6 @@ async def test_list_actors():
 @pytest.mark.asyncio
 async def test_list_methods():
     """Test that list_methods returns method info for an actor."""
-    from iris.rpc import actor_pb2
-
     server = ActorServer(host="127.0.0.1")
     server.register("calc", Calculator())
     server.serve_background()
@@ -116,7 +114,6 @@ async def test_list_methods():
 @pytest.mark.asyncio
 async def test_list_methods_with_docstring():
     """Test that list_methods includes docstrings when present."""
-    from iris.rpc import actor_pb2
 
     class DocumentedActor:
         def documented_method(self) -> str:
@@ -145,8 +142,6 @@ async def test_list_methods_with_docstring():
 @pytest.mark.asyncio
 async def test_list_methods_missing_actor():
     """Test that list_methods returns empty response for missing actor."""
-    from iris.rpc import actor_pb2
-
     server = ActorServer(host="127.0.0.1")
     server.register("calc", Calculator())
     server.serve_background()

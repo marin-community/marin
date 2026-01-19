@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from iris.client import IrisClient
+from iris.cluster.client import get_job_info
 from iris.cluster.client.local_client import (
     LocalEnvironmentProvider,
     _LocalBundleProvider,
@@ -312,8 +313,6 @@ class TestJobLifecycle:
         """Running job can be killed."""
 
         def long_job():
-            import time
-
             time.sleep(60)
 
         job_id = test_cluster.submit(long_job, name="long-job")
@@ -418,8 +417,6 @@ class TestPorts:
         """Ports are allocated and passed via JobInfo."""
 
         def port_job():
-            from iris.cluster.client import get_job_info
-
             info = get_job_info()
             if info is None:
                 raise ValueError("JobInfo not available")
@@ -448,8 +445,6 @@ class TestJobInfo:
         """JobInfo is available via contextvar with correct job_id and worker_id."""
 
         def test_fn():
-            from iris.cluster.client import get_job_info
-
             info = get_job_info()
             assert info is not None
             assert info.job_id == "test-job-info"
@@ -465,8 +460,6 @@ class TestJobInfo:
         """JobInfo contains all allocated ports and they are unique."""
 
         def test_fn():
-            from iris.cluster.client import get_job_info
-
             info = get_job_info()
             assert info is not None
             assert "actor" in info.ports
@@ -485,8 +478,6 @@ class TestJobInfo:
         """JobInfo contains task fields (task_id, task_index, num_tasks)."""
 
         def test_fn():
-            from iris.cluster.client import get_job_info
-
             info = get_job_info()
             assert info is not None
             assert info.task_id == "test-task-fields/task-0"
@@ -511,12 +502,6 @@ class TestEndpoints:
         """Job can register endpoints that are visible externally."""
 
         def register_endpoint_job():
-            import time
-
-            from iris.cluster.client import get_job_info
-            from iris.rpc import cluster_pb2
-            from iris.rpc.cluster_connect import ControllerServiceClientSync
-
             info = get_job_info()
             if info is None:
                 raise ValueError("JobInfo not available")
@@ -555,12 +540,6 @@ class TestEndpoints:
         """Endpoint prefix matching works correctly."""
 
         def register_multiple_endpoints():
-            import time
-
-            from iris.cluster.client import get_job_info
-            from iris.rpc import cluster_pb2
-            from iris.rpc.cluster_connect import ControllerServiceClientSync
-
             info = get_job_info()
             if info is None:
                 raise ValueError("JobInfo not available")
