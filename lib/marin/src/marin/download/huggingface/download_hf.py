@@ -101,7 +101,7 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path}")
             return {"file_path": file_path, "status": "success"}
         except Exception as e:
-            wait_time = (2**attempt) + random.uniform(0, 5)
+            wait_time = min(2**attempt, 2**10) + random.uniform(0, 5)
             logger.warning(f"Attempt {attempt + 1} failed for {file_path}: {e}, retrying in {wait_time:.1f}s")
             time.sleep(wait_time)
     raise RuntimeError(f"Failed to download {file_path} after {max_retries} attempts")
