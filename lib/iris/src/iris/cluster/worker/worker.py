@@ -14,7 +14,6 @@
 
 """Unified worker managing all components and lifecycle."""
 
-import base64
 import logging
 import shutil
 import socket
@@ -401,7 +400,7 @@ class Worker:
 
             # Deserialize entrypoint
             entrypoint = cloudpickle.loads(task.request.serialized_entrypoint)
-            command = self._build_command(entrypoint, task.ports)
+            entrypoint_tuple = (entrypoint.callable, entrypoint.args, entrypoint.kwargs)
 
             # Build environment from user-provided vars + EnvironmentConfig
             env = dict(env_config.env_vars)
@@ -412,7 +411,7 @@ class Worker:
 
             config = ContainerConfig(
                 image=build_result.image_tag,
-                command=command,
+                entrypoint=entrypoint_tuple,
                 env=env,
                 resources=task.request.resources if task.request.HasField("resources") else None,
                 timeout_seconds=task.request.timeout_seconds or None,
@@ -606,31 +605,6 @@ class Worker:
             env[f"IRIS_PORT_{name.upper()}"] = str(port)
 
         return env
-
-    def _build_command(self, entrypoint, ports: dict[str, int]) -> list[str]:
-        del ports  # Ports are passed via IRIS_PORT_* env vars, not serialized
-
-        data = (entrypoint.callable, entrypoint.args, entrypoint.kwargs)
-        serialized = cloudpickle.dumps(data)
-        encoded = base64.b64encode(serialized).decode()
-
-        thunk = f"""
-import cloudpickle
-import base64
-import sys
-import traceback
-
-try:
-    fn, args, kwargs = cloudpickle.loads(base64.b64decode('{encoded}'))
-    result = fn(*args, **kwargs)
-
-    with open('/workdir/_result.pkl', 'wb') as f:
-        f.write(cloudpickle.dumps(result))
-except Exception:
-    traceback.print_exc()
-    sys.exit(1)
-"""
-        return ["python", "-u", "-c", thunk]
 
     def get_task(self, task_id: str) -> Task | None:
         """Get a task by ID."""

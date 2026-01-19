@@ -19,9 +19,7 @@ instead of Docker containers, ensuring local execution follows the same code pat
 as production cluster execution.
 """
 
-import base64
 import io
-import re
 import socket
 import tempfile
 import threading
@@ -32,8 +30,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Self
-
-import cloudpickle
 
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
@@ -112,9 +108,8 @@ class _LocalContainer:
             )
             set_job_info(job_info)
 
-            # Extract encoded data from command (command is ['python', '-c', script])
-            script = self.config.command[2]
-            fn, args, kwargs = self._extract_entrypoint(script)
+            # Use entrypoint directly - no command parsing needed
+            fn, args, kwargs = self.config.entrypoint
 
             # Check if killed before executing
             if self._killed.is_set():
@@ -146,13 +141,6 @@ class _LocalContainer:
                         data=line,
                     )
                 )
-
-    def _extract_entrypoint(self, script: str):
-        match = re.search(r"base64\.b64decode\('([^']+)'\)\)", script)
-        if match:
-            encoded = match.group(1)
-            return cloudpickle.loads(base64.b64decode(encoded))
-        raise ValueError("Could not extract entrypoint from command")
 
     def kill(self):
         self._killed.set()

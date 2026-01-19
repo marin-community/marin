@@ -167,8 +167,11 @@ def worker_job_entrypoint(pool_id: str) -> None:
     logger.info("Worker starting: pool_id=%s, task_index=%d of %d", pool_id, task_index, job_info.num_tasks)
     logger.info("Worker name: %s, job_id=%s", worker_name, ctx.job_id)
 
-    # Start actor server
-    server = ActorServer(host="0.0.0.0")
+    # Get the allocated port - this port is published by Docker for container access
+    port = ctx.get_port("actor")
+
+    # Start actor server on the allocated port
+    server = ActorServer(host="0.0.0.0", port=port)
     server.register(worker_name, TaskExecutorActor())
     actual_port = server.serve_background()
 

@@ -15,7 +15,6 @@
 """Tests for Worker class (includes PortAllocator and task management)."""
 
 import socket
-import subprocess
 import time
 import zipfile
 from pathlib import Path
@@ -29,7 +28,7 @@ from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import BuildResult, VenvCache
 from iris.cluster.worker.bundle_cache import BundleCache
-from iris.cluster.worker.docker import ContainerConfig, ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
+from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
 
@@ -558,20 +557,6 @@ def test_port_retry_exhausted(mock_bundle_cache, mock_venv_cache, mock_image_cac
 # ============================================================================
 
 
-def check_docker_available():
-    """Check if Docker is available and running."""
-    try:
-        result = subprocess.run(
-            ["docker", "info"],
-            check=True,
-            capture_output=True,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-
-
 def create_test_bundle(tmp_path):
     """Create a minimal test bundle with pyproject.toml."""
     bundle_dir = tmp_path / "bundle"
@@ -656,74 +641,12 @@ def real_service(real_worker):
     return WorkerServiceImpl(real_worker)
 
 
-@pytest.fixture
-def runtime():
-    """Create DockerRuntime instance."""
-    return DockerRuntime()
-
-
-class TestDockerRuntimeIntegration:
-    """Integration tests for DockerRuntime with real containers."""
-
-    @pytest.mark.slow
-    def test_create_and_start_container(self, runtime):
-        """Create and start a simple container and verify it runs."""
-        if not check_docker_available():
-            pytest.skip("Docker not available")
-
-        config = ContainerConfig(
-            image="alpine:latest",
-            command=["echo", "hello"],
-            env={},
-        )
-
-        container_id = runtime.create_container(config)
-        assert container_id is not None
-
-        runtime.start_container(container_id)
-
-        time.sleep(1)
-
-        status = runtime.inspect(container_id)
-        assert not status.running
-        assert status.exit_code == 0
-
-        runtime.remove(container_id)
-
-    @pytest.mark.slow
-    def test_kill_container(self, runtime):
-        """Test killing a running container."""
-        if not check_docker_available():
-            pytest.skip("Docker not available")
-
-        config = ContainerConfig(
-            image="alpine:latest",
-            command=["sleep", "60"],
-            env={},
-        )
-
-        container_id = runtime.create_container(config)
-        runtime.start_container(container_id)
-
-        time.sleep(1)
-
-        runtime.kill(container_id, force=True)
-
-        status = runtime.inspect(container_id)
-        assert not status.running
-
-        runtime.remove(container_id)
-
-
 class TestWorkerIntegration:
     """Integration tests for Worker with real components."""
 
     @pytest.mark.slow
     def test_submit_task_lifecycle(self, real_worker, test_bundle):
         """Test full task lifecycle from submission to completion."""
-        if not check_docker_available():
-            pytest.skip("Docker not available")
-
         request = create_integration_run_task_request(test_bundle, "integration-test-1")
 
         task_id = real_worker.submit_task(request)
@@ -763,9 +686,6 @@ class TestWorkerServiceIntegration:
     @pytest.mark.slow
     def test_fetch_logs_tail(self, real_service, test_bundle):
         """Test FetchLogs with negative start_line for tailing."""
-        if not check_docker_available():
-            pytest.skip("Docker not available")
-
         ctx = Mock(spec=RequestContext)
 
         request = create_integration_run_task_request(test_bundle, "logs-test")
