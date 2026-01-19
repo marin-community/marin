@@ -394,7 +394,7 @@ class RayContext:
         if self.ray_options:
             remote_fn = ray.remote(**self.ray_options)(fn)
         else:
-            remote_fn = ray.remote(fn)
+            remote_fn = ray.remote(max_retries=100)(fn)
 
         return remote_fn.options(scheduling_strategy="SPREAD").remote(*args)
 
