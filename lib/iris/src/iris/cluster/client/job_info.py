@@ -24,10 +24,7 @@ from dataclasses import dataclass, field
 
 @dataclass
 class JobInfo:
-    """Minimal job metadata available in cluster operations.
-
-    For full context with client/registry/resolver, use iris.client.IrisContext.
-    """
+    """Information about the currently running job."""
 
     job_id: str
     task_id: str | None = None
@@ -35,9 +32,15 @@ class JobInfo:
     num_tasks: int = 1
     attempt_id: int = 0
     worker_id: str | None = None
+
     controller_address: str | None = None
+    """Address of the controller that started this job, if any."""
+
     advertise_host: str = "127.0.0.1"
+    """The externally visible host name to use when advertising services."""
+
     ports: dict[str, int] = field(default_factory=dict)
+    """Name to port number mapping for this task."""
 
 
 # Module-level ContextVar for job metadata

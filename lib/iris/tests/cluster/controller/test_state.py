@@ -24,8 +24,7 @@ import time
 
 import pytest
 
-from iris.cluster.controller.job import Job
-from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerWorker
+from iris.cluster.controller.state import ControllerEndpoint, ControllerJob, ControllerState, ControllerWorker
 from iris.cluster.types import JobId, WorkerId
 from iris.rpc import cluster_pb2
 
@@ -87,8 +86,8 @@ def _add_job(state, job):
 def test_controller_state_fifo_order(job_request):
     """Verify tasks are returned in FIFO order."""
     state = ControllerState()
-    job1 = Job(job_id=JobId("j1"), request=job_request("job1"), submitted_at_ms=100)
-    job2 = Job(job_id=JobId("j2"), request=job_request("job2"), submitted_at_ms=200)
+    job1 = ControllerJob(job_id=JobId("j1"), request=job_request("job1"), submitted_at_ms=100)
+    job2 = ControllerJob(job_id=JobId("j2"), request=job_request("job2"), submitted_at_ms=200)
     _add_job(state, job1)
     _add_job(state, job2)
 
@@ -102,8 +101,8 @@ def test_controller_state_fifo_order(job_request):
 def test_controller_state_skip_non_pending(job_request):
     """Verify peek_pending_tasks skips tasks that are not schedulable."""
     state = ControllerState()
-    job1 = Job(job_id=JobId("j1"), request=job_request("job1"))
-    job2 = Job(job_id=JobId("j2"), request=job_request("job2"))
+    job1 = ControllerJob(job_id=JobId("j1"), request=job_request("job1"))
+    job2 = ControllerJob(job_id=JobId("j2"), request=job_request("job2"))
     tasks1 = _add_job(state, job1)
     _add_job(state, job2)
 
@@ -147,9 +146,9 @@ def test_controller_state_worker_operations(worker_metadata):
 def test_controller_state_gang_tracking(job_request):
     """Verify gang jobs are tracked correctly."""
     state = ControllerState()
-    job1 = Job(job_id=JobId("j1"), request=job_request("job1"), gang_id="gang1")
-    job2 = Job(job_id=JobId("j2"), request=job_request("job2"), gang_id="gang1")
-    job3 = Job(job_id=JobId("j3"), request=job_request("job3"), gang_id="gang2")
+    job1 = ControllerJob(job_id=JobId("j1"), request=job_request("job1"), gang_id="gang1")
+    job2 = ControllerJob(job_id=JobId("j2"), request=job_request("job2"), gang_id="gang1")
+    job3 = ControllerJob(job_id=JobId("j3"), request=job_request("job3"), gang_id="gang2")
 
     _add_job(state, job1)
     _add_job(state, job2)
@@ -185,7 +184,7 @@ def test_controller_state_thread_safety(job_request):
             # Add jobs
             for i in range(jobs_per_thread):
                 job_id = f"t{thread_id}_j{i}"
-                job = Job(job_id=JobId(job_id), request=job_request(f"job-{job_id}"))
+                job = ControllerJob(job_id=JobId(job_id), request=job_request(f"job-{job_id}"))
                 _add_job(state, job)
         except Exception as e:
             errors.append(e)
@@ -215,7 +214,7 @@ def test_controller_state_multiple_gangs(job_request):
         gang_id = f"gang{gang_num}"
         for job_num in range(gang_num + 1):  # gang0 has 1 job, gang1 has 2, etc.
             job_id = JobId(f"g{gang_num}_j{job_num}")
-            job = Job(job_id=job_id, request=job_request(f"job-{job_id}"), gang_id=gang_id)
+            job = ControllerJob(job_id=job_id, request=job_request(f"job-{job_id}"), gang_id=gang_id)
             _add_job(state, job)
 
     # Verify each gang has correct number of jobs
@@ -230,7 +229,7 @@ def test_controller_state_multiple_gangs(job_request):
 
 def test_controller_state_task_assignment_and_requeue(job_request, worker_metadata):
     """Test task assignment to worker and re-queuing."""
-    from iris.cluster.controller.task import TaskTransitionResult
+    from iris.cluster.controller.state import TaskTransitionResult
 
     state = ControllerState()
     now_ms = int(time.time() * 1000)
@@ -245,7 +244,7 @@ def test_controller_state_task_assignment_and_requeue(job_request, worker_metada
     # Allow 1 task failure at the job level so job doesn't fail when task fails
     req = job_request("job1")
     req.max_task_failures = 1
-    job = Job(job_id=JobId("j1"), request=req)
+    job = ControllerJob(job_id=JobId("j1"), request=req)
     tasks = _add_job(state, job)
     task = tasks[0]
 
@@ -296,16 +295,16 @@ def test_controller_state_get_children_returns_direct_children(job_request):
     state = ControllerState()
 
     # Create parent job
-    parent = Job(job_id=JobId("parent"), request=job_request("parent"))
+    parent = ControllerJob(job_id=JobId("parent"), request=job_request("parent"))
     _add_job(state, parent)
 
     # Create child jobs
-    child1 = Job(
+    child1 = ControllerJob(
         job_id=JobId("child1"),
         request=job_request("child1"),
         parent_job_id=JobId("parent"),
     )
-    child2 = Job(
+    child2 = ControllerJob(
         job_id=JobId("child2"),
         request=job_request("child2"),
         parent_job_id=JobId("parent"),
@@ -314,7 +313,7 @@ def test_controller_state_get_children_returns_direct_children(job_request):
     _add_job(state, child2)
 
     # Create an unrelated job with no parent
-    unrelated = Job(job_id=JobId("unrelated"), request=job_request("unrelated"))
+    unrelated = ControllerJob(job_id=JobId("unrelated"), request=job_request("unrelated"))
     _add_job(state, unrelated)
 
     # Get children of parent
@@ -328,7 +327,7 @@ def test_controller_state_get_children_returns_empty_for_no_children(job_request
     state = ControllerState()
 
     # Create a job with no children
-    job = Job(job_id=JobId("lonely"), request=job_request("lonely"))
+    job = ControllerJob(job_id=JobId("lonely"), request=job_request("lonely"))
     _add_job(state, job)
 
     children = state.get_children(JobId("lonely"))
@@ -340,13 +339,13 @@ def test_controller_state_get_children_only_returns_direct_not_grandchildren(job
     state = ControllerState()
 
     # Create a 3-level hierarchy: grandparent -> parent -> child
-    grandparent = Job(job_id=JobId("grandparent"), request=job_request("grandparent"))
-    parent = Job(
+    grandparent = ControllerJob(job_id=JobId("grandparent"), request=job_request("grandparent"))
+    parent = ControllerJob(
         job_id=JobId("parent"),
         request=job_request("parent"),
         parent_job_id=JobId("grandparent"),
     )
-    child = Job(
+    child = ControllerJob(
         job_id=JobId("child"),
         request=job_request("child"),
         parent_job_id=JobId("parent"),
@@ -371,7 +370,7 @@ def test_add_and_lookup_endpoint():
     state = ControllerState()
 
     # Create a running job first
-    job = Job(
+    job = ControllerJob(
         job_id=JobId("ns-1"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
         state=cluster_pb2.JOB_STATE_RUNNING,
@@ -399,7 +398,7 @@ def test_endpoint_not_returned_for_non_running_job():
     state = ControllerState()
 
     # Create a completed job
-    job = Job(
+    job = ControllerJob(
         job_id=JobId("ns-1"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
         state=cluster_pb2.JOB_STATE_SUCCEEDED,
@@ -421,12 +420,12 @@ def test_endpoint_not_returned_for_non_running_job():
 
 def test_transition_task_to_terminal_removes_endpoints(job_request):
     """Test that transition_task removes endpoints when task reaches terminal state."""
-    from iris.cluster.controller.task import TaskTransitionResult
+    from iris.cluster.controller.state import TaskTransitionResult
 
     state = ControllerState()
     now_ms = int(time.time() * 1000)
 
-    job = Job(
+    job = ControllerJob(
         job_id=JobId("ns-1"),
         request=job_request("test"),
     )
@@ -468,12 +467,12 @@ def test_namespace_isolation_via_prefix():
     """Test that namespace isolation works via name prefixing."""
     state = ControllerState()
 
-    job1 = Job(
+    job1 = ControllerJob(
         job_id=JobId("ns-1"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test1"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
-    job2 = Job(
+    job2 = ControllerJob(
         job_id=JobId("ns-2"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
@@ -511,7 +510,7 @@ def test_list_endpoints_by_prefix():
     """Test prefix-based endpoint listing."""
     state = ControllerState()
 
-    job = Job(
+    job = ControllerJob(
         job_id=JobId("ns-1"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
         state=cluster_pb2.JOB_STATE_RUNNING,
@@ -560,12 +559,12 @@ def test_multiple_endpoints_for_same_name():
     """Test that multiple endpoints can be registered for the same name."""
     state = ControllerState()
 
-    job1 = Job(
+    job1 = ControllerJob(
         job_id=JobId("ns-1/worker-1"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test1"),
         state=cluster_pb2.JOB_STATE_RUNNING,
     )
-    job2 = Job(
+    job2 = ControllerJob(
         job_id=JobId("ns-1/worker-2"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
         state=cluster_pb2.JOB_STATE_RUNNING,
@@ -599,7 +598,7 @@ def test_remove_endpoint_by_id():
     """Test explicit endpoint removal by ID."""
     state = ControllerState()
 
-    job = Job(
+    job = ControllerJob(
         job_id=JobId("ns-1"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
         state=cluster_pb2.JOB_STATE_RUNNING,
@@ -632,7 +631,7 @@ def test_pending_job_endpoints_not_returned():
     """Test that endpoints for PENDING jobs are not returned."""
     state = ControllerState()
 
-    job = Job(
+    job = ControllerJob(
         job_id=JobId("ns-1"),
         request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
         state=cluster_pb2.JOB_STATE_PENDING,
@@ -666,7 +665,7 @@ def test_pending_job_endpoints_not_returned():
 
 def test_task_success_updates_job_state(job_request, worker_metadata):
     """When all tasks succeed, job transitions to SUCCEEDED."""
-    from iris.cluster.controller.task import TaskTransitionResult
+    from iris.cluster.controller.state import TaskTransitionResult
 
     state = ControllerState()
     now_ms = int(time.time() * 1000)
@@ -678,7 +677,7 @@ def test_task_success_updates_job_state(job_request, worker_metadata):
     )
     state.add_worker(worker)
 
-    job = Job(job_id=JobId("j1"), request=job_request("job1"))
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"))
     tasks = _add_job(state, job)
     task = tasks[0]
 
@@ -696,7 +695,7 @@ def test_task_success_updates_job_state(job_request, worker_metadata):
 
 def test_task_failure_updates_job_state(job_request, worker_metadata):
     """When task fails with no retries, job transitions to FAILED."""
-    from iris.cluster.controller.task import TaskTransitionResult
+    from iris.cluster.controller.state import TaskTransitionResult
 
     state = ControllerState()
     now_ms = int(time.time() * 1000)
@@ -708,7 +707,7 @@ def test_task_failure_updates_job_state(job_request, worker_metadata):
     )
     state.add_worker(worker)
 
-    job = Job(job_id=JobId("j1"), request=job_request("job1"))
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"))
     tasks = _add_job(state, job)
     task = tasks[0]
 
@@ -731,7 +730,7 @@ def test_task_failure_updates_job_state(job_request, worker_metadata):
 
 def test_task_failure_with_retry(job_request, worker_metadata):
     """Task failure with retries available requeues task."""
-    from iris.cluster.controller.task import TaskTransitionResult
+    from iris.cluster.controller.state import TaskTransitionResult
 
     state = ControllerState()
     now_ms = int(time.time() * 1000)
@@ -746,7 +745,7 @@ def test_task_failure_with_retry(job_request, worker_metadata):
     # Allow 1 task failure at the job level so job doesn't fail when task fails
     req = job_request("job1")
     req.max_task_failures = 1
-    job = Job(job_id=JobId("j1"), request=req)
+    job = ControllerJob(job_id=JobId("j1"), request=req)
     tasks = _add_job(state, job)
     task = tasks[0]
 
@@ -788,7 +787,7 @@ def test_terminal_states_clean_up_endpoints(job_request, terminal_state):
     state = ControllerState()
     now_ms = int(time.time() * 1000)
 
-    job = Job(
+    job = ControllerJob(
         job_id=JobId("j1"),
         request=job_request("job1"),
     )
@@ -823,7 +822,7 @@ def test_terminal_states_clean_up_endpoints(job_request, terminal_state):
 
 def test_worker_timeout_task_cleanup(job_request, worker_metadata):
     """Worker timeout triggers proper task cleanup including endpoints."""
-    from iris.cluster.controller.task import TaskTransitionResult
+    from iris.cluster.controller.state import TaskTransitionResult
 
     state = ControllerState()
     now_ms = int(time.time() * 1000)
@@ -836,7 +835,7 @@ def test_worker_timeout_task_cleanup(job_request, worker_metadata):
     )
     state.add_worker(worker)
 
-    job = Job(
+    job = ControllerJob(
         job_id=JobId("j1"),
         request=job_request("job1"),
     )
@@ -877,7 +876,7 @@ def test_worker_timeout_task_cleanup(job_request, worker_metadata):
 
 def test_failure_domain_kills_remaining_tasks_on_task_failure(worker_metadata):
     """When one task fails beyond retries, remaining tasks should be killed."""
-    from iris.cluster.controller.task import TaskTransitionResult
+    from iris.cluster.controller.state import TaskTransitionResult
 
     state = ControllerState()
     now_ms = int(time.time() * 1000)
@@ -897,7 +896,7 @@ def test_failure_domain_kills_remaining_tasks_on_task_failure(worker_metadata):
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         max_task_failures=0,
     )
-    job = Job(job_id=JobId("j1"), request=job_request)
+    job = ControllerJob(job_id=JobId("j1"), request=job_request)
     tasks = state.add_job(job)
 
     assert len(tasks) == 3
@@ -939,7 +938,7 @@ def test_failure_domain_kills_remaining_tasks_on_task_failure(worker_metadata):
 
 def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
     """Job with max_task_failures=1 tolerates one failure before failing."""
-    from iris.cluster.controller.task import TaskTransitionResult
+    from iris.cluster.controller.state import TaskTransitionResult
 
     state = ControllerState()
     now_ms = int(time.time() * 1000)
@@ -959,7 +958,7 @@ def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         max_task_failures=1,
     )
-    job = Job(job_id=JobId("j1"), request=job_request)
+    job = ControllerJob(job_id=JobId("j1"), request=job_request)
     tasks = state.add_job(job)
 
     # Dispatch all tasks
@@ -1005,7 +1004,7 @@ def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
 
 def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
     """Preemptions (worker failures) don't count toward max_task_failures threshold."""
-    from iris.cluster.controller.task import TaskTransitionResult
+    from iris.cluster.controller.state import TaskTransitionResult
 
     state = ControllerState()
     now_ms = int(time.time() * 1000)
@@ -1025,7 +1024,7 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         max_task_failures=0,
     )
-    job = Job(job_id=JobId("j1"), request=job_request)
+    job = ControllerJob(job_id=JobId("j1"), request=job_request)
     tasks = state.add_job(job)
 
     # Dispatch task-0
@@ -1054,7 +1053,7 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
 
 def test_all_tasks_succeed_job_succeeds(worker_metadata):
     """When all tasks succeed, job transitions to SUCCEEDED."""
-    from iris.cluster.controller.task import TaskTransitionResult
+    from iris.cluster.controller.state import TaskTransitionResult
 
     state = ControllerState()
     now_ms = int(time.time() * 1000)
@@ -1073,7 +1072,7 @@ def test_all_tasks_succeed_job_succeeds(worker_metadata):
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
     )
-    job = Job(job_id=JobId("j1"), request=job_request)
+    job = ControllerJob(job_id=JobId("j1"), request=job_request)
     tasks = state.add_job(job)
 
     # Dispatch and complete all tasks

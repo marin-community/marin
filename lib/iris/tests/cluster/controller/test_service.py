@@ -295,14 +295,14 @@ def test_terminate_job_only_affects_descendants(service, job_request):
 
 def test_terminate_job_skips_already_finished_children(service, state, job_request):
     """Verify terminate_job skips children already in terminal state."""
-    from iris.cluster.controller.job import Job
+    from iris.cluster.controller.state import ControllerJob
 
     # Launch parent via RPC
     service.launch_job(job_request("parent"), None)
 
     # Create a child that's already succeeded (need to set up via state since
     # we can't naturally get a job to SUCCEEDED without worker interaction)
-    child_succeeded = Job(
+    child_succeeded = ControllerJob(
         job_id=JobId("child-succeeded"),
         request=job_request("child-succeeded"),
         state=cluster_pb2.JOB_STATE_SUCCEEDED,

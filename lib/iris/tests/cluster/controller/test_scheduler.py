@@ -23,9 +23,8 @@ import time
 
 import pytest
 
-from iris.cluster.controller.job import Job, expand_job_to_tasks
 from iris.cluster.controller.scheduler import Scheduler
-from iris.cluster.controller.state import ControllerState, ControllerWorker
+from iris.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker, expand_job_to_tasks
 from iris.cluster.types import JobId, WorkerId
 from iris.rpc import cluster_pb2
 
@@ -119,7 +118,7 @@ def test_scheduler_finds_assignment_for_task(scheduler, state, job_request, work
     state.add_worker(worker)
 
     now_ms = int(time.time() * 1000)
-    job = Job(JobId("j1"), request=job_request())
+    job = ControllerJob(JobId("j1"), request=job_request())
     tasks = _add_job(state, job)
     task = tasks[0]
 
@@ -136,7 +135,7 @@ def test_scheduler_finds_assignment_for_task(scheduler, state, job_request, work
 def test_scheduler_returns_empty_when_no_workers(scheduler, state, job_request):
     """Verify scheduler returns empty result when no workers available."""
     now_ms = int(time.time() * 1000)
-    job = Job(JobId("j1"), request=job_request())
+    job = ControllerJob(JobId("j1"), request=job_request())
     _add_job(state, job)
 
     pending_tasks = state.peek_pending_tasks()
@@ -158,9 +157,9 @@ def test_scheduler_assigns_multiple_tasks_to_worker(scheduler, state, job_reques
     state.add_worker(worker)
 
     now_ms = int(time.time() * 1000)
-    job1 = Job(JobId("j1"), request=job_request(cpu=2))
-    job2 = Job(JobId("j2"), request=job_request(cpu=2))
-    job3 = Job(JobId("j3"), request=job_request(cpu=2))
+    job1 = ControllerJob(JobId("j1"), request=job_request(cpu=2))
+    job2 = ControllerJob(JobId("j2"), request=job_request(cpu=2))
+    job3 = ControllerJob(JobId("j3"), request=job_request(cpu=2))
     tasks1 = _add_job(state, job1)
     tasks2 = _add_job(state, job2)
     tasks3 = _add_job(state, job3)
@@ -187,9 +186,9 @@ def test_scheduler_skips_tasks_that_dont_fit(scheduler, state, job_request, work
 
     now_ms = int(time.time() * 1000)
     # Job 1: needs 8 CPUs (won't fit on 4 CPU worker)
-    job1 = Job(JobId("j1"), request=job_request(cpu=8))
+    job1 = ControllerJob(JobId("j1"), request=job_request(cpu=8))
     # Job 2: needs 2 CPUs (will fit)
-    job2 = Job(JobId("j2"), request=job_request(cpu=2))
+    job2 = ControllerJob(JobId("j2"), request=job_request(cpu=2))
     _add_job(state, job1)
     tasks2 = _add_job(state, job2)
 
@@ -217,7 +216,7 @@ def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         scheduling_timeout_seconds=1,
     )
-    job = Job(
+    job = ControllerJob(
         JobId("j1"),
         request=job_request,
         submitted_at_ms=int(time.time() * 1000) - 2000,  # Submitted 2s ago
@@ -257,7 +256,7 @@ def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         scheduling_timeout_seconds=0,  # No timeout
     )
-    job = Job(
+    job = ControllerJob(
         JobId("j1"),
         request=job_request,
         submitted_at_ms=int(time.time() * 1000) - 10000,  # Submitted 10s ago
@@ -286,7 +285,7 @@ def test_scheduler_respects_worker_capacity_across_assignments(scheduler, state,
     # Submit 4 jobs, each requiring 2 CPUs
     # Only 2 should fit at a time
     for i in range(4):
-        job = Job(JobId(f"j{i}"), request=job_request(cpu=2))
+        job = ControllerJob(JobId(f"j{i}"), request=job_request(cpu=2))
         _add_job(state, job)
 
     pending_tasks = state.peek_pending_tasks()
@@ -308,7 +307,7 @@ def test_scheduler_skips_unhealthy_workers(scheduler, state, job_request, worker
     state.add_worker(unhealthy_worker)
 
     now_ms = int(time.time() * 1000)
-    job = Job(JobId("j1"), request=job_request())
+    job = ControllerJob(JobId("j1"), request=job_request())
     _add_job(state, job)
 
     pending_tasks = state.peek_pending_tasks()
@@ -330,7 +329,7 @@ def test_scheduler_considers_running_tasks_for_capacity(scheduler, state, job_re
     now_ms = int(time.time() * 1000)
 
     # Add a running job with a running task that uses 3 CPUs
-    running_job = Job(
+    running_job = ControllerJob(
         JobId("running"),
         request=job_request(cpu=3),
         state=cluster_pb2.JOB_STATE_RUNNING,
@@ -339,11 +338,11 @@ def test_scheduler_considers_running_tasks_for_capacity(scheduler, state, job_re
     # Mark task as running on worker (creates attempt with worker_id)
     running_tasks[0].create_attempt(worker.worker_id, now_ms)
     state.add_job(running_job, running_tasks)
-    # Manually assign task to worker
-    worker.running_tasks.add(running_tasks[0].task_id)
+    # Assign task to worker using the proper method to track committed resources
+    worker.assign_task(running_tasks[0].task_id, running_job.request.resources)
 
     # Try to schedule a job that needs 2 CPUs (won't fit, only 1 CPU available)
-    job = Job(JobId("j1"), request=job_request(cpu=2))
+    job = ControllerJob(JobId("j1"), request=job_request(cpu=2))
     _add_job(state, job)
 
     pending_tasks = state.peek_pending_tasks()
@@ -366,7 +365,7 @@ def test_scheduler_assigns_to_multiple_workers(scheduler, state, job_request, wo
     # Three jobs needing 2 CPUs each
     # Two should fit (one on each worker), third won't fit
     for i in range(3):
-        job = Job(JobId(f"j{i}"), request=job_request(cpu=2))
+        job = ControllerJob(JobId(f"j{i}"), request=job_request(cpu=2))
         _add_job(state, job)
 
     pending_tasks = state.peek_pending_tasks()
@@ -391,7 +390,7 @@ def test_scheduler_reports_task_too_large_for_cluster(scheduler, state, job_requ
 
     now_ms = int(time.time() * 1000)
     # Job that needs 4 CPUs - exceeds the capacity of any single worker
-    job = Job(JobId("j1"), request=job_request(cpu=4))
+    job = ControllerJob(JobId("j1"), request=job_request(cpu=4))
     _add_job(state, job)
 
     pending_tasks = state.peek_pending_tasks()

@@ -22,9 +22,9 @@ from starlette.testclient import TestClient
 from iris.rpc import cluster_pb2
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.job import Job
 from iris.cluster.controller.state import (
     ControllerEndpoint,
+    ControllerJob,
     ControllerState,
     ControllerWorker,
 )
@@ -90,9 +90,9 @@ def resource_spec():
 
 def test_stats_counts_building_separately_from_running(client, state, job_request):
     """Building jobs should be counted separately, not as running or pending."""
-    state.add_job(Job(job_id=JobId("pending"), request=job_request, state=cluster_pb2.JOB_STATE_PENDING))
-    state.add_job(Job(job_id=JobId("building"), request=job_request, state=cluster_pb2.JOB_STATE_BUILDING))
-    state.add_job(Job(job_id=JobId("running"), request=job_request, state=cluster_pb2.JOB_STATE_RUNNING))
+    state.add_job(ControllerJob(job_id=JobId("pending"), request=job_request, state=cluster_pb2.JOB_STATE_PENDING))
+    state.add_job(ControllerJob(job_id=JobId("building"), request=job_request, state=cluster_pb2.JOB_STATE_BUILDING))
+    state.add_job(ControllerJob(job_id=JobId("running"), request=job_request, state=cluster_pb2.JOB_STATE_RUNNING))
 
     stats = client.get("/api/stats").json()
 
@@ -109,7 +109,7 @@ def test_stats_groups_terminal_states_as_completed(client, state, job_request):
         cluster_pb2.JOB_STATE_KILLED,
         cluster_pb2.JOB_STATE_WORKER_FAILED,
     ]:
-        state.add_job(Job(job_id=JobId(f"job-{job_state}"), request=job_request, state=job_state))
+        state.add_job(ControllerJob(job_id=JobId(f"job-{job_state}"), request=job_request, state=job_state))
 
     stats = client.get("/api/stats").json()
 
@@ -145,11 +145,11 @@ def test_stats_counts_only_healthy_workers(client, state, make_worker_metadata):
 def test_stats_counts_endpoints_for_running_jobs_only(client, state, job_request):
     """Endpoint count only includes endpoints for RUNNING jobs."""
     # Running job with endpoint
-    state.add_job(Job(job_id=JobId("running"), request=job_request, state=cluster_pb2.JOB_STATE_RUNNING))
+    state.add_job(ControllerJob(job_id=JobId("running"), request=job_request, state=cluster_pb2.JOB_STATE_RUNNING))
     state.add_endpoint(ControllerEndpoint(endpoint_id="ep1", name="svc", address="host:80", job_id=JobId("running")))
 
     # Pending job with endpoint (should not count)
-    state.add_job(Job(job_id=JobId("pending"), request=job_request, state=cluster_pb2.JOB_STATE_PENDING))
+    state.add_job(ControllerJob(job_id=JobId("pending"), request=job_request, state=cluster_pb2.JOB_STATE_PENDING))
     state.add_endpoint(ControllerEndpoint(endpoint_id="ep2", name="svc2", address="host:81", job_id=JobId("pending")))
 
     stats = client.get("/api/stats").json()
@@ -160,9 +160,9 @@ def test_stats_counts_endpoints_for_running_jobs_only(client, state, job_request
 def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     """ListEndpoints filters out endpoints for non-running jobs."""
     # Create jobs in various states
-    state.add_job(Job(job_id=JobId("pending"), request=job_request, state=cluster_pb2.JOB_STATE_PENDING))
-    state.add_job(Job(job_id=JobId("running"), request=job_request, state=cluster_pb2.JOB_STATE_RUNNING))
-    state.add_job(Job(job_id=JobId("succeeded"), request=job_request, state=cluster_pb2.JOB_STATE_SUCCEEDED))
+    state.add_job(ControllerJob(job_id=JobId("pending"), request=job_request, state=cluster_pb2.JOB_STATE_PENDING))
+    state.add_job(ControllerJob(job_id=JobId("running"), request=job_request, state=cluster_pb2.JOB_STATE_RUNNING))
+    state.add_job(ControllerJob(job_id=JobId("succeeded"), request=job_request, state=cluster_pb2.JOB_STATE_SUCCEEDED))
 
     # Add endpoints for each
     state.add_endpoint(ControllerEndpoint(endpoint_id="ep1", name="pending-svc", address="h:1", job_id=JobId("pending")))
@@ -182,7 +182,7 @@ def test_job_detail_page_includes_worker_address(client, state, job_request, mak
             worker_id=WorkerId("w1"), address="worker-host:9000", metadata=make_worker_metadata(), healthy=True
         )
     )
-    state.add_job(Job(job_id=JobId("j1"), request=job_request, state=cluster_pb2.JOB_STATE_RUNNING))
+    state.add_job(ControllerJob(job_id=JobId("j1"), request=job_request, state=cluster_pb2.JOB_STATE_RUNNING))
 
     response = client.get("/job/j1")
 
@@ -193,7 +193,7 @@ def test_job_detail_page_includes_worker_address(client, state, job_request, mak
 
 def test_job_detail_page_empty_worker_for_pending_job(client, state, job_request):
     """Job detail page has empty worker address for unassigned jobs."""
-    state.add_job(Job(job_id=JobId("pending-job"), request=job_request, state=cluster_pb2.JOB_STATE_PENDING))
+    state.add_job(ControllerJob(job_id=JobId("pending-job"), request=job_request, state=cluster_pb2.JOB_STATE_PENDING))
 
     response = client.get("/job/pending-job")
 
@@ -215,7 +215,7 @@ def test_jobs_state_names_mapped_correctly(client, state, job_request):
     ]
 
     for proto_state, _ in state_mapping:
-        state.add_job(Job(job_id=JobId(f"j-{proto_state}"), request=job_request, state=proto_state))
+        state.add_job(ControllerJob(job_id=JobId(f"j-{proto_state}"), request=job_request, state=proto_state))
 
     jobs = client.get("/api/jobs").json()
     job_by_id = {j["job_id"]: j["state"] for j in jobs}
@@ -226,7 +226,7 @@ def test_jobs_state_names_mapped_correctly(client, state, job_request):
 
 def test_api_jobs_includes_retry_counts(client, state, job_request):
     """Jobs API includes retry count fields."""
-    job = Job(
+    job = ControllerJob(
         job_id=JobId("test-job"),
         request=job_request,
         state=cluster_pb2.JOB_STATE_RUNNING,
@@ -248,7 +248,7 @@ def test_api_job_attempts_returns_retry_info(client, state, job_request):
     Jobs no longer track individual attempts - tasks do. This endpoint
     returns aggregate retry information for the job.
     """
-    job = Job(
+    job = ControllerJob(
         job_id=JobId("test-job"),
         request=job_request,
         state=cluster_pb2.JOB_STATE_RUNNING,

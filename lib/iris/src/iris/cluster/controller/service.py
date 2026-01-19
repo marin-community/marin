@@ -28,8 +28,7 @@ from typing import Any, Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.cluster.controller.job import Job
-from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerWorker
+from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerWorker, ControllerJob
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
@@ -101,7 +100,7 @@ class ControllerServiceImpl:
 
             parent_job_id = JobId(request.parent_job_id) if request.parent_job_id else None
 
-            job = Job(
+            job = ControllerJob(
                 job_id=JobId(job_id),
                 request=request,
                 submitted_at_ms=int(time.time() * 1000),
@@ -204,7 +203,7 @@ class ControllerServiceImpl:
         self._terminate_job_tree(job)
         return cluster_pb2.Empty()
 
-    def _terminate_job_tree(self, job: Job) -> None:
+    def _terminate_job_tree(self, job: ControllerJob) -> None:
         """Recursively terminate a job and all its descendants (depth-first)."""
         # First, terminate all children recursively
         children = self._state.get_children(job.job_id)

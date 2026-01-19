@@ -17,37 +17,18 @@
 import logging
 from dataclasses import dataclass, field
 
-from iris.cluster.controller.job import Job
-from iris.cluster.controller.state import ControllerState, ControllerWorker
-from iris.cluster.controller.task import Task
+from iris.cluster.controller.state import (
+    ControllerJob,
+    ControllerState,
+    ControllerTask,
+    ControllerWorker,
+    get_device_type,
+    get_device_variant,
+    get_gpu_count,
+)
 from iris.cluster.types import WorkerId
-from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
-
-
-def get_device_type(device: cluster_pb2.DeviceConfig) -> str:
-    if device.HasField("cpu"):
-        return "cpu"
-    elif device.HasField("gpu"):
-        return "gpu"
-    elif device.HasField("tpu"):
-        return "tpu"
-    return "cpu"  # Default to CPU if no device specified
-
-
-def get_device_variant(device: cluster_pb2.DeviceConfig) -> str | None:
-    if device.HasField("gpu"):
-        return device.gpu.variant if device.gpu.variant else None
-    elif device.HasField("tpu"):
-        return device.tpu.variant if device.tpu.variant else None
-    return None
-
-
-def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
-    if device.HasField("gpu"):
-        return device.gpu.count or 1
-    return 0
 
 
 @dataclass
@@ -61,7 +42,7 @@ class WorkerCapacity:
     device_variant: str | None
 
 
-def worker_can_fit_task(capacity: WorkerCapacity, job: Job) -> bool:
+def worker_can_fit_task(capacity: WorkerCapacity, job: ControllerJob) -> bool:
     """Check if worker capacity can fit task. Tasks use the job's resource spec."""
     res = job.request.resources
 
@@ -85,7 +66,7 @@ def worker_can_fit_task(capacity: WorkerCapacity, job: Job) -> bool:
     return True
 
 
-def deduct_task_from_capacity(capacity: WorkerCapacity, job: Job) -> None:
+def deduct_task_from_capacity(capacity: WorkerCapacity, job: ControllerJob) -> None:
     """Deduct task's resources from capacity (mutates capacity). Uses job's resource spec."""
     res = job.request.resources
     capacity.available_cpu -= res.cpu
@@ -93,9 +74,9 @@ def deduct_task_from_capacity(capacity: WorkerCapacity, job: Job) -> None:
     capacity.available_gpus -= get_gpu_count(res.device)
 
 
-def compute_worker_capacity(state: ControllerState, worker: ControllerWorker) -> WorkerCapacity:
+def compute_worker_capacity(worker: ControllerWorker) -> WorkerCapacity:
     """Compute current available capacity for a worker."""
-    committed_cpu, committed_mem, committed_gpu = state.get_committed_resources(worker)
+    committed_cpu, committed_mem, committed_gpu = worker.get_committed_resources()
     metadata = worker.metadata
     return WorkerCapacity(
         available_cpu=metadata.cpu_count - committed_cpu,
@@ -111,22 +92,22 @@ class SchedulingTransaction:
     """Accumulates tentative task assignments that can be rolled back."""
 
     state: ControllerState
-    assignments: list[tuple[Task, ControllerWorker]] = field(default_factory=list)
-    timed_out_tasks: list[Task] = field(default_factory=list)
+    assignments: list[tuple[ControllerTask, ControllerWorker]] = field(default_factory=list)
+    timed_out_tasks: list[ControllerTask] = field(default_factory=list)
 
-    def tentatively_assign(self, task: Task, worker: ControllerWorker) -> None:
+    def tentatively_assign(self, task: ControllerTask, worker: ControllerWorker) -> None:
         """Assign task to worker immediately (updates running_tasks and removes from queue)."""
         self.state.assign_task_to_worker(worker.worker_id, task.task_id)
         self.assignments.append((task, worker))
 
-    def rollback_assignment(self, task: Task, worker: ControllerWorker) -> None:
+    def rollback_assignment(self, task: ControllerTask, worker: ControllerWorker) -> None:
         """Rollback a single failed assignment."""
         self.state.rollback_task_assignment(worker.worker_id, task)
 
 
-def build_capacity_map(state: ControllerState, workers: list[ControllerWorker]) -> dict[WorkerId, WorkerCapacity]:
+def build_capacity_map(workers: list[ControllerWorker]) -> dict[WorkerId, WorkerCapacity]:
     """Build capacity map for all healthy workers."""
-    return {w.worker_id: compute_worker_capacity(state, w) for w in workers if w.healthy}
+    return {w.worker_id: compute_worker_capacity(w) for w in workers if w.healthy}
 
 
 class Scheduler:
@@ -137,7 +118,7 @@ class Scheduler:
 
     def find_assignments(
         self,
-        pending_tasks: list[Task],
+        pending_tasks: list[ControllerTask],
         workers: list[ControllerWorker],
         now_ms: int,
     ) -> SchedulingTransaction:
@@ -159,7 +140,7 @@ class Scheduler:
             SchedulingTransaction with assignments and timed-out tasks
         """
         transaction = SchedulingTransaction(self._state)
-        capacities = build_capacity_map(self._state, workers)
+        capacities = build_capacity_map(workers)
 
         for task in pending_tasks:
             job = self._state.get_job(task.job_id)
@@ -205,7 +186,7 @@ class Scheduler:
             )
         return transaction
 
-    def _is_task_timed_out(self, task: Task, job: Job, now_ms: int) -> bool:
+    def _is_task_timed_out(self, task: ControllerTask, job: ControllerJob, now_ms: int) -> bool:
         """Check if a task has exceeded its scheduling timeout."""
         timeout_seconds = job.request.scheduling_timeout_seconds
         if timeout_seconds <= 0:

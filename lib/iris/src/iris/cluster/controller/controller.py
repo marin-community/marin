@@ -26,8 +26,7 @@ import uvicorn
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.scheduler import Scheduler, SchedulingTransaction
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.state import ControllerState, ControllerWorker
-from iris.cluster.controller.task import Task
+from iris.cluster.controller.state import ControllerState, ControllerWorker, ControllerTask
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import ExponentialBackoff
@@ -248,7 +247,7 @@ class Controller:
     def _dispatch_task(
         self,
         transaction: SchedulingTransaction,
-        task: Task,
+        task: ControllerTask,
         worker: ControllerWorker,
         now_ms: int,
     ) -> None:
@@ -306,7 +305,7 @@ class Controller:
                 details=f"task={task.task_id}",
             )
 
-    def _mark_task_unschedulable(self, task: Task, now_ms: int) -> None:
+    def _mark_task_unschedulable(self, task: ControllerTask, now_ms: int) -> None:
         """Mark a task as unschedulable due to timeout."""
         job = self._state.get_job(task.job_id)
         timeout_seconds = job.request.scheduling_timeout_seconds if job else 0
