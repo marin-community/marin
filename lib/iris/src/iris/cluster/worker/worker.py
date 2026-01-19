@@ -593,10 +593,13 @@ class Worker:
             env["IRIS_BUNDLE_GCS_PATH"] = task.request.bundle_gcs_path
 
         # Inject bind host - 0.0.0.0 for Docker (so port mapping works), 127.0.0.1 otherwise
+        # Also inject advertise host - the address other containers should use to reach this one
         if isinstance(self._runtime, DockerRuntime):
             env["IRIS_BIND_HOST"] = "0.0.0.0"
+            env["IRIS_ADVERTISE_HOST"] = "host.docker.internal"
         else:
             env["IRIS_BIND_HOST"] = "127.0.0.1"
+            env["IRIS_ADVERTISE_HOST"] = "127.0.0.1"
 
         # Inject allocated ports
         for name, port in task.ports.items():

@@ -14,10 +14,30 @@
 
 """Namespace-aware resolver for actor discovery via cluster controller."""
 
+import os
+
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.types import Namespace
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+
+
+def _rewrite_address_for_host(address: str) -> str:
+    """Rewrite Docker-internal addresses to localhost when running on the host.
+
+    When actors register from inside Docker containers, they use host.docker.internal
+    so other containers can reach them. But clients running on the host (outside Docker)
+    can't resolve host.docker.internal - they should use localhost instead since Docker
+    publishes ports to the host.
+
+    This function checks if we're running outside Docker (no IRIS_ADVERTISE_HOST set)
+    and rewrites host.docker.internal to localhost.
+    """
+    # If IRIS_ADVERTISE_HOST is set, we're inside a container and should use Docker networking
+    if os.environ.get("IRIS_ADVERTISE_HOST"):
+        return address
+    # Otherwise, we're on the host - rewrite Docker-internal addresses
+    return address.replace("host.docker.internal", "localhost")
 
 
 class ClusterResolver:
@@ -68,9 +88,10 @@ class ClusterResolver:
         resp = self._client.list_endpoints(request)
 
         # Filter to exact name matches (controller uses prefix matching)
+        # Rewrite addresses for host/container compatibility
         endpoints = [
             ResolvedEndpoint(
-                url=f"http://{ep.address}",
+                url=f"http://{_rewrite_address_for_host(ep.address)}",
                 actor_id=ep.endpoint_id,
                 metadata=dict(ep.metadata),
             )

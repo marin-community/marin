@@ -38,13 +38,14 @@ Example:
 """
 
 import logging
+import os
 import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
 from contextvars import Context, copy_context
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 from queue import Empty, Queue
 from typing import Any, Generic, TypeVar
@@ -56,6 +57,7 @@ from iris.actor import ActorServer
 from iris.actor.client import ActorClient
 from iris.actor.resolver import Resolver
 from iris.client.client import IrisClient, Job, iris_ctx
+from iris.cluster.client import get_job_info
 from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
 from iris.time_utils import ExponentialBackoff
 
@@ -144,19 +146,25 @@ class TaskExecutorActor:
         return fn(*args, **kwargs)
 
 
-def worker_job_entrypoint(pool_id: str, worker_index: int) -> None:
+def worker_job_entrypoint(pool_id: str) -> None:
     """Job entrypoint that starts a TaskExecutor actor.
+
+    This function runs inside each task of the co-scheduled worker pool job.
+    It uses IRIS_TASK_INDEX from the environment to determine which worker
+    index this task represents.
 
     Args:
         pool_id: Unique identifier for the worker pool
-        worker_index: Index of this worker (0, 1, 2, ...)
     """
     ctx = iris_ctx()
+    job_info = get_job_info()
+    if job_info is None:
+        raise RuntimeError("No job info available - must run inside an Iris job")
 
-    # Unique name per worker
-    worker_name = f"_workerpool_{pool_id}:worker-{worker_index}"
+    task_index = job_info.task_index
+    worker_name = f"_workerpool_{pool_id}:worker-{task_index}"
 
-    logger.info("Worker starting: pool_id=%s, worker_index=%d", pool_id, worker_index)
+    logger.info("Worker starting: pool_id=%s, task_index=%d of %d", pool_id, task_index, job_info.num_tasks)
     logger.info("Worker name: %s, job_id=%s", worker_name, ctx.job_id)
 
     # Start actor server
@@ -167,7 +175,8 @@ def worker_job_entrypoint(pool_id: str, worker_index: int) -> None:
     # Register endpoint with registry
     if ctx.registry is None:
         raise RuntimeError("No registry available - are you running in a cluster context?")
-    address = f"localhost:{actual_port}"
+    advertise_host = os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1")
+    address = f"{advertise_host}:{actual_port}"
     ctx.registry.register(worker_name, address, {"job_id": ctx.job_id})
     logger.info("ActorServer started and registered on port %d", actual_port)
 
@@ -443,7 +452,7 @@ class WorkerPool:
         if self._resolver is None:
             self._resolver = self._client.resolver()
 
-        # Initialize worker state and launch jobs
+        # Initialize worker state for each task we'll create
         for i in range(self._config.num_workers):
             worker_id = f"worker-{i}"
             worker_name = f"_workerpool_{self._pool_id}:{worker_id}"
@@ -453,19 +462,22 @@ class WorkerPool:
                 status=WorkerStatus.PENDING,
             )
 
-            entrypoint = Entrypoint(
-                callable=worker_job_entrypoint,
-                args=(self._pool_id, i),
-            )
+        # Submit ONE job with replicas=num_workers (co-scheduling)
+        # Each replica becomes a task that reads its task_index from the environment
+        entrypoint = Entrypoint(
+            callable=worker_job_entrypoint,
+            args=(self._pool_id,),
+        )
+        resources_with_replicas = replace(self._config.resources, replicas=self._config.num_workers)
 
-            job = self._client.submit(
-                entrypoint=entrypoint,
-                name=f"{self._config.name_prefix}-{self._pool_id}-{i}",
-                resources=self._config.resources,
-                environment=self._config.environment,
-                ports=["actor"],
-            )
-            self._jobs.append(job)
+        job = self._client.submit(
+            entrypoint=entrypoint,
+            name=f"{self._config.name_prefix}-{self._pool_id}",
+            resources=resources_with_replicas,
+            environment=self._config.environment,
+            ports=["actor"],
+        )
+        self._jobs.append(job)
 
         # Start dispatchers (one per worker). Each thread needs its own context copy
         # because a Context can only be entered by one thread at a time.

@@ -420,8 +420,7 @@ def main(docker: bool, no_browser: bool, validate_only: bool, test_notebook: boo
     By default, runs jobs in-process (no Docker required). Use --docker for
     real container execution.
     """
-    # Enable verbose logging if requested or if running test-notebook
-    if verbose or test_notebook:
+    if verbose:
         logging.basicConfig(
             level=logging.DEBUG,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
