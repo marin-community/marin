@@ -40,13 +40,32 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen1.5-4B-Chat", trust_remote_c
 def load_hotpotqa():
     # Load HotPotQA (using dspy built-in or HF)
     # For simplicity using dspy.datasets if available or loading from HF
+    # Load HotPotQA from HF
     dl = DataLoader()
-    dataset = dl.from_huggingface(
+    # First load raw dataset
+    hf_dataset = dl.from_huggingface(
         "hotpotqa/hotpot_qa",
         "fullwiki",
         split="train",
-        input_keys=("question", "context"), # ADDED context for BM25 Indexing
     )
+    
+    # Manually convert to Examples to control input_keys
+    dataset = []
+    for item in hf_dataset:
+        # We perform a shallow copy or just usage of fields
+        # item is already a dspy.Example but with all fields as inputs if loaded via dspy.DataLoader defaults?
+        # Actually dspy.DataLoader.from_huggingface returns list of dspy.Example
+        # but we need to ensure 'context' is accessible but NOT an input.
+        
+        # Re-create example to be sure
+        ex = dspy.Example(
+            question=item.question,
+            answer=item.answer,
+            context=item.context if hasattr(item, 'context') else None
+        ).with_inputs("question")
+        
+        dataset.append(ex)
+        
     return dataset
 
 def load_hover():
