@@ -67,8 +67,8 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - per_device_parallelism: samples processed per device at a time (limited by memory)
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
-PER_DEVICE_PARALLELISM = 4  # 1 sample per device (memory-safe for VLM with large images)
-GRADIENT_ACCUMULATION_STEPS = 4  # Accumulate 4 micro-batches
+PER_DEVICE_PARALLELISM = 8  # 1 sample per device (memory-safe for VLM with large images)
+GRADIENT_ACCUMULATION_STEPS = 1  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
 # ============================================================================
@@ -139,8 +139,10 @@ data_source = ConversationDatasetSourceConfig(
 
 data_config = ImageMixtureDatasetConfig(
     cache_dir="cache/vlm_demo",
-    # Processor for tokenization + image preprocessing
+    # Processor for image preprocessing
     processor="llava-hf/llava-onevision-qwen2-0.5b-ov-hf",
+    # Custom tokenizer for text processing (uses CustomVLMProcessor internally)
+    tokenizer="Qwen/Qwen3-1.7B",
     configs={"train": data_source},
     train_weights={"train": 1.0},
     use_cache=False,  # Streaming mode (no disk caching)
@@ -161,9 +163,10 @@ train_config = SimpleVlmTrainConfig(
     per_device_parallelism=PER_DEVICE_PARALLELISM,
     num_train_steps=NUM_TRAIN_STEPS,
     epoch=0,  # Disable epoch mode (use num_train_steps instead)
-    learning_rate=2e-4,
+    learning_rate=1e-4,
     warmup=0.03,  # 3% warmup
     weight_decay=0.0,
+    min_lr_ratio=0.01,  # Final LR = 1% of peak LR
 
     # Full bfloat16: params and compute both in bfloat16 (saves memory)
     mp="bfloat16",

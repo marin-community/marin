@@ -832,9 +832,13 @@ class LlavaOnevisionModel(eqx.Module):
                 combined_mask = jnp.where(special_image_mask.array, 1, text_mask.array).astype(jnp.int32)
             else:
                 # Need to check grid_mask validity for each placeholder position
+                # Use ACTUAL valid patches from grid_mask (more robust)
+                num_valid_patches = jnp.sum(grid_mask.array, axis=-1, keepdims=True)  # (batch, 1)
+                num_valid_tokens = num_valid_patches * features_per_patch  # (batch, 1)
+
                 grid_mask_expanded = jnp.repeat(grid_mask.array, features_per_patch, axis=1)
                 image_token_indices = jnp.cumsum(special_image_mask.array.astype(jnp.int32), axis=-1) - 1
-                image_token_indices = jnp.clip(image_token_indices, 0, total_image_tokens - 1)
+                image_token_indices = jnp.clip(image_token_indices, 0, num_valid_tokens - 1)
                 image_validity = self._batch_gather(grid_mask_expanded, image_token_indices)
                 combined_mask = jnp.where(special_image_mask.array, image_validity, text_mask.array).astype(jnp.int32)
 

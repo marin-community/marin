@@ -11,7 +11,7 @@ from levanter.store.cache import SerialCacheWriter
 import jax
 import jax.numpy as jnp
 
-from test_image_utils import get_real_data, DEFAULT_GRID_PINPOINTS, SINGLE_PATCH_GRID_PINPOINTS
+from test_image_utils import get_real_data, DEFAULT_GRID_PINPOINTS, SINGLE_PATCH_GRID_PINPOINTS, QWEN3_TOKENIZER
 import numpy as np
 import haliax as hax
 from jax.sharding import Mesh
@@ -150,8 +150,18 @@ def test_llava_with_image_dataloader(processor, dataset):
     vision_feature_height = patch_size // 14
     max_num_patches = 1  # Only 1 patch per image in disable_anyres mode
 
-    padded_processor = create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=grid_pinpoints, vision_aspect_ratio="single")
+    # Create base processors
+    base_padded_processor = create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=grid_pinpoints, vision_aspect_ratio="single")
     unpadded_processor = create_custom_processor(model_name, do_pad=False, image_grid_pinpoints=grid_pinpoints, vision_aspect_ratio="single")
+
+    # Use Qwen3 tokenizer for Levanter's data processing (consistent with other tests)
+    from transformers import AutoTokenizer
+    from levanter.data.image import CustomVLMProcessor
+
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    padded_processor = CustomVLMProcessor.from_processor_and_tokenizer(
+        base_padded_processor, qwen3_tokenizer
+    )
 
     batch_processor = BatchImageProcessor(
         padded_processor,
@@ -223,6 +233,10 @@ def test_llava_with_image_dataloader(processor, dataset):
             config, vision_config=vision_config_updated, text_config=text_config_updated, gradient_checkpointing=False
         )
 
+        # Update config with correct image_token_id for Qwen3 tokenizer
+        image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+        config = config.with_token_ids(image_token_id=image_token_id)
+
         trainer_config = TrainerConfig()
 
         with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
@@ -263,7 +277,7 @@ def test_llava_with_image_dataloader(processor, dataset):
             batch_pixel_values = np.array(batch.pixel_values.array)
             batch_grid_mask = np.array(batch.grid_mask.array) if batch.grid_mask is not None else None
 
-            image_token_id = hf_model.config.image_token_index
+            # image_token_id is now defined above with Qwen3 tokenizer's <|image_pad|> token
 
             # Monkey-patch image_size_to_num_patches to return 1 for disable_anyres mode
             original_image_size_to_num_patches = llava_modeling.image_size_to_num_patches

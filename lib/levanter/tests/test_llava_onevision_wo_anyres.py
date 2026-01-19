@@ -598,6 +598,12 @@ def test_llava_onevision_real_image_text():
     # Use a small pretrained model for testing
     model_name = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
 
+    # Load Qwen3 tokenizer and get image token ID
+    from transformers import AutoTokenizer
+    from test_image_utils import QWEN3_TOKENIZER
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+
     try:
         torch_model = HfLlavaOnevision.from_pretrained(
             model_name,
@@ -608,6 +614,8 @@ def test_llava_onevision_real_image_text():
         # Use SINGLE_PATCH_GRID_PINPOINTS and vision_aspect_ratio="single" to match disable_anyres=True mode
         torch_model.model.config.image_grid_pinpoints = SINGLE_PATCH_GRID_PINPOINTS
         torch_model.model.config.vision_aspect_ratio = "single"
+        # Update HF model's image_token_id to use Qwen3's <|image_pad|>
+        torch_model.config.image_token_id = image_token_id
     except Exception:
         pytest.skip(f"Could not download model: {model_name}")
         return
@@ -624,10 +632,11 @@ def test_llava_onevision_real_image_text():
         disable_anyres=True,
     )
 
-    # Extract HF data for HF forward pass
-    hf_input_ids = torch.tensor(test_pair.hf.input_ids).unsqueeze(0)
+    # Extract data for HF forward pass - use Levanter's input_ids (Qwen3 tokenized)
+    lev_seq_len = len(test_pair.lev.input_ids)
+    hf_input_ids = torch.tensor(test_pair.lev.input_ids[:lev_seq_len]).unsqueeze(0)
     hf_pixel_values = torch.tensor(test_pair.hf.pixel_values).unsqueeze(0)
-    hf_attention_mask = torch.tensor(test_pair.hf.attention_mask).unsqueeze(0)
+    hf_attention_mask = torch.ones_like(hf_input_ids)
     hf_image_sizes = torch.tensor(test_pair.hf.image_sizes).unsqueeze(0)
 
     # For disable_anyres mode: truncate to base patch only and patch HF to expect 1 patch
@@ -663,6 +672,9 @@ def test_llava_onevision_real_image_text():
     hf_config = torch_model.config
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
+    # Update config with correct image_token_id for Qwen3 tokenizer (already loaded above)
+    config = config.with_token_ids(image_token_id=image_token_id)
+
     mesh_config = MeshConfig(compute_mapping={"vision_batch": DEFAULT_DP_AXES})
     trainer_config = TrainerConfig(mesh=mesh_config)
 
@@ -678,9 +690,6 @@ def test_llava_onevision_real_image_text():
             dtype=jnp.float32,
             resize_vocab_to_match_tokenizer=False,
         )
-
-    # Get image token ID for logits comparison
-    image_token_id = torch_model.config.image_token_index
 
     # unpad_indices is already correctly sized by BatchImageProcessor
     # (total_patches * features_per_patch) - no trimming needed
@@ -747,6 +756,12 @@ def test_llava_onevision_real_multi_image_text():
     # Use a small pretrained model for testing
     model_name = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
 
+    # Load Qwen3 tokenizer and get image token ID
+    from transformers import AutoTokenizer
+    from test_image_utils import QWEN3_TOKENIZER
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+
     try:
         torch_model = HfLlavaOnevision.from_pretrained(
             model_name,
@@ -756,6 +771,8 @@ def test_llava_onevision_real_multi_image_text():
         # Use SINGLE_PATCH_GRID_PINPOINTS and vision_aspect_ratio="single" to match disable_anyres=True mode
         torch_model.model.config.image_grid_pinpoints = SINGLE_PATCH_GRID_PINPOINTS
         torch_model.model.config.vision_aspect_ratio = "single"
+        # Update HF model's image_token_id to use Qwen3's <|image_pad|>
+        torch_model.config.image_token_id = image_token_id
     except Exception:
         pytest.skip(f"Could not download model: {model_name}")
         return
@@ -779,9 +796,10 @@ def test_llava_onevision_real_multi_image_text():
         test_pair.lev.grid_mask.sum() == num_images
     ), f"Multi-image should have {num_images} valid patches (base only)"
 
-    # Prepare HF inputs for forward pass
-    hf_input_ids = torch.tensor(test_pair.hf.input_ids).unsqueeze(0)
-    hf_attention_mask = torch.tensor(test_pair.hf.attention_mask).unsqueeze(0)
+    # Prepare HF inputs for forward pass - use Levanter's input_ids (Qwen3 tokenized)
+    lev_seq_len = len(test_pair.lev.input_ids)
+    hf_input_ids = torch.tensor(test_pair.lev.input_ids[:lev_seq_len]).unsqueeze(0)
+    hf_attention_mask = torch.ones_like(hf_input_ids)
 
     hf_pixel_values = torch.tensor(test_pair.hf.pixel_values)
     if hf_pixel_values.dim() == 4:
@@ -805,6 +823,9 @@ def test_llava_onevision_real_multi_image_text():
     # Convert to Levanter
     hf_config = torch_model.config
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
+
+    # Update config with correct image_token_id for Qwen3 tokenizer (already loaded above)
+    config = config.with_token_ids(image_token_id=image_token_id)
 
     # Use model_axis_size=-1 to put all devices on model axis (not data axis)
     # This avoids batch sharding issues with batch_size=1
@@ -857,11 +878,11 @@ def test_llava_onevision_real_multi_image_text():
 
     hf_logits_flat = hf_logits[0]
 
-    image_token_id = torch_model.config.image_token_index
+    # Use Qwen3's image_token_id (already loaded above) for logits comparison
     comparison_result = compare_logits_by_region(
         hf_logits=hf_logits_flat,
         lev_logits=lev_logits_np,
-        input_ids=test_pair.hf.input_ids,
+        input_ids=test_pair.lev.input_ids,  # Use Levanter's input_ids (Qwen3 tokenized)
         image_token_id=image_token_id,
         tolerance=1.5e-3,
         verbose=True,
@@ -1242,6 +1263,12 @@ def test_llava_onevision_generation_with_inference_engine():
     model_name = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
     image = get_single_image()
 
+    # Load Qwen3 tokenizer and get image token ID
+    from transformers import AutoTokenizer
+    from test_image_utils import QWEN3_TOKENIZER
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+
     try:
         torch_model = HfLlavaOnevision.from_pretrained(model_name, torch_dtype=torch.float32)
         torch_model.eval()
@@ -1249,6 +1276,8 @@ def test_llava_onevision_generation_with_inference_engine():
         # Use SINGLE_PATCH_GRID_PINPOINTS and vision_aspect_ratio="single" to match disable_anyres=True mode
         torch_model.model.config.image_grid_pinpoints = SINGLE_PATCH_GRID_PINPOINTS
         torch_model.model.config.vision_aspect_ratio = "single"
+        # Update HF model's image_token_id to use Qwen3's <|image_pad|>
+        torch_model.config.image_token_id = image_token_id
         processor = AutoProcessor.from_pretrained(model_name)
     except Exception:
         pytest.skip(f"Could not download model: {model_name}")
@@ -1265,11 +1294,12 @@ def test_llava_onevision_generation_with_inference_engine():
         disable_anyres=True,
     )
 
-    # HuggingFace generation
+    # HuggingFace generation - use Levanter's input_ids (Qwen3 tokenized)
     max_new_tokens = 100
-    hf_input_ids = torch.tensor(test_pair.hf.input_ids).unsqueeze(0)
+    lev_seq_len = len(test_pair.lev.input_ids)
+    hf_input_ids = torch.tensor(test_pair.lev.input_ids[:lev_seq_len]).unsqueeze(0)
     hf_pixel_values = torch.tensor(test_pair.hf.pixel_values).unsqueeze(0)
-    hf_attention_mask = torch.tensor(test_pair.hf.attention_mask).unsqueeze(0)
+    hf_attention_mask = torch.ones_like(hf_input_ids)
     hf_image_sizes = torch.tensor(test_pair.hf.image_sizes).unsqueeze(0)
 
     # For disable_anyres mode: truncate to base patch only
@@ -1302,6 +1332,9 @@ def test_llava_onevision_generation_with_inference_engine():
     hf_config = torch_model.config
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
+    # Update config with correct image_token_id for Qwen3 tokenizer (already loaded above)
+    config = config.with_token_ids(image_token_id=image_token_id)
+
     trainer_config = TrainerConfig()  # Default: model_axis_size=1, all devices on data axis
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
         mesh = trainer_config.device_mesh
@@ -1323,7 +1356,7 @@ def test_llava_onevision_generation_with_inference_engine():
         jax_tensors = create_lev_jax_tensors(test_pair.lev, batch_size=1)
 
         # Configure InferenceEngine
-        prompt_len_lev = len(test_pair.hf.input_ids)
+        prompt_len_lev = len(test_pair.lev.input_ids)
         estimated_max_seq_len = prompt_len_lev + max_new_tokens + 64
         page_size = 16
 
@@ -1346,9 +1379,9 @@ def test_llava_onevision_generation_with_inference_engine():
             mesh=mesh,
         )
 
-        prompt_tokens = test_pair.hf.input_ids.tolist()
+        prompt_tokens = list(test_pair.lev.input_ids)  # Use Levanter's input_ids (Qwen3 tokenized)
 
-        eos_token_id = processor.tokenizer.eos_token_id
+        eos_token_id = qwen3_tokenizer.eos_token_id
         if eos_token_id is not None:
             stop_tokens = hax.named(jnp.array([[eos_token_id]], dtype=jnp.int32), ("stop_seq", "position"))
         else:
@@ -1398,11 +1431,19 @@ def test_llava_onevision_generation_with_inference_engine_multi():
     images = get_multi_images()
     num_images = len(images)
 
+    # Load Qwen3 tokenizer and get image token ID
+    from transformers import AutoTokenizer
+    from test_image_utils import QWEN3_TOKENIZER
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+
     try:
         torch_model = HfLlavaOnevision.from_pretrained(model_name, torch_dtype=torch.float32)
         torch_model.eval()
         torch_model.model.image_newline = None
         torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
+        # Update HF model's image_token_id to use Qwen3's <|image_pad|>
+        torch_model.config.image_token_id = image_token_id
         processor = AutoProcessor.from_pretrained(model_name)
     except Exception:
         pytest.skip(f"Could not download model: {model_name}")
@@ -1421,10 +1462,11 @@ def test_llava_onevision_generation_with_inference_engine_multi():
     assert test_pair.lev.unpad_indices is None, "Multi-image should have None unpad_indices"
     assert test_pair.lev.grid_mask.sum() == num_images, f"Multi-image should have {num_images} valid patches"
 
-    # HuggingFace generation
+    # HuggingFace generation - use Levanter's input_ids (Qwen3 tokenized)
     max_new_tokens = 100
-    hf_input_ids = torch.tensor(test_pair.hf.input_ids).unsqueeze(0)
-    hf_attention_mask = torch.tensor(test_pair.hf.attention_mask).unsqueeze(0)
+    lev_seq_len = len(test_pair.lev.input_ids)
+    hf_input_ids = torch.tensor(test_pair.lev.input_ids[:lev_seq_len]).unsqueeze(0)
+    hf_attention_mask = torch.ones_like(hf_input_ids)
     hf_pixel_values = torch.tensor(test_pair.hf.pixel_values)
     if hf_pixel_values.dim() == 4:
         hf_pixel_values = hf_pixel_values.unsqueeze(0)
@@ -1452,6 +1494,9 @@ def test_llava_onevision_generation_with_inference_engine_multi():
     text_config_updated = dataclasses.replace(config.text_config, attn_backend="dot", flash_attention_block_size=None)
     config = dataclasses.replace(config, text_config=text_config_updated)
 
+    # Update config with correct image_token_id for Qwen3 tokenizer (already loaded above)
+    config = config.with_token_ids(image_token_id=image_token_id)
+
     trainer_config = TrainerConfig()
 
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
@@ -1474,7 +1519,7 @@ def test_llava_onevision_generation_with_inference_engine_multi():
         jax_tensors = create_lev_jax_tensors(test_pair.lev, batch_size=1)
 
         # Configure InferenceEngine
-        prompt_len_lev = len(test_pair.hf.input_ids)
+        prompt_len_lev = len(test_pair.lev.input_ids)
         estimated_max_seq_len = prompt_len_lev + max_new_tokens + 64
         page_size = 16
 
@@ -1497,9 +1542,9 @@ def test_llava_onevision_generation_with_inference_engine_multi():
             mesh=mesh,
         )
 
-        prompt_tokens = test_pair.hf.input_ids.tolist()
+        prompt_tokens = list(test_pair.lev.input_ids)  # Use Levanter's input_ids (Qwen3 tokenized)
 
-        eos_token_id = processor.tokenizer.eos_token_id
+        eos_token_id = qwen3_tokenizer.eos_token_id
         if eos_token_id is not None:
             stop_tokens = hax.named(jnp.array([[eos_token_id]], dtype=jnp.int32), ("stop_seq", "position"))
         else:

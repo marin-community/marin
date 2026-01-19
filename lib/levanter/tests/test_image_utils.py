@@ -234,6 +234,9 @@ DEFAULT_GRID_PINPOINTS = [
 SINGLE_PATCH_GRID_PINPOINTS = [[384, 384]]
 
 
+QWEN3_TOKENIZER = "Qwen/Qwen3-0.6B"
+
+
 def _create_processors(
     model_name: str,
     grid_pinpoints: list[list[int]],
@@ -244,6 +247,7 @@ def _create_processors(
     add_generation_prompt: bool = False,
     disable_anyres: bool = False,
     max_images_per_sample: int = 5,
+    tokenizer_name: str = QWEN3_TOKENIZER,
 ):
     """Create HF and Levanter processors for test data preparation.
 
@@ -259,6 +263,8 @@ def _create_processors(
                         Each image uses only its base patch.
         max_images_per_sample: Maximum number of images per sample (used in disable_anyres mode).
                                Default 5 to support interleaved multi-image data.
+        tokenizer_name: Tokenizer name for both HF and Levanter processors. Default is Qwen3-0.6B
+                        which uses <|image_pad|> as image token. Set to None to use original model tokenizer.
 
     Returns:
         Tuple of (hf_processor, lev_batch_processor)
@@ -281,8 +287,8 @@ def _create_processors(
     try:
         from levanter.data.image import create_custom_processor
 
-        # HF processor with do_pad=True and max_image_tiles for padding_mode support
-        hf_processor = create_custom_processor(
+        # Create base processor first
+        base_processor = create_custom_processor(
             model_name,
             do_pad=True,
             image_grid_pinpoints=effective_grid_pinpoints,
@@ -290,14 +296,25 @@ def _create_processors(
             vision_aspect_ratio=effective_vision_aspect_ratio,
         )
 
-        # Levanter processor with do_pad=True (padding, fixed shape)
-        lev_processor = create_custom_processor(
-            model_name,
-            do_pad=True,
-            image_grid_pinpoints=effective_grid_pinpoints,
-            max_image_tiles=max_image_tiles,
-            vision_aspect_ratio=effective_vision_aspect_ratio,
-        )
+        # Use custom tokenizer for both HF and Levanter processors for consistency
+        if tokenizer_name is not None:
+            from transformers import AutoTokenizer
+            from levanter.data.image import CustomVLMProcessor
+
+            # Load the custom tokenizer (e.g., Qwen3)
+            custom_tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+
+            # Wrap both processors with CustomVLMProcessor for consistent tokenization
+            hf_processor = CustomVLMProcessor.from_processor_and_tokenizer(
+                base_processor, custom_tokenizer
+            )
+            lev_processor = CustomVLMProcessor.from_processor_and_tokenizer(
+                base_processor, custom_tokenizer
+            )
+        else:
+            # Use original processor (same tokenizer as model)
+            hf_processor = base_processor
+            lev_processor = base_processor
     except ImportError:
         # Fallback to standard AutoProcessor
         from transformers import AutoProcessor
@@ -430,6 +447,10 @@ def prepare_test_data(
             # Single image: (2,) for H, W
             image_sizes = hf_processed["image_sizes"][0]
 
+        # Ensure image_sizes is np.array (CustomVLMProcessor may return tuple)
+        if not isinstance(image_sizes, np.ndarray):
+            image_sizes = np.array(image_sizes)
+
         hf_data = HFProcessedData(
             input_ids=hf_processed["input_ids"][0],
             pixel_values=pixel_values,
@@ -553,6 +574,10 @@ def prepare_test_data_single(
     # Multi-image already produces 1 patch per image (no anyres), so no truncation needed
     if disable_anyres and not is_multi_image and hf_pixel_values.shape[0] > 1:
         hf_pixel_values = hf_pixel_values[0:1]  # Keep as (1, C, H, W)
+
+    # Ensure image_sizes is np.array (CustomVLMProcessor may return tuple)
+    if not isinstance(hf_image_sizes, np.ndarray):
+        hf_image_sizes = np.array(hf_image_sizes)
 
     hf_data = HFProcessedData(
         input_ids=hf_processed["input_ids"][0],

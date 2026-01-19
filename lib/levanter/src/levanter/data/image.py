@@ -244,6 +244,7 @@ class CustomVLMProcessor(ProcessorMixin):
         video_token="<video>",
         num_image_tokens=None,
         vision_feature_select_strategy=None,
+        vision_aspect_ratio=None,
         **kwargs,
     ):
         """
@@ -258,15 +259,25 @@ class CustomVLMProcessor(ProcessorMixin):
             video_token: Token used for video placeholders
             num_image_tokens: Number of tokens per image
             vision_feature_select_strategy: Strategy for selecting vision features
+            vision_aspect_ratio: Aspect ratio mode (e.g., "anyres_max_9")
         """
         self.num_image_tokens = num_image_tokens
         self.vision_feature_select_strategy = vision_feature_select_strategy
+        self.vision_aspect_ratio = vision_aspect_ratio
         self.image_token = image_token
         self.video_token = video_token
         self.image_token_id = tokenizer.convert_tokens_to_ids(image_token)
         self.video_token_id = tokenizer.convert_tokens_to_ids(video_token)
 
-        super().__init__(image_processor, tokenizer, video_processor, chat_template=chat_template)
+        # ProcessorMixin validates arguments against the `attributes` class variable.
+        # When video_processor is None, we need to exclude it from attributes to avoid type validation error.
+        if video_processor is None:
+            # Set instance-level attributes (overrides class attribute lookup)
+            object.__setattr__(self, "attributes", ["image_processor", "tokenizer"])
+            super().__init__(image_processor, tokenizer, chat_template=chat_template)
+            self.video_processor = None  # Set manually after init
+        else:
+            super().__init__(image_processor, tokenizer, video_processor, chat_template=chat_template)
 
     @classmethod
     def from_processor_and_tokenizer(
@@ -343,6 +354,7 @@ class CustomVLMProcessor(ProcessorMixin):
             video_token=video_token,
             num_image_tokens=getattr(original_processor, "num_image_tokens", None),
             vision_feature_select_strategy=getattr(original_processor, "vision_feature_select_strategy", None),
+            vision_aspect_ratio=getattr(original_processor, "vision_aspect_ratio", None),
         )
 
         logger.info(
@@ -351,6 +363,432 @@ class CustomVLMProcessor(ProcessorMixin):
         )
 
         return result
+
+    def __call__(
+        self,
+        images=None,
+        text=None,
+        **kwargs,
+    ):
+        """
+        Process images and text, expanding image placeholders to correct token count.
+
+        This method:
+        1. Processes images with the image_processor
+        2. Expands <image> placeholders in text to num_image_tokens copies of image_token
+        3. Tokenizes the expanded text
+
+        Args:
+            images: Image input (PIL Image, list of PIL Images, etc.)
+            text: Text input (str or list of str)
+            **kwargs: Additional arguments passed to tokenizer (return_tensors, padding, etc.)
+
+        Returns:
+            BatchFeature with processed images and tokenized text
+        """
+        from transformers import BatchFeature
+
+        # 1. Process images with image_processor
+        # Filter out tokenizer-specific kwargs that shouldn't go to image_processor
+        image_processor_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k not in ("padding", "max_length", "truncation", "return_tensors", "padding_mode")
+        }
+        image_inputs = {}
+        if images is not None:
+            # Auto-wrap flat image list into nested list based on <image> token count in text.
+            # This enables the image processor to correctly handle multi-image samples.
+            # When multiple images belong to one text sample, the processor outputs 1 patch
+            # per image (base only) instead of multiple patches per image (anyres).
+            #
+            # Example:
+            #   images = [img1, img2, img3]  # flat
+            #   text = "<image> <image> <image> describe these"
+            #   → images = [[img1, img2, img3]]  # nested for one sample
+            is_flat_list = (
+                isinstance(images, (list, tuple))
+                and len(images) > 0
+                and not isinstance(images[0], (list, tuple))
+            )
+
+            if is_flat_list and text is not None:
+                # Count <image> tokens in each text sample (using the original <image> placeholder)
+                # Chat templates produce <image> placeholders which we later convert
+                original_image_token = "<image>"
+                if isinstance(text, str):
+                    text_list = [text]
+                else:
+                    text_list = text
+                num_images_per_sample = [t.count(original_image_token) for t in text_list]
+
+                # Validate total images match before reorganizing
+                total_expected = sum(num_images_per_sample)
+                if total_expected == len(images):
+                    # Reorganize flat list into nested list
+                    images_nested = []
+                    idx = 0
+                    for num_img in num_images_per_sample:
+                        images_nested.append(list(images[idx : idx + num_img]))
+                        idx += num_img
+                    images = images_nested
+
+            image_inputs = self.image_processor(images, **image_processor_kwargs)
+            # Convert to dict if BatchFeature
+            if hasattr(image_inputs, "data"):
+                image_inputs = dict(image_inputs.data)
+
+        # 2. Expand image tokens in text
+        if text is not None and images is not None:
+            text = self._expand_image_tokens(text, image_inputs)
+
+        # 3. Tokenize expanded text
+        text_inputs = {}
+        if text is not None:
+            text_inputs = self.tokenizer(
+                text,
+                return_tensors=kwargs.get("return_tensors", None),
+                padding=kwargs.get("padding", False),
+                max_length=kwargs.get("max_length"),
+                truncation=kwargs.get("truncation", False),
+            )
+            # Convert to dict if BatchEncoding
+            if hasattr(text_inputs, "data"):
+                text_inputs = dict(text_inputs.data)
+
+        return BatchFeature(data={**image_inputs, **text_inputs})
+
+    def _expand_image_tokens(
+        self,
+        text,
+        image_inputs: dict,
+    ):
+        """
+        Expand <image> placeholders to num_image_tokens copies of image_token with vision markers.
+
+        Key insight: Chat template produces "<image>" but we want:
+        "<|vision_start|><|image_pad|>...<|image_pad|><|vision_end|>"
+
+        For single image with anyres enabled, calculates actual token count based on
+        image dimensions and grid pinpoints. For multi-image or disable_anyres,
+        uses fixed base token count.
+
+        Args:
+            text: Text input (str or list of str)
+            image_inputs: Dict with processed image data (pixel_values, image_sizes, etc.)
+
+        Returns:
+            Expanded text with image tokens properly expanded
+        """
+        if isinstance(text, str):
+            text = [text]
+            was_single = True
+        else:
+            was_single = False
+
+        # The chat template uses "<image>" as placeholder (standard LLaVA format)
+        CHAT_TEMPLATE_PLACEHOLDER = "<image>"
+
+        # Get image_sizes for anyres calculation
+        image_sizes = image_inputs.get("image_sizes")
+
+        # Determine if anyres is enabled
+        is_anyres_enabled = (
+            self.vision_aspect_ratio is not None and self.vision_aspect_ratio != "single"
+        )
+
+        # Get patch size from image processor
+        patch_size = getattr(self.image_processor, "size", {}).get("height", 384)
+
+        expanded = []
+        image_idx = 0  # Track which image we're processing across all samples
+
+        for sample in text:
+            # Count images in this sample (from chat template's <image>)
+            num_images_in_sample = sample.count(CHAT_TEMPLATE_PLACEHOLDER)
+            if num_images_in_sample == 0:
+                expanded.append(sample)
+                continue
+
+            result = sample
+            # Vision markers to wrap image tokens
+            vision_start = "<|vision_start|>"
+            vision_end = "<|vision_end|>"
+
+            for _ in range(num_images_in_sample):
+                # Determine tokens for this image
+                is_single_image = num_images_in_sample == 1
+
+                if is_anyres_enabled and is_single_image and image_sizes is not None:
+                    # Single image with anyres: calculate actual tokens based on image dimensions
+                    orig_height, orig_width = image_sizes[image_idx]
+                    tokens_per_image = self._get_number_of_features(
+                        orig_height, orig_width, patch_size, patch_size
+                    )
+                else:
+                    # Multi-image or disable_anyres: use base tokens
+                    # Levanter doesn't use newline separator
+                    base_tokens = self.num_image_tokens or 729
+                    tokens_per_image = base_tokens
+
+                # Replace <image> with <|vision_start|><|image_pad|>*N<|vision_end|>
+                result = result.replace(
+                    CHAT_TEMPLATE_PLACEHOLDER,  # "<image>" from chat template
+                    vision_start + (self.image_token * tokens_per_image) + vision_end,
+                    1,  # Replace only first occurrence
+                )
+                image_idx += 1
+            expanded.append(result)
+
+        return expanded[0] if was_single else expanded
+
+    def _get_unpadded_features(
+        self,
+        orig_height: int,
+        orig_width: int,
+        patches_height: int,
+        patches_width: int,
+        scale_height: int,
+        scale_width: int,
+    ) -> tuple[int, int]:
+        """
+        Calculate unpadded features based on original aspect ratio.
+        Mirrors HF's LlavaOnevisionProcessor._get_unpadded_features.
+
+        Args:
+            orig_height/orig_width: Original image dimensions
+            patches_height/patches_width: Patches per tile dimension (e.g., 27)
+            scale_height/scale_width: Number of tiles in each dimension
+
+        Returns:
+            Tuple of (unpadded_features, newline_features)
+        """
+        import math
+
+        current_height = patches_height * scale_height
+        current_width = patches_width * scale_width
+
+        original_aspect_ratio = orig_width / orig_height
+        current_aspect_ratio = current_width / current_height
+
+        if original_aspect_ratio > current_aspect_ratio:
+            # Wider image - remove top/bottom padding
+            scale_factor = current_width / orig_width
+            new_height = int(round(orig_height * scale_factor, 7))
+            padding = (current_height - new_height) // 2
+            current_height -= padding * 2
+        else:
+            # Taller image - remove left/right padding
+            scale_factor = current_height / orig_height
+            new_width = int(round(orig_width * scale_factor, 7))
+            padding = (current_width - new_width) // 2
+            current_width -= padding * 2
+
+        unpadded_features = current_height * current_width
+        newline_features = current_height
+
+        # Apply anyres_max limit if specified
+        if self.vision_aspect_ratio and self.vision_aspect_ratio.startswith("anyres_max_"):
+            max_num_patches = int(self.vision_aspect_ratio.split("anyres_max_")[-1])
+            ratio = math.sqrt(
+                current_height * current_width / (max_num_patches * patches_height**2)
+            )
+            if ratio > 1.1:
+                unpadded_features = int(current_height // ratio) * int(current_width // ratio)
+                newline_features = int(current_height // ratio)
+
+        return unpadded_features, newline_features
+
+    def _get_number_of_features(
+        self,
+        orig_height: int,
+        orig_width: int,
+        height: int,
+        width: int,
+    ) -> int:
+        """
+        Calculate actual image tokens for single image with anyres.
+        Mirrors HF's LlavaOnevisionProcessor._get_number_of_features.
+
+        Args:
+            orig_height/orig_width: Original image dimensions
+            height/width: Patch size (e.g., 384)
+
+        Returns:
+            Total number of image tokens = base_features + unpadded_features + newline_features
+        """
+        import math
+        from transformers.models.llava_onevision.image_processing_llava_onevision import (
+            select_best_resolution,
+        )
+
+        image_grid_pinpoints = self.image_processor.image_grid_pinpoints
+
+        # 1. Select best resolution from grid pinpoints
+        height_best, width_best = select_best_resolution(
+            [orig_height, orig_width], image_grid_pinpoints
+        )
+        scale_height = height_best // height
+        scale_width = width_best // width
+
+        # 2. Calculate patch dimensions (e.g., 27x27 for 729 tokens)
+        patches_height = patches_width = int(math.sqrt(self.num_image_tokens))
+
+        # 3. Calculate unpadded features based on aspect ratio
+        unpadded_features, newline_features = self._get_unpadded_features(
+            orig_height, orig_width, patches_height, patches_width, scale_height, scale_width
+        )
+
+        # 4. Total = base + unpadded + newlines
+        return self.num_image_tokens + unpadded_features 
+
+    def _compute_unpad_indices(
+        self,
+        orig_height: int,
+        orig_width: int,
+        patches_height: int,
+        patches_width: int,
+        scale_height: int,
+        scale_width: int,
+        features_per_patch: int,
+    ) -> np.ndarray:
+        """
+        Compute indices to reorder Levanter's padded features to HF's unpadded order.
+
+        HF's pack_image_features applies spatial unpadding based on original image aspect ratio.
+        This function computes the mapping from HF's feature positions to Levanter's sequential
+        feature layout.
+
+        Args:
+            orig_height: Original image height
+            orig_width: Original image width
+            patches_height: Number of patches per tile in height (e.g., 27)
+            patches_width: Number of patches per tile in width (e.g., 27)
+            scale_height: Number of tiles in height (e.g., 3 for 3x3 grid)
+            scale_width: Number of tiles in width (e.g., 3 for 3x3 grid)
+            features_per_patch: Features per patch/tile (e.g., 729)
+
+        Returns:
+            unpad_indices: Array of shape (num_unpadded_features,) where
+                          unpad_indices[i] = Levanter index for HF position i
+        """
+        # Base features are identity mapping (base patch is always first)
+        base_indices = np.arange(features_per_patch)
+
+        # Grid spatial dimensions after combining all tiles
+        curr_height = patches_height * scale_height  # e.g., 81 for 3x3 grid of 27x27 patches
+        curr_width = patches_width * scale_width
+
+        # Compute unpadding bounds based on original aspect ratio
+        # This matches HF's unpad_image logic
+        original_aspect_ratio = orig_width / orig_height
+        current_aspect_ratio = curr_width / curr_height
+
+        if original_aspect_ratio > current_aspect_ratio:
+            # Wider image - remove top/bottom padding
+            scale_factor = curr_width / orig_width
+            new_height = int(round(orig_height * scale_factor, 7))
+            padding = (curr_height - new_height) // 2
+            row_start = padding
+            row_end = curr_height - padding  # Symmetric padding like HF
+            col_start = 0
+            col_end = curr_width
+        else:
+            # Taller image - remove left/right padding
+            scale_factor = curr_height / orig_height
+            new_width = int(round(orig_width * scale_factor, 7))
+            padding = (curr_width - new_width) // 2
+            row_start = 0
+            row_end = curr_height
+            col_start = padding
+            col_end = curr_width - padding  # Symmetric padding like HF
+
+        # Build mapping from HF grid position to Levanter grid index
+        # HF order: row-major through unpadded region
+        # Levanter order: patch-by-patch (tile-by-tile), then row-major within each patch
+        grid_indices = []
+        for row in range(row_start, row_end):
+            for col in range(col_start, col_end):
+                # Convert global (row, col) to Levanter's patch-based index
+                # Which tile (patch) does this position belong to?
+                tile_row = row // patches_height
+                tile_col = col // patches_width
+                # Local position within the tile
+                local_row = row % patches_height
+                local_col = col % patches_width
+
+                # Tile index in row-major order (0-indexed grid patch, excluding base)
+                tile_idx = tile_row * scale_width + tile_col
+                # Local feature index within the tile
+                local_idx = local_row * patches_width + local_col
+
+                # Levanter index: base_features + tile_idx * features_per_patch + local_idx
+                # +1 because tile_idx=0 is the first grid tile, but Levanter's patch 0 is the base
+                lev_idx = features_per_patch + tile_idx * features_per_patch + local_idx
+                grid_indices.append(lev_idx)
+
+        return np.concatenate([base_indices, np.array(grid_indices, dtype=np.int32)])
+
+    def compute_unpad_indices(
+        self,
+        image_sizes: list,
+        height: int,
+        width: int,
+        max_num_features: int,
+    ) -> np.ndarray:
+        """
+        Compute unpad indices for a batch of images.
+
+        Args:
+            image_sizes: List of (orig_height, orig_width) tuples for each image
+            height: Processed tile height (e.g., 384)
+            width: Processed tile width (e.g., 384)
+            max_num_features: Maximum number of features to pad to
+
+        Returns:
+            unpad_indices: Array of shape (batch, max_num_features) padded with zeros
+        """
+        image_grid_pinpoints = self.image_processor.image_grid_pinpoints
+
+        # Handle single resolution mode (no grid patches, only base)
+        # Check both empty grid_pinpoints and vision_aspect_ratio="single"
+        is_single_resolution = (
+            not image_grid_pinpoints
+            or (self.vision_aspect_ratio and not self.vision_aspect_ratio.startswith("anyres"))
+        )
+        if is_single_resolution:
+            # For single resolution, return identity mapping (no reordering needed)
+            batch_size = len(image_sizes)
+            return np.zeros((batch_size, max_num_features), dtype=np.int32)
+
+        patches_height = patches_width = int(math.sqrt(self.num_image_tokens))
+
+        batch_indices = []
+        for orig_height, orig_width in image_sizes:
+            # Find best resolution for this image
+            height_best_resolution, width_best_resolution = select_best_resolution(
+                [orig_height, orig_width], image_grid_pinpoints
+            )
+            scale_height = height_best_resolution // height
+            scale_width = width_best_resolution // width
+
+            # Compute unpad indices for this image
+            indices = self._compute_unpad_indices(
+                orig_height,
+                orig_width,
+                patches_height,
+                patches_width,
+                scale_height,
+                scale_width,
+                self.num_image_tokens,
+            )
+            batch_indices.append(indices)
+
+        # Pad all indices to max_num_features
+        padded_indices = np.zeros((len(batch_indices), max_num_features), dtype=np.int32)
+        for i, indices in enumerate(batch_indices):
+            padded_indices[i, : len(indices)] = indices
+
+        return padded_indices
 
 
 def expand_urls_with_folder_support(urls: List[str]) -> List[str]:
@@ -869,19 +1307,32 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             pixel_values: Image patches array of shape (actual_patches, C, H, W)
             valid_patches: Number of patches to mark as valid in grid_mask
             batch_max_patches: Target patches for this batch (e.g., max images in batch).
-                              Dynamically pads to batch's actual max, but not exceeding max_num_patches+1.
+                              For multi-image disable_anyres: this is the number of images.
+                              For single-image anyres: dynamically pads to batch's actual max,
+                              but not exceeding max_num_patches+1.
 
         Returns:
             Tuple of (padded_pixel_values, grid_mask)
         """
         assert self.max_num_patches is not None
-        upper_limit = self.max_num_patches + 1  # +1 for base patch, this is the max allowed
-        # Dynamic padding: use batch's actual max, but don't exceed the configured upper limit
+        upper_limit = self.max_num_patches + 1  # +1 for base patch, this is the max allowed for anyres
+        actual_patches = pixel_values.shape[0]
+
+        # Determine total_patches based on mode:
+        # - Multi-image mode: batch_max_patches > 1 AND actual_patches == batch_max_patches
+        #   (each image contributes exactly 1 base patch)
+        # - Single-image anyres mode: actual_patches > 1 (single image with multiple patches)
+        #   Should use upper_limit to preserve all anyres patches
         if batch_max_patches is not None:
-            total_patches = min(batch_max_patches, upper_limit)
+            is_multi_image = batch_max_patches > 1 and actual_patches == batch_max_patches
+            if is_multi_image:
+                # Multi-image case: pad to batch_max_patches (one patch per image)
+                total_patches = batch_max_patches
+            else:
+                # Single-image anyres: preserve all patches up to upper_limit
+                total_patches = upper_limit
         else:
             total_patches = upper_limit
-        actual_patches = pixel_values.shape[0]
 
         # Create grid_mask: True for valid patches, False for padding
         grid_mask = np.zeros(total_patches, dtype=np.bool_)
@@ -1015,12 +1466,14 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             combined_mask = np.where(special_image_mask, 1, text_mask).astype(np.int32)
         elif grid_mask is not None:
             # Need to check grid_mask validity for each placeholder position
-            total_image_tokens = total_patches * features_per_patch
+            # Use ACTUAL valid patches from grid_mask (more robust than total_patches parameter)
+            num_valid_patches = np.sum(grid_mask.astype(np.int32))
+            num_valid_tokens = num_valid_patches * features_per_patch
             grid_mask_expanded = np.repeat(grid_mask.astype(np.int32), features_per_patch)
 
             # Compute image token indices for each position
             image_token_indices = np.cumsum(special_image_mask.astype(np.int32)) - 1
-            image_token_indices = np.clip(image_token_indices, 0, max(total_image_tokens - 1, 0))
+            image_token_indices = np.clip(image_token_indices, 0, max(num_valid_tokens - 1, 0))
 
             # Gather image validity from expanded grid_mask
             image_validity = grid_mask_expanded[image_token_indices]
@@ -1106,7 +1559,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         has_pixel_values = "pixel_values" in processed
         has_image_sizes = "image_sizes" in processed
         pv = processed["pixel_values"] if has_pixel_values else None
-        img_sizes = processed["image_sizes"].astype(np.int32) if has_image_sizes else None
+        # image_sizes might be a list (from some processors), convert to numpy array
+        img_sizes = np.array(processed["image_sizes"]).astype(np.int32) if has_image_sizes else None
 
         # Pre-compute cumulative image indices for fast slicing
         # cumsum gives end indices: [n0, n0+n1, n0+n1+n2, ...]
@@ -1200,7 +1654,14 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 self.vision_feature_height * self.vision_feature_height
                 if self.vision_feature_height else 729  # default 27x27
             )
-            total_patches = (self.max_num_patches + 1) if self.max_num_patches else 1
+            # For multi-image: use num_images as total_patches (one base patch per image)
+            # For single-image anyres: use (max_num_patches + 1) for grid tiles + base
+            if num_images > 1:
+                total_patches = num_images
+            elif self.max_num_patches is not None:
+                total_patches = self.max_num_patches + 1
+            else:
+                total_patches = 1
 
             combined_mask = self._compute_combined_mask(
                 input_ids=input_ids,
@@ -1468,6 +1929,11 @@ class ImageTaskConfig(abc.ABC):
     """Base configuration for image-text tasks."""
 
     processor: str = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
+    tokenizer: Optional[str] = None
+    """Optional custom tokenizer name (e.g., "Qwen/Qwen3-1.7B").
+    If specified, creates a CustomVLMProcessor that combines the processor's image processing
+    with the custom tokenizer. This is useful when training with a different tokenizer than
+    the one bundled with the processor."""
     max_length: int = 2048
     padding: bool = True
     image_grid_pinpoints: Optional[List[List[int]]] = None
@@ -1480,6 +1946,14 @@ class ImageTaskConfig(abc.ABC):
         # Override image_grid_pinpoints if specified (e.g., for disable_anyres)
         if self.image_grid_pinpoints is not None and hasattr(proc, "image_processor"):
             proc.image_processor.image_grid_pinpoints = self.image_grid_pinpoints
+
+        # If custom tokenizer is specified, wrap with CustomVLMProcessor
+        if self.tokenizer is not None:
+            from transformers import AutoTokenizer
+
+            custom_tokenizer = AutoTokenizer.from_pretrained(self.tokenizer, trust_remote_code=True)
+            proc = CustomVLMProcessor.from_processor_and_tokenizer(proc, custom_tokenizer)
+
         return proc
 
     @cached_property

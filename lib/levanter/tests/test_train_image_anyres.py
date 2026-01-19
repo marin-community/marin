@@ -27,6 +27,7 @@ from test_image_utils import (
     create_lev_jax_tensors,
     DEFAULT_GRID_PINPOINTS,
     SINGLE_PATCH_GRID_PINPOINTS,
+    QWEN3_TOKENIZER,
     get_real_data,
     get_interleaved_data,
 )
@@ -111,6 +112,11 @@ def test_vlm_numerical_correctness():
             disable_anyres=True,
         )
 
+    # Load Qwen3 tokenizer and get image token ID (used by both HF and Levanter)
+    from transformers import AutoTokenizer
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+
     hf_model = AutoModelForVision2Seq.from_pretrained(
         model_name,
         torch_dtype=torch.float32,
@@ -119,9 +125,14 @@ def test_vlm_numerical_correctness():
     hf_model.model.config.image_grid_pinpoints = grid_pinpoints
     hf_model.model.config.vision_aspect_ratio = "single"  # disable_anyres mode
     hf_model.model.image_newline = None
+    hf_model.config.image_token_id = image_token_id  # Use Qwen3's image token ID
     hf_model.eval()
 
     lev_config = _load_levanter_config(model_name, enable_flash_attention=False, gradient_checkpointing=False)
+
+    # Update config with correct image_token_id for Qwen3 tokenizer
+    lev_config = lev_config.with_token_ids(image_token_id=image_token_id)
+
     trainer_config = TrainerConfig()
 
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
@@ -156,7 +167,8 @@ def test_vlm_numerical_correctness():
 
         try:
             for sample_idx, pair in enumerate(test_pairs):
-                hf_input_ids = torch.from_numpy(pair.hf.input_ids).unsqueeze(0)
+                # Both processors now use same tokenizer, so input_ids should match
+                hf_input_ids = torch.from_numpy(np.array(pair.hf.input_ids)).unsqueeze(0)
                 hf_pixel_values = torch.from_numpy(pair.hf.pixel_values).unsqueeze(0)
                 hf_image_sizes = torch.from_numpy(pair.hf.image_sizes).unsqueeze(0)
 
@@ -182,11 +194,10 @@ def test_vlm_numerical_correctness():
                 )
                 lev_logits_np = np.array(lev_logits.array)[0]
 
-                image_token_id = hf_model.config.image_token_index
                 result = compare_logits_by_region(
                     hf_logits=hf_logits,
                     lev_logits=lev_logits_np,
-                    input_ids=pair.hf.input_ids,
+                    input_ids=np.array(pair.hf.input_ids),
                     image_token_id=image_token_id,
                     tolerance=1e-3,
                     verbose=False,
@@ -231,6 +242,11 @@ def test_vlm_loss_and_gradients():
         )
         pair = test_pairs[0]
 
+    # Load Qwen3 tokenizer and get image token ID (used by both HF and Levanter)
+    from transformers import AutoTokenizer
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+
     # ==================== Load HF Model ====================
     hf_model = AutoModelForVision2Seq.from_pretrained(
         model_name,
@@ -240,10 +256,12 @@ def test_vlm_loss_and_gradients():
     hf_model.model.config.image_grid_pinpoints = grid_pinpoints
     hf_model.model.config.vision_aspect_ratio = "single"  # disable_anyres mode
     hf_model.model.image_newline = None
+    hf_model.config.image_token_id = image_token_id  # Use Qwen3's image token ID
     hf_model.eval()
 
-    # Prepare HF inputs
-    hf_input_ids = torch.from_numpy(pair.hf.input_ids).unsqueeze(0)
+    # Prepare HF inputs - use Levanter's input_ids (Qwen3 tokenized)
+    lev_seq_len = len(pair.lev.input_ids)
+    hf_input_ids = torch.from_numpy(np.array(pair.lev.input_ids[:lev_seq_len])).unsqueeze(0)
     hf_pixel_values = torch.from_numpy(pair.hf.pixel_values).unsqueeze(0)
     hf_image_sizes = torch.from_numpy(pair.hf.image_sizes).unsqueeze(0)
 
@@ -255,7 +273,7 @@ def test_vlm_loss_and_gradients():
     # NOTE: Do NOT shift the loss_mask here! HF's ForCausalLMLoss already shifts labels internally.
     # Levanter's loss_mask[i]=1 means compute loss for predicting token[i].
     # HF's labels[i]!=-100 means compute loss for predicting token[i] (after HF's internal shift).
-    hf_labels = hf_input_ids.clone()
+    hf_labels = hf_input_ids.clone().long()  # Cast to int64 for PyTorch cross_entropy
     seq_len = hf_input_ids.shape[1]
     loss_mask_np = np.array(pair.lev.loss_mask)[:seq_len]  # Truncate to actual sequence length
     mask_tensor = torch.from_numpy(loss_mask_np).unsqueeze(0)
@@ -281,6 +299,10 @@ def test_vlm_loss_and_gradients():
     # ==================== Load Levanter Model ====================
     # Use flash attention and gradient checkpointing to avoid OOM with long sequences
     lev_config = _load_levanter_config(model_name, enable_flash_attention=True, gradient_checkpointing=True)
+
+    # Update config with correct image_token_id for Qwen3 tokenizer (already loaded above)
+    lev_config = lev_config.with_token_ids(image_token_id=image_token_id)
+
     # Use tensor parallelism instead of data parallelism for batch_size=1
     # Mesh: model=-1 absorbs all 8 devices, data=1 (auto), replica=1
     # Sharding strategy:
@@ -393,6 +415,13 @@ def test_vlm_training_reproducibility():
         pair = test_pairs[0]
 
     lev_config = _load_levanter_config(model_name, enable_flash_attention=True, gradient_checkpointing=True)
+
+    # Update config with correct image_token_id for Qwen3 tokenizer
+    from transformers import AutoTokenizer
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+    lev_config = lev_config.with_token_ids(image_token_id=image_token_id)
+
     trainer_config = TrainerConfig(per_device_parallelism=1)
 
     def run_training_step():
@@ -506,6 +535,11 @@ def test_vlm_loss_and_gradients_interleved():
         )
         pair = test_pairs[0]
 
+    # Load Qwen3 tokenizer and get image token ID (used by both HF and Levanter)
+    from transformers import AutoTokenizer
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+
     # ==================== Load HF Model ====================
     hf_model = AutoModelForVision2Seq.from_pretrained(
         model_name,
@@ -515,10 +549,12 @@ def test_vlm_loss_and_gradients_interleved():
     hf_model.model.config.image_grid_pinpoints = grid_pinpoints
     hf_model.model.config.vision_aspect_ratio = "single"  # disable_anyres mode
     hf_model.model.image_newline = None
+    hf_model.config.image_token_id = image_token_id  # Use Qwen3's image token ID
     hf_model.eval()
 
-    # Prepare HF inputs
-    hf_input_ids = torch.from_numpy(pair.hf.input_ids).unsqueeze(0)
+    # Prepare HF inputs - use Levanter's input_ids (Qwen3 tokenized)
+    lev_seq_len = len(pair.lev.input_ids)
+    hf_input_ids = torch.from_numpy(np.array(pair.lev.input_ids[:lev_seq_len])).unsqueeze(0).long()
     hf_image_sizes = torch.from_numpy(pair.hf.image_sizes)
 
     # For multi-image disable_anyres: pixel_values shape is (num_images, C, H, W)
@@ -536,7 +572,7 @@ def test_vlm_loss_and_gradients_interleved():
     # NOTE: Do NOT shift the loss_mask here! HF's ForCausalLMLoss already shifts labels internally.
     # Levanter's loss_mask[i]=1 means compute loss for predicting token[i].
     # HF's labels[i]!=-100 means compute loss for predicting token[i] (after HF's internal shift).
-    hf_labels = hf_input_ids.clone()
+    hf_labels = hf_input_ids.clone().long()  # Cast to int64 for PyTorch cross_entropy
     seq_len = hf_input_ids.shape[1]
     loss_mask_np = np.array(pair.lev.loss_mask)[:seq_len]  # Truncate to actual sequence length
     mask_tensor = torch.from_numpy(loss_mask_np).unsqueeze(0)
@@ -550,17 +586,6 @@ def test_vlm_loss_and_gradients_interleved():
     print(f"  Truncated loss_mask sum: {np.sum(loss_mask_np)}")
     print(f"  HF labels with -100 count: {(hf_labels[0] == -100).sum().item()}")
     print(f"  HF labels valid count: {(hf_labels[0] != -100).sum().item()}")
-
-    # Check if HF and Levanter input_ids match at non-padding positions
-    hf_ids = pair.hf.input_ids  # (seq_len,)
-    lev_ids = np.array(pair.lev.input_ids)[:len(hf_ids)]  # first seq_len tokens
-    match = np.all(hf_ids == lev_ids)
-    print(f"  Input IDs match: {match}")
-    if not match:
-        mismatch_positions = np.where(hf_ids != lev_ids)[0]
-        print(f"  First 10 mismatch positions: {mismatch_positions[:10]}")
-        print(f"  HF IDs at mismatch: {hf_ids[mismatch_positions[:10]]}")
-        print(f"  Lev IDs at mismatch: {lev_ids[mismatch_positions[:10]]}")
 
     # Monkey-patch image_size_to_num_patches to return 1 for disable_anyres mode
     original_image_size_to_num_patches = llava_modeling.image_size_to_num_patches
@@ -606,6 +631,10 @@ def test_vlm_loss_and_gradients_interleved():
         vision_aspect_ratio="single",
         image_grid_pinpoints=grid_pinpoints,
     )
+
+    # Update config with correct image_token_id for Qwen3 tokenizer (already loaded above)
+    lev_config = lev_config.with_token_ids(image_token_id=image_token_id)
+
     # Use tensor parallelism instead of data parallelism for batch_size=1
     # Mesh: model=-1 absorbs all 8 devices, data=1 (auto), replica=1
     # Sharding: mlp->model, heads->replica (avoids divisibility and conflict issues)
@@ -1038,6 +1067,11 @@ def test_vlm_batch_loss_consistency():
     for i, pair in enumerate(test_pairs):
         print(f"    Sample {i}: {len(pair.lev.input_ids)} tokens, {np.sum(pair.lev.loss_mask)} valid loss positions")
 
+    # Load Qwen3 tokenizer and get image token ID (used by both HF and Levanter)
+    from transformers import AutoTokenizer
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+
     # ==================== Load HF model ====================
     hf_model = AutoModelForVision2Seq.from_pretrained(
         model_name,
@@ -1047,6 +1081,7 @@ def test_vlm_batch_loss_consistency():
     hf_model.model.config.image_grid_pinpoints = grid_pinpoints
     hf_model.model.config.vision_aspect_ratio = "single"
     hf_model.model.image_newline = None
+    hf_model.config.image_token_id = image_token_id  # Use Qwen3's image token ID
     hf_model.eval()
 
     # Monkey-patch for disable_anyres mode
@@ -1066,8 +1101,9 @@ def test_vlm_batch_loss_consistency():
             else:
                 num_images = pair.hf.image_sizes.shape[0]  # Multi-image: shape is (num_images, 2)
 
-            # Convert to torch tensors
-            hf_input_ids = torch.from_numpy(pair.hf.input_ids).unsqueeze(0)
+            # Convert to torch tensors - use Levanter's input_ids (Qwen3 tokenized)
+            lev_seq_len = len(pair.lev.input_ids)
+            hf_input_ids = torch.from_numpy(np.array(pair.lev.input_ids[:lev_seq_len])).unsqueeze(0)
             hf_pixel_values = torch.from_numpy(pair.hf.pixel_values)
             hf_image_sizes = torch.from_numpy(pair.hf.image_sizes)
             # Ensure image_sizes has shape (num_images, 2) for HF model
@@ -1092,7 +1128,7 @@ def test_vlm_batch_loss_consistency():
 
 
             # Create labels from loss_mask (no shift - HF shifts internally)
-            hf_labels = hf_input_ids.clone()
+            hf_labels = hf_input_ids.clone().long()  # Cast to int64 for PyTorch cross_entropy
             seq_len = hf_input_ids.shape[1]
             loss_mask_np = np.array(pair.lev.loss_mask)[:seq_len]
             mask_tensor = torch.from_numpy(loss_mask_np).unsqueeze(0)
@@ -1116,6 +1152,10 @@ def test_vlm_batch_loss_consistency():
     # ==================== Load Levanter model ====================
     lev_config = _load_levanter_config(model_name, enable_flash_attention=False, gradient_checkpointing=False)
     trainer_config = TrainerConfig()
+
+    # Update config with correct image_token_id for Qwen3 tokenizer (already loaded above)
+    lev_config = lev_config.with_token_ids(image_token_id=image_token_id)
+    print(f"  Updated lev_config.image_token_index to {image_token_id} (<|image_pad|>)")
 
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
         compute_dtype = jnp.float32

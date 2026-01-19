@@ -640,6 +640,12 @@ def test_llava_onevision_real_image_text():
     hf_config = torch_model.config
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
+    # Sync image_token_index with Qwen3 tokenizer's image token (used by Levanter processor)
+    from transformers import AutoTokenizer
+    qwen3_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B", trust_remote_code=True)
+    qwen3_image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+    config = config.with_token_ids(image_token_id=qwen3_image_token_id)
+
     mesh_config = MeshConfig(compute_mapping={"vision_batch": DEFAULT_DP_AXES})
     trainer_config = TrainerConfig(mesh=mesh_config)
 
@@ -657,7 +663,8 @@ def test_llava_onevision_real_image_text():
         )
 
     # Compute valid image token count using attention_mask & image_mask intersection
-    image_token_id = torch_model.config.image_token_index
+    # Use Qwen3's image token ID (same as model config)
+    image_token_id = qwen3_image_token_id
     image_mask = test_pair.lev.input_ids == image_token_id
     valid_image_mask = test_pair.lev.attention_mask.astype(bool) & image_mask
     num_valid_image_tokens = int(valid_image_mask.sum())

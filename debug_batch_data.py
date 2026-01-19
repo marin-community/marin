@@ -188,15 +188,24 @@ def main():
 
         return "".join(result_parts)
 
-    for i, pair in enumerate(test_pairs):
-        orig_len = len(pair.lev_dict["input_ids"])
-        ids = input_ids_np[i, :orig_len].tolist()  # Only decode non-padding tokens
+    # Visualize tokens where masks == 1
+    for i in range(len(test_pairs)):
+        orig_len = len(test_pairs[i].lev_dict["input_ids"])
+        ids = input_ids_np[i, :orig_len]
+        loss_mask = loss_mask_np[i, :orig_len]
+        combined_mask = combined_mask_np[i, :orig_len]
 
-        print(f"\n--- Sample {i} (seq_len={orig_len}) ---")
+        print(f"\n--- Sample {i} ---")
 
-        # Decode with compression for repeated tokens
-        compressed_text = compress_repeated_tokens(ids, tokenizer)
-        print(f"Decoded text (compressed):\n{compressed_text}")
+        # Tokens where loss_mask == 1
+        loss_masked_ids = ids[loss_mask == 1].tolist()
+        print(f"loss_mask=1 ({len(loss_masked_ids)} tokens):")
+        print(compress_repeated_tokens(loss_masked_ids, tokenizer))
+
+        # Tokens where combined_mask == 1
+        combined_masked_ids = ids[combined_mask == 1].tolist()
+        print(f"combined_mask=1 ({len(combined_masked_ids)} tokens):")
+        print(compress_repeated_tokens(combined_masked_ids, tokenizer))
 
     print("\nDone!")
 
