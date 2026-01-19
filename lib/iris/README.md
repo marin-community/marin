@@ -66,8 +66,7 @@ src/iris/
 
 ```python
 from iris.client import IrisClient
-from iris.cluster.types import Entrypoint
-from iris.rpc.cluster_pb2 import ResourceSpec
+from iris.cluster.types import Entrypoint, ResourceSpec
 
 def my_task():
     print("Hello from iris!")

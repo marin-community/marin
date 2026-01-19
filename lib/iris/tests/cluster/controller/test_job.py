@@ -29,7 +29,7 @@ def make_job_request():
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             serialized_entrypoint=b"test",
-            resources=cluster_pb2.ResourceSpec(cpu=1, memory="1g"),
+            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         )
 
