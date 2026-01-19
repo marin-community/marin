@@ -10,7 +10,7 @@ from transformers import (
     TrainingArguments
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTConfig
 
 def train():
     print("🚀 Starting Qwen-4B Training (HF Stack)...")
@@ -82,23 +82,26 @@ def train():
     # 5. Training Execution (Pipeline Step 5)
     print("🔄 Initializing Trainer...")
     
+    # Using SFTConfig as required by newer TRL versions
+    training_args = SFTConfig(
+        output_dir="checkpoints/qwen-4b-pipeline",
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=4,
+        learning_rate=2e-4,
+        logging_steps=1,
+        max_steps=10, # Adjustable based on dataset size
+        fp16=torch.cuda.is_available(),
+        use_cpu=not torch.cuda.is_available(),
+        optim="paged_adamw_8bit" if torch.cuda.is_available() else "adamw_torch",
+        report_to="none",
+        max_seq_length=512  # Moved inside config
+    )
+    
     trainer = SFTTrainer(
         model=model,
         train_dataset=dataset,
         formatting_func=formatting_func,
-        args=TrainingArguments(
-            output_dir="checkpoints/qwen-4b-pipeline",
-            per_device_train_batch_size=1,
-            gradient_accumulation_steps=4,
-            learning_rate=2e-4,
-            logging_steps=1,
-            max_steps=10, # Adjustable based on dataset size
-            fp16=torch.cuda.is_available(),
-            use_cpu=not torch.cuda.is_available(),
-            optim="paged_adamw_8bit" if torch.cuda.is_available() else "adamw_torch",
-            report_to="none"
-        ),
-        max_seq_length=512,
+        args=training_args,
     )
 
     trainer.train()

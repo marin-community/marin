@@ -30,8 +30,8 @@ from experiments.dspy.programs.field_extraction import FieldExtraction
 from experiments.dspy.adapters.baml import BAMLAdapter
 from experiments.dspy.metrics import claim_verification_metric, field_extraction_metric
 
-# Initialize Llama 3 tokenizer
-tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B-Instruct")
+# Initialize Qwen tokenizer (Open model, no login required)
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen1.5-4B-Chat", trust_remote_code=True)
 
 # ==========================================
 # 1. Data Loading
