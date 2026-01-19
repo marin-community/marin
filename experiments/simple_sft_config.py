@@ -19,6 +19,53 @@ from levanter.schedule import IntSchedule
 from fray.cluster import ResourceConfig
 
 
+def compute_per_device_parallelism(
+    global_batch_size: int,
+    microbatch_size: int,
+    resources: ResourceConfig,
+) -> int:
+    """Compute per_device_parallelism for gradient accumulation.
+
+    Args:
+        global_batch_size: The effective batch size after gradient accumulation.
+        microbatch_size: The batch size that fits in memory (local batch size).
+        resources: The ResourceConfig specifying TPU/GPU resources.
+
+    Returns:
+        per_device_parallelism: Number of examples each device processes per forward/backward pass.
+
+    Example:
+        For v5p-8 (4 chips), global_batch_size=128, microbatch_size=8:
+        - per_device_parallelism = 8 / 4 = 2
+        - gradient_accumulation = 128 / 8 = 16 steps
+    """
+    num_devices = resources.chip_count()
+
+    if microbatch_size % num_devices != 0:
+        raise ValueError(
+            f"microbatch_size ({microbatch_size}) must be divisible by "
+            f"num_devices ({num_devices})"
+        )
+
+    if global_batch_size % microbatch_size != 0:
+        raise ValueError(
+            f"global_batch_size ({global_batch_size}) must be divisible by "
+            f"microbatch_size ({microbatch_size})"
+        )
+
+    per_device_parallelism = microbatch_size // num_devices
+    grad_accum_steps = global_batch_size // microbatch_size
+
+    print(
+        f"Gradient accumulation config: "
+        f"global_batch={global_batch_size}, microbatch={microbatch_size}, "
+        f"num_devices={num_devices}, per_device_parallelism={per_device_parallelism}, "
+        f"grad_accum_steps={grad_accum_steps}"
+    )
+
+    return per_device_parallelism
+
+
 @dataclass(frozen=True)
 class SimpleSFTConfig:
     """
@@ -120,6 +167,12 @@ class SimpleSFTConfig:
     pad their vocab to be divisible by 4 for TPU efficiency)."""
 
     z_loss_weight: float = 0.0
+
+    per_device_parallelism: int = -1
+    """How many examples to process in parallel on each device. -1 (default) means
+    train_batch_size/num_devices (no gradient accumulation). Set to a smaller value
+    to enable gradient accumulation. For example, with 8 devices, batch_size=32, and
+    per_device_parallelism=1, you get gradient accumulation of 4."""
 
     reinit_tokens: list[str] | bool = False
     """

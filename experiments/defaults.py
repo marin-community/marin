@@ -338,6 +338,7 @@ def default_train(
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,
+            per_device_parallelism=train_config.per_device_parallelism,
             num_train_steps=train_config.num_train_steps,
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
@@ -496,6 +497,7 @@ def default_sft(
         beta1=sft_config.beta1,
         beta2=sft_config.beta2,
         pad_tokenizer_to_match_model=sft_config.pad_tokenizer_to_match_model,
+        per_device_parallelism=sft_config.per_device_parallelism,
     )
 
     if sft_config.reinit_tokens:

@@ -60,6 +60,10 @@ class SimpleTrainConfig:
     """how often to run task evaluations"""
     steps_per_hf_export: int | None = None
     """None means match steps_per_export, -1 disables"""
+    per_device_parallelism: int = -1
+    """How many examples to process in parallel on each device. -1 (default) means
+    train_batch_size/num_devices (no gradient accumulation). Set to a positive value
+    to enable gradient accumulation."""
     per_device_eval_parallelism: int | None = None
     """Number of examples to evaluate in parallel on each device"""
     max_eval_batches: int | None = None
