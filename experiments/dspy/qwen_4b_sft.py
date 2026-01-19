@@ -48,7 +48,8 @@ def train():
         model_id, 
         quantization_config=bnb_config if torch.cuda.is_available() else None, 
         device_map="auto", 
-        trust_remote_code=True
+        trust_remote_code=True,
+        torch_dtype=torch.float16 # Force FP16 to override model's default BF16
     )
     model.config.use_cache = False
     
