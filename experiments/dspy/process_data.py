@@ -275,7 +275,14 @@ if __name__ == "__main__":
                 # If we retrieved fewer than k (because corpus was small), pad with the last doc or empty
                 # DSPy generally expects k results if asked, though list length variance might be handled.
                 # For safety, let's just return what we found.
-                return found_docs
+                
+                # IMPORTANT: DSPy expects objects with attributes (like .long_text), not raw strings.
+                # breakdown in dspy.primitives.search.py suggests it often handles DotDicts or Predictions.
+                class Passage(dspy.primitives.prediction.Prediction):
+                    def __init__(self, text):
+                        super().__init__(long_text=text)
+
+                return [Passage(doc) for doc in found_docs]
 
         # Use HotPotQA data to populate the Knowledge Base (Source of Truth)
         # This makes the system "closed-book" on the training set, which is perfect for generating adaptation traces.
