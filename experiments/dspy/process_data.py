@@ -258,13 +258,24 @@ if __name__ == "__main__":
 
             def __call__(self, query, k=None, **kwargs):
                 k = k if k else self.k
+                # Dynamically adjust k to avoid "k > corpus_size" error
+                available_docs = len(self.corpus_map)
+                if available_docs == 0:
+                    return [""] * k # Should catch empty case, but just in case
+                
+                safe_k = min(k, available_docs)
+                
                 # Query the index
                 # bm25s.retrieve returns (docs, scores)
-                results, _ = self.retriever.retrieve(bm25s.tokenize([query], stemmer=Stemmer.Stemmer("english")), k=k)
+                results, _ = self.retriever.retrieve(bm25s.tokenize([query], stemmer=Stemmer.Stemmer("english")), k=safe_k)
                 
                 # results is a list of lists (batch size 1)
-                # Return the documents directly as a list of strings
-                return [doc for doc in results[0]]
+                found_docs = [doc for doc in results[0]]
+                
+                # If we retrieved fewer than k (because corpus was small), pad with the last doc or empty
+                # DSPy generally expects k results if asked, though list length variance might be handled.
+                # For safety, let's just return what we found.
+                return found_docs
 
         # Use HotPotQA data to populate the Knowledge Base (Source of Truth)
         # This makes the system "closed-book" on the training set, which is perfect for generating adaptation traces.
