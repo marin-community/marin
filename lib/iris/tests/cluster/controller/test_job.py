@@ -383,3 +383,100 @@ def test_gang_empty_list():
     """Empty job list returns empty list."""
     retried = handle_gang_failure([], now_ms=1000, is_worker_failure=True, error="error")
     assert retried == []
+
+
+# --- Task State Tracking ---
+
+
+def test_job_on_task_transition_updates_counts(make_job_request):
+    """on_task_transition incrementally updates task state counts."""
+    job = Job(job_id=JobId("test"), request=make_job_request())
+    job.num_tasks = 3
+
+    # Initialize with 3 pending tasks
+    for _ in range(3):
+        job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] += 1
+
+    # Transition one task from PENDING to RUNNING
+    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1000)
+
+    assert job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] == 2
+    assert job.task_state_counts[cluster_pb2.TASK_STATE_RUNNING] == 1
+
+
+def test_job_compute_job_state_all_succeeded(make_job_request):
+    """Job state becomes SUCCEEDED when all tasks succeed."""
+    job = Job(job_id=JobId("test"), request=make_job_request())
+    job.num_tasks = 2
+
+    # Start with pending tasks
+    job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 2
+
+    # First task succeeds - job should stay pending
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_SUCCEEDED, now_ms=1000)
+    assert new_state is None
+
+    # Second task succeeds - job should become SUCCEEDED
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_SUCCEEDED, now_ms=2000)
+    assert new_state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+
+def test_job_compute_job_state_failed(make_job_request):
+    """Job state becomes FAILED when task failures exceed threshold."""
+    request = make_job_request()
+    request.max_task_failures = 0
+    job = Job(job_id=JobId("test"), request=request)
+    job.num_tasks = 2
+
+    # Start with running tasks
+    job.task_state_counts[cluster_pb2.TASK_STATE_RUNNING] = 2
+    job.state = cluster_pb2.JOB_STATE_RUNNING
+
+    # First task fails - should trigger job failure (0 allowed, 1 failed)
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED, now_ms=1000)
+    assert new_state == cluster_pb2.JOB_STATE_FAILED
+
+
+def test_job_compute_job_state_tolerates_failures(make_job_request):
+    """Job state stays RUNNING when failures are within threshold."""
+    request = make_job_request()
+    request.max_task_failures = 1
+    job = Job(job_id=JobId("test"), request=request)
+    job.num_tasks = 3
+
+    # Start with running tasks
+    job.task_state_counts[cluster_pb2.TASK_STATE_RUNNING] = 3
+    job.state = cluster_pb2.JOB_STATE_RUNNING
+
+    # First task fails - job stays running (1 allowed, 1 failed)
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED, now_ms=1000)
+    assert new_state is None  # No state change
+
+    # Second task fails - job should fail (1 allowed, 2 failed)
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED, now_ms=2000)
+    assert new_state == cluster_pb2.JOB_STATE_FAILED
+
+
+def test_job_finished_task_count(make_job_request):
+    """finished_task_count returns count of tasks in terminal states."""
+    job = Job(job_id=JobId("test"), request=make_job_request())
+    job.num_tasks = 5
+
+    job.task_state_counts[cluster_pb2.TASK_STATE_SUCCEEDED] = 2
+    job.task_state_counts[cluster_pb2.TASK_STATE_FAILED] = 1
+    job.task_state_counts[cluster_pb2.TASK_STATE_RUNNING] = 2
+
+    assert job.finished_task_count == 3  # 2 succeeded + 1 failed
+
+
+def test_job_on_task_transition_sets_running_on_first_dispatch(make_job_request):
+    """Job state becomes RUNNING when first task starts running."""
+    job = Job(job_id=JobId("test"), request=make_job_request())
+    job.num_tasks = 2
+    job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 2
+
+    # First task starts running
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1000)
+
+    assert new_state == cluster_pb2.JOB_STATE_RUNNING
+    assert job.started_at_ms == 1000

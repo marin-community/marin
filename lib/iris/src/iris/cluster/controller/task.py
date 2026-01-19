@@ -24,6 +24,16 @@ from enum import Enum
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 
+TERMINAL_TASK_STATES: frozenset[int] = frozenset(
+    {
+        cluster_pb2.TASK_STATE_SUCCEEDED,
+        cluster_pb2.TASK_STATE_FAILED,
+        cluster_pb2.TASK_STATE_KILLED,
+        cluster_pb2.TASK_STATE_UNSCHEDULABLE,
+        cluster_pb2.TASK_STATE_WORKER_FAILED,
+    }
+)
+
 
 class TaskTransitionResult(Enum):
     """Result of a task state transition."""
@@ -201,13 +211,7 @@ class Task:
 
     def is_finished(self) -> bool:
         """Check if task is in a terminal state."""
-        return self.state in (
-            cluster_pb2.TASK_STATE_SUCCEEDED,
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
-            cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-        )
+        return self.state in TERMINAL_TASK_STATES
 
     @property
     def total_attempts(self) -> int:

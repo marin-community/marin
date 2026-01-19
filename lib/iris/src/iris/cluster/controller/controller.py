@@ -261,13 +261,8 @@ class Controller:
         if not job:
             return
 
-        task.mark_dispatched(worker.worker_id, now_ms)
-
-        # Update job state to RUNNING when first task is dispatched
-        if job.state == cluster_pb2.JOB_STATE_PENDING:
-            job.state = cluster_pb2.JOB_STATE_RUNNING
-            if job.started_at_ms is None:
-                job.started_at_ms = now_ms
+        # Mark task as dispatched and update job state counts
+        self._state.mark_task_dispatched(task, worker.worker_id, now_ms)
 
         try:
             stub = self._stub_factory.get_stub(worker.address)
@@ -300,7 +295,7 @@ class Controller:
             )
 
         except Exception:
-            task.revert_dispatch()
+            self._state.revert_task_dispatch(task)
             transaction.rollback_assignment(task, worker)
             self._state.mark_worker_unhealthy(worker.worker_id)
             logger.exception("Failed to dispatch task %s to worker %s", task.task_id, worker.address)

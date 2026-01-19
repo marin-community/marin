@@ -14,10 +14,11 @@
 
 """Self-contained Job with state transition logic and retry tracking."""
 
+from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
 
-from iris.cluster.controller.task import Task
+from iris.cluster.controller.task import TERMINAL_TASK_STATES, Task
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 
@@ -91,6 +92,10 @@ class Job:
 
     error: str | None = None
     exit_code: int | None = None
+
+    # Incremental task state tracking
+    num_tasks: int = 0
+    task_state_counts: Counter[int] = field(default_factory=Counter)
 
     # --- State Transitions ---
 
@@ -214,6 +219,62 @@ class Job:
         self.finished_at_ms = None
         self.error = None
         self.exit_code = None
+
+    # --- Task State Tracking ---
+
+    def on_task_transition(self, old_state: int | None, new_state: int, now_ms: int) -> int | None:
+        """Update counts for a single task transition.
+
+        Args:
+            old_state: Previous task state, or None if new task
+            new_state: New task state
+            now_ms: Current timestamp in milliseconds
+
+        Returns:
+            New job state if changed, None otherwise
+        """
+        if old_state is not None:
+            self.task_state_counts[old_state] -= 1
+        self.task_state_counts[new_state] += 1
+        return self._compute_job_state(now_ms)
+
+    def _compute_job_state(self, now_ms: int) -> int | None:
+        """Derive job state from counts. O(1) - no task iteration.
+
+        Returns:
+            New job state if changed, None otherwise
+        """
+        counts = self.task_state_counts
+
+        # Job succeeds when all tasks succeed
+        if counts[cluster_pb2.TASK_STATE_SUCCEEDED] == self.num_tasks:
+            return cluster_pb2.JOB_STATE_SUCCEEDED
+
+        # Only actual failures count (not preemptions/worker failures)
+        max_task_failures = self.request.max_task_failures
+        if counts[cluster_pb2.TASK_STATE_FAILED] > max_task_failures:
+            return cluster_pb2.JOB_STATE_FAILED
+
+        # Job unschedulable if any task is unschedulable
+        if counts[cluster_pb2.TASK_STATE_UNSCHEDULABLE] > 0:
+            return cluster_pb2.JOB_STATE_UNSCHEDULABLE
+
+        # Job killed if any task was killed (and we're not already in a terminal state)
+        if counts[cluster_pb2.TASK_STATE_KILLED] > 0 and not self.is_finished():
+            return cluster_pb2.JOB_STATE_KILLED
+
+        # Job is RUNNING if any task is running
+        if counts[cluster_pb2.TASK_STATE_RUNNING] > 0 and self.state != cluster_pb2.JOB_STATE_RUNNING:
+            if self.started_at_ms is None:
+                self.started_at_ms = now_ms
+            return cluster_pb2.JOB_STATE_RUNNING
+
+        return None
+
+    @property
+    def finished_task_count(self) -> int:
+        """Count of tasks in terminal states."""
+        return sum(self.task_state_counts[s] for s in TERMINAL_TASK_STATES)
 
     # --- State Queries ---
 

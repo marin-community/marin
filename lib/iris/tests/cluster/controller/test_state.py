@@ -262,8 +262,8 @@ def test_controller_state_task_assignment_and_requeue(job_request, worker_metada
     assert task.task_id in worker.running_tasks
 
     # Simulate task failure with retry via transition_task
-    task.mark_dispatched(WorkerId("w1"), now_ms)
     task.max_retries_failure = 1
+    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
 
     result, _ = state.transition_task(
         task.task_id,
@@ -495,10 +495,7 @@ def test_transition_task_to_terminal_removes_endpoints(job_request):
     task = tasks[0]
 
     # Mark task as running
-    task.mark_dispatched(WorkerId("w1"), now_ms)
-
-    # Update job state to running
-    job.state = cluster_pb2.JOB_STATE_RUNNING
+    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
 
     ep = ControllerEndpoint(
         endpoint_id="ep-1",
@@ -746,7 +743,7 @@ def test_task_success_updates_job_state(job_request, worker_metadata):
     tasks = _add_job(state, job)
     task = tasks[0]
 
-    task.mark_dispatched(WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
     state.assign_task_to_worker(WorkerId("w1"), task.task_id)
 
     # Task succeeds via transition_task
@@ -776,7 +773,7 @@ def test_task_failure_updates_job_state(job_request, worker_metadata):
     tasks = _add_job(state, job)
     task = tasks[0]
 
-    task.mark_dispatched(WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
     state.assign_task_to_worker(WorkerId("w1"), task.task_id)
 
     # Task fails with no retries (default max_retries_failure=0)
@@ -812,7 +809,7 @@ def test_task_failure_with_retry(job_request, worker_metadata):
     task = tasks[0]
 
     task.max_retries_failure = 1  # Allow one retry
-    task.mark_dispatched(WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
     state.assign_task_to_worker(WorkerId("w1"), task.task_id)
 
     # First failure - should retry
@@ -824,7 +821,8 @@ def test_task_failure_with_retry(job_request, worker_metadata):
 
     assert result == TaskTransitionResult.SHOULD_RETRY
     assert task.state == cluster_pb2.TASK_STATE_PENDING
-    assert job.state == cluster_pb2.JOB_STATE_PENDING  # Job stays pending
+    # Job stays RUNNING - once started, job doesn't go back to PENDING on retry
+    assert job.state == cluster_pb2.JOB_STATE_RUNNING
     assert task.task_id not in worker.running_tasks
 
     # Task should be back in pending queue
@@ -853,8 +851,7 @@ def test_terminal_states_clean_up_endpoints(job_request, terminal_state):
     tasks = _add_job(state, job)
     task = tasks[0]
 
-    task.mark_dispatched(WorkerId("w1"), now_ms)
-    job.state = cluster_pb2.JOB_STATE_RUNNING
+    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
 
     ep = ControllerEndpoint(
         endpoint_id="ep1",
@@ -903,9 +900,8 @@ def test_worker_timeout_task_cleanup(job_request, worker_metadata):
     task = tasks[0]
 
     task.max_retries_preemption = 0  # No preemption retries
-    task.mark_dispatched(WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
     state.assign_task_to_worker(WorkerId("w1"), task.task_id)
-    job.state = cluster_pb2.JOB_STATE_RUNNING
 
     ep = ControllerEndpoint(
         endpoint_id="ep1",
@@ -963,9 +959,9 @@ def test_failure_domain_kills_remaining_tasks_on_task_failure(worker_metadata):
     assert len(tasks) == 3
 
     # Dispatch task-0 and task-1 to workers, leave task-2 pending
-    tasks[0].mark_dispatched(WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(tasks[0], WorkerId("w1"), now_ms)
     state.assign_task_to_worker(WorkerId("w1"), tasks[0].task_id)
-    tasks[1].mark_dispatched(WorkerId("w1"), now_ms + 1)
+    state.mark_task_dispatched(tasks[1], WorkerId("w1"), now_ms + 1)
     state.assign_task_to_worker(WorkerId("w1"), tasks[1].task_id)
 
     # Task-0 fails (no retries since max_retries_failure=0)
@@ -1018,7 +1014,7 @@ def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
 
     # Dispatch all tasks
     for i, task in enumerate(tasks):
-        task.mark_dispatched(WorkerId("w1"), now_ms + i)
+        state.mark_task_dispatched(task, WorkerId("w1"), now_ms + i)
         state.assign_task_to_worker(WorkerId("w1"), task.task_id)
 
     # Task-0 fails - job should still be running (1 failure <= 1 allowed)
@@ -1083,8 +1079,8 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
     tasks = state.add_job(job)
 
     # Dispatch task-0
-    tasks[0].mark_dispatched(WorkerId("w1"), now_ms)
     tasks[0].max_retries_preemption = 1  # Allow one preemption retry
+    state.mark_task_dispatched(tasks[0], WorkerId("w1"), now_ms)
     state.assign_task_to_worker(WorkerId("w1"), tasks[0].task_id)
 
     # Task-0 is preempted (worker failure) - should NOT count toward max_task_failures
@@ -1100,8 +1096,8 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
     assert result == TaskTransitionResult.SHOULD_RETRY
     assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
 
-    # Job should still be PENDING, not FAILED
-    assert job.state == cluster_pb2.JOB_STATE_PENDING
+    # Job stays RUNNING - once started, job doesn't go back to PENDING on retry
+    assert job.state == cluster_pb2.JOB_STATE_RUNNING
 
 
 def test_failure_domain_logs_actions(worker_metadata):
@@ -1129,7 +1125,7 @@ def test_failure_domain_logs_actions(worker_metadata):
 
     # Dispatch all tasks
     for i, task in enumerate(tasks):
-        task.mark_dispatched(WorkerId("w1"), now_ms + i)
+        state.mark_task_dispatched(task, WorkerId("w1"), now_ms + i)
         state.assign_task_to_worker(WorkerId("w1"), task.task_id)
 
     # Task-0 fails
@@ -1185,7 +1181,7 @@ def test_all_tasks_succeed_job_succeeds(worker_metadata):
 
     # Dispatch and complete all tasks
     for i, task in enumerate(tasks):
-        task.mark_dispatched(WorkerId("w1"), now_ms + i)
+        state.mark_task_dispatched(task, WorkerId("w1"), now_ms + i)
         state.assign_task_to_worker(WorkerId("w1"), task.task_id)
 
         result, _ = state.transition_task(

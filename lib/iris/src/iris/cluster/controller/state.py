@@ -148,10 +148,13 @@ class ControllerState:
             if tasks is None:
                 tasks = expand_job_to_tasks(job, now_ms())
 
+            # Initialize task state counts
+            job.num_tasks = len(tasks)
             for task in tasks:
                 self._tasks[task.task_id] = task
                 self._tasks_by_job[job.job_id].append(task.task_id)
                 self._task_queue.append(task.task_id)
+                job.task_state_counts[task.state] += 1
 
             if job.gang_id:
                 self._gangs.setdefault(job.gang_id, set()).add(job.job_id)
@@ -216,6 +219,35 @@ class ControllerState:
             if task.task_id not in self._task_queue:
                 self._task_queue.append(task.task_id)
 
+    def mark_task_dispatched(self, task: Task, worker_id: WorkerId, now_ms: int) -> int | None:
+        """Mark a task as dispatched and update job state counts.
+
+        Returns:
+            New job state if changed, None otherwise
+        """
+        with self._lock:
+            job = self._jobs.get(task.job_id)
+            if not job:
+                task.mark_dispatched(worker_id, now_ms)
+                return None
+
+            old_state = task.state
+            task.mark_dispatched(worker_id, now_ms)
+            new_job_state = job.on_task_transition(old_state, task.state, now_ms)
+            if new_job_state is not None:
+                job.state = new_job_state
+            return new_job_state
+
+    def revert_task_dispatch(self, task: Task) -> None:
+        """Revert a failed dispatch and update job state counts."""
+        with self._lock:
+            job = self._jobs.get(task.job_id)
+            old_state = task.state
+            task.revert_dispatch()
+            if job:
+                job.task_state_counts[old_state] -= 1
+                job.task_state_counts[task.state] += 1
+
     def transition_task(
         self,
         task_id: TaskId,
@@ -238,7 +270,13 @@ class ControllerState:
             if not task:
                 return TaskTransitionResult.COMPLETE, []
 
+            job = self._jobs.get(task.job_id)
+            if not job:
+                return TaskTransitionResult.COMPLETE, []
+
             worker_id = task.worker_id
+            old_state = task.state
+
             result = task.transition(
                 new_state,
                 now_ms,
@@ -246,6 +284,9 @@ class ControllerState:
                 error=error,
                 exit_code=exit_code,
             )
+
+            # Update job's task state counts incrementally
+            new_job_state = job.on_task_transition(old_state, task.state, now_ms)
 
             removed_endpoints: list[ControllerEndpoint] = []
             if result == TaskTransitionResult.SHOULD_RETRY:
@@ -263,91 +304,60 @@ class ControllerState:
                     if worker:
                         worker.running_tasks.discard(task_id)
 
-                # Update job state based on task states
-                self._update_job_from_tasks(task.job_id, now_ms)
+            # Apply job state change if needed
+            if new_job_state is not None:
+                job.state = new_job_state
+                if new_job_state == cluster_pb2.JOB_STATE_FAILED:
+                    job.finished_at_ms = now_ms
+                    job.error = self._get_first_task_error(task.job_id)
+                    failed_count = job.task_state_counts[cluster_pb2.TASK_STATE_FAILED]
+                    self.log_action(
+                        "failure_domain_triggered",
+                        job_id=task.job_id,
+                        details=f"failed={failed_count} max_allowed={job.request.max_task_failures}",
+                    )
+                    self._kill_remaining_tasks(task.job_id, now_ms, "Job exceeded max_task_failures")
+                elif new_job_state in (
+                    cluster_pb2.JOB_STATE_SUCCEEDED,
+                    cluster_pb2.JOB_STATE_KILLED,
+                    cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+                ):
+                    job.finished_at_ms = now_ms
+                    if job.error is None:
+                        job.error = self._get_first_task_error(task.job_id)
 
             return result, removed_endpoints
 
-    def _update_job_from_tasks(self, job_id: JobId, now_ms: int) -> None:
-        """Update job state based on aggregate task states.
-
-        Failure policy: Job fails when task failures exceed max_task_failures.
-        - Only counts tasks that exhausted their per-task retries (TASK_STATE_FAILED)
-        - Preemptions (TASK_STATE_WORKER_FAILED) do NOT count toward max_task_failures
-        - max_task_failures=0 means fail on first task failure (default)
-        """
-        job = self._jobs.get(job_id)
-        if not job:
-            return
-
-        tasks = self.get_job_tasks(job_id)
-        if not tasks:
-            return
-
-        # Count task states
-        succeeded = sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_SUCCEEDED)
-        # Only count actual failures (not preemptions) toward max_task_failures
-        failed_permanently = sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_FAILED)
-        killed = sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_KILLED)
-        unschedulable = sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_UNSCHEDULABLE)
-        running = sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_RUNNING)
-
-        max_task_failures = job.request.max_task_failures  # Default 0
-
-        # Job is RUNNING if any task is running
-        if running > 0 and job.state != cluster_pb2.JOB_STATE_RUNNING:
-            job.state = cluster_pb2.JOB_STATE_RUNNING
-            if job.started_at_ms is None:
-                job.started_at_ms = now_ms
-
-        # Job succeeds when all tasks succeed
-        if succeeded == len(tasks):
-            job.state = cluster_pb2.JOB_STATE_SUCCEEDED
-            job.finished_at_ms = now_ms
-        # Job fails when task failures exceed threshold
-        elif failed_permanently > max_task_failures:
-            job.state = cluster_pb2.JOB_STATE_FAILED
-            job.finished_at_ms = now_ms
-            for t in tasks:
-                if t.error and t.state == cluster_pb2.TASK_STATE_FAILED:
-                    job.error = t.error
-                    break
-            # Kill remaining running/pending tasks (failure domain)
-            self.log_action(
-                "failure_domain_triggered",
-                job_id=job_id,
-                details=f"failed={failed_permanently} max_allowed={max_task_failures}",
-            )
-            self._kill_remaining_tasks(job_id, now_ms, "Job exceeded max_task_failures")
-        # Job unschedulable if any task is unschedulable
-        elif unschedulable > 0:
-            job.state = cluster_pb2.JOB_STATE_UNSCHEDULABLE
-            job.finished_at_ms = now_ms
-            for t in tasks:
-                if t.error and t.state == cluster_pb2.TASK_STATE_UNSCHEDULABLE:
-                    job.error = t.error
-                    break
-        # Job killed if any task was killed
-        elif killed > 0:
-            job.state = cluster_pb2.JOB_STATE_KILLED
-            job.finished_at_ms = now_ms
-            for t in tasks:
-                if t.error:
-                    job.error = t.error
-                    break
+    def _get_first_task_error(self, job_id: JobId) -> str | None:
+        """Get the first error message from failed/killed tasks in a job."""
+        for task_id in self._tasks_by_job.get(job_id, []):
+            task = self._tasks.get(task_id)
+            if task and task.error:
+                return task.error
+        return None
 
     def _kill_remaining_tasks(self, job_id: JobId, now_ms: int, error: str) -> None:
-        """Kill all non-finished tasks in a job (failure domain)."""
+        """Kill all non-finished tasks in a job (failure domain).
+
+        Updates job.task_state_counts incrementally for each killed task.
+        """
+        job = self._jobs.get(job_id)
         killed_count = 0
         for task_id in self._tasks_by_job.get(job_id, []):
             task = self._tasks.get(task_id)
             if not task or task.is_finished():
                 continue
 
+            old_state = task.state
             task.state = cluster_pb2.TASK_STATE_KILLED
             task.finished_at_ms = now_ms
             task.error = error
             killed_count += 1
+
+            # Update job's task state counts
+            if job:
+                job.task_state_counts[old_state] -= 1
+                job.task_state_counts[cluster_pb2.TASK_STATE_KILLED] += 1
 
             self._task_queue = deque(tid for tid in self._task_queue if tid != task_id)
             if task.worker_id:
