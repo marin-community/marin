@@ -153,7 +153,10 @@ eval = [
     "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
 ]
 
-vllm =["vllm-tpu==0.13.2.post6"]
+vllm =[
+    "vllm-tpu==0.13.2.post6",
+    "triton==3.5.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
+]
 
 math = ["pylatexenc", "sympy"]
 

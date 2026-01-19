@@ -264,6 +264,8 @@ def tokenize(config: TokenizeConfigBase):
     if isinstance(config, TokenizeConfig):
         train_paths = _get_filepaths_to_tokenize(config.train_paths) if config.train_paths else []
         validation_paths = _get_filepaths_to_tokenize(config.validation_paths) if config.validation_paths else []
+        # Validate expanded paths to catch validation/test files that were inside directories
+        _validate_train_urls(train_paths, warn=config.allow_test_in_train)
     elif isinstance(config, HfTokenizeConfig):
         logger.info(f"Loading dataset metadata for {config.id}" + (f" (config: {config.name})" if config.name else ""))
 
