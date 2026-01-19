@@ -179,6 +179,12 @@ if __name__ == "__main__":
     # start_inference_server(model_path="meta-llama/Meta-Llama-3.1-8B-Instruct", port=8000, device_type="tpu")
     # time.sleep(10)
     
+    # 1. Data Loading (Moved up to build index)
+    print("Loading data...")
+    hotpot_data = load_hotpotqa()
+    hover_data = load_hover()
+    fhir_data = load_fhir()
+
     print("Configuring DSPy...")
     # Configure Retrieval Model
     colbert_url = os.environ.get("COLBERT_SERVER_URL")
@@ -186,24 +192,86 @@ if __name__ == "__main__":
         print(f"Using configured ColBERT server: {colbert_url}")
         rm = dspy.ColBERTv2(url=colbert_url)
     else:
-        # Fallback to DummyRM to avoid external dependency failures (broken public demo server)
-        print("Warning: COLBERT_SERVER_URL not set. Using DummyRM to ensure pipeline continuity.")
+        print("Warning: COLBERT_SERVER_URL not set. Switch to Local BM25S Retriever.")
         
-        class DummyRM(dspy.Retrieve):
-            def __call__(self, query, k=3, **kwargs):
-                # Return dummy passages to allow Baleen/DSPy to proceed with generation
-                return ["This is a dummy retrieved document. The retrieval server was not configured, so we are using placeholder context to allow the pipeline to generate training examples via the LLM."] * k
+        try:
+            import bm25s
+            import Stemmer
+        except ImportError:
+            raise ImportError("Please install bm25s: `pip install bm25s[full]` or `pip install bm25s PyStemmer`")
+
+        class BM25Retriever(dspy.Retrieve):
+            def __init__(self, data_source, k=3):
+                super().__init__(k=k)
+                self.k = k
+                self.retriever = None
+                self._build_index(data_source)
+
+            def _build_index(self, examples):
+                print("Building BM25 index from dataset contexts...")
                 
-        rm = DummyRM()
+                corpus = []
+                self.corpus_map = [] # To map index ID back to text
+                
+                seen = set()
+                
+                for ex in examples:
+                    # Strategy: Use available context or fallback to specific fields
+                    texts_to_index = []
+                    
+                    if hasattr(ex, "context") and isinstance(ex.context, list):
+                        # HotPotQA style context: list of [title, sentences]
+                        for item in ex.context:
+                            if isinstance(item, list) and len(item) >= 2:
+                                title = item[0]
+                                sentences = item[1]
+                                text = f"{title}\n{' '.join(sentences)}"
+                                texts_to_index.append(text)
+                            elif isinstance(item, str):
+                                texts_to_index.append(item)
+                                
+                    elif hasattr(ex, "note"): # FHIR style
+                        texts_to_index.append(ex.note)
+                        
+                    elif hasattr(ex, "evidence"): # HoVer style
+                        if isinstance(ex.evidence, str):
+                            texts_to_index.append(ex.evidence)
+                        elif isinstance(ex.evidence, list):
+                             texts_to_index.append(" ".join([str(e) for e in ex.evidence]))
+
+                    # Add unique texts to corpus
+                    for text in texts_to_index:
+                        if text and text not in seen:
+                            corpus.append(text)
+                            seen.add(text)
+                            self.corpus_map.append(text)
+                
+                if not corpus:
+                    print("Warning: No context found to index. Using dummy corpus.")
+                    corpus = ["This is a placeholder document to prevent empty index errors."]
+                    self.corpus_map = corpus
+
+                # Create BM25S retriever
+                self.retriever = bm25s.BM25(corpus=corpus)
+                self.retriever.index(bm25s.tokenize(corpus, stemmer=Stemmer.Stemmer("english")))
+                print(f"BM25 Index built with {len(corpus)} documents.")
+
+            def __call__(self, query, k=None, **kwargs):
+                k = k if k else self.k
+                # Query the index
+                # bm25s.retrieve returns (docs, scores)
+                results, _ = self.retriever.retrieve(bm25s.tokenize([query], stemmer=Stemmer.Stemmer("english")), k=k)
+                
+                # results is a list of lists (batch size 1)
+                # Return the documents directly as a list of strings
+                return [doc for doc in results[0]]
+
+        # Use HotPotQA data to populate the Knowledge Base (Source of Truth)
+        # This makes the system "closed-book" on the training set, which is perfect for generating adaptation traces.
+        rm = BM25Retriever(hotpot_data if hotpot_data else fhir_data, k=3)
 
     lm = dspy.LM(model="openai/gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
     dspy.settings.configure(lm=lm, rm=rm, adapter=BAMLAdapter())
-
-    # 1. Data
-    print("Loading data...")
-    hotpot_data = load_hotpotqa()
-    hover_data = load_hover()
-    fhir_data = load_fhir()
 
     # 2. Modules
     baleen = SimplifiedBaleen()
