@@ -2,6 +2,16 @@
 SFT script for Qwen-4B using DSPy format adaptation trace data.
 """
 
+# Monkey-patch JAX to satisfy Levanter's import of TpuCluster
+# This is necessary because we are running on GPU and Levanter imports a deprecated/removed internal JAX class.
+try:
+    import jax._src.clusters
+    if not hasattr(jax._src.clusters, "TpuCluster"):
+        # Define a dummy class to prevent ImportError
+        jax._src.clusters.TpuCluster = type("TpuCluster", (), {})
+except ImportError:
+    pass
+
 from levanter.data.text import ChatLmDatasetFormat
 from experiments.defaults import default_sft, default_tokenize
 from experiments.dspy.train_qwen_4b_config import QwenSFTConfig
