@@ -58,6 +58,9 @@ def train():
 
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
+    # Universal fix for TRL version mismatches: set max_length on tokenizer directly
+    # This avoids arg errors in both SFTTrainer and SFTConfig
+    tokenizer.model_max_length = 512
 
     # 3. LoRA Configuration (Pipeline Step 3)
     # Targeting specific linear layers for Qwen architecture.
@@ -94,7 +97,7 @@ def train():
         use_cpu=not torch.cuda.is_available(),
         optim="paged_adamw_8bit" if torch.cuda.is_available() else "adamw_torch",
         report_to="none",
-        max_seq_length=512  # Moved inside config
+        # max_seq_length removed to avoid version conflicts
     )
     
     trainer = SFTTrainer(
