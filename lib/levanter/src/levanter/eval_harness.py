@@ -27,7 +27,7 @@ import tempfile
 import typing
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Iterator, List, Optional, Tuple, Union
+from typing import Any, Iterator, List, Optional, Tuple, Union
 
 import equinox as eqx
 import haliax
