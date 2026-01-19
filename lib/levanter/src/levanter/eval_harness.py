@@ -543,9 +543,6 @@ class LevanterHarnessLM(TemplateLM):
             )
             padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
 
-            batch = hax.shard(batch, self.axis_resources)
-            batch = jax.device_put(batch)
-
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
 
             # Increment step after processing batch
