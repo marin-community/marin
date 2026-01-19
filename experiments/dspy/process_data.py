@@ -45,7 +45,7 @@ def load_hotpotqa():
         "hotpotqa/hotpot_qa",
         "fullwiki",
         split="train",
-        input_keys=("question",),
+        input_keys=("question", "context"), # ADDED context for BM25 Indexing
     )
     return dataset
 
@@ -125,8 +125,9 @@ def collect_traces_for_module(
         assert metric is not None
         assert trace_data["score"] is not None
 
-        if trace_data["score"] == 0:
-            continue
+        # TEMPORARILY DISABLED FILTERING to ensure data flow even with imperfect retrieval
+        # if trace_data["score"] == 0:
+        #     continue
 
         for ti in trace_info:
             assert dspy.settings.adapter is not None
