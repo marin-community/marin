@@ -27,7 +27,6 @@ state and return results indicating what the caller should do.
 """
 
 import logging
-import time
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from enum import Enum
@@ -132,7 +131,6 @@ class ControllerTaskAttempt:
     def transition(
         self,
         new_state: int,
-        now_ms: int,
         *,
         exit_code: int | None = None,
         error: str | None = None,
@@ -140,12 +138,13 @@ class ControllerTaskAttempt:
     ) -> None:
         """Transition this attempt to a new state."""
         self.state = new_state
+        ts = now_ms()
 
         if new_state == cluster_pb2.TASK_STATE_RUNNING:
-            self.started_at_ms = now_ms
+            self.started_at_ms = ts
 
         if new_state in TERMINAL_TASK_STATES:
-            self.finished_at_ms = now_ms
+            self.finished_at_ms = ts
             self.exit_code = exit_code
             self.error = error
             self.is_worker_failure = is_worker_failure
@@ -218,26 +217,27 @@ class ControllerTask:
 
     # --- Attempt management methods ---
 
-    def create_attempt(self, worker_id: WorkerId, now_ms: int) -> ControllerTaskAttempt:
+    def create_attempt(self, worker_id: WorkerId) -> ControllerTaskAttempt:
         """Create a new attempt for this task.
 
         Called when the scheduler assigns this task to a worker.
         Updates task state to RUNNING and sets started_at_ms on first attempt.
         Returns the new attempt so caller can track it.
         """
+        ts = now_ms()
         attempt = ControllerTaskAttempt(
             attempt_id=len(self.attempts),
             worker_id=worker_id,
             state=cluster_pb2.TASK_STATE_RUNNING,
-            created_at_ms=now_ms,
-            started_at_ms=now_ms,
+            created_at_ms=ts,
+            started_at_ms=ts,
         )
         self.attempts.append(attempt)
 
         # Update task-level state
         self.state = cluster_pb2.TASK_STATE_RUNNING
         if self.started_at_ms is None:
-            self.started_at_ms = now_ms
+            self.started_at_ms = ts
 
         return attempt
 
@@ -252,30 +252,9 @@ class ControllerTask:
             self.attempts.pop()
             self.state = cluster_pb2.TASK_STATE_PENDING
 
-    def transition_without_attempt(
-        self,
-        new_state: int,
-        now_ms: int,
-        *,
-        error: str | None = None,
-        exit_code: int | None = None,
-    ) -> TaskTransitionResult:
-        """Transition a task that has no attempts (e.g., killing a PENDING task).
-
-        This handles direct state transitions for tasks that were never dispatched
-        to a worker. For tasks with attempts, use handle_attempt_result() instead.
-        """
-        self.state = new_state
-        if new_state in TERMINAL_TASK_STATES:
-            self.finished_at_ms = now_ms
-            self.error = error
-            self.exit_code = exit_code
-        return TaskTransitionResult.COMPLETE
-
     def handle_attempt_result(
         self,
         new_state: int,
-        now_ms: int,
         *,
         is_worker_failure: bool = False,
         error: str | None = None,
@@ -292,7 +271,6 @@ class ControllerTask:
 
         Args:
             new_state: Target state
-            now_ms: Current timestamp
             is_worker_failure: True if failure due to worker death (preemption)
             error: Error message for failure states
             exit_code: Exit code for completed tasks
@@ -301,7 +279,12 @@ class ControllerTask:
             TaskTransitionResult indicating what caller should do
         """
         if not self.attempts:
-            return self.transition_without_attempt(new_state, now_ms, error=error, exit_code=exit_code)
+            self.state = new_state
+            if new_state in TERMINAL_TASK_STATES:
+                self.finished_at_ms = now_ms()
+                self.error = error
+                self.exit_code = exit_code
+            return TaskTransitionResult.COMPLETE
 
         attempt = self.attempts[-1]
 
@@ -312,7 +295,6 @@ class ControllerTask:
         ):
             attempt.transition(
                 new_state,
-                now_ms,
                 exit_code=exit_code,
                 error=error,
                 is_worker_failure=is_worker_failure,
@@ -325,8 +307,7 @@ class ControllerTask:
                 # Terminal: record final outcome
                 self.error = error
                 self.exit_code = exit_code
-                self.finished_at_ms = now_ms
-            # For SHOULD_RETRY, we don't set finished_at_ms since task isn't truly finished
+                self.finished_at_ms = now_ms()
             return result
 
         # For success, set exit_code to 0 if not provided
@@ -334,7 +315,6 @@ class ControllerTask:
             final_exit_code = exit_code if exit_code is not None else 0
             attempt.transition(
                 new_state,
-                now_ms,
                 exit_code=final_exit_code,
                 error=error,
                 is_worker_failure=is_worker_failure,
@@ -343,7 +323,7 @@ class ControllerTask:
             self.state = new_state
             self.exit_code = final_exit_code
             self.error = error
-            self.finished_at_ms = now_ms
+            self.finished_at_ms = now_ms()
             return TaskTransitionResult.COMPLETE
 
         # For other terminal states (KILLED, UNSCHEDULABLE)
@@ -353,7 +333,6 @@ class ControllerTask:
                 actual_error = "Scheduling timeout exceeded"
             attempt.transition(
                 new_state,
-                now_ms,
                 exit_code=exit_code,
                 error=actual_error,
                 is_worker_failure=is_worker_failure,
@@ -362,13 +341,12 @@ class ControllerTask:
             self.state = new_state
             self.error = actual_error
             self.exit_code = exit_code
-            self.finished_at_ms = now_ms
+            self.finished_at_ms = now_ms()
             return TaskTransitionResult.COMPLETE
 
         # Non-terminal states (BUILDING, RUNNING)
         attempt.transition(
             new_state,
-            now_ms,
             exit_code=exit_code,
             error=error,
             is_worker_failure=is_worker_failure,
@@ -447,10 +425,10 @@ class ControllerJob:
         job = ControllerJob(job_id=..., request=...)
 
         # Job starts running when first task starts
-        job.mark_dispatched(now_ms)
+        job.mark_dispatched()
 
         # Task reports failure
-        result = job.transition(JOB_STATE_FAILED, now_ms, is_worker_failure=False)
+        result = job.transition(JOB_STATE_FAILED, is_worker_failure=False)
         if result == JobTransitionResult.SHOULD_RETRY:
             queue.add(job)  # Caller handles re-queueing
     """
@@ -485,10 +463,10 @@ class ControllerJob:
 
     # --- State Transitions ---
 
-    def mark_dispatched(self, now_ms: int) -> None:
+    def mark_dispatched(self) -> None:
         """Mark job as running. Called when first task starts."""
         self.state = cluster_pb2.JOB_STATE_RUNNING
-        self.started_at_ms = now_ms
+        self.started_at_ms = now_ms()
 
     def revert_dispatch(self) -> None:
         """Revert dispatch if no tasks actually started."""
@@ -498,7 +476,6 @@ class ControllerJob:
     def transition(
         self,
         new_state: int,
-        now_ms: int,
         *,
         is_worker_failure: bool = False,
         error: str | None = None,
@@ -513,7 +490,6 @@ class ControllerJob:
 
         Args:
             new_state: Target state
-            now_ms: Current timestamp
             is_worker_failure: True if failure due to worker death (preemption)
             error: Error message for failure states
             exit_code: Exit code for completed jobs
@@ -522,28 +498,27 @@ class ControllerJob:
             JobTransitionResult indicating what caller should do
         """
         # Handle failure states with retry logic
-        if new_state in (
-            cluster_pb2.JOB_STATE_FAILED,
-            cluster_pb2.JOB_STATE_WORKER_FAILED,
-        ):
-            return self._handle_failure(now_ms, is_worker_failure, error, exit_code)
+        if new_state == cluster_pb2.JOB_STATE_FAILED:
+            return self._handle_failure(is_worker_failure, error, exit_code)
+
+        ts = now_ms()
 
         # Non-failure terminal states
         if new_state == cluster_pb2.JOB_STATE_SUCCEEDED:
             self.state = new_state
-            self.finished_at_ms = now_ms
+            self.finished_at_ms = ts
             self.exit_code = exit_code or 0
             return JobTransitionResult.COMPLETE
 
         if new_state == cluster_pb2.JOB_STATE_KILLED:
             self.state = new_state
-            self.finished_at_ms = now_ms
+            self.finished_at_ms = ts
             self.error = error
             return JobTransitionResult.COMPLETE
 
         if new_state == cluster_pb2.JOB_STATE_UNSCHEDULABLE:
             self.state = new_state
-            self.finished_at_ms = now_ms
+            self.finished_at_ms = ts
             self.error = error or f"Scheduling timeout exceeded ({self.request.scheduling_timeout_seconds}s)"
             return JobTransitionResult.COMPLETE
 
@@ -553,7 +528,6 @@ class ControllerJob:
 
     def _handle_failure(
         self,
-        now_ms: int,
         is_worker_failure: bool,
         error: str | None,
         exit_code: int | None,
@@ -567,8 +541,7 @@ class ControllerJob:
             can_retry = self.failure_count <= self.max_retries_failure
 
         if can_retry:
-            # Reset state for retry - no attempt history tracking needed since
-            # jobs don't execute on workers (tasks do)
+            # Reset state for retry
             self.state = cluster_pb2.JOB_STATE_PENDING
             self.started_at_ms = None
             self.finished_at_ms = None
@@ -577,21 +550,20 @@ class ControllerJob:
             return JobTransitionResult.SHOULD_RETRY
         else:
             # Terminal failure
-            self.state = cluster_pb2.JOB_STATE_WORKER_FAILED if is_worker_failure else cluster_pb2.JOB_STATE_FAILED
-            self.finished_at_ms = now_ms
+            self.state = cluster_pb2.JOB_STATE_FAILED
+            self.finished_at_ms = now_ms()
             self.error = error
             self.exit_code = exit_code
             return JobTransitionResult.EXCEEDED_RETRY_LIMIT
 
     # --- Task State Tracking ---
 
-    def on_task_transition(self, old_state: int | None, new_state: int, now_ms: int) -> int | None:
+    def on_task_transition(self, old_state: int | None, new_state: int) -> int | None:
         """Update counts for a single task transition.
 
         Args:
             old_state: Previous task state, or None if new task
             new_state: New task state
-            now_ms: Current timestamp in milliseconds
 
         Returns:
             New job state if changed, None otherwise
@@ -599,9 +571,9 @@ class ControllerJob:
         if old_state is not None:
             self.task_state_counts[old_state] -= 1
         self.task_state_counts[new_state] += 1
-        return self._compute_job_state(now_ms)
+        return self._compute_job_state()
 
-    def _compute_job_state(self, now_ms: int) -> int | None:
+    def _compute_job_state(self) -> int | None:
         """Derive job state from counts. O(1) - no task iteration.
 
         Returns:
@@ -629,9 +601,10 @@ class ControllerJob:
         # Job is RUNNING if any task is running
         if counts[cluster_pb2.TASK_STATE_RUNNING] > 0 and self.state != cluster_pb2.JOB_STATE_RUNNING:
             if self.started_at_ms is None:
-                self.started_at_ms = now_ms
+                self.started_at_ms = now_ms()
             return cluster_pb2.JOB_STATE_RUNNING
 
+        # No state change detected
         return None
 
     @property
@@ -639,14 +612,11 @@ class ControllerJob:
         """Count of tasks in terminal states."""
         return sum(self.task_state_counts[s] for s in TERMINAL_TASK_STATES)
 
-    # --- State Queries ---
-
     def is_finished(self) -> bool:
         return self.state in (
             cluster_pb2.JOB_STATE_SUCCEEDED,
             cluster_pb2.JOB_STATE_FAILED,
             cluster_pb2.JOB_STATE_KILLED,
-            cluster_pb2.JOB_STATE_WORKER_FAILED,
             cluster_pb2.JOB_STATE_UNSCHEDULABLE,
         )
 
@@ -669,7 +639,6 @@ class ControllerJob:
 
 def handle_gang_failure(
     jobs: list[ControllerJob],
-    now_ms: int,
     is_worker_failure: bool,
     error: str,
 ) -> list[ControllerJob]:
@@ -680,7 +649,6 @@ def handle_gang_failure(
 
     Args:
         jobs: All jobs in the gang
-        now_ms: Current timestamp
         is_worker_failure: Type of failure
         error: Error message
 
@@ -700,7 +668,7 @@ def handle_gang_failure(
         # Mark all running jobs as killed
         for job in jobs:
             if job.state == cluster_pb2.JOB_STATE_RUNNING:
-                job.transition(cluster_pb2.JOB_STATE_KILLED, now_ms, error=error)
+                job.transition(cluster_pb2.JOB_STATE_KILLED, error=error)
         return []
 
     # Retry all jobs
@@ -708,7 +676,6 @@ def handle_gang_failure(
     for job in jobs:
         result = job.transition(
             cluster_pb2.JOB_STATE_FAILED,
-            now_ms,
             is_worker_failure=is_worker_failure,
             error=error,
         )
@@ -718,7 +685,7 @@ def handle_gang_failure(
     return to_requeue
 
 
-def expand_job_to_tasks(job: ControllerJob, now_ms: int) -> list[ControllerTask]:
+def expand_job_to_tasks(job: ControllerJob) -> list[ControllerTask]:
     """Expand a job into its constituent tasks based on replicas.
 
     Jobs with replicas=N expand into N tasks. Each task has a unique ID
@@ -726,7 +693,6 @@ def expand_job_to_tasks(job: ControllerJob, now_ms: int) -> list[ControllerTask]
 
     Args:
         job: The job to expand
-        now_ms: Current timestamp in milliseconds
 
     Returns:
         List of ControllerTask objects for this job
@@ -742,7 +708,7 @@ def expand_job_to_tasks(job: ControllerJob, now_ms: int) -> list[ControllerTask]
             task_index=i,
             max_retries_failure=job.max_retries_failure,
             max_retries_preemption=job.max_retries_preemption,
-            submitted_at_ms=now_ms,
+            submitted_at_ms=job.submitted_at_ms,
         )
         tasks.append(task)
 
@@ -905,7 +871,7 @@ class ControllerState:
             self._tasks_by_job[job.job_id] = []
 
             if tasks is None:
-                tasks = expand_job_to_tasks(job, now_ms())
+                tasks = expand_job_to_tasks(job)
 
             # Initialize task state counts
             job.num_tasks = len(tasks)
@@ -969,17 +935,9 @@ class ControllerState:
         Updates the worker's committed resources based on the job's resource requirements.
         """
         with self._lock:
-            worker = self._workers.get(worker_id)
-            if not worker:
-                return False
-
-            task = self._tasks.get(task_id)
-            if not task:
-                return False
-
-            job = self._jobs.get(task.job_id)
-            if not job:
-                return False
+            worker = self._workers[worker_id]
+            task = self._tasks[task_id]
+            job = self._jobs[task.job_id]
 
             worker.assign_task(task_id, job.request.resources)
             self._task_queue = deque(tid for tid in self._task_queue if tid != task_id)
@@ -994,17 +952,17 @@ class ControllerState:
             if task.task_id not in self._task_queue:
                 self._task_queue.append(task.task_id)
 
-    def mark_task_dispatched(self, task: ControllerTask, worker_id: WorkerId, now_ms: int) -> int | None:
+    def mark_task_dispatched(self, task: ControllerTask, worker_id: WorkerId) -> int | None:
         """Mark a task as dispatched and update job state counts.
 
         Returns:
             New job state if changed, None otherwise
         """
         with self._lock:
-            job = self._jobs.get(task.job_id)
+            job = self._jobs[task.job_id]
             old_state = task.state
-            task.create_attempt(worker_id, now_ms)
-            new_job_state = job.on_task_transition(old_state, task.state, now_ms)
+            task.create_attempt(worker_id)
+            new_job_state = job.on_task_transition(old_state, task.state)
             if new_job_state is not None:
                 job.state = new_job_state
             return new_job_state
@@ -1012,7 +970,7 @@ class ControllerState:
     def revert_task_dispatch(self, task: ControllerTask) -> None:
         """Revert a failed dispatch and update job state counts."""
         with self._lock:
-            job = self._jobs.get(task.job_id)
+            job = self._jobs[task.job_id]
             old_state = task.state
             task.revert_attempt()
             job.task_state_counts[old_state] -= 1
@@ -1022,7 +980,6 @@ class ControllerState:
         self,
         task_id: TaskId,
         new_state: int,
-        now_ms: int,
         *,
         is_worker_failure: bool = False,
         error: str | None = None,
@@ -1050,32 +1007,29 @@ class ControllerState:
             # Delegate state transition to task (handles both with/without attempts)
             result = task.handle_attempt_result(
                 new_state,
-                now_ms,
                 is_worker_failure=is_worker_failure,
                 error=error,
                 exit_code=exit_code,
             )
 
             # Update job's task state counts and check for job state change
-            new_job_state = job.on_task_transition(old_state, task.state, now_ms)
-
-            # Handle side effects based on transition result
-            removed_endpoints = self._handle_task_side_effects(task, job, worker_id, result)
+            new_job_state = job.on_task_transition(old_state, task.state)
+            removed_endpoints = self._update_task_queue(task, job, worker_id, result)
 
             # Finalize job state if it changed
             if new_job_state is not None:
-                self._finalize_job_state(job, new_job_state, now_ms)
+                self._finalize_job_state(job, new_job_state)
 
             return result, removed_endpoints
 
-    def _handle_task_side_effects(
+    def _update_task_queue(
         self,
         task: ControllerTask,
         job: ControllerJob,
         worker_id: WorkerId | None,
         result: TaskTransitionResult,
     ) -> list[ControllerEndpoint]:
-        """Handle side effects of a task transition (queue, worker, endpoints)."""
+        """Update task queue based on transition result."""
         removed_endpoints: list[ControllerEndpoint] = []
 
         if result == TaskTransitionResult.SHOULD_RETRY:
@@ -1099,11 +1053,10 @@ class ControllerState:
         self,
         job: ControllerJob,
         new_state: int,
-        now_ms: int,
     ) -> None:
         """Apply a job state change and handle associated actions."""
         job.state = new_state
-        job.finished_at_ms = now_ms
+        job.finished_at_ms = now_ms()
 
         if new_state == cluster_pb2.JOB_STATE_FAILED:
             job.error = self._get_first_task_error(job.job_id)
@@ -1113,14 +1066,16 @@ class ControllerState:
                 job_id=job.job_id,
                 details=f"failed={failed_count} max_allowed={job.request.max_task_failures}",
             )
-            self._kill_remaining_tasks(job.job_id, now_ms, "Job exceeded max_task_failures")
+            self._kill_remaining_tasks(job.job_id, "Job exceeded max_task_failures")
         elif new_state == cluster_pb2.JOB_STATE_SUCCEEDED:
             self.log_action("job_succeeded", job_id=job.job_id)
         elif new_state == cluster_pb2.JOB_STATE_KILLED:
             job.error = self._get_first_task_error(job.job_id)
+            self._kill_remaining_tasks(job.job_id, "Job was terminated.")
             self.log_action("job_killed", job_id=job.job_id)
         elif new_state == cluster_pb2.JOB_STATE_UNSCHEDULABLE:
             job.error = self._get_first_task_error(job.job_id)
+            self._kill_remaining_tasks(job.job_id, "Job could not be scheduled.")
             self.log_action("job_unschedulable", job_id=job.job_id)
 
     def _get_first_task_error(self, job_id: JobId) -> str | None:
@@ -1131,13 +1086,14 @@ class ControllerState:
                 return task.error
         return None
 
-    def _kill_remaining_tasks(self, job_id: JobId, now_ms: int, error: str) -> None:
+    def _kill_remaining_tasks(self, job_id: JobId, error: str) -> None:
         """Kill all non-finished tasks in a job (failure domain).
 
         Updates job.task_state_counts incrementally for each killed task.
         """
         job = self._jobs.get(job_id)
         killed_count = 0
+        ts = now_ms()
         for task_id in self._tasks_by_job.get(job_id, []):
             task = self._tasks.get(task_id)
             if not task or task.is_finished():
@@ -1145,7 +1101,7 @@ class ControllerState:
 
             old_state = task.state
             task.state = cluster_pb2.TASK_STATE_KILLED
-            task.finished_at_ms = now_ms
+            task.finished_at_ms = ts
             task.error = error
             killed_count += 1
 
@@ -1215,13 +1171,13 @@ class ControllerState:
 
     def load_workers_from_config(self, configs: list[WorkerConfig]) -> None:
         """Load workers from static configuration."""
-        now_ms = int(time.time() * 1000)
+        ts = now_ms()
         for cfg in configs:
             worker = ControllerWorker(
                 worker_id=WorkerId(cfg.worker_id),
                 address=cfg.address,
                 metadata=cfg.metadata,
-                last_heartbeat_ms=now_ms,
+                last_heartbeat_ms=ts,
             )
             self.add_worker(worker)
 
@@ -1235,7 +1191,7 @@ class ControllerState:
         details: str = "",
     ) -> None:
         entry = ActionLogEntry(
-            timestamp_ms=int(time.time() * 1000),
+            timestamp_ms=now_ms(),
             action=action,
             job_id=job_id,
             worker_id=worker_id,

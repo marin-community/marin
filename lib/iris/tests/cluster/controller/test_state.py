@@ -20,7 +20,6 @@ scheduling and execution.
 """
 
 import threading
-import time
 
 import pytest
 
@@ -113,7 +112,7 @@ def test_controller_state_skip_non_pending(job_request):
     _add_job(state, job2)
 
     # Mark first task as running by creating an attempt
-    tasks1[0].create_attempt(WorkerId("w1"), now_ms=1000)
+    tasks1[0].create_attempt(WorkerId("w1"))
 
     # Should skip j1's task since it's running (has a non-terminal attempt)
     pending = state.peek_pending_tasks()
@@ -236,7 +235,6 @@ def test_controller_state_multiple_gangs(job_request):
 def test_controller_state_task_assignment_and_requeue(job_request, worker_metadata):
     """Test task assignment to worker and re-queuing."""
     state = ControllerState()
-    now_ms = int(time.time() * 1000)
 
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
@@ -269,12 +267,11 @@ def test_controller_state_task_assignment_and_requeue(job_request, worker_metada
 
     # Simulate task failure with retry via transition_task
     task.max_retries_failure = 1
-    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(task, WorkerId("w1"))
 
     result, _ = state.transition_task(
         task.task_id,
         cluster_pb2.TASK_STATE_FAILED,
-        now_ms + 1000,
         error="Test failure",
     )
 
@@ -425,7 +422,6 @@ def test_endpoint_not_returned_for_non_running_job():
 def test_transition_task_to_terminal_removes_endpoints(job_request):
     """Test that transition_task removes endpoints when task reaches terminal state."""
     state = ControllerState()
-    now_ms = int(time.time() * 1000)
 
     job = ControllerJob(
         job_id=JobId("ns-1"),
@@ -435,7 +431,7 @@ def test_transition_task_to_terminal_removes_endpoints(job_request):
     task = tasks[0]
 
     # Mark task as running
-    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(task, WorkerId("w1"))
 
     ep = ControllerEndpoint(
         endpoint_id="ep-1",
@@ -453,7 +449,6 @@ def test_transition_task_to_terminal_removes_endpoints(job_request):
     result, removed = state.transition_task(
         task.task_id,
         cluster_pb2.TASK_STATE_SUCCEEDED,
-        now_ms=now_ms + 1000,
     )
 
     assert result == TaskTransitionResult.COMPLETE
@@ -668,7 +663,6 @@ def test_pending_job_endpoints_not_returned():
 def test_task_success_updates_job_state(job_request, worker_metadata):
     """When all tasks succeed, job transitions to SUCCEEDED."""
     state = ControllerState()
-    now_ms = int(time.time() * 1000)
 
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
@@ -681,11 +675,11 @@ def test_task_success_updates_job_state(job_request, worker_metadata):
     tasks = _add_job(state, job)
     task = tasks[0]
 
-    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(task, WorkerId("w1"))
     state.assign_task_to_worker(WorkerId("w1"), task.task_id)
 
     # Task succeeds via transition_task
-    result, _ = state.transition_task(task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED, now_ms + 1000)
+    result, _ = state.transition_task(task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
 
     assert result == TaskTransitionResult.COMPLETE
     assert task.state == cluster_pb2.TASK_STATE_SUCCEEDED
@@ -696,7 +690,6 @@ def test_task_success_updates_job_state(job_request, worker_metadata):
 def test_task_failure_updates_job_state(job_request, worker_metadata):
     """When task fails with no retries, job transitions to FAILED."""
     state = ControllerState()
-    now_ms = int(time.time() * 1000)
 
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
@@ -709,14 +702,13 @@ def test_task_failure_updates_job_state(job_request, worker_metadata):
     tasks = _add_job(state, job)
     task = tasks[0]
 
-    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(task, WorkerId("w1"))
     state.assign_task_to_worker(WorkerId("w1"), task.task_id)
 
     # Task fails with no retries (default max_retries_failure=0)
     result, _ = state.transition_task(
         task.task_id,
         cluster_pb2.TASK_STATE_FAILED,
-        now_ms + 1000,
         error="Task failed",
     )
 
@@ -729,7 +721,6 @@ def test_task_failure_updates_job_state(job_request, worker_metadata):
 def test_task_failure_with_retry(job_request, worker_metadata):
     """Task failure with retries available requeues task."""
     state = ControllerState()
-    now_ms = int(time.time() * 1000)
 
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
@@ -746,14 +737,13 @@ def test_task_failure_with_retry(job_request, worker_metadata):
     task = tasks[0]
 
     task.max_retries_failure = 1  # Allow one retry
-    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(task, WorkerId("w1"))
     state.assign_task_to_worker(WorkerId("w1"), task.task_id)
 
     # First failure - should retry
     result, _ = state.transition_task(
         task.task_id,
         cluster_pb2.TASK_STATE_FAILED,
-        now_ms + 1000,
     )
 
     assert result == TaskTransitionResult.SHOULD_RETRY
@@ -781,7 +771,6 @@ def test_task_failure_with_retry(job_request, worker_metadata):
 def test_terminal_states_clean_up_endpoints(job_request, terminal_state):
     """All terminal states clean up task endpoints."""
     state = ControllerState()
-    now_ms = int(time.time() * 1000)
 
     job = ControllerJob(
         job_id=JobId("j1"),
@@ -790,7 +779,7 @@ def test_terminal_states_clean_up_endpoints(job_request, terminal_state):
     tasks = _add_job(state, job)
     task = tasks[0]
 
-    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(task, WorkerId("w1"))
 
     ep = ControllerEndpoint(
         endpoint_id="ep1",
@@ -808,7 +797,6 @@ def test_terminal_states_clean_up_endpoints(job_request, terminal_state):
     state.transition_task(
         task.task_id,
         terminal_state,
-        now_ms=now_ms + 1000,
         is_worker_failure=(terminal_state == cluster_pb2.TASK_STATE_WORKER_FAILED),
         error="terminated",
     )
@@ -819,7 +807,6 @@ def test_terminal_states_clean_up_endpoints(job_request, terminal_state):
 def test_worker_timeout_task_cleanup(job_request, worker_metadata):
     """Worker timeout triggers proper task cleanup including endpoints."""
     state = ControllerState()
-    now_ms = int(time.time() * 1000)
 
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
@@ -837,7 +824,7 @@ def test_worker_timeout_task_cleanup(job_request, worker_metadata):
     task = tasks[0]
 
     task.max_retries_preemption = 0  # No preemption retries
-    state.mark_task_dispatched(task, WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(task, WorkerId("w1"))
     state.assign_task_to_worker(WorkerId("w1"), task.task_id)
 
     ep = ControllerEndpoint(
@@ -852,7 +839,6 @@ def test_worker_timeout_task_cleanup(job_request, worker_metadata):
     result, removed = state.transition_task(
         task.task_id,
         cluster_pb2.TASK_STATE_WORKER_FAILED,
-        now_ms=60000,
         is_worker_failure=True,
         error="Worker timed out",
     )
@@ -871,7 +857,6 @@ def test_worker_timeout_task_cleanup(job_request, worker_metadata):
 def test_failure_domain_kills_remaining_tasks_on_task_failure(worker_metadata):
     """When one task fails beyond retries, remaining tasks should be killed."""
     state = ControllerState()
-    now_ms = int(time.time() * 1000)
 
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
@@ -894,16 +879,15 @@ def test_failure_domain_kills_remaining_tasks_on_task_failure(worker_metadata):
     assert len(tasks) == 3
 
     # Dispatch task-0 and task-1 to workers, leave task-2 pending
-    state.mark_task_dispatched(tasks[0], WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(tasks[0], WorkerId("w1"))
     state.assign_task_to_worker(WorkerId("w1"), tasks[0].task_id)
-    state.mark_task_dispatched(tasks[1], WorkerId("w1"), now_ms + 1)
+    state.mark_task_dispatched(tasks[1], WorkerId("w1"))
     state.assign_task_to_worker(WorkerId("w1"), tasks[1].task_id)
 
     # Task-0 fails (no retries since max_retries_failure=0)
     result, _ = state.transition_task(
         tasks[0].task_id,
         cluster_pb2.TASK_STATE_FAILED,
-        now_ms + 2000,
         error="Task failed",
     )
 
@@ -931,7 +915,6 @@ def test_failure_domain_kills_remaining_tasks_on_task_failure(worker_metadata):
 def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
     """Job with max_task_failures=1 tolerates one failure before failing."""
     state = ControllerState()
-    now_ms = int(time.time() * 1000)
 
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
@@ -952,15 +935,14 @@ def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
     tasks = state.add_job(job)
 
     # Dispatch all tasks
-    for i, task in enumerate(tasks):
-        state.mark_task_dispatched(task, WorkerId("w1"), now_ms + i)
+    for task in tasks:
+        state.mark_task_dispatched(task, WorkerId("w1"))
         state.assign_task_to_worker(WorkerId("w1"), task.task_id)
 
     # Task-0 fails - job should still be running (1 failure <= 1 allowed)
     result, _ = state.transition_task(
         tasks[0].task_id,
         cluster_pb2.TASK_STATE_FAILED,
-        now_ms + 1000,
         error="First failure",
     )
 
@@ -973,7 +955,6 @@ def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
     result, _ = state.transition_task(
         tasks[1].task_id,
         cluster_pb2.TASK_STATE_SUCCEEDED,
-        now_ms + 2000,
     )
 
     assert tasks[1].state == cluster_pb2.TASK_STATE_SUCCEEDED
@@ -983,7 +964,6 @@ def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
     result, _ = state.transition_task(
         tasks[2].task_id,
         cluster_pb2.TASK_STATE_FAILED,
-        now_ms + 3000,
         error="Second failure",
     )
 
@@ -995,7 +975,6 @@ def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
 def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
     """Preemptions (worker failures) don't count toward max_task_failures threshold."""
     state = ControllerState()
-    now_ms = int(time.time() * 1000)
 
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
@@ -1017,14 +996,13 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
 
     # Dispatch task-0
     tasks[0].max_retries_preemption = 1  # Allow one preemption retry
-    state.mark_task_dispatched(tasks[0], WorkerId("w1"), now_ms)
+    state.mark_task_dispatched(tasks[0], WorkerId("w1"))
     state.assign_task_to_worker(WorkerId("w1"), tasks[0].task_id)
 
     # Task-0 is preempted (worker failure) - should NOT count toward max_task_failures
     result, _ = state.transition_task(
         tasks[0].task_id,
         cluster_pb2.TASK_STATE_WORKER_FAILED,
-        now_ms + 1000,
         is_worker_failure=True,
         error="Worker died",
     )
@@ -1042,7 +1020,6 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
 def test_all_tasks_succeed_job_succeeds(worker_metadata):
     """When all tasks succeed, job transitions to SUCCEEDED."""
     state = ControllerState()
-    now_ms = int(time.time() * 1000)
 
     worker = ControllerWorker(
         worker_id=WorkerId("w1"),
@@ -1062,14 +1039,13 @@ def test_all_tasks_succeed_job_succeeds(worker_metadata):
     tasks = state.add_job(job)
 
     # Dispatch and complete all tasks
-    for i, task in enumerate(tasks):
-        state.mark_task_dispatched(task, WorkerId("w1"), now_ms + i)
+    for task in tasks:
+        state.mark_task_dispatched(task, WorkerId("w1"))
         state.assign_task_to_worker(WorkerId("w1"), task.task_id)
 
         result, _ = state.transition_task(
             task.task_id,
             cluster_pb2.TASK_STATE_SUCCEEDED,
-            now_ms + 1000 + i * 100,
         )
         assert result == TaskTransitionResult.COMPLETE
 

@@ -27,6 +27,7 @@ from iris.cluster.controller.state import (
     get_gpu_count,
 )
 from iris.cluster.types import WorkerId
+from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,6 @@ class Scheduler:
         self,
         pending_tasks: list[ControllerTask],
         workers: list[ControllerWorker],
-        now_ms: int,
     ) -> SchedulingTransaction:
         """Match pending tasks to available workers one at a time.
 
@@ -134,7 +134,6 @@ class Scheduler:
         Args:
             pending_tasks: Tasks waiting to be scheduled (in FIFO order)
             workers: Available workers (only healthy ones should be passed)
-            now_ms: Current timestamp in milliseconds
 
         Returns:
             SchedulingTransaction with assignments and timed-out tasks
@@ -147,7 +146,7 @@ class Scheduler:
             if not job:
                 continue
 
-            if self._is_task_timed_out(task, job, now_ms):
+            if self._is_task_timed_out(task, job):
                 transaction.timed_out_tasks.append(task)
                 self._state.log_action(
                     "task_timeout",
@@ -186,12 +185,12 @@ class Scheduler:
             )
         return transaction
 
-    def _is_task_timed_out(self, task: ControllerTask, job: ControllerJob, now_ms: int) -> bool:
+    def _is_task_timed_out(self, task: ControllerTask, job: ControllerJob) -> bool:
         """Check if a task has exceeded its scheduling timeout."""
         timeout_seconds = job.request.scheduling_timeout_seconds
         if timeout_seconds <= 0:
             return False
 
-        pending_duration_ms = now_ms - task.submitted_at_ms
+        pending_duration_ms = now_ms() - task.submitted_at_ms
         timeout_ms = timeout_seconds * 1000
         return pending_duration_ms > timeout_ms

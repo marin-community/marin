@@ -20,7 +20,6 @@ aggregated from task states.
 """
 
 import logging
-import time
 import uuid
 from pathlib import Path
 from typing import Any, Protocol
@@ -32,6 +31,7 @@ from iris.cluster.controller.state import ControllerEndpoint, ControllerState, C
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
+from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ class ControllerServiceImpl:
             job = ControllerJob(
                 job_id=JobId(job_id),
                 request=request,
-                submitted_at_ms=int(time.time() * 1000),
+                submitted_at_ms=now_ms(),
                 parent_job_id=parent_job_id,
             )
 
@@ -213,22 +213,17 @@ class ControllerServiceImpl:
         if job.is_finished():
             return
 
-        now_ms = int(time.time() * 1000)
-
         # Kill all tasks for this job
         for task in self._state.get_job_tasks(job.job_id):
             if not task.is_finished():
                 self._state.transition_task(
                     task.task_id,
                     cluster_pb2.TASK_STATE_KILLED,
-                    now_ms,
                     error="Terminated by user",
                 )
 
         # Mark job as killed
-        job.state = cluster_pb2.JOB_STATE_KILLED
-        job.finished_at_ms = now_ms
-        job.error = "Terminated by user"
+        job.transition(cluster_pb2.JOB_STATE_KILLED, error="Terminated by user")
 
         self._state.log_action("job_killed", job_id=job.job_id)
 
@@ -362,14 +357,12 @@ class ControllerServiceImpl:
             )
             return cluster_pb2.Controller.ReportTaskStateResponse()
 
-        now_ms = int(time.time() * 1000)
         new_state = request.state
         is_worker_failure = new_state == cluster_pb2.TASK_STATE_WORKER_FAILED
 
         self._state.transition_task(
             task_id,
             new_state,
-            now_ms,
             is_worker_failure=is_worker_failure,
             error=request.error if request.error else None,
             exit_code=request.exit_code if request.exit_code else None,
@@ -391,13 +384,13 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.RegisterWorkerResponse:
         """Register a new worker or process a heartbeat from an existing worker."""
-        now_ms = int(time.time() * 1000)
+        ts = now_ms()
         worker_id = WorkerId(request.worker_id)
 
         # Try heartbeat update first (worker already exists)
         if self._state.update_worker_heartbeat(
             worker_id,
-            now_ms,
+            ts,
             metadata=request.metadata,
         ):
             return cluster_pb2.Controller.RegisterWorkerResponse(accepted=True)
@@ -407,7 +400,7 @@ class ControllerServiceImpl:
             worker_id=worker_id,
             address=request.address,
             metadata=request.metadata,
-            last_heartbeat_ms=now_ms,
+            last_heartbeat_ms=ts,
         )
         self._state.add_worker(worker)
         self._state.log_action(
@@ -462,7 +455,7 @@ class ControllerServiceImpl:
                 address=request.address,
                 job_id=JobId(request.job_id),
                 metadata=dict(request.metadata),
-                registered_at_ms=int(time.time() * 1000),
+                registered_at_ms=now_ms(),
             )
 
             self._state.add_endpoint(endpoint)

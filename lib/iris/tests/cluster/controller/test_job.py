@@ -50,13 +50,13 @@ def make_job_request():
 def test_job_terminal_transitions(make_job_request, target_state, exit_code, error):
     """Job transitions to terminal states (SUCCEEDED, KILLED, UNSCHEDULABLE) with appropriate metadata."""
     job = ControllerJob(job_id=JobId("test"), request=make_job_request())
-    job.mark_dispatched(now_ms=1000)
+    job.mark_dispatched()
 
-    result = job.transition(target_state, now_ms=2000, exit_code=exit_code, error=error)
+    result = job.transition(target_state, exit_code=exit_code, error=error)
 
     assert result == JobTransitionResult.COMPLETE
     assert job.state == target_state
-    assert job.finished_at_ms == 2000
+    assert job.finished_at_ms > 0
     assert job.is_finished()
 
     if exit_code is not None:
@@ -71,7 +71,7 @@ def test_unschedulable_includes_timeout_in_error(make_job_request):
     request.scheduling_timeout_seconds = 300
     job = ControllerJob(job_id=JobId("test"), request=request)
 
-    result = job.transition(cluster_pb2.JOB_STATE_UNSCHEDULABLE, now_ms=2000)
+    result = job.transition(cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
     assert result == JobTransitionResult.COMPLETE
     assert job.state == cluster_pb2.JOB_STATE_UNSCHEDULABLE
@@ -84,10 +84,10 @@ def test_job_dispatch_and_revert(make_job_request):
     job = ControllerJob(job_id=JobId("test"), request=make_job_request())
     assert job.state == cluster_pb2.JOB_STATE_PENDING
 
-    job.mark_dispatched(now_ms=1000)
+    job.mark_dispatched()
 
     assert job.state == cluster_pb2.JOB_STATE_RUNNING
-    assert job.started_at_ms == 1000
+    assert job.started_at_ms > 0
 
     job.revert_dispatch()
 
@@ -105,11 +105,10 @@ def test_failure_with_retries_available(make_job_request):
         request=make_job_request(),
         max_retries_failure=2,
     )
-    job.mark_dispatched(now_ms=1000)
+    job.mark_dispatched()
 
     result = job.transition(
         cluster_pb2.JOB_STATE_FAILED,
-        now_ms=2000,
         error="oops",
     )
 
@@ -128,23 +127,23 @@ def test_failure_exceeds_retry_limit(make_job_request):
         request=make_job_request(),
         max_retries_failure=1,
     )
-    job.mark_dispatched(now_ms=1000)
+    job.mark_dispatched()
 
     # First failure - retry
-    result = job.transition(cluster_pb2.JOB_STATE_FAILED, now_ms=2000)
+    result = job.transition(cluster_pb2.JOB_STATE_FAILED)
     assert result == JobTransitionResult.SHOULD_RETRY
     assert job.failure_count == 1
 
     # Dispatch again
-    job.mark_dispatched(now_ms=3000)
+    job.mark_dispatched()
 
     # Second failure - no more retries
-    result = job.transition(cluster_pb2.JOB_STATE_FAILED, now_ms=4000, error="final error")
+    result = job.transition(cluster_pb2.JOB_STATE_FAILED, error="final error")
     assert result == JobTransitionResult.EXCEEDED_RETRY_LIMIT
     assert job.state == cluster_pb2.JOB_STATE_FAILED
     assert job.failure_count == 2
     assert job.error == "final error"
-    assert job.finished_at_ms == 4000
+    assert job.finished_at_ms > 0
     assert job.is_finished()
 
 
@@ -155,12 +154,11 @@ def test_worker_failure_uses_separate_retry_counter(make_job_request):
         request=make_job_request(),
         max_retries_preemption=1,
     )
-    job.mark_dispatched(now_ms=1000)
+    job.mark_dispatched()
 
     # First preemption - retry
     result = job.transition(
-        cluster_pb2.JOB_STATE_WORKER_FAILED,
-        now_ms=2000,
+        cluster_pb2.JOB_STATE_FAILED,
         is_worker_failure=True,
     )
     assert result == JobTransitionResult.SHOULD_RETRY
@@ -168,16 +166,15 @@ def test_worker_failure_uses_separate_retry_counter(make_job_request):
     assert job.failure_count == 0
 
     # Dispatch again
-    job.mark_dispatched(now_ms=3000)
+    job.mark_dispatched()
 
     # Second preemption - no more retries
     result = job.transition(
-        cluster_pb2.JOB_STATE_WORKER_FAILED,
-        now_ms=4000,
+        cluster_pb2.JOB_STATE_FAILED,
         is_worker_failure=True,
     )
     assert result == JobTransitionResult.EXCEEDED_RETRY_LIMIT
-    assert job.state == cluster_pb2.JOB_STATE_WORKER_FAILED
+    assert job.state == cluster_pb2.JOB_STATE_FAILED
     assert job.preemption_count == 2
 
 
@@ -206,18 +203,18 @@ def test_retry_count_limits(make_job_request, failure_type, max_retries, expecte
             request=make_job_request(),
             max_retries_preemption=max_retries,
         )
-        state = cluster_pb2.JOB_STATE_WORKER_FAILED
+        state = cluster_pb2.JOB_STATE_FAILED
         is_worker_failure = True
 
     # Attempt up to the limit
-    for attempt in range(max_retries):
-        job.mark_dispatched(now_ms=attempt * 1000)
-        result = job.transition(state, now_ms=attempt * 1000 + 500, is_worker_failure=is_worker_failure)
+    for _ in range(max_retries):
+        job.mark_dispatched()
+        result = job.transition(state, is_worker_failure=is_worker_failure)
         assert result == JobTransitionResult.SHOULD_RETRY
 
     # Final attempt should fail
-    job.mark_dispatched(now_ms=max_retries * 1000)
-    result = job.transition(state, now_ms=max_retries * 1000 + 500, is_worker_failure=is_worker_failure)
+    job.mark_dispatched()
+    result = job.transition(state, is_worker_failure=is_worker_failure)
     assert result == JobTransitionResult.EXCEEDED_RETRY_LIMIT
     assert job.is_finished()
     # expected_attempts = max_retries + 1 (original attempt + retries)
@@ -250,7 +247,7 @@ def test_gang_all_or_nothing_retry(make_job_request):
     job2.state = cluster_pb2.JOB_STATE_RUNNING
 
     # Gang fails - j2 has 0 retries, so entire gang cannot retry
-    retried = handle_gang_failure([job1, job2], now_ms=1000, is_worker_failure=False, error="Gang g1 failed")
+    retried = handle_gang_failure([job1, job2], is_worker_failure=False, error="Gang g1 failed")
     assert retried == []
 
     # Both jobs should be marked KILLED
@@ -282,7 +279,7 @@ def test_gang_retry_success(make_job_request):
     job2.state = cluster_pb2.JOB_STATE_RUNNING
 
     # Gang fails due to worker failure - both have retries left
-    retried = handle_gang_failure([job1, job2], now_ms=1000, is_worker_failure=True, error="Worker died")
+    retried = handle_gang_failure([job1, job2], is_worker_failure=True, error="Worker died")
 
     assert len(retried) == 2
     assert job1 in retried
@@ -328,7 +325,7 @@ def test_gang_only_running_jobs_killed(make_job_request):
     job3.state = cluster_pb2.JOB_STATE_RUNNING
 
     # Gang fails - no retries available
-    retried = handle_gang_failure([job1, job2, job3], now_ms=1000, is_worker_failure=False, error="Gang failed")
+    retried = handle_gang_failure([job1, job2, job3], is_worker_failure=False, error="Gang failed")
     assert retried == []
 
     # Only running jobs should be marked KILLED
@@ -360,7 +357,7 @@ def test_gang_tracks_correct_failure_type(make_job_request):
     # After a worker failure, preemption retry budget should be consumed
     assert job1.can_retry_preemption()
     assert job2.can_retry_preemption()
-    retried = handle_gang_failure([job1, job2], now_ms=1000, is_worker_failure=True, error="Worker died")
+    retried = handle_gang_failure([job1, job2], is_worker_failure=True, error="Worker died")
     assert len(retried) == 2
 
     # Failure retry budget should be untouched
@@ -372,7 +369,7 @@ def test_gang_tracks_correct_failure_type(make_job_request):
     job2.state = cluster_pb2.JOB_STATE_RUNNING
 
     # After a job failure, failure retry budget should be consumed
-    retried = handle_gang_failure([job1, job2], now_ms=2000, is_worker_failure=False, error="Job crashed")
+    retried = handle_gang_failure([job1, job2], is_worker_failure=False, error="Job crashed")
     assert len(retried) == 2
 
     # Still have one more retry in each budget
@@ -392,11 +389,11 @@ def test_job_compute_job_state_all_succeeded(make_job_request):
     job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 2
 
     # First task succeeds - job should stay pending
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_SUCCEEDED, now_ms=1000)
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_SUCCEEDED)
     assert new_state is None
 
     # Second task succeeds - job should become SUCCEEDED
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_SUCCEEDED, now_ms=2000)
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_SUCCEEDED)
     assert new_state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -412,7 +409,7 @@ def test_job_compute_job_state_failed(make_job_request):
     job.state = cluster_pb2.JOB_STATE_RUNNING
 
     # First task fails - should trigger job failure (0 allowed, 1 failed)
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED, now_ms=1000)
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED)
     assert new_state == cluster_pb2.JOB_STATE_FAILED
 
 
@@ -428,11 +425,11 @@ def test_job_compute_job_state_tolerates_failures(make_job_request):
     job.state = cluster_pb2.JOB_STATE_RUNNING
 
     # First task fails - job stays running (1 allowed, 1 failed)
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED, now_ms=1000)
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED)
     assert new_state is None  # No state change
 
     # Second task fails - job should fail (1 allowed, 2 failed)
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED, now_ms=2000)
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED)
     assert new_state == cluster_pb2.JOB_STATE_FAILED
 
 
@@ -445,18 +442,18 @@ def test_job_finished_task_count(make_job_request):
     job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 5
 
     # Move 2 tasks through running to succeeded
-    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1000)
-    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1001)
-    job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_SUCCEEDED, now_ms=2000)
-    job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_SUCCEEDED, now_ms=2001)
+    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING)
+    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING)
+    job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_SUCCEEDED)
+    job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_SUCCEEDED)
 
     # Move 1 task through running to failed
-    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1002)
-    job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED, now_ms=2002)
+    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING)
+    job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED)
 
     # Keep 2 tasks running
-    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1003)
-    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1004)
+    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING)
+    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING)
 
     assert job.finished_task_count == 3  # 2 succeeded + 1 failed
 
@@ -468,10 +465,10 @@ def test_job_on_task_transition_sets_running_on_first_dispatch(make_job_request)
     job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 2
 
     # First task starts running
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1000)
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING)
 
     assert new_state == cluster_pb2.JOB_STATE_RUNNING
-    assert job.started_at_ms == 1000
+    assert job.started_at_ms > 0
 
 
 # --- Job Expansion ---
@@ -483,7 +480,7 @@ def test_job_expands_to_correct_number_of_tasks(make_job_request):
     request.resources.replicas = 3
     job = ControllerJob(job_id=JobId("test-job"), request=request)
 
-    tasks = expand_job_to_tasks(job, now_ms=1000)
+    tasks = expand_job_to_tasks(job)
 
     assert len(tasks) == 3
     for i, task in enumerate(tasks):
@@ -500,7 +497,7 @@ def test_job_expands_single_replica_by_default(make_job_request):
     # replicas defaults to 0 in proto, which should be treated as 1
     job = ControllerJob(job_id=JobId("test-job"), request=request)
 
-    tasks = expand_job_to_tasks(job, now_ms=1000)
+    tasks = expand_job_to_tasks(job)
 
     assert len(tasks) == 1
     assert tasks[0].task_index == 0
@@ -513,7 +510,7 @@ def test_job_becomes_unschedulable_when_task_unschedulable(make_job_request):
     job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 3
 
     # One task becomes unschedulable
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_UNSCHEDULABLE, now_ms=1000)
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_UNSCHEDULABLE)
 
     assert new_state == cluster_pb2.JOB_STATE_UNSCHEDULABLE
 
@@ -526,7 +523,7 @@ def test_job_becomes_killed_when_task_killed(make_job_request):
     job.state = cluster_pb2.JOB_STATE_RUNNING
 
     # One task is killed
-    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_KILLED, now_ms=1000)
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_KILLED)
 
     assert new_state == cluster_pb2.JOB_STATE_KILLED
 
@@ -553,7 +550,7 @@ def test_gang_failure_respects_minimum_retry_budget(make_job_request):
     assert job1.can_retry_failure()
     assert not job2.can_retry_failure()
 
-    retried = handle_gang_failure([job1, job2], now_ms=1000, is_worker_failure=False, error="Gang failed")
+    retried = handle_gang_failure([job1, job2], is_worker_failure=False, error="Gang failed")
 
     # No jobs should be retried
     assert retried == []
@@ -576,19 +573,19 @@ def test_job_total_attempts_reflects_retry_history(make_job_request):
     assert job.total_attempts == 0
 
     # After a failure retry
-    job.mark_dispatched(now_ms=1000)
-    result = job.transition(cluster_pb2.JOB_STATE_FAILED, now_ms=2000)
+    job.mark_dispatched()
+    result = job.transition(cluster_pb2.JOB_STATE_FAILED)
     assert result == JobTransitionResult.SHOULD_RETRY
     assert job.total_attempts == 1  # 1 failure
 
     # After a preemption retry
-    job.mark_dispatched(now_ms=3000)
-    result = job.transition(cluster_pb2.JOB_STATE_WORKER_FAILED, now_ms=4000, is_worker_failure=True)
+    job.mark_dispatched()
+    result = job.transition(cluster_pb2.JOB_STATE_FAILED, is_worker_failure=True)
     assert result == JobTransitionResult.SHOULD_RETRY
     assert job.total_attempts == 2  # 1 failure + 1 preemption
 
     # After another failure
-    job.mark_dispatched(now_ms=5000)
-    result = job.transition(cluster_pb2.JOB_STATE_FAILED, now_ms=6000)
+    job.mark_dispatched()
+    result = job.transition(cluster_pb2.JOB_STATE_FAILED)
     assert result == JobTransitionResult.SHOULD_RETRY
     assert job.total_attempts == 3  # 2 failures + 1 preemption

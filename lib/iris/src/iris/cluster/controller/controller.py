@@ -26,7 +26,7 @@ import uvicorn
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.scheduler import Scheduler, SchedulingTransaction
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.state import ControllerState, ControllerWorker, ControllerTask
+from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import ExponentialBackoff
@@ -142,23 +142,10 @@ class Controller:
         self._config = config
         self._stub_factory = worker_stub_factory
 
-        # Initialize state first
         self._state = ControllerState()
-
-        # Scheduler: shallow interface, no threads, no callbacks
         self._scheduler = Scheduler(self._state)
-
-        # Service and dashboard
-        self._service = ControllerServiceImpl(
-            self._state,
-            self,  # Controller implements the scheduling wake interface
-            bundle_dir=config.bundle_dir,
-        )
-        self._dashboard = ControllerDashboard(
-            self._service,
-            host=config.host,
-            port=config.port,
-        )
+        self._service = ControllerServiceImpl(self._state, self, bundle_dir=config.bundle_dir)
+        self._dashboard = ControllerDashboard(self._service, host=config.host, port=config.port)
 
         # Background loop state
         self._stop = False
@@ -226,30 +213,28 @@ class Controller:
 
     def _run_scheduling(self) -> None:
         """Run one scheduling cycle."""
-        now_ms = int(time.time() * 1000)
         pending_tasks = self._state.peek_pending_tasks()
         workers = self._state.get_available_workers()
 
         if not pending_tasks:
             return
 
-        result = self._scheduler.find_assignments(pending_tasks, workers, now_ms)
-        self._apply_schedule_result(result, now_ms)
+        result = self._scheduler.find_assignments(pending_tasks, workers)
+        self._apply_schedule_result(result)
 
-    def _apply_schedule_result(self, transaction: SchedulingTransaction, now_ms: int) -> None:
+    def _apply_schedule_result(self, transaction: SchedulingTransaction) -> None:
         """Apply scheduling results: dispatch tasks and handle timeouts."""
         for task in transaction.timed_out_tasks:
-            self._mark_task_unschedulable(task, now_ms)
+            self._mark_task_unschedulable(task)
 
         for task, worker in transaction.assignments:
-            self._dispatch_task(transaction, task, worker, now_ms)
+            self._dispatch_task(transaction, task, worker)
 
     def _dispatch_task(
         self,
         transaction: SchedulingTransaction,
         task: ControllerTask,
         worker: ControllerWorker,
-        now_ms: int,
     ) -> None:
         """Dispatch a task to a worker via RPC.
 
@@ -261,7 +246,7 @@ class Controller:
             return
 
         # Mark task as dispatched and update job state counts
-        self._state.mark_task_dispatched(task, worker.worker_id, now_ms)
+        self._state.mark_task_dispatched(task, worker.worker_id)
 
         try:
             stub = self._stub_factory.get_stub(worker.address)
@@ -305,7 +290,7 @@ class Controller:
                 details=f"task={task.task_id}",
             )
 
-    def _mark_task_unschedulable(self, task: ControllerTask, now_ms: int) -> None:
+    def _mark_task_unschedulable(self, task: ControllerTask) -> None:
         """Mark a task as unschedulable due to timeout."""
         job = self._state.get_job(task.job_id)
         timeout_seconds = job.request.scheduling_timeout_seconds if job else 0
@@ -313,7 +298,6 @@ class Controller:
         self._state.transition_task(
             task.task_id,
             cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-            now_ms,
             error=f"Scheduling timeout exceeded ({timeout_seconds}s)",
         )
         self._state.log_action(
@@ -324,11 +308,11 @@ class Controller:
 
     def _check_worker_timeouts(self) -> None:
         """Mark workers as unhealthy if they haven't sent heartbeat within worker_timeout_seconds."""
-        now_ms = int(time.time() * 1000)
+        current_time_ms = int(time.time() * 1000)
         timeout_ms = int(self._config.worker_timeout_seconds * 1000)
 
         for worker in self._state.list_all_workers():
-            if worker.healthy and (now_ms - worker.last_heartbeat_ms) > timeout_ms:
+            if worker.healthy and (current_time_ms - worker.last_heartbeat_ms) > timeout_ms:
                 self._state.mark_worker_unhealthy(worker.worker_id)
                 logger.warning(
                     f"Worker {worker.worker_id} timed out (no heartbeat for {self._config.worker_timeout_seconds}s)"
@@ -344,7 +328,6 @@ class Controller:
                     self._state.transition_task(
                         task_id,
                         cluster_pb2.TASK_STATE_WORKER_FAILED,
-                        now_ms,
                         is_worker_failure=True,
                         error=f"Worker {worker.worker_id} timed out",
                     )
@@ -361,8 +344,6 @@ class Controller:
             self._server.run()
         except Exception as e:
             print(f"Controller server error: {e}")
-
-    # Delegate key service methods
 
     def launch_job(
         self,
