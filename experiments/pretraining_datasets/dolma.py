@@ -21,29 +21,31 @@ logic for all 15 splits.
 
 import os.path
 
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, this_output_path, versioned, InputName
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
+from marin.execution import StepRef, deferred, output, step, versioned
+from marin.processing.tokenize import TokenizeConfig
+from marin.processing.tokenize import tokenize as _tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
+tokenize = deferred(_tokenize)
+
 # Raw dataset download step
-downloads = {
-    "dolma": ExecutorStep(
-        name="raw/dolma",
-        fn=download_hf,
-        config=DownloadConfig(
-            hf_dataset_id="allenai/dolma",
-            revision="7f48140",
-            gcs_output_path=this_output_path(),
-            wait_for_completion=True,
-        ),
-        override_output_path="raw/dolma",
-    )
-}
+@step(name="raw/dolma", override_output_path="raw/dolma")
+def dolma_download():
+    return download_hf(DownloadConfig(
+        hf_dataset_id="allenai/dolma",
+        revision="7f48140",
+        gcs_output_path=output(),
+        wait_for_completion=True,
+    ))
+
 
 
 # For dolma 1.7, we hardcode the path since it was added before versioning
-_DOLMA_V1_7_PATH = InputName.hardcoded("raw/dolma/v1.7")
+_DOLMA_V1_7_PATH = "raw/dolma/v1.7"
 
 
 # Sampling proportion comes from https://huggingface.co/datasets/allenai/dolma
@@ -109,6 +111,17 @@ DOLMA_LLAMA3_OVERRIDES = {
 }
 
 
+@step(name="tokenized/dolma/{dataset}")
+def _tokenize_dolma_split(dataset: str, file_list: list[str], tok: str) -> StepRef:
+    """Tokenize a single Dolma split."""
+    return tokenize(TokenizeConfig(
+        train_paths=[_DOLMA_V1_7_PATH + "/" + file for file in file_list],
+        validation_paths=versioned([]),
+        cache_path=output(),
+        tokenizer=versioned(tok),
+    ))
+
+
 def tokenize_dolma(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Dolma 1.7 dataset splits."""
     from experiments.llama import llama3_tokenizer
@@ -116,22 +129,13 @@ def tokenize_dolma(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
     if tokenizer is None:
         tokenizer = llama3_tokenizer
 
-    dolma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
+    dolma_steps: dict[str, StepRef] = {}
     for dataset, files in DOLMA_DATASETS.items():
-        step = ExecutorStep(
-            name=os.path.join("tokenized", "dolma", dataset),
-            fn=tokenize,
-            config=TokenizeConfig(
-                train_paths=[_DOLMA_V1_7_PATH / file for file in files],
-                validation_paths=versioned([]),
-                cache_path=this_output_path(),
-                tokenizer=versioned(tokenizer),
-            ),
-        )
+        result = _tokenize_dolma_split(dataset=dataset, file_list=files, tok=tokenizer)
 
         # Check if we need to use override path for llama3
         if tokenizer == llama3_tokenizer and dataset in DOLMA_LLAMA3_OVERRIDES:
-            step = step.with_output_path(DOLMA_LLAMA3_OVERRIDES[dataset])
-        dolma_steps[os.path.join("dolma", dataset)] = step
+            result = result.with_output_path(DOLMA_LLAMA3_OVERRIDES[dataset])
+        dolma_steps[os.path.join("dolma", dataset)] = result
 
     return dolma_steps

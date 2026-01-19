@@ -34,7 +34,7 @@ from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_com
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main, output_path_of
+from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 # ------------------------------------------------------------------------------------
@@ -136,7 +136,7 @@ sft_config = SimpleSFTConfig(
     learning_rate=SFT_LEARNING_RATE,
     weight_decay=WEIGHT_DECAY,
     tokenizer=TOKENIZER_NAME,
-    model_name_or_path=output_path_of(nanochat_pre_mid_step, "hf/step-24999/"),
+    model_name_or_path=nanochat_pre_mid_step / "hf/step-24999/",
     steps_per_eval=100,
     steps_per_checkpoint=200,
     steps_per_hf_export=200,

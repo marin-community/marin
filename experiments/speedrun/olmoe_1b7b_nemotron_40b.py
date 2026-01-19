@@ -29,10 +29,12 @@ from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
 from levanter.infra.cli_helpers import load_config
-from marin.execution.executor import ExecutorStep, InputName, executor_main, output_path_of
+from marin.execution import step, deferred, output, ExecutorStep, executor_main, StepRef
 from marin.processing.tokenize import lm_data_config, lm_mixture_data_config
-from marin.speedrun.speedrun import Author, SpeedrunConfig, SpeedrunResultsConfig, speedrun_results
+from marin.speedrun.speedrun import Author, SpeedrunConfig, SpeedrunResultsConfig, speedrun_results as _speedrun_results
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
+
+speedrun_results = deferred(_speedrun_results)
 
 logger = logging.getLogger("ray")
 
@@ -125,6 +127,24 @@ DATASET_OPTIONS = {
 DEFAULT_DATASET = "nemotron_cc"
 
 
+@step(name="speedrun/{name}-speedrun_results")
+def _results_step_impl(
+    name: str,
+    wandb_run_id: str | ExecutorStep,
+    wandb_entity: str,
+    wandb_project: str,
+    config: SpeedrunConfig,
+    train_step: ExecutorStep,
+) -> ExecutorStep:
+    return speedrun_results(SpeedrunResultsConfig(
+        wandb_run_id=wandb_run_id,
+        wandb_entity=wandb_entity,
+        wandb_project=wandb_project,
+        speedrun_config=config,
+        output_path=train_step / "speedrun_results.json",
+    ))
+
+
 def nemotron_only_speedrun(
     name: str,
     config: SpeedrunConfig,
@@ -142,7 +162,7 @@ def nemotron_only_speedrun(
     run_tags = ["speedrun"] + (tags or [])
     train_config = dataclasses.replace(config.train_config, data_seed=42)
 
-    if isinstance(config.tokenized_dataset, (InputName, ExecutorStep)):
+    if isinstance(config.tokenized_dataset, (StepRef, ExecutorStep)):
         pretraining_data = lm_data_config(
             training_set=config.tokenized_dataset,
             validation_sets=[],
@@ -203,20 +223,14 @@ def nemotron_only_speedrun(
     else:
         wandb_run_id = train_step  # resolved to the actual output path by the executor
 
-    results_step = ExecutorStep(
-        name=f"speedrun/{name}-speedrun_results",
-        description=f"compute and store metrics and stats for the speedrun {name}.",
-        fn=speedrun_results,
-        config=SpeedrunResultsConfig(
-            wandb_run_id=wandb_run_id,
-            wandb_entity=wandb_entity,
-            wandb_project=wandb_project,
-            speedrun_config=config,
-            output_path=output_path_of(train_step, "speedrun_results.json"),
-        ),
-    )
-
-    return [train_step, results_step]
+    return [train_step, _results_step_impl(
+        name=name,
+        wandb_run_id=wandb_run_id,
+        wandb_entity=wandb_entity,
+        wandb_project=wandb_project,
+        config=config,
+        train_step=train_step,
+    )]
 
 
 def make_speedrun_config(

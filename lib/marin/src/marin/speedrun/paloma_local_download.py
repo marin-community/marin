@@ -21,21 +21,26 @@ https://huggingface.co/datasets/allenai/paloma
 from experiments.paloma import paloma_tokenized
 from marin.download import HfDownloadConfig
 from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.execution import step, deferred, output
+from marin.execution.executor import ExecutorStep, executor_main, versioned
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
 
-paloma_speedrun = ExecutorStep(
-    name="raw/paloma-speedrun",
-    fn=download_hf,
-    config=HfDownloadConfig(
+download_hf_deferred = deferred(download_hf)
+
+
+@step(name="raw/paloma-speedrun")
+def paloma_speedrun():
+    return download_hf_deferred(HfDownloadConfig(
         hf_dataset_id=versioned("allenai/paloma"),
         revision=versioned("65cd6fc"),
-        gcs_output_path=this_output_path(),
+        gcs_output_path=output(),
         wait_for_completion=True,
         append_sha_to_path=True,
-    ),
-).cd("65cd6fc")
+    ))
+
+
+paloma_speedrun = paloma_speedrun().cd("65cd6fc")
 
 
 def speedrun_paloma_tokenized(tokenizer: str = llama3_tokenizer):

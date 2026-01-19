@@ -26,10 +26,10 @@ Usage:
 Example:
 ```
 from gemstones import gemstone_768x45
-from marin.execution.executor import executor_main, output_path_of
+from marin.execution.executor import executor_main
 
 executor_main([gemstone_768x45])
-model_path = output_path_of(gemstone_768x45)
+model_path = gemstone_768x45  # Use step directly or step / "subpath"
 ```
 """
 
@@ -44,12 +44,19 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter
 
 from experiments.defaults import default_tokenize, default_validation_sets
 from experiments.models import ModelConfig, download_model_step
+from experiments.steps import default_lm_log_probs
 from fray.cluster import ResourceConfig
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.evaluation.log_probs import default_lm_log_probs
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from marin.download.huggingface.download_hf import DownloadConfig
+from marin.download.huggingface.download_hf import download_hf as _download_hf
+from marin.execution.executor import executor_main, versioned
+from marin.execution import step, deferred, output
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
-from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
+from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions
+from marin.transform.huggingface.dataset_to_eval import hf_dataset_to_jsonl as _hf_dataset_to_jsonl
+
+# Mark library functions as deferred
+download_hf = deferred(_download_hf)
+hf_dataset_to_jsonl = deferred(_hf_dataset_to_jsonl)
 
 # Unfortunately, the international corpus of english is not publicly accessible and cannot be redistributed.
 # By default, this experiment runs without ICE since it cannot be shared more widely.
@@ -180,131 +187,124 @@ def get_all_revisions(repo_id):
 
 def distributional_eval_sets(tokenizer):
     eval_sets = default_validation_sets(tokenizer=versioned(tokenizer))
-    md3_raw = ExecutorStep(
-        name="raw/WillHeld/MD3",
-        fn=download_hf,
-        config=DownloadConfig(
+
+    @step(name="raw/WillHeld/MD3")
+    def md3_raw_step():
+        return download_hf(DownloadConfig(
             hf_dataset_id="WillHeld/MD3",
             revision=versioned("7c74e59"),
-            gcs_output_path=this_output_path(),
+            gcs_output_path=output(),
             wait_for_completion=True,
             hf_urls_glob=["**/*.parquet"],
-        ),
-        override_output_path="raw/WillHeld/MD3-Trunc",
-    ).cd("7c74e59/huggingface.co/datasets/WillHeld/MD3/resolve/7c74e59")
+        ))
+
+    md3_raw = md3_raw_step().with_output_path("raw/WillHeld/MD3-Trunc").cd("7c74e59/huggingface.co/datasets/WillHeld/MD3/resolve/7c74e59")
 
     tokenized_domains = {}
     for split in get_dataset_split_names("WillHeld/MD3"):
-        json = ExecutorStep(
-            name=f"hf_dataset_to_jsonl/md3/{split}",
-            fn=hf_dataset_to_jsonl,
-            config=DatasetConversionConfig(
+        @step(name=f"hf_dataset_to_jsonl/md3/{split}")
+        def json_step(md3_raw=md3_raw, split=split):
+            return hf_dataset_to_jsonl(DatasetConversionConfig(
                 dataset_name="WillHeld/MD3",
                 subsets=["*"],
                 splits=[split],
                 input_path=md3_raw,
                 hf_path="WillHeld/MD3",
-                output_path=this_output_path(),
+                output_path=output(),
                 output_format=OutputFormatOptions("decontamination"),
                 prompt_key="transcript",
-            ),
-        )
-        tokenized_json = default_tokenize(f"tokenized/md3-{split}", json, tokenizer, is_validation=True)
+            ))
+
+        tokenized_json = default_tokenize(f"tokenized/md3-{split}", json_step(), tokenizer, is_validation=True)
         tokenized_domains[f"md3/{split}"] = tokenized_json
 
     if CAN_ACCESS_ICE:
-        ice_raw = ExecutorStep(
-            name="raw/WillHeld/ICE",
-            fn=download_hf,
-            config=DownloadConfig(
+        @step(name="raw/WillHeld/ICE")
+        def ice_raw_step():
+            return download_hf(DownloadConfig(
                 hf_dataset_id="WillHeld/ICE_Cleaned",
                 revision=versioned("4c09dd9"),
-                gcs_output_path=this_output_path(),
+                gcs_output_path=output(),
                 wait_for_completion=True,
                 hf_urls_glob=["**/*.parquet"],
-            ),
-            override_output_path="raw/WillHeld/ICE_Cleaned",
-        ).cd("4c09dd9/huggingface.co/datasets/WillHeld/ICE_Cleaned/resolve/4c09dd9")
+            ))
+
+        ice_raw = ice_raw_step().with_output_path("raw/WillHeld/ICE_Cleaned").cd("4c09dd9/huggingface.co/datasets/WillHeld/ICE_Cleaned/resolve/4c09dd9")
 
         for split in get_dataset_split_names("WillHeld/ICE_Cleaned"):
-            json = ExecutorStep(
-                name=f"hf_dataset_to_jsonl/ICE/{split}",
-                fn=hf_dataset_to_jsonl,
-                config=DatasetConversionConfig(
+            @step(name=f"hf_dataset_to_jsonl/ICE/{split}")
+            def json_step(ice_raw=ice_raw, split=split):
+                return hf_dataset_to_jsonl(DatasetConversionConfig(
                     dataset_name="WillHeld/ICE_Cleaned",
                     subsets=["*"],
                     splits=[split],
                     input_path=ice_raw,
                     hf_path="WillHeld/ICE_Cleaned",
-                    output_path=this_output_path(),
+                    output_path=output(),
                     output_format=OutputFormatOptions("decontamination"),
                     prompt_key="text",
-                ),
-            )
-            tokenized_json = default_tokenize(f"tokenized/ICE-{split}", json, tokenizer, is_validation=True)
+                ))
+
+            tokenized_json = default_tokenize(f"tokenized/ICE-{split}", json_step(), tokenizer, is_validation=True)
             tokenized_domains[f"ICE/{split}"] = tokenized_json
 
-    subreddits_raw = ExecutorStep(
-        name="raw/WillHeld/paloma_subreddits",
-        fn=download_hf,
-        config=DownloadConfig(
+    @step(name="raw/WillHeld/paloma_subreddits")
+    def subreddits_raw_step():
+        return download_hf(DownloadConfig(
             hf_dataset_id="WillHeld/paloma_subreddits",
             revision=versioned("9561a2b"),
-            gcs_output_path=this_output_path(),
+            gcs_output_path=output(),
             wait_for_completion=True,
             hf_urls_glob=["**/*.parquet", "README.md"],
-        ),
-        override_output_path="raw/WillHeld/paloma_subreddits",
-    ).cd("9561a2b/huggingface.co/datasets/WillHeld/paloma_subreddits/resolve/9561a2b")
+        ))
+
+    subreddits_raw = subreddits_raw_step().with_output_path("raw/WillHeld/paloma_subreddits").cd("9561a2b/huggingface.co/datasets/WillHeld/paloma_subreddits/resolve/9561a2b")
 
     for subset in get_dataset_config_names("WillHeld/paloma_subreddits"):
-        json = ExecutorStep(
-            name=f"hf_dataset_to_jsonl/paloma_subreddits/{subset}",
-            fn=hf_dataset_to_jsonl,
-            config=DatasetConversionConfig(
+        @step(name=f"hf_dataset_to_jsonl/paloma_subreddits/{subset}")
+        def json_step(subreddits_raw=subreddits_raw, subset=subset):
+            return hf_dataset_to_jsonl(DatasetConversionConfig(
                 dataset_name="WillHeld/paloma_subreddits",
                 subsets=[subset],
                 splits=["train"],
                 input_path=subreddits_raw,
                 hf_path="WillHeld/paloma_subreddits",
-                output_path=this_output_path(),
+                output_path=output(),
                 output_format=OutputFormatOptions("decontamination"),
                 prompt_key="text",
-            ),
-        )
-        tokenized_json = default_tokenize(f"tokenized/paloma_subreddits-{subset}", json, tokenizer, is_validation=True)
+            ))
+
+        tokenized_json = default_tokenize(f"tokenized/paloma_subreddits-{subset}", json_step(), tokenizer, is_validation=True)
         tokenized_domains[f"paloma_subreddits/{subset}"] = tokenized_json
 
-    pls_raw = ExecutorStep(
-        name="raw/WillHeld/paloma_programming_languages",
-        fn=download_hf,
-        config=DownloadConfig(
+    @step(name="raw/WillHeld/paloma_programming_languages")
+    def pls_raw_step():
+        return download_hf(DownloadConfig(
             hf_dataset_id="WillHeld/paloma_programming_languages",
             revision=versioned("6c08b5f"),
-            gcs_output_path=this_output_path(),
+            gcs_output_path=output(),
             wait_for_completion=True,
             hf_urls_glob=["**/*.parquet", "README.md"],
-        ),
-        override_output_path="raw/WillHeld/paloma_programming_languages",
-    ).cd("6c08b5f/huggingface.co/datasets/WillHeld/paloma_programming_languages/resolve/6c08b5f")
+        ))
+
+    pls_raw = pls_raw_step().with_output_path("raw/WillHeld/paloma_programming_languages").cd("6c08b5f/huggingface.co/datasets/WillHeld/paloma_programming_languages/resolve/6c08b5f")
 
     for subset in get_dataset_config_names("WillHeld/paloma_programming_languages"):
-        json = ExecutorStep(
-            name=f"hf_dataset_to_jsonl/paloma_programming_languages/{subset}",
-            fn=hf_dataset_to_jsonl,
-            config=DatasetConversionConfig(
+        @step(name=f"hf_dataset_to_jsonl/paloma_programming_languages/{subset}")
+        def json_step(pls_raw=pls_raw, subset=subset):
+            return hf_dataset_to_jsonl(DatasetConversionConfig(
                 dataset_name="WillHeld/paloma_programming_languages",
                 subsets=[subset],
                 splits=["train"],
                 input_path=pls_raw,
                 hf_path="WillHeld/paloma_programming_languages",
-                output_path=this_output_path(),
+                output_path=output(),
                 output_format=OutputFormatOptions("decontamination"),
                 prompt_key="text",
-            ),
-        )
+            ))
+
         tokenized_json = default_tokenize(
-            f"tokenized/paloma_programming_languages-{subset}", json, tokenizer, is_validation=True
+            f"tokenized/paloma_programming_languages-{subset}", json_step(), tokenizer, is_validation=True
         )
         tokenized_domains[f"paloma_programming_languages/{subset}"] = tokenized_json
 
@@ -338,7 +338,10 @@ for model, revision in model_revision_pairs:
     gemstone_splits[config.variant][config] = gemstone_model
 
 
-if __name__ == "__main__":
+@step(name="gemstones/scaling_law_all")
+def run_gemstones_scaling_law():
+    """Entry point for Gemstones scaling law experiments."""
+    # Generate eval steps for cooldown models at 10% cooldown point
     for config in gemstone_splits["cooldown"]:
         if roughly_equals(config.step, int(config.cooldown_start_step + (0.1 * config.cooldown_start_step))):
             try:
@@ -349,8 +352,8 @@ if __name__ == "__main__":
                 )
                 gemstone_model = gemstone_splits["cooldown"][config]
 
-                eval_step = default_lm_log_probs(
-                    output_path_of(gemstone_model),
+                default_lm_log_probs(
+                    gemstone_model,
                     model_config,
                     evaluation_mixture,
                     checkpoint_is_hf=True,
@@ -360,13 +363,11 @@ if __name__ == "__main__":
                         f"M={model_config.model_type}",
                         "eval=domain-scaling-laws",
                     ],
-                )
-                executor_main(
-                    [eval_step],
-                    description="Compute logprobs for all Gemstone Model Checkpoints",
-                )
+                )  # Step traced on creation
             except ValueError as e:
                 print(f"Skipping {model}/{revision}: {e}")
+
+    # Generate eval steps for baseline models
     baselines = [
         ("allenai/OLMo-2-1124-7B", "stage1-step928646-tokens3896B"),
         ("allenai/OLMo-2-1124-13B", "stage1-step596000-tokens5000B"),
@@ -377,14 +378,17 @@ if __name__ == "__main__":
         model_config = HFCheckpointConverter.from_hf(f"{model}@{revision}").config_from_hf_checkpoint(
             f"{model}@{revision}"
         )
-        eval_step = default_lm_log_probs(
-            output_path_of(model_instance),
+        default_lm_log_probs(
+            model_instance,
             model_config,
             local_evaluation_mixture,
             checkpoint_is_hf=True,
             name=versioned(f"Domain-Scaling-Laws-tokenizer-fix-{model}@{revision}"),
-        )
-        executor_main(
-            [eval_step],
-            description="Compute logprobs for all Baseline Model Checkpoints",
-        )
+        )  # Step traced on creation
+
+
+if __name__ == "__main__":
+    executor_main(
+        steps=[run_gemstones_scaling_law()],
+        description="Compute logprobs for all Gemstone and Baseline Model Checkpoints",
+    )

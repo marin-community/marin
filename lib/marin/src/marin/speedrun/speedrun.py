@@ -31,7 +31,7 @@ import fsspec
 from fray.cluster import ResourceConfig
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
-from marin.execution.executor import ExecutorStep, InputName, output_path_of
+from marin.execution import ExecutorStep, StepRef, step, deferred, output
 from marin.processing.tokenize import add_validation_sets_to_mixture, lm_data_config
 from marin.speedrun.paloma_local_download import speedrun_paloma_tokenized
 from marin.training.training import TrainLmOnPodConfig
@@ -77,7 +77,7 @@ class SpeedrunConfig:
     train_config: SimpleTrainConfig | TrainLmOnPodConfig
 
     # by default, this is fineweb_edu_subcache_10B
-    tokenized_dataset: InputName | LMMixtureDatasetConfig = fineweb_edu_subcache_10B
+    tokenized_dataset: StepRef | LMMixtureDatasetConfig = fineweb_edu_subcache_10B
 
     @property
     def vocab_size(self) -> int:
@@ -365,7 +365,7 @@ def default_speedrun(
     run_tags = ["speedrun"] + (tags or [])
 
     train_config = dataclasses.replace(config.train_config, data_seed=42)
-    if isinstance(config.tokenized_dataset, InputName | ExecutorStep):
+    if isinstance(config.tokenized_dataset, StepRef | ExecutorStep):
         pretraining_data = lm_data_config(
             training_set=config.tokenized_dataset,
             validation_sets=speedrun_paloma_tokenized(tokenizer=(_get_tokenizer_for_train(config.tokenized_dataset))),
@@ -411,17 +411,24 @@ def default_speedrun(
 
     assert wandb_run_id is not None, "Could not extract wandb run ID from train step"
 
-    results_step = ExecutorStep(
-        name=f"speedrun/{name}-speedrun_results",
-        description=f"compute and store metrics and stats for the speedrun {name}.",
-        fn=speedrun_results,
-        config=SpeedrunResultsConfig(
+    speedrun_results_deferred = deferred(speedrun_results)
+
+    @step(name=f"speedrun/{name}-speedrun_results")
+    def _results_step():
+        # Resolve train_step if it's a StepRef/ExecutorStep
+        if isinstance(train_step, (StepRef, ExecutorStep)):
+            resolved_train_step = train_step
+        else:
+            resolved_train_step = train_step
+
+        return speedrun_results_deferred(SpeedrunResultsConfig(
             wandb_run_id=wandb_run_id,
             wandb_entity=wandb_entity,
             wandb_project=wandb_project,
             speedrun_config=config,
-            output_path=output_path_of(train_step, "speedrun_results.json"),
-        ),
-    )
+            output_path=resolved_train_step / "speedrun_results.json",
+        ))
+
+    results_step = _results_step()
 
     return [train_step, results_step]

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3_wrong
+from marin.execution import step
 from marin.execution.executor import executor_main
 import dataclasses
 import logging
@@ -25,7 +26,7 @@ from experiments.defaults import default_train
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, InputName
+from marin.execution.executor import ExecutorStep, StepRef
 
 DEFAULT_MODEL_CONFIG = LlamaConfig(
     max_seq_len=4096,
@@ -58,7 +59,7 @@ DEFAULT_SWEEP_TRAIN_CONFIG = SimpleTrainConfig(
 
 def scaling_law_suite(
     sweep_name: str,
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: StepRef | ExecutorStep | LMMixtureDatasetConfig,
     widths: Sequence[int] = (512, 768, 1024, 1536, 2048),
     base_model_config: LlamaConfig = llama_1_4b,
     tags: Sequence[str] = (),
@@ -140,10 +141,15 @@ TAG = ["654_scaling_tootsie"]
 
 suite = scaling_law_suite(sweep_name="tootsie-scaling", tokenized=dclm_mixture_config_llama3_wrong, tags=TAG)
 
+
+@step(name="tootsie/exp654/scaling_suite")
+def run_scaling_suite():
+    """Entry point for Tootsie scaling law suite."""
+    return suite
+
+
 if __name__ == "__main__":
     executor_main(
-        steps=[
-            *suite,
-        ],
+        steps=[run_scaling_suite()],
         description="scaling law suite to predict performance of 8B model on DCLM mix",
     )

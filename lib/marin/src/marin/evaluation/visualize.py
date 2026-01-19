@@ -32,7 +32,7 @@ from levanter.main.viz_logprobs import main as viz_lm_main
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.executor import this_output_path
+from marin.execution.executor import StepRef
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,7 @@ class VizLmConfig:
     checkpoint_is_hf: bool = False
     num_docs_per_dataset: int = 32
     per_device_batch_size: int = 4
-    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
+    output_path: str = dataclasses.field(default_factory=lambda: StepRef(_step=None))  # type: ignore
 
     comparison_model_path: str | None = None
     comparison_is_hf: bool = False
