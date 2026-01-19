@@ -91,7 +91,7 @@ downloads = {
                 wait_for_completion=True,
             ),
             override_output_path="raw/fineweb-edu-c2beb4",
-        ).cd("3c452cb/huggingface.co/datasets/HuggingFaceFW/fineweb-edu/resolve/3c452cb")
+        ).cd("data")
     ),
     "slimpajama": (
         ExecutorStep(

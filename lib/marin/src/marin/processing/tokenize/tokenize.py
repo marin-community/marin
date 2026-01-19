@@ -247,7 +247,9 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
+    from marin.utils import load_tokenizer_with_backoff
+
+    tokenizer = load_tokenizer_with_backoff(config.tokenizer)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     for batch in batches:

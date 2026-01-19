@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import functools
+import hashlib
 import logging
 import os
 import random
@@ -287,21 +288,95 @@ def load_tokenizer_with_backoff(
     *,
     tokenizer_kwargs: dict[str, Any] | None = None,
     context: str | None = None,
-    max_attempts: int = 6,
-    initial_delay: float = 2.0,
-    max_delay: float = 60.0,
+    max_attempts: int = 10,
+    initial_delay: float = 5.0,
+    max_delay: float = 120.0,
     logger: logging.Logger | None = None,
 ):
+    """Load a tokenizer with backoff and local file locking for distributed settings.
+
+    When multiple workers try to load the same tokenizer, this uses:
+    1. Local file lock to ensure only one process per machine downloads
+    2. Random jitter to spread out requests across machines
+    3. Aggressive exponential backoff for HuggingFace rate limits
+    4. local_files_only=True when loading from cache to avoid API calls
+
+    Args:
+        tokenizer_name: HuggingFace tokenizer name or local path.
+        tokenizer_kwargs: Additional kwargs to pass to AutoTokenizer.from_pretrained.
+        context: Context string for logging.
+        max_attempts: Maximum retry attempts for HuggingFace requests.
+        initial_delay: Initial backoff delay in seconds.
+        max_delay: Maximum backoff delay in seconds.
+        logger: Logger instance.
+
+    Returns:
+        The loaded tokenizer.
+    """
+    from filelock import FileLock
+
     kwargs = tokenizer_kwargs or {}
     load_context = context or f"tokenizer={tokenizer_name}"
-    return call_with_hf_backoff(
-        lambda: transformers.AutoTokenizer.from_pretrained(tokenizer_name, **kwargs),
-        context=load_context,
-        max_attempts=max_attempts,
-        initial_delay=initial_delay,
-        max_delay=max_delay,
-        logger=logger,
-    )
+    log_obj = logger or logging.getLogger(__name__)
+
+    # Skip locking for local paths
+    if os.path.exists(tokenizer_name):
+        return transformers.AutoTokenizer.from_pretrained(tokenizer_name, **kwargs)
+
+    # Create a unique lock file for this tokenizer
+    tokenizer_hash = hashlib.md5(tokenizer_name.encode()).hexdigest()[:12]
+    lock_file = f"/tmp/tokenizer_{tokenizer_hash}.lock"
+    success_file = f"/tmp/tokenizer_{tokenizer_hash}.success"
+
+    # Check if another process on this machine already downloaded successfully
+    # Use local_files_only=True to avoid any HuggingFace API calls
+    if os.path.exists(success_file):
+        log_obj.debug(f"Tokenizer {tokenizer_name} already cached locally, loading offline")
+        try:
+            return transformers.AutoTokenizer.from_pretrained(
+                tokenizer_name, local_files_only=True, **kwargs
+            )
+        except Exception as e:
+            # If local loading fails, the cache might be corrupted - remove marker and retry
+            log_obj.warning(f"Failed to load tokenizer from local cache: {e}, will re-download")
+            os.remove(success_file)
+
+    # Add random jitter (0-30 seconds) to spread out requests across machines
+    # This is the main mechanism to prevent rate limiting across distributed workers
+    jitter = random.uniform(0, 30.0)
+    log_obj.info(f"Adding {jitter:.1f}s jitter before loading tokenizer {tokenizer_name}")
+    time.sleep(jitter)
+
+    # Use file lock to ensure only one process per machine downloads
+    with FileLock(lock_file, timeout=600):  # 10 minute timeout
+        # Re-check after acquiring lock - use local_files_only=True
+        if os.path.exists(success_file):
+            log_obj.debug(f"Tokenizer {tokenizer_name} downloaded by another process, loading offline")
+            try:
+                return transformers.AutoTokenizer.from_pretrained(
+                    tokenizer_name, local_files_only=True, **kwargs
+                )
+            except Exception as e:
+                log_obj.warning(f"Failed to load from local cache after lock: {e}")
+                os.remove(success_file)
+
+        # Download from HuggingFace with aggressive backoff
+        log_obj.info(f"Downloading tokenizer {tokenizer_name} from HuggingFace")
+        tokenizer = call_with_hf_backoff(
+            lambda: transformers.AutoTokenizer.from_pretrained(tokenizer_name, **kwargs),
+            context=load_context,
+            max_attempts=max_attempts,
+            initial_delay=initial_delay,
+            max_delay=max_delay,
+            logger=log_obj,
+        )
+
+        # Mark as successfully downloaded for other processes on this machine
+        with open(success_file, "w") as f:
+            f.write(tokenizer_name)
+        log_obj.info(f"Tokenizer {tokenizer_name} cached successfully")
+
+        return tokenizer
 
 
 def fsspec_size(file_path: str) -> int:

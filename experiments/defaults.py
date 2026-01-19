@@ -238,7 +238,7 @@ def simulated_epoching_train(
 
     logger.info(
         f"Simulating Epoching Behavior, Experiment Tokens {experiment_budget}, "
-        + "Simulated Target Tokens {target_budget}"
+        f"Simulated Target Tokens {target_budget}"
     )
 
     return default_train(
