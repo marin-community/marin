@@ -7,7 +7,7 @@ import logging
 import math
 import warnings
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from numbers import Integral
 from typing import Optional, Union, cast, overload
 
@@ -54,12 +54,15 @@ from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig
 logger = logging.getLogger(__name__)
 
 
-class AttentionBackend(Enum):
+class AttentionBackend(StrEnum):
     DEFAULT = "default"  # use the default attention type for the accelerator
     NVTE = "nvte"  # with Transformer Engine on NVIDIA GPUs
     SPLASH = "splash"  # on TPU.
     JAX_FLASH = "jax_flash"  # Use the JAX reference implementation
     VANILLA = "vanilla"  # regular dot product attention
+
+
+DEFAULT_SPLASH_BLOCK_SIZE = 512
 
 
 def default_attention_type() -> AttentionBackend:
@@ -1359,7 +1362,7 @@ def _tpu_splash_attention(
         segment_ids_axes = None
 
     # MaxText uses a block size of 512
-    block_size = block_size or 512
+    block_size = block_size or DEFAULT_SPLASH_BLOCK_SIZE
 
     # Compute sharding factors from the mesh (OUTSIDE shard_map)
     mesh = jax.sharding.get_abstract_mesh()

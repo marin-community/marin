@@ -23,7 +23,7 @@
 - Assume Python >=3.11.
 - Always use `uv run` for Python entry points. If that fails, try `.venv/bin/python` directly.
 - Run `uv run python infra/pre-commit.py --all-files` before sending changes; formatting and linting are enforced with `ruff`.
-- Keep type hints passing under `uv run mypy`; configuration lives in `pyproject.toml`.
+- Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
 
 ### Communication & Commits
 
@@ -36,6 +36,7 @@
 - Put all imports at the top of the file. Avoid local imports unless technically necessary (for example, to break circular dependencies or guard optional dependencies).
 - Prefer top-level functions when code does not mutate shared state; use classes to encapsulate data when that improves clarity.
 - Prefer top-level Python tests and fixtures.
+- Disprefer internal mutation of function arguments, especially config dataclasses; prefer returning a modified copy (e.g., via `dataclasses.replace`) so call sites remain predictable and side effects are explicit.
 - Use early returns (`if not x: return None`) when they reduce nesting.
 - Do not introduce ad-hoc compatibility hacks like `hasattr(m, "old_attr")`; update the code consistently instead.
 - Do not use `from future import ...` statements.
@@ -87,6 +88,15 @@ You don't generate comments that merely restate the code, e.g.
 - Do not fix tests by relaxing tolerances or hacking around them.
 - Run the appropriate tests for your changes (for example, `uv run pytest` under the relevant directory); consult subproject guides for preferred markers.
 - Use pytest features like fixtures and parameterization to avoid duplication and write clean code.
+
+PREFER:
+
+- Integration style tests which exercise behavior and test the output
+
+DO NOT:
+
+- Create tests which validate obvious features: if a type exists, a constant has a value, etc.
+
 
 ## Environment
 

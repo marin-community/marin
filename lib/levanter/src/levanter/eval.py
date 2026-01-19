@@ -3,12 +3,15 @@
 
 import asyncio
 import dataclasses
+import json
 import logging
+import os
 import warnings
 from collections import defaultdict
 from typing import Callable, Mapping, Optional, Sequence, TypeVar
 
 import equinox as eqx
+import fsspec
 import jax.numpy as jnp
 import jmp
 import numpy as np
@@ -21,7 +24,7 @@ from haliax.partitioning import ResourceMapping
 import levanter.tracker
 from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset, DataLoader
-from levanter.models.lm_model import LmExample, LmHeadModel, compute_next_token_loss
+from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.utils.hf_utils import HfTokenizer, byte_length_of_token
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.stat_utils import Arrayish, RunningMean
@@ -173,6 +176,7 @@ def cb_tagged_lm_evaluate(
     eval_ema: bool = True,
     prefix: str = "eval",
     mp: jmp.Policy = None,
+    checkpoint_path: Optional[str] = None,
 ) -> Callable[[StepInfo], None]:
     """
     Evaluates multiple tagged datasets using a given evaluation function.
@@ -196,6 +200,7 @@ def cb_tagged_lm_evaluate(
         prefix: The prefix to use for logging the losses
         eval_current: Whether to evaluate the model's current parameters
         eval_ema: Whether to evaluate the EMA model (or other model averaged model)
+        checkpoint_path: If provided, write eval metrics to a JSONL file in this directory
     """
 
     evaluator = TaggedEvaluator(
@@ -207,10 +212,12 @@ def cb_tagged_lm_evaluate(
 
     def eval_callback(step: StepInfo):
         step_count = step.step
+        metrics_to_write = {}
 
         if eval_current:
             log_dict = eval_model(evaluator, step.model, prefix=prefix)
             levanter.tracker.log(log_dict, step=step_count)
+            metrics_to_write.update(log_dict)
 
         if not eval_current and step.state.model_averaging is None:
             raise ValueError("Cannot evaluate EMA model without model averaging, but you only want to evaluate EMA")
@@ -218,6 +225,21 @@ def cb_tagged_lm_evaluate(
         if eval_ema and step.state.model_averaging is not None:
             log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
             levanter.tracker.log(log_dict, step=step_count)
+            metrics_to_write.update(log_dict)
+
+        # Write metrics to file if checkpoint_path is provided
+        if checkpoint_path is not None and metrics_to_write:
+            metrics_file = os.path.join(checkpoint_path, "eval_metrics.jsonl")
+            fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
+            fs.makedirs(checkpoint_path, exist_ok=True)
+            with fs.open(metrics_file, "a") as f:
+                # Convert numpy/jax floats to Python floats for JSON serialization
+                serializable_metrics = {
+                    k: float(v) if isinstance(v, (np.floating, jnp.floating)) else v
+                    for k, v in metrics_to_write.items()
+                }
+                record = {"step": int(step_count), **serializable_metrics}
+                f.write(json.dumps(record, sort_keys=True) + "\n")
 
         return
 
@@ -336,7 +358,7 @@ class TaggedEvaluator:
             with context:
                 if axis_mapping is not None:
                     context.enter_context(hax.axis_mapping(axis_mapping))
-                losses = compute_next_token_loss(m, batch, reduction=None, reduction_axis=())
+                losses = m.compute_next_token_loss(batch, reduction=None, reduction_axis=())
                 weights = batch.loss_weight  # [Batch, Pos]
                 this_tokens = hax.sum(weights)
                 this_loss = hax.einsum("->", losses, weights)  # to scalar

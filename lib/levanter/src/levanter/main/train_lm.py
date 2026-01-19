@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import functools
 import gc
 import logging
 import os
@@ -25,7 +24,7 @@ from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_ca
 from levanter.data.text import LMMixtureDatasetConfig, SingleDatasetLMConfig, UrlSingleDatasetLMConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, compute_next_token_loss
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
@@ -102,7 +101,8 @@ def main(config: TrainLmConfig):
     levanter.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    loss_function = functools.partial(compute_next_token_loss, logsumexp_weight=config.z_loss_weight)
+    def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
+        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh
@@ -199,6 +199,11 @@ def main(config: TrainLmConfig):
         if len(tagged_eval_datasets) == 0:
             logger.warning("No evaluation datasets provided.")
         else:
+            # Write eval metrics to the same directory as checkpoints
+            checkpoint_path = None
+            if config.trainer.checkpointer is not None:
+                checkpoint_path = config.trainer.checkpointer.expanded_path(trainer.run_id)
+
             cb = levanter.eval.cb_tagged_lm_evaluate(
                 EvalBatch,
                 tagged_eval_datasets,
@@ -207,6 +212,7 @@ def main(config: TrainLmConfig):
                 compute_axis_mapping,
                 max_eval_examples_per_ds,
                 mp=config.trainer.mp,
+                checkpoint_path=checkpoint_path,
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
 

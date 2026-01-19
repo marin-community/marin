@@ -30,6 +30,7 @@ from huggingface_hub import HfFileSystem
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 from zephyr import Backend, Dataset
+from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
 
@@ -78,25 +79,29 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
 
 
 def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path: str):
-    """Ray task to stream a file from HfFileSystem to another fsspec path."""
+    """Stream a file from HfFileSystem to another fsspec path using atomic write.
+
+    Uses atomic_rename to write to a temp file first, then rename on success.
+    This enables recovery across individual files if the job is interrupted.
+    """
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
     target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
-    # Use larger chunk size for large files, such as 32B models
-    chunk_size = 256 * 1024 * 1024 * 1024
-    max_retries = 10
+    # Use 256 MB chunk size for large files
+    chunk_size = 256 * 1024 * 1024
+    max_retries = 100
 
     # Retry when there is an error, such as hf rate limit
     for attempt in range(max_retries):
         try:
-            with hf_fs.open(file_path, "rb") as src_file:
-                target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
-                with target_fs.open(fsspec_file_path, "wb") as dest_file:
+            target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
+            with atomic_rename(fsspec_file_path) as temp_path:
+                with hf_fs.open(file_path, "rb") as src_file, fsspec.open(temp_path, "wb") as dest_file:
                     while chunk := src_file.read(chunk_size):
                         dest_file.write(chunk)
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path}")
             return {"file_path": file_path, "status": "success"}
         except Exception as e:
-            wait_time = (2**attempt) + random.uniform(0, 5)
+            wait_time = min(2**attempt, 2**10) + random.uniform(0, 5)
             logger.warning(f"Attempt {attempt + 1} failed for {file_path}: {e}, retrying in {wait_time:.1f}s")
             time.sleep(wait_time)
     raise RuntimeError(f"Failed to download {file_path} after {max_retries} attempts")
@@ -154,7 +159,7 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    Backend.execute(pipeline)
+    Backend.execute(pipeline, max_parallelism=16)
 
     # Write Provenance JSON
     write_provenance_json(

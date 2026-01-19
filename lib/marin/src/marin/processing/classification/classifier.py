@@ -51,7 +51,7 @@ class FasttextClassifier(BaseClassifier):
         self.k = k
 
     def load_model(self):
-        from fasttext.FastText import _FastText
+        import floret
         from filelock import FileLock
         from huggingface_hub import hf_hub_download, repo_exists
 
@@ -123,7 +123,7 @@ class FasttextClassifier(BaseClassifier):
 
         assert os.path.exists(success_file) and os.path.exists(local_filepath), f"Model file {local_filepath} not found"
 
-        model = _FastText(local_filepath)
+        model = floret.load_model(local_filepath)
 
         return model
 

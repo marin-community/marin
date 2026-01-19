@@ -100,6 +100,7 @@ class JobContext(Protocol):
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         preemptible: bool = True,
+        num_cpus: float | None = None,
         **kwargs,
     ) -> Any:
         """Create an actor (stateful service) within the execution context.
@@ -251,6 +252,7 @@ class SyncContext:
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         preemptible: bool = True,
+        num_cpus: float | None = None,
         **kwargs,
     ) -> ThreadActorHandle:
         if name is not None and name in self._actors:
@@ -345,6 +347,7 @@ class ThreadContext:
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         preemptible: bool = True,
+        num_cpus: float | None = None,
         **kwargs,
     ) -> ThreadActorHandle:
         with self._actors_lock:
@@ -391,7 +394,7 @@ class RayContext:
         if self.ray_options:
             remote_fn = ray.remote(**self.ray_options)(fn)
         else:
-            remote_fn = ray.remote(fn)
+            remote_fn = ray.remote(max_retries=100)(fn)
 
         return remote_fn.options(scheduling_strategy="SPREAD").remote(*args)
 
@@ -410,6 +413,7 @@ class RayContext:
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         preemptible: bool = True,
+        num_cpus: float | None = None,
         **kwargs,
     ) -> ActorHandle:
         options = {}
@@ -421,6 +425,9 @@ class RayContext:
         # run non-preemptible actors on the head node for persistence
         if not preemptible:
             options["resources"] = {"head_node": 0.0001}
+
+        if num_cpus is not None:
+            options["num_cpus"] = num_cpus
 
         remote_class = ray.remote(actor_class)
         ray_actor = remote_class.options(**options).remote(*args, **kwargs)
@@ -476,6 +483,7 @@ def get_default_job_ctx() -> JobContext:
 
 def create_job_ctx(
     context_type: Literal["ray", "threadpool", "sync", "auto"] = "auto",
+    *,
     max_workers: int = 1,
     **ray_options,
 ) -> JobContext:
@@ -486,14 +494,29 @@ def create_job_ctx(
         max_workers: Maximum number of worker threads (threadpool only)
         **ray_options: Additional Ray remote options
 
+    For "auto":
+    - If Ray is initialized and we're not in a local cluster context, use RayContext
+    - Otherwise, use ThreadContext to run in current process with user's venv
+
+    This ensures:
+    - Standalone Ray usage (e.g., tests) gets RayContext when Ray is initialized
+    - Local GPU runs use ThreadContext to avoid Ray worker overhead and CUDA library issues
+
     Examples:
         >>> context = create_job_ctx("sync")
         >>> context = create_job_ctx("threadpool", max_workers=4)
         >>> context = create_job_ctx("ray")
     """
     if context_type == "auto":
-        if ray and ray.is_initialized():
-            context_type = "ray"
+        import ray
+
+        # Use Ray if it's initialized, UNLESS we're explicitly running on a local cluster
+        if ray.is_initialized():
+            cluster_spec = os.environ.get("FRAY_CLUSTER_SPEC", "")
+            if cluster_spec.startswith("local"):
+                context_type = "threadpool"
+            else:
+                context_type = "ray"
         else:
             context_type = "threadpool"
 
