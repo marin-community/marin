@@ -239,11 +239,6 @@ class _LocalImageProvider:
         del tag
 
 
-# =============================================================================
-# LocalClusterClient
-# =============================================================================
-
-
 class LocalClusterClient:
     """Local cluster client using real Controller/Worker with in-process execution.
 

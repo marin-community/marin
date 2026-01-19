@@ -14,11 +14,14 @@
 
 """Log polling utility for streaming job logs."""
 
+from __future__ import annotations
+
 import logging
 import threading
+from typing import TYPE_CHECKING
 
-from iris.client.client import IrisClient
-from iris.cluster.types import JobId
+if TYPE_CHECKING:
+    from iris.client.client import Job
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +32,14 @@ class LogPoller:
     Can be used as a context manager for automatic start/stop:
 
     Example:
-        with LogPoller(client, job_id):
+        job = client.submit(entrypoint, "my-job", resources)
+        with LogPoller(job):
             # logs are automatically polled and written to logger.info
-            # ... wait for job ...
+            job.wait(raise_on_failure=False)
 
     Or manually:
-        poller = LogPoller(client, job_id)
+        job = client.submit(entrypoint, "my-job", resources)
+        poller = LogPoller(job)
         poller.start()
         # ... wait for job ...
         poller.stop()
@@ -42,19 +47,16 @@ class LogPoller:
 
     def __init__(
         self,
-        client: IrisClient,
-        job_id: JobId,
+        job: Job,
         poll_interval: float = 1.0,
     ):
         """Initialize log poller.
 
         Args:
-            client: IrisClient to use for fetching logs
-            job_id: Job ID to poll logs for
+            job: Job handle to poll logs for
             poll_interval: Seconds between polls
         """
-        self._client = client
-        self._job_id = job_id
+        self._job = job
         self._poll_interval = poll_interval
         self._last_timestamp_ms = 0
         self._stop_event = threading.Event()
@@ -81,7 +83,7 @@ class LogPoller:
         self._thread = None
         self._stop_event.clear()
 
-    def __enter__(self) -> "LogPoller":
+    def __enter__(self) -> LogPoller:
         self.start()
         return self
 
@@ -91,14 +93,13 @@ class LogPoller:
     def _poll_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
-                logs = self._client.fetch_logs(
-                    self._job_id,
-                    start_ms=self._last_timestamp_ms,
-                )
-                for entry in logs:
-                    if entry.timestamp_ms > self._last_timestamp_ms:
-                        self._last_timestamp_ms = entry.timestamp_ms
-                    logger.info("[%s] %s", entry.source, entry.data)
+                # Fetch logs from all tasks
+                for task in self._job.tasks():
+                    logs = task.logs(start_ms=self._last_timestamp_ms)
+                    for entry in logs:
+                        if entry.timestamp_ms > self._last_timestamp_ms:
+                            self._last_timestamp_ms = entry.timestamp_ms
+                        logger.info("[task-%d][%s] %s", task.task_index, entry.source, entry.data)
             except (ConnectionError, OSError, ValueError):
                 pass
 

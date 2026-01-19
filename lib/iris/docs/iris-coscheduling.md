@@ -376,25 +376,3 @@ if info.task_index == 0:
 shard = get_data_shard(info.task_index, info.num_tasks)
 process(shard)
 ```
-
-## Verification Summary
-
-Each stage has specific verification commands to ensure correctness:
-
-| Stage | Verification Command | What It Tests |
-|-------|---------------------|---------------|
-| 1. Proto | `uv run python scripts/generate_protos.py` | Proto definitions compile without errors |
-| 2. Worker | `uv run pytest tests/cluster/worker/ -v` | Workers can execute tasks and report state |
-| 3. Controller | `uv run pytest tests/cluster/controller/ -v` | Controller creates tasks, tracks state, implements failure domains |
-| 4. Client | `uv run pytest tests/cluster/test_client.py tests/client/ -v` | Client APIs expose task information correctly |
-| 5. E2E | `uv run pytest tests/cluster/ -v -k "gang or failure"` | Failure domains work end-to-end |
-| Full Suite | `uv run pytest tests/cluster/ -v` | Complete integration works correctly |
-
-## Detailed Documentation
-
-For implementation details of each stage, see:
-- [Stage 1: Proto Updates](iris-coscheduling-stage-1.md) - Protobuf definitions
-- [Stage 2: Worker Updates](iris-coscheduling-stage-2.md) - Worker task execution
-- [Stage 3: Controller Updates](iris-coscheduling-stage-3.md) - Controller task tracking and failure domains
-- [Stage 4: Client Updates](iris-coscheduling-stage-4.md) - Client task APIs
-- [Stage 5: Failure Domains](iris-coscheduling-stage-5.md) - Verification and logging

@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from iris.actor.resolver import ResolvedEndpoint, ResolveResult, Resolver
+from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
     BundleCreator,
     JobInfo,
@@ -47,15 +47,11 @@ from iris.cluster.client import (
     RemoteClusterClient,
     get_job_info,
 )
-from iris.cluster.types import EnvironmentSpec, Entrypoint, is_job_finished, JobId, Namespace, ResourceSpec
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobId, Namespace, ResourceSpec, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
-
-# =============================================================================
-# Log Entry
-# =============================================================================
 
 
 @dataclass
@@ -79,6 +75,241 @@ class LogEntry:
             source=proto.source,
             data=proto.data,
         )
+
+
+class JobFailedError(Exception):
+    """Raised when a job ends in a non-SUCCESS terminal state."""
+
+    def __init__(self, job_id: JobId, status: cluster_pb2.JobStatus):
+        self.job_id = job_id
+        self.status = status
+        state_name = cluster_pb2.JobState.Name(status.state)
+        msg = f"Job {job_id} {state_name}"
+        if status.error:
+            msg += f": {status.error}"
+        super().__init__(msg)
+
+
+@dataclass
+class _TaskLogState:
+    """Per-task log polling state for multi-task log streaming."""
+
+    task_index: int
+    last_timestamp_ms: int = 0
+
+
+class Task:
+    """Handle for a specific task within a job.
+
+    Provides convenient methods for task-level operations like status
+    checking and log retrieval.
+
+    Example:
+        job = client.submit(entrypoint, "my-job", resources)
+        job.wait()
+        for task in job.tasks():
+            print(f"Task {task.task_index}: {task.state}")
+            for entry in task.logs():
+                print(entry.data)
+    """
+
+    def __init__(self, client: "IrisClient", job_id: JobId, task_index: int):
+        self._client = client
+        self._job_id = job_id
+        self._task_index = task_index
+
+    @property
+    def task_index(self) -> int:
+        """0-indexed task number within the job."""
+        return self._task_index
+
+    @property
+    def task_id(self) -> str:
+        """Full task identifier (job_id/task-N)."""
+        return f"{self._job_id}/task-{self._task_index}"
+
+    @property
+    def job_id(self) -> JobId:
+        """Parent job identifier."""
+        return self._job_id
+
+    def status(self) -> cluster_pb2.TaskStatus:
+        """Get current task status.
+
+        Returns:
+            TaskStatus proto containing state, worker assignment, and metrics
+        """
+        return self._client._cluster.get_task_status(str(self._job_id), self._task_index)
+
+    @property
+    def state(self) -> cluster_pb2.TaskState:
+        """Get current task state (shortcut for status().state)."""
+        return self.status().state
+
+    def logs(self, *, start_ms: int = 0, max_lines: int = 0) -> list[LogEntry]:
+        """Fetch logs for this task.
+
+        Args:
+            start_ms: Only return logs after this timestamp (milliseconds since epoch)
+            max_lines: Maximum number of log lines to return (0 = unlimited)
+
+        Returns:
+            List of LogEntry objects from the task
+        """
+        task_id = f"{self._job_id}/task-{self._task_index}"
+        entries = self._client._cluster.fetch_task_logs(task_id, start_ms, max_lines)
+        return [LogEntry.from_proto(e) for e in entries]
+
+
+class Job:
+    """Handle for a submitted job with convenient methods.
+
+    Returned by IrisClient.submit(). Provides an ergonomic interface for
+    common job operations like waiting for completion, checking status,
+    and accessing task-level information.
+
+    Example:
+        job = client.submit(entrypoint, "my-job", resources)
+        status = job.wait()  # Blocks until job completes
+        print(f"Job finished: {job.state}")
+
+        for task in job.tasks():
+            print(f"Task {task.task_index} logs:")
+            for entry in task.logs():
+                print(entry.data)
+    """
+
+    def __init__(self, client: "IrisClient", job_id: JobId):
+        self._client = client
+        self._job_id = job_id
+
+    @property
+    def job_id(self) -> JobId:
+        """Unique job identifier."""
+        return self._job_id
+
+    def __str__(self) -> str:
+        return str(self._job_id)
+
+    def __repr__(self) -> str:
+        return f"Job({self._job_id!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Job):
+            return self._job_id == other._job_id
+        if isinstance(other, str):
+            return str(self._job_id) == other
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self._job_id)
+
+    def status(self) -> cluster_pb2.JobStatus:
+        """Get current job status.
+
+        Returns:
+            JobStatus proto with current state, task counts, and error info
+        """
+        return self._client._cluster.get_job_status(self._job_id)
+
+    @property
+    def state(self) -> cluster_pb2.JobState:
+        """Get current job state (shortcut for status().state)."""
+        return self.status().state
+
+    def tasks(self) -> list[Task]:
+        """Get all tasks for this job.
+
+        Returns:
+            List of Task handles, one per task in the job
+        """
+        task_statuses = self._client._cluster.list_tasks(str(self._job_id))
+        return [Task(self._client, self._job_id, ts.task_index) for ts in task_statuses]
+
+    def wait(
+        self,
+        timeout: float = 300.0,
+        poll_interval: float = 2.0,
+        *,
+        raise_on_failure: bool = True,
+        stream_logs: bool = False,
+    ) -> cluster_pb2.JobStatus:
+        """Wait for job to complete.
+
+        Args:
+            timeout: Maximum wait time in seconds
+            poll_interval: Maximum time between status checks
+            raise_on_failure: If True, raise JobFailedError on any non-SUCCESS terminal state
+            stream_logs: If True, stream logs from all tasks interleaved
+
+        Returns:
+            Final JobStatus
+
+        Raises:
+            TimeoutError: Job didn't complete in time
+            JobFailedError: Job ended in non-SUCCESS state and raise_on_failure=True
+        """
+        if not stream_logs:
+            status = self._client._cluster.wait_for_job(self._job_id, timeout, poll_interval)
+        else:
+            status = self._wait_with_multi_task_streaming(timeout, poll_interval)
+
+        if raise_on_failure and status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
+            raise JobFailedError(self._job_id, status)
+
+        return status
+
+    def _wait_with_multi_task_streaming(
+        self,
+        timeout: float,
+        poll_interval: float,
+    ) -> cluster_pb2.JobStatus:
+        """Wait while streaming logs from all tasks."""
+        log_states: list[_TaskLogState] = []
+        backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
+        start = time.monotonic()
+
+        while True:
+            status = self._client._cluster.get_job_status(self._job_id)
+
+            # Initialize log pollers when we learn num_tasks
+            if not log_states and status.num_tasks > 0:
+                log_states = [_TaskLogState(i) for i in range(status.num_tasks)]
+
+            # Poll logs from all tasks
+            for state in log_states:
+                try:
+                    task_id = f"{self._job_id}/task-{state.task_index}"
+                    entries = self._client._cluster.fetch_task_logs(task_id, state.last_timestamp_ms, 0)
+                    for proto in entries:
+                        entry = LogEntry.from_proto(proto)
+                        state.last_timestamp_ms = max(state.last_timestamp_ms, entry.timestamp_ms)
+                        _print_log_entry(self._job_id, entry, task_index=state.task_index)
+                except ValueError:
+                    pass  # Task not yet scheduled
+
+            if is_job_finished(status.state):
+                # Final drain to catch any remaining logs
+                for state in log_states:
+                    try:
+                        task_id = f"{self._job_id}/task-{state.task_index}"
+                        entries = self._client._cluster.fetch_task_logs(task_id, state.last_timestamp_ms, 0)
+                        for proto in entries:
+                            entry = LogEntry.from_proto(proto)
+                            _print_log_entry(self._job_id, entry, task_index=state.task_index)
+                    except ValueError:
+                        pass
+                return status
+
+            elapsed = time.monotonic() - start
+            if elapsed >= timeout:
+                raise TimeoutError(f"Job {self._job_id} did not complete in {timeout}s")
+
+            time.sleep(backoff.next_interval())
+
+    def terminate(self) -> None:
+        """Terminate this job."""
+        self._client._cluster.terminate_job(self._job_id)
 
 
 # =============================================================================
@@ -252,11 +483,6 @@ def iris_ctx_scope(ctx: IrisContext) -> Generator[IrisContext, None, None]:
         _iris_context.reset(token)
 
 
-# =============================================================================
-# Client Configuration
-# =============================================================================
-
-
 @dataclass
 class LocalClientConfig:
     """Configuration for local job execution.
@@ -268,11 +494,6 @@ class LocalClientConfig:
 
     max_workers: int = 4
     port_range: tuple[int, int] = (50000, 60000)
-
-
-# =============================================================================
-# Endpoint Registry
-# =============================================================================
 
 
 class EndpointRegistry(Protocol):
@@ -353,11 +574,6 @@ class NamespacedEndpointRegistry:
         self._cluster.unregister_endpoint(endpoint_id)
 
 
-# =============================================================================
-# Namespace-aware Resolver
-# =============================================================================
-
-
 class NamespacedResolver:
     """Resolver that auto-prefixes names with namespace from IrisContext."""
 
@@ -398,24 +614,22 @@ class NamespacedResolver:
         return ResolveResult(name=name, endpoints=endpoints)
 
 
-# =============================================================================
-# IrisClient
-# =============================================================================
-
-
 class IrisClient:
     """High-level client with automatic job hierarchy and namespace-based actor discovery.
 
     Example:
         # Local execution
         with IrisClient.local() as client:
-            job_id = client.submit(entrypoint, "my-job", resources)
-            client.wait(job_id)
+            job = client.submit(entrypoint, "my-job", resources)
+            job.wait()
 
         # Remote execution
         client = IrisClient.remote("http://controller:8080", workspace=Path("."))
-        job_id = client.submit(entrypoint, "my-job", resources)
-        client.wait(job_id)
+        job = client.submit(entrypoint, "my-job", resources)
+        status = job.wait()
+        for task in job.tasks():
+            for entry in task.logs():
+                print(entry.data)
     """
 
     def __init__(self, cluster: LocalClusterClient | RemoteClusterClient):
@@ -504,7 +718,7 @@ class IrisClient:
         environment: EnvironmentSpec | None = None,
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,
-    ) -> JobId:
+    ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
         Args:
@@ -516,7 +730,7 @@ class IrisClient:
             scheduling_timeout_seconds: Maximum time to wait for scheduling (0 = no timeout)
 
         Returns:
-            Job ID (the full hierarchical name)
+            Job handle for the submitted job
 
         Raises:
             ValueError: If name contains '/'
@@ -547,7 +761,7 @@ class IrisClient:
             scheduling_timeout_seconds=scheduling_timeout_seconds,
         )
 
-        return job_id
+        return Job(self, job_id)
 
     def status(self, job_id: JobId) -> cluster_pb2.JobStatus:
         """Get job status.
@@ -767,11 +981,6 @@ def _print_log_entry(job_id: JobId, entry: LogEntry, task_index: int | None = No
         logger.info("[%s/task-%d][%s] %s", job_id, task_index, ts_str, entry.data)
     else:
         logger.info("[%s][%s] %s", job_id, ts_str, entry.data)
-
-
-# =============================================================================
-# Context Creation from Environment
-# =============================================================================
 
 
 def create_context_from_env() -> IrisContext:

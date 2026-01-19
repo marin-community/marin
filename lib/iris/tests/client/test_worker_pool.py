@@ -321,13 +321,37 @@ def test_dispatch_retries_on_infrastructure_failure():
 
 
 @dataclass
-class MockJob:
+class MockJobRecord:
     """Tracks a job submission."""
 
     job_id: JobId
     name: str
     entrypoint: Entrypoint
     resources: ResourceSpec
+
+
+class MockJob:
+    """Mock Job object that mimics the real Job class interface.
+
+    Used by MockClusterClient to return Job-like objects from submit().
+    """
+
+    def __init__(self, client: "MockClusterClient", job_id: JobId):
+        self._client = client
+        self._job_id = job_id
+
+    @property
+    def job_id(self) -> JobId:
+        return self._job_id
+
+    def terminate(self) -> None:
+        self._client.terminate(self._job_id)
+
+    def __str__(self) -> str:
+        return str(self._job_id)
+
+    def __repr__(self) -> str:
+        return f"MockJob({self._job_id!r})"
 
 
 class MockClusterClient:
@@ -338,7 +362,7 @@ class MockClusterClient:
     """
 
     def __init__(self):
-        self._jobs: dict[JobId, MockJob] = {}
+        self._jobs: dict[JobId, MockJobRecord] = {}
         self._job_counter = 0
 
     def resolver(self):
@@ -352,16 +376,16 @@ class MockClusterClient:
         resources: ResourceSpec,
         environment: EnvironmentSpec | None = None,
         ports: list[str] | None = None,
-    ) -> JobId:
+    ) -> MockJob:
         job_id = JobId(f"mock-job-{self._job_counter}")
         self._job_counter += 1
-        self._jobs[job_id] = MockJob(
+        self._jobs[job_id] = MockJobRecord(
             job_id=job_id,
             name=name,
             entrypoint=entrypoint,
             resources=resources,
         )
-        return job_id
+        return MockJob(self, job_id)
 
     def status(self, job_id: JobId) -> cluster_pb2.JobStatus:
         return cluster_pb2.JobStatus(
@@ -382,7 +406,7 @@ class MockClusterClient:
         pass
 
     @property
-    def submitted_jobs(self) -> list[MockJob]:
+    def submitted_jobs(self) -> list[MockJobRecord]:
         return list(self._jobs.values())
 
 

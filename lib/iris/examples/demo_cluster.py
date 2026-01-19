@@ -50,7 +50,7 @@ from iris.cluster.client.local_client import (
     _LocalImageProvider,
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
-from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
+from iris.cluster.types import EnvironmentSpec, Entrypoint, ResourceSpec
 from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import DockerRuntime
@@ -241,8 +241,8 @@ class DemoCluster:
         cpu: int = 1,
         memory: str = "1g",
         **kwargs,
-    ) -> str:
-        """Submit a job to the cluster."""
+    ):
+        """Submit a job to the cluster and return Job handle."""
         entrypoint = Entrypoint.from_callable(fn, *args, **kwargs)
         environment = EnvironmentSpec(workspace="/app")
         resources = ResourceSpec(cpu=cpu, memory=memory)
@@ -284,9 +284,9 @@ class DemoCluster:
         ]
 
         for fn, args, kwargs, name in jobs:
-            job_id = self.submit(fn, *args, name=name, **kwargs)
-            status = self.client.wait(JobId(job_id))
-            results.append((job_id, cluster_pb2.JobState.Name(status.state)))
+            job = self.submit(fn, *args, name=name, **kwargs)
+            status = job.wait()
+            results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
             print(f"  {name}: {cluster_pb2.JobState.Name(status.state)}")
 
         return results

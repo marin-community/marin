@@ -55,7 +55,7 @@ from connectrpc.errors import ConnectError
 from iris.actor import ActorServer
 from iris.actor.client import ActorClient
 from iris.actor.resolver import Resolver
-from iris.client.client import IrisClient, iris_ctx
+from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
 from iris.time_utils import ExponentialBackoff
 
@@ -405,7 +405,7 @@ class WorkerPool:
 
         # Worker management
         self._workers: dict[str, WorkerState] = {}
-        self._job_ids: list[JobId] = []
+        self._jobs: list[Job] = []
 
         # Task queue and dispatch
         self._task_queue: Queue[PendingTask] = Queue()
@@ -437,7 +437,7 @@ class WorkerPool:
 
     @property
     def job_ids(self) -> list[JobId]:
-        return list(self._job_ids)
+        return [job.job_id for job in self._jobs]
 
     def _launch_workers(self) -> None:
         if self._resolver is None:
@@ -458,14 +458,14 @@ class WorkerPool:
                 args=(self._pool_id, i),
             )
 
-            job_id = self._client.submit(
+            job = self._client.submit(
                 entrypoint=entrypoint,
                 name=f"{self._config.name_prefix}-{self._pool_id}-{i}",
                 resources=self._config.resources,
                 environment=self._config.environment,
                 ports=["actor"],
             )
-            self._job_ids.append(job_id)
+            self._jobs.append(job)
 
         # Start dispatchers (one per worker). Each thread needs its own context copy
         # because a Context can only be entered by one thread at a time.
@@ -610,8 +610,8 @@ class WorkerPool:
                 dispatcher.join(timeout=5.0)
 
         # Terminate worker jobs
-        for job_id in self._job_ids:
+        for job in self._jobs:
             try:
-                self._client.terminate(job_id)
+                job.terminate()
             except Exception as e:
-                logger.debug("Failed to terminate worker job %s: %s", job_id, e)
+                logger.debug("Failed to terminate worker job %s: %s", job.job_id, e)

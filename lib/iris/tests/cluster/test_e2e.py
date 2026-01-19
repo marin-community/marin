@@ -52,11 +52,6 @@ def find_free_port() -> int:
         return s.getsockname()[1]
 
 
-# =============================================================================
-# Test Cluster
-# =============================================================================
-
-
 class E2ECluster:
     """Synchronous context manager running a controller + worker cluster.
 
@@ -174,7 +169,8 @@ class E2ECluster:
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,
         **kwargs,
-    ) -> str:
+    ):
+        """Submit a job and return a Job handle."""
         entrypoint = Entrypoint.from_callable(fn, *args, **kwargs)
         environment = EnvironmentSpec(workspace="/app")
         resources = ResourceSpec(cpu=cpu, memory=memory)
@@ -187,7 +183,15 @@ class E2ECluster:
             scheduling_timeout_seconds=scheduling_timeout_seconds,
         )
 
-    def status(self, job_id: str) -> dict:
+    def _to_job_id_str(self, job_or_id) -> str:
+        """Convert Job object or string to job_id string."""
+        if isinstance(job_or_id, str):
+            return job_or_id
+        # Assume it's a Job object
+        return str(job_or_id.job_id)
+
+    def status(self, job_or_id) -> dict:
+        job_id = self._to_job_id_str(job_or_id)
         request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         response = self._controller_client.get_job_status(request)
         return {
@@ -198,7 +202,8 @@ class E2ECluster:
             "workerId": response.job.worker_id,
         }
 
-    def wait(self, job_id: str, timeout: float = 60.0, poll_interval: float = 0.1) -> dict:
+    def wait(self, job_or_id, timeout: float = 60.0, poll_interval: float = 0.1) -> dict:
+        job_id = self._to_job_id_str(job_or_id)
         start = time.time()
         terminal_states = {
             "JOB_STATE_SUCCEEDED",
@@ -213,7 +218,8 @@ class E2ECluster:
             time.sleep(poll_interval)
         raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
 
-    def kill(self, job_id: str) -> None:
+    def kill(self, job_or_id) -> None:
+        job_id = self._to_job_id_str(job_or_id)
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
         self._controller_client.terminate_job(request)
 
