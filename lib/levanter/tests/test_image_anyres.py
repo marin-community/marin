@@ -502,5 +502,123 @@ def test_streaming_dataset_basic():
         dataset.close()
 
 
+def test_image_data_loader_variable_length_sequences():
+    """Test that ImageDataLoader handles variable-length sequences correctly.
+
+    This verifies end-to-end padding support for input_ids, loss_mask,
+    combined_mask, and position_ids when sequence lengths vary.
+    """
+    from levanter.data.dataset import ListAsyncDataset
+    from levanter.data.image import ImageDataLoader, ImageTextExample
+
+    # Create test data with DIFFERENT sequence lengths
+    seq_lens = [100, 150, 200, 80]  # Variable lengths
+    target_seq_len = 256  # Pos.size > max(seq_lens)
+    num_patches = 2
+    batch_size = len(seq_lens)
+
+    test_dicts = []
+    for seq_len in seq_lens:
+        d = {
+            "input_ids": np.arange(seq_len, dtype=np.int32),
+            "attention_mask": np.ones(seq_len, dtype=np.int32),
+            "loss_mask": np.ones(seq_len, dtype=np.float32),
+            "pixel_values": np.random.randn(num_patches, 3, 384, 384).astype(np.float32),
+            "grid_mask": np.array([True, True], dtype=np.bool_),
+            "combined_mask": np.ones(seq_len, dtype=np.int32),
+            "position_ids": np.arange(seq_len, dtype=np.int32),
+        }
+        test_dicts.append(d)
+
+    dataset = ListAsyncDataset(test_dicts, is_complete=True)
+
+    # Define axes (Pos.size > max sequence length)
+    Pos = hax.Axis("position", target_seq_len)
+    NumPatches = hax.Axis("num_patches", num_patches)
+    Channels = hax.Axis("channels", 3)
+    Height = hax.Axis("height", 384)
+    Width = hax.Axis("width", 384)
+
+    # Create simple CPU mesh
+    devices = np.array(jax.devices("cpu")[:1])
+    mesh = Mesh(devices, ("data",))
+    axis_resources = {"batch": "data"}
+
+    with mesh:
+        loader = ImageDataLoader(
+            data=dataset,
+            batch_size=batch_size,
+            Pos=Pos,
+            NumPatches=NumPatches,
+            Channels=Channels,
+            Height=Height,
+            Width=Width,
+            mesh=mesh,
+            axis_resources=axis_resources,
+            max_buffered_batches=0,
+        )
+
+        batch = next(iter(loader.iter_from_step(0)))
+
+    # Verify shapes
+    assert batch.input_ids.array.shape == (batch_size, target_seq_len), (
+        f"Expected input_ids shape ({batch_size}, {target_seq_len}), got {batch.input_ids.array.shape}"
+    )
+    assert batch.loss_mask.array.shape == (batch_size, target_seq_len), (
+        f"Expected loss_mask shape ({batch_size}, {target_seq_len}), got {batch.loss_mask.array.shape}"
+    )
+    assert batch.combined_mask.array.shape == (batch_size, target_seq_len), (
+        f"Expected combined_mask shape ({batch_size}, {target_seq_len}), got {batch.combined_mask.array.shape}"
+    )
+    assert batch.position_ids.array.shape == (batch_size, target_seq_len), (
+        f"Expected position_ids shape ({batch_size}, {target_seq_len}), got {batch.position_ids.array.shape}"
+    )
+
+    # Verify padding is correct (values after seq_len should be 0)
+    input_ids_np = np.array(batch.input_ids.array)
+    loss_mask_np = np.array(batch.loss_mask.array)
+    combined_mask_np = np.array(batch.combined_mask.array)
+    position_ids_np = np.array(batch.position_ids.array)
+
+    for i, seq_len in enumerate(seq_lens):
+        # Original values preserved for input_ids
+        assert np.all(input_ids_np[i, :seq_len] == np.arange(seq_len)), (
+            f"Example {i}: input_ids values not preserved"
+        )
+        # Padding is 0 for input_ids
+        assert np.all(input_ids_np[i, seq_len:] == 0), (
+            f"Example {i}: input_ids padding not zero"
+        )
+
+        # Original values preserved for loss_mask (all ones)
+        assert np.all(loss_mask_np[i, :seq_len] == 1.0), (
+            f"Example {i}: loss_mask values not preserved"
+        )
+        # Padding is 0 for loss_mask
+        assert np.all(loss_mask_np[i, seq_len:] == 0.0), (
+            f"Example {i}: loss_mask padding not zero"
+        )
+
+        # Original values preserved for combined_mask (all ones)
+        assert np.all(combined_mask_np[i, :seq_len] == 1), (
+            f"Example {i}: combined_mask values not preserved"
+        )
+        # Padding is 0 for combined_mask
+        assert np.all(combined_mask_np[i, seq_len:] == 0), (
+            f"Example {i}: combined_mask padding not zero"
+        )
+
+        # Original values preserved for position_ids
+        assert np.all(position_ids_np[i, :seq_len] == np.arange(seq_len)), (
+            f"Example {i}: position_ids values not preserved"
+        )
+        # Padding is 0 for position_ids
+        assert np.all(position_ids_np[i, seq_len:] == 0), (
+            f"Example {i}: position_ids padding not zero"
+        )
+
+    print("Variable-length sequence test passed!")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

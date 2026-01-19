@@ -212,6 +212,7 @@ class TestDataPair:
 
     hf: HFProcessedData
     lev: LevProcessedData
+    lev_dict: dict  # Raw ImageTextDict from BatchImageProcessor (for native batching)
     raw_images: list[Image.Image]  # Original PIL images for reference
     messages: list[dict[str, Any]]  # Original messages from dataset
 
@@ -242,7 +243,7 @@ def _create_processors(
     vision_feature_height: int,
     add_generation_prompt: bool = False,
     disable_anyres: bool = False,
-    num_images: int = 1,
+    max_images_per_sample: int = 5,
 ):
     """Create HF and Levanter processors for test data preparation.
 
@@ -255,8 +256,9 @@ def _create_processors(
         vision_feature_height: Vision encoder output tokens per spatial dim.
         add_generation_prompt: Whether to add generation prompt.
         disable_anyres: If True, disable anyres processing and use single resolution only.
-                        Each image uses only its base patch (num_images patches total).
-        num_images: Number of images (used when disable_anyres=True for multi-image).
+                        Each image uses only its base patch.
+        max_images_per_sample: Maximum number of images per sample (used in disable_anyres mode).
+                               Default 5 to support interleaved multi-image data.
 
     Returns:
         Tuple of (hf_processor, lev_batch_processor)
@@ -264,10 +266,10 @@ def _create_processors(
     # Handle disable_anyres mode
     if disable_anyres:
         # For disable_anyres, each image only contributes its base patch
-        # Single image: 1 patch, Multi-image: num_images patches
-        effective_max_num_patches = max(0, num_images - 1)  # total_patches = num_images
+        # total_patches = max_images_per_sample (one patch per image)
+        effective_max_num_patches = max(0, max_images_per_sample - 1)
         effective_grid_pinpoints = [[patch_size, patch_size]]  # Single resolution
-        max_image_tiles = num_images  # One tile per image
+        max_image_tiles = max_images_per_sample  # One tile per image
         effective_vision_aspect_ratio = "single"  # Disable anyres in HF processor
     else:
         effective_max_num_patches = max_num_patches
@@ -411,11 +413,28 @@ def prepare_test_data(
             max_length=max_length,
         )
 
+        # Handle pixel_values and image_sizes for multi-image case with disable_anyres
+        # When disable_anyres=True and multiple images:
+        #   pixel_values is [img1_array, img2_array, ...] where each has shape (1, C, H, W)
+        #   We need to stack them to (num_images, C, H, W)
+        #   image_sizes should be (num_images, 2), NOT (2,)
+        # Otherwise: pixel_values[0] has shape (patches, C, H, W)
+        pv = hf_processed["pixel_values"]
+        if disable_anyres and len(pv) > 1:
+            # Multi-image disable_anyres: each pv[i] has shape (1, C, H, W)
+            pixel_values = np.squeeze(np.stack(pv), axis=1)  # (num_images, C, H, W)
+            # Keep all image_sizes for multi-image: (num_images, 2)
+            image_sizes = hf_processed["image_sizes"]
+        else:
+            pixel_values = pv[0]
+            # Single image: (2,) for H, W
+            image_sizes = hf_processed["image_sizes"][0]
+
         hf_data = HFProcessedData(
             input_ids=hf_processed["input_ids"][0],
-            pixel_values=hf_processed["pixel_values"][0],
+            pixel_values=pixel_values,
             attention_mask=hf_processed["attention_mask"][0],
-            image_sizes=hf_processed["image_sizes"][0],
+            image_sizes=image_sizes,
         )
 
         # --- Levanter Processing (with padding + grid_mask) ---
@@ -438,6 +457,7 @@ def prepare_test_data(
             TestDataPair(
                 hf=hf_data,
                 lev=lev_data,
+                lev_dict=lev_result,  # Raw ImageTextDict for native batching
                 raw_images=raw_images,
                 messages=messages,
             )
@@ -560,6 +580,7 @@ def prepare_test_data_single(
     return TestDataPair(
         hf=hf_data,
         lev=lev_data,
+        lev_dict=lev_result,  # Raw ImageTextDict for native batching
         raw_images=images,
         messages=messages,
     )
@@ -951,3 +972,113 @@ def create_lev_jax_tensors(
         GridMaskAxis=GridMaskAxis,
         NumImageTokens=NumImageTokens,
     )
+
+
+def prepare_batched_test_data(
+    parquet_path: str,
+    sample_indices: list[int],
+    model_name: str = "llava-hf/llava-onevision-qwen2-0.5b-si-hf",
+    max_length: int = 8192,
+    max_num_patches: int = 9,
+    grid_pinpoints: Optional[list[list[int]]] = None,
+    patch_size: int = 384,
+    vision_feature_height: int = 27,
+    add_generation_prompt: bool = False,
+    disable_anyres: bool = False,
+    mesh: Optional[Any] = None,
+    axis_resources: Optional[dict] = None,
+) -> tuple[list[TestDataPair], "ImageTextExample"]:
+    """Prepare test data pairs and batched ImageTextExample using ImageDataLoader.
+
+    This is a convenience function that calls prepare_test_data() and then
+    batches the Levanter data using Levanter's native ImageDataLoader.
+
+    Args:
+        parquet_path: Path to parquet dataset file
+        sample_indices: List of sample indices to process
+        model_name: HuggingFace model name for processor
+        max_length: Maximum sequence length for tokenization
+        max_num_patches: Maximum number of patches for anyres
+        grid_pinpoints: Grid resolutions for anyres processing
+        patch_size: Size of each image patch
+        vision_feature_height: Vision encoder output tokens per spatial dim
+        add_generation_prompt: Whether to add generation prompt
+        disable_anyres: If True, disable anyres processing
+        mesh: JAX mesh for sharding. If None, creates a simple CPU mesh.
+        axis_resources: Axis resource mapping. If None, uses {"batch": "data"}.
+
+    Returns:
+        Tuple of (test_pairs, batched_example) where:
+        - test_pairs: List of TestDataPair objects for individual comparison
+        - batched_example: ImageTextExample with all examples batched by ImageDataLoader
+    """
+    from levanter.data.dataset import ListAsyncDataset
+    from levanter.data.image import ImageDataLoader, ImageTextExample
+    from jax.sharding import Mesh
+    import jax
+    import haliax as hax
+
+    # Get individual test pairs
+    test_pairs = prepare_test_data(
+        parquet_path=parquet_path,
+        sample_indices=sample_indices,
+        model_name=model_name,
+        max_length=max_length,
+        max_num_patches=max_num_patches,
+        grid_pinpoints=grid_pinpoints,
+        patch_size=patch_size,
+        vision_feature_height=vision_feature_height,
+        add_generation_prompt=add_generation_prompt,
+        disable_anyres=disable_anyres,
+    )
+
+    # Determine max sequence length for Pos axis
+    # ImageDataLoader handles padding automatically to Pos.size
+    max_seq_len = max(len(p.lev_dict["input_ids"]) for p in test_pairs)
+
+    # Use lev_dict directly - ImageDataLoader pads variable-length sequences automatically
+    image_text_dicts = [p.lev_dict for p in test_pairs]
+
+    # Create async dataset
+    dataset = ListAsyncDataset(image_text_dicts, is_complete=True)
+
+    # Get MAX dimensions across all examples for multi-image support
+    # Different samples may have different numbers of images, so we need max_patches
+    max_patches = max(p.lev_dict["pixel_values"].shape[0] for p in test_pairs)
+    first_pv = test_pairs[0].lev_dict["pixel_values"]
+    channels = first_pv.shape[1]
+    height = first_pv.shape[2]
+    width = first_pv.shape[3]
+
+    # Define axes with MAX values to accommodate all samples
+    Pos = hax.Axis("position", max_seq_len)
+    NumPatches = hax.Axis("num_patches", max_patches)
+    Channels = hax.Axis("channels", channels)
+    Height = hax.Axis("height", height)
+    Width = hax.Axis("width", width)
+
+    # Use provided mesh or create a simple CPU mesh for testing
+    if mesh is None:
+        devices = np.array(jax.devices("cpu")[:1])
+        mesh = Mesh(devices, ("data",))
+    if axis_resources is None:
+        axis_resources = {"batch": "data"}
+
+    # Create loader and get batch
+    loader = ImageDataLoader(
+        data=dataset,
+        batch_size=len(test_pairs),
+        Pos=Pos,
+        NumPatches=NumPatches,
+        Channels=Channels,
+        Height=Height,
+        Width=Width,
+        mesh=mesh,
+        axis_resources=axis_resources,
+        max_buffered_batches=0,
+        allow_nondivisible_batch_size=True,
+    )
+
+    batched = next(iter(loader.iter_from_step(0)))
+
+    return test_pairs, batched

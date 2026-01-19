@@ -861,22 +861,26 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         return np.concatenate([base_indices, grid_indices])
 
     def _pad_pixel_values(
-        self, pixel_values: np.ndarray, valid_patches: int, min_total_patches: Optional[int] = None
+        self, pixel_values: np.ndarray, valid_patches: int, batch_max_patches: Optional[int] = None
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Pad pixel_values to fixed TOTAL_PATCHES size and create grid_mask.
+        """Pad pixel_values to target size and create grid_mask.
 
         Args:
             pixel_values: Image patches array of shape (actual_patches, C, H, W)
             valid_patches: Number of patches to mark as valid in grid_mask
-            min_total_patches: Minimum total patches for consistent batching (e.g., max images in batch)
+            batch_max_patches: Target patches for this batch (e.g., max images in batch).
+                              Dynamically pads to batch's actual max, but not exceeding max_num_patches+1.
 
         Returns:
             Tuple of (padded_pixel_values, grid_mask)
         """
         assert self.max_num_patches is not None
-        base_total = self.max_num_patches + 1  # +1 for base patch
-        # For mixed batches: ensure total_patches >= max images in batch
-        total_patches = max(base_total, min_total_patches) if min_total_patches else base_total
+        upper_limit = self.max_num_patches + 1  # +1 for base patch, this is the max allowed
+        # Dynamic padding: use batch's actual max, but don't exceed the configured upper limit
+        if batch_max_patches is not None:
+            total_patches = min(batch_max_patches, upper_limit)
+        else:
+            total_patches = upper_limit
         actual_patches = pixel_values.shape[0]
 
         # Create grid_mask: True for valid patches, False for padding
@@ -1134,7 +1138,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                         pixel_values, grid_mask = self._pad_pixel_values(
                             pixel_values,
                             valid_patches=pixel_values.shape[0],
-                            min_total_patches=max_num_images_in_batch,
+                            batch_max_patches=max_num_images_in_batch,
                         )
                 else:
                     # Multiple images: only use base patch (first patch) from each image
@@ -1145,7 +1149,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                         pixel_values, grid_mask = self._pad_pixel_values(
                             pixel_values,
                             valid_patches=num_images,
-                            min_total_patches=max_num_images_in_batch,
+                            batch_max_patches=max_num_images_in_batch,
                         )
             else:
                 pixel_values = None
@@ -2691,6 +2695,37 @@ class LlavaOnevisionProcessor(ProcessorMixin):
         image_inputs = video_inputs = {}
 
         if images is not None:
+            # Auto-wrap flat image list into nested list based on <image> token count in each text.
+            # This enables HF processor to correctly compute batch_num_images.
+            #
+            # Example:
+            #   images = [img1, img2, img3, img4, img5, img6]  # flat
+            #   text = ["<image> <image> desc", "<image> desc", "<image> <image> <image> desc"]
+            #   → images = [[img1, img2], [img3], [img4, img5, img6]]  # nested
+            #   → batch_num_images = [2, 1, 3]
+            is_flat_list = (
+                isinstance(images, (list, tuple))
+                and len(images) > 0
+                and not isinstance(images[0], (list, tuple))
+            )
+
+            if is_flat_list:
+                # Count <image> tokens in each text sample
+                text_list = [text] if isinstance(text, str) else text
+                num_images_per_sample = [t.count(self.image_token) for t in text_list]
+
+                # Validate total images match before reorganizing
+                total_expected = sum(num_images_per_sample)
+                if total_expected == len(images):
+                    # Reorganize flat list into nested list
+                    images_nested = []
+                    idx = 0
+                    for num_img in num_images_per_sample:
+                        images_nested.append(list(images[idx : idx + num_img]))
+                        idx += num_img
+                    images = images_nested
+                # else: leave as-is, let HF processor handle mismatch error
+
             image_inputs = self.image_processor(images, **output_kwargs["images_kwargs"])
 
             batch_num_images = iter(image_inputs["batch_num_images"])
@@ -3252,6 +3287,29 @@ class ImageDataLoaderIterator(DataLoaderIterator):
         padding = numpy.zeros((pad_size,) + pixel_values.shape[1:], dtype=pixel_values.dtype)
         return numpy.concatenate([pixel_values, padding], axis=0)
 
+    def _pad_sequence_to_pos(self, arr: numpy.ndarray, target_len: int, pad_value=0) -> numpy.ndarray:
+        """Pad or truncate sequence to target length (Pos.size).
+
+        Args:
+            arr: 1D array to pad/truncate
+            target_len: Target sequence length
+            pad_value: Value to use for padding (default 0)
+
+        Returns:
+            Array of length target_len
+        """
+        actual_len = len(arr)
+        if actual_len == target_len:
+            return arr
+        if actual_len > target_len:
+            return arr[:target_len]
+        # Pad to target length
+        padded = numpy.zeros(target_len, dtype=arr.dtype)
+        if pad_value != 0:
+            padded.fill(pad_value)
+        padded[:actual_len] = arr
+        return padded
+
     def _batchify_local_data(self, batch: _Batch[ImageTextDict]) -> ImageTextExample:
         """
         Stack individual ImageTextDict examples into a batched ImageTextExample.
@@ -3261,6 +3319,7 @@ class ImageDataLoaderIterator(DataLoaderIterator):
         Batch = hax.Axis(self.dl.batch_axis_name, padded_batch_size)
 
         # Get target sizes from the axes
+        target_seq_len = self.dl.Pos.size
         target_num_patches = self.dl.NumPatches.size
 
         # Determine axes for each field
@@ -3329,13 +3388,15 @@ class ImageDataLoaderIterator(DataLoaderIterator):
         input_shape = tuple(ax.size for ax in input_axes)
 
         def get_input_ids(d: ImageTextDict) -> numpy.ndarray:
-            return d["input_ids"].astype(numpy.int32)
+            ids = d["input_ids"].astype(numpy.int32)
+            return self._pad_sequence_to_pos(ids, target_seq_len, pad_value=0)
 
         input_ids = make_sharded_array(input_shape, input_axes, numpy.int32, get_input_ids)
 
         # Get loss_mask directly from preprocessed data
         def get_loss_mask(d: ImageTextDict) -> numpy.ndarray:
-            return d["loss_mask"].astype(numpy.float32)
+            mask = d["loss_mask"].astype(numpy.float32)
+            return self._pad_sequence_to_pos(mask, target_seq_len, pad_value=0.0)
 
         loss_mask = make_sharded_array(input_shape, input_axes, numpy.float32, get_loss_mask)
 
@@ -3392,9 +3453,11 @@ class ImageDataLoaderIterator(DataLoaderIterator):
         def get_combined_mask(d: ImageTextDict) -> numpy.ndarray:
             mask = d.get("combined_mask")
             if mask is not None:
-                return mask.astype(numpy.int32)
+                mask = mask.astype(numpy.int32)
+                return self._pad_sequence_to_pos(mask, target_seq_len, pad_value=0)
             # Fallback: create from attention_mask
-            return d["attention_mask"].astype(numpy.int32)
+            attn = d["attention_mask"].astype(numpy.int32)
+            return self._pad_sequence_to_pos(attn, target_seq_len, pad_value=0)
 
         combined_mask = make_sharded_array(input_shape, input_axes, numpy.int32, get_combined_mask)
 
@@ -3402,9 +3465,11 @@ class ImageDataLoaderIterator(DataLoaderIterator):
         def get_position_ids(d: ImageTextDict) -> numpy.ndarray:
             pos_ids = d.get("position_ids")
             if pos_ids is not None:
-                return pos_ids.astype(numpy.int32)
+                pos_ids = pos_ids.astype(numpy.int32)
+                return self._pad_sequence_to_pos(pos_ids, target_seq_len, pad_value=0)
             # Fallback: compute from attention_mask using cumsum
             attn_mask = d["attention_mask"].astype(numpy.int32)
+            attn_mask = self._pad_sequence_to_pos(attn_mask, target_seq_len, pad_value=0)
             pos_ids = numpy.cumsum(attn_mask) - 1
             return numpy.maximum(pos_ids, 0).astype(numpy.int32)
 
