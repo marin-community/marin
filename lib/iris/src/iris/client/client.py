@@ -37,7 +37,10 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from iris.client.client import IrisClient, NamespacedEndpointRegistry
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.cluster.client import (
@@ -156,8 +159,7 @@ class Task:
         Returns:
             List of LogEntry objects from the task
         """
-        task_id = f"{self._job_id}/task-{self._task_index}"
-        entries = self._client._cluster.fetch_task_logs(task_id, start_ms, max_lines)
+        entries = self._client._cluster.fetch_task_logs(self.task_id, start_ms, max_lines)
         return [LogEntry.from_proto(e) for e in entries]
 
 
@@ -193,16 +195,6 @@ class Job:
 
     def __repr__(self) -> str:
         return f"Job({self._job_id!r})"
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, Job):
-            return self._job_id == other._job_id
-        if isinstance(other, str):
-            return str(self._job_id) == other
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash(self._job_id)
 
     def status(self) -> cluster_pb2.JobStatus:
         """Get current job status.
@@ -286,7 +278,7 @@ class Job:
                         state.last_timestamp_ms = max(state.last_timestamp_ms, entry.timestamp_ms)
                         _print_log_entry(self._job_id, entry, task_index=state.task_index)
                 except ValueError:
-                    pass  # Task not yet scheduled
+                    logger.debug("Task %d not yet scheduled for job %s", state.task_index, self._job_id)
 
             if is_job_finished(status.state):
                 # Final drain to catch any remaining logs
@@ -298,7 +290,9 @@ class Job:
                             entry = LogEntry.from_proto(proto)
                             _print_log_entry(self._job_id, entry, task_index=state.task_index)
                     except ValueError:
-                        pass
+                        logger.debug(
+                            "Task %d logs unavailable during final drain for job %s", state.task_index, self._job_id
+                        )
                 return status
 
             elapsed = time.monotonic() - start
@@ -340,8 +334,8 @@ class IrisContext:
     job_id: str
     attempt_id: int = 0
     worker_id: str | None = None
-    client: Any = None  # IrisClient (can't type due to forward ref)
-    registry: Any = None  # NamespacedEndpointRegistry (can't type due to forward ref)
+    client: "IrisClient | None" = None
+    registry: "NamespacedEndpointRegistry | None" = None
     ports: dict[str, int] | None = None
 
     def __post_init__(self):
@@ -406,8 +400,8 @@ class IrisContext:
     @staticmethod
     def from_job_info(
         info: JobInfo,
-        client: Any = None,
-        registry: Any = None,
+        client: "IrisClient | None" = None,
+        registry: "NamespacedEndpointRegistry | None" = None,
     ) -> "IrisContext":
         """Create IrisContext from JobInfo.
 

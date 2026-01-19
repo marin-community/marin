@@ -12,13 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for fetch_logs and LogPoller."""
-
-import time
+"""Tests for fetch_logs and log streaming."""
 
 import pytest
 
-from iris.client import IrisClient, LocalClientConfig, LogPoller
+from iris.client import IrisClient, LocalClientConfig
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import cluster_pb2
 
@@ -54,32 +52,6 @@ def test_fetch_logs_basic(local_client, resources):
     assert any("Log line 1" in d for d in log_data)
     assert any("Log line 2" in d for d in log_data)
     assert any("Log line 3" in d for d in log_data)
-
-
-def test_log_poller_api(local_client, resources):
-    """Verify LogPoller API works with Job objects.
-
-    In local mode, log capture timing is unreliable because:
-    1. Jobs complete very quickly (often < 100ms)
-    2. Task logs may not be available until after the job finishes
-
-    This test verifies the API works without asserting log content.
-    """
-    entrypoint = Entrypoint.from_callable(logging_job)
-    job = local_client.submit(entrypoint, "poller-test", resources)
-
-    # Test that LogPoller accepts Job objects and can start/stop
-    poller = LogPoller(job, poll_interval=0.1)
-    poller.start()
-
-    job.wait(raise_on_failure=False)
-    time.sleep(0.2)
-    poller.stop()
-
-    # Test context manager usage
-    job2 = local_client.submit(entrypoint, "poller-test-2", resources)
-    with LogPoller(job2, poll_interval=0.1):
-        job2.wait(raise_on_failure=False)
 
 
 def test_wait_with_stream_logs(local_client, resources, caplog):

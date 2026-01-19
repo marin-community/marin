@@ -35,7 +35,6 @@ from iris.client.client import (
     iris_ctx,
     iris_ctx_scope,
 )
-from iris.client.log_poller import LogPoller
 from iris.client.resolver import ClusterResolver
 from iris.client.worker_pool import WorkerPool, WorkerPoolConfig
 
@@ -50,7 +49,6 @@ __all__ = [
     "JobFailedError",
     "LocalClientConfig",
     "LogEntry",
-    "LogPoller",
     "ResolveResult",
     "ResolvedEndpoint",
     "Resolver",

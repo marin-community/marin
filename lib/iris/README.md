@@ -116,7 +116,7 @@ result = pool.call().predict([1, 2, 3])
 
 ```python
 from iris.client import IrisClient, WorkerPool, WorkerPoolConfig
-from iris.rpc.cluster_pb2 import ResourceSpec
+from iris.cluster.types import ResourceSpec
 
 client = IrisClient.remote("http://controller:8080", workspace=Path("."))
 config = WorkerPoolConfig(num_workers=10, resources=ResourceSpec(cpu=2))
