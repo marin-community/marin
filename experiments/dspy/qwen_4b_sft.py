@@ -94,6 +94,7 @@ def train():
         logging_steps=1,
         max_steps=10, # Adjustable based on dataset size
         fp16=torch.cuda.is_available(),
+        bf16=False, # Explicitly disable BF16 for T4 compatibility
         use_cpu=not torch.cuda.is_available(),
         optim="paged_adamw_8bit" if torch.cuda.is_available() else "adamw_torch",
         report_to="none",
