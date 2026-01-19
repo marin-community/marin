@@ -415,7 +415,7 @@ class WorkerPool:
 
         # Worker management
         self._workers: dict[str, WorkerState] = {}
-        self._jobs: list[Job] = []
+        self._job: Job | None = None
 
         # Task queue and dispatch
         self._task_queue: Queue[PendingTask] = Queue()
@@ -446,8 +446,8 @@ class WorkerPool:
         return sum(1 for w in self._workers.values() if w.status == WorkerStatus.IDLE)
 
     @property
-    def job_ids(self) -> list[JobId]:
-        return [job.job_id for job in self._jobs]
+    def job_id(self) -> JobId | None:
+        return self._job.job_id if self._job else None
 
     def _launch_workers(self) -> None:
         if self._resolver is None:
@@ -478,7 +478,7 @@ class WorkerPool:
             environment=self._config.environment,
             ports=["actor"],
         )
-        self._jobs.append(job)
+        self._job = job
 
         # Start dispatchers (one per worker). Each thread needs its own context copy
         # because a Context can only be entered by one thread at a time.
@@ -622,9 +622,9 @@ class WorkerPool:
             for dispatcher in self._dispatchers:
                 dispatcher.join(timeout=5.0)
 
-        # Terminate worker jobs
-        for job in self._jobs:
+        # Terminate worker job
+        if self._job:
             try:
-                job.terminate()
+                self._job.terminate()
             except Exception as e:
-                logger.debug("Failed to terminate worker job %s: %s", job.job_id, e)
+                logger.debug("Failed to terminate worker job %s: %s", self._job.job_id, e)
