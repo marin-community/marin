@@ -905,12 +905,6 @@ def test_failure_domain_kills_remaining_tasks_on_task_failure(worker_metadata):
     assert tasks[2].state == cluster_pb2.TASK_STATE_KILLED
     assert tasks[2].error is not None and "max_task_failures" in tasks[2].error
 
-    # Verify failure reason is logged for operational visibility
-    actions = state.get_recent_actions()
-    failure_log = next((a for a in actions if a.action == "failure_domain_triggered"), None)
-    assert failure_log is not None, "Failure domain trigger should be logged for operators"
-    assert failure_log.job_id == "j1"
-
 
 def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
     """Job with max_task_failures=1 tolerates one failure before failing."""
@@ -1053,3 +1047,435 @@ def test_all_tasks_succeed_job_succeeds(worker_metadata):
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
     for task in tasks:
         assert task.state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+
+# =============================================================================
+# Event-Driven API Tests
+# =============================================================================
+
+
+def test_handle_event_worker_registered(worker_metadata):
+    """Test worker registration via handle_event."""
+    from iris.cluster.controller.events import Event, EventType
+
+    state = ControllerState()
+    event = Event(
+        EventType.WORKER_REGISTERED,
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+        timestamp_ms=1000,
+    )
+
+    txn = state.handle_event(event)
+
+    # Worker should be registered
+    worker = state.get_worker(WorkerId("w1"))
+    assert worker is not None
+    assert worker.address == "host:8080"
+    assert worker.healthy is True
+    assert worker.last_heartbeat_ms == 1000
+
+    # Transaction should log the action
+    assert len(txn.actions) == 1
+    assert txn.actions[0].action == "worker_registered"
+    assert txn.actions[0].entity_id == "w1"
+
+
+def test_handle_event_worker_heartbeat(worker_metadata):
+    """Test worker heartbeat via handle_event."""
+    from iris.cluster.controller.events import Event, EventType
+
+    state = ControllerState()
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+        last_heartbeat_ms=1000,
+    )
+    state.add_worker(worker)
+    worker.healthy = False
+
+    event = Event(
+        EventType.WORKER_HEARTBEAT,
+        worker_id=WorkerId("w1"),
+        timestamp_ms=2000,
+    )
+    txn = state.handle_event(event)
+
+    # Worker should be updated
+    assert worker.last_heartbeat_ms == 2000
+    assert worker.healthy is True
+    assert worker.consecutive_failures == 0
+
+    assert len(txn.actions) == 1
+    assert txn.actions[0].action == "heartbeat"
+
+
+def test_handle_event_worker_failed_cascades_to_tasks(job_request, worker_metadata):
+    """Test that worker failure cascades to running tasks."""
+    from iris.cluster.controller.events import Event, EventType
+
+    state = ControllerState()
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+    )
+    state.add_worker(worker)
+
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"))
+    tasks = state.add_job(job)
+    task = tasks[0]
+    task.max_retries_preemption = 1
+
+    # Start the task
+    state.mark_task_dispatched(task, WorkerId("w1"))
+    state.assign_task_to_worker(WorkerId("w1"), task.task_id)
+
+    # Worker fails
+    event = Event(
+        EventType.WORKER_FAILED,
+        worker_id=WorkerId("w1"),
+        error="Connection lost",
+    )
+    txn = state.handle_event(event)
+
+    # Worker should be marked unhealthy
+    assert worker.healthy is False
+
+    # Task should be in WORKER_FAILED state and requeued
+    assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert task.can_be_scheduled()
+
+    # Transaction should log both worker failure and task cascade
+    actions = [a.action for a in txn.actions]
+    assert "worker_failed" in actions
+    assert "task_worker_failed" in actions
+    assert "task_requeued" in actions
+
+
+def test_handle_event_job_submitted(job_request):
+    """Test job submission via handle_event."""
+    from iris.cluster.controller.events import Event, EventType
+
+    state = ControllerState()
+    req = job_request("test-job")
+    req.resources.replicas = 3
+
+    event = Event(
+        EventType.JOB_SUBMITTED,
+        job_id=JobId("j1"),
+        request=req,
+        timestamp_ms=1000,
+    )
+    txn = state.handle_event(event)
+
+    # Job should be created
+    job = state.get_job(JobId("j1"))
+    assert job is not None
+    assert job.submitted_at_ms == 1000
+    assert job.num_tasks == 3
+
+    # Tasks should be created
+    tasks = state.get_job_tasks(JobId("j1"))
+    assert len(tasks) == 3
+
+    # Tasks should be in queue
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 3
+
+    # Transaction should log actions
+    actions = [a.action for a in txn.actions]
+    assert actions.count("task_created") == 3
+    assert "job_submitted" in actions
+
+
+def test_handle_event_job_cancelled(job_request):
+    """Test job cancellation via handle_event."""
+    from iris.cluster.controller.events import Event, EventType
+
+    state = ControllerState()
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("test-job"))
+    tasks = state.add_job(job)
+
+    event = Event(
+        EventType.JOB_CANCELLED,
+        job_id=JobId("j1"),
+        reason="User cancelled",
+    )
+    txn = state.handle_event(event)
+
+    # Job should be killed (no JOB_STATE_CANCELLED in proto)
+    assert job.state == cluster_pb2.JOB_STATE_KILLED
+    assert job.finished_at_ms is not None
+
+    # Tasks should be killed
+    for task in tasks:
+        assert task.state == cluster_pb2.TASK_STATE_KILLED
+
+    # Transaction should log actions
+    actions = [a.action for a in txn.actions]
+    assert "task_killed" in actions
+    assert "job_cancelled" in actions
+
+
+def test_handle_event_task_assigned(job_request, worker_metadata):
+    """Test task assignment via handle_event.
+
+    TASK_ASSIGNED puts the task in PENDING state (assigned to worker but not yet running).
+    The task transitions to RUNNING when TASK_RUNNING event is received.
+    """
+    from iris.cluster.controller.events import Event, EventType
+
+    state = ControllerState()
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+    )
+    state.add_worker(worker)
+
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("test-job"))
+    tasks = state.add_job(job)
+    task = tasks[0]
+
+    event = Event(
+        EventType.TASK_ASSIGNED,
+        task_id=task.task_id,
+        worker_id=WorkerId("w1"),
+    )
+    txn = state.handle_event(event)
+
+    # Task should be assigned but PENDING (not running yet)
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.worker_id == WorkerId("w1")
+    assert len(task.attempts) == 1
+    assert task.attempts[0].state == cluster_pb2.TASK_STATE_PENDING
+
+    # Worker should have the task
+    assert task.task_id in worker.running_tasks
+
+    # Task should be removed from queue (it's assigned, just not running)
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 0
+
+    assert len(txn.actions) == 1
+    assert txn.actions[0].action == "task_assigned"
+
+
+def test_handle_event_task_succeeded(job_request, worker_metadata):
+    """Test task success via handle_event."""
+    from iris.cluster.controller.events import Event, EventType
+
+    state = ControllerState()
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+    )
+    state.add_worker(worker)
+
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("test-job"))
+    tasks = state.add_job(job)
+    task = tasks[0]
+
+    # Assign task (PENDING) then mark running
+    state.handle_event(Event(EventType.TASK_ASSIGNED, task_id=task.task_id, worker_id=WorkerId("w1")))
+    state.handle_event(Event(EventType.TASK_RUNNING, task_id=task.task_id))
+
+    # Task succeeds
+    event = Event(EventType.TASK_SUCCEEDED, task_id=task.task_id, exit_code=0)
+    txn = state.handle_event(event)
+
+    # Task should be succeeded
+    assert task.state == cluster_pb2.TASK_STATE_SUCCEEDED
+    assert task.exit_code == 0
+    assert task.finished_at_ms is not None
+
+    # Job should be succeeded (single task)
+    assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    # Worker should have task unassigned
+    assert task.task_id not in worker.running_tasks
+
+    assert "task_succeeded" in [a.action for a in txn.actions]
+
+
+def test_handle_event_task_failed_with_retry(job_request, worker_metadata):
+    """Test task failure with retry via handle_event."""
+    from iris.cluster.controller.events import Event, EventType
+
+    state = ControllerState()
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+    )
+    state.add_worker(worker)
+
+    req = job_request("test-job")
+    req.max_task_failures = 1  # Allow job to tolerate 1 failure
+    job = ControllerJob(job_id=JobId("j1"), request=req)
+    tasks = state.add_job(job)
+    task = tasks[0]
+    task.max_retries_failure = 1  # Allow task retry
+
+    # Assign task (PENDING) then mark running
+    state.handle_event(Event(EventType.TASK_ASSIGNED, task_id=task.task_id, worker_id=WorkerId("w1")))
+    state.handle_event(Event(EventType.TASK_RUNNING, task_id=task.task_id))
+
+    # Task fails
+    event = Event(EventType.TASK_FAILED, task_id=task.task_id, error="Test error", exit_code=1)
+    txn = state.handle_event(event)
+
+    # Task should be in FAILED state but schedulable
+    assert task.state == cluster_pb2.TASK_STATE_FAILED
+    assert task.failure_count == 1
+    assert task.can_be_scheduled()
+
+    # Task should be requeued
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 1
+    assert pending[0].task_id == task.task_id
+
+    # Job should still be running
+    assert job.state == cluster_pb2.JOB_STATE_RUNNING
+
+    actions = [a.action for a in txn.actions]
+    assert "task_failed" in actions
+    assert "task_requeued" in actions
+
+
+def test_handle_event_task_failed_exhausted_retries(job_request, worker_metadata):
+    """Test task failure with exhausted retries via handle_event."""
+    from iris.cluster.controller.events import Event, EventType
+
+    state = ControllerState()
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+    )
+    state.add_worker(worker)
+
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("test-job"))
+    tasks = state.add_job(job)
+    task = tasks[0]
+    # Default max_retries_failure=0
+
+    # Assign task (PENDING) then mark running
+    state.handle_event(Event(EventType.TASK_ASSIGNED, task_id=task.task_id, worker_id=WorkerId("w1")))
+    state.handle_event(Event(EventType.TASK_RUNNING, task_id=task.task_id))
+
+    # Task fails
+    event = Event(EventType.TASK_FAILED, task_id=task.task_id, error="Test error")
+    state.handle_event(event)
+
+    # Task should be finished (no retries)
+    assert task.state == cluster_pb2.TASK_STATE_FAILED
+    assert task.is_finished()
+
+    # Job should be failed
+    assert job.state == cluster_pb2.JOB_STATE_FAILED
+
+
+def test_handle_event_task_running(job_request, worker_metadata):
+    """Test that TASK_RUNNING transitions task from PENDING to RUNNING."""
+    from iris.cluster.controller.events import Event, EventType
+
+    state = ControllerState()
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+    )
+    state.add_worker(worker)
+
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("test-job"))
+    tasks = state.add_job(job)
+    task = tasks[0]
+
+    # Assign task (goes to PENDING)
+    state.handle_event(Event(EventType.TASK_ASSIGNED, task_id=task.task_id, worker_id=WorkerId("w1")))
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
+
+    # Worker reports task is running
+    event = Event(EventType.TASK_RUNNING, task_id=task.task_id)
+    txn = state.handle_event(event)
+
+    # Task should now be RUNNING
+    assert task.state == cluster_pb2.TASK_STATE_RUNNING
+    assert task.attempts[0].state == cluster_pb2.TASK_STATE_RUNNING
+    assert task.attempts[0].started_at_ms is not None
+
+    # Job should transition to RUNNING
+    assert job.state == cluster_pb2.JOB_STATE_RUNNING
+
+    assert len(txn.actions) == 1
+    assert txn.actions[0].action == "task_running"
+
+
+def test_handle_event_task_killed_directly(job_request, worker_metadata):
+    """Test TASK_KILLED event directly (not via job cancellation)."""
+    from iris.cluster.controller.events import Event, EventType
+
+    state = ControllerState()
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+    )
+    state.add_worker(worker)
+
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("test-job"))
+    tasks = state.add_job(job)
+    task = tasks[0]
+
+    # Assign and run the task
+    state.handle_event(Event(EventType.TASK_ASSIGNED, task_id=task.task_id, worker_id=WorkerId("w1")))
+    state.handle_event(Event(EventType.TASK_RUNNING, task_id=task.task_id))
+    assert task.state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Kill the task directly
+    event = Event(EventType.TASK_KILLED, task_id=task.task_id, reason="Manual kill")
+    txn = state.handle_event(event)
+
+    # Task should be KILLED
+    assert task.state == cluster_pb2.TASK_STATE_KILLED
+    assert task.error == "Manual kill"
+    assert task.finished_at_ms is not None
+    assert task.is_finished()
+
+    # Job should be KILLED (single task job)
+    assert job.state == cluster_pb2.JOB_STATE_KILLED
+
+    # Worker should have task unassigned
+    assert task.task_id not in worker.running_tasks
+
+    assert "task_killed" in [a.action for a in txn.actions]
+
+
+def test_get_transactions_returns_recent(job_request):
+    """Test that get_transactions returns recent transactions."""
+    from iris.cluster.controller.events import Event, EventType
+
+    state = ControllerState()
+
+    # Submit a few jobs
+    for i in range(5):
+        event = Event(
+            EventType.JOB_SUBMITTED,
+            job_id=JobId(f"j{i}"),
+            request=job_request(f"job-{i}"),
+        )
+        state.handle_event(event)
+
+    # Get transactions
+    transactions = state.get_transactions(limit=3)
+    assert len(transactions) == 3
+
+    # Should be most recent
+    assert transactions[-1].event.job_id == JobId("j4")
+    assert transactions[-2].event.job_id == JobId("j3")
+    assert transactions[-3].event.job_id == JobId("j2")

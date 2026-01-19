@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from threading import RLock
 
+from iris.cluster.controller.events import Event, EventType, TransactionLog
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import now_ms
@@ -811,32 +812,21 @@ class ControllerEndpoint:
     registered_at_ms: int = 0
 
 
-@dataclass
-class ActionLogEntry:
-    """Record of a controller action for the dashboard.
-
-    Args:
-        timestamp_ms: Unix timestamp in milliseconds when action occurred
-        action: Action type (e.g., "job_submitted", "job_started", "worker_failed")
-        job_id: Associated job ID, if any
-        worker_id: Associated worker ID, if any
-        details: Additional human-readable details
-    """
-
-    timestamp_ms: int
-    action: str
-    job_id: JobId | None = None
-    worker_id: WorkerId | None = None
-    details: str = ""
-
-
 # =============================================================================
 # Controller State
 # =============================================================================
 
 
 class ControllerState:
-    """Thread-safe controller state managing jobs, tasks, workers, endpoints, and queues."""
+    """Thread-safe controller state managing jobs, tasks, workers, endpoints, and queues.
+
+    State transitions can be performed via the event-driven handle_event() API,
+    which provides transaction logging for debugging and supports cascading effects.
+
+    TODO: Migrate legacy methods (transition_task, add_job, mark_task_dispatched, etc.)
+    to use handle_event() in a follow-up. The legacy methods remain for backward
+    compatibility with existing controller code that has not yet been updated.
+    """
 
     def __init__(self):
         self._lock = RLock()
@@ -846,9 +836,350 @@ class ControllerState:
         self._workers: dict[WorkerId, ControllerWorker] = {}
         self._task_queue: deque[TaskId] = deque()  # FIFO queue of task IDs
         self._gangs: dict[str, set[JobId]] = {}  # gang_id -> job_ids
-        self._actions: deque[ActionLogEntry] = deque(maxlen=100)  # Recent actions log
         self._endpoints: dict[str, ControllerEndpoint] = {}  # endpoint_id -> endpoint
         self._endpoints_by_task: dict[TaskId, set[str]] = {}  # task_id -> endpoint_ids
+        self._transactions: deque[TransactionLog] = deque(maxlen=1000)  # Event transaction log
+
+    # =========================================================================
+    # Event-Driven State Transitions
+    # =========================================================================
+
+    def handle_event(self, event: Event) -> TransactionLog:
+        """Main entry point for all event-driven state changes.
+
+        Dispatches to the appropriate handler based on event_type and records
+        all actions to a transaction log for debugging.
+
+        Args:
+            event: The event to process
+
+        Returns:
+            TransactionLog containing all actions taken during event handling
+        """
+        with self._lock:
+            txn = TransactionLog(event=event)
+
+            match event.event_type:
+                case EventType.WORKER_REGISTERED:
+                    self._on_worker_registered(txn, event)
+                case EventType.WORKER_HEARTBEAT:
+                    self._on_worker_heartbeat(txn, event)
+                case EventType.WORKER_FAILED:
+                    self._on_worker_failed(txn, event)
+                case EventType.JOB_SUBMITTED:
+                    self._on_job_submitted(txn, event)
+                case EventType.JOB_CANCELLED:
+                    self._on_job_cancelled(txn, event)
+                case EventType.TASK_ASSIGNED:
+                    self._on_task_assigned(txn, event)
+                case EventType.TASK_RUNNING:
+                    self._on_task_running(txn, event)
+                case EventType.TASK_SUCCEEDED:
+                    self._on_task_succeeded(txn, event)
+                case EventType.TASK_FAILED:
+                    self._on_task_failed(txn, event)
+                case EventType.TASK_KILLED:
+                    self._on_task_killed(txn, event)
+                case EventType.TASK_WORKER_FAILED:
+                    self._on_task_worker_failed(txn, event)
+
+            self._transactions.append(txn)
+            return txn
+
+    # -------------------------------------------------------------------------
+    # Worker Event Handlers
+    # -------------------------------------------------------------------------
+
+    def _on_worker_registered(self, txn: TransactionLog, event: Event) -> None:
+        assert event.worker_id and event.address and event.metadata
+        worker = ControllerWorker(
+            worker_id=event.worker_id,
+            address=event.address,
+            metadata=event.metadata,
+            last_heartbeat_ms=event.timestamp_ms or now_ms(),
+        )
+        self._workers[event.worker_id] = worker
+        txn.log("worker_registered", event.worker_id, address=event.address)
+
+    def _on_worker_heartbeat(self, txn: TransactionLog, event: Event) -> None:
+        assert event.worker_id and event.timestamp_ms is not None
+        worker = self._workers[event.worker_id]
+        worker.last_heartbeat_ms = event.timestamp_ms
+        worker.healthy = True
+        worker.consecutive_failures = 0
+        txn.log("heartbeat", event.worker_id)
+
+    def _on_worker_failed(self, txn: TransactionLog, event: Event) -> None:
+        assert event.worker_id
+        worker = self._workers[event.worker_id]
+        worker.healthy = False
+        txn.log("worker_failed", event.worker_id, error=event.error)
+
+        # Cascade to running tasks - call handler directly, same transaction
+        for task_id in list(worker.running_tasks):
+            task = self._tasks[task_id]
+            assert task.worker_id == event.worker_id
+            if task.state != cluster_pb2.TASK_STATE_RUNNING:
+                continue
+
+            cascade_event = Event(
+                EventType.TASK_WORKER_FAILED,
+                task_id=task_id,
+                worker_id=event.worker_id,
+                error=f"Worker {event.worker_id} failed: {event.error or 'unknown'}",
+            )
+            self._on_task_worker_failed(txn, cascade_event)
+
+    # -------------------------------------------------------------------------
+    # Job Event Handlers
+    # -------------------------------------------------------------------------
+
+    def _on_job_submitted(self, txn: TransactionLog, event: Event) -> None:
+        assert event.job_id and event.request
+        job = ControllerJob(
+            job_id=event.job_id,
+            request=event.request,
+            submitted_at_ms=event.timestamp_ms or now_ms(),
+        )
+        self._jobs[event.job_id] = job
+        self._tasks_by_job[event.job_id] = []
+
+        tasks = expand_job_to_tasks(job)
+        job.num_tasks = len(tasks)
+
+        for task in tasks:
+            self._tasks[task.task_id] = task
+            self._tasks_by_job[event.job_id].append(task.task_id)
+            self._task_queue.append(task.task_id)
+            job.task_state_counts[task.state] += 1
+            txn.log("task_created", task.task_id, job_id=str(event.job_id))
+
+        if job.gang_id:
+            self._gangs.setdefault(job.gang_id, set()).add(event.job_id)
+
+        txn.log("job_submitted", event.job_id, num_tasks=job.num_tasks)
+
+    def _on_job_cancelled(self, txn: TransactionLog, event: Event) -> None:
+        assert event.job_id and event.reason
+        job = self._jobs[event.job_id]
+
+        for task_id in self._tasks_by_job.get(event.job_id, []):
+            task = self._tasks[task_id]
+            if task.state in TERMINAL_TASK_STATES:
+                continue
+
+            cascade_event = Event(EventType.TASK_KILLED, task_id=task_id, reason=event.reason)
+            self._on_task_killed(txn, cascade_event)
+
+        job.state = cluster_pb2.JOB_STATE_KILLED
+        job.error = event.reason
+        job.finished_at_ms = now_ms()
+        txn.log("job_cancelled", event.job_id, reason=event.reason)
+
+    # -------------------------------------------------------------------------
+    # Task Event Handlers
+    # -------------------------------------------------------------------------
+
+    def _on_task_assigned(self, txn: TransactionLog, event: Event) -> None:
+        assert event.task_id and event.worker_id
+        task = self._tasks[event.task_id]
+        worker = self._workers[event.worker_id]
+        job = self._jobs[task.job_id]
+
+        old_state = task.state
+        task.create_attempt(event.worker_id)
+
+        # Task is assigned but not yet running - worker needs to report TASK_RUNNING
+        task.state = cluster_pb2.TASK_STATE_PENDING
+        if task.attempts:
+            task.attempts[-1].state = cluster_pb2.TASK_STATE_PENDING
+
+        worker.assign_task(event.task_id, job.request.resources)
+
+        # Remove from queue
+        self._task_queue = deque(tid for tid in self._task_queue if tid != event.task_id)
+
+        # Update job counters and state
+        new_job_state = job.on_task_transition(old_state, task.state)
+        if new_job_state is not None:
+            job.state = new_job_state
+
+        txn.log("task_assigned", event.task_id, worker_id=str(event.worker_id))
+
+    def _on_task_running(self, txn: TransactionLog, event: Event) -> None:
+        assert event.task_id
+        task = self._tasks[event.task_id]
+        job = self._jobs[task.job_id]
+        old_state = task.state
+
+        task.state = cluster_pb2.TASK_STATE_RUNNING
+        if task.attempts:
+            task.attempts[-1].state = cluster_pb2.TASK_STATE_RUNNING
+            task.attempts[-1].started_at_ms = now_ms()
+
+        new_job_state = job.on_task_transition(old_state, task.state)
+        if new_job_state is not None:
+            job.state = new_job_state
+
+        txn.log("task_running", event.task_id)
+
+    def _on_task_succeeded(self, txn: TransactionLog, event: Event) -> None:
+        assert event.task_id
+        task = self._tasks[event.task_id]
+        job = self._jobs[task.job_id]
+        old_state = task.state
+        ts = now_ms()
+
+        task.state = cluster_pb2.TASK_STATE_SUCCEEDED
+        task.exit_code = event.exit_code if event.exit_code is not None else 0
+        task.finished_at_ms = ts
+
+        if task.attempts:
+            task.attempts[-1].state = cluster_pb2.TASK_STATE_SUCCEEDED
+            task.attempts[-1].exit_code = task.exit_code
+            task.attempts[-1].finished_at_ms = ts
+
+        self._finalize_task(task, job, txn)
+
+        new_job_state = job.on_task_transition(old_state, task.state)
+        if new_job_state is not None:
+            self._finalize_job_state(job, new_job_state)
+
+        txn.log("task_succeeded", event.task_id, exit_code=task.exit_code)
+
+    def _on_task_failed(self, txn: TransactionLog, event: Event) -> None:
+        """Task failed due to task error. Uses failure retry budget."""
+        assert event.task_id
+        task = self._tasks[event.task_id]
+        job = self._jobs[task.job_id]
+        old_state = task.state
+
+        task.failure_count += 1
+        can_retry = task.failure_count <= task.max_retries_failure
+
+        self._apply_task_failure(
+            task,
+            job,
+            txn,
+            new_state=cluster_pb2.TASK_STATE_FAILED,
+            error=event.error,
+            exit_code=event.exit_code,
+            can_retry=can_retry,
+        )
+
+        new_job_state = job.on_task_transition(old_state, task.state)
+        if new_job_state is not None:
+            self._finalize_job_state(job, new_job_state)
+
+        txn.log("task_failed", event.task_id, error=event.error, can_retry=can_retry)
+
+    def _on_task_killed(self, txn: TransactionLog, event: Event) -> None:
+        """Task killed by user/scheduler. No retry."""
+        assert event.task_id
+        task = self._tasks[event.task_id]
+        job = self._jobs[task.job_id]
+        old_state = task.state
+
+        self._apply_task_failure(
+            task,
+            job,
+            txn,
+            new_state=cluster_pb2.TASK_STATE_KILLED,
+            error=event.reason,
+            can_retry=False,
+        )
+
+        new_job_state = job.on_task_transition(old_state, task.state)
+        if new_job_state is not None:
+            self._finalize_job_state(job, new_job_state)
+
+        txn.log("task_killed", event.task_id, reason=event.reason)
+
+    def _on_task_worker_failed(self, txn: TransactionLog, event: Event) -> None:
+        """Task failed because worker died. Uses preemption retry budget."""
+        assert event.task_id
+        task = self._tasks[event.task_id]
+        job = self._jobs[task.job_id]
+        old_state = task.state
+
+        task.preemption_count += 1
+        can_retry = task.preemption_count <= task.max_retries_preemption
+
+        self._apply_task_failure(
+            task,
+            job,
+            txn,
+            new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+            error=event.error,
+            can_retry=can_retry,
+        )
+
+        new_job_state = job.on_task_transition(old_state, task.state)
+        if new_job_state is not None:
+            self._finalize_job_state(job, new_job_state)
+
+        txn.log(
+            "task_worker_failed",
+            event.task_id,
+            worker_id=str(event.worker_id) if event.worker_id else None,
+            can_retry=can_retry,
+        )
+
+    # -------------------------------------------------------------------------
+    # Shared Helpers for Event Handlers
+    # -------------------------------------------------------------------------
+
+    def _apply_task_failure(
+        self,
+        task: ControllerTask,
+        job: ControllerJob,
+        txn: TransactionLog,
+        *,
+        new_state: int,
+        error: str | None,
+        exit_code: int | None = None,
+        can_retry: bool,
+    ) -> None:
+        """Common logic for task failure states."""
+        ts = now_ms()
+        task.state = new_state
+        task.error = error
+        task.exit_code = exit_code
+
+        if task.attempts:
+            task.attempts[-1].state = new_state
+            task.attempts[-1].error = error
+            task.attempts[-1].exit_code = exit_code
+            task.attempts[-1].finished_at_ms = ts
+
+        if can_retry:
+            self._requeue_task(task, job, txn)
+        else:
+            task.finished_at_ms = ts
+
+        self._finalize_task(task, job, txn)
+
+    def _finalize_task(self, task: ControllerTask, job: ControllerJob, txn: TransactionLog) -> None:
+        """Unassign from worker and clean up endpoints."""
+        worker_id = task.worker_id
+        if worker_id:
+            worker = self._workers.get(worker_id)
+            if worker and task.task_id in worker.running_tasks:
+                worker.unassign_task(task.task_id, job.request.resources)
+                txn.log("task_unassigned", task.task_id, worker_id=str(worker_id))
+
+        self._remove_endpoints_for_task(task.task_id)
+
+    def _requeue_task(self, task: ControllerTask, job: ControllerJob, txn: TransactionLog) -> None:
+        """Put task back on scheduling queue for retry."""
+        if task.task_id not in self._task_queue:
+            self._task_queue.append(task.task_id)
+        txn.log("task_requeued", task.task_id)
+
+    def get_transactions(self, limit: int = 100) -> list[TransactionLog]:
+        """Return recent transactions for debugging."""
+        with self._lock:
+            return list(self._transactions)[-limit:]
 
     # --- Job Management ---
 
@@ -1060,23 +1391,15 @@ class ControllerState:
 
         if new_state == cluster_pb2.JOB_STATE_FAILED:
             job.error = self._get_first_task_error(job.job_id)
-            failed_count = job.task_state_counts[cluster_pb2.TASK_STATE_FAILED]
-            self.log_action(
-                "failure_domain_triggered",
-                job_id=job.job_id,
-                details=f"failed={failed_count} max_allowed={job.request.max_task_failures}",
-            )
             self._kill_remaining_tasks(job.job_id, "Job exceeded max_task_failures")
         elif new_state == cluster_pb2.JOB_STATE_SUCCEEDED:
-            self.log_action("job_succeeded", job_id=job.job_id)
+            pass
         elif new_state == cluster_pb2.JOB_STATE_KILLED:
             job.error = self._get_first_task_error(job.job_id)
             self._kill_remaining_tasks(job.job_id, "Job was terminated.")
-            self.log_action("job_killed", job_id=job.job_id)
         elif new_state == cluster_pb2.JOB_STATE_UNSCHEDULABLE:
             job.error = self._get_first_task_error(job.job_id)
             self._kill_remaining_tasks(job.job_id, "Job could not be scheduled.")
-            self.log_action("job_unschedulable", job_id=job.job_id)
 
     def _get_first_task_error(self, job_id: JobId) -> str | None:
         """Get the first error message from failed/killed tasks in a job."""
@@ -1092,7 +1415,6 @@ class ControllerState:
         Updates job.task_state_counts incrementally for each killed task.
         """
         job = self._jobs.get(job_id)
-        killed_count = 0
         ts = now_ms()
         for task_id in self._tasks_by_job.get(job_id, []):
             task = self._tasks.get(task_id)
@@ -1103,7 +1425,6 @@ class ControllerState:
             task.state = cluster_pb2.TASK_STATE_KILLED
             task.finished_at_ms = ts
             task.error = error
-            killed_count += 1
 
             # Update job's task state counts
             if job:
@@ -1116,13 +1437,6 @@ class ControllerState:
                 if worker:
                     worker.unassign_task(task_id, job.request.resources)
             self._remove_endpoints_for_task(task_id)
-
-        if killed_count > 0:
-            self.log_action(
-                "tasks_killed",
-                job_id=job_id,
-                details=f"killed={killed_count} reason={error}",
-            )
 
     # --- Worker Management ---
 
@@ -1180,30 +1494,6 @@ class ControllerState:
                 last_heartbeat_ms=ts,
             )
             self.add_worker(worker)
-
-    # --- Action Log ---
-
-    def log_action(
-        self,
-        action: str,
-        job_id: JobId | None = None,
-        worker_id: WorkerId | None = None,
-        details: str = "",
-    ) -> None:
-        entry = ActionLogEntry(
-            timestamp_ms=now_ms(),
-            action=action,
-            job_id=job_id,
-            worker_id=worker_id,
-            details=details,
-        )
-        with self._lock:
-            self._actions.append(entry)
-
-    def get_recent_actions(self, limit: int = 50) -> list[ActionLogEntry]:
-        with self._lock:
-            actions = list(self._actions)
-            return actions[-limit:] if limit < len(actions) else actions
 
     # --- Endpoint Management ---
 

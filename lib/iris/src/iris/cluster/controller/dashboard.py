@@ -778,19 +778,19 @@ class ControllerDashboard:
         )
 
     def _api_actions(self, _request: Request) -> JSONResponse:
-        actions = self._state.get_recent_actions(limit=50)
-        return JSONResponse(
-            [
-                {
-                    "timestamp_ms": a.timestamp_ms,
-                    "action": a.action,
-                    "job_id": str(a.job_id) if a.job_id else None,
-                    "worker_id": str(a.worker_id) if a.worker_id else None,
-                    "details": a.details,
-                }
-                for a in actions
-            ]
-        )
+        transactions = self._state.get_transactions(limit=50)
+        actions = []
+        for txn in transactions:
+            for action in txn.actions:
+                actions.append(
+                    {
+                        "timestamp_ms": action.timestamp_ms,
+                        "action": action.action,
+                        "entity_id": action.entity_id,
+                        "details": action.details,
+                    }
+                )
+        return JSONResponse(actions)
 
     def _api_workers(self, _request: Request) -> JSONResponse:
         workers = self._state.list_all_workers()

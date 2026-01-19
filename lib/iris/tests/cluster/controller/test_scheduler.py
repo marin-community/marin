@@ -230,13 +230,6 @@ def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
     assert len(result.timed_out_tasks) == 1
     assert result.timed_out_tasks[0] == tasks[0]
 
-    # Secondary observable behavior: action log records why
-    actions = state.get_recent_actions()
-    timeout_action = next((a for a in actions if a.action == "task_timeout"), None)
-    assert timeout_action is not None, "Expected task_timeout action to be logged"
-    assert timeout_action.job_id == "j1"
-    assert "task=j1/task-0" in timeout_action.details
-
 
 def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
     """Verify task with scheduling_timeout_seconds=0 never times out."""
@@ -388,10 +381,3 @@ def test_scheduler_reports_task_too_large_for_cluster(scheduler, state, job_requ
 
     # Primary observable behavior: task cannot be assigned
     assert len(result.assignments) == 0
-
-    # Secondary observable behavior: action log explains why
-    actions = state.get_recent_actions()
-    unschedulable_action = next((a for a in actions if a.action == "task_unschedulable"), None)
-    assert unschedulable_action is not None, "Expected task_unschedulable action to be logged"
-    assert unschedulable_action.job_id == "j1"
-    assert "no_worker_has_capacity" in unschedulable_action.details

@@ -108,7 +108,6 @@ class ControllerServiceImpl:
             )
 
             tasks = self._state.add_job(job)
-            self._state.log_action("job_submitted", job_id=job.job_id, details=request.name)
             self._scheduler.wake()
 
             logger.info(f"Job {job_id} submitted with {len(tasks)} task(s)")
@@ -224,8 +223,6 @@ class ControllerServiceImpl:
 
         # Mark job as killed
         job.transition(cluster_pb2.JOB_STATE_KILLED, error="Terminated by user")
-
-        self._state.log_action("job_killed", job_id=job.job_id)
 
     def list_jobs(
         self,
@@ -403,11 +400,6 @@ class ControllerServiceImpl:
             last_heartbeat_ms=ts,
         )
         self._state.add_worker(worker)
-        self._state.log_action(
-            "worker_registered",
-            worker_id=worker.worker_id,
-            details=f"address={request.address}",
-        )
         self._scheduler.wake()
 
         return cluster_pb2.Controller.RegisterWorkerResponse(accepted=True)
@@ -460,11 +452,6 @@ class ControllerServiceImpl:
 
             self._state.add_endpoint(endpoint)
 
-            self._state.log_action(
-                "endpoint_registered",
-                job_id=job.job_id,
-                details=f"{request.name} at {request.address}",
-            )
             return cluster_pb2.Controller.RegisterEndpointResponse(endpoint_id=endpoint_id)
 
     def unregister_endpoint(
@@ -473,13 +460,7 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Empty:
         """Unregister a service endpoint. Idempotent."""
-        endpoint = self._state.remove_endpoint(request.endpoint_id)
-        if endpoint:
-            self._state.log_action(
-                "endpoint_unregistered",
-                job_id=endpoint.job_id,
-                details=endpoint.name,
-            )
+        self._state.remove_endpoint(request.endpoint_id)
         return cluster_pb2.Empty()
 
     def lookup_endpoint(

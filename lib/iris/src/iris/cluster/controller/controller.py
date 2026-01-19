@@ -271,24 +271,12 @@ class Controller:
             stub.run_task(request)
 
             logger.info(f"Dispatched task {task.task_id} to worker {worker.worker_id}")
-            self._state.log_action(
-                "task_dispatched",
-                job_id=task.job_id,
-                worker_id=worker.worker_id,
-                details=f"task={task.task_id}",
-            )
 
         except Exception:
             self._state.revert_task_dispatch(task)
             transaction.rollback_assignment(task, worker)
             self._state.mark_worker_unhealthy(worker.worker_id)
             logger.exception("Failed to dispatch task %s to worker %s", task.task_id, worker.address)
-            self._state.log_action(
-                "dispatch_failed",
-                job_id=task.job_id,
-                worker_id=worker.worker_id,
-                details=f"task={task.task_id}",
-            )
 
     def _mark_task_unschedulable(self, task: ControllerTask) -> None:
         """Mark a task as unschedulable due to timeout."""
@@ -299,11 +287,6 @@ class Controller:
             task.task_id,
             cluster_pb2.TASK_STATE_UNSCHEDULABLE,
             error=f"Scheduling timeout exceeded ({timeout_seconds}s)",
-        )
-        self._state.log_action(
-            "task_unschedulable",
-            job_id=task.job_id,
-            details=f"task={task.task_id}, timeout={timeout_seconds}s",
         )
 
     def _check_worker_timeouts(self) -> None:
@@ -316,11 +299,6 @@ class Controller:
                 self._state.mark_worker_unhealthy(worker.worker_id)
                 logger.warning(
                     f"Worker {worker.worker_id} timed out (no heartbeat for {self._config.worker_timeout_seconds}s)"
-                )
-                self._state.log_action(
-                    "worker_timeout",
-                    worker_id=worker.worker_id,
-                    details=f"No heartbeat for {self._config.worker_timeout_seconds}s",
                 )
 
                 # Retry tasks that were running on the timed-out worker
