@@ -83,6 +83,9 @@ def train():
         # Simply returns the pre-formatted text field
         return example["text"]
 
+    # Force model to FP16 explicitly to clear any BF16 remnants
+    model = model.to(torch.float16)
+
     # 5. Training Execution (Pipeline Step 5)
     print("🔄 Initializing Trainer...")
     
@@ -94,10 +97,10 @@ def train():
         learning_rate=2e-4,
         logging_steps=1,
         max_steps=10, # Adjustable based on dataset size
-        fp16=torch.cuda.is_available(),
-        bf16=False, # Explicitly disable BF16 for T4 compatibility
+        fp16=True, # STRICT FP16
+        bf16=False, # STRICT NO BF16
         use_cpu=not torch.cuda.is_available(),
-        optim="paged_adamw_8bit" if torch.cuda.is_available() else "adamw_torch",
+        optim="adamw_torch", # standard optimizer, safest for T4
         report_to="none",
         # max_seq_length removed to avoid version conflicts
     )
