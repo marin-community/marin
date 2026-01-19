@@ -35,7 +35,7 @@ from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
     get_instruction_dataset,
 )
-from experiments.simple_sft_config import SimpleSFTConfig
+from experiments.simple_sft_config import SimpleSFTConfig, compute_per_device_parallelism
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main
 from marin.processing.tokenize import lm_mixture_data_config
@@ -80,13 +80,17 @@ assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 total_examples = sum(mixture_weights.values())
 TARGET_EPOCHS = 10
 TRAIN_BATCH_SIZE = 128
+MICROBATCH_SIZE = 32  # Local batch size that fits in memory
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
+RESOURCES = ResourceConfig.with_tpu("v5p-8")
+
 mixture_sft_config = SimpleSFTConfig(
-    resources=ResourceConfig.with_tpu("v5p-64"),
+    resources=RESOURCES,
     tokenizer=qwen3_8b_tokenizer,
     model_name_or_path="Qwen/Qwen3-8B",
     train_batch_size=TRAIN_BATCH_SIZE,
+    per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=4e-5,
     max_seq_len=16384,
@@ -114,6 +118,7 @@ qwen3_8b_16384_seq_len = dataclasses.replace(
     qwen3_8b,
     max_seq_len=16384,
     rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),  # 1M theta value (same as original) is appropriate given that the base model was trained with 131K+ context length
+    cross_entropy_block_size=32000,  # Process vocab in chunks to reduce memory during loss computation
 )
 
 exp2339e_sft_qwen3_8b_ot4_90k = default_sft(
