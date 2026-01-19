@@ -23,7 +23,6 @@ import dataclasses
 import hashlib
 import json
 import logging
-import os
 import uuid
 from dataclasses import dataclass, field
 from typing import Literal
@@ -216,20 +215,25 @@ class RLJob:
                 worker = TrainWorker(config=train_worker_config)
                 worker.train()
 
-        def inference_worker_task():
-            with remove_tpu_lockfile_on_exit():
-                logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-                # inject a different seed for each worker
+        def make_inference_task(worker_idx: int):
+            def inference_worker_task():
+                with remove_tpu_lockfile_on_exit():
+                    logging.basicConfig(
+                        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True
+                    )
+                    # use deterministic seed based on worker index
 
-                process_id = os.getpid()
-                config = dataclasses.replace(
-                    rollout_worker_config,
-                    seed=rollout_worker_config.seed + process_id,
-                    run_id=f"{rollout_worker_config.run_id}-{process_id}",
-                )
+                    config = dataclasses.replace(
+                        rollout_worker_config,
+                        seed=rollout_worker_config.seed + worker_idx,
+                        run_id=f"{rollout_worker_config.run_id}-rollout-{worker_idx}",
+                        worker_index=worker_idx,
+                    )
 
-                worker = RolloutWorker(config=config)
-                worker.run()
+                    worker = RolloutWorker(config=config)
+                    worker.run()
+
+            return inference_worker_task
 
         cluster = current_cluster()
         jobs = []
@@ -250,7 +254,7 @@ class RLJob:
                     JobRequest(
                         name=f"rl-train-{name}-rollout-{i}",
                         resources=rollout_resources,
-                        entrypoint=Entrypoint.from_callable(inference_worker_task),
+                        entrypoint=Entrypoint.from_callable(make_inference_task(i)),
                         environment=EnvironmentConfig.create(env_vars=env, extras=self.config.pip_dependency_groups),
                     )
                 )
