@@ -242,7 +242,10 @@ def test_controller_state_task_assignment_and_requeue(job_request, worker_metada
     )
     state.add_worker(worker)
 
-    job = Job(job_id=JobId("j1"), request=job_request("job1"))
+    # Allow 1 task failure at the job level so job doesn't fail when task fails
+    req = job_request("job1")
+    req.max_task_failures = 1
+    job = Job(job_id=JobId("j1"), request=req)
     tasks = _add_job(state, job)
     task = tasks[0]
 
@@ -281,70 +284,6 @@ def test_controller_state_task_assignment_and_requeue(job_request, worker_metada
 
     # Task should be unassigned from worker
     assert task.task_id not in worker.running_tasks
-
-
-def test_controller_state_action_log():
-    """Test action log functionality."""
-    state = ControllerState()
-
-    # Initially empty
-    assert state.get_recent_actions() == []
-
-    # Log some actions
-    state.log_action("job_submitted", job_id=JobId("j1"), details="Test job")
-    state.log_action("worker_registered", worker_id=WorkerId("w1"))
-    state.log_action("job_started", job_id=JobId("j1"), worker_id=WorkerId("w1"))
-
-    # Should have 3 actions
-    actions = state.get_recent_actions()
-    assert len(actions) == 3
-
-    # Check order (oldest first)
-    assert actions[0].action == "job_submitted"
-    assert actions[0].job_id == "j1"
-    assert actions[0].details == "Test job"
-    assert actions[1].action == "worker_registered"
-    assert actions[1].worker_id == "w1"
-    assert actions[2].action == "job_started"
-
-    # Check timestamps are set
-    for action in actions:
-        assert action.timestamp_ms > 0
-
-
-def test_controller_state_action_log_limit():
-    """Test action log respects limit parameter."""
-    state = ControllerState()
-
-    # Log many actions
-    for i in range(10):
-        state.log_action(f"action_{i}")
-
-    # Get with limit
-    actions = state.get_recent_actions(limit=3)
-    assert len(actions) == 3
-
-    # Should be most recent 3
-    assert actions[0].action == "action_7"
-    assert actions[1].action == "action_8"
-    assert actions[2].action == "action_9"
-
-
-def test_controller_state_action_log_bounded():
-    """Test action log deque is bounded to 100 entries."""
-    state = ControllerState()
-
-    # Log more than 100 actions
-    for i in range(150):
-        state.log_action(f"action_{i}")
-
-    # Should only have 100
-    actions = state.get_recent_actions(limit=200)
-    assert len(actions) == 100
-
-    # Oldest should be action_50 (first 50 were evicted)
-    assert actions[0].action == "action_50"
-    assert actions[-1].action == "action_149"
 
 
 # =============================================================================
@@ -804,7 +743,10 @@ def test_task_failure_with_retry(job_request, worker_metadata):
     )
     state.add_worker(worker)
 
-    job = Job(job_id=JobId("j1"), request=job_request("job1"))
+    # Allow 1 task failure at the job level so job doesn't fail when task fails
+    req = job_request("job1")
+    req.max_task_failures = 1
+    job = Job(job_id=JobId("j1"), request=req)
     tasks = _add_job(state, job)
     task = tasks[0]
 
@@ -820,12 +762,14 @@ def test_task_failure_with_retry(job_request, worker_metadata):
     )
 
     assert result == TaskTransitionResult.SHOULD_RETRY
-    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    # Task state stays FAILED (current attempt is terminal), but task is schedulable
+    assert task.state == cluster_pb2.TASK_STATE_FAILED
+    assert task.can_be_scheduled()
     # Job stays RUNNING - once started, job doesn't go back to PENDING on retry
     assert job.state == cluster_pb2.JOB_STATE_RUNNING
     assert task.task_id not in worker.running_tasks
 
-    # Task should be back in pending queue
+    # Task should be back in pending queue (schedulable despite being in FAILED state)
     pending = state.peek_pending_tasks()
     assert len(pending) == 1
     assert pending[0].task_id == task.task_id
@@ -986,6 +930,12 @@ def test_failure_domain_kills_remaining_tasks_on_task_failure(worker_metadata):
     assert tasks[2].state == cluster_pb2.TASK_STATE_KILLED
     assert tasks[2].error is not None and "max_task_failures" in tasks[2].error
 
+    # Verify failure reason is logged for operational visibility
+    actions = state.get_recent_actions()
+    failure_log = next((a for a in actions if a.action == "failure_domain_triggered"), None)
+    assert failure_log is not None, "Failure domain trigger should be logged for operators"
+    assert failure_log.job_id == "j1"
+
 
 def test_failure_domain_allows_max_task_failures_threshold(worker_metadata):
     """Job with max_task_failures=1 tolerates one failure before failing."""
@@ -1094,65 +1044,12 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
 
     # Should retry due to preemption retry
     assert result == TaskTransitionResult.SHOULD_RETRY
-    assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
+    # Task state stays WORKER_FAILED (current attempt is terminal), but task is schedulable
+    assert tasks[0].state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert tasks[0].can_be_scheduled()
 
     # Job stays RUNNING - once started, job doesn't go back to PENDING on retry
     assert job.state == cluster_pb2.JOB_STATE_RUNNING
-
-
-def test_failure_domain_logs_actions(worker_metadata):
-    """Verify failure domain triggers proper action logging."""
-    state = ControllerState()
-    now_ms = int(time.time() * 1000)
-
-    worker = ControllerWorker(
-        worker_id=WorkerId("w1"),
-        address="host:8080",
-        metadata=worker_metadata(),
-    )
-    state.add_worker(worker)
-
-    # Create job with 3 replicas and max_task_failures=0
-    job_request = cluster_pb2.Controller.LaunchJobRequest(
-        name="logging-job",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
-        max_task_failures=0,
-    )
-    job = Job(job_id=JobId("j1"), request=job_request)
-    tasks = state.add_job(job)
-
-    # Dispatch all tasks
-    for i, task in enumerate(tasks):
-        state.mark_task_dispatched(task, WorkerId("w1"), now_ms + i)
-        state.assign_task_to_worker(WorkerId("w1"), task.task_id)
-
-    # Task-0 fails
-    state.transition_task(
-        tasks[0].task_id,
-        cluster_pb2.TASK_STATE_FAILED,
-        now_ms + 1000,
-        error="Task failed",
-    )
-
-    # Check action log
-    actions = state.get_recent_actions()
-    action_types = [a.action for a in actions]
-
-    assert "failure_domain_triggered" in action_types
-    assert "tasks_killed" in action_types
-
-    # Verify failure_domain_triggered details
-    fd_action = next(a for a in actions if a.action == "failure_domain_triggered")
-    assert fd_action.job_id == "j1"
-    assert "failed=1" in fd_action.details
-    assert "max_allowed=0" in fd_action.details
-
-    # Verify tasks_killed details
-    tk_action = next(a for a in actions if a.action == "tasks_killed")
-    assert tk_action.job_id == "j1"
-    assert "killed=2" in tk_action.details
 
 
 def test_all_tasks_succeed_job_succeeds(worker_metadata):

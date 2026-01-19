@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from iris.cluster.controller.task import TERMINAL_TASK_STATES, Task
-from iris.cluster.types import JobId, TaskId, WorkerId
+from iris.cluster.types import JobId, TaskId
 from iris.rpc import cluster_pb2
 
 
@@ -32,20 +32,6 @@ class TransitionResult(Enum):
 
 
 @dataclass
-class JobAttempt:
-    """Record of a single job execution attempt."""
-
-    attempt_id: int
-    worker_id: WorkerId | None = None
-    state: int = cluster_pb2.JOB_STATE_PENDING
-    started_at_ms: int | None = None
-    finished_at_ms: int | None = None
-    exit_code: int | None = None
-    error: str | None = None
-    is_worker_failure: bool = False
-
-
-@dataclass
 class Job:
     """Job with self-contained state transitions.
 
@@ -55,10 +41,10 @@ class Job:
     Example:
         job = Job(job_id=..., request=...)
 
-        # Dispatch to worker
-        job.mark_dispatched(worker_id, now_ms)
+        # Job starts running when first task starts
+        job.mark_dispatched(now_ms)
 
-        # Worker reports failure
+        # Task reports failure
         result = job.transition(JOB_STATE_FAILED, now_ms, is_worker_failure=False)
         if result == TransitionResult.SHOULD_RETRY:
             queue.add(job)  # Caller handles re-queueing
@@ -67,7 +53,6 @@ class Job:
     job_id: JobId
     request: cluster_pb2.Controller.LaunchJobRequest
     state: int = cluster_pb2.JOB_STATE_PENDING
-    worker_id: WorkerId | None = None
 
     # Retry tracking
     failure_count: int = 0
@@ -80,10 +65,6 @@ class Job:
 
     # Hierarchical job tracking
     parent_job_id: JobId | None = None
-
-    # Attempt tracking
-    current_attempt_id: int = 0
-    attempts: list[JobAttempt] = field(default_factory=list)
 
     # Timestamps
     submitted_at_ms: int = 0
@@ -99,15 +80,14 @@ class Job:
 
     # --- State Transitions ---
 
-    def mark_dispatched(self, worker_id: WorkerId, now_ms: int) -> None:
-        """Mark job as dispatched to a worker. Called BEFORE the RPC."""
+    def mark_dispatched(self, now_ms: int) -> None:
+        """Mark job as running. Called when first task starts."""
         self.state = cluster_pb2.JOB_STATE_RUNNING
-        self.worker_id = worker_id
         self.started_at_ms = now_ms
 
     def revert_dispatch(self) -> None:
+        """Revert dispatch if no tasks actually started."""
         self.state = cluster_pb2.JOB_STATE_PENDING
-        self.worker_id = None
         self.started_at_ms = None
 
     def transition(
@@ -182,7 +162,13 @@ class Job:
             can_retry = self.failure_count <= self.max_retries_failure
 
         if can_retry:
-            self._reset_for_retry(is_worker_failure=is_worker_failure)
+            # Reset state for retry - no attempt history tracking needed since
+            # jobs don't execute on workers (tasks do)
+            self.state = cluster_pb2.JOB_STATE_PENDING
+            self.started_at_ms = None
+            self.finished_at_ms = None
+            self.error = None
+            self.exit_code = None
             return TransitionResult.SHOULD_RETRY
         else:
             # Terminal failure
@@ -191,34 +177,6 @@ class Job:
             self.error = error
             self.exit_code = exit_code
             return TransitionResult.EXCEEDED_RETRY_LIMIT
-
-    def _reset_for_retry(self, *, is_worker_failure: bool) -> None:
-        """Reset state for retry attempt, preserving history."""
-        # Save current attempt to history if it was actually started
-        if self.started_at_ms is not None:
-            self.attempts.append(
-                JobAttempt(
-                    attempt_id=self.current_attempt_id,
-                    worker_id=self.worker_id,
-                    state=self.state,
-                    started_at_ms=self.started_at_ms,
-                    finished_at_ms=self.finished_at_ms,
-                    exit_code=self.exit_code,
-                    error=self.error,
-                    is_worker_failure=is_worker_failure,
-                )
-            )
-
-        # Increment attempt counter
-        self.current_attempt_id += 1
-
-        # Reset current state
-        self.state = cluster_pb2.JOB_STATE_PENDING
-        self.worker_id = None
-        self.started_at_ms = None
-        self.finished_at_ms = None
-        self.error = None
-        self.exit_code = None
 
     # --- Task State Tracking ---
 
@@ -294,8 +252,33 @@ class Job:
         return self.preemption_count < self.max_retries_preemption
 
     @property
+    def current_attempt_id(self) -> int:
+        """Current attempt ID for this job.
+
+        Computed from failure and preemption counts. Jobs don't execute on
+        workers (tasks do), so this is a derived value for API compatibility.
+        """
+        return self.failure_count + self.preemption_count
+
+    @property
+    def attempts(self) -> list:
+        """Historical attempts for this job.
+
+        Returns empty list since jobs no longer track attempt history.
+        Job "attempts" were really task attempts - actual execution happens
+        at the task level, not job level.
+        """
+        return []
+
+    @property
     def total_attempts(self) -> int:
-        return len(self.attempts) + 1
+        """Total number of execution cycles for this job.
+
+        Computed from failure and preemption counts. Each failure or preemption
+        represents one completed attempt. For a fresh job that hasn't failed yet,
+        this returns 1 (the current/initial attempt).
+        """
+        return max(1, self.failure_count + self.preemption_count)
 
 
 def handle_gang_failure(

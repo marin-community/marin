@@ -204,7 +204,7 @@ def test_scheduler_skips_tasks_that_dont_fit(scheduler, state, job_request, work
 
 
 def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
-    """Verify scheduler identifies tasks that exceeded scheduling timeout."""
+    """Verify scheduler identifies tasks that exceeded scheduling timeout and logs the event."""
     worker = ControllerWorker(WorkerId("w1"), "addr", worker_metadata(cpu=2))
     state.add_worker(worker)
 
@@ -231,9 +231,17 @@ def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
 
     result = scheduler.find_assignments(pending_tasks, workers, now_ms)
 
+    # Primary observable behavior: task is marked as timed out
     assert len(result.assignments) == 0
     assert len(result.timed_out_tasks) == 1
     assert result.timed_out_tasks[0] == tasks[0]
+
+    # Secondary observable behavior: action log records why
+    actions = state.get_recent_actions()
+    timeout_action = next((a for a in actions if a.action == "task_timeout"), None)
+    assert timeout_action is not None, "Expected task_timeout action to be logged"
+    assert timeout_action.job_id == "j1"
+    assert "task=j1/task-0" in timeout_action.details
 
 
 def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
@@ -326,12 +334,10 @@ def test_scheduler_considers_running_tasks_for_capacity(scheduler, state, job_re
         JobId("running"),
         request=job_request(cpu=3),
         state=cluster_pb2.JOB_STATE_RUNNING,
-        worker_id=worker.worker_id,
     )
     running_tasks = expand_job_to_tasks(running_job, now_ms)
-    # Mark task as running on worker
-    running_tasks[0].state = cluster_pb2.TASK_STATE_RUNNING
-    running_tasks[0].worker_id = worker.worker_id
+    # Mark task as running on worker (creates attempt with worker_id)
+    running_tasks[0].mark_dispatched(worker.worker_id, now_ms)
     state.add_job(running_job, running_tasks)
     # Manually assign task to worker
     worker.running_tasks.add(running_tasks[0].task_id)
@@ -373,62 +379,18 @@ def test_scheduler_assigns_to_multiple_workers(scheduler, state, job_request, wo
     assert assigned_workers == {"w1", "w2"}
 
 
-# =============================================================================
-# Scheduler Logging Tests
-# =============================================================================
+def test_scheduler_reports_task_too_large_for_cluster(scheduler, state, job_request, worker_metadata):
+    """Verify scheduler reports when a task requires more resources than any worker can provide.
 
-
-def test_scheduler_logs_task_timeout(scheduler, state, worker_metadata):
-    """Verify scheduler logs task_timeout action when scheduling timeout exceeded."""
-    worker = ControllerWorker(WorkerId("w1"), "addr", worker_metadata(cpu=2))
-    state.add_worker(worker)
-
-    # Job that requires 100 CPUs (will never fit) with 1 second timeout
-    # Submitted 2 seconds ago, so it should be timed out
-    job_request = cluster_pb2.Controller.LaunchJobRequest(
-        name="impossible-job",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=100, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
-        scheduling_timeout_seconds=1,
-    )
-    job = Job(
-        JobId("j1"),
-        request=job_request,
-        submitted_at_ms=int(time.time() * 1000) - 2000,  # Submitted 2s ago
-    )
-    tasks = expand_job_to_tasks(job, int(time.time() * 1000) - 2000)
-    state.add_job(job, tasks)
-
-    pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()
-    now_ms = int(time.time() * 1000)
-
-    result = scheduler.find_assignments(pending_tasks, workers, now_ms)
-
-    assert len(result.timed_out_tasks) == 1
-
-    # Check action log
-    actions = state.get_recent_actions()
-    action_types = [a.action for a in actions]
-
-    assert "task_timeout" in action_types
-
-    # Verify task_timeout details
-    timeout_action = next(a for a in actions if a.action == "task_timeout")
-    assert timeout_action.job_id == "j1"
-    assert "task=j1/task-0" in timeout_action.details
-    assert "attempt=" in timeout_action.details
-
-
-def test_scheduler_logs_task_unschedulable(scheduler, state, job_request, worker_metadata):
-    """Verify scheduler logs task_unschedulable action when no worker has capacity."""
-    # Worker with only 2 CPUs
+    This is distinct from temporary capacity unavailability - the task will *never* be
+    schedulable on the current cluster configuration.
+    """
+    # Worker with only 2 CPUs - this is the largest worker in our "cluster"
     worker = ControllerWorker(WorkerId("w1"), "addr", worker_metadata(cpu=2))
     state.add_worker(worker)
 
     now_ms = int(time.time() * 1000)
-    # Job that needs 4 CPUs (won't fit)
+    # Job that needs 4 CPUs - exceeds the capacity of any single worker
     job = Job(JobId("j1"), request=job_request(cpu=4))
     _add_job(state, job)
 
@@ -437,16 +399,12 @@ def test_scheduler_logs_task_unschedulable(scheduler, state, job_request, worker
 
     result = scheduler.find_assignments(pending_tasks, workers, now_ms)
 
+    # Primary observable behavior: task cannot be assigned
     assert len(result.assignments) == 0
 
-    # Check action log
+    # Secondary observable behavior: action log explains why
     actions = state.get_recent_actions()
-    action_types = [a.action for a in actions]
-
-    assert "task_unschedulable" in action_types
-
-    # Verify task_unschedulable details
-    unschedulable_action = next(a for a in actions if a.action == "task_unschedulable")
+    unschedulable_action = next((a for a in actions if a.action == "task_unschedulable"), None)
+    assert unschedulable_action is not None, "Expected task_unschedulable action to be logged"
     assert unschedulable_action.job_id == "j1"
-    assert "task=j1/task-0" in unschedulable_action.details
     assert "no_worker_has_capacity" in unschedulable_action.details

@@ -15,10 +15,9 @@
 """End-to-end tests for actor server and client."""
 
 import pytest
-
 from iris.actor import ActorClient, ActorServer
 from iris.actor.resolver import FixedResolver
-from iris.client import IrisContext, iris_ctx, iris_ctx_scope
+from iris.client import iris_ctx
 
 
 class Calculator:
@@ -63,30 +62,6 @@ def test_actor_exception_propagation():
     client = ActorClient(resolver, "calc")
     with pytest.raises(ZeroDivisionError):
         client.divide(1, 0)
-
-
-@pytest.mark.skip(reason="Context injection removed in Step 1 - ActorServer is now 'dumb'. Will be handled in Step 3.")
-def test_actor_context_injection():
-    """Test that IrisContext is properly injected and accessible.
-
-    NOTE: This test is disabled as part of the actor layer cleanup (Step 1).
-    ActorServer no longer automatically injects context. Context management
-    will be handled by higher-level helpers in iris.client (Step 3).
-    """
-    ctx = IrisContext(
-        job_id="test-job-123",
-        worker_id="test-worker",
-    )
-
-    # Set up context before starting server (server captures context at serve_background time)
-    with iris_ctx_scope(ctx):
-        server = ActorServer(host="127.0.0.1")
-        server.register("ctx_actor", ContextAwareActor())
-        port = server.serve_background()
-
-    resolver = FixedResolver({"ctx_actor": f"http://127.0.0.1:{port}"})
-    client = ActorClient(resolver, "ctx_actor")
-    assert client.get_job_id() == "test-job-123"
 
 
 @pytest.mark.asyncio

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from threading import RLock
 
 from iris.cluster.controller.job import Job, expand_job_to_tasks
-from iris.cluster.controller.task import Task, TaskTransitionResult
+from iris.cluster.controller.task import TERMINAL_TASK_STATES, Task, TaskTransitionResult
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import now_ms
@@ -191,12 +191,16 @@ class ControllerState:
             return [self._tasks[tid] for tid in task_ids if tid in self._tasks]
 
     def peek_pending_tasks(self) -> list[Task]:
-        """Return all PENDING tasks in queue order without removing them."""
+        """Return all schedulable tasks in queue order without removing them.
+
+        A task is schedulable if it has no attempts yet (fresh task) or
+        its current attempt is terminal and it should retry.
+        """
         with self._lock:
             pending = []
             for task_id in self._task_queue:
                 task = self._tasks.get(task_id)
-                if task and task.state == cluster_pb2.TASK_STATE_PENDING:
+                if task and task.can_be_scheduled():
                     pending.append(task)
             return pending
 
@@ -228,11 +232,11 @@ class ControllerState:
         with self._lock:
             job = self._jobs.get(task.job_id)
             if not job:
-                task.mark_dispatched(worker_id, now_ms)
+                task.create_attempt(worker_id, now_ms)
                 return None
 
             old_state = task.state
-            task.mark_dispatched(worker_id, now_ms)
+            task.create_attempt(worker_id, now_ms)
             new_job_state = job.on_task_transition(old_state, task.state, now_ms)
             if new_job_state is not None:
                 job.state = new_job_state
@@ -243,7 +247,7 @@ class ControllerState:
         with self._lock:
             job = self._jobs.get(task.job_id)
             old_state = task.state
-            task.revert_dispatch()
+            task.revert_attempt()
             if job:
                 job.task_state_counts[old_state] -= 1
                 job.task_state_counts[task.state] += 1
@@ -277,13 +281,22 @@ class ControllerState:
             worker_id = task.worker_id
             old_state = task.state
 
-            result = task.transition(
-                new_state,
-                now_ms,
-                is_worker_failure=is_worker_failure,
-                error=error,
-                exit_code=exit_code,
-            )
+            # Handle case where task has no attempts (e.g., killing a PENDING task)
+            if not task.attempts:
+                task.state = new_state
+                if new_state in TERMINAL_TASK_STATES:
+                    task.finished_at_ms = now_ms
+                    task.error = error
+                    task.exit_code = exit_code
+                result = TaskTransitionResult.COMPLETE
+            else:
+                result = task.handle_attempt_result(
+                    new_state,
+                    now_ms,
+                    is_worker_failure=is_worker_failure,
+                    error=error,
+                    exit_code=exit_code,
+                )
 
             # Update job's task state counts incrementally
             new_job_state = job.on_task_transition(old_state, task.state, now_ms)

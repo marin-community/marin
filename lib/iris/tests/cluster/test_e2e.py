@@ -193,13 +193,30 @@ class E2ECluster:
     def status(self, job_or_id) -> dict:
         job_id = self._to_job_id_str(job_or_id)
         request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
+        assert self._controller_client is not None
         response = self._controller_client.get_job_status(request)
         return {
             "jobId": response.job.job_id,
             "state": cluster_pb2.JobState.Name(response.job.state),
             "exitCode": response.job.exit_code,
             "error": response.job.error,
-            "workerId": response.job.worker_id,
+        }
+
+    def task_status(self, job_or_id, task_index: int = 0) -> dict:
+        """Get status of a specific task within a job."""
+        job_id = self._to_job_id_str(job_or_id)
+        request = cluster_pb2.Controller.GetTaskStatusRequest(job_id=job_id, task_index=task_index)
+        assert self._controller_client is not None
+        response = self._controller_client.get_task_status(request)
+        return {
+            "taskId": response.task.task_id,
+            "jobId": response.task.job_id,
+            "taskIndex": response.task.task_index,
+            "state": cluster_pb2.TaskState.Name(response.task.state),
+            "workerId": response.task.worker_id,
+            "workerAddress": response.task.worker_address,
+            "exitCode": response.task.exit_code,
+            "error": response.task.error,
         }
 
     def wait(self, job_or_id, timeout: float = 60.0, poll_interval: float = 0.1) -> dict:
@@ -221,6 +238,7 @@ class E2ECluster:
     def kill(self, job_or_id) -> None:
         job_id = self._to_job_id_str(job_or_id)
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
+        assert self._controller_client is not None
         self._controller_client.terminate_job(request)
 
     def get_client(self) -> IrisClient:
@@ -378,12 +396,12 @@ class TestMultiWorker:
             status = multi_worker_cluster.wait(job_id, timeout=30)
             assert status["state"] == "JOB_STATE_SUCCEEDED"
 
-        # Verify jobs ran on different workers
+        # Verify jobs ran on different workers (via task-level worker info)
         workers_used = set()
         for job_id in job_ids:
-            status = multi_worker_cluster.status(job_id)
-            if status["workerId"]:
-                workers_used.add(status["workerId"])
+            task_status = multi_worker_cluster.task_status(job_id, task_index=0)
+            if task_status["workerId"]:
+                workers_used.add(task_status["workerId"])
 
         assert len(workers_used) > 1, "Jobs should run on multiple workers"
 

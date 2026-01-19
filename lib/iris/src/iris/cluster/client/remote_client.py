@@ -208,6 +208,9 @@ class RemoteClusterClient:
     ) -> list[cluster_pb2.Worker.LogEntry]:
         """Fetch logs for a job, routing to the correct worker.
 
+        For single-task jobs, fetches logs from task-0. For multi-task jobs,
+        use fetch_task_logs() to get logs from specific tasks.
+
         Args:
             job_id: Job ID to fetch logs for
             start_ms: Only return logs after this timestamp (exclusive, for incremental polling)
@@ -217,16 +220,19 @@ class RemoteClusterClient:
             List of LogEntry protos
 
         Raises:
-            ValueError: If job has no worker assigned (not yet scheduled)
+            ValueError: If job's first task has no worker assigned (not yet scheduled)
         """
-        status = self.get_job_status(job_id)
-        if not status.worker_address:
-            raise ValueError(f"Job {job_id} has no worker assigned (state: {cluster_pb2.JobState.Name(status.state)})")
+        # For single-task jobs, get worker address from task-0
+        task_status = self.get_task_status(job_id, task_index=0)
+        if not task_status.worker_address:
+            job_status = self.get_job_status(job_id)
+            raise ValueError(
+                f"Job {job_id} has no worker assigned (state: {cluster_pb2.JobState.Name(job_status.state)})"
+            )
 
-        # For single-task jobs, the task_id is "{job_id}/task-0"
         task_id = f"{job_id}/task-0"
 
-        worker_client = self._get_worker_client(status.worker_address)
+        worker_client = self._get_worker_client(task_status.worker_address)
         filter_proto = cluster_pb2.Worker.FetchLogsFilter(
             start_ms=start_ms,
             max_lines=max_lines,

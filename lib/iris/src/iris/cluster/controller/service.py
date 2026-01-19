@@ -120,26 +120,55 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.GetJobStatusRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.GetJobStatusResponse:
-        """Get status of a specific job."""
+        """Get status of a specific job including all task statuses."""
         job = self._state.get_job(JobId(request.job_id))
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        tasks = self._state.get_job_tasks(job.job_id)
+        # Build task statuses with attempts
+        task_statuses = []
+        for task in self._state.get_job_tasks(job.job_id):
+            worker_address = ""
+            if task.worker_id:
+                worker = self._state.get_worker(task.worker_id)
+                if worker:
+                    worker_address = worker.address
 
-        # Get worker info from first task that has a worker_id (prefer running, then any)
-        worker_id = job.worker_id
-        for t in tasks:
-            if t.worker_id:
-                worker_id = t.worker_id
-                if t.state == cluster_pb2.TASK_STATE_RUNNING:
-                    break  # Prefer running task's worker
+            # Convert task attempts to proto
+            attempts = [
+                cluster_pb2.TaskAttempt(
+                    attempt_id=attempt.attempt_id,
+                    worker_id=str(attempt.worker_id) if attempt.worker_id else "",
+                    state=attempt.state,
+                    exit_code=attempt.exit_code or 0,
+                    error=attempt.error or "",
+                    started_at_ms=attempt.started_at_ms or 0,
+                    finished_at_ms=attempt.finished_at_ms or 0,
+                    is_worker_failure=attempt.is_worker_failure,
+                )
+                for attempt in task.attempts
+            ]
 
-        worker_address = ""
-        if worker_id:
-            worker = self._state.get_worker(worker_id)
-            if worker:
-                worker_address = worker.address
+            task_statuses.append(
+                cluster_pb2.TaskStatus(
+                    task_id=str(task.task_id),
+                    job_id=str(task.job_id),
+                    task_index=task.task_index,
+                    state=task.state,
+                    worker_id=str(task.worker_id) if task.worker_id else "",
+                    worker_address=worker_address,
+                    started_at_ms=task.started_at_ms or 0,
+                    finished_at_ms=task.finished_at_ms or 0,
+                    exit_code=task.exit_code or 0,
+                    error=task.error or "",
+                    current_attempt_id=task.current_attempt_id,
+                    attempts=attempts,
+                )
+            )
+
+        # Aggregate failure and preemption counts from all tasks
+        total_failure_count = sum(task.failure_count for task in self._state.get_job_tasks(job.job_id))
+        total_preemption_count = sum(task.preemption_count for task in self._state.get_job_tasks(job.job_id))
 
         return cluster_pb2.Controller.GetJobStatusResponse(
             job=cluster_pb2.JobStatus(
@@ -149,24 +178,11 @@ class ControllerServiceImpl:
                 exit_code=job.exit_code or 0,
                 started_at_ms=job.started_at_ms or 0,
                 finished_at_ms=job.finished_at_ms or 0,
-                worker_id=str(worker_id) if worker_id else "",
-                worker_address=worker_address,
                 parent_job_id=str(job.parent_job_id) if job.parent_job_id else "",
-                current_attempt_id=job.current_attempt_id,
-                failure_count=job.failure_count,
-                preemption_count=job.preemption_count,
-                attempts=[
-                    cluster_pb2.JobAttempt(
-                        attempt_id=a.attempt_id,
-                        worker_id=a.worker_id or "",
-                        state=a.state,
-                        exit_code=a.exit_code or 0,
-                        error=a.error or "",
-                        started_at_ms=a.started_at_ms or 0,
-                        finished_at_ms=a.finished_at_ms or 0,
-                    )
-                    for a in job.attempts
-                ],
+                failure_count=total_failure_count,
+                preemption_count=total_preemption_count,
+                num_tasks=len(task_statuses),
+                tasks=task_statuses,
             )
         )
 
@@ -224,33 +240,22 @@ class ControllerServiceImpl:
         """List all jobs."""
         jobs = []
         for j in self._state.list_all_jobs():
+            # Aggregate failure and preemption counts from all tasks
             tasks = self._state.get_job_tasks(j.job_id)
-
-            # Get worker info from first task that has a worker_id (prefer running, then any)
-            worker_id = j.worker_id
-            for t in tasks:
-                if t.worker_id:
-                    worker_id = t.worker_id
-                    if t.state == cluster_pb2.TASK_STATE_RUNNING:
-                        break  # Prefer running task's worker
-
-            worker_address = ""
-            if worker_id:
-                worker = self._state.get_worker(worker_id)
-                if worker:
-                    worker_address = worker.address
+            total_failure_count = sum(task.failure_count for task in tasks)
+            total_preemption_count = sum(task.preemption_count for task in tasks)
 
             jobs.append(
                 cluster_pb2.JobStatus(
                     job_id=j.job_id,
                     state=j.state,
-                    worker_id=str(worker_id) if worker_id else "",
-                    worker_address=worker_address,
                     error=j.error or "",
                     exit_code=j.exit_code or 0,
                     started_at_ms=j.started_at_ms or 0,
                     finished_at_ms=j.finished_at_ms or 0,
                     parent_job_id=str(j.parent_job_id) if j.parent_job_id else "",
+                    failure_count=total_failure_count,
+                    preemption_count=total_preemption_count,
                 )
             )
         return cluster_pb2.Controller.ListJobsResponse(jobs=jobs)
@@ -268,6 +273,13 @@ class ControllerServiceImpl:
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {task_id} not found")
 
+        # Look up worker address
+        worker_address = ""
+        if task.worker_id:
+            worker = self._state.get_worker(task.worker_id)
+            if worker:
+                worker_address = worker.address
+
         return cluster_pb2.Controller.GetTaskStatusResponse(
             task=cluster_pb2.TaskStatus(
                 task_id=str(task.task_id),
@@ -275,6 +287,7 @@ class ControllerServiceImpl:
                 task_index=task.task_index,
                 state=task.state,
                 worker_id=str(task.worker_id) if task.worker_id else "",
+                worker_address=worker_address,
                 started_at_ms=task.started_at_ms or 0,
                 finished_at_ms=task.finished_at_ms or 0,
                 exit_code=task.exit_code or 0,
@@ -300,6 +313,13 @@ class ControllerServiceImpl:
 
         task_statuses = []
         for task in tasks:
+            # Look up worker address
+            worker_address = ""
+            if task.worker_id:
+                worker = self._state.get_worker(task.worker_id)
+                if worker:
+                    worker_address = worker.address
+
             task_statuses.append(
                 cluster_pb2.TaskStatus(
                     task_id=str(task.task_id),
@@ -307,6 +327,7 @@ class ControllerServiceImpl:
                     task_index=task.task_index,
                     state=task.state,
                     worker_id=str(task.worker_id) if task.worker_id else "",
+                    worker_address=worker_address,
                     started_at_ms=task.started_at_ms or 0,
                     finished_at_ms=task.finished_at_ms or 0,
                     exit_code=task.exit_code or 0,

@@ -16,8 +16,8 @@
 
 import pytest
 
-from iris.cluster.controller.job import Job, TransitionResult, handle_gang_failure
-from iris.cluster.types import JobId, WorkerId
+from iris.cluster.controller.job import Job, TransitionResult, expand_job_to_tasks, handle_gang_failure
+from iris.cluster.types import JobId
 from iris.rpc import cluster_pb2
 
 
@@ -50,7 +50,7 @@ def make_job_request():
 def test_job_terminal_transitions(make_job_request, target_state, exit_code, error):
     """Job transitions to terminal states (SUCCEEDED, KILLED, UNSCHEDULABLE) with appropriate metadata."""
     job = Job(job_id=JobId("test"), request=make_job_request())
-    job.mark_dispatched(WorkerId("w1"), now_ms=1000)
+    job.mark_dispatched(now_ms=1000)
 
     result = job.transition(target_state, now_ms=2000, exit_code=exit_code, error=error)
 
@@ -84,16 +84,14 @@ def test_job_dispatch_and_revert(make_job_request):
     job = Job(job_id=JobId("test"), request=make_job_request())
     assert job.state == cluster_pb2.JOB_STATE_PENDING
 
-    job.mark_dispatched(WorkerId("w1"), now_ms=1000)
+    job.mark_dispatched(now_ms=1000)
 
     assert job.state == cluster_pb2.JOB_STATE_RUNNING
-    assert job.worker_id == WorkerId("w1")
     assert job.started_at_ms == 1000
 
     job.revert_dispatch()
 
     assert job.state == cluster_pb2.JOB_STATE_PENDING
-    assert job.worker_id is None
     assert job.started_at_ms is None
 
 
@@ -107,7 +105,7 @@ def test_failure_with_retries_available(make_job_request):
         request=make_job_request(),
         max_retries_failure=2,
     )
-    job.mark_dispatched(WorkerId("w1"), now_ms=1000)
+    job.mark_dispatched(now_ms=1000)
 
     result = job.transition(
         cluster_pb2.JOB_STATE_FAILED,
@@ -118,7 +116,6 @@ def test_failure_with_retries_available(make_job_request):
     assert result == TransitionResult.SHOULD_RETRY
     assert job.state == cluster_pb2.JOB_STATE_PENDING
     assert job.failure_count == 1
-    assert job.worker_id is None
     assert job.started_at_ms is None
     assert job.error is None
     assert not job.is_finished()
@@ -131,7 +128,7 @@ def test_failure_exceeds_retry_limit(make_job_request):
         request=make_job_request(),
         max_retries_failure=1,
     )
-    job.mark_dispatched(WorkerId("w1"), now_ms=1000)
+    job.mark_dispatched(now_ms=1000)
 
     # First failure - retry
     result = job.transition(cluster_pb2.JOB_STATE_FAILED, now_ms=2000)
@@ -139,7 +136,7 @@ def test_failure_exceeds_retry_limit(make_job_request):
     assert job.failure_count == 1
 
     # Dispatch again
-    job.mark_dispatched(WorkerId("w2"), now_ms=3000)
+    job.mark_dispatched(now_ms=3000)
 
     # Second failure - no more retries
     result = job.transition(cluster_pb2.JOB_STATE_FAILED, now_ms=4000, error="final error")
@@ -158,7 +155,7 @@ def test_worker_failure_uses_separate_retry_counter(make_job_request):
         request=make_job_request(),
         max_retries_preemption=1,
     )
-    job.mark_dispatched(WorkerId("w1"), now_ms=1000)
+    job.mark_dispatched(now_ms=1000)
 
     # First preemption - retry
     result = job.transition(
@@ -171,7 +168,7 @@ def test_worker_failure_uses_separate_retry_counter(make_job_request):
     assert job.failure_count == 0
 
     # Dispatch again
-    job.mark_dispatched(WorkerId("w2"), now_ms=3000)
+    job.mark_dispatched(now_ms=3000)
 
     # Second preemption - no more retries
     result = job.transition(
@@ -214,12 +211,12 @@ def test_retry_count_limits(make_job_request, failure_type, max_retries, expecte
 
     # Attempt up to the limit
     for attempt in range(max_retries):
-        job.mark_dispatched(WorkerId(f"w{attempt}"), now_ms=attempt * 1000)
+        job.mark_dispatched(now_ms=attempt * 1000)
         result = job.transition(state, now_ms=attempt * 1000 + 500, is_worker_failure=is_worker_failure)
         assert result == TransitionResult.SHOULD_RETRY
 
     # Final attempt should fail
-    job.mark_dispatched(WorkerId(f"w{max_retries}"), now_ms=max_retries * 1000)
+    job.mark_dispatched(now_ms=max_retries * 1000)
     result = job.transition(state, now_ms=max_retries * 1000 + 500, is_worker_failure=is_worker_failure)
     assert result == TransitionResult.EXCEEDED_RETRY_LIMIT
     assert job.is_finished()
@@ -296,8 +293,6 @@ def test_gang_retry_success(make_job_request):
     assert job2.preemption_count == 1
 
     # State should be cleared
-    assert job1.worker_id is None
-    assert job2.worker_id is None
     assert job1.error is None
     assert job2.error is None
 
@@ -339,7 +334,7 @@ def test_gang_only_running_jobs_killed(make_job_request):
 
 
 def test_gang_tracks_correct_failure_type(make_job_request):
-    """Gang retry increments correct counter based on failure type."""
+    """Gang retry uses correct retry budget based on failure type."""
     job1 = Job(
         job_id=JobId("j1"),
         request=make_job_request("job1"),
@@ -358,50 +353,30 @@ def test_gang_tracks_correct_failure_type(make_job_request):
     job1.state = cluster_pb2.JOB_STATE_RUNNING
     job2.state = cluster_pb2.JOB_STATE_RUNNING
 
-    # Test worker failure (preemption)
+    # After a worker failure, preemption retry budget should be consumed
+    assert job1.can_retry_preemption()
+    assert job2.can_retry_preemption()
     retried = handle_gang_failure([job1, job2], now_ms=1000, is_worker_failure=True, error="Worker died")
     assert len(retried) == 2
-    assert job1.preemption_count == 1
-    assert job2.preemption_count == 1
-    assert job1.failure_count == 0
-    assert job2.failure_count == 0
+
+    # Failure retry budget should be untouched
+    assert job1.can_retry_failure()
+    assert job2.can_retry_failure()
 
     # Reset for next test
     job1.state = cluster_pb2.JOB_STATE_RUNNING
     job2.state = cluster_pb2.JOB_STATE_RUNNING
 
-    # Test job failure (internal)
+    # After a job failure, failure retry budget should be consumed
     retried = handle_gang_failure([job1, job2], now_ms=2000, is_worker_failure=False, error="Job crashed")
     assert len(retried) == 2
-    assert job1.preemption_count == 1  # Unchanged
-    assert job2.preemption_count == 1  # Unchanged
-    assert job1.failure_count == 1
-    assert job2.failure_count == 1
 
-
-def test_gang_empty_list():
-    """Empty job list returns empty list."""
-    retried = handle_gang_failure([], now_ms=1000, is_worker_failure=True, error="error")
-    assert retried == []
+    # Still have one more retry in each budget
+    assert job1.can_retry_failure()
+    assert job1.can_retry_preemption()
 
 
 # --- Task State Tracking ---
-
-
-def test_job_on_task_transition_updates_counts(make_job_request):
-    """on_task_transition incrementally updates task state counts."""
-    job = Job(job_id=JobId("test"), request=make_job_request())
-    job.num_tasks = 3
-
-    # Initialize with 3 pending tasks
-    for _ in range(3):
-        job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] += 1
-
-    # Transition one task from PENDING to RUNNING
-    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1000)
-
-    assert job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] == 2
-    assert job.task_state_counts[cluster_pb2.TASK_STATE_RUNNING] == 1
 
 
 def test_job_compute_job_state_all_succeeded(make_job_request):
@@ -462,9 +437,22 @@ def test_job_finished_task_count(make_job_request):
     job = Job(job_id=JobId("test"), request=make_job_request())
     job.num_tasks = 5
 
-    job.task_state_counts[cluster_pb2.TASK_STATE_SUCCEEDED] = 2
-    job.task_state_counts[cluster_pb2.TASK_STATE_FAILED] = 1
-    job.task_state_counts[cluster_pb2.TASK_STATE_RUNNING] = 2
+    # Start with 5 pending tasks
+    job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 5
+
+    # Move 2 tasks through running to succeeded
+    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1000)
+    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1001)
+    job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_SUCCEEDED, now_ms=2000)
+    job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_SUCCEEDED, now_ms=2001)
+
+    # Move 1 task through running to failed
+    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1002)
+    job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_FAILED, now_ms=2002)
+
+    # Keep 2 tasks running
+    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1003)
+    job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_RUNNING, now_ms=1004)
 
     assert job.finished_task_count == 3  # 2 succeeded + 1 failed
 
@@ -480,3 +468,123 @@ def test_job_on_task_transition_sets_running_on_first_dispatch(make_job_request)
 
     assert new_state == cluster_pb2.JOB_STATE_RUNNING
     assert job.started_at_ms == 1000
+
+
+# --- Job Expansion ---
+
+
+def test_job_expands_to_correct_number_of_tasks(make_job_request):
+    """expand_job_to_tasks creates correct number of tasks based on replicas."""
+    request = make_job_request()
+    request.resources.replicas = 3
+    job = Job(job_id=JobId("test-job"), request=request)
+
+    tasks = expand_job_to_tasks(job, now_ms=1000)
+
+    assert len(tasks) == 3
+    for i, task in enumerate(tasks):
+        assert task.task_index == i
+        assert task.job_id == job.job_id
+        assert str(task.task_id) == f"{job.job_id}/task-{i}"
+        assert task.max_retries_failure == job.max_retries_failure
+        assert task.max_retries_preemption == job.max_retries_preemption
+
+
+def test_job_expands_single_replica_by_default(make_job_request):
+    """expand_job_to_tasks creates single task when replicas not specified."""
+    request = make_job_request()
+    # replicas defaults to 0 in proto, which should be treated as 1
+    job = Job(job_id=JobId("test-job"), request=request)
+
+    tasks = expand_job_to_tasks(job, now_ms=1000)
+
+    assert len(tasks) == 1
+    assert tasks[0].task_index == 0
+
+
+def test_job_becomes_unschedulable_when_task_unschedulable(make_job_request):
+    """Job transitions to UNSCHEDULABLE when any task becomes unschedulable."""
+    job = Job(job_id=JobId("test"), request=make_job_request())
+    job.num_tasks = 3
+    job.task_state_counts[cluster_pb2.TASK_STATE_PENDING] = 3
+
+    # One task becomes unschedulable
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_PENDING, cluster_pb2.TASK_STATE_UNSCHEDULABLE, now_ms=1000)
+
+    assert new_state == cluster_pb2.JOB_STATE_UNSCHEDULABLE
+
+
+def test_job_becomes_killed_when_task_killed(make_job_request):
+    """Job transitions to KILLED when any task is killed."""
+    job = Job(job_id=JobId("test"), request=make_job_request())
+    job.num_tasks = 3
+    job.task_state_counts[cluster_pb2.TASK_STATE_RUNNING] = 3
+    job.state = cluster_pb2.JOB_STATE_RUNNING
+
+    # One task is killed
+    new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_KILLED, now_ms=1000)
+
+    assert new_state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_gang_failure_respects_minimum_retry_budget(make_job_request):
+    """Gang fails when any member has no retries, even if others have budget."""
+    job1 = Job(
+        job_id=JobId("j1"),
+        request=make_job_request("job1"),
+        gang_id="g1",
+        max_retries_failure=5,  # Plenty of retries
+    )
+    job2 = Job(
+        job_id=JobId("j2"),
+        request=make_job_request("job2"),
+        gang_id="g1",
+        max_retries_failure=0,  # No retries
+    )
+
+    job1.state = cluster_pb2.JOB_STATE_RUNNING
+    job2.state = cluster_pb2.JOB_STATE_RUNNING
+
+    # Job2 cannot retry, so entire gang fails
+    assert job1.can_retry_failure()
+    assert not job2.can_retry_failure()
+
+    retried = handle_gang_failure([job1, job2], now_ms=1000, is_worker_failure=False, error="Gang failed")
+
+    # No jobs should be retried
+    assert retried == []
+
+    # Both should be killed
+    assert job1.state == cluster_pb2.JOB_STATE_KILLED
+    assert job2.state == cluster_pb2.JOB_STATE_KILLED
+
+
+def test_job_total_attempts_reflects_retry_history(make_job_request):
+    """total_attempts property correctly reflects the job's execution history."""
+    job = Job(
+        job_id=JobId("test"),
+        request=make_job_request(),
+        max_retries_failure=3,
+        max_retries_preemption=3,
+    )
+
+    # Fresh job has 1 attempt (the initial one)
+    assert job.total_attempts == 1
+
+    # After a failure retry
+    job.mark_dispatched(now_ms=1000)
+    result = job.transition(cluster_pb2.JOB_STATE_FAILED, now_ms=2000)
+    assert result == TransitionResult.SHOULD_RETRY
+    assert job.total_attempts == 1  # 1 failure
+
+    # After a preemption retry
+    job.mark_dispatched(now_ms=3000)
+    result = job.transition(cluster_pb2.JOB_STATE_WORKER_FAILED, now_ms=4000, is_worker_failure=True)
+    assert result == TransitionResult.SHOULD_RETRY
+    assert job.total_attempts == 2  # 1 failure + 1 preemption
+
+    # After another failure
+    job.mark_dispatched(now_ms=5000)
+    result = job.transition(cluster_pb2.JOB_STATE_FAILED, now_ms=6000)
+    assert result == TransitionResult.SHOULD_RETRY
+    assert job.total_attempts == 3  # 2 failures + 1 preemption

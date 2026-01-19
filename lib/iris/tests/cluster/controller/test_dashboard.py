@@ -176,20 +176,19 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
 
 
 def test_job_detail_page_includes_worker_address(client, state, job_request, make_worker_metadata):
-    """Job detail page injects worker address for client-side fetch."""
+    """Job detail page has empty worker address since jobs don't execute on workers."""
     state.add_worker(
         ControllerWorker(
             worker_id=WorkerId("w1"), address="worker-host:9000", metadata=make_worker_metadata(), healthy=True
         )
     )
-    state.add_job(
-        Job(job_id=JobId("j1"), request=job_request, state=cluster_pb2.JOB_STATE_RUNNING, worker_id=WorkerId("w1"))
-    )
+    state.add_job(Job(job_id=JobId("j1"), request=job_request, state=cluster_pb2.JOB_STATE_RUNNING))
 
     response = client.get("/job/j1")
 
     assert response.status_code == 200
-    assert "worker-host:9000" in response.text
+    # Jobs don't execute on workers - tasks do
+    assert "const workerAddress = '';" in response.text
 
 
 def test_job_detail_page_empty_worker_for_pending_job(client, state, job_request):
@@ -225,92 +224,50 @@ def test_jobs_state_names_mapped_correctly(client, state, job_request):
         assert job_by_id[f"j-{proto_state}"] == expected_name
 
 
-def test_api_jobs_includes_attempt_info(client, state, job_request):
-    """Jobs API includes attempt tracking fields."""
-    from iris.cluster.controller.job import JobAttempt
-
+def test_api_jobs_includes_retry_counts(client, state, job_request):
+    """Jobs API includes retry count fields."""
     job = Job(
         job_id=JobId("test-job"),
         request=job_request,
         state=cluster_pb2.JOB_STATE_RUNNING,
-        current_attempt_id=2,
         failure_count=1,
-        preemption_count=0,
-        attempts=[
-            JobAttempt(attempt_id=0, state=cluster_pb2.JOB_STATE_FAILED),
-            JobAttempt(attempt_id=1, state=cluster_pb2.JOB_STATE_WORKER_FAILED),
-        ],
+        preemption_count=2,
     )
     state.add_job(job)
 
     jobs = client.get("/api/jobs").json()
 
     assert len(jobs) == 1
-    assert jobs[0]["current_attempt_id"] == 2
+    # total_attempts = max(1, failure_count + preemption_count)
     assert jobs[0]["total_attempts"] == 3
     assert jobs[0]["failure_count"] == 1
-    assert jobs[0]["preemption_count"] == 0
+    assert jobs[0]["preemption_count"] == 2
 
 
-def test_api_job_attempts_returns_attempt_history(client, state, job_request):
-    """Job attempts API returns historical attempts plus current."""
-    from iris.cluster.controller.job import JobAttempt
+def test_api_job_attempts_returns_retry_info(client, state, job_request):
+    """Job attempts API returns retry counts and current state.
 
+    Jobs no longer track individual attempts - tasks do. This endpoint
+    returns aggregate retry information for the job.
+    """
     job = Job(
         job_id=JobId("test-job"),
         request=job_request,
         state=cluster_pb2.JOB_STATE_RUNNING,
-        current_attempt_id=2,
-        worker_id=WorkerId("worker2"),
         started_at_ms=3000,
-        attempts=[
-            JobAttempt(
-                attempt_id=0,
-                worker_id=WorkerId("worker1"),
-                state=cluster_pb2.JOB_STATE_FAILED,
-                started_at_ms=1000,
-                finished_at_ms=2000,
-                exit_code=1,
-                error="Task failed",
-                is_worker_failure=False,
-            ),
-            JobAttempt(
-                attempt_id=1,
-                worker_id=WorkerId("worker1"),
-                state=cluster_pb2.JOB_STATE_WORKER_FAILED,
-                started_at_ms=2100,
-                finished_at_ms=2500,
-                error="Worker died",
-                is_worker_failure=True,
-            ),
-        ],
+        failure_count=1,
+        preemption_count=1,
     )
     state.add_job(job)
 
-    attempts = client.get("/api/jobs/test-job/attempts").json()
+    response = client.get("/api/jobs/test-job/attempts").json()
 
-    assert len(attempts) == 3
-
-    # First attempt
-    assert attempts[0]["attempt_id"] == 0
-    assert attempts[0]["worker_id"] == "worker1"
-    assert attempts[0]["state"] == "failed"
-    assert attempts[0]["exit_code"] == 1
-    assert attempts[0]["error"] == "Task failed"
-    assert attempts[0]["is_worker_failure"] is False
-
-    # Second attempt
-    assert attempts[1]["attempt_id"] == 1
-    assert attempts[1]["worker_id"] == "worker1"
-    assert attempts[1]["state"] == "worker_failed"
-    assert attempts[1]["error"] == "Worker died"
-    assert attempts[1]["is_worker_failure"] is True
-
-    # Current attempt
-    assert attempts[2]["attempt_id"] == 2
-    assert attempts[2]["worker_id"] == "worker2"
-    assert attempts[2]["state"] == "running"
-    assert attempts[2]["is_worker_failure"] is False
+    # total_attempts = max(1, failure_count + preemption_count)
+    assert response["total_attempts"] == 2
+    assert response["failure_count"] == 1
+    assert response["preemption_count"] == 1
+    assert response["current_state"] == "running"
+    assert response["started_at_ms"] == 3000
 
 
 def test_api_job_attempts_returns_404_for_missing_job(client, state):

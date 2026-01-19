@@ -51,6 +51,20 @@ def _job_state_name(state: int) -> str:
     return state_map.get(state, f"unknown({state})")
 
 
+def _task_state_name(state: int) -> str:
+    state_map: dict[int, str] = {
+        cluster_pb2.TASK_STATE_PENDING: "pending",
+        cluster_pb2.TASK_STATE_BUILDING: "building",
+        cluster_pb2.TASK_STATE_RUNNING: "running",
+        cluster_pb2.TASK_STATE_SUCCEEDED: "succeeded",
+        cluster_pb2.TASK_STATE_FAILED: "failed",
+        cluster_pb2.TASK_STATE_KILLED: "killed",
+        cluster_pb2.TASK_STATE_WORKER_FAILED: "worker_failed",
+        cluster_pb2.TASK_STATE_UNSCHEDULABLE: "unschedulable",
+    }
+    return state_map.get(state, f"unknown({state})")
+
+
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html>
 <head>
@@ -712,6 +726,7 @@ class ControllerDashboard:
             Route("/api/workers", self._api_workers),
             Route("/api/jobs", self._api_jobs),
             Route("/api/jobs/{job_id}/attempts", self._api_job_attempts),
+            Route("/api/jobs/{job_id}/tasks", self._api_job_tasks),
             Route("/api/endpoints", self._api_endpoints),
             Route("/health", self._health),
             # Connect RPC - mount WSGI app wrapped for ASGI
@@ -805,12 +820,10 @@ class ControllerDashboard:
                     "job_id": str(j.job_id),
                     "name": j.request.name,
                     "state": _job_state_name(j.state),
-                    "worker_id": str(j.worker_id) if j.worker_id else None,
                     "error": j.error,
                     "submitted_at_ms": j.submitted_at_ms,
                     "started_at_ms": j.started_at_ms,
                     "finished_at_ms": j.finished_at_ms,
-                    "current_attempt_id": j.current_attempt_id,
                     "total_attempts": j.total_attempts,
                     "failure_count": j.failure_count,
                     "preemption_count": j.preemption_count,
@@ -824,40 +837,64 @@ class ControllerDashboard:
         )
 
     def _api_job_attempts(self, request: Request) -> JSONResponse:
+        """Get retry information for a job.
+
+        Jobs don't have attempts - tasks do. This endpoint returns retry counts
+        and the current job state. For detailed attempt history, query the
+        task attempts via /api/jobs/{job_id}/tasks.
+        """
         job_id = request.path_params["job_id"]
         job = self._state.get_job(JobId(job_id))
         if not job:
             return JSONResponse({"error": "Job not found"}, status_code=404)
 
-        attempts = [
+        return JSONResponse(
             {
-                "attempt_id": a.attempt_id,
-                "worker_id": str(a.worker_id) if a.worker_id else None,
-                "state": _job_state_name(a.state),
-                "exit_code": a.exit_code,
-                "error": a.error,
-                "started_at_ms": a.started_at_ms,
-                "finished_at_ms": a.finished_at_ms,
-                "is_worker_failure": a.is_worker_failure,
-            }
-            for a in job.attempts
-        ]
-
-        # Add current attempt
-        attempts.append(
-            {
-                "attempt_id": job.current_attempt_id,
-                "worker_id": str(job.worker_id) if job.worker_id else None,
-                "state": _job_state_name(job.state),
+                "total_attempts": job.total_attempts,
+                "failure_count": job.failure_count,
+                "preemption_count": job.preemption_count,
+                "current_state": _job_state_name(job.state),
                 "exit_code": job.exit_code,
                 "error": job.error,
                 "started_at_ms": job.started_at_ms,
                 "finished_at_ms": job.finished_at_ms,
-                "is_worker_failure": False,
             }
         )
 
-        return JSONResponse(attempts)
+    def _api_job_tasks(self, request: Request) -> JSONResponse:
+        """Get all tasks for a specific job."""
+        job_id = request.path_params["job_id"]
+        job = self._state.get_job(JobId(job_id))
+        if not job:
+            return JSONResponse({"error": "Job not found"}, status_code=404)
+
+        tasks = self._state.get_job_tasks(job.job_id)
+        task_data = []
+        for t in tasks:
+            worker_id = t.worker_id  # Property reading from attempts
+            worker_address = ""
+            if worker_id:
+                worker = self._state.get_worker(worker_id)
+                if worker:
+                    worker_address = worker.address
+
+            task_data.append(
+                {
+                    "task_id": str(t.task_id),
+                    "task_index": t.task_index,
+                    "state": _task_state_name(t.state),
+                    "worker_id": str(worker_id) if worker_id else None,
+                    "worker_address": worker_address,
+                    "started_at_ms": t.started_at_ms or 0,
+                    "finished_at_ms": t.finished_at_ms or 0,
+                    "exit_code": t.exit_code,
+                    "error": t.error or "",
+                    "current_attempt_id": t.current_attempt_id,
+                    "num_attempts": len(t.attempts),
+                }
+            )
+
+        return JSONResponse(task_data)
 
     def _api_endpoints(self, _request: Request) -> JSONResponse:
         endpoints = []
@@ -877,12 +914,9 @@ class ControllerDashboard:
 
     def _job_detail_page(self, request: Request) -> HTMLResponse:
         job_id = request.path_params["job_id"]
-        job = self._state.get_job(JobId(job_id))
+        # Jobs don't execute on workers - tasks do
+        # worker_address is kept empty for now (UI will be updated to show task-level workers)
         worker_address = ""
-        if job and job.worker_id:
-            worker = self._state.get_worker(job.worker_id)
-            if worker:
-                worker_address = worker.address
         return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", job_id).replace("{{worker_address}}", worker_address))
 
     def _health(self, _request: Request) -> JSONResponse:

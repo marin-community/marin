@@ -118,19 +118,21 @@ message JobStatus {
 
   BuildMetrics build_metrics = 10;
 
-  // Worker ID (populated by controller, not worker)
-  string worker_id = 11;
-  string worker_address = 12;  // host:port for direct worker connection
+  // Fields 11-12 removed: Jobs don't execute on workers (tasks do)
+  // string worker_id = 11;
+  // string worker_address = 12;
+
   bytes serialized_result = 13;  // cloudpickle serialized return value (if requested)
 
   // Parent job ID for hierarchical job tracking (empty string if root job)
   string parent_job_id = 14;
 
-  // Attempt tracking
-  int32 current_attempt_id = 15;           // Current/latest attempt number
-  repeated JobAttempt attempts = 16;       // History of previous attempts
-  int32 failure_count = 17;                // Total job failures
-  int32 preemption_count = 18;             // Total preemptions
+  // Fields 15-16 removed: Jobs don't have attempts (tasks do)
+  // int32 current_attempt_id = 15;
+  // repeated JobAttempt attempts = 16;
+
+  int32 failure_count = 17;                // Total task failures (aggregated)
+  int32 preemption_count = 18;             // Total task preemptions (aggregated)
 
   // Task information (populated for jobs with replicas > 1)
   int32 num_tasks = 19;
@@ -138,23 +140,11 @@ message JobStatus {
   int32 tasks_running = 21;
   int32 tasks_succeeded = 22;
   int32 tasks_failed = 23;
-  repeated TaskStatus tasks = 24;          // Per-task status (optional, controlled by include_tasks)
+  repeated TaskStatus tasks = 24;          // Per-task status (always included)
 }
 
-// Record of a single job execution attempt
-message JobAttempt {
-  int32 attempt_id = 1;           // 0-indexed attempt number
-  string worker_id = 2;           // Worker that executed this attempt
-
-  JobState state = 3;             // Terminal state of this attempt
-  int32 exit_code = 4;
-  string error = 5;
-
-  int64 started_at_ms = 6;
-  int64 finished_at_ms = 7;
-
-  bool is_worker_failure = 8;     // True if preemption/worker death
-}
+// JobAttempt message removed: Jobs don't have attempts - tasks do.
+// Job state is derived from task states, and retry semantics are per-task.
 
 // ============================================================================
 // RESOURCE SPECIFICATION
@@ -292,7 +282,6 @@ message Controller {
   message GetJobStatusRequest {
     string job_id = 1;
     bool include_result = 2;  // If true, include serialized_result in response
-    bool include_tasks = 3;   // If true, include per-task status in response
   }
 
   message GetJobStatusResponse {

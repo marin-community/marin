@@ -617,14 +617,20 @@ class Worker:
         thunk = f"""
 import cloudpickle
 import base64
+import sys
+import traceback
 
-fn, args, kwargs = cloudpickle.loads(base64.b64decode('{encoded}'))
-result = fn(*args, **kwargs)
+try:
+    fn, args, kwargs = cloudpickle.loads(base64.b64decode('{encoded}'))
+    result = fn(*args, **kwargs)
 
-with open('/workdir/_result.pkl', 'wb') as f:
-    f.write(cloudpickle.dumps(result))
+    with open('/workdir/_result.pkl', 'wb') as f:
+        f.write(cloudpickle.dumps(result))
+except Exception:
+    traceback.print_exc()
+    sys.exit(1)
 """
-        return ["python", "-c", thunk]
+        return ["python", "-u", "-c", thunk]
 
     def get_task(self, task_id: str) -> Task | None:
         """Get a task by ID."""
