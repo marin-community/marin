@@ -231,49 +231,36 @@ if __name__ == "__main__":
 
     # 4. Filter and Save
     print(f"Total traces collected: {len(all_traces)}")
-    final_dataset = filter_and_sample(all_traces, final_count=3000, max_tokens=4096)
+    print(f"Total traces collected: {len(all_traces)}")
+    # Sampling
+    if len(all_traces) > 3000:
+        final_dataset = random.sample(all_traces, 3000)
+    else:
+        final_dataset = all_traces
 
     output_file = "experiments/dspy/format_adaptation_dataset.jsonl"
+    
+    # Initialize tokenizer for formatting (using the Llama-3 tokenizer defined globally or Qwen if preferred)
+    # Using the globally defined 'tokenizer' which is Llama-3.1-8B-Instruct. 
+    # NOTE: Ideally this should match the training model (Qwen), but Llama 3 chat template is standard enough for now
+    # or we can re-initialize a Qwen tokenizer here. Let's stick to the loaded one for simplicity 
+    # as strict template matching happens in SFT script if we passed list, but here we pre-format.
+    
     with open(output_file, "w") as f:
-        # Serialize predictions if needed (they are objects)
         for item in final_dataset:
-            # item is a dict (TraceData + dataset key)
-            clean_item = {}
-            for k, v in item.items():
-                if k == "prediction":
-                     if hasattr(v, "toDict"):
-                         clean_item[k] = v.toDict()
-                     elif hasattr(v, "__dict__"):
-                         clean_item[k] = vars(v)
-                     else:
-                         clean_item[k] = str(v)
-                elif k == "example":
-                     if hasattr(v, "toDict"):
-                         clean_item[k] = v.toDict()
-                     elif hasattr(v, "__dict__"):
-                         clean_item[k] = vars(v)
-                     else:
-                         clean_item[k] = str(v)
-                elif k == "trace":
-                     # trace is list of (module, input, prediction)
-                     # We convert to string representation for modules/objects
-                     clean_trace = []
-                     if isinstance(v, list):
-                         for step in v:
-                             if isinstance(step, (list, tuple)) and len(step) >= 3:
-                                 # (module, input, prediction)
-                                 mod, inp, step_pred = step[0], step[1], step[2]
-                                 clean_trace.append({
-                                     "module": str(mod),
-                                     "input": inp,
-                                     "prediction": str(step_pred)
-                                 })
-                             else:
-                                 clean_trace.append(str(step))
-                     clean_item[k] = clean_trace
-                else:
-                     clean_item[k] = v
-            # Write as JSON line
-            f.write(json.dumps(clean_item) + "\n")
+            # item is {"dataset": "...", "chat": [...]}
+            try:
+                chat_content = item.get("chat")
+                if not chat_content:
+                    continue
+                
+                # Apply chat template to turn list of dicts into a single string
+                # We use tokenize=False to get the raw string
+                formatted_text = tokenizer.apply_chat_template(chat_content, tokenize=False)
+                
+                # Save as simple {"text": "..."} for SFTTrainer
+                f.write(json.dumps({"text": formatted_text}) + "\n")
+            except Exception as e:
+                print(f"Skipping item due to formatting error: {e}")
 
-    print(f"Saved {len(final_dataset)} trajectories to {output_file}")
+    print(f"Saved {len(final_dataset)} formatted conversational traces to {output_file}")
