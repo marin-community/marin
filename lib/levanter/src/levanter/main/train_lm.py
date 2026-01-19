@@ -199,6 +199,11 @@ def main(config: TrainLmConfig):
         if len(tagged_eval_datasets) == 0:
             logger.warning("No evaluation datasets provided.")
         else:
+            # Write eval metrics to the same directory as checkpoints
+            checkpoint_path = None
+            if config.trainer.checkpointer is not None:
+                checkpoint_path = config.trainer.checkpointer.expanded_path(trainer.run_id)
+
             cb = levanter.eval.cb_tagged_lm_evaluate(
                 EvalBatch,
                 tagged_eval_datasets,
@@ -207,6 +212,7 @@ def main(config: TrainLmConfig):
                 compute_axis_mapping,
                 max_eval_examples_per_ds,
                 mp=config.trainer.mp,
+                checkpoint_path=checkpoint_path,
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
 
