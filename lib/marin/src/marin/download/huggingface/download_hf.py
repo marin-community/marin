@@ -65,6 +65,9 @@ class DownloadConfig:
         # spaces/ for spaces, and models do not need a prefix in the URL.
     )
 
+    zephyr_max_parallelism: int = 1024
+    """Maximum parallelism of the Zephyr download job"""
+
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
@@ -176,7 +179,7 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    Backend.execute(pipeline)
+    Backend.execute(pipeline, max_parallelism=cfg.zephyr_max_parallelism)
 
     # Write Provenance JSON
     write_provenance_json(
