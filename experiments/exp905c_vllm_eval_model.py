@@ -68,8 +68,8 @@ EVAL_TASKS = [
 ]
 
 # Seeds for multiple evaluation runs to compute averaged results
-# SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
-SEEDS = [42, 43, 44]
+SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+# SEEDS = [42, 43, 44]
 
 MODELS = [
     # {
@@ -190,18 +190,18 @@ MODELS = [
     # },
 
     # START exp2199
-    # {
-    #     "name": "marin-8b-longcontext-finetuned-ot3-exp2199a2_redo2",
-    #     "path": "gs://marin-us-central2/checkpoints/exp2199a2_redo2_sft_longcontext_marin_8b_ot3_bsz512_lr8e_5-fe3bab/hf/step-11718/",
-    #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
-    # },
-    # {
-    #     "name": "qwen2.5-7b-instruct-finetuned-ot3-exp2199b_redo3",
-    #     "path": "gs://marin-us-central2/checkpoints/exp2199b_redo3_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-c05011/hf/step-11718/",
-    #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 1,
-    # },
+    {
+        "name": "marin-8b-longcontext-finetuned-ot3-exp2199a2_redo2",
+        "path": "gs://marin-us-central2/checkpoints/exp2199a2_redo2_sft_longcontext_marin_8b_ot3_bsz512_lr8e_5-fe3bab/hf/step-11718/",
+        "apply_chat_template": True,
+        "tensor_parallel_size": 4,
+    },
+    {
+        "name": "qwen2.5-7b-instruct-finetuned-ot3-exp2199b_redo3",
+        "path": "gs://marin-us-central2/checkpoints/exp2199b_redo3_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-c05011/hf/step-11718/",
+        "apply_chat_template": True,
+        "tensor_parallel_size": 1,
+    },
 
     # START exp2262
     # {
@@ -264,78 +264,176 @@ MODELS = [
     #     "apply_chat_template": True,
     #     "tensor_parallel_size": 1,
     # },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
-        "path": "gs://marin-us-east5/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-500/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
-        "path": "gs://marin-us-east5/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-500/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
-        "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-1000/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
-        "path": "gs://marin-us-east5/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-1000/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
-        "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-2000/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
-        "path": "gs://marin-us-central1/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-2000/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
-        "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-3000/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
-        "path": "gs://marin-us-central1/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-3000/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
-        "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-4000/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
-        "path": "gs://marin-us-central1/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-4000/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
-        "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-4681/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
-    {
-        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
-        "path": "gs://marin-us-central1/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-4681/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-500/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-500/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
+    #     "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-1000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-1000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
+    #     "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-2000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
+    #     "path": "gs://marin-us-central1/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-2000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
+    #     "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-3000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
+    #     "path": "gs://marin-us-central1/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-3000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
+    #     "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-4000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
+    #     "path": "gs://marin-us-central1/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-4000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
+    #     "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-4681/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
+    #     "path": "gs://marin-us-central1/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-4681/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+
+    # START exp2262 - part 2: agreed/disagreed subsets
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math11k-qwen3-32b-agreed-exp2262k",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262k_ot4_agreed_qwen3_32b_bsz128_lr4e_5-afb092/hf/step-1000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math11k-qwen3-32b-agreed-exp2262k",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262k_ot4_agreed_qwen3_32b_bsz128_lr4e_5-afb092/hf/step-1711/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math11k-qwen3-235b-a22b-agreed-exp2262l",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262l_ot4_agreed_qwen3_235b_a22b_bsz128_lr4e_5-72433f/hf/step-1000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math11k-qwen3-235b-a22b-agreed-exp2262l",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262l_ot4_agreed_qwen3_235b_a22b_bsz128_lr4e_5-72433f/hf/step-1711/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math11k-qwen3-32b-agreed-exp2262o",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262o_longcontext_marin_ot4_agreed_qwen3_32b_bsz128_lr1e_5-abb099/hf/step-1000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math11k-qwen3-32b-agreed-exp2262o",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262o_longcontext_marin_ot4_agreed_qwen3_32b_bsz128_lr1e_5-abb099/hf/step-1711/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math11k-qwen3-235b-a22b-agreed-exp2262p",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262p_longcont_marin_ot4_agreed_qwen3_235b_bsz128_lr1e_5-472040/hf/step-1000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math11k-qwen3-235b-a22b-agreed-exp2262p",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262p_longcont_marin_ot4_agreed_qwen3_235b_bsz128_lr1e_5-472040/hf/step-1711/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math6k-qwen3-32b-disagreed-exp2262m",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262m_ot4_disagreed_qwen3_32b_bsz128_lr4e_5-9bf2dd/hf/step-500/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math6k-qwen3-32b-disagreed-exp2262m",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262m_ot4_disagreed_qwen3_32b_bsz128_lr4e_5-9bf2dd/hf/step-934/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math6k-qwen3-235b-a22b-disagreed-exp2262n",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262n_ot4_disagreed_qwen3_235b_a22b_bsz128_lr4e_5-6dea42/hf/step-500/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math6k-qwen3-235b-a22b-disagreed-exp2262n",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262n_ot4_disagreed_qwen3_235b_a22b_bsz128_lr4e_5-6dea42/hf/step-934/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math6k-qwen3-32b-disagreed-exp2262q",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262q_longcontext_marin_ot4_disagreed_qwen3_32b_bsz128_lr1e_5-ccc1db/hf/step-500/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math6k-qwen3-32b-disagreed-exp2262q",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262q_longcontext_marin_ot4_disagreed_qwen3_32b_bsz128_lr1e_5-ccc1db/hf/step-934/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math6k-qwen3-235b-a22b-disagreed-exp2262r",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262r_longcont_marin_ot4_disagreed_qwen3_235b_bsz128_lr1e_5-9aa333/hf/step-500/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-longcont-finetuned-ot4-math6k-qwen3-235b-a22b-disagreed-exp2262r",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262r_longcont_marin_ot4_disagreed_qwen3_235b_bsz128_lr1e_5-9aa333/hf/step-934/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
 ]
 
 
@@ -393,9 +491,10 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
                 gcs_root = "gs://" + base_dir.lstrip("/")
 
             # Pattern for per-task sample files:
-            # {root}/{dataset}_0shot/__tmp__{model}/samples_{dataset}_TIMESTAMP.jsonl
+            # {root}/{dataset}_0shot/{model_name_escaped}/samples_{dataset}_TIMESTAMP.jsonl
+            # Note: model_name_escaped replaces "/" with "__" (e.g. gs__bucket__path__model)
             fs = fsspec.filesystem("gcs")
-            pattern = gcs_root.rstrip("/") + "/*/__tmp__*/samples_*.jsonl"
+            pattern = gcs_root.rstrip("/") + "/*/*/samples_*.jsonl"
             sample_files: list[str] = fs.glob(pattern)
 
             if not sample_files:
@@ -407,7 +506,7 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
                 path_parts = sample_file.split("/")
 
                 # Infer dataset_name from the task directory: {dataset}_0shot
-                # e.g. .../model-task-seed42-hash/aime24_0shot/__tmp__.../samples_aime24_*.jsonl
+                # e.g. .../model-task-seed42-hash/aime24_0shot/gs__bucket__model/samples_aime24_*.jsonl
                 if len(path_parts) >= 3:
                     task_dir = path_parts[-3]
                     # Strip trailing "_{shot}" suffix (e.g. "_0shot", "_5shot")
@@ -419,7 +518,7 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
                     dataset_name = "unknown_dataset"
 
                 # Infer model_name from the model/hash directory (4 levels up from samples file)
-                # path: .../{model-task-seed42-hash}/{task}_0shot/__tmp__*/samples_*.jsonl
+                # path: .../{model-task-seed42-hash}/{task}_0shot/{model_escaped}/samples_*.jsonl
                 if len(path_parts) >= 4:
                     model_dir = path_parts[-4]
                 elif len(path_parts) >= 2:

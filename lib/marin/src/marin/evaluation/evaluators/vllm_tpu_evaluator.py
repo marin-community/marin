@@ -189,11 +189,28 @@ class VllmTpuEvaluator(Evaluator, ABC):
         if resource_config is None:
             resource_config = ResourceConfig()
 
+        # Build env_vars for the TPU job
+        tpu_env_vars = {
+            # Allow vLLM to use max_model_len larger than the model's native max_position_embeddings.
+            # Required when the model config has a smaller max_position_embeddings but we want to use
+            # a larger context window (e.g., for models with RoPE scaling).
+            "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
+        }
+        # Pass WANDB_API_KEY if set, so that wandb logging works on TPU nodes
+        wandb_api_key = os.environ.get("WANDB_API_KEY")
+        if wandb_api_key:
+            tpu_env_vars["WANDB_API_KEY"] = wandb_api_key
+
         job_request = JobRequest(
             name="vllm-tpu-evaluation",
             entrypoint=Entrypoint.from_callable(_run),
             resources=resource_config,
-            environment=EnvironmentConfig.create(extras=["eval", "vllm"]),
+            environment=EnvironmentConfig.create(
+                extras=["eval", "vllm"],
+                # Force reinstall pandas to fix numpy binary incompatibility.
+                pip_packages=["pandas"],
+                env_vars=tpu_env_vars,
+            ),
         )
 
         cluster = current_cluster()
