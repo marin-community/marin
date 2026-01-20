@@ -211,10 +211,9 @@ def test_task_failure_with_retry_requeues(job_request, worker_metadata):
 
     req = job_request("job1")
     req.max_task_failures = 1
-    job = ControllerJob(job_id=JobId("j1"), request=req)
+    job = ControllerJob(job_id=JobId("j1"), request=req, max_retries_failure=1)
     tasks = _add_job(state, job)
     task = tasks[0]
-    task.max_retries_failure = 1
 
     # First attempt fails
     dispatch_task(state, task, WorkerId("w1"))
@@ -280,10 +279,9 @@ def test_worker_failure_cascades_to_running_tasks(job_request, worker_metadata):
     )
     state.add_worker(worker)
 
-    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"))
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"), max_retries_preemption=1)
     tasks = state.add_job(job)
     task = tasks[0]
-    task.max_retries_preemption = 1
 
     dispatch_task(state, task, WorkerId("w1"))
 
@@ -315,10 +313,9 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, wor
     )
     state.add_worker(worker)
 
-    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"))
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"), max_retries_preemption=1)
     tasks = state.add_job(job)
     task = tasks[0]
-    task.max_retries_preemption = 1
 
     # Task gets assigned (creates attempt, puts in PENDING state)
     state.handle_event(
@@ -453,9 +450,8 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         max_task_failures=0,
     )
-    job = ControllerJob(job_id=JobId("j1"), request=req)
+    job = ControllerJob(job_id=JobId("j1"), request=req, max_retries_preemption=1)
     tasks = state.add_job(job)
-    tasks[0].max_retries_preemption = 1
 
     dispatch_task(state, tasks[0], WorkerId("w1"))
     transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker died")

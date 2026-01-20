@@ -1004,11 +1004,18 @@ class ControllerState:
     def _on_job_submitted(self, txn: TransactionLog, event: Event) -> None:
         assert event.job_id and event.request
         parent_job_id = JobId(event.request.parent_job_id) if event.request.parent_job_id else None
+
+        # Read retry limits from request, using defaults if not set
+        max_retries_failure = event.request.max_retries_failure  # proto default: 0
+        max_retries_preemption = event.request.max_retries_preemption or 100  # default: 100
+
         job = ControllerJob(
             job_id=event.job_id,
             request=event.request,
             submitted_at_ms=event.timestamp_ms or now_ms(),
             parent_job_id=parent_job_id,
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
         )
         self._jobs[event.job_id] = job
         self._tasks_by_job[event.job_id] = []

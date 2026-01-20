@@ -15,22 +15,25 @@
 """Tests for WorkerPool behavior.
 
 These tests exercise the WorkerPool through its public interface, testing
-observable behavior rather than implementation details. The test harness
-uses real ActorServers with TaskExecutorActor instances, bypassing only
-the job-launching infrastructure (ClusterClient).
+observable behavior rather than implementation details.
+
+Unit tests for TaskExecutorActor and WorkerDispatcher use real ActorServers
+but bypass job infrastructure for fast, focused testing.
+
+E2E tests use LocalClusterClient to exercise the full job submission flow:
+WorkerPool -> IrisClient -> LocalClusterClient -> Controller -> Worker -> task execution.
 """
 
 import time
 from concurrent.futures import Future
-from dataclasses import dataclass
 from queue import Queue
 
 import cloudpickle
 import pytest
-from connectrpc.errors import ConnectError
 
 from iris.actor import ActorServer
 from iris.actor.resolver import FixedResolver
+from iris.client import IrisClient
 from iris.client.worker_pool import (
     PendingTask,
     TaskExecutorActor,
@@ -40,8 +43,7 @@ from iris.client.worker_pool import (
     WorkerState,
     WorkerStatus,
 )
-from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
-from iris.rpc import cluster_pb2
+from iris.cluster.types import ResourceSpec
 
 # =============================================================================
 # Unit tests for TaskExecutorActor
@@ -316,391 +318,191 @@ def test_dispatch_retries_on_infrastructure_failure():
 
 
 # =============================================================================
-# E2E tests for WorkerPool
+# E2E tests for WorkerPool using LocalClusterClient
 # =============================================================================
 
 
-@dataclass
-class MockJobRecord:
-    """Tracks a job submission."""
+@pytest.fixture(scope="module")
+def local_client():
+    """Create a LocalClusterClient-backed IrisClient for true E2E testing.
 
-    job_id: JobId
-    name: str
-    entrypoint: Entrypoint
-    resources: ResourceSpec
-
-
-class MockJob:
-    """Mock Job object that mimics the real Job class interface.
-
-    Used by MockClusterClient to return Job-like objects from submit().
+    This fixture starts a real Controller and Worker with in-process execution,
+    ensuring WorkerPool tests go through the full job submission infrastructure.
     """
-
-    def __init__(self, client: "MockClusterClient", job_id: JobId):
-        self._client = client
-        self._job_id = job_id
-
-    @property
-    def job_id(self) -> JobId:
-        return self._job_id
-
-    def terminate(self) -> None:
-        self._client.terminate(self._job_id)
-
-    def __str__(self) -> str:
-        return str(self._job_id)
-
-    def __repr__(self) -> str:
-        return f"MockJob({self._job_id!r})"
-
-
-class MockClusterClient:
-    """Mock ClusterClient that tracks submissions without launching jobs.
-
-    For E2E testing, we bypass the actual job infrastructure. Workers are
-    started directly as ActorServers and discovered via FixedResolver.
-    """
-
-    def __init__(self):
-        self._jobs: dict[JobId, MockJobRecord] = {}
-        self._job_counter = 0
-
-    def resolver(self):
-        # Return a FixedResolver that will be replaced by test harness
-        return FixedResolver({})
-
-    def submit(
-        self,
-        entrypoint: Entrypoint,
-        name: str,
-        resources: ResourceSpec,
-        environment: EnvironmentSpec | None = None,
-        ports: list[str] | None = None,
-    ) -> MockJob:
-        job_id = JobId(f"mock-job-{self._job_counter}")
-        self._job_counter += 1
-        self._jobs[job_id] = MockJobRecord(
-            job_id=job_id,
-            name=name,
-            entrypoint=entrypoint,
-            resources=resources,
-        )
-        return MockJob(self, job_id)
-
-    def status(self, job_id: JobId) -> cluster_pb2.JobStatus:
-        return cluster_pb2.JobStatus(
-            job_id=str(job_id),
-            name=self._jobs[job_id].name if job_id in self._jobs else "",
-            state=cluster_pb2.JOB_STATE_RUNNING,
-        )
-
-    def wait(
-        self,
-        job_id: JobId,
-        timeout: float = 300.0,
-        poll_interval: float = 0.5,
-    ) -> cluster_pb2.JobStatus:
-        return self.status(job_id)
-
-    def terminate(self, job_id: JobId) -> None:
-        pass
-
-    @property
-    def submitted_jobs(self) -> list[MockJobRecord]:
-        return list(self._jobs.values())
-
-
-@dataclass
-class WorkerPoolTestHarness:
-    """Test harness that manages worker servers and provides a configured pool.
-
-    Starts real ActorServers with TaskExecutorActor instances and configures
-    a FixedResolver to discover them. The WorkerPool uses these servers instead
-    of launching jobs via ClusterClient.
-    """
-
-    pool: WorkerPool
-    client: MockClusterClient
-    servers: list[ActorServer]
-    endpoints: dict[str, str]
-
-
-@pytest.fixture
-def worker_pool_harness():
-    """Create a WorkerPool with 2 real worker servers."""
-    num_workers = 2
-
-    # Start real ActorServers
-    servers = []
-    endpoints = {}
-    for _ in range(num_workers):
-        server = ActorServer(host="127.0.0.1", port=0)
-        # Worker names are generated by WorkerPool as _workerpool_{pool_id}:worker-{i}
-        # We'll register with a placeholder name and update the resolver after pool creation
-        servers.append(server)
-
-    # Create the pool with mock client
-    client = MockClusterClient()
-    config = WorkerPoolConfig(
-        num_workers=num_workers,
-        resources=ResourceSpec(cpu=1, memory="512m"),
-        max_retries=1,
-    )
-    pool = WorkerPool(client, config, timeout=5.0)
-
-    # Get the pool_id and set up workers with correct names
-    pool_id = pool.pool_id
-    for i, server in enumerate(servers):
-        worker_name = f"_workerpool_{pool_id}:worker-{i}"
-        server.register(worker_name, TaskExecutorActor())
-        port = server.serve_background()
-        endpoints[worker_name] = f"http://127.0.0.1:{port}"
-
-    # Create resolver and inject it
-    resolver = FixedResolver(endpoints)
-    pool._resolver = resolver
-
-    yield WorkerPoolTestHarness(
-        pool=pool,
-        client=client,
-        servers=servers,
-        endpoints=endpoints,
-    )
-
-    # Cleanup
-    pool.shutdown(wait=False)
+    client = IrisClient.local()
+    yield client
+    client.shutdown(wait=False)
 
 
 class TestWorkerPoolE2E:
-    """End-to-end tests for WorkerPool through its public interface."""
+    """True end-to-end tests for WorkerPool using LocalClusterClient.
 
-    def test_pool_discovers_workers(self, worker_pool_harness):
-        """Workers transition from PENDING to IDLE when discovered."""
-        harness = worker_pool_harness
-        pool = harness.pool
+    These tests exercise the full job submission flow:
+    WorkerPool -> IrisClient -> LocalClusterClient -> Controller -> Worker -> task execution.
+    """
 
-        # Manually trigger worker launch (normally done by __enter__)
-        pool._launch_workers()
-
-        # Wait for workers to be discovered
-        pool.wait_for_workers(min_workers=2, timeout=5.0)
-
-        assert pool.size == 2
-        assert pool.idle_count == 2
-
-    def test_submit_executes_task(self, worker_pool_harness):
-        """submit() dispatches a task and returns correct result."""
-        harness = worker_pool_harness
-        pool = harness.pool
-
-        pool._launch_workers()
-        pool.wait_for_workers(min_workers=1, timeout=5.0)
-
-        def add(a, b):
-            return a + b
-
-        future = pool.submit(add, 10, 20)
-        result = future.result(timeout=5.0)
-
-        assert result == 30
-
-    def test_submit_with_kwargs(self, worker_pool_harness):
-        """submit() passes keyword arguments correctly."""
-        harness = worker_pool_harness
-        pool = harness.pool
-
-        pool._launch_workers()
-        pool.wait_for_workers(min_workers=1, timeout=5.0)
-
-        def greet(name, prefix="Hello"):
-            return f"{prefix}, {name}!"
-
-        future = pool.submit(greet, "World", prefix="Hi")
-        result = future.result(timeout=5.0)
-
-        assert result == "Hi, World!"
-
-    def test_map_executes_in_parallel(self, worker_pool_harness):
-        """map() distributes work across workers."""
-        harness = worker_pool_harness
-        pool = harness.pool
-
-        pool._launch_workers()
-        pool.wait_for_workers(min_workers=2, timeout=5.0)
-
-        def square(x):
-            return x * x
-
-        futures = pool.map(square, [1, 2, 3, 4, 5])
-        results = [f.result(timeout=5.0) for f in futures]
-
-        assert results == [1, 4, 9, 16, 25]
-
-    def test_exception_propagates_to_caller(self, worker_pool_harness):
-        """Exceptions raised by user code propagate to the caller."""
-        harness = worker_pool_harness
-        pool = harness.pool
-
-        pool._launch_workers()
-        pool.wait_for_workers(min_workers=1, timeout=5.0)
-
-        def fail():
-            raise ValueError("intentional error")
-
-        future = pool.submit(fail)
-
-        with pytest.raises(ValueError, match="intentional error"):
-            future.result(timeout=5.0)
-
-    def test_complex_return_values(self, worker_pool_harness):
-        """Complex objects are properly serialized and returned."""
-        harness = worker_pool_harness
-        pool = harness.pool
-
-        pool._launch_workers()
-        pool.wait_for_workers(min_workers=1, timeout=5.0)
-
-        def create_complex():
-            return {
-                "numbers": [1, 2, 3],
-                "nested": {"a": 1, "b": 2},
-                "tuple": (1, "two", 3.0),
-            }
-
-        future = pool.submit(create_complex)
-        result = future.result(timeout=5.0)
-
-        assert result["numbers"] == [1, 2, 3]
-        assert result["nested"]["b"] == 2
-        assert result["tuple"] == (1, "two", 3.0)
-
-    def test_closures_work(self, worker_pool_harness):
-        """Functions that capture variables work correctly."""
-        harness = worker_pool_harness
-        pool = harness.pool
-
-        pool._launch_workers()
-        pool.wait_for_workers(min_workers=1, timeout=5.0)
-
-        multiplier = 7
-
-        def multiply(x):
-            return x * multiplier
-
-        future = pool.submit(multiply, 6)
-        result = future.result(timeout=5.0)
-
-        assert result == 42
-
-    def test_context_manager_waits_for_at_least_one_worker(self):
-        """__enter__ waits for at least one worker before returning."""
-        # Set up a dedicated server for this test
-        server = ActorServer(host="127.0.0.1", port=0)
-        worker_name = "_workerpool_ctxtest:worker-0"
-        server.register(worker_name, TaskExecutorActor())
-        port = server.serve_background()
-
-        endpoints = {worker_name: f"http://127.0.0.1:{port}"}
-
-        client = MockClusterClient()
+    def test_submit_executes_task(self, local_client):
+        """submit() dispatches a task through real job infrastructure and returns correct result."""
         config = WorkerPoolConfig(
             num_workers=1,
-            resources=ResourceSpec(cpu=1),
+            resources=ResourceSpec(cpu=1, memory="512m"),
         )
-        pool = WorkerPool(client, config, timeout=5.0, resolver=FixedResolver(endpoints))
-        pool._pool_id = "ctxtest"
 
-        with pool:
-            # By the time __enter__ returns, we should have at least 1 worker
+        with WorkerPool(local_client, config, timeout=30.0) as pool:
+
+            def add(a, b):
+                return a + b
+
+            future = pool.submit(add, 10, 20)
+            result = future.result(timeout=60.0)
+
+            assert result == 30
+
+    def test_submit_with_kwargs(self, local_client):
+        """submit() passes keyword arguments correctly through job infrastructure."""
+        config = WorkerPoolConfig(
+            num_workers=1,
+            resources=ResourceSpec(cpu=1, memory="512m"),
+        )
+
+        with WorkerPool(local_client, config, timeout=30.0) as pool:
+
+            def greet(name, prefix="Hello"):
+                return f"{prefix}, {name}!"
+
+            future = pool.submit(greet, "World", prefix="Hi")
+            result = future.result(timeout=60.0)
+
+            assert result == "Hi, World!"
+
+    def test_map_executes_tasks(self, local_client):
+        """map() distributes work through real job infrastructure."""
+        config = WorkerPoolConfig(
+            num_workers=2,
+            resources=ResourceSpec(cpu=1, memory="512m"),
+        )
+
+        with WorkerPool(local_client, config, timeout=30.0) as pool:
+
+            def square(x):
+                return x * x
+
+            futures = pool.map(square, [1, 2, 3, 4, 5])
+            results = [f.result(timeout=60.0) for f in futures]
+
+            assert results == [1, 4, 9, 16, 25]
+
+    def test_exception_propagates_to_caller(self, local_client):
+        """Exceptions raised by user code propagate through job infrastructure to caller."""
+        config = WorkerPoolConfig(
+            num_workers=1,
+            resources=ResourceSpec(cpu=1, memory="512m"),
+        )
+
+        with WorkerPool(local_client, config, timeout=30.0) as pool:
+
+            def fail():
+                raise ValueError("intentional error")
+
+            future = pool.submit(fail)
+
+            with pytest.raises(ValueError, match="intentional error"):
+                future.result(timeout=60.0)
+
+    def test_complex_return_values(self, local_client):
+        """Complex objects are properly serialized through job infrastructure."""
+        config = WorkerPoolConfig(
+            num_workers=1,
+            resources=ResourceSpec(cpu=1, memory="512m"),
+        )
+
+        with WorkerPool(local_client, config, timeout=30.0) as pool:
+
+            def create_complex():
+                return {
+                    "numbers": [1, 2, 3],
+                    "nested": {"a": 1, "b": 2},
+                    "tuple": (1, "two", 3.0),
+                }
+
+            future = pool.submit(create_complex)
+            result = future.result(timeout=60.0)
+
+            assert result["numbers"] == [1, 2, 3]
+            assert result["nested"]["b"] == 2
+            assert result["tuple"] == (1, "two", 3.0)
+
+    def test_closures_work(self, local_client):
+        """Functions that capture variables work through job infrastructure."""
+        config = WorkerPoolConfig(
+            num_workers=1,
+            resources=ResourceSpec(cpu=1, memory="512m"),
+        )
+
+        with WorkerPool(local_client, config, timeout=30.0) as pool:
+            multiplier = 7
+
+            def multiply(x):
+                return x * multiplier
+
+            future = pool.submit(multiply, 6)
+            result = future.result(timeout=60.0)
+
+            assert result == 42
+
+    def test_context_manager_waits_for_workers(self, local_client):
+        """__enter__ waits for workers to become available before returning."""
+        config = WorkerPoolConfig(
+            num_workers=2,
+            resources=ResourceSpec(cpu=1, memory="512m"),
+        )
+
+        with WorkerPool(local_client, config, timeout=30.0) as pool:
+            # By the time __enter__ returns, we should have workers available
             assert pool.size >= 1
 
-    def test_shutdown_prevents_new_submissions(self, worker_pool_harness):
+    def test_shutdown_prevents_new_submissions(self, local_client):
         """After shutdown, submit() raises RuntimeError."""
-        harness = worker_pool_harness
-        pool = harness.pool
+        config = WorkerPoolConfig(
+            num_workers=1,
+            resources=ResourceSpec(cpu=1, memory="512m"),
+        )
 
-        pool._launch_workers()
-        pool.wait_for_workers(min_workers=1, timeout=5.0)
+        pool = WorkerPool(local_client, config, timeout=30.0)
+        pool.__enter__()
 
         pool.shutdown(wait=False)
 
         with pytest.raises(RuntimeError, match="shutdown"):
             pool.submit(lambda: 42)
 
-
-class TestWorkerPoolRetry:
-    """Tests for retry behavior on infrastructure failures."""
-
-    def test_task_retries_on_worker_failure(self):
-        """When a worker fails, the task is re-queued and picked up by another worker."""
-        # Set up one bad worker and one good worker
-        good_server = ActorServer(host="127.0.0.1", port=0)
-        good_server.register("_workerpool_test:worker-1", TaskExecutorActor())
-        good_port = good_server.serve_background()
-
-        # Endpoints: worker-0 points to non-existent server, worker-1 is real
-        endpoints = {
-            "_workerpool_test:worker-0": "http://127.0.0.1:9999",  # Will fail
-            "_workerpool_test:worker-1": f"http://127.0.0.1:{good_port}",
-        }
-
-        client = MockClusterClient()
-        config = WorkerPoolConfig(
-            num_workers=2,
-            resources=ResourceSpec(cpu=1),
-            max_retries=2,
-        )
-
-        pool = WorkerPool(
-            client,
-            config,
-            timeout=2.0,
-            resolver=FixedResolver(endpoints),
-        )
-
-        # Override pool_id to match our endpoints
-        pool._pool_id = "test"
-
-        pool._launch_workers()
-        pool.wait_for_workers(min_workers=1, timeout=5.0)
-
-        # Submit task - may hit failed worker first but should succeed after retry
-        future = pool.submit(lambda: "success")
-        result = future.result(timeout=10.0)
-
-        assert result == "success"
-
-        pool.shutdown(wait=False)
-
-    def test_task_fails_when_retries_exhausted(self):
-        """When all retries are exhausted, the error propagates to caller."""
-        # All workers point to non-existent servers
-        endpoints = {
-            "_workerpool_noretry:worker-0": "http://127.0.0.1:9999",
-        }
-
-        client = MockClusterClient()
+    def test_multiple_sequential_tasks(self, local_client):
+        """Multiple tasks can be submitted sequentially to the same pool."""
         config = WorkerPoolConfig(
             num_workers=1,
-            resources=ResourceSpec(cpu=1),
-            max_retries=0,  # No retries
+            resources=ResourceSpec(cpu=1, memory="512m"),
         )
 
-        pool = WorkerPool(
-            client,
-            config,
-            timeout=1.0,
-            resolver=FixedResolver(endpoints),
+        with WorkerPool(local_client, config, timeout=30.0) as pool:
+            results = []
+            for i in range(3):
+                future = pool.submit(lambda x: x * 2, i)
+                results.append(future.result(timeout=60.0))
+
+            assert results == [0, 2, 4]
+
+    def test_pool_status_reflects_workers(self, local_client):
+        """Pool status correctly reflects worker state after initialization."""
+        config = WorkerPoolConfig(
+            num_workers=2,
+            resources=ResourceSpec(cpu=1, memory="512m"),
         )
 
-        pool._pool_id = "noretry"
-        pool._launch_workers()
-        pool.wait_for_workers(min_workers=1, timeout=5.0)
+        with WorkerPool(local_client, config, timeout=30.0) as pool:
+            status = pool.status()
 
-        future = pool.submit(lambda: "should fail")
-
-        # Should fail with connection error from failed RPC
-        with pytest.raises(ConnectError):
-            future.result(timeout=5.0)
-
-        pool.shutdown(wait=False)
+            assert status.num_workers == 2
+            # Workers should be idle or pending (not failed)
+            assert status.workers_failed == 0
+            # At least some workers should have been discovered
+            assert status.workers_idle + status.workers_busy + status.workers_pending == 2

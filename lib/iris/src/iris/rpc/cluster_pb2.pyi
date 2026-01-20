@@ -112,7 +112,7 @@ class TaskAttempt(_message.Message):
     started_at_ms: int
     finished_at_ms: int
     is_worker_failure: bool
-    def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., is_worker_failure: _Optional[bool] = ...) -> None: ...
+    def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., is_worker_failure: bool = ...) -> None: ...
 
 class ResourceUsage(_message.Message):
     __slots__ = ("memory_mb", "disk_mb", "cpu_millicores", "memory_peak_mb", "cpu_percent", "process_count")
@@ -140,7 +140,7 @@ class BuildMetrics(_message.Message):
     build_finished_ms: int
     from_cache: bool
     image_tag: str
-    def __init__(self, build_started_ms: _Optional[int] = ..., build_finished_ms: _Optional[int] = ..., from_cache: _Optional[bool] = ..., image_tag: _Optional[str] = ...) -> None: ...
+    def __init__(self, build_started_ms: _Optional[int] = ..., build_finished_ms: _Optional[int] = ..., from_cache: bool = ..., image_tag: _Optional[str] = ...) -> None: ...
 
 class JobStatus(_message.Message):
     __slots__ = ("job_id", "state", "exit_code", "error", "started_at_ms", "finished_at_ms", "ports", "resource_usage", "status_message", "build_metrics", "serialized_result", "parent_job_id", "failure_count", "preemption_count", "num_tasks", "tasks_pending", "tasks_running", "tasks_succeeded", "tasks_failed", "tasks")
@@ -241,7 +241,7 @@ class ResourceSpecProto(_message.Message):
     replicas: int
     preemptible: bool
     regions: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., preemptible: _Optional[bool] = ..., regions: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., preemptible: bool = ..., regions: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
     __slots__ = ("workspace", "pip_packages", "env_vars", "extras")
@@ -299,7 +299,7 @@ class WorkerMetadata(_message.Message):
 class Controller(_message.Message):
     __slots__ = ()
     class LaunchJobRequest(_message.Message):
-        __slots__ = ("name", "serialized_entrypoint", "resources", "environment", "bundle_gcs_path", "bundle_hash", "bundle_blob", "scheduling_timeout_seconds", "ports", "parent_job_id", "max_task_failures")
+        __slots__ = ("name", "serialized_entrypoint", "resources", "environment", "bundle_gcs_path", "bundle_hash", "bundle_blob", "scheduling_timeout_seconds", "ports", "parent_job_id", "max_task_failures", "max_retries_failure", "max_retries_preemption")
         NAME_FIELD_NUMBER: _ClassVar[int]
         SERIALIZED_ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
         RESOURCES_FIELD_NUMBER: _ClassVar[int]
@@ -311,6 +311,8 @@ class Controller(_message.Message):
         PORTS_FIELD_NUMBER: _ClassVar[int]
         PARENT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
         MAX_TASK_FAILURES_FIELD_NUMBER: _ClassVar[int]
+        MAX_RETRIES_FAILURE_FIELD_NUMBER: _ClassVar[int]
+        MAX_RETRIES_PREEMPTION_FIELD_NUMBER: _ClassVar[int]
         name: str
         serialized_entrypoint: bytes
         resources: ResourceSpecProto
@@ -322,7 +324,9 @@ class Controller(_message.Message):
         ports: _containers.RepeatedScalarFieldContainer[str]
         parent_job_id: str
         max_task_failures: int
-        def __init__(self, name: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout_seconds: _Optional[int] = ..., ports: _Optional[_Iterable[str]] = ..., parent_job_id: _Optional[str] = ..., max_task_failures: _Optional[int] = ...) -> None: ...
+        max_retries_failure: int
+        max_retries_preemption: int
+        def __init__(self, name: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout_seconds: _Optional[int] = ..., ports: _Optional[_Iterable[str]] = ..., parent_job_id: _Optional[str] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ...) -> None: ...
     class LaunchJobResponse(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -334,7 +338,7 @@ class Controller(_message.Message):
         INCLUDE_RESULT_FIELD_NUMBER: _ClassVar[int]
         job_id: str
         include_result: bool
-        def __init__(self, job_id: _Optional[str] = ..., include_result: _Optional[bool] = ...) -> None: ...
+        def __init__(self, job_id: _Optional[str] = ..., include_result: bool = ...) -> None: ...
     class GetJobStatusResponse(_message.Message):
         __slots__ = ("job",)
         JOB_FIELD_NUMBER: _ClassVar[int]
@@ -401,7 +405,7 @@ class Controller(_message.Message):
         CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
         accepted: bool
         controller_address: str
-        def __init__(self, accepted: _Optional[bool] = ..., controller_address: _Optional[str] = ...) -> None: ...
+        def __init__(self, accepted: bool = ..., controller_address: _Optional[str] = ...) -> None: ...
     class WorkerHealthStatus(_message.Message):
         __slots__ = ("worker_id", "healthy", "consecutive_failures", "last_heartbeat_ms", "running_job_ids")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -414,7 +418,7 @@ class Controller(_message.Message):
         consecutive_failures: int
         last_heartbeat_ms: int
         running_job_ids: _containers.RepeatedScalarFieldContainer[str]
-        def __init__(self, worker_id: _Optional[str] = ..., healthy: _Optional[bool] = ..., consecutive_failures: _Optional[int] = ..., last_heartbeat_ms: _Optional[int] = ..., running_job_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+        def __init__(self, worker_id: _Optional[str] = ..., healthy: bool = ..., consecutive_failures: _Optional[int] = ..., last_heartbeat_ms: _Optional[int] = ..., running_job_ids: _Optional[_Iterable[str]] = ...) -> None: ...
     class ListWorkersRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
@@ -557,7 +561,7 @@ class Worker(_message.Message):
         INCLUDE_RESULT_FIELD_NUMBER: _ClassVar[int]
         task_id: str
         include_result: bool
-        def __init__(self, task_id: _Optional[str] = ..., include_result: _Optional[bool] = ...) -> None: ...
+        def __init__(self, task_id: _Optional[str] = ..., include_result: bool = ...) -> None: ...
     class ListTasksRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
@@ -615,5 +619,5 @@ class Worker(_message.Message):
         healthy: bool
         uptime_ms: int
         running_tasks: int
-        def __init__(self, healthy: _Optional[bool] = ..., uptime_ms: _Optional[int] = ..., running_tasks: _Optional[int] = ...) -> None: ...
+        def __init__(self, healthy: bool = ..., uptime_ms: _Optional[int] = ..., running_tasks: _Optional[int] = ...) -> None: ...
     def __init__(self) -> None: ...

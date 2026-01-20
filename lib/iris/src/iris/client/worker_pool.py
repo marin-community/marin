@@ -450,9 +450,6 @@ class WorkerPool:
         return self._job.job_id if self._job else None
 
     def _launch_workers(self) -> None:
-        if self._resolver is None:
-            self._resolver = self._client.resolver()
-
         # Initialize worker state for each task we'll create
         for i in range(self._config.num_workers):
             worker_id = f"worker-{i}"
@@ -479,6 +476,11 @@ class WorkerPool:
             ports=["actor"],
         )
         self._job = job
+
+        # Create resolver after job submission so we can use the job's namespace.
+        # Workers register endpoints with namespace prefix derived from job_id.
+        if self._resolver is None:
+            self._resolver = self._client.resolver_for_job(self._job.job_id)
 
         # Start dispatchers (one per worker). Each thread needs its own context copy
         # because a Context can only be entered by one thread at a time.

@@ -73,6 +73,8 @@ def job_request():
         name: str = "test-job",
         replicas: int = 1,
         parent_job_id: str | None = None,
+        max_retries_failure: int = 0,
+        max_retries_preemption: int = 0,  # Default to 0 for tests (no implicit retries)
     ) -> cluster_pb2.Controller.LaunchJobRequest:
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
@@ -80,6 +82,8 @@ def job_request():
             resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=replicas),
             environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
             parent_job_id=parent_job_id or "",
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
         )
 
     return _make
@@ -507,14 +511,8 @@ def test_report_task_state_validates_attempt_id(service, state, job_request, wor
 
 def test_task_retry_preserves_attempt_history(service, state, job_request, worker_metadata):
     """Verify that when a task fails and retries, attempt history is preserved."""
-    # Launch job with retry enabled
-    request = cluster_pb2.Controller.LaunchJobRequest(
-        name="retry-job",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
-    )
-    service.launch_job(request, None)
+    # Launch job with retry enabled via proto field
+    service.launch_job(job_request("retry-job", max_retries_preemption=2), None)
 
     # Register worker
     service.register_worker(
@@ -526,9 +524,8 @@ def test_task_retry_preserves_attempt_history(service, state, job_request, worke
         None,
     )
 
-    # Get task and set up retry policy (setup requires internal access)
+    # Get task - retry config already set via proto
     task = state.get_task(state.get_job_tasks(JobId("retry-job"))[0].task_id)
-    task.max_retries_preemption = 2  # Allow retries for worker failures
 
     # First attempt: dispatch and fail (dispatch is internal scheduler operation)
     dispatch_task(state, task, WorkerId("w1"))
@@ -558,8 +555,8 @@ def test_task_retry_preserves_attempt_history(service, state, job_request, worke
 
 def test_stale_worker_report_ignored_after_retry(service, state, job_request, worker_metadata):
     """Verify that after retry, reports from old attempt are ignored."""
-    # Launch job
-    service.launch_job(job_request("test-job"), None)
+    # Launch job with retry enabled via proto field
+    service.launch_job(job_request("test-job", max_retries_preemption=2), None)
 
     # Register worker
     service.register_worker(
@@ -571,9 +568,8 @@ def test_stale_worker_report_ignored_after_retry(service, state, job_request, wo
         None,
     )
 
-    # Get task and set up retry (setup requires internal access)
+    # Get task - retry config already set via proto
     task = state.get_task(state.get_job_tasks(JobId("test-job"))[0].task_id)
-    task.max_retries_preemption = 2
 
     # First attempt (dispatch is internal scheduler operation)
     dispatch_task(state, task, WorkerId("w1"))
@@ -611,8 +607,8 @@ def test_stale_worker_report_ignored_after_retry(service, state, job_request, wo
 
 def test_job_running_while_tasks_retry(service, state, job_request, worker_metadata):
     """Verify job stays RUNNING while tasks are retrying."""
-    # Launch job
-    service.launch_job(job_request("test-job"), None)
+    # Launch job with retry enabled via proto field
+    service.launch_job(job_request("test-job", max_retries_preemption=2), None)
 
     # Register worker
     service.register_worker(
@@ -624,9 +620,8 @@ def test_job_running_while_tasks_retry(service, state, job_request, worker_metad
         None,
     )
 
-    # Get task and set up retry (setup requires internal access)
+    # Get task - retry config already set via proto
     task = state.get_task(state.get_job_tasks(JobId("test-job"))[0].task_id)
-    task.max_retries_preemption = 2
 
     # First attempt - dispatch (dispatch is internal scheduler operation)
     dispatch_task(state, task, WorkerId("w1"))
@@ -657,8 +652,8 @@ def test_job_running_while_tasks_retry(service, state, job_request, worker_metad
 
 def test_killing_job_with_retrying_task(service, state, job_request, worker_metadata):
     """Verify killing a job with a retrying task terminates properly."""
-    # Launch job
-    service.launch_job(job_request("test-job"), None)
+    # Launch job with retry enabled via proto field
+    service.launch_job(job_request("test-job", max_retries_preemption=2), None)
 
     # Register worker
     service.register_worker(
@@ -670,9 +665,8 @@ def test_killing_job_with_retrying_task(service, state, job_request, worker_meta
         None,
     )
 
-    # Get task and set up retry (setup requires internal access)
+    # Get task - retry config already set via proto
     task = state.get_task(state.get_job_tasks(JobId("test-job"))[0].task_id)
-    task.max_retries_preemption = 2
 
     # First attempt - dispatch and fail
     dispatch_task(state, task, WorkerId("w1"))
@@ -694,8 +688,8 @@ def test_killing_job_with_retrying_task(service, state, job_request, worker_meta
 
 def test_full_lifecycle_submit_fail_retry_succeed(service, state, job_request, worker_metadata):
     """End-to-end test: submit job, fail task, retry, succeed."""
-    # Launch job
-    service.launch_job(job_request("lifecycle-job"), None)
+    # Launch job with retry enabled via proto field
+    service.launch_job(job_request("lifecycle-job", max_retries_preemption=2), None)
 
     # Register worker
     service.register_worker(
@@ -707,9 +701,8 @@ def test_full_lifecycle_submit_fail_retry_succeed(service, state, job_request, w
         None,
     )
 
-    # Get task and configure retry (setup requires internal access)
+    # Get task - retry config already set via proto
     task = state.get_task(state.get_job_tasks(JobId("lifecycle-job"))[0].task_id)
-    task.max_retries_preemption = 2
 
     # First attempt - dispatch (dispatch is internal scheduler operation)
     dispatch_task(state, task, WorkerId("w1"))

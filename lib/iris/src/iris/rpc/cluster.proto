@@ -25,10 +25,12 @@ message Empty {}
 enum JobState {
   JOB_STATE_UNSPECIFIED = 0;
   JOB_STATE_PENDING = 1;
+  JOB_STATE_BUILDING = 2;
   JOB_STATE_RUNNING = 3;
   JOB_STATE_SUCCEEDED = 4;
   JOB_STATE_FAILED = 5;
   JOB_STATE_KILLED = 6;
+  JOB_STATE_WORKER_FAILED = 7;
   JOB_STATE_UNSCHEDULABLE = 8;  // Couldn't be scheduled within timeout
 }
 
@@ -270,6 +272,13 @@ message Controller {
     // A job fails when this many tasks have exhausted their retries (default 0 = fail on first task failure)
     // Preemptions do not count toward this limit
     int32 max_task_failures = 11;
+
+    // Per-task retry limits
+    // When a task fails (non-zero exit code), retry up to this many times before marking permanently failed
+    int32 max_retries_failure = 12;  // Default: 0 (no retries on task failure)
+
+    // When a task is preempted (worker dies), retry up to this many times
+    int32 max_retries_preemption = 13;  // Default: 100 (generous preemption tolerance)
   }
 
   message LaunchJobResponse {

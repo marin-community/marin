@@ -566,15 +566,27 @@ class NamespacedEndpointRegistry:
 
 
 class NamespacedResolver:
-    """Resolver that auto-prefixes names with namespace from IrisContext."""
+    """Resolver that auto-prefixes names with namespace.
 
-    def __init__(self, cluster: LocalClusterClient | RemoteClusterClient):
+    Can be used in two modes:
+    1. With explicit namespace: Use directly from client code without IrisContext
+    2. Without explicit namespace: Derives namespace from IrisContext (requires job context)
+    """
+
+    def __init__(
+        self,
+        cluster: LocalClusterClient | RemoteClusterClient,
+        namespace: Namespace | None = None,
+    ):
         self._cluster = cluster
+        self._explicit_namespace = namespace
 
     def _namespace_prefix(self) -> str:
+        if self._explicit_namespace is not None:
+            return str(self._explicit_namespace)
         ctx = get_iris_ctx()
         if ctx is None:
-            raise RuntimeError("No IrisContext - must be called from within a job")
+            raise RuntimeError("No IrisContext - provide explicit namespace or call from within a job")
         return str(Namespace.from_job_id(ctx.job_id))
 
     def resolve(self, name: str) -> ResolveResult:
@@ -700,6 +712,22 @@ class IrisClient:
 
     def resolver(self) -> Resolver:
         return self._resolver
+
+    def resolver_for_job(self, job_id: JobId | str) -> Resolver:
+        """Get a resolver for endpoints registered by a specific job.
+
+        Use this when resolving endpoints from outside a job context, such as
+        from WorkerPool which runs in client context but needs to resolve
+        endpoints registered by its worker jobs.
+
+        Args:
+            job_id: The job whose namespace to resolve endpoints in
+
+        Returns:
+            Resolver that prefixes lookups with the job's namespace
+        """
+        namespace = Namespace.from_job_id(str(job_id))
+        return NamespacedResolver(self._cluster, namespace=namespace)
 
     def submit(
         self,
