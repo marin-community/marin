@@ -11,6 +11,7 @@ from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import Array, Bool, Float, Int
 
+from haliax.jax_utils import named_call
 from haliax.partitioning import _get_mesh
 
 
@@ -147,6 +148,7 @@ def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[Floa
     return cos, sin
 
 
+@named_call
 def apply_rotary_embedding(
     q: Float[Array, "B S H D"],
     k: Float[Array, "B S H D"],
@@ -303,6 +305,41 @@ def _tpu_splash_attention(
 
     head_shards = _spec_shard_factor(q_pspec[1], mesh)
     q_seq_shards = _spec_shard_factor(q_pspec[2], mesh)
+    kv_seq_shards = _spec_shard_factor(k_pspec[2], mesh)
+
+    # MaxText uses a block size of 512. Pick per-shard blocks that evenly divide each shard length,
+    # preferring multiples of 128 when possible.
+    block_size = 512
+
+    shard_Sq = max(1, Sq // max(1, q_seq_shards))
+    shard_Sk = max(1, Sk // max(1, kv_seq_shards))
+
+    def _compatible_block(shard_len: int, max_block: int) -> int:
+        """Pick largest block <= max_block that divides shard_len; prefer multiples of 128."""
+        if shard_len <= 0:
+            return max_block
+        cap = min(max_block, shard_len)
+        for step in (128, 1):
+            candidate = cap - (cap % step)
+            while candidate >= step:
+                if shard_len % candidate == 0:
+                    return candidate
+                candidate -= step
+        return 1
+
+    block_q = _compatible_block(shard_Sq, block_size)
+    block_kv = _compatible_block(shard_Sk, block_size)
+
+    block_sizes = splash_attention_kernel.BlockSizes(
+        block_q=block_q,
+        block_kv_compute=block_kv,
+        block_kv=block_kv,
+        block_q_dkv=block_q,
+        block_kv_dkv=block_kv,
+        block_kv_dkv_compute=block_q,
+        block_q_dq=block_q,
+        block_kv_dq=block_kv,
+    )
 
     if mask is None:
         base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
@@ -357,6 +394,7 @@ def _tpu_splash_attention(
 
     splash_kernel = splash_attention_kernel.make_splash_mha(
         mask=kernel_mask,
+        block_sizes=block_sizes,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
