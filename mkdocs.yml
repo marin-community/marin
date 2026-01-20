@@ -35,6 +35,7 @@ theme:
 
 repo_url: https://github.com/marin-community/marin
 repo_name: marin-community/marin
+edit_uri: edit/main/docs/
 
 # Include extra JS to setup Read the Docs addons integrations
 extra_javascript:
