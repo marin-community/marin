@@ -129,8 +129,12 @@ class WeightSampler:
         log_max = np.log10(self.params.max_strength)
         strength = 10 ** self.rng.uniform(log_min, log_max)
 
-        # Create temperature-scaled alpha vector
-        alphas = np.array([strength * (self.natural_proportions[d] ** self.params.temp) for d in self.domain_names])
+        # Create temperature-scaled base distribution (normalize after scaling)
+        base_probs = np.array([self.natural_proportions[d] ** self.params.temp for d in self.domain_names])
+        base_probs = base_probs / base_probs.sum()
+
+        # Calculate Dirichlet alphas
+        alphas = strength * base_probs
 
         # Rejection sampling loop
         max_attempts = 1000
