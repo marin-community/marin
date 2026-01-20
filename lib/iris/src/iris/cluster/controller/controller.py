@@ -16,7 +16,6 @@
 
 import logging
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -30,7 +29,7 @@ from iris.cluster.controller.events import Event, EventType
 from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import ExponentialBackoff, now_ms
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +314,7 @@ class Controller:
 
     def _check_worker_timeouts(self) -> None:
         """Mark workers as unhealthy if they haven't sent heartbeat within worker_timeout_seconds."""
-        current_time_ms = int(time.time() * 1000)
+        current_time_ms = now_ms()
         timeout_ms = int(self._config.worker_timeout_seconds * 1000)
 
         for worker in self._state.list_all_workers():

@@ -15,7 +15,6 @@
 """Internal worker types for task tracking."""
 
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +24,7 @@ from pydantic import BaseModel
 from iris.cluster.types import is_task_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_pb2 import TaskState
+from iris.time_utils import now_ms
 
 
 class LogLine(BaseModel):
@@ -105,7 +105,7 @@ class Task:
         self.status = state
         self.status_message = message
         if is_task_finished(state):
-            self.finished_at_ms = int(time.time() * 1000)
+            self.finished_at_ms = now_ms()
             if error:
                 self.error = error
             if exit_code is not None:

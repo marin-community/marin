@@ -28,7 +28,7 @@ import cloudpickle
 import uvicorn
 
 from iris.rpc import cluster_pb2
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import ExponentialBackoff, now_ms
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.errors import format_exception_with_traceback
 from iris.cluster.worker.builder import ImageCache, ImageProvider, VenvCache
@@ -354,7 +354,7 @@ class Worker:
         try:
             # Phase 1: Download bundle
             task.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
-            task.started_at_ms = int(time.time() * 1000)
+            task.started_at_ms = now_ms()
 
             bundle_path = self._bundle_cache.get_bundle(
                 task.request.bundle_gcs_path,
@@ -363,7 +363,7 @@ class Worker:
 
             # Phase 2: Build image
             task.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="building image")
-            task.build_started_ms = int(time.time() * 1000)
+            task.build_started_ms = now_ms()
             env_config = task.request.environment
             extras = list(env_config.extras)
 
@@ -387,7 +387,7 @@ class Worker:
                 task_logs=task.logs,
             )
 
-            task.build_finished_ms = int(time.time() * 1000)
+            task.build_finished_ms = now_ms()
             task.build_from_cache = build_result.from_cache
             task.image_tag = build_result.image_tag
 

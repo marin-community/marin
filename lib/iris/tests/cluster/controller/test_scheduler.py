@@ -19,14 +19,13 @@ current time) and returns outputs (assignments, timed-out tasks). It does not
 dispatch tasks, modify state, or run threads.
 """
 
-import time
-
 import pytest
 
 from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.state import ControllerJob, ControllerState, ControllerWorker, expand_job_to_tasks
 from iris.cluster.types import JobId, WorkerId
 from iris.rpc import cluster_pb2
+from iris.time_utils import now_ms
 
 
 @pytest.fixture
@@ -215,7 +214,7 @@ def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
     job = ControllerJob(
         JobId("j1"),
         request=job_request,
-        submitted_at_ms=int(time.time() * 1000) - 2000,  # Submitted 2s ago
+        submitted_at_ms=now_ms() - 2000,  # Submitted 2s ago
     )
     tasks = expand_job_to_tasks(job)
     state.add_job(job, tasks)
@@ -247,7 +246,7 @@ def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
     job = ControllerJob(
         JobId("j1"),
         request=job_request,
-        submitted_at_ms=int(time.time() * 1000) - 10000,  # Submitted 10s ago
+        submitted_at_ms=now_ms() - 10000,  # Submitted 10s ago
     )
     tasks = expand_job_to_tasks(job)
     state.add_job(job, tasks)
