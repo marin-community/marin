@@ -141,7 +141,7 @@ def main(config: EvalLmConfig):
             for name, dataset in config.data.validation_sets(Pos).items():
                 if config.trainer.max_eval_batches is not None:
                     dataset = dataset.take(config.trainer.max_eval_batches * config.trainer.eval_batch_size)
-                loader = DataLoader(dataset, batch_size=config.trainer.eval_batch_size)
+                loader = DataLoader(dataset, batch_size=config.trainer.eval_batch_size, axis_resources=compute_axis_mapping)
                 entropy_hist = levanter.analysis.compute_entropy_histogram(
                     model,
                     Vocab,
@@ -161,7 +161,7 @@ def main(config: EvalLmConfig):
             for name, dataset in config.data.validation_sets(Pos).items():
                 if config.trainer.max_eval_batches is not None:
                     dataset = dataset.take(config.trainer.max_eval_batches * config.trainer.eval_batch_size)
-                    loader = DataLoader(dataset, batch_size=config.trainer.eval_batch_size)
+                    loader = DataLoader(dataset, batch_size=config.trainer.eval_batch_size, axis_resources=compute_axis_mapping)
                     top2_gap_hist = levanter.analysis.compute_top2_gap_histogram(
                         model,
                         Vocab,
