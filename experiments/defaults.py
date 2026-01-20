@@ -331,6 +331,7 @@ def default_train(
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project="marin",
+                name=name,
                 tags=[*tags],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),

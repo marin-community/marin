@@ -253,12 +253,12 @@ class MixtureExperiment:
 
         if self.target_budget is not None:
             return simulated_epoching_train(
-                name=f"{prefix}/run_{weight_config.run_id:03d}",
+                name=f"{prefix}/run_{weight_config.run_id:05d}",
                 tokenized=mixture_config,
                 model_config=self.model_config,
                 train_config=train_config,
                 target_budget=self.target_budget,
-                tags=[self.name, f"run_{weight_config.run_id:03d}"],
+                tags=[self.name, f"run_{weight_config.run_id:05d}"],
                 use_default_validation=True,
                 eval_harness_tasks=self.eval_harness_tasks,
             )
@@ -266,11 +266,11 @@ class MixtureExperiment:
             from experiments.defaults import default_train
 
             return default_train(
-                name=f"{prefix}/run_{weight_config.run_id:03d}",
+                name=f"{prefix}/run_{weight_config.run_id:05d}",
                 tokenized=mixture_config,
                 model_config=self.model_config,
                 train_config=train_config,
-                tags=[self.name, f"run_{weight_config.run_id:03d}"],
+                tags=[self.name, f"run_{weight_config.run_id:05d}"],
                 use_default_validation=True,
                 eval_harness_tasks=self.eval_harness_tasks,
             )
