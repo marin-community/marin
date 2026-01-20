@@ -18,7 +18,7 @@ This experiment creates ~100 proxy model training runs with:
 - RegMix 60M model configuration (1B tokens)
 - Three training phases with independently sampled mixture weights
 - Phase boundaries at 33% and 67% of training
-- Three data domains: pretrain (Nemotron), midtrain (FineWeb-Edu), SFT
+- Three data domains: pretrain (Nemotron), midtrain (full Dolmino), SFT
 
 Usage:
     python -m experiments.domain_phase_mix.three_phase_experiment [--n_runs N] [--seed SEED]
@@ -72,7 +72,7 @@ def create_three_phase_experiment(
     """Create the three-phase swarm experiment.
 
     This sets up:
-    - 3 domains: Nemotron HQ (pretrain), FineWeb-Edu (midtrain), Math SFT
+    - 3 domains: Nemotron HQ (pretrain), full Dolmino (midtrain), Math SFT
     - 3 phases: [0, 0.33), [0.33, 0.67), [0.67, 1.0)
     - RegMix 60M proxy model
     - Simulated epoching with 2.5T target budget

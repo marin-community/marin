@@ -410,6 +410,6 @@ def _verify_tokenizers_same(components: dict[str, TokenizerStep]):
             else:
                 logger.warning(
                     f"Tokenizers ({name}) and {tokenizer} ({name}) have equivalent vocabularies but are not the same"
-                    f"tokenizer. This may cause issues with training."
+                    f" tokenizer. This may cause issues with training."
                 )
     return tokenizer
