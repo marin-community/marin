@@ -272,6 +272,23 @@ class PhysicalStage:
     stage_type: StageType = StageType.WORKER
     output_shards: int | None = None
 
+    def stage_name(self, max_length: int | None = None) -> str:
+        """Generate a descriptive name from operations.
+
+        Args:
+            max_length: Maximum length of the name (truncates with "..." if exceeded).
+                        None means no limit. Must be >= 3 if specified.
+
+        Returns:
+            Name like "Map → Filter → Write" or "Map → Filter → ..." if truncated
+        """
+        assert max_length is None or max_length >= 3, "max_length must be at least 3"
+        op_names = [type(op).__name__ for op in self.operations]
+        name = " → ".join(op_names)
+        if max_length is not None and len(name) > max_length:
+            return name[: max_length - 3] + "..."
+        return name
+
 
 @dataclass
 class PhysicalPlan:
