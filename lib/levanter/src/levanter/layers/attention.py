@@ -1647,26 +1647,17 @@ class Attention(eqx.Module):
     q_norm: Optional[LayerNormBase] = None
     k_norm: Optional[LayerNormBase] = None
     rot_embs: Optional[RotaryEmbeddings] = None
+    gate_proj: Optional[hnn.Linear] = None
 
     @staticmethod
     def init(config: AttentionConfig, *, key) -> "Attention":
         use_bias = config.use_bias
         use_output_bias = config.use_output_bias if config.use_output_bias is not None else use_bias
-        k_q, k_k, k_v, k_o = jrandom.split(key, 4)
-
-        # For gated attention, the gate is fused with Q projection (following the paper).
-        # The Q projection outputs [KVHeads, QHeadsPerGroup, HeadSize + GateSize].
-        # For headwise gating: GateSize = 1 (one scalar per head)
-        # For elementwise gating: GateSize = HeadSize (one value per element)
-        if config.gated != "none":
-            QGateAxis = Axis("q_gate_combined", config.HeadSize.size + config.GateSize.size)
-            q_out_axes = (config.KVHeads, config.QHeadsPerGroup, QGateAxis)
-        else:
-            q_out_axes = (config.KVHeads, config.QHeadsPerGroup, config.HeadSize)
+        k_q, k_k, k_v, k_o, k_g = jrandom.split(key, 5)
 
         q_proj = hnn.Linear.init(
             In=config.Embed,
-            Out=q_out_axes,
+            Out=(config.KVHeads, config.QHeadsPerGroup, config.HeadSize),
             key=k_q,
             use_bias=use_bias,
             out_first=True,
@@ -1693,6 +1684,19 @@ class Attention(eqx.Module):
             out_first=True,
         )
 
+        # For gated attention, create a separate gate projection.
+        # For headwise gating: GateSize = 1 (one scalar per head)
+        # For elementwise gating: GateSize = HeadSize (one value per element)
+        gate_proj = None
+        if config.gated != "none":
+            gate_proj = hnn.Linear.init(
+                In=config.Embed,
+                Out=(config.KVHeads, config.QHeadsPerGroup, config.GateSize),
+                key=k_g,
+                use_bias=use_bias,
+                out_first=True,
+            )
+
         q_norm = None
         k_norm = None
         if config.qk_norm is not None:
@@ -1702,27 +1706,7 @@ class Attention(eqx.Module):
         # Build rotary embeddings once during initialization if configured
         rot_embs = config.rope.build(config.HeadSize) if config.rope is not None else None
 
-        return Attention(config, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, rot_embs)
-
-    def _split_q_and_gate(self, q_combined: NamedArray) -> tuple[NamedArray, NamedArray | None]:
-        """Split the combined Q+gate projection into Q and gate components.
-
-        Args:
-            q_combined: The combined output from q_proj with shape [..., q_gate_combined].
-
-        Returns:
-            A tuple of (q, gate) where:
-            - q has shape [..., head_size]
-            - gate has shape [..., gate_size] (1 for headwise, head_size for elementwise)
-              or None if gating is disabled.
-        """
-        if self.config.gated == "none":
-            return q_combined, None
-
-        combined_axis = q_combined.resolve_axis("q_gate_combined")
-        q, gate = hax.split(q_combined, axis=combined_axis, new_axes=[self.config.HeadSize, self.config.GateSize])
-
-        return q, gate
+        return Attention(config, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, rot_embs, gate_proj)
 
     def empty_page_cache(self, spec: PageTableSpec, *, dtype) -> "KvPageCache":
         return KvPageCache.init(spec, self.config.KVHeads, self.config.HeadSize, dtype=dtype)
@@ -1852,16 +1836,18 @@ class Attention(eqx.Module):
             A tuple of (q, k, v, gate) where gate is None if gating is disabled.
         """
 
-        # Split the projection key into three – one for each of Q, K, V
-        key_q, key_k, key_v = maybe_rng_split(key, 3)
+        # Split the projection key into four – one for each of Q, K, V, and gate
+        key_q, key_k, key_v, key_g = maybe_rng_split(key, 4)
 
         # Linear projections
-        q_combined = self.q_proj(x, key=key_q)
+        q = self.q_proj(x, key=key_q)
         k = self.k_proj(x, key=key_k)
         v = self.v_proj(x, key=key_v)
 
-        # Split Q and gate if gated attention is enabled
-        q, gate = self._split_q_and_gate(q_combined)
+        # Compute gate if gated attention is enabled
+        gate = None
+        if self.gate_proj is not None:
+            gate = self.gate_proj(x, key=key_g)
 
         # Optional QK layer-norm (applied only to Q, not gate)
         if self.config.qk_norm is not None:
@@ -2414,6 +2400,7 @@ class AttentionWithSink(Attention):
             base.q_norm,
             base.k_norm,
             base.rot_embs,
+            base.gate_proj,
             sinks,
         )
 

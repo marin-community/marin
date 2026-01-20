@@ -135,10 +135,9 @@ def test_attention_with_sink_module():
 def test_attention_with_gating_module():
     """Test elementwise gated attention.
 
-    The gate is fused with q_proj. When gated="elementwise", q_proj outputs
-    [head_size + head_size] and the second half is the gate.
+    When gated="elementwise", a separate gate_proj outputs [kv_head, q_heads_per_group, head_size].
 
-    With zero weights/biases for Q (and gate), the gate output is sigmoid(0) = 0.5.
+    With zero weights/biases for Q and gate, the gate output is sigmoid(0) = 0.5.
     With v_proj bias=1 and o_proj weight=1, the attention output before gating is 1.
     After gating: 1 * 0.5 = 0.5
     """
@@ -148,8 +147,8 @@ def test_attention_with_gating_module():
     config = AttentionConfig(Embed=Embed, num_heads=1, num_kv_heads=1, use_bias=True, gated="elementwise")
     attn = Attention.init(config, key=jrandom.PRNGKey(0))
 
-    # q_proj now has shape [embed, kv_head, q_heads_per_group, head_size*2] for elementwise gating
-    # The first half is Q, the second half is the gate
+    # q_proj has shape [embed, kv_head, q_heads_per_group, head_size]
+    # gate_proj is a separate projection with same output shape
     attn = eqx.tree_at(lambda a: a.q_proj.weight, attn, hax.zeros(attn.q_proj.weight.axes))
     attn = eqx.tree_at(lambda a: a.q_proj.bias, attn, hax.zeros(attn.q_proj.bias.axes))
     attn = eqx.tree_at(lambda a: a.k_proj.weight, attn, hax.zeros(attn.k_proj.weight.axes))
@@ -158,6 +157,9 @@ def test_attention_with_gating_module():
     attn = eqx.tree_at(lambda a: a.v_proj.bias, attn, hax.ones(attn.v_proj.bias.axes))
     attn = eqx.tree_at(lambda a: a.o_proj.weight, attn, hax.ones(attn.o_proj.weight.axes))
     attn = eqx.tree_at(lambda a: a.o_proj.bias, attn, hax.zeros(attn.o_proj.bias.axes))
+    # Zero out gate_proj so sigmoid(0) = 0.5
+    attn = eqx.tree_at(lambda a: a.gate_proj.weight, attn, hax.zeros(attn.gate_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.gate_proj.bias, attn, hax.zeros(attn.gate_proj.bias.axes))
 
     x = hax.zeros((Pos, Embed))
     out = attn(x, None)
@@ -169,10 +171,10 @@ def test_attention_with_gating_module():
 def test_attention_with_headwise_gating_module():
     """Test headwise gated attention.
 
-    The gate is fused with q_proj. When gated="headwise", q_proj outputs
-    [head_size + 1] and the last value is the gate (one scalar per head).
+    When gated="headwise", a separate gate_proj outputs [kv_head, q_heads_per_group, 1]
+    (one scalar per head).
 
-    With zero weights/biases for Q (and gate), the gate output is sigmoid(0) = 0.5.
+    With zero weights/biases for Q and gate, the gate output is sigmoid(0) = 0.5.
     With v_proj bias=1 and o_proj weight=1, the attention output before gating is 1.
     After gating: 1 * 0.5 = 0.5
     """
@@ -182,8 +184,8 @@ def test_attention_with_headwise_gating_module():
     config = AttentionConfig(Embed=Embed, num_heads=1, num_kv_heads=1, use_bias=True, gated="headwise")
     attn = Attention.init(config, key=jrandom.PRNGKey(0))
 
-    # q_proj now has shape [embed, kv_head, q_heads_per_group, head_size+1] for headwise gating
-    # The first head_size values are Q, the last value is the gate
+    # q_proj has shape [embed, kv_head, q_heads_per_group, head_size]
+    # gate_proj is a separate projection with output [kv_head, q_heads_per_group, 1]
     attn = eqx.tree_at(lambda a: a.q_proj.weight, attn, hax.zeros(attn.q_proj.weight.axes))
     attn = eqx.tree_at(lambda a: a.q_proj.bias, attn, hax.zeros(attn.q_proj.bias.axes))
     attn = eqx.tree_at(lambda a: a.k_proj.weight, attn, hax.zeros(attn.k_proj.weight.axes))
@@ -192,6 +194,9 @@ def test_attention_with_headwise_gating_module():
     attn = eqx.tree_at(lambda a: a.v_proj.bias, attn, hax.ones(attn.v_proj.bias.axes))
     attn = eqx.tree_at(lambda a: a.o_proj.weight, attn, hax.ones(attn.o_proj.weight.axes))
     attn = eqx.tree_at(lambda a: a.o_proj.bias, attn, hax.zeros(attn.o_proj.bias.axes))
+    # Zero out gate_proj so sigmoid(0) = 0.5
+    attn = eqx.tree_at(lambda a: a.gate_proj.weight, attn, hax.zeros(attn.gate_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.gate_proj.bias, attn, hax.zeros(attn.gate_proj.bias.axes))
 
     x = hax.zeros((Pos, Embed))
     out = attn(x, None)
