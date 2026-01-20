@@ -30,7 +30,7 @@ from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.nemotron import tokenize_nemotron, NEMOTRON_WEIGHTS
 from experiments.pretraining_datasets.simple import downloads as simple_downloads, _tokenize_simple
 
-from experiments.three_phase_swarm.config import Domain, DatasetComponent
+from experiments.domain_phase_mix.config import Domain, DatasetComponent
 
 # ============================================================================
 # DOMAIN REGISTRY

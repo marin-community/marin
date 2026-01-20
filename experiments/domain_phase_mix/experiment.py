@@ -34,13 +34,13 @@ from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
-from experiments.three_phase_swarm.config import (
+from experiments.domain_phase_mix.config import (
     ExperimentConfig,
     Domain,
     PhaseSchedule,
     WeightConfig,
 )
-from experiments.three_phase_swarm.weight_sampler import WeightSampler, DirichletSamplingParams
+from experiments.domain_phase_mix.weight_sampler import WeightSampler, DirichletSamplingParams
 
 logger = logging.getLogger("ray")
 

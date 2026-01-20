@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from experiments.three_phase_swarm.config import WeightConfig, ExperimentConfig
+from experiments.domain_phase_mix.config import WeightConfig, ExperimentConfig
 
 
 @dataclass

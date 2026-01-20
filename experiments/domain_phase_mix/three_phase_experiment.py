@@ -21,19 +21,19 @@ This experiment creates ~100 proxy model training runs with:
 - Three data domains: pretrain (Nemotron), midtrain (FineWeb-Edu), SFT
 
 Usage:
-    python -m experiments.three_phase_swarm.three_phase_experiment [--n_runs N] [--seed SEED]
+    python -m experiments.domain_phase_mix.three_phase_experiment [--n_runs N] [--seed SEED]
 """
 
 import logging
 import os
 
 from experiments.evals.task_configs import CORE_TASKS
-from experiments.three_phase_swarm.proxy_sweep import regmix_60m_proxy
+from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from marin.execution.executor import executor_main
 
-from experiments.three_phase_swarm.config import PhaseSchedule
-from experiments.three_phase_swarm.domains import get_three_partition_domains
-from experiments.three_phase_swarm.experiment import MixtureExperiment
+from experiments.domain_phase_mix.config import PhaseSchedule
+from experiments.domain_phase_mix.domains import get_three_partition_domains
+from experiments.domain_phase_mix.experiment import MixtureExperiment
 
 logger = logging.getLogger("ray")
 
@@ -63,7 +63,7 @@ PHASE_BOUNDARIES = [0.33, 0.67]  # Creates 3 phases: [0, 0.33), [0.33, 0.67), [0
 
 
 def create_three_phase_experiment(
-    name: str = "pinlin_calvin_xu/data_mixture/three_phase_swarm",
+    name: str = "pinlin_calvin_xu/data_mixture/domain_phase_mix",
     experiment_budget: int = EXPERIMENT_BUDGET,
     target_budget: int = TARGET_BUDGET,
     batch_size: int = BATCH_SIZE,
@@ -117,7 +117,7 @@ def create_three_phase_experiment(
 def main(
     n_runs: int = 100,
     seed: int = 42,
-    name_prefix: str = "pinlin_calvin_xu/data_mixture/three_phase_swarm",
+    name_prefix: str = "pinlin_calvin_xu/data_mixture/domain_phase_mix",
 ):
     """Main entry point for running the swarm experiment.
 
@@ -177,7 +177,7 @@ def _parse_args():
     parser.add_argument(
         "--name_prefix",
         type=str,
-        default="pinlin_calvin_xu/data_mixture/three_phase_swarm",
+        default="pinlin_calvin_xu/data_mixture/domain_phase_mix",
         help="Prefix for run names.",
     )
     return parser.parse_known_args()
