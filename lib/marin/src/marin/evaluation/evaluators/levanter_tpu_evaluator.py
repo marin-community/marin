@@ -42,7 +42,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         logger.info("Cleaning up resources.")
 
         # Delete the checkpoint
-        model.destroy()
+        model.cleanup()
 
     def launch_evaluate_with_ray(
         self,

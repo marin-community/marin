@@ -27,7 +27,7 @@ def test_model_config_destroy_removes_downloaded_dir(tmp_path: Path) -> None:
 
     config = ModelConfig(name="unit-test-model", path=None, engine_kwargs={})
     config.downloaded_to = str(downloaded_dir)
-    config.destroy()
+    config.cleanup()
 
     assert not downloaded_dir.exists()
 

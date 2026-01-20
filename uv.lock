@@ -4376,7 +4376,6 @@ cpu = [
 ]
 eval = [
     { name = "lm-eval", extra = ["math"] },
-    { name = "tenacity" },
 ]
 gpu = [
     { name = "jax", extra = ["cuda12"], marker = "extra == 'extra-5-marin-gpu' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
@@ -4524,7 +4523,6 @@ requires-dist = [
     { name = "s3fs", specifier = ">=2024" },
     { name = "sympy", marker = "extra == 'math'" },
     { name = "sympy", marker = "extra == 'rl'", specifier = ">=1.12.1,<1.14" },
-    { name = "tenacity", marker = "extra == 'eval'" },
     { name = "toml" },
     { name = "torch", specifier = ">=2.7.0" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==2.9.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "marin", extra = "gpu" } },

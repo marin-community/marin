@@ -41,7 +41,7 @@ def model_config():
         generation_params={"max_tokens": 16},
     )
     yield config
-    config.destroy()
+    config.cleanup()
 
 
 @pytest.mark.tpu_ci

@@ -87,7 +87,7 @@ class ModelConfig:
             )
         return None
 
-    def destroy(self) -> None:
+    def cleanup(self) -> None:
         """Deletes the model checkpoint."""
         if self.downloaded_to and os.path.exists(self.downloaded_to):
             shutil.rmtree(self.downloaded_to, ignore_errors=True)

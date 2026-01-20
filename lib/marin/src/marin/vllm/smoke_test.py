@@ -24,7 +24,8 @@ import requests
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator, VllmServerHandle
+from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
+from marin.vllm.vllm_server import VllmServerHandle
 from marin.utils import remove_tpu_lockfile_on_exit
 
 
