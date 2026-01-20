@@ -3146,6 +3146,21 @@ wheels = [
 ]
 
 [[package]]
+name = "jaxopt"
+version = "0.8.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jax" },
+    { name = "jaxlib" },
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3a/da/ff7d7fbd13b8ed5e8458e80308d075fc649062b9f8676d3fc56f2dc99a82/jaxopt-0.8.5.tar.gz", hash = "sha256:2790bd68ef132b216c083a8bc7a2704eceb35a92c0fc0a1e652e79dfb1e9e9ab", size = 121709, upload-time = "2025-04-14T17:59:01.618Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/d8/55e0901103c93d57bab3b932294c216f0cbd49054187ce29f8f13808d530/jaxopt-0.8.5-py3-none-any.whl", hash = "sha256:ff221d1a86908ec759eb1e219ee1d12bf208a70707e961bf7401076fe7cf4d5e", size = 172434, upload-time = "2025-04-14T17:59:00.342Z" },
+]
+
+[[package]]
 name = "jaxtyping"
 version = "0.3.5"
 source = { registry = "https://pypi.org/simple" }
@@ -4317,6 +4332,7 @@ dependencies = [
     { name = "google-cloud-storage-transfer" },
     { name = "haliax" },
     { name = "jax" },
+    { name = "jaxopt" },
     { name = "levanter", extra = ["serve"] },
     { name = "lm-eval" },
     { name = "lxml", extra = ["html-clean"] },
@@ -4326,6 +4342,7 @@ dependencies = [
     { name = "numpy" },
     { name = "openai" },
     { name = "pandas" },
+    { name = "plotly" },
     { name = "pyarrow" },
     { name = "ray" },
     { name = "regex" },
@@ -4403,6 +4420,7 @@ dev = [
     { name = "mypy" },
     { name = "openai-responses" },
     { name = "pip" },
+    { name = "plotly" },
     { name = "pylatexenc" },
     { name = "pymdown-extensions" },
     { name = "pyrefly" },
@@ -4451,6 +4469,7 @@ metrics = [
 test = [
     { name = "openai-responses" },
     { name = "pip" },
+    { name = "plotly" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -4482,6 +4501,7 @@ requires-dist = [
     { name = "jax", marker = "extra == 'cpu'", specifier = "==0.8.0" },
     { name = "jax", extras = ["cuda12"], marker = "extra == 'gpu'", specifier = "==0.8.0" },
     { name = "jax", extras = ["tpu"], marker = "extra == 'tpu'", specifier = "==0.8.0" },
+    { name = "jaxopt", specifier = ">=0.8.3" },
     { name = "levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "lm-eval", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lm-eval", extras = ["math"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
@@ -4492,6 +4512,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "openai" },
     { name = "pandas" },
+    { name = "plotly" },
     { name = "prime", marker = "extra == 'rl'" },
     { name = "pyarrow", specifier = ">=22" },
     { name = "pylatexenc", marker = "extra == 'math'" },
@@ -4540,6 +4561,7 @@ dev = [
     { name = "mypy", specifier = ">=1.4.1" },
     { name = "openai-responses" },
     { name = "pip" },
+    { name = "plotly" },
     { name = "pylatexenc" },
     { name = "pymdown-extensions", specifier = ">=10.0.0" },
     { name = "pyrefly", specifier = "==0.40.0" },
@@ -4586,6 +4608,7 @@ metrics = [{ name = "google-cloud-logging" }]
 test = [
     { name = "openai-responses" },
     { name = "pip" },
+    { name = "plotly" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },

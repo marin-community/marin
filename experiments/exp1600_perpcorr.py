@@ -24,7 +24,7 @@ from functools import lru_cache
 
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from experiments.evals.task_configs import EvalTaskConfig
-from experiments.isoflop_sweep import generate_isoflop_sweep
+from experiments.isoflop_sweep import MARIN_2025_RECIPE, create_isoflop_sweep_steps
 from experiments.llama import llama3_tokenizer
 from experiments.models import ModelConfig as HFModelConfig, download_model_step
 from experiments.paloma import paloma_tokenized
@@ -56,22 +56,22 @@ EVAL_TASKS = [
 @lru_cache(maxsize=1)
 def build_steps():
     steps = []
-    isoflop_steps, isoflop_metadatas = generate_isoflop_sweep(
+    isoflop_steps, isoflop_candidates = create_isoflop_sweep_steps(
         nemotron_mix,
         experiment_name="nemo-wider-depth-adapt",
+        recipe=MARIN_2025_RECIPE,
     )
-    for isoflop_step, isoflop_metadata in zip(isoflop_steps, isoflop_metadatas, strict=False):
+    for isoflop_step, candidate in zip(isoflop_steps, isoflop_candidates, strict=False):
         experiment_name = isoflop_step.name.split("/")[-1]
         paloma_tokenized_dict = paloma_tokenized(tokenizer=llama3_tokenizer)
         uncheatable_eval_tokenized_dict = uncheatable_eval_tokenized(tokenizer=llama3_tokenizer)
         eval_data = mixture_for_evaluation(paloma_tokenized_dict | uncheatable_eval_tokenized_dict)
-        budget, hidden_size, num_layers, batch_size, train_steps = isoflop_metadata
         wandb_tags = [
-            f"FLOPs={budget:.1e}",
-            f"d={hidden_size}",
-            f"L={num_layers}",
-            f"B={batch_size}",
-            f"steps={train_steps}",
+            f"FLOPs={candidate.flops_budget:.1e}",
+            f"d={candidate.hidden_size}",
+            f"L={candidate.num_layers}",
+            f"B={candidate.batch_size}",
+            f"steps={candidate.train_steps}",
         ]
         model_config = isoflop_step.config.train_config.model
         checkpoint_path = output_path_of(isoflop_step)
