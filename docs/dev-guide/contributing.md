@@ -52,4 +52,4 @@ cd data_browser
 python server.py --config conf/local.conf
 ```
 
-For more information, see the [data browser README](https://github.com/marin-community/marin/blob/main/data_browser/README.md).
+For more information, see the [data browser](https://github.com/marin-community/marin/tree/main/data_browser).

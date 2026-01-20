@@ -73,7 +73,6 @@ nav:
       - Adding an Optimizer for Speedrun: tutorials/add-optimizer.md
   - Explanations:
       - The Language Modeling Pipeline: explanations/lm-pipeline.md
-      - Datashop: explanations/datashop.md
       - Evaluation: explanations/evaluation.md
       - Experiments: explanations/experiments.md
       - Executor: explanations/executor.md

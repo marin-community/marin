@@ -28,7 +28,6 @@ marin/
 │   ├── training/               # Model training (training.py, scaling_laws.py)
 │   ├── rl/                     # Async PPO (rollout_worker.py, train_worker.py, replay_buffer.py, curriculum.py, environments/, weight_transfer/)
 │   ├── evaluation/             # Evaluation (evaluators/, visualize.py)
-│   ├── datashop/               # LLM-based filtering (pipeline.py, dataset_processor.py, templates.py)
 │   ├── generation/             # LLM inference (inference.py, llm_generation.py, pipeline.py)
 │   ├── markdown/               # HTML → markdown (markdown.py, guess_code.py)
 │   ├── core/                   # Data types (data.py, conversation.py)
@@ -64,7 +63,7 @@ marin/
 **Pipeline Stages**:
 1. **Download** (`lib/marin/src/marin/download/`): Fetch datasets from HF Hub, S3, Wikipedia, arXiv
 2. **Transform** (`lib/marin/src/marin/transform/`): Raw formats → text/markdown
-3. **Quality Filtering** ([`lib/marin/src/marin/processing/classification/`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/processing/classification/)): Train classifiers for filtering
+3. **Quality Filtering** ([`lib/marin/src/marin/processing/classification/`](https://github.com/marin-community/marin/tree/main/lib/marin/src/marin/processing/classification)): Train classifiers for filtering
 4. **Tokenize** (`lib/marin/src/marin/processing/tokenize/`): Text → tokens (sentencepiece/tiktoken)
 5. **Train** (`lib/marin/src/marin/training/`): Levanter (JAX) on TPU/GPU
 6. **Evaluate** (`lib/marin/src/marin/evaluation/`): lm-eval-harness or vLLM

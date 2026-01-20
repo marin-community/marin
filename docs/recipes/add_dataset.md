@@ -7,13 +7,13 @@ This recipe guides agents and humans in inspecting Hugging Face dataset schemas 
 - Install the [Hugging Face `datasets` library](https://huggingface.co/docs/datasets/) (e.g., `pip install datasets`).
 - For YAML output, install `pyyaml` (e.g., `pip install pyyaml`).
 - Ensure access to the dataset: Hugging Face Hub ID, local path, or other supported formats.
-- Use `uv run marin/tools/get_hf_dataset_schema.py` for direct execution, or install Marin with `uv sync` for CLI access.
+- Use `uv run lib/marin/tools/get_hf_dataset_schema.py` for direct execution, or install Marin with `uv sync` for CLI access.
 
 ## Guidelines for Humans
 
 ### Command Line Usage
 ```sh
-uv run marin/tools/get_hf_dataset_schema.py <dataset_name> [options]
+uv run lib/marin/tools/get_hf_dataset_schema.py <dataset_name> [options]
 ```
 
 ### Python Import
@@ -23,7 +23,7 @@ schema = get_schema(dataset_name="wikitext", config_name="wikitext-103-v1")
 ```
 
 ### Common Workflows
-1. **Basic inspection**: `uv run marin/tools/get_hf_dataset_schema.py roneneldan/TinyStories`
+1. **Basic inspection**: `uv run lib/marin/tools/get_hf_dataset_schema.py roneneldan/TinyStories`
 2. **Multi-config dataset**: First try without config, then use the suggested config from the error
 3. **Remote code datasets**: Add `--trust_remote_code` flag when needed
 
@@ -81,7 +81,7 @@ The tool returns a JSON object with:
 
 ### Basic Usage
 ```sh
-$ uv run marin/tools/get_hf_dataset_schema.py roneneldan/TinyStories
+$ uv run lib/marin/tools/get_hf_dataset_schema.py roneneldan/TinyStories
 {
   "splits": ["train", "validation"],
   "text_field_candidates": ["text"],
@@ -92,13 +92,13 @@ $ uv run marin/tools/get_hf_dataset_schema.py roneneldan/TinyStories
 
 ### Dataset with Config
 ```sh
-$ uv run marin/tools/get_hf_dataset_schema.py wikitext
+$ uv run lib/marin/tools/get_hf_dataset_schema.py wikitext
 {
   "error": "Config name is required.",
   "available_configs": ["wikitext-103-raw-v1", "wikitext-103-v1", ...]
 }
 
-$ uv run marin/tools/get_hf_dataset_schema.py wikitext --config_name wikitext-103-v1
+$ uv run lib/marin/tools/get_hf_dataset_schema.py wikitext --config_name wikitext-103-v1
 {
   "splits": ["train", "validation", "test"],
   "text_field_candidates": ["text"],
@@ -109,7 +109,7 @@ $ uv run marin/tools/get_hf_dataset_schema.py wikitext --config_name wikitext-10
 
 ### Dataset with Remote Code
 ```sh
-$ uv run marin/tools/get_hf_dataset_schema.py c4 --config_name en --trust_remote_code
+$ uv run lib/marin/tools/get_hf_dataset_schema.py c4 --config_name en --trust_remote_code
 {
   "splits": ["train", "validation"],
   "text_field_candidates": ["text"],
@@ -138,5 +138,5 @@ Once the schema is inspected and the dataset is registered (for example in [`exp
 These will be detailed in expanded recipes or subsequent PRs.
 
 ## See Also
-- [get_hf_dataset_schema.py on GitHub](https://github.com/marin-community/marin/blob/main/marin/tools/get_hf_dataset_schema.py)
+- [get_hf_dataset_schema.py on GitHub](https://github.com/marin-community/marin/blob/main/lib/marin/tools/get_hf_dataset_schema.py)
 - [Hugging Face datasets documentation](https://huggingface.co/docs/datasets/)
