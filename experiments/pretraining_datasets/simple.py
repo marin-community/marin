@@ -81,18 +81,23 @@ downloads = {
         override_output_path="raw/fineweb",
     ),
     "fineweb_edu": (
-        ExecutorStep(
-            name="raw/fineweb-edu",
-            fn=download_hf,
-            config=DownloadConfig(
-                hf_dataset_id="HuggingFaceFW/fineweb-edu",
-                revision="3c452cb",
-                gcs_output_path=this_output_path(),
-                wait_for_completion=True,
-            ),
-            override_output_path="raw/fineweb-edu-c2beb4",
-        ).cd("3c452cb/huggingface.co/datasets/HuggingFaceFW/fineweb-edu/resolve/3c452cb")
+        (
+            fineweb_edu_base_step := ExecutorStep(
+                name="raw/fineweb-edu",
+                fn=download_hf,
+                config=DownloadConfig(
+                    hf_dataset_id="HuggingFaceFW/fineweb-edu",
+                    revision=(revision := "87f0914"),
+                    gcs_output_path=this_output_path(),
+                    wait_for_completion=True,
+                ),
+                override_output_path=f"raw/fineweb-edu-{revision}",
+            )
+        ).cd("data")
     ),
+    "fineweb_edu_sample_10bt": fineweb_edu_base_step.cd("sample/10BT"),
+    "fineweb_edu_sample_100bt": fineweb_edu_base_step.cd("sample/100BT"),
+    "fineweb_edu_sample_350bt": fineweb_edu_base_step.cd("sample/350BT"),
     "slimpajama": (
         ExecutorStep(
             name="raw/SlimPajama-627B",
