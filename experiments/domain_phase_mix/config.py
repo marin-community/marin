@@ -64,8 +64,13 @@ class Domain:
 
     name: str
     components: list[DatasetComponent]
-    natural_proportion: float = 1.0
+    natural_proportion: float | None = None  # If None, computed from total_weight
     description: str = ""
+
+    @property
+    def total_weight(self) -> float:
+        """Sum of all component weights (typically token counts)."""
+        return sum(c.weight for c in self.components)
 
     def get_component_weights(self) -> dict[str, float]:
         """Get normalized weights for components within this domain.
@@ -73,7 +78,7 @@ class Domain:
         Returns:
             Dictionary mapping component names to their normalized weights.
         """
-        total = sum(c.weight for c in self.components)
+        total = self.total_weight
         if total == 0:
             # Uniform weights if all are zero
             n = len(self.components)
@@ -300,9 +305,24 @@ class ExperimentConfig:
         return self.total_steps * self.tokens_per_step
 
     def get_natural_proportions(self) -> dict[str, float]:
-        """Get natural proportions for all domains (normalized)."""
-        total = sum(d.natural_proportion for d in self.domains)
-        return {d.name: d.natural_proportion / total for d in self.domains}
+        """Get natural proportions for all domains (normalized).
+
+        If a domain has natural_proportion set, uses that value.
+        Otherwise, uses the domain's total_weight (sum of component weights).
+        The final proportions are normalized to sum to 1.
+        """
+
+        def get_domain_weight(d: Domain) -> float:
+            if d.natural_proportion is not None:
+                return d.natural_proportion
+            return d.total_weight
+
+        total = sum(get_domain_weight(d) for d in self.domains)
+        if total == 0:
+            # Uniform if all weights are zero
+            n = len(self.domains)
+            return {d.name: 1.0 / n for d in self.domains}
+        return {d.name: get_domain_weight(d) / total for d in self.domains}
 
     def get_all_components(self) -> dict[str, ExecutorStep]:
         """Get all dataset components across all domains."""
