@@ -355,12 +355,10 @@ class ControllerServiceImpl:
             return cluster_pb2.Controller.ReportTaskStateResponse()
 
         new_state = request.state
-        is_worker_failure = new_state == cluster_pb2.TASK_STATE_WORKER_FAILED
 
         self._state.transition_task(
             task_id,
             new_state,
-            is_worker_failure=is_worker_failure,
             error=request.error if request.error else None,
             exit_code=request.exit_code if request.exit_code else None,
         )

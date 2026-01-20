@@ -306,7 +306,6 @@ class Controller:
                     self._state.transition_task(
                         task_id,
                         cluster_pb2.TASK_STATE_WORKER_FAILED,
-                        is_worker_failure=True,
                         error=f"Worker {worker.worker_id} timed out",
                     )
 

@@ -113,6 +113,9 @@ class ControllerTaskAttempt:
 
     An attempt represents one try at executing a task on a specific worker.
     All execution-related state (timestamps, exit codes, errors) lives here.
+
+    Whether this was a worker failure is encoded in the state itself:
+    TASK_STATE_WORKER_FAILED indicates worker died, TASK_STATE_FAILED indicates task error.
     """
 
     attempt_id: int
@@ -127,7 +130,6 @@ class ControllerTaskAttempt:
     # Result
     exit_code: int | None = None
     error: str | None = None
-    is_worker_failure: bool = False
 
     def transition(
         self,
@@ -135,7 +137,6 @@ class ControllerTaskAttempt:
         *,
         exit_code: int | None = None,
         error: str | None = None,
-        is_worker_failure: bool = False,
     ) -> None:
         """Transition this attempt to a new state."""
         self.state = new_state
@@ -148,11 +149,15 @@ class ControllerTaskAttempt:
             self.finished_at_ms = ts
             self.exit_code = exit_code
             self.error = error
-            self.is_worker_failure = is_worker_failure
 
     def is_terminal(self) -> bool:
         """Check if this attempt is in a terminal state."""
         return self.state in TERMINAL_TASK_STATES
+
+    @property
+    def is_worker_failure(self) -> bool:
+        """Whether this attempt failed due to worker death (derived from state)."""
+        return self.state == cluster_pb2.TASK_STATE_WORKER_FAILED
 
 
 @dataclass
@@ -257,7 +262,6 @@ class ControllerTask:
         self,
         new_state: int,
         *,
-        is_worker_failure: bool = False,
         error: str | None = None,
         exit_code: int | None = None,
     ) -> TaskTransitionResult:
@@ -270,9 +274,12 @@ class ControllerTask:
 
         Does NOT create new attempts - that's the scheduler's job.
 
+        Whether this is a worker failure is derived from the target state:
+        - TASK_STATE_WORKER_FAILED -> uses preemption retry budget
+        - TASK_STATE_FAILED -> uses failure retry budget
+
         Args:
             new_state: Target state
-            is_worker_failure: True if failure due to worker death (preemption)
             error: Error message for failure states
             exit_code: Exit code for completed tasks
 
@@ -298,9 +305,8 @@ class ControllerTask:
                 new_state,
                 exit_code=exit_code,
                 error=error,
-                is_worker_failure=is_worker_failure,
             )
-            result = self._handle_failure(is_worker_failure)
+            result = self._handle_failure(new_state)
 
             # Update task-level state to reflect the failure
             self.state = new_state
@@ -318,7 +324,6 @@ class ControllerTask:
                 new_state,
                 exit_code=final_exit_code,
                 error=error,
-                is_worker_failure=is_worker_failure,
             )
             # Update task-level state
             self.state = new_state
@@ -336,7 +341,6 @@ class ControllerTask:
                 new_state,
                 exit_code=exit_code,
                 error=actual_error,
-                is_worker_failure=is_worker_failure,
             )
             # Update task-level state
             self.state = new_state
@@ -350,19 +354,21 @@ class ControllerTask:
             new_state,
             exit_code=exit_code,
             error=error,
-            is_worker_failure=is_worker_failure,
         )
         # Update task-level state for non-terminal transitions
         self.state = new_state
         return TaskTransitionResult.COMPLETE
 
-    def _handle_failure(self, is_worker_failure: bool) -> TaskTransitionResult:
+    def _handle_failure(self, new_state: int) -> TaskTransitionResult:
         """Determine if task should retry after a failure.
 
         Does NOT reset task state - current attempt stays terminal.
         Scheduler will create new attempt when it reassigns the task.
+
+        Args:
+            new_state: The failure state (TASK_STATE_FAILED or TASK_STATE_WORKER_FAILED)
         """
-        if is_worker_failure:
+        if new_state == cluster_pb2.TASK_STATE_WORKER_FAILED:
             self.preemption_count += 1
             can_retry = self.preemption_count <= self.max_retries_preemption
         else:
@@ -1312,11 +1318,14 @@ class ControllerState:
         task_id: TaskId,
         new_state: int,
         *,
-        is_worker_failure: bool = False,
         error: str | None = None,
         exit_code: int | None = None,
     ) -> tuple[TaskTransitionResult, list[ControllerEndpoint]]:
         """Transition a task and handle all side effects automatically.
+
+        Whether this is a worker failure is derived from the target state:
+        - TASK_STATE_WORKER_FAILED -> uses preemption retry budget
+        - TASK_STATE_FAILED -> uses failure retry budget
 
         Side effects based on result:
         - SHOULD_RETRY: Re-queues task, unassigns from worker
@@ -1338,7 +1347,6 @@ class ControllerState:
             # Delegate state transition to task (handles both with/without attempts)
             result = task.handle_attempt_result(
                 new_state,
-                is_worker_failure=is_worker_failure,
                 error=error,
                 exit_code=exit_code,
             )

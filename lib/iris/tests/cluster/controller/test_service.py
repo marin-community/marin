@@ -549,10 +549,10 @@ def test_stale_worker_report_ignored_after_retry(service, state, job_request, wo
     task_id = status.job.tasks[0].task_id
 
     # Fail and trigger retry (transition_task simulates scheduler's response to worker failure)
+    # Failure type is derived from TASK_STATE_WORKER_FAILED
     state.transition_task(
         task.task_id,
         cluster_pb2.TASK_STATE_WORKER_FAILED,
-        is_worker_failure=True,
         error="Worker died",
     )
 
@@ -645,11 +645,11 @@ def test_killing_job_with_retrying_task(service, state, job_request, worker_meta
     task.max_retries_preemption = 2
 
     # First attempt - dispatch and fail (dispatch and transition are internal scheduler operations)
+    # Failure type is derived from TASK_STATE_WORKER_FAILED
     state.mark_task_dispatched(task, WorkerId("w1"))
     state.transition_task(
         task.task_id,
         cluster_pb2.TASK_STATE_WORKER_FAILED,
-        is_worker_failure=True,
     )
 
     # Verify task is in WORKER_FAILED state (last attempt failed) but has retries available

@@ -793,11 +793,10 @@ def test_terminal_states_clean_up_endpoints(job_request, terminal_state):
     if terminal_state == cluster_pb2.TASK_STATE_WORKER_FAILED:
         task.max_retries_preemption = 0
 
-    # Transition to terminal state
+    # Transition to terminal state - failure type is derived from the state itself
     state.transition_task(
         task.task_id,
         terminal_state,
-        is_worker_failure=(terminal_state == cluster_pb2.TASK_STATE_WORKER_FAILED),
         error="terminated",
     )
 
@@ -835,11 +834,10 @@ def test_worker_timeout_task_cleanup(job_request, worker_metadata):
     )
     state.add_endpoint(ep, task.task_id)
 
-    # Simulate worker timeout via transition_task
+    # Simulate worker timeout via transition_task - failure type is derived from the state
     result, removed = state.transition_task(
         task.task_id,
         cluster_pb2.TASK_STATE_WORKER_FAILED,
-        is_worker_failure=True,
         error="Worker timed out",
     )
     assert result == TaskTransitionResult.EXCEEDED_RETRY_LIMIT
@@ -994,10 +992,10 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
     state.assign_task_to_worker(WorkerId("w1"), tasks[0].task_id)
 
     # Task-0 is preempted (worker failure) - should NOT count toward max_task_failures
+    # Failure type is derived from TASK_STATE_WORKER_FAILED
     result, _ = state.transition_task(
         tasks[0].task_id,
         cluster_pb2.TASK_STATE_WORKER_FAILED,
-        is_worker_failure=True,
         error="Worker died",
     )
 
