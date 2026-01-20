@@ -470,7 +470,12 @@ def check_eof_newline(files: list[pathlib.Path], fix: bool) -> int:
 
 
 def check_notebooks(files: list[pathlib.Path], fix: bool) -> int:
-    """Check that Jupyter notebooks have cleared outputs and normalized formatting."""
+    """Check that Jupyter notebooks have cleared outputs and normalized formatting.
+
+    TODO: Consider generating static HTML versions of notebooks (via nbconvert) and uploading
+    to GCS, then recording the GCS path in the cleared notebook. This would preserve a trace
+    of what the author saw at commit time while still keeping git diffs clean.
+    """
     nb_files = [f for f in files if f.suffix == ".ipynb"]
     if not nb_files:
         return 0
