@@ -271,7 +271,8 @@ This is **not** expressible via the OpenAI HTTP API, so moving RL serving into a
    - Ensure all Ray TPU worker images/clusters that need sidecar have docker-alongside-docker correctly configured (`/var/run/docker.sock` mount).
    - Standardize where `MARIN_VLLM_DOCKER_IMAGE` is set (cluster YAML vs per-run).
 3) Compilation cache:
-   - Decide/validate a default `VLLM_XLA_CACHE_PATH` strategy (local stable path vs object store), and document expected behavior + operational tradeoffs.
+   - Default `VLLM_XLA_CACHE_PATH` is now `/dev/shm/marin-vllm-xla-cache` (container-local) to avoid filling `/tmp` / Ray session directories.
+   - Object-store cache paths like `gs://...` still require adding `gcsfs` (or equivalent) to the vLLM image; otherwise vLLM/JAX will warn and ignore the cache.
 
 **Milestone 2: RL (true hot-reload)**
 

@@ -138,6 +138,14 @@ eval = [
     "tenacity",
 ]
 
+helmet = [
+    # `pytrec_eval` (0.5) fetches trec_eval from GitHub during setup, which is flaky in Ray runtime_env.
+    # `pytrec_eval-terrier` provides prebuilt wheels (incl. manylinux cp311) and exposes the same `pytrec_eval` module.
+    "pytrec_eval-terrier==0.5.7",
+    "rouge_score",
+    "tiktoken",
+]
+
 
 [[tool.uv.index]]
 name = "marin-resiliparse"

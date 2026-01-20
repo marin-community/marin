@@ -48,6 +48,16 @@ class HelmetConfig:
     vllm_serve_args: tuple[str, ...] = ()
     """Additional CLI args appended to `vllm serve` (e.g. `--max-model-len 131072`)."""
 
+    eval_py_args: tuple[str, ...] = ()
+    """
+    Additional CLI args appended to HELMET's `eval.py` invocation.
+
+    This can be used to override values coming from the HELMET config YAML (e.g. to run
+    a single dataset/test-file as a smoke test):
+
+        ("--datasets", "msmarco_rerank_psg", "--test_files", "data/msmarco/test_reranking_data_k10_dep3.jsonl", ...)
+    """
+
     seed: int = 42
     tag: str = "v1"
 

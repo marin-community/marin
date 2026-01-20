@@ -156,6 +156,62 @@ class HelmetSummarizeConfig:
     output_path: str
 
     wandb_tags: list[str] | None = None
+    allow_partial: bool = False
+    """Allow summarizing based on whatever outputs exist (useful for smoke tests)."""
+
+
+def _report_from_local_outputs(
+    *,
+    config: HelmetSummarizeConfig,
+    evals: list[str],
+    local_output_dir: str,
+) -> dict[str, Any]:
+    outputs: list[dict[str, Any]] = []
+    for filename in sorted(os.listdir(local_output_dir)):
+        if not filename.endswith(".json"):
+            continue
+        if filename == "marin_metadata.json":
+            continue
+        path = os.path.join(local_output_dir, filename)
+        with open(path, "r") as f:
+            payload = json.load(f)
+        if not isinstance(payload, dict):
+            continue
+        args = payload.get("args")
+        averaged = payload.get("averaged_metrics")
+        if not isinstance(args, dict) or not isinstance(averaged, dict):
+            continue
+        outputs.append(
+            {
+                "path": path,
+                "dataset": args.get("datasets"),
+                "test_files": args.get("test_files"),
+                "demo_files": args.get("demo_files"),
+                "input_max_length": args.get("input_max_length"),
+                "generation_max_length": args.get("generation_max_length"),
+                "max_test_samples": args.get("max_test_samples"),
+                "shots": args.get("shots"),
+                "use_chat_template": args.get("use_chat_template"),
+                "averaged_metrics": averaged,
+            }
+        )
+
+    return {
+        "model_name": config.model_name,
+        "model_path": config.model_path,
+        "helmet_repo_url": config.helmet_repo_url,
+        "helmet_repo_sha": config.helmet_repo_sha,
+        "helmet_data_sha": config.helmet_data_sha,
+        "use_chat_template": config.use_chat_template,
+        "config_variant": config.config_variant,
+        "tag": config.tag,
+        "seed": config.seed,
+        "evals": evals,
+        "outputs": outputs,
+        "category_scores": {},
+        "collect_results_rows": [],
+        "mapping_source": "partial (derived from produced json outputs)",
+    }
 
 
 def summarize_helmet(config: HelmetSummarizeConfig) -> None:
@@ -190,101 +246,105 @@ def summarize_helmet(config: HelmetSummarizeConfig) -> None:
             # Fall back to the common HELMET set when metadata is missing.
             evals = ["recall", "rag", "longqa", "summ", "icl", "rerank", "cite"]
 
-        dataset_configs = _dataset_configs_from_helmet(
-            repo_dir=repo_dir,
-            evals=evals,
-            config_variant=config.config_variant,
-            use_chat_template=config.use_chat_template,
-            helmet_collect_results=helmet_collect_results,
-        )
-
-        values_by_len: dict[int, dict[str, list[float]]] = {}
-        dataset_rows: list[dict[str, Any]] = []
-        failed_paths: list[str] = []
-
-        for ds_cfg in dataset_configs:
-            # They named their class lower-case `argument`
-            args = helmet_collect_results.arguments()
-            args.tag = config.tag
-            args.seed = config.seed
-            args.output_dir = local_output_dir
-            args.update(ds_cfg)
-
-            import contextlib
-            import io
-
-            with contextlib.redirect_stdout(io.StringIO()):
-                metric_dict = args.get_averaged_metric()
-            if metric_dict is None:
-                failed_paths.append(args.get_path())
-                continue
-
-            match = args.get_metric_name()
-            if match is None:
-                raise RuntimeError(f"Could not infer metric name for dataset: {args.dataset}")
-            dataset_simple, _ = match
-
-            input_len = int(args.input_max_length)
-            len_bucket = values_by_len.setdefault(input_len, {})
-            for metric_name, value in metric_dict.items():
-                col = f"{dataset_simple} {metric_name}"
-                len_bucket.setdefault(col, []).append(float(value))
-
-            dataset_rows.append(
-                {
-                    "dataset": args.dataset,
-                    "test_name": args.test_name,
-                    "input_max_length": input_len,
-                    "path": args.get_path(),
-                    "dataset_simple": dataset_simple,
-                    "metrics": {k: float(v) for k, v in metric_dict.items()},
-                }
+        if config.allow_partial:
+            report = _report_from_local_outputs(config=config, evals=evals, local_output_dir=local_output_dir)
+            category_scores: dict[str, float] = {}
+        else:
+            dataset_configs = _dataset_configs_from_helmet(
+                repo_dir=repo_dir,
+                evals=evals,
+                config_variant=config.config_variant,
+                use_chat_template=config.use_chat_template,
+                helmet_collect_results=helmet_collect_results,
             )
 
-        if failed_paths:
-            raise RuntimeError(
-                "Missing expected HELMET outputs; refusing to aggregate partial results. "
-                f"Missing paths (first 20): {failed_paths[:20]}"
-            )
+            values_by_len: dict[int, dict[str, list[float]]] = {}
+            dataset_rows: list[dict[str, Any]] = []
+            failed_paths: list[str] = []
 
-        collect_results_rows: list[dict[str, Any]] = []
-        for input_len in sorted(values_by_len):
-            row: dict[str, Any] = {"input_max_length": input_len}
-            for col, vals in values_by_len[input_len].items():
-                row[col] = sum(vals) / len(vals)
+            for ds_cfg in dataset_configs:
+                # They named their class lower-case `argument`
+                args = helmet_collect_results.arguments()
+                args.tag = config.tag
+                args.seed = config.seed
+                args.output_dir = local_output_dir
+                args.update(ds_cfg)
 
-            # Match HELMET's `custom_avgs` behavior (computed in insertion order).
-            for category, deps in custom_avgs.items():
-                dep_vals: list[float] = []
-                for dep in deps:
-                    if dep not in row:
-                        raise RuntimeError(f"Missing column '{dep}' needed for category '{category}' at {input_len}")
-                    dep_vals.append(float(row[dep]))
-                row[category] = sum(dep_vals) / len(dep_vals) if dep_vals else None
+                import contextlib
+                import io
 
-            collect_results_rows.append(row)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    metric_dict = args.get_averaged_metric()
+                if metric_dict is None:
+                    failed_paths.append(args.get_path())
+                    continue
 
-        canonical_row = max(collect_results_rows, key=lambda r: int(r["input_max_length"]))
-        category_scores = {
-            k: float(canonical_row[k]) for k in custom_avgs if k in canonical_row and canonical_row[k] is not None
-        }
+                match = args.get_metric_name()
+                if match is None:
+                    raise RuntimeError(f"Could not infer metric name for dataset: {args.dataset}")
+                dataset_simple, _ = match
 
-    report = {
-        "model_name": config.model_name,
-        "model_path": config.model_path,
-        "helmet_repo_url": config.helmet_repo_url,
-        "helmet_repo_sha": config.helmet_repo_sha,
-        "helmet_data_sha": config.helmet_data_sha,
-        "use_chat_template": config.use_chat_template,
-        "config_variant": config.config_variant,
-        "tag": config.tag,
-        "seed": config.seed,
-        "evals": evals,
-        "outputs": dataset_rows,
-        "category_scores": category_scores,
-        "collect_results_rows": collect_results_rows,
-        "mapping_source": "HELMET scripts/collect_results.py (arguments + custom_avgs)",
-    }
+                input_len = int(args.input_max_length)
+                len_bucket = values_by_len.setdefault(input_len, {})
+                for metric_name, value in metric_dict.items():
+                    col = f"{dataset_simple} {metric_name}"
+                    len_bucket.setdefault(col, []).append(float(value))
+
+                dataset_rows.append(
+                    {
+                        "dataset": args.dataset,
+                        "test_name": args.test_name,
+                        "input_max_length": input_len,
+                        "path": args.get_path(),
+                        "dataset_simple": dataset_simple,
+                        "metrics": {k: float(v) for k, v in metric_dict.items()},
+                    }
+                )
+
+            if failed_paths:
+                raise RuntimeError(
+                    "Missing expected HELMET outputs; refusing to aggregate partial results. "
+                    f"Missing paths (first 20): {failed_paths[:20]}"
+                )
+
+            collect_results_rows: list[dict[str, Any]] = []
+            for input_len in sorted(values_by_len):
+                row: dict[str, Any] = {"input_max_length": input_len}
+                for col, vals in values_by_len[input_len].items():
+                    row[col] = sum(vals) / len(vals)
+
+                # Match HELMET's `custom_avgs` behavior (computed in insertion order).
+                for category, deps in custom_avgs.items():
+                    dep_vals: list[float] = []
+                    for dep in deps:
+                        if dep not in row:
+                            raise RuntimeError(f"Missing column '{dep}' needed for category '{category}' at {input_len}")
+                        dep_vals.append(float(row[dep]))
+                    row[category] = sum(dep_vals) / len(dep_vals) if dep_vals else None
+
+                collect_results_rows.append(row)
+
+            canonical_row = max(collect_results_rows, key=lambda r: int(r["input_max_length"]))
+            category_scores = {
+                k: float(canonical_row[k]) for k in custom_avgs if k in canonical_row and canonical_row[k] is not None
+            }
+
+            report = {
+                "model_name": config.model_name,
+                "model_path": config.model_path,
+                "helmet_repo_url": config.helmet_repo_url,
+                "helmet_repo_sha": config.helmet_repo_sha,
+                "helmet_data_sha": config.helmet_data_sha,
+                "use_chat_template": config.use_chat_template,
+                "config_variant": config.config_variant,
+                "tag": config.tag,
+                "seed": config.seed,
+                "evals": evals,
+                "outputs": dataset_rows,
+                "category_scores": category_scores,
+                "collect_results_rows": collect_results_rows,
+                "mapping_source": "HELMET scripts/collect_results.py (arguments + custom_avgs)",
+            }
 
     fs, out_root = fsspec.core.url_to_fs(config.output_path)
     fs.makedirs(out_root, exist_ok=True)

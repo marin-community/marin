@@ -19,7 +19,7 @@ from marin.execution.executor import executor_main
 
 
 def main() -> None:
-    # For gcsfuse-backed checkpoints, prefer a path under `gs://$PREFIX/gcsfuse_mount/...`
+    # can be a gcs:// path or a huggingface repo
     model_path = "meta-llama/Llama-3.2-1B"
     model_name = "llama-3.2-1b"
 
@@ -31,7 +31,7 @@ def main() -> None:
             use_chat_template=False,
             resource_config=ResourceConfig.with_tpu("v4-8"),
             # Optional: for long-context models, you may need something like:
-            # vllm_serve_args=("--max-model-len", "131072"),
+            vllm_serve_args=("--max-model-len", "131072"),
         ),
         pipeline=HELMET_PIPELINE_AUTOMATIC,
         wandb_tags=["helmet", "test"],

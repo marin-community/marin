@@ -68,6 +68,20 @@ class VllmTpuEvaluator(Evaluator, ABC):
         return "/tmp/marin-jax-compilation-cache"
 
     @staticmethod
+    def _looks_like_remote_path(path: str) -> bool:
+        parsed = urlparse(path)
+        return bool(parsed.scheme) and parsed.scheme not in {"file"}
+
+    @staticmethod
+    def _default_vllm_xla_cache_path() -> str:
+        # vLLM's TPU backend uses XLA compilation caching. We want this cache to:
+        # - Avoid filling Ray's `/tmp/ray/session_*` (common source of node death).
+        # - Avoid `gs://...` until the vLLM image includes `gcsfs`/TensorFlow I/O.
+        #
+        # `--shm-size=...` gives the container a large /dev/shm, so default there.
+        return "/dev/shm/marin-vllm-xla-cache"
+
+    @staticmethod
     def _vllm_env() -> dict[str, str]:
         env = dict(os.environ)
         # tpu_inference defaults MODEL_IMPL_TYPE=auto, which selects flax_nnx for many
@@ -199,19 +213,24 @@ class VllmTpuEvaluator(Evaluator, ABC):
         if "MARIN_VLLM_DOCKER_IMAGE" not in os.environ and docker_image is None:
             print(f"MARIN_VLLM_DOCKER_IMAGE not set; defaulting to {resolved_image}")
 
+        jax_cache_dir = os.environ.get(
+            "JAX_COMPILATION_CACHE_DIR",
+            VllmTpuEvaluator._default_jax_compilation_cache_dir(),
+        )
+        if VllmTpuEvaluator._looks_like_remote_path(jax_cache_dir):
+            jax_cache_dir = VllmTpuEvaluator._default_jax_compilation_cache_dir()
+
+        vllm_xla_cache_path = os.environ.get("VLLM_XLA_CACHE_PATH", VllmTpuEvaluator._default_vllm_xla_cache_path())
+        if VllmTpuEvaluator._looks_like_remote_path(vllm_xla_cache_path):
+            vllm_xla_cache_path = VllmTpuEvaluator._default_vllm_xla_cache_path()
+
         env: dict[str, str] = {
             "TOKENIZERS_PARALLELISM": "false",
             # See `_vllm_env`.
             "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "vllm"),
             "JAX_ENABLE_COMPILATION_CACHE": os.environ.get("JAX_ENABLE_COMPILATION_CACHE", "1"),
-            "JAX_COMPILATION_CACHE_DIR": os.environ.get(
-                "JAX_COMPILATION_CACHE_DIR",
-                VllmTpuEvaluator._default_jax_compilation_cache_dir(),
-            ),
-            "VLLM_XLA_CACHE_PATH": os.environ.get(
-                "VLLM_XLA_CACHE_PATH",
-                os.environ.get("JAX_COMPILATION_CACHE_DIR", VllmTpuEvaluator._default_jax_compilation_cache_dir()),
-            ),
+            "JAX_COMPILATION_CACHE_DIR": jax_cache_dir,
+            "VLLM_XLA_CACHE_PATH": vllm_xla_cache_path,
             "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": os.environ.get(
                 "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1"
             ),
@@ -248,7 +267,9 @@ class VllmTpuEvaluator(Evaluator, ABC):
         print(
             "Starting vLLM Docker sidecar with "
             f"TPU_MIN_LOG_LEVEL={env.get('TPU_MIN_LOG_LEVEL')} "
-            f"TPU_STDERR_LOG_LEVEL={env.get('TPU_STDERR_LOG_LEVEL')}"
+            f"TPU_STDERR_LOG_LEVEL={env.get('TPU_STDERR_LOG_LEVEL')} "
+            f"VLLM_XLA_CACHE_PATH={env.get('VLLM_XLA_CACHE_PATH')} "
+            f"JAX_COMPILATION_CACHE_DIR={env.get('JAX_COMPILATION_CACHE_DIR')}"
         )
         docker_handle = start_vllm_docker_server(config, timeout_seconds=timeout_seconds)
         return VllmServerHandle(
@@ -355,15 +376,25 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """Clean up the vLLM server and any other resources."""
 
         print("Cleaning up resources.")
-        try:
-            if vllm_server is not None and vllm_server.mode == "docker" and vllm_server.docker_container_name:
+        errors: list[BaseException] = []
+        if vllm_server is not None and vllm_server.mode == "docker" and vllm_server.docker_container_name:
+            try:
                 stop_vllm_docker_server_by_name(vllm_server.docker_container_name)
-            elif vllm_server is not None and vllm_server.mode == "native" and vllm_server.process is not None:
+            except BaseException as e:
+                errors.append(e)
+        elif vllm_server is not None and vllm_server.mode == "native" and vllm_server.process is not None:
+            try:
                 vllm_server.process.kill()
-        except Exception as e:
-            print(f"Failed to stop vLLM server: {e}")
+            except BaseException as e:
+                errors.append(e)
 
-        model.destroy()
+        try:
+            model.destroy()
+        except BaseException as e:
+            errors.append(e)
+
+        if errors:
+            raise RuntimeError(f"Cleanup failed with {len(errors)} error(s); first error: {errors[0]!r}") from errors[0]
 
     def launch_evaluate_with_ray(
         self,

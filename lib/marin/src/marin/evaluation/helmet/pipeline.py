@@ -170,6 +170,7 @@ def helmet_steps(
                 output_path=this_output_path(),  # type: ignore[arg-type]
                 resource_config=helmet.resource_config,
                 vllm_serve_args=helmet.vllm_serve_args,
+                eval_py_args=helmet.eval_py_args,
             ),
             pip_dependency_groups=["eval", "helmet"],
         )
@@ -237,6 +238,7 @@ def helmet_steps(
             wandb_tags=wandb_tags,
             tag=helmet.tag,
             seed=helmet.seed,
+            allow_partial=bool(helmet.eval_py_args),
         ),
         pip_dependency_groups=["eval"],
     )
