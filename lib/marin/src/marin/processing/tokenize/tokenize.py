@@ -359,6 +359,7 @@ def tokenize(config: TokenizeConfigBase):
                 )
             ),
             context=cluster_ctx,
+            verbose=False,
         )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
