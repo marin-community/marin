@@ -9,7 +9,7 @@
         },
         "description": "Hackable Transformer (1_2b); Gated Attention (Splash); LR sweep multiplier=1.5",
         "device_flops": 459000000000000.0,
-        "eval/paloma/c4_en/bpb": 0.9129290580749512,
+        "eval/paloma/c4_en/bpb": 0.9122039675712585,
         "model_config": {
           "activation_function": "silu",
           "attn_backend": null,
@@ -37,20 +37,20 @@
           "tokenizer": null,
           "upcast_attn": false,
           "use_bias": false,
-          "use_gated_attention": "elementwise",
+          "use_gated_attention": true,
           "use_layer_norm_weight": true
         },
         "model_flops": 5.1738353514618185e+20,
         "model_flops_per_token": 2877292544.0,
         "model_size": 1498482688,
-        "num_chips": 16,
-        "num_devices": 16,
+        "num_chips": 32,
+        "num_devices": 32,
         "resources": {
           "cpu": 1,
           "device": {
             "kind": "tpu",
             "topology": null,
-            "variant": "v5p-32"
+            "variant": "v5p-64"
           },
           "disk": "1g",
           "preemptible": true,
@@ -58,8 +58,8 @@
           "regions": null,
           "replicas": 1
         },
-        "run_completion_timestamp": "2026-01-10 22:53:32 UTC",
-        "tokenized_dataset": "gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-ac65f6",
+        "run_completion_timestamp": "2025-12-17 00:31:25 UTC",
+        "tokenized_dataset": "gs://marin-us-east5/tokenized/subcache/fineweb-edu-10B-ac65f6",
         "total_tokens": 59938701312,
         "train_config": {
           "allow_partial_checkpoint": false,
@@ -70,7 +70,6 @@
           "decay": null,
           "ema_beta": null,
           "epsilon": null,
-          "explicit_mesh_axes": false,
           "initialize_from_checkpoint_path": null,
           "initialize_from_hf": null,
           "int8": false,
@@ -135,9 +134,9 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 1.1933404335361132e+21,
-        "training_time": 162491.88909805464,
-        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_1_2b_attngate_2048_splash_lr_sweep_lr_x1_5_v5p32-f366f3"
+        "training_hardware_flops": 1.8044518078036129e+21,
+        "training_time": 122852.11109774053,
+        "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_1_2b_attngate_2048_splash_lr_sweep_lr_x1_5-e5d647"
       }
     }
   ]
