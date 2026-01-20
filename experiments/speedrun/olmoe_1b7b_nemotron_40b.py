@@ -289,6 +289,7 @@ def nemotron_only_speedrun(
     append_async_collective_permute_flag: bool = False,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
+    use_default_validation: bool = False,
     eval_suite: str = "none",
     eval_suite_mode: str = "post_train",
     eval_tpu_type: str | None = None,
@@ -334,7 +335,7 @@ def nemotron_only_speedrun(
         wandb_name=wandb_name or name,
         wandb_group=wandb_group,
         override_output_path=override_output_path,
-        use_default_validation=False,
+        use_default_validation=use_default_validation,
     )
 
     if append_ici_ag_pipelining_flags or append_async_collective_permute_flag:
