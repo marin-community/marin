@@ -316,10 +316,12 @@ class MarinFlightServer(flight.FlightServerBase):
 
 
 @jax.jit
-def copy_and_flatten(model: PyTree) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
+def copy_and_flatten(
+    model: PyTree, convert_to_bfloat16: bool = True
+) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
     """Convert `model` into a state with flattened arrays and shapes.
 
-    Converts weights to bfloat16 for efficient transfer to inference workers.
+    Optionally converts weights to bfloat16 for efficient transfer to inference workers.
     This provides several benefits:
     1. Reduces network transfer size by 50% (float32 -> bfloat16)
     2. Reduces device-to-host copy bandwidth by 50%
@@ -330,9 +332,20 @@ def copy_and_flatten(model: PyTree) -> tuple[dict[str, jax.Array], dict[str, tup
     """
     state_dict = hsd.to_state_dict(model)
     shape_dict = jax.tree.map(lambda y: y.shape, state_dict)
-    # Convert to bfloat16 for inference - happens on GPU before device_get
-    bf16_dict = jax.tree.map(lambda y: y.astype(jnp.bfloat16), state_dict)
-    flat_dict = jax.tree.map(lambda y: y.reshape(-1), bf16_dict)
+
+    if convert_to_bfloat16:
+        # Convert to bfloat16 for inference - happens on GPU before device_get
+        # Only cast floating point arrays to avoid issues with integer/bool arrays
+        def maybe_cast_to_bf16(arr):
+            if jnp.issubdtype(arr.dtype, jnp.floating):
+                return arr.astype(jnp.bfloat16)
+            return arr
+
+        bf16_dict = jax.tree.map(maybe_cast_to_bf16, state_dict)
+        flat_dict = jax.tree.map(lambda y: y.reshape(-1), bf16_dict)
+    else:
+        flat_dict = jax.tree.map(lambda y: y.reshape(-1), state_dict)
+
     return flat_dict, shape_dict
 
 
@@ -416,7 +429,7 @@ class ArrowFlightServer(WeightTransferServer):
 
             if jax.process_index() == 0:
                 # Fetching the entire state dict to CPU allows JAX to parallelize the individual transfers
-                flat_dict, shape_dict = copy_and_flatten(model)
+                flat_dict, shape_dict = copy_and_flatten(model, self.config.convert_to_bfloat16)
                 state_dict_time = time.time()
                 flat_dict = jax.device_get(flat_dict)
                 copy_time = time.time()
