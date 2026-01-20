@@ -24,10 +24,45 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
+from iris.cluster.controller.events import Event, EventType
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.state import ControllerState
+from iris.cluster.controller.state import ControllerState, ControllerTask
 from iris.cluster.types import JobId, WorkerId
 from iris.rpc import cluster_pb2
+
+# =============================================================================
+# Test Helpers - Wrap handle_event() for common test patterns
+# =============================================================================
+
+
+def dispatch_task(state: ControllerState, task: ControllerTask, worker_id: WorkerId) -> None:
+    """Dispatch a task to a worker: assign + mark running."""
+    state.handle_event(
+        Event(
+            EventType.TASK_ASSIGNED,
+            task_id=task.task_id,
+            worker_id=worker_id,
+        )
+    )
+    state.handle_event(
+        Event(
+            EventType.TASK_STATE_CHANGED,
+            task_id=task.task_id,
+            new_state=cluster_pb2.TASK_STATE_RUNNING,
+        )
+    )
+
+
+def transition_task(state: ControllerState, task: ControllerTask, new_state: int, *, error: str | None = None) -> None:
+    """Transition a task to a new state via handle_event."""
+    state.handle_event(
+        Event(
+            EventType.TASK_STATE_CHANGED,
+            task_id=task.task_id,
+            new_state=new_state,
+            error=error,
+        )
+    )
 
 
 @pytest.fixture
@@ -410,7 +445,7 @@ def test_report_task_state_transitions_task(service, state, job_request, worker_
 
     # Simulate scheduler dispatch (no RPC for this - internal scheduler operation)
     task = state.get_task(state.get_job_tasks(JobId("test-job"))[0].task_id)
-    state.mark_task_dispatched(task, WorkerId("w1"))
+    dispatch_task(state, task, WorkerId("w1"))
 
     # Get updated attempt ID after dispatch
     status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="test-job"), None)
@@ -446,7 +481,7 @@ def test_report_task_state_validates_attempt_id(service, state, job_request, wor
 
     # Get task and create attempt
     task = state.get_task(state.get_job_tasks(JobId("test-job"))[0].task_id)
-    state.mark_task_dispatched(task, WorkerId("w1"))
+    dispatch_task(state, task, WorkerId("w1"))
 
     # Report with wrong attempt_id (stale report)
     request = cluster_pb2.Controller.ReportTaskStateRequest(
@@ -496,7 +531,7 @@ def test_task_retry_preserves_attempt_history(service, state, job_request, worke
     task.max_retries_preemption = 2  # Allow retries for worker failures
 
     # First attempt: dispatch and fail (dispatch is internal scheduler operation)
-    state.mark_task_dispatched(task, WorkerId("w1"))
+    dispatch_task(state, task, WorkerId("w1"))
 
     # Get attempt ID via RPC
     status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="retry-job"), None)
@@ -541,23 +576,18 @@ def test_stale_worker_report_ignored_after_retry(service, state, job_request, wo
     task.max_retries_preemption = 2
 
     # First attempt (dispatch is internal scheduler operation)
-    state.mark_task_dispatched(task, WorkerId("w1"))
+    dispatch_task(state, task, WorkerId("w1"))
 
     # Get old attempt ID via RPC
     status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="test-job"), None)
     old_attempt_id = status.job.tasks[0].current_attempt_id
     task_id = status.job.tasks[0].task_id
 
-    # Fail and trigger retry (transition_task simulates scheduler's response to worker failure)
-    # Failure type is derived from TASK_STATE_WORKER_FAILED
-    state.transition_task(
-        task.task_id,
-        cluster_pb2.TASK_STATE_WORKER_FAILED,
-        error="Worker died",
-    )
+    # Fail and trigger retry
+    transition_task(state, task, cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker died")
 
     # Second attempt (dispatch is internal scheduler operation)
-    state.mark_task_dispatched(task, WorkerId("w1"))
+    dispatch_task(state, task, WorkerId("w1"))
 
     # Get new attempt ID via RPC
     status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="test-job"), None)
@@ -599,7 +629,7 @@ def test_job_running_while_tasks_retry(service, state, job_request, worker_metad
     task.max_retries_preemption = 2
 
     # First attempt - dispatch (dispatch is internal scheduler operation)
-    state.mark_task_dispatched(task, WorkerId("w1"))
+    dispatch_task(state, task, WorkerId("w1"))
 
     # Job should be RUNNING
     status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="test-job"), None)
@@ -644,13 +674,9 @@ def test_killing_job_with_retrying_task(service, state, job_request, worker_meta
     task = state.get_task(state.get_job_tasks(JobId("test-job"))[0].task_id)
     task.max_retries_preemption = 2
 
-    # First attempt - dispatch and fail (dispatch and transition are internal scheduler operations)
-    # Failure type is derived from TASK_STATE_WORKER_FAILED
-    state.mark_task_dispatched(task, WorkerId("w1"))
-    state.transition_task(
-        task.task_id,
-        cluster_pb2.TASK_STATE_WORKER_FAILED,
-    )
+    # First attempt - dispatch and fail
+    dispatch_task(state, task, WorkerId("w1"))
+    transition_task(state, task, cluster_pb2.TASK_STATE_WORKER_FAILED)
 
     # Verify task is in WORKER_FAILED state (last attempt failed) but has retries available
     # The task can still be scheduled even though its state shows the last attempt's failure
@@ -686,7 +712,7 @@ def test_full_lifecycle_submit_fail_retry_succeed(service, state, job_request, w
     task.max_retries_preemption = 2
 
     # First attempt - dispatch (dispatch is internal scheduler operation)
-    state.mark_task_dispatched(task, WorkerId("w1"))
+    dispatch_task(state, task, WorkerId("w1"))
 
     # Verify job is RUNNING via RPC
     status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="lifecycle-job"), None)
@@ -718,7 +744,7 @@ def test_full_lifecycle_submit_fail_retry_succeed(service, state, job_request, w
     assert status.job.tasks[0].state == cluster_pb2.TASK_STATE_WORKER_FAILED
 
     # Second attempt - dispatch again (dispatch is internal scheduler operation)
-    state.mark_task_dispatched(task, WorkerId("w1"))
+    dispatch_task(state, task, WorkerId("w1"))
 
     # Get new attempt ID via RPC
     status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="lifecycle-job"), None)

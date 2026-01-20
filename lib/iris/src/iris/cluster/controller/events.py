@@ -40,12 +40,8 @@ class EventType(Enum):
     JOB_CANCELLED = auto()
 
     # Task lifecycle
-    TASK_ASSIGNED = auto()
-    TASK_RUNNING = auto()
-    TASK_SUCCEEDED = auto()
-    TASK_FAILED = auto()
-    TASK_KILLED = auto()
-    TASK_WORKER_FAILED = auto()
+    TASK_ASSIGNED = auto()  # Creates attempt, assigns to worker
+    TASK_STATE_CHANGED = auto()  # All task state transitions (new_state field carries target)
 
 
 @dataclass(frozen=True)
@@ -58,8 +54,10 @@ class Event:
 
     Examples:
         Event(EventType.WORKER_FAILED, worker_id=worker_id, error="Connection lost")
-        Event(EventType.TASK_SUCCEEDED, task_id=task_id, exit_code=0)
-        Event(EventType.TASK_WORKER_FAILED, task_id=task_id, worker_id=worker_id, error="Worker died")
+        Event(EventType.TASK_STATE_CHANGED, task_id=task_id,
+              new_state=cluster_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
+        Event(EventType.TASK_STATE_CHANGED, task_id=task_id,
+              new_state=cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker died")
     """
 
     event_type: EventType
@@ -68,6 +66,9 @@ class Event:
     task_id: TaskId | None = None
     worker_id: WorkerId | None = None
     job_id: JobId | None = None
+
+    # For TASK_STATE_CHANGED - the target task state
+    new_state: int | None = None
 
     # Event data
     error: str | None = None

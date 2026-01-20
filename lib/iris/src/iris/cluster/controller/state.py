@@ -223,27 +223,36 @@ class ControllerTask:
 
     # --- Attempt management methods ---
 
-    def create_attempt(self, worker_id: WorkerId) -> ControllerTaskAttempt:
+    def create_attempt(
+        self,
+        worker_id: WorkerId,
+        *,
+        initial_state: int = cluster_pb2.TASK_STATE_PENDING,
+    ) -> ControllerTaskAttempt:
         """Create a new attempt for this task.
 
-        Called when the scheduler assigns this task to a worker.
-        Updates task state to RUNNING and sets started_at_ms on first attempt.
-        Returns the new attempt so caller can track it.
+        Called when the scheduler assigns this task to a worker. The attempt
+        starts in PENDING state by default - the worker will report RUNNING
+        when execution actually begins.
+
+        Args:
+            worker_id: The worker this attempt is assigned to
+            initial_state: Starting state for the attempt (default: PENDING)
+
+        Returns:
+            The new attempt so caller can track it.
         """
         ts = now_ms()
         attempt = ControllerTaskAttempt(
             attempt_id=len(self.attempts),
             worker_id=worker_id,
-            state=cluster_pb2.TASK_STATE_RUNNING,
+            state=initial_state,
             created_at_ms=ts,
-            started_at_ms=ts,
         )
         self.attempts.append(attempt)
 
         # Update task-level state
-        self.state = cluster_pb2.TASK_STATE_RUNNING
-        if self.started_at_ms is None:
-            self.started_at_ms = ts
+        self.state = initial_state
 
         return attempt
 
@@ -826,12 +835,12 @@ class ControllerEndpoint:
 class ControllerState:
     """Thread-safe controller state managing jobs, tasks, workers, endpoints, and queues.
 
-    State transitions can be performed via the event-driven handle_event() API,
+    All production state transitions go through the unified handle_event() API,
     which provides transaction logging for debugging and supports cascading effects.
 
-    TODO: Migrate legacy methods (transition_task, add_job, mark_task_dispatched, etc.)
-    to use handle_event() in a follow-up. The legacy methods remain for backward
-    compatibility with existing controller code that has not yet been updated.
+    Low-level methods like add_job(), assign_task_to_worker(), etc. exist for:
+    - Test setup (creating initial state)
+    - Scheduler operations (tentative assignment/rollback)
     """
 
     def __init__(self):
@@ -878,16 +887,8 @@ class ControllerState:
                     self._on_job_cancelled(txn, event)
                 case EventType.TASK_ASSIGNED:
                     self._on_task_assigned(txn, event)
-                case EventType.TASK_RUNNING:
-                    self._on_task_running(txn, event)
-                case EventType.TASK_SUCCEEDED:
-                    self._on_task_succeeded(txn, event)
-                case EventType.TASK_FAILED:
-                    self._on_task_failed(txn, event)
-                case EventType.TASK_KILLED:
-                    self._on_task_killed(txn, event)
-                case EventType.TASK_WORKER_FAILED:
-                    self._on_task_worker_failed(txn, event)
+                case EventType.TASK_STATE_CHANGED:
+                    self._on_task_state_changed(txn, event)
 
             self._transactions.append(txn)
             return txn
@@ -929,12 +930,13 @@ class ControllerState:
                 continue
 
             cascade_event = Event(
-                EventType.TASK_WORKER_FAILED,
+                EventType.TASK_STATE_CHANGED,
                 task_id=task_id,
                 worker_id=event.worker_id,
+                new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
                 error=f"Worker {event.worker_id} failed: {event.error or 'unknown'}",
             )
-            self._on_task_worker_failed(txn, cascade_event)
+            self._on_task_state_changed(txn, cascade_event)
 
     # -------------------------------------------------------------------------
     # Job Event Handlers
@@ -942,10 +944,12 @@ class ControllerState:
 
     def _on_job_submitted(self, txn: TransactionLog, event: Event) -> None:
         assert event.job_id and event.request
+        parent_job_id = JobId(event.request.parent_job_id) if event.request.parent_job_id else None
         job = ControllerJob(
             job_id=event.job_id,
             request=event.request,
             submitted_at_ms=event.timestamp_ms or now_ms(),
+            parent_job_id=parent_job_id,
         )
         self._jobs[event.job_id] = job
         self._tasks_by_job[event.job_id] = []
@@ -974,8 +978,13 @@ class ControllerState:
             if task.state in TERMINAL_TASK_STATES:
                 continue
 
-            cascade_event = Event(EventType.TASK_KILLED, task_id=task_id, reason=event.reason)
-            self._on_task_killed(txn, cascade_event)
+            cascade_event = Event(
+                EventType.TASK_STATE_CHANGED,
+                task_id=task_id,
+                new_state=cluster_pb2.TASK_STATE_KILLED,
+                error=event.reason,
+            )
+            self._on_task_state_changed(txn, cascade_event)
 
         job.state = cluster_pb2.JOB_STATE_KILLED
         job.error = event.reason
@@ -987,183 +996,82 @@ class ControllerState:
     # -------------------------------------------------------------------------
 
     def _on_task_assigned(self, txn: TransactionLog, event: Event) -> None:
+        """Handle task assignment to a worker.
+
+        Creates an attempt in PENDING state. The task transitions to RUNNING
+        when the worker reports TASK_STATE_CHANGED with RUNNING.
+        """
         assert event.task_id and event.worker_id
         task = self._tasks[event.task_id]
         worker = self._workers[event.worker_id]
         job = self._jobs[task.job_id]
 
         old_state = task.state
-        task.create_attempt(event.worker_id)
-
-        # Task is assigned but not yet running - worker needs to report TASK_RUNNING
-        task.state = cluster_pb2.TASK_STATE_PENDING
-        if task.attempts:
-            task.attempts[-1].state = cluster_pb2.TASK_STATE_PENDING
+        task.create_attempt(event.worker_id, initial_state=cluster_pb2.TASK_STATE_PENDING)
 
         worker.assign_task(event.task_id, job.request.resources)
 
         # Remove from queue
         self._task_queue = deque(tid for tid in self._task_queue if tid != event.task_id)
 
-        # Update job counters and state
+        # Update job counters (state stays PENDING, so no job state change expected)
         new_job_state = job.on_task_transition(old_state, task.state)
         if new_job_state is not None:
             job.state = new_job_state
 
         txn.log("task_assigned", event.task_id, worker_id=str(event.worker_id))
 
-    def _on_task_running(self, txn: TransactionLog, event: Event) -> None:
-        assert event.task_id
+    def _on_task_state_changed(self, txn: TransactionLog, event: Event) -> None:
+        """Handle all task state transitions.
+
+        Delegates to task.handle_attempt_result() which contains the canonical
+        state transition logic including retry budget management.
+        """
+        assert event.task_id and event.new_state is not None
         task = self._tasks[event.task_id]
         job = self._jobs[task.job_id]
         old_state = task.state
 
-        task.state = cluster_pb2.TASK_STATE_RUNNING
-        if task.attempts:
-            task.attempts[-1].state = cluster_pb2.TASK_STATE_RUNNING
-            task.attempts[-1].started_at_ms = now_ms()
-
-        new_job_state = job.on_task_transition(old_state, task.state)
-        if new_job_state is not None:
-            job.state = new_job_state
-
-        txn.log("task_running", event.task_id)
-
-    def _on_task_succeeded(self, txn: TransactionLog, event: Event) -> None:
-        assert event.task_id
-        task = self._tasks[event.task_id]
-        job = self._jobs[task.job_id]
-        old_state = task.state
-        ts = now_ms()
-
-        task.state = cluster_pb2.TASK_STATE_SUCCEEDED
-        task.exit_code = event.exit_code if event.exit_code is not None else 0
-        task.finished_at_ms = ts
-
-        if task.attempts:
-            task.attempts[-1].state = cluster_pb2.TASK_STATE_SUCCEEDED
-            task.attempts[-1].exit_code = task.exit_code
-            task.attempts[-1].finished_at_ms = ts
-
-        self._finalize_task(task, job, txn)
-
-        new_job_state = job.on_task_transition(old_state, task.state)
-        if new_job_state is not None:
-            self._finalize_job_state(job, new_job_state)
-
-        txn.log("task_succeeded", event.task_id, exit_code=task.exit_code)
-
-    def _on_task_failed(self, txn: TransactionLog, event: Event) -> None:
-        """Task failed due to task error. Uses failure retry budget."""
-        assert event.task_id
-        task = self._tasks[event.task_id]
-        job = self._jobs[task.job_id]
-        old_state = task.state
-
-        task.failure_count += 1
-        can_retry = task.failure_count <= task.max_retries_failure
-
-        self._apply_task_failure(
-            task,
-            job,
-            txn,
-            new_state=cluster_pb2.TASK_STATE_FAILED,
+        # Delegate to the canonical state transition logic
+        result = task.handle_attempt_result(
+            event.new_state,
             error=event.error,
             exit_code=event.exit_code,
-            can_retry=can_retry,
         )
 
-        new_job_state = job.on_task_transition(old_state, task.state)
-        if new_job_state is not None:
-            self._finalize_job_state(job, new_job_state)
+        # Handle side effects based on result
+        self._handle_task_side_effects(task, job, result, txn)
 
-        txn.log("task_failed", event.task_id, error=event.error, can_retry=can_retry)
-
-    def _on_task_killed(self, txn: TransactionLog, event: Event) -> None:
-        """Task killed by user/scheduler. No retry."""
-        assert event.task_id
-        task = self._tasks[event.task_id]
-        job = self._jobs[task.job_id]
-        old_state = task.state
-
-        self._apply_task_failure(
-            task,
-            job,
-            txn,
-            new_state=cluster_pb2.TASK_STATE_KILLED,
-            error=event.reason,
-            can_retry=False,
-        )
-
-        new_job_state = job.on_task_transition(old_state, task.state)
-        if new_job_state is not None:
-            self._finalize_job_state(job, new_job_state)
-
-        txn.log("task_killed", event.task_id, reason=event.reason)
-
-    def _on_task_worker_failed(self, txn: TransactionLog, event: Event) -> None:
-        """Task failed because worker died. Uses preemption retry budget."""
-        assert event.task_id
-        task = self._tasks[event.task_id]
-        job = self._jobs[task.job_id]
-        old_state = task.state
-
-        task.preemption_count += 1
-        can_retry = task.preemption_count <= task.max_retries_preemption
-
-        self._apply_task_failure(
-            task,
-            job,
-            txn,
-            new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
-            error=event.error,
-            can_retry=can_retry,
-        )
-
+        # Update job state counters and finalize if needed
         new_job_state = job.on_task_transition(old_state, task.state)
         if new_job_state is not None:
             self._finalize_job_state(job, new_job_state)
 
         txn.log(
-            "task_worker_failed",
+            "task_state_changed",
             event.task_id,
-            worker_id=str(event.worker_id) if event.worker_id else None,
-            can_retry=can_retry,
+            old_state=old_state,
+            new_state=task.state,
+            result=result.name,
         )
 
     # -------------------------------------------------------------------------
     # Shared Helpers for Event Handlers
     # -------------------------------------------------------------------------
 
-    def _apply_task_failure(
+    def _handle_task_side_effects(
         self,
         task: ControllerTask,
         job: ControllerJob,
+        result: TaskTransitionResult,
         txn: TransactionLog,
-        *,
-        new_state: int,
-        error: str | None,
-        exit_code: int | None = None,
-        can_retry: bool,
     ) -> None:
-        """Common logic for task failure states."""
-        ts = now_ms()
-        task.state = new_state
-        task.error = error
-        task.exit_code = exit_code
-
-        if task.attempts:
-            task.attempts[-1].state = new_state
-            task.attempts[-1].error = error
-            task.attempts[-1].exit_code = exit_code
-            task.attempts[-1].finished_at_ms = ts
-
-        if can_retry:
-            self._requeue_task(task, job, txn)
-        else:
-            task.finished_at_ms = ts
-
-        self._finalize_task(task, job, txn)
+        """Handle side effects after a task state transition."""
+        if result == TaskTransitionResult.SHOULD_RETRY:
+            self._requeue_task(task, txn)
+            self._finalize_task(task, job, txn)
+        elif task.is_finished():
+            self._finalize_task(task, job, txn)
 
     def _finalize_task(self, task: ControllerTask, job: ControllerJob, txn: TransactionLog) -> None:
         """Unassign from worker and clean up endpoints."""
@@ -1176,7 +1084,7 @@ class ControllerState:
 
         self._remove_endpoints_for_task(task.task_id)
 
-    def _requeue_task(self, task: ControllerTask, job: ControllerJob, txn: TransactionLog) -> None:
+    def _requeue_task(self, task: ControllerTask, txn: TransactionLog) -> None:
         """Put task back on scheduling queue for retry."""
         if task.task_id not in self._task_queue:
             self._task_queue.append(task.task_id)
@@ -1289,21 +1197,6 @@ class ControllerState:
             if task.task_id not in self._task_queue:
                 self._task_queue.append(task.task_id)
 
-    def mark_task_dispatched(self, task: ControllerTask, worker_id: WorkerId) -> int | None:
-        """Mark a task as dispatched and update job state counts.
-
-        Returns:
-            New job state if changed, None otherwise
-        """
-        with self._lock:
-            job = self._jobs[task.job_id]
-            old_state = task.state
-            task.create_attempt(worker_id)
-            new_job_state = job.on_task_transition(old_state, task.state)
-            if new_job_state is not None:
-                job.state = new_job_state
-            return new_job_state
-
     def revert_task_dispatch(self, task: ControllerTask) -> None:
         """Revert a failed dispatch and update job state counts."""
         with self._lock:
@@ -1312,81 +1205,6 @@ class ControllerState:
             task.revert_attempt()
             job.task_state_counts[old_state] -= 1
             job.task_state_counts[task.state] += 1
-
-    def transition_task(
-        self,
-        task_id: TaskId,
-        new_state: int,
-        *,
-        error: str | None = None,
-        exit_code: int | None = None,
-    ) -> tuple[TaskTransitionResult, list[ControllerEndpoint]]:
-        """Transition a task and handle all side effects automatically.
-
-        Whether this is a worker failure is derived from the target state:
-        - TASK_STATE_WORKER_FAILED -> uses preemption retry budget
-        - TASK_STATE_FAILED -> uses failure retry budget
-
-        Side effects based on result:
-        - SHOULD_RETRY: Re-queues task, unassigns from worker
-        - Terminal state: Removes from queue, removes endpoints, unassigns from worker,
-                         updates job state
-        """
-        with self._lock:
-            task = self._tasks.get(task_id)
-            if not task:
-                return TaskTransitionResult.COMPLETE, []
-
-            job = self._jobs.get(task.job_id)
-            if not job:
-                return TaskTransitionResult.COMPLETE, []
-
-            worker_id = task.worker_id
-            old_state = task.state
-
-            # Delegate state transition to task (handles both with/without attempts)
-            result = task.handle_attempt_result(
-                new_state,
-                error=error,
-                exit_code=exit_code,
-            )
-
-            # Update job's task state counts and check for job state change
-            new_job_state = job.on_task_transition(old_state, task.state)
-            removed_endpoints = self._update_task_queue(task, job, worker_id, result)
-
-            # Finalize job state if it changed
-            if new_job_state is not None:
-                self._finalize_job_state(job, new_job_state)
-
-            return result, removed_endpoints
-
-    def _update_task_queue(
-        self,
-        task: ControllerTask,
-        job: ControllerJob,
-        worker_id: WorkerId | None,
-        result: TaskTransitionResult,
-    ) -> list[ControllerEndpoint]:
-        """Update task queue based on transition result."""
-        removed_endpoints: list[ControllerEndpoint] = []
-
-        if result == TaskTransitionResult.SHOULD_RETRY:
-            if task.task_id not in self._task_queue:
-                self._task_queue.append(task.task_id)
-            if worker_id:
-                worker = self._workers.get(worker_id)
-                if worker:
-                    worker.unassign_task(task.task_id, job.request.resources)
-        elif task.is_finished():
-            self._task_queue = deque(tid for tid in self._task_queue if tid != task.task_id)
-            removed_endpoints = self._remove_endpoints_for_task(task.task_id)
-            if worker_id:
-                worker = self._workers.get(worker_id)
-                if worker:
-                    worker.unassign_task(task.task_id, job.request.resources)
-
-        return removed_endpoints
 
     def _finalize_job_state(
         self,

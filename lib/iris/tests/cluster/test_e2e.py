@@ -53,6 +53,11 @@ def find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def unique_name(prefix: str) -> str:
+    """Generate a unique job name with the given prefix."""
+    return f"{prefix}-{uuid.uuid4().hex[:8]}"
+
+
 class E2ECluster:
     """Synchronous context manager running a controller + worker cluster.
 
@@ -143,9 +148,22 @@ class E2ECluster:
             self._worker_ports.append(worker_port)
 
         # Wait for workers to register with controller
-        time.sleep(2.0)
+        self._wait_for_workers(timeout=10.0)
 
         return self
+
+    def _wait_for_workers(self, timeout: float = 10.0) -> None:
+        """Wait for all workers to register with the controller."""
+        start = time.time()
+        while time.time() - start < timeout:
+            request = cluster_pb2.Controller.ListWorkersRequest()
+            assert self._controller_client is not None
+            response = self._controller_client.list_workers(request)
+            healthy_workers = [w for w in response.workers if w.healthy]
+            if len(healthy_workers) >= self._num_workers:
+                return
+            time.sleep(0.1)
+        raise TimeoutError(f"Workers failed to register within {timeout}s")
 
     def __exit__(self, *args):
         if self._rpc_client:
@@ -284,7 +302,7 @@ class TestJobLifecycle:
         def hello():
             return 42
 
-        job_id = test_cluster.submit(hello, name="test-job")
+        job_id = test_cluster.submit(hello, name=unique_name("test-job"))
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
@@ -294,17 +312,18 @@ class TestJobLifecycle:
         def add(a, b):
             return a + b
 
-        job_id = test_cluster.submit(add, 10, 32, name="add-job")
+        job_id = test_cluster.submit(add, 10, 32, name=unique_name("add-job"))
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
     def test_multiple_jobs_complete(self, test_cluster):
         """Multiple jobs complete successfully."""
+        run_id = uuid.uuid4().hex[:8]
 
         def fast_job(n):
             return n * 2
 
-        job_ids = [test_cluster.submit(fast_job, i, name=f"job-{i}") for i in range(5)]
+        job_ids = [test_cluster.submit(fast_job, i, name=f"job-{run_id}-{i}") for i in range(5)]
         for job_id in job_ids:
             status = test_cluster.wait(job_id, timeout=30)
             assert status["state"] == "JOB_STATE_SUCCEEDED"
@@ -315,7 +334,7 @@ class TestJobLifecycle:
         def long_job():
             time.sleep(60)
 
-        job_id = test_cluster.submit(long_job, name="long-job")
+        job_id = test_cluster.submit(long_job, name=unique_name("long-job"))
 
         # Wait for job to start running
         for _ in range(50):
@@ -334,7 +353,7 @@ class TestJobLifecycle:
         def failing_job():
             raise ValueError("intentional failure")
 
-        job_id = test_cluster.submit(failing_job, name="fail-job")
+        job_id = test_cluster.submit(failing_job, name=unique_name("fail-job"))
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_FAILED"
 
@@ -350,10 +369,10 @@ class TestResourceScheduling:
     def test_small_job_skips_oversized_job(self, test_cluster):
         """Small job scheduled even when large job is waiting."""
         # Submit job requiring 100 CPUs (won't fit on 4-CPU worker)
-        big_job_id = test_cluster.submit(lambda: None, name="big-job", cpu=100)
+        big_job_id = test_cluster.submit(lambda: None, name=unique_name("big-job"), cpu=100)
 
         # Submit small job
-        small_job_id = test_cluster.submit(lambda: "done", name="small-job", cpu=1)
+        small_job_id = test_cluster.submit(lambda: "done", name=unique_name("small-job"), cpu=1)
 
         # Small job should complete even though big job is first
         status = test_cluster.wait(small_job_id, timeout=10)
@@ -368,7 +387,7 @@ class TestResourceScheduling:
         # Submit job requiring 100 CPUs with 1 second timeout
         job_id = test_cluster.submit(
             lambda: None,
-            name="impossible-job",
+            name=unique_name("impossible-job"),
             cpu=100,
             scheduling_timeout_seconds=1,
         )
@@ -388,7 +407,8 @@ class TestMultiWorker:
 
     def test_multi_worker_execution(self, multi_worker_cluster):
         """Jobs distributed across multiple workers."""
-        job_ids = [multi_worker_cluster.submit(lambda n=n: n * 2, name=f"job-{n}", cpu=2) for n in range(6)]
+        run_id = uuid.uuid4().hex[:8]
+        job_ids = [multi_worker_cluster.submit(lambda n=n: n * 2, name=f"mw-job-{run_id}-{n}", cpu=2) for n in range(6)]
 
         # Wait for all to complete
         for job_id in job_ids:
@@ -427,7 +447,7 @@ class TestPorts:
             assert info.ports["http"] > 0
             assert info.ports["grpc"] > 0
 
-        job_id = test_cluster.submit(port_job, name="port-job", ports=["http", "grpc"])
+        job_id = test_cluster.submit(port_job, name=unique_name("port-job"), ports=["http", "grpc"])
         status = test_cluster.wait(job_id, timeout=30)
         # Job succeeds only if ports were correctly passed
         assert status["state"] == "JOB_STATE_SUCCEEDED", f"Job failed: {status}"
@@ -443,16 +463,17 @@ class TestJobInfo:
 
     def test_job_info_contextvar(self, test_cluster):
         """JobInfo is available via contextvar with correct job_id and worker_id."""
+        job_name = unique_name("test-job-info")
 
-        def test_fn():
+        def test_fn(expected_job_id):
             info = get_job_info()
             assert info is not None
-            assert info.job_id == "test-job-info"
+            assert info.job_id == expected_job_id
             assert info.worker_id is not None
             assert "actor" in info.ports
             return info.job_id
 
-        job_id = test_cluster.submit(test_fn, name="test-job-info", ports=["actor"])
+        job_id = test_cluster.submit(test_fn, job_name, name=job_name, ports=["actor"])
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
@@ -470,22 +491,23 @@ class TestJobInfo:
             assert len(port_values) == len(set(port_values))
             return info.ports
 
-        job_id = test_cluster.submit(test_fn, name="test-job-ports", ports=["actor", "metrics", "custom"])
+        job_id = test_cluster.submit(test_fn, name=unique_name("test-job-ports"), ports=["actor", "metrics", "custom"])
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
     def test_job_info_task_fields(self, test_cluster):
         """JobInfo contains task fields (task_id, task_index, num_tasks)."""
+        job_name = unique_name("test-task-fields")
 
-        def test_fn():
+        def test_fn(expected_job_name):
             info = get_job_info()
             assert info is not None
-            assert info.task_id == "test-task-fields/task-0"
+            assert info.task_id == f"{expected_job_name}/task-0"
             assert info.task_index == 0
             assert info.num_tasks == 1
             return info.task_id
 
-        job_id = test_cluster.submit(test_fn, name="test-task-fields")
+        job_id = test_cluster.submit(test_fn, job_name, name=job_name)
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
@@ -500,8 +522,9 @@ class TestEndpoints:
 
     def test_endpoint_registration_from_job(self, test_cluster):
         """Job can register endpoints that are visible externally."""
+        endpoint_prefix = f"test-{uuid.uuid4().hex[:8]}"
 
-        def register_endpoint_job():
+        def register_endpoint_job(prefix):
             info = get_job_info()
             if info is None:
                 raise ValueError("JobInfo not available")
@@ -510,9 +533,10 @@ class TestEndpoints:
 
             client = ControllerServiceClientSync(address=info.controller_address, timeout_ms=5000)
             try:
+                endpoint_name = f"{prefix}/actor1"
                 # Register an endpoint
                 request = cluster_pb2.Controller.RegisterEndpointRequest(
-                    name="test/actor1",
+                    name=endpoint_name,
                     address="localhost:5000",
                     job_id=info.job_id,
                     metadata={"type": "actor"},
@@ -521,10 +545,10 @@ class TestEndpoints:
                 assert response.endpoint_id
 
                 # List endpoints to verify
-                list_request = cluster_pb2.Controller.ListEndpointsRequest(prefix="test/")
+                list_request = cluster_pb2.Controller.ListEndpointsRequest(prefix=f"{prefix}/")
                 list_response = client.list_endpoints(list_request)
                 assert len(list_response.endpoints) == 1
-                assert list_response.endpoints[0].name == "test/actor1"
+                assert list_response.endpoints[0].name == endpoint_name
                 assert list_response.endpoints[0].metadata["type"] == "actor"
 
                 # Keep job alive briefly so endpoint stays registered
@@ -532,14 +556,17 @@ class TestEndpoints:
             finally:
                 client.close()
 
-        job_id = test_cluster.submit(register_endpoint_job, name="endpoint-job")
+        job_id = test_cluster.submit(register_endpoint_job, endpoint_prefix, name=unique_name("endpoint-job"))
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED", f"Job failed: {status}"
 
     def test_endpoint_prefix_matching(self, test_cluster):
         """Endpoint prefix matching works correctly."""
+        run_id = uuid.uuid4().hex[:8]
+        ns1 = f"ns1-{run_id}"
+        ns2 = f"ns2-{run_id}"
 
-        def register_multiple_endpoints():
+        def register_multiple_endpoints(ns1_prefix, ns2_prefix):
             info = get_job_info()
             if info is None:
                 raise ValueError("JobInfo not available")
@@ -549,10 +576,10 @@ class TestEndpoints:
             try:
                 # Register endpoints with various prefixes
                 for name, addr in [
-                    ("ns1/actor1", "host1:5000"),
-                    ("ns1/actor2", "host2:5001"),
-                    ("ns1/service/actor3", "host3:5002"),
-                    ("ns2/actor1", "host4:5003"),
+                    (f"{ns1_prefix}/actor1", "host1:5000"),
+                    (f"{ns1_prefix}/actor2", "host2:5001"),
+                    (f"{ns1_prefix}/service/actor3", "host3:5002"),
+                    (f"{ns2_prefix}/actor1", "host4:5003"),
                 ]:
                     request = cluster_pb2.Controller.RegisterEndpointRequest(
                         name=name,
@@ -562,20 +589,22 @@ class TestEndpoints:
                     client.register_endpoint(request)
 
                 # Test prefix matching
-                ns1_all = client.list_endpoints(cluster_pb2.Controller.ListEndpointsRequest(prefix="ns1/"))
+                ns1_all = client.list_endpoints(cluster_pb2.Controller.ListEndpointsRequest(prefix=f"{ns1_prefix}/"))
                 assert len(ns1_all.endpoints) == 3
 
-                ns1_service = client.list_endpoints(cluster_pb2.Controller.ListEndpointsRequest(prefix="ns1/service/"))
+                ns1_service = client.list_endpoints(
+                    cluster_pb2.Controller.ListEndpointsRequest(prefix=f"{ns1_prefix}/service/")
+                )
                 assert len(ns1_service.endpoints) == 1
-                assert ns1_service.endpoints[0].name == "ns1/service/actor3"
+                assert ns1_service.endpoints[0].name == f"{ns1_prefix}/service/actor3"
 
-                ns2 = client.list_endpoints(cluster_pb2.Controller.ListEndpointsRequest(prefix="ns2/"))
-                assert len(ns2.endpoints) == 1
+                ns2_all = client.list_endpoints(cluster_pb2.Controller.ListEndpointsRequest(prefix=f"{ns2_prefix}/"))
+                assert len(ns2_all.endpoints) == 1
 
                 time.sleep(0.5)
             finally:
                 client.close()
 
-        job_id = test_cluster.submit(register_multiple_endpoints, name="prefix-job")
+        job_id = test_cluster.submit(register_multiple_endpoints, ns1, ns2, name=unique_name("prefix-job"))
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED", f"Job failed: {status}"

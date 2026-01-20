@@ -27,7 +27,8 @@ from typing import Any, Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerWorker, ControllerJob
+from iris.cluster.controller.events import Event, EventType
+from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerWorker
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
@@ -98,19 +99,19 @@ class ControllerServiceImpl:
                     parent_job_id=request.parent_job_id,
                 )
 
-            parent_job_id = JobId(request.parent_job_id) if request.parent_job_id else None
-
-            job = ControllerJob(
-                job_id=JobId(job_id),
-                request=request,
-                submitted_at_ms=now_ms(),
-                parent_job_id=parent_job_id,
+            # Submit job via event API
+            self._state.handle_event(
+                Event(
+                    EventType.JOB_SUBMITTED,
+                    job_id=JobId(job_id),
+                    request=request,
+                    timestamp_ms=now_ms(),
+                )
             )
-
-            tasks = self._state.add_job(job)
             self._scheduler.wake()
 
-            logger.info(f"Job {job_id} submitted with {len(tasks)} task(s)")
+            num_tasks = len(self._state.get_job_tasks(JobId(job_id)))
+            logger.info(f"Job {job_id} submitted with {num_tasks} task(s)")
             return cluster_pb2.Controller.LaunchJobResponse(job_id=job_id)
 
     def get_job_status(
@@ -199,30 +200,31 @@ class ControllerServiceImpl:
         if not job:
             raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
 
-        self._terminate_job_tree(job)
+        self._terminate_job_tree(JobId(request.job_id))
         return cluster_pb2.Empty()
 
-    def _terminate_job_tree(self, job: ControllerJob) -> None:
+    def _terminate_job_tree(self, job_id: JobId) -> None:
         """Recursively terminate a job and all its descendants (depth-first)."""
+        job = self._state.get_job(job_id)
+        if not job:
+            return
+
         # First, terminate all children recursively
-        children = self._state.get_children(job.job_id)
+        children = self._state.get_children(job_id)
         for child in children:
-            self._terminate_job_tree(child)
+            self._terminate_job_tree(child.job_id)
 
         if job.is_finished():
             return
 
-        # Kill all tasks for this job
-        for task in self._state.get_job_tasks(job.job_id):
-            if not task.is_finished():
-                self._state.transition_task(
-                    task.task_id,
-                    cluster_pb2.TASK_STATE_KILLED,
-                    error="Terminated by user",
-                )
-
-        # Mark job as killed
-        job.transition(cluster_pb2.JOB_STATE_KILLED, error="Terminated by user")
+        # Cancel the job via event API (this will kill all tasks)
+        self._state.handle_event(
+            Event(
+                EventType.JOB_CANCELLED,
+                job_id=job_id,
+                reason="Terminated by user",
+            )
+        )
 
     def list_jobs(
         self,
@@ -356,11 +358,14 @@ class ControllerServiceImpl:
 
         new_state = request.state
 
-        self._state.transition_task(
-            task_id,
-            new_state,
-            error=request.error if request.error else None,
-            exit_code=request.exit_code if request.exit_code else None,
+        self._state.handle_event(
+            Event(
+                EventType.TASK_STATE_CHANGED,
+                task_id=task_id,
+                new_state=new_state,
+                error=request.error if request.error else None,
+                exit_code=request.exit_code if request.exit_code else None,
+            )
         )
 
         logger.debug(f"Task {task_id} reported state {new_state}")

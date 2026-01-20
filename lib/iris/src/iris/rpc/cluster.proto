@@ -25,17 +25,14 @@ message Empty {}
 enum JobState {
   JOB_STATE_UNSPECIFIED = 0;
   JOB_STATE_PENDING = 1;
-  JOB_STATE_BUILDING = 2;
   JOB_STATE_RUNNING = 3;
   JOB_STATE_SUCCEEDED = 4;
   JOB_STATE_FAILED = 5;
   JOB_STATE_KILLED = 6;
-  JOB_STATE_WORKER_FAILED = 7;  // Worker died, job may be retried
   JOB_STATE_UNSCHEDULABLE = 8;  // Couldn't be scheduled within timeout
 }
 
 // Task state mirrors job state - a task is a single unit of execution within a job
-// TaskState is identical to JobState but distinct for type safety and clarity
 enum TaskState {
   TASK_STATE_UNSPECIFIED = 0;
   TASK_STATE_PENDING = 1;

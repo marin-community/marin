@@ -26,6 +26,7 @@ import uvicorn
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.scheduler import Scheduler, SchedulingTransaction
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.events import Event, EventType
 from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
@@ -238,15 +239,17 @@ class Controller:
     ) -> None:
         """Dispatch a task to a worker via RPC.
 
-        State is already updated by tentatively_assign(). The worker reports all state
+        Worker assignment is already handled by the scheduler's tentatively_assign().
+        This method creates an attempt and sends the RPC. The worker reports all state
         transitions (BUILDING, RUNNING, SUCCEEDED, etc.) via ReportTaskState.
         """
         job = self._state.get_job(task.job_id)
         if not job:
             return
 
-        # Mark task as dispatched and update job state counts
-        self._state.mark_task_dispatched(task, worker.worker_id)
+        # Create attempt for this dispatch. Scheduler already assigned to worker,
+        # so we just need to track the attempt.
+        task.create_attempt(worker.worker_id, initial_state=cluster_pb2.TASK_STATE_PENDING)
 
         try:
             stub = self._stub_factory.get_stub(worker.address)
@@ -283,10 +286,13 @@ class Controller:
         job = self._state.get_job(task.job_id)
         timeout_seconds = job.request.scheduling_timeout_seconds if job else 0
         logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout_seconds}s), marking as UNSCHEDULABLE")
-        self._state.transition_task(
-            task.task_id,
-            cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-            error=f"Scheduling timeout exceeded ({timeout_seconds}s)",
+        self._state.handle_event(
+            Event(
+                EventType.TASK_STATE_CHANGED,
+                task_id=task.task_id,
+                new_state=cluster_pb2.TASK_STATE_UNSCHEDULABLE,
+                error=f"Scheduling timeout exceeded ({timeout_seconds}s)",
+            )
         )
 
     def _check_worker_timeouts(self) -> None:
@@ -296,18 +302,17 @@ class Controller:
 
         for worker in self._state.list_all_workers():
             if worker.healthy and (current_time_ms - worker.last_heartbeat_ms) > timeout_ms:
-                self._state.mark_worker_unhealthy(worker.worker_id)
                 logger.warning(
                     f"Worker {worker.worker_id} timed out (no heartbeat for {self._config.worker_timeout_seconds}s)"
                 )
-
-                # Retry tasks that were running on the timed-out worker
-                for task_id in list(worker.running_tasks):
-                    self._state.transition_task(
-                        task_id,
-                        cluster_pb2.TASK_STATE_WORKER_FAILED,
+                # Use WORKER_FAILED event which will cascade to running tasks
+                self._state.handle_event(
+                    Event(
+                        EventType.WORKER_FAILED,
+                        worker_id=worker.worker_id,
                         error=f"Worker {worker.worker_id} timed out",
                     )
+                )
 
     def _run_server(self) -> None:
         try:
