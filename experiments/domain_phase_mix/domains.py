@@ -25,7 +25,7 @@ tokenization/download operations.
 from levanter.data.text import ChatLmDatasetFormat
 
 from experiments.defaults import default_tokenize
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_models import MARIN_CHAT_TEMPLATE, marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino_subset
 from experiments.pretraining_datasets.nemotron import tokenize_nemotron, NEMOTRON_WEIGHTS
@@ -351,7 +351,7 @@ def _create_sft_step(dataset_name: str):
             name=f"sft/{dataset_name}",
             dataset=dataset / "**/*.jsonl.gz",
             tokenizer=marin_tokenizer,
-            format=ChatLmDatasetFormat(),
+            format=ChatLmDatasetFormat(chat_template=MARIN_CHAT_TEMPLATE),
         )
         # Use pre-tokenized path if available
         if dataset_name in SFT_TOKENIZED_PATHS:
