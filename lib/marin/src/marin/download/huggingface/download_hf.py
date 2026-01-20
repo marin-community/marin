@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 import draccus
 import fsspec
 from huggingface_hub import HfFileSystem
+from huggingface_hub.errors import HfHubHTTPError
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 from zephyr import Backend, Dataset
@@ -89,6 +90,8 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
     # Use 256 MB chunk size for large files
     chunk_size = 256 * 1024 * 1024
     max_retries = 10
+    # 10 minutes max sleep
+    max_sleep = 10 * 60
 
     # Retry when there is an error, such as hf rate limit
     for attempt in range(max_retries):
@@ -101,8 +104,22 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path}")
             return {"file_path": file_path, "status": "success"}
         except Exception as e:
-            wait_time = min(2**attempt, 2**10) + random.uniform(0, 5)
-            logger.warning(f"Attempt {attempt + 1} failed for {file_path}: {e}, retrying in {wait_time:.1f}s")
+            wait_base = 2**attempt
+
+            if isinstance(e, HfHubHTTPError):
+                TOO_MANY_REQUESTS = 429
+                if e.response.status_code == TOO_MANY_REQUESTS:
+                    # NOTE: RateLimit	"api\|pages\|resolvers";r=[remaining];t=[seconds remaining until reset]
+                    try:
+                        wait_base += int(e.response.headers["RateLimit"].split(";")[-1].split("=")[-1])
+                    except Exception:
+                        logger.exception("Failed to parse RateLimit header")
+
+            jitter = random.uniform(0, wait_base)
+            wait_time = wait_base + jitter
+            wait_time = min(wait_time, max_sleep)
+
+            logger.exception(f"Attempt {attempt + 1} failed for {file_path}, retrying in {wait_time:.1f}s")
             time.sleep(wait_time)
     raise RuntimeError(f"Failed to download {file_path} after {max_retries} attempts")
 
