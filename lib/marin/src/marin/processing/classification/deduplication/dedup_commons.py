@@ -138,7 +138,7 @@ class DupCounters:
         }
 
 
-def collect_input_files(*, input_paths: str | list[str], filetypes: list[str]) -> list[str]:
+def _collect_input_files(*, input_paths: str | list[str], filetypes: list[str]) -> list[str]:
     """Given an input path or list of paths, collect all matching files"""
     input_paths = input_paths if isinstance(input_paths, list) else [input_paths]
     all_files = []
@@ -156,7 +156,7 @@ def collect_input_files(*, input_paths: str | list[str], filetypes: list[str]) -
     return all_files
 
 
-def init_wandb(config: DedupConfig):
+def _init_wandb(config: DedupConfig):
     """
     Initialize wandb if configured.
 
@@ -184,14 +184,14 @@ def init_wandb(config: DedupConfig):
     )
 
 
-def get_extension(file_path: str) -> str:
+def _get_extension(file_path: str) -> str:
     for ext in sorted(SUPPORTED_EXTENSIONS, key=len, reverse=True):
         if file_path.endswith(ext):
             return ext
     raise ValueError(f"Unsupported extension: {file_path}.")
 
 
-def load_batches(file_path: str, columns: list[str] | None = None, **parquet_kwargs) -> Iterator[pa.RecordBatch]:
+def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kwargs) -> Iterator[pa.RecordBatch]:
     # Private function for now to isolate the `pa.RecordBatch` experiment
     if not file_path.endswith(SUPPORTED_EXTENSIONS):
         raise ValueError(f"Unsupported extension: {file_path}.")
@@ -208,7 +208,7 @@ def load_batches(file_path: str, columns: list[str] | None = None, **parquet_kwa
             yield from pa_json.read_json(f).to_batches()
 
 
-def load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
+def _load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
     shard_dup_map = {}
 
     def add_to_dup_map(record: dict):
@@ -227,7 +227,7 @@ def load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
     return shard_dup_map
 
 
-def find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
+def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
     # Determine base path for rebasing
     base_path = input_path[0] if isinstance(input_path, list) else input_path
     if base_path in input_files:
@@ -236,7 +236,7 @@ def find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
     return base_path
 
 
-def compute_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:
+def _compute_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:
     with log_time(f"Compute deduplication stats from {len(shards)} shards"):
         result: DupCounters = Backend.execute(  # type: ignore[bad-assignment]
             Dataset.from_list(shards)
@@ -264,7 +264,7 @@ class DupeReduceResult(TypedDict):
     canonical: str | None
 
 
-def count_reduce(key: str, items: Iterator[pa.StructScalar], *, canonical_id: str) -> DupeReduceResult:
+def _count_reduce(key: str, items: Iterator[pa.StructScalar], *, canonical_id: str) -> DupeReduceResult:
     head = next(items)
     doc_cnt = sum(map(lambda _: 1, items)) + 1
     if doc_cnt == 1:

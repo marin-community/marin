@@ -18,7 +18,16 @@ import logging
 from marin.utils import rebase_file_path
 import pyarrow as pa
 from fray.job.context import create_job_ctx
-from marin.processing.classification.deduplication import dedup_commons
+from marin.processing.classification.deduplication.dedup_commons import (
+    DedupConfig,
+    DedupMode,
+    DupCounters,
+    _collect_input_files,
+    _find_base_path,
+    _get_extension,
+    _init_wandb,
+    _load_batches,
+)
 from marin.processing.classification.deduplication.connected_components import connected_components
 from marin.utilities.time_logger import log_time
 import wandb
@@ -29,14 +38,14 @@ from zephyr.readers import InputFileSpec, load_file
 logger = logging.getLogger(__name__)
 
 
-def _compute_fuzzy_dedup_stats(shards: list[str], method: str, level: str) -> dedup_commons.DupCounters:
+def _compute_fuzzy_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:
     with log_time(f"Compute fuzzy deduplication stats from {len(shards)} shards"):
-        result: dedup_commons.DupCounters = Backend.execute(  # type: ignore[bad-assignment]
+        result: DupCounters = Backend.execute(  # type: ignore[bad-assignment]
             Dataset.from_list(shards).load_parquet(columns=["component_id"])
             # Compute the per-component statistics and then roll them up into a single counter group
             .group_by(
                 key=lambda r: r["component_id"],
-                reducer=lambda _, items: dedup_commons.DupCounters(
+                reducer=lambda _, items: DupCounters(
                     method=method,
                     level=level,
                     total=(total := sum(1 for _ in items)),
@@ -44,7 +53,7 @@ def _compute_fuzzy_dedup_stats(shards: list[str], method: str, level: str) -> de
                     unique=1,
                     dup_clusters=int(total > 1),
                 ),
-            ).reduce(partial(sum, start=dedup_commons.DupCounters(method=method, level=level))),
+            ).reduce(partial(sum, start=DupCounters(method=method, level=level))),
             context=create_job_ctx("threadpool"),
         )[0]
     return result
@@ -70,16 +79,16 @@ def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
     return shard_dup_map
 
 
-def dedup_fuzzy_document(config: dedup_commons.DedupConfig):
+def dedup_fuzzy_document(config: DedupConfig):
     """Perform fuzzy document-level deduplication"""
 
     import dupekit
     from dupekit import Transformation
 
-    input_files = dedup_commons.collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
+    input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
 
     ctx = create_job_ctx("auto", memory=config.ray_memory, num_cpus=config.ray_num_cpus)
-    dedup_commons.init_wandb(config)
+    _init_wandb(config)
 
     def compute_minhash_lsh_batches(batch: pa.RecordBatch) -> Iterator[dict]:
         """
@@ -115,7 +124,7 @@ def dedup_fuzzy_document(config: dedup_commons.DedupConfig):
 
     doc_minhash_lsh = (
         Dataset.from_list(input_files)
-        .flat_map(lambda f: dedup_commons.load_batches(f, columns=[config.text_field, "id"]))
+        .flat_map(lambda f: _load_batches(f, columns=[config.text_field, "id"]))
         .reshard(num_shards=config.processes if len(input_files) < 42 else None)
         .flat_map(compute_minhash_lsh_batches)
     )
@@ -150,10 +159,10 @@ def dedup_fuzzy_document(config: dedup_commons.DedupConfig):
         for doc in docs:
             is_fuzzy_dup = fuzzy_dup_map.get(doc["id"], False)
             doc["attributes"] = {}
-            doc["attributes"][str(dedup_commons.DedupMode.FUZZY_DOCUMENT)] = is_fuzzy_dup
+            doc["attributes"][str(DedupMode.FUZZY_DOCUMENT)] = is_fuzzy_dup
             yield doc
 
-    base_path = dedup_commons.find_base_path(config.input_paths, input_files)
+    base_path = _find_base_path(config.input_paths, input_files)
     Backend.execute(
         Dataset.from_list(input_files).flat_map(lambda p: load_file(InputFileSpec(path=p, columns=["id"])))
         # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
@@ -163,7 +172,7 @@ def dedup_fuzzy_document(config: dedup_commons.DedupConfig):
                 base_path,
                 input_files[shard_idx],
                 f"{config.output_path}/data",
-                old_extension=dedup_commons.get_extension(input_files[shard_idx]),
+                old_extension=_get_extension(input_files[shard_idx]),
                 new_extension=".jsonl.gz",
             ),
             skip_existing=True,
@@ -175,4 +184,4 @@ def dedup_fuzzy_document(config: dedup_commons.DedupConfig):
     if wandb.run:
         wandb.finish()
 
-    return {"success": True, "mode": str(dedup_commons.DedupMode.FUZZY_DOCUMENT)} | fuzzy_cnt.to_dict()
+    return {"success": True, "mode": str(DedupMode.FUZZY_DOCUMENT)} | fuzzy_cnt.to_dict()
