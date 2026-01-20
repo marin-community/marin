@@ -142,7 +142,7 @@ def main(
     weight_configs_step, training_steps = experiment.create_swarm_steps(
         n_runs=n_runs, seed=seed, name_prefix=name_prefix
     )
-    
+
     analysis_step = create_analysis_step(
         weight_configs_step=weight_configs_step,
         name_prefix=name_prefix,

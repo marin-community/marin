@@ -22,13 +22,15 @@ Domains are defined lazily to avoid import-time execution of expensive
 tokenization/download operations.
 """
 
+from functools import partial
+
 from levanter.data.text import ChatLmDatasetFormat
 
 from experiments.defaults import default_tokenize
 from experiments.marin_models import MARIN_CHAT_TEMPLATE, marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino_subset
-from experiments.pretraining_datasets.nemotron import tokenize_nemotron, NEMOTRON_WEIGHTS
+from experiments.pretraining_datasets.nemotron import tokenize_nemotron
 from experiments.pretraining_datasets.simple import downloads as simple_downloads, _tokenize_simple
 
 from experiments.domain_phase_mix.config import Domain, DatasetComponent
@@ -96,98 +98,82 @@ def _get_nemotron_tokenized():
     return _nemotron_tokenized_cache
 
 
-def _nemotron_hq_actual():
-    return _get_nemotron_tokenized()["nemotron_cc/hq_actual"]
+def _nemotron_split(split: str):
+    """Get a specific Nemotron split (lazy)."""
+    return _get_nemotron_tokenized()[split]
 
 
-def _nemotron_medium_high():
-    return _get_nemotron_tokenized()["nemotron_cc/medium_high"]
-
-
-def _nemotron_medium():
-    return _get_nemotron_tokenized()["nemotron_cc/medium"]
-
-
-def _nemotron_hq_synth():
-    return _get_nemotron_tokenized()["nemotron_cc/hq_synth"]
-
-
-def _nemotron_medium_low():
-    return _get_nemotron_tokenized()["nemotron_cc/medium_low"]
-
-
-def _nemotron_low_actual():
-    return _get_nemotron_tokenized()["nemotron_cc/low_actual"]
-
-
-# Conversion factor: ~500B tokens per TiB for typical text data
-TIB_TO_TOKENS_B = 500.0
+# Token counts from GCS caches (queried via count_tokens.py)
+NEMOTRON_TOKENS = {
+    "nemotron_cc/hq_actual": 537620495374,  # 537.62B tokens
+    "nemotron_cc/hq_synth": 1497529159716,  # 1497.53B tokens
+    "nemotron_cc/medium_high": 489053720257,  # 489.05B tokens
+    "nemotron_cc/medium": 1960603657130,  # 1960.60B tokens
+    "nemotron_cc/medium_low": 860999424951,  # 861.00B tokens
+    "nemotron_cc/low_actual": 384102407349,  # 384.10B tokens
+}
 
 # High-quality Nemotron splits (no synthetic)
-# Convert TiB to billions of tokens for consistent units
 NEMOTRON_HQ_DOMAIN = register_domain(
     Domain(
         name="nemotron_hq",
         components=[
             DatasetComponent(
                 name="nemotron_cc/hq_actual",
-                step_fn=_nemotron_hq_actual,
-                weight=NEMOTRON_WEIGHTS.get("nemotron_cc/hq_actual", 0.91) * TIB_TO_TOKENS_B,
+                step_fn=partial(_nemotron_split, "nemotron_cc/hq_actual"),
+                weight=NEMOTRON_TOKENS["nemotron_cc/hq_actual"],
             ),
             DatasetComponent(
                 name="nemotron_cc/medium_high",
-                step_fn=_nemotron_medium_high,
-                weight=NEMOTRON_WEIGHTS.get("nemotron_cc/medium_high", 0.82) * TIB_TO_TOKENS_B,
+                step_fn=partial(_nemotron_split, "nemotron_cc/medium_high"),
+                weight=NEMOTRON_TOKENS["nemotron_cc/medium_high"],
             ),
             DatasetComponent(
                 name="nemotron_cc/medium",
-                step_fn=_nemotron_medium,
-                weight=NEMOTRON_WEIGHTS.get("nemotron_cc/medium", 3.38) * TIB_TO_TOKENS_B,
+                step_fn=partial(_nemotron_split, "nemotron_cc/medium"),
+                weight=NEMOTRON_TOKENS["nemotron_cc/medium"],
             ),
         ],
-        # natural_proportion computed from total_weight (~2.5T tokens)
         description="High-quality Nemotron CC splits (hq_actual, medium_high, medium) - no synthetic data",
     )
 )
 
 # Full Nemotron domain (including synthetic and lower quality)
-# Convert TiB to billions of tokens for consistent units
 NEMOTRON_FULL_DOMAIN = register_domain(
     Domain(
         name="nemotron_full",
         components=[
             DatasetComponent(
                 name="nemotron_cc/hq_actual",
-                step_fn=_nemotron_hq_actual,
-                weight=NEMOTRON_WEIGHTS.get("nemotron_cc/hq_actual", 0.91) * TIB_TO_TOKENS_B,
+                step_fn=partial(_nemotron_split, "nemotron_cc/hq_actual"),
+                weight=NEMOTRON_TOKENS["nemotron_cc/hq_actual"],
             ),
             DatasetComponent(
                 name="nemotron_cc/hq_synth",
-                step_fn=_nemotron_hq_synth,
-                weight=NEMOTRON_WEIGHTS.get("nemotron_cc/hq_synth", 0.5) * TIB_TO_TOKENS_B,
+                step_fn=partial(_nemotron_split, "nemotron_cc/hq_synth"),
+                weight=NEMOTRON_TOKENS["nemotron_cc/hq_synth"],
             ),
             DatasetComponent(
                 name="nemotron_cc/medium_high",
-                step_fn=_nemotron_medium_high,
-                weight=NEMOTRON_WEIGHTS.get("nemotron_cc/medium_high", 0.82) * TIB_TO_TOKENS_B,
+                step_fn=partial(_nemotron_split, "nemotron_cc/medium_high"),
+                weight=NEMOTRON_TOKENS["nemotron_cc/medium_high"],
             ),
             DatasetComponent(
                 name="nemotron_cc/medium",
-                step_fn=_nemotron_medium,
-                weight=NEMOTRON_WEIGHTS.get("nemotron_cc/medium", 3.38) * TIB_TO_TOKENS_B,
+                step_fn=partial(_nemotron_split, "nemotron_cc/medium"),
+                weight=NEMOTRON_TOKENS["nemotron_cc/medium"],
             ),
             DatasetComponent(
                 name="nemotron_cc/medium_low",
-                step_fn=_nemotron_medium_low,
-                weight=NEMOTRON_WEIGHTS.get("nemotron_cc/medium_low", 1.0) * TIB_TO_TOKENS_B,
+                step_fn=partial(_nemotron_split, "nemotron_cc/medium_low"),
+                weight=NEMOTRON_TOKENS["nemotron_cc/medium_low"],
             ),
             DatasetComponent(
                 name="nemotron_cc/low_actual",
-                step_fn=_nemotron_low_actual,
-                weight=NEMOTRON_WEIGHTS.get("nemotron_cc/low_actual", 0.5) * TIB_TO_TOKENS_B,
+                step_fn=partial(_nemotron_split, "nemotron_cc/low_actual"),
+                weight=NEMOTRON_TOKENS["nemotron_cc/low_actual"],
             ),
         ],
-        # natural_proportion computed from total_weight
         description="Full Nemotron CC dataset including synthetic and lower quality splits",
     )
 )
@@ -242,77 +228,54 @@ FINEWEB_EDU_DOMAIN = register_domain(
 _dolmino_cache: dict = {}
 
 
-def _get_dolmino_split(split: str):
+def _dolmino_split(split: str):
     """Get a Dolmino split tokenized dataset (lazy)."""
     if split not in _dolmino_cache:
         _dolmino_cache[split] = tokenize_dolmino_subset(split)
     return _dolmino_cache[split]
 
 
-def _dolmino_dclm():
-    return _get_dolmino_split("dclm")
-
-
-def _dolmino_flan():
-    return _get_dolmino_split("flan")
-
-
-def _dolmino_pes2o():
-    return _get_dolmino_split("pes2o")
-
-
-def _dolmino_stackexchange():
-    return _get_dolmino_split("stackexchange")
-
-
-def _dolmino_wiki():
-    return _get_dolmino_split("wiki")
-
-
-# Weights based on token counts from https://huggingface.co/datasets/allenai/dolmino-mix-1124
-# Using token counts in billions as weights (proportional sampling)
-DOLMINO_WEIGHTS = {
-    "dclm": 752.0,  # 752B tokens - HQ web pages
-    "flan": 17.0,  # 17B tokens - instruction-tuning data
-    "pes2o": 58.6,  # 58.6B tokens - STEM papers
-    "stackexchange": 1.26,  # 1.26B tokens - Q&A
-    "wiki": 3.7,  # 3.7B tokens - encyclopedic
+# Token counts from GCS caches (queried via count_tokens.py)
+DOLMINO_TOKENS = {
+    "dclm": 746292199610,  # 746.29B tokens - HQ web pages
+    "flan": 16971415899,  # 16.97B tokens - instruction-tuning data
+    "pes2o": 58517080692,  # 58.52B tokens - STEM papers
+    "stackexchange": 1265589187,  # 1.27B tokens - Q&A
+    "wiki": 3669138258,  # 3.67B tokens - encyclopedic
 }
-# Total: ~832.56B tokens
+# Total: ~827B tokens
 
 # Full Dolmino domain with all non-math splits
-# Component weights are in billions of tokens, total ~833B tokens
 DOLMINO_DOMAIN = register_domain(
     Domain(
         name="dolmino",
         components=[
             DatasetComponent(
                 name="dolmino/dclm",
-                step_fn=_dolmino_dclm,
-                weight=DOLMINO_WEIGHTS["dclm"],
+                step_fn=partial(_dolmino_split, "dclm"),
+                weight=DOLMINO_TOKENS["dclm"],
             ),
             DatasetComponent(
                 name="dolmino/flan",
-                step_fn=_dolmino_flan,
-                weight=DOLMINO_WEIGHTS["flan"],
+                step_fn=partial(_dolmino_split, "flan"),
+                weight=DOLMINO_TOKENS["flan"],
             ),
             DatasetComponent(
                 name="dolmino/pes2o",
-                step_fn=_dolmino_pes2o,
-                weight=DOLMINO_WEIGHTS["pes2o"],
+                step_fn=partial(_dolmino_split, "pes2o"),
+                weight=DOLMINO_TOKENS["pes2o"],
             ),
             DatasetComponent(
                 name="dolmino/stackexchange",
-                step_fn=_dolmino_stackexchange,
-                weight=DOLMINO_WEIGHTS["stackexchange"],
+                step_fn=partial(_dolmino_split, "stackexchange"),
+                weight=DOLMINO_TOKENS["stackexchange"],
             ),
             DatasetComponent(
                 name="dolmino/wiki",
-                step_fn=_dolmino_wiki,
-                weight=DOLMINO_WEIGHTS["wiki"],
+                step_fn=partial(_dolmino_split, "wiki"),
+                weight=DOLMINO_TOKENS["wiki"],
             ),
         ],
-        # natural_proportion computed from total_weight (~833B tokens)
         description="Full Dolmino dataset (dclm, flan, pes2o, stackexchange, wiki) for mid-training",
     )
 )
@@ -322,29 +285,20 @@ DOLMINO_DOMAIN = register_domain(
 # SFT DOMAINS
 # ============================================================================
 
-# SFT dataset definitions with estimated token counts (in billions)
-# Token estimates based on sample counts and typical tokens/sample for each type
-SFT_DATASETS = {
-    "tulu_3_sft_mixture": {
-        "hf_id": "allenai/tulu-3-sft-mixture",
-        "sample_count": 939343,
-        "tokens_b": 1.61,  # per Olmo3 technical report
-        "description": "General instruction tuning mixture",
-    },
-    "openthoughts_114k_math": {
-        "hf_id": "open-r1/OpenThoughts-114k-math",
-        "sample_count": 89120,
-        "tokens_b": 0.57,  # 89K samples * ~6367 tokens/sample (per HF stats)
-        "description": "Math reasoning with chain-of-thought",
-    },
-    "verifiable_math_problems": {
-        "hf_id": "PrimeIntellect/verifiable-math-problems",
-        "sample_count": 777457,
-        "tokens_b": 0.4,  # ~777K samples * ~500 tokens/sample (math Q&A)
-        "description": "Verifiable math problem solving",
-    },
+# Token counts from GCS caches (queried via count_tokens.py)
+SFT_TOKENS = {
+    "tulu_3_sft_mixture": 749008790,  # 0.75B tokens
+    "openthoughts_114k_math": 72964948,  # 0.07B tokens
+    "verifiable_math_problems": 382056624,  # 0.38B tokens
 }
-# Total SFT: ~1.7B tokens
+# Total SFT: ~1.20B tokens
+
+# SFT dataset HuggingFace IDs
+SFT_HF_IDS = {
+    "tulu_3_sft_mixture": "allenai/tulu-3-sft-mixture",
+    "openthoughts_114k_math": "open-r1/OpenThoughts-114k-math",
+    "verifiable_math_problems": "PrimeIntellect/verifiable-math-problems",
+}
 
 # Pre-tokenized paths (if available)
 SFT_TOKENIZED_PATHS = {
@@ -356,10 +310,10 @@ SFT_TOKENIZED_PATHS = {
 _sft_cache: dict = {}
 
 
-def _create_sft_step(dataset_name: str):
-    """Create a tokenization step for an SFT dataset."""
+def _sft_step(dataset_name: str):
+    """Create a tokenization step for an SFT dataset (lazy)."""
     if dataset_name not in _sft_cache:
-        hf_id = SFT_DATASETS[dataset_name]["hf_id"]
+        hf_id = SFT_HF_IDS[dataset_name]
         dataset = get_instruction_dataset(hf_id, splits=["train"])
         step = default_tokenize(
             name=f"sft/{dataset_name}",
@@ -374,41 +328,27 @@ def _create_sft_step(dataset_name: str):
     return _sft_cache[dataset_name]
 
 
-def _tulu_3_sft():
-    return _create_sft_step("tulu_3_sft_mixture")
-
-
-def _openthoughts_math():
-    return _create_sft_step("openthoughts_114k_math")
-
-
-def _verifiable_math():
-    return _create_sft_step("verifiable_math_problems")
-
-
 # Math-focused SFT domain
-# Component weights in billions of tokens, total ~1.6B tokens
 MATH_SFT_DOMAIN = register_domain(
     Domain(
         name="math_sft",
         components=[
             DatasetComponent(
                 name="tulu_3_sft_mixture",
-                step_fn=_tulu_3_sft,
-                weight=SFT_DATASETS["tulu_3_sft_mixture"]["tokens_b"],
+                step_fn=partial(_sft_step, "tulu_3_sft_mixture"),
+                weight=SFT_TOKENS["tulu_3_sft_mixture"],
             ),
             DatasetComponent(
                 name="openthoughts_114k_math",
-                step_fn=_openthoughts_math,
-                weight=SFT_DATASETS["openthoughts_114k_math"]["tokens_b"],
+                step_fn=partial(_sft_step, "openthoughts_114k_math"),
+                weight=SFT_TOKENS["openthoughts_114k_math"],
             ),
             DatasetComponent(
                 name="verifiable_math_problems",
-                step_fn=_verifiable_math,
-                weight=SFT_DATASETS["verifiable_math_problems"]["tokens_b"],
+                step_fn=partial(_sft_step, "verifiable_math_problems"),
+                weight=SFT_TOKENS["verifiable_math_problems"],
             ),
         ],
-        # natural_proportion computed from total_weight (~1.6B tokens)
         description="Math-focused SFT datasets (Tulu-3 + math reasoning)",
     )
 )
@@ -420,11 +360,10 @@ GENERAL_SFT_DOMAIN = register_domain(
         components=[
             DatasetComponent(
                 name="tulu_3_sft_mixture",
-                step_fn=_tulu_3_sft,
-                weight=SFT_DATASETS["tulu_3_sft_mixture"]["tokens_b"],
+                step_fn=partial(_sft_step, "tulu_3_sft_mixture"),
+                weight=SFT_TOKENS["tulu_3_sft_mixture"],
             ),
         ],
-        # natural_proportion computed from total_weight (~0.94B tokens)
         description="General instruction tuning with Tulu-3 mixture",
     )
 )

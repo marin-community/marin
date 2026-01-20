@@ -206,9 +206,7 @@ def query_wandb_runs(
     return results
 
 
-def match_runs_to_configs(
-    runs: list[dict], configs: list[dict], experiment_name: str
-) -> list[dict]:
+def match_runs_to_configs(runs: list[dict], configs: list[dict], experiment_name: str) -> list[dict]:
     """Match W&B runs to weight configurations by run_id pattern.
 
     Extracts run_id from W&B run names and matches to the corresponding config.
