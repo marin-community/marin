@@ -202,17 +202,20 @@ def build_runtime_env_for_packages(
     req_path = f"/tmp/ray_reqs_{req_hash}.txt"
     Path(req_path).write_text(requirements_txt_str)
 
+    # Ray's runtime env installs into a virtualenv that includes system site-packages. Without `--ignore-installed`,
+    # pip can decide requirements are already satisfied by the base (anaconda) env, which can lead to ABI mismatches
+    # (e.g. pandas compiled against a different numpy). We set pip env vars to ensure stable installs even on older
+    # Ray versions that reject non-standard runtime_env pip fields.
+    pip_env_defaults = {
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PIP_NO_CACHE_DIR": "1",
+        "PIP_IGNORE_INSTALLED": "1",
+    }
+
     return dict(  # type: ignore[return-value]
-        env_vars=env_vars | {"PYTHONPATH": ":".join(python_path)},
+        env_vars=pip_env_defaults | env_vars | {"PYTHONPATH": ":".join(python_path)},
         pip={
             "packages": req_path,
             "pip_check": False,
-            # Ray's runtime env installs into a virtualenv that includes system site-packages. Without
-            # `--ignore-installed`, pip can decide requirements are already satisfied by the base (anaconda) env,
-            # which can lead to ABI mismatches (e.g. pandas compiled against a different numpy).
-            #
-            # Ray's internal pip runtime_env plugin supports `pip_install_options` even though it's not part of the
-            # public `RuntimeEnv(pip=...)` API; we rely on it here for cluster stability.
-            "pip_install_options": ["--disable-pip-version-check", "--no-cache-dir", "--ignore-installed"],
         },
     )
