@@ -25,11 +25,14 @@ import logging
 import os
 import re
 from collections.abc import Iterator, Sequence
+from typing import Any
 
 import draccus
+from fray.job.context import JobContext
+import humanfriendly
 import transformers
 from datasets import load_dataset_builder
-from fray.job import create_job_ctx, get_default_job_ctx
+from fray.job import create_job_ctx
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -91,6 +94,9 @@ class TokenizeConfig(TokenizeConfigBase):
     If True, allows 'test' or 'validation' in the train_paths. This is useful for datasets that have
     'test' or 'validation' in the file names, but are not actually test or validation sets.
     """
+    # TODO (rav): remove this once there's better way to capture this in datakit
+    zephyr_num_cpus: int = 2
+    zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -147,6 +153,10 @@ class HfTokenizeConfig(TokenizeConfigBase):
 
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
+
+    # TODO (rav): remove this once there's better way to capture this in datakit
+    zephyr_num_cpus: int = 2
+    zephyr_memory: int = humanfriendly.parse_size("32GB", binary=True)
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -245,9 +255,11 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
         yield current_group
 
 
-def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
+def _tokenize_batches(
+    *, ctx: JobContext, tokenizer_ref: Any, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]
+) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
+    tokenizer: transformers.PreTrainedTokenizer = ctx.get(tokenizer_ref)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     for batch in batches:
@@ -320,13 +332,20 @@ def tokenize(config: TokenizeConfigBase):
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
+        cluster_ctx = create_job_ctx(context_type="auto", num_cpus=config.zephyr_num_cpus, memory=config.zephyr_memory)
+        # NOTE: "broadcast" the tokenizer on the cluster context
+        tokenizer_ref = cluster_ctx.put(transformers.AutoTokenizer.from_pretrained(config.tokenizer))
+
         temp_shards = (
             ds.window(64)
-            .map_shard(lambda batches: _tokenize_batches(config, batches))
+            .map_shard(
+                lambda batches: _tokenize_batches(
+                    ctx=cluster_ctx, tokenizer_ref=tokenizer_ref, config=config, batches=batches
+                )
+            )
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
 
-        cluster_ctx = get_default_job_ctx()
         shard_paths = Backend.execute(temp_shards, context=cluster_ctx)
 
         logger.info("Computing exemplar for cache consolidation")
@@ -334,8 +353,13 @@ def tokenize(config: TokenizeConfigBase):
             Dataset.from_list(paths[0:1])
             .flat_map(load_file)
             .take_per_shard(1)
-            .map_shard(lambda example: _tokenize_batches(config, [example])),
+            .map_shard(
+                lambda example: _tokenize_batches(
+                    ctx=cluster_ctx, tokenizer_ref=tokenizer_ref, config=config, batches=[example]
+                )
+            ),
             context=cluster_ctx,
+            verbose=False,
         )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")

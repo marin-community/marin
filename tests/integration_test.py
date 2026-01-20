@@ -19,6 +19,7 @@ import sys
 
 import draccus
 from fray.cluster import ResourceConfig, create_cluster, set_current_cluster
+import humanfriendly
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
@@ -37,11 +38,10 @@ from marin.processing.classification.fasttext.train_fasttext import (
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.processing.tokenize import lm_data_config
+from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from marin.schemas.web.convert import ResiliparseConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
-
-from experiments.defaults import default_tokenize
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -138,10 +138,20 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # Tokenize
     tokenizer = "gpt2"
 
-    tokenize_step = default_tokenize(
-        name=os.path.join(prefix, "tokenized"),
-        dataset=output_path_of(transform_hq_data_step),
+    tokenize_config = TokenizeConfig(
+        train_paths=[transform_hq_data_step],
+        validation_paths=[],
+        cache_path=this_output_path(),
         tokenizer=tokenizer,
+        zephyr_num_cpus=1,
+        zephyr_memory=humanfriendly.parse_size("1MB", binary=True),
+    )
+
+    tokenize_step = ExecutorStep(
+        name=os.path.join(prefix, "tokenized"),
+        description=f"Tokenize raw text using the {tokenizer} tokenizer.",
+        fn=tokenize,
+        config=tokenize_config,
     )
 
     # ############################################################
