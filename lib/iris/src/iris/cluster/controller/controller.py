@@ -195,6 +195,12 @@ class Controller:
         if self._scheduling_loop_thread:
             self._scheduling_loop_thread.join(timeout=5.0)
 
+        # Stop uvicorn server
+        if self._server:
+            self._server.should_exit = True
+        if self._server_thread:
+            self._server_thread.join(timeout=5.0)
+
     def _run_scheduling_loop(self) -> None:
         """Main controller loop running scheduling and worker timeout checks."""
         while not self._stop:
@@ -237,16 +243,23 @@ class Controller:
     ) -> None:
         """Dispatch a task to a worker via RPC.
 
-        State is committed only after successful dispatch:
-        1. Attempt RPC
-        2. On success: fire TASK_ASSIGNED event (commits resources + creates attempt)
-        3. On failure: fire WORKER_FAILED event (task will be rescheduled next cycle)
-
-        The task remains schedulable until TASK_ASSIGNED creates a non-terminal attempt.
+        Creates attempt before RPC so worker reports are always valid:
+        1. Fire TASK_ASSIGNED event (commits resources + creates attempt)
+        2. Send RPC with valid attempt_id
+        3. On failure: revert attempt and mark worker failed
         """
         job = self._state.get_job(task.job_id)
         if not job:
             return
+
+        # Create attempt BEFORE RPC so worker state reports have a valid attempt_id
+        self._state.handle_event(
+            Event(
+                event_type=EventType.TASK_ASSIGNED,
+                task_id=task.task_id,
+                worker_id=worker.worker_id,
+            )
+        )
 
         try:
             stub = self._stub_factory.get_stub(worker.address)
@@ -275,19 +288,11 @@ class Controller:
             )
             stub.run_task(request)
 
-            # SUCCESS: Now commit state via TASK_ASSIGNED event
-            self._state.handle_event(
-                Event(
-                    event_type=EventType.TASK_ASSIGNED,
-                    task_id=task.task_id,
-                    worker_id=worker.worker_id,
-                )
-            )
-
             logger.info(f"Successfully dispatched task {task.task_id} to worker {worker.worker_id}")
 
         except Exception as e:
-            # FAILURE: Mark worker failed (task will be rescheduled on next cycle)
+            # FAILURE: Revert attempt and mark worker failed
+            task.revert_attempt()
             self._state.handle_event(
                 Event(
                     event_type=EventType.WORKER_FAILED,

@@ -202,6 +202,12 @@ class Worker:
         if self._heartbeat_thread:
             self._heartbeat_thread.join(timeout=5.0)
 
+        # Stop uvicorn server
+        if self._server:
+            self._server.should_exit = True
+        if self._server_thread:
+            self._server_thread.join(timeout=5.0)
+
         # Kill and remove all containers
         with self._lock:
             tasks = list(self._tasks.values())
