@@ -183,6 +183,10 @@ def build_runtime_env_for_packages(
     for pkg in package_spec.package_specs + pip_packages:
         # Defer torch-family installs to the end so that the --extra-index-url only applies to them
         if pkg.startswith(TORCH_GPU_PACKAGE_PREFIXES):
+            # Some environments (notably certain Ray clusters) don't have `torch==X+cpu` wheels available and
+            # require the plain `torch==X` PyPI release. Strip the "+cpu" local version for non-GPU installs.
+            if accelerator_type_from_extra(extra) != AcceleratorType.GPU:
+                pkg = pkg.replace("+cpu", "")
             torch_pkgs.append(pkg)
             continue
         requirements_txt.append(pkg)
