@@ -315,7 +315,7 @@ class MarinFlightServer(flight.FlightServerBase):
             return self._latest_weight_id
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("convert_to_bfloat16",))
 def copy_and_flatten(
     model: PyTree, convert_to_bfloat16: bool = True
 ) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
