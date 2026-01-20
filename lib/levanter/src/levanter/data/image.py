@@ -245,6 +245,7 @@ class CustomVLMProcessor(ProcessorMixin):
         num_image_tokens=None,
         vision_feature_select_strategy=None,
         vision_aspect_ratio=None,
+        use_full_padded_tokens=False,
         **kwargs,
     ):
         """
@@ -260,10 +261,13 @@ class CustomVLMProcessor(ProcessorMixin):
             num_image_tokens: Number of tokens per image
             vision_feature_select_strategy: Strategy for selecting vision features
             vision_aspect_ratio: Aspect ratio mode (e.g., "anyres_max_9")
+            use_full_padded_tokens: If True, use full padded token count (num_tiles * base_tokens)
+                                   for Levanter. If False (default), use HF-style unpadded count.
         """
         self.num_image_tokens = num_image_tokens
         self.vision_feature_select_strategy = vision_feature_select_strategy
         self.vision_aspect_ratio = vision_aspect_ratio
+        self.use_full_padded_tokens = use_full_padded_tokens
         self.image_token = image_token
         self.video_token = video_token
         self.image_token_id = tokenizer.convert_tokens_to_ids(image_token)
@@ -284,6 +288,7 @@ class CustomVLMProcessor(ProcessorMixin):
         cls,
         original_processor: ProcessorMixin,
         new_tokenizer: PreTrainedTokenizerBase,
+        use_full_padded_tokens: bool = False,
     ) -> "CustomVLMProcessor":
         """
         Create a CustomVLMProcessor by combining original processor components with a new tokenizer.
@@ -294,6 +299,8 @@ class CustomVLMProcessor(ProcessorMixin):
         Args:
             original_processor: The original VLM processor (e.g., LlavaOnevisionProcessor)
             new_tokenizer: The new tokenizer to use (e.g., from Qwen3-1.7B)
+            use_full_padded_tokens: If True, use full padded token count for Levanter.
+                                   If False (default), use HF-style unpadded count.
 
         Returns:
             A new CustomVLMProcessor instance
@@ -345,6 +352,13 @@ class CustomVLMProcessor(ProcessorMixin):
         else:
             raise NotImplementedError(f"Tokenizer {type(new_tokenizer).__name__} is not supported")
 
+        # Read vision_aspect_ratio from image_processor first (may have been overridden),
+        # then fall back to processor-level attribute
+        vision_aspect_ratio = getattr(
+            original_processor.image_processor, "vision_aspect_ratio",
+            getattr(original_processor, "vision_aspect_ratio", None)
+        )
+
         result = cls(
             image_processor=original_processor.image_processor,
             tokenizer=new_tokenizer,
@@ -354,7 +368,8 @@ class CustomVLMProcessor(ProcessorMixin):
             video_token=video_token,
             num_image_tokens=getattr(original_processor, "num_image_tokens", None),
             vision_feature_select_strategy=getattr(original_processor, "vision_feature_select_strategy", None),
-            vision_aspect_ratio=getattr(original_processor, "vision_aspect_ratio", None),
+            vision_aspect_ratio=vision_aspect_ratio,
+            use_full_padded_tokens=use_full_padded_tokens,
         )
 
         logger.info(
@@ -437,9 +452,23 @@ class CustomVLMProcessor(ProcessorMixin):
             if hasattr(image_inputs, "data"):
                 image_inputs = dict(image_inputs.data)
 
+        # Extract actual patch counts from HF processor output (ground truth for token count)
+        # This ensures token count matches pixel_values, avoiding mismatches from different
+        # resolution selection algorithms between HF processor and _get_number_of_features
+        actual_patch_counts = None
+        if images is not None:
+            pixel_values = image_inputs.get("pixel_values")
+            if pixel_values is not None:
+                if isinstance(pixel_values, (list, tuple)):
+                    # Multiple images: each has shape (num_patches, C, H, W)
+                    actual_patch_counts = [pv.shape[0] for pv in pixel_values]
+                elif hasattr(pixel_values, 'shape') and len(pixel_values.shape) >= 1:
+                    # Single image or batch: pixel_values has shape (num_patches, C, H, W)
+                    actual_patch_counts = [pixel_values.shape[0]]
+
         # 2. Expand image tokens in text
         if text is not None and images is not None:
-            text = self._expand_image_tokens(text, image_inputs)
+            text = self._expand_image_tokens(text, image_inputs, actual_patch_counts)
 
         # 3. Tokenize expanded text
         text_inputs = {}
@@ -461,6 +490,7 @@ class CustomVLMProcessor(ProcessorMixin):
         self,
         text,
         image_inputs: dict,
+        actual_patch_counts: Optional[List[int]] = None,
     ):
         """
         Expand <image> placeholders to num_image_tokens copies of image_token with vision markers.
@@ -475,6 +505,9 @@ class CustomVLMProcessor(ProcessorMixin):
         Args:
             text: Text input (str or list of str)
             image_inputs: Dict with processed image data (pixel_values, image_sizes, etc.)
+            actual_patch_counts: Optional list of actual patch counts from HF processor output.
+                               When provided, this is used as ground truth for token count
+                               to ensure consistency with pixel_values shape.
 
         Returns:
             Expanded text with image tokens properly expanded
@@ -517,9 +550,29 @@ class CustomVLMProcessor(ProcessorMixin):
             for _ in range(num_images_in_sample):
                 # Determine tokens for this image
                 is_single_image = num_images_in_sample == 1
+                base_tokens = self.num_image_tokens or 576
 
-                if is_anyres_enabled and is_single_image and image_sizes is not None:
-                    # Single image with anyres: calculate actual tokens based on image dimensions
+                # DEBUG: Print values for diagnosis
+                logger.info(f"[_expand_image_tokens] image_idx={image_idx}, actual_patch_counts={actual_patch_counts}, "
+                           f"base_tokens={base_tokens}, self.num_image_tokens={self.num_image_tokens}, "
+                           f"use_full_padded_tokens={self.use_full_padded_tokens}")
+
+                # For Levanter (use_full_padded_tokens=True): use actual_patch_counts * base_tokens
+                # For HF (use_full_padded_tokens=False): use _get_number_of_features for unpadded count
+                if self.use_full_padded_tokens:
+                    # Levanter mode: full padded tokens (unpadding handled via grid_mask/unpad_indices)
+                    if actual_patch_counts is not None and image_idx < len(actual_patch_counts):
+                        # actual_patch_counts[i] = number of patches (tiles) from HF processor
+                        tokens_per_image = actual_patch_counts[image_idx] * base_tokens
+                    elif is_anyres_enabled and is_single_image and image_sizes is not None:
+                        orig_height, orig_width = image_sizes[image_idx]
+                        tokens_per_image = self._get_number_of_features(
+                            orig_height, orig_width, patch_size, patch_size
+                        )
+                    else:
+                        tokens_per_image = base_tokens
+                elif is_anyres_enabled and is_single_image and image_sizes is not None:
+                    # Fallback: calculate based on image dimensions (may not match HF processor)
                     orig_height, orig_width = image_sizes[image_idx]
                     tokens_per_image = self._get_number_of_features(
                         orig_height, orig_width, patch_size, patch_size
@@ -527,8 +580,10 @@ class CustomVLMProcessor(ProcessorMixin):
                 else:
                     # Multi-image or disable_anyres: use base tokens
                     # Levanter doesn't use newline separator
-                    base_tokens = self.num_image_tokens or 729
                     tokens_per_image = base_tokens
+
+                # DEBUG: Print final tokens_per_image
+                logger.info(f"[_expand_image_tokens] Final tokens_per_image={tokens_per_image}")
 
                 # Replace <image> with <|vision_start|><|image_pad|>*N<|vision_end|>
                 result = result.replace(
@@ -614,7 +669,9 @@ class CustomVLMProcessor(ProcessorMixin):
             height/width: Patch size (e.g., 384)
 
         Returns:
-            Total number of image tokens = base_features + unpadded_features + newline_features
+            Total number of image tokens. Depends on use_full_padded_tokens:
+            - True (Levanter): num_tiles * base_tokens (full padded, unpadding via grid_mask)
+            - False (HF): base_features + unpadded_features (HF-style spatial unpadding)
         """
         import math
         from transformers.models.llava_onevision.image_processing_llava_onevision import (
@@ -630,16 +687,18 @@ class CustomVLMProcessor(ProcessorMixin):
         scale_height = height_best // height
         scale_width = width_best // width
 
-        # 2. Calculate patch dimensions (e.g., 27x27 for 729 tokens)
-        patches_height = patches_width = int(math.sqrt(self.num_image_tokens))
-
-        # 3. Calculate unpadded features based on aspect ratio
-        unpadded_features, newline_features = self._get_unpadded_features(
-            orig_height, orig_width, patches_height, patches_width, scale_height, scale_width
-        )
-
-        # 4. Total = base + unpadded + newlines
-        return self.num_image_tokens + unpadded_features 
+        if self.use_full_padded_tokens:
+            # Levanter mode: full padded tokens, unpadding handled via grid_mask/unpad_indices
+            num_sub_patches = scale_height * scale_width
+            num_tiles = num_sub_patches + 1  # sub-patches + base tile
+            return num_tiles * self.num_image_tokens
+        else:
+            # HF mode: calculate unpadded feature count (matches HF's spatial unpadding)
+            patches_height = patches_width = int(math.sqrt(self.num_image_tokens))
+            unpadded_features, newline_features = self._get_unpadded_features(
+                orig_height, orig_width, patches_height, patches_width, scale_height, scale_width
+            )
+            return self.num_image_tokens + unpadded_features 
 
     def _compute_unpad_indices(
         self,
@@ -1084,6 +1143,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         grid_pinpoints: Optional[List[List[int]]] = None,
         patch_size: int = 384,
         vision_feature_height: Optional[int] = None,
+        disable_anyres: bool = False,
+        use_full_padded_tokens: bool = True,
     ):
         """
         Initialize the BatchImageProcessor.
@@ -1104,6 +1165,9 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             patch_size: Size of each image patch (default 384)
             vision_feature_height: Vision encoder output tokens per spatial dim (e.g., 27 for 384/14)
             max_num_patches: Maximum number of patches for anyres constraint (e.g., 9 for anyres_max_9)
+            disable_anyres: If True, only use base patch for single images (no anyres sub-patches)
+            use_full_padded_tokens: If True, use full padded token count (num_tiles × base_tokens)
+                                   for Levanter mode. If False, use HF-style unpadded count.
         """
         self.processor = processor
         self.max_length = max_length
@@ -1113,12 +1177,23 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         self.add_generation_prompt = add_generation_prompt
         self.mask_prompt = mask_prompt
         self.override_resources = override_resources
+        self.disable_anyres = disable_anyres
+        self.use_full_padded_tokens = use_full_padded_tokens
 
         # Parameters for computing grid_mask for JIT-compatible VLM training
         self.grid_pinpoints = grid_pinpoints
         self.patch_size = patch_size
         self.vision_feature_height = vision_feature_height
         self.max_num_patches = max_num_patches
+
+        # Override processor's num_image_tokens when vision_feature_height is provided
+        # This ensures the processor expands image placeholders to the correct number of tokens
+        # Critical: HF processor defaults to 729 (27x27), but custom vision encoders may output
+        # different sizes (e.g., 576 = 24x24 for SigLIP with patch_size=16)
+        if vision_feature_height is not None:
+            num_image_tokens = vision_feature_height * vision_feature_height
+            if hasattr(processor, 'num_image_tokens'):
+                processor.num_image_tokens = num_image_tokens
 
         # Pre-compute grid_pinpoints arrays for vectorized _compute_grid_shape
         # Note: empty list [] is treated as no grid pinpoints (disable_anyres case)
@@ -1133,7 +1208,9 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         # Create a custom processor with the new tokenizer if specified
         if tokenizer is not None:
-            self.processor = CustomVLMProcessor.from_processor_and_tokenizer(processor, tokenizer)
+            self.processor = CustomVLMProcessor.from_processor_and_tokenizer(
+                processor, tokenizer, use_full_padded_tokens=True
+            )
 
         # Cache padding mode for __call__
         self._padding_mode = "max_length" if self.padding else False
@@ -1174,10 +1251,13 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         }
 
     def _compute_grid_shape(self, image_size: Tuple[int, int]) -> Tuple[int, int]:
-        """Compute (gh, gw) grid shape for an image using vectorized numpy operations.
+        """Compute (gh, gw) grid shape for an image using HF's select_best_resolution.
 
         This is used for pre-computing grid shapes during CPU preprocessing so they can be
         passed as concrete Python ints to pack_image_features, enabling JIT compilation.
+
+        IMPORTANT: This method MUST use the same algorithm as CustomVLMProcessor._get_number_of_features
+        to ensure grid_mask and token count are consistent. Both use HF's select_best_resolution.
 
         Args:
             image_size: (height, width) of the original image
@@ -1185,31 +1265,15 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         Returns:
             (gh, gw) grid dimensions as Python ints
         """
-        if self._grid_h is None or self.patch_size is None:
+        if self.grid_pinpoints is None or self.patch_size is None:
             return (1, 1)  # Default for no anyres
 
+        from transformers.models.llava_onevision.image_processing_llava_onevision import (
+            select_best_resolution,
+        )
+
         orig_h, orig_w = image_size
-        orig_area = orig_h * orig_w
-
-        # Vectorized computation of scales for all grid resolutions
-        # scale = min(w/orig_w, h/orig_h) for each resolution
-        scales = np.minimum(self._grid_w / orig_w, self._grid_h / orig_h)
-
-        # Compute scaled dimensions and effective area
-        scaled_h = (orig_h * scales).astype(np.int64)
-        scaled_w = (orig_w * scales).astype(np.int64)
-        eff = np.minimum(scaled_h * scaled_w, orig_area)
-
-        # Compute waste (area not used)
-        waste = self._grid_area - eff
-
-        # Combined score: maximize eff first, then minimize waste
-        # Use large multiplier to ensure eff dominates
-        scores = eff.astype(np.float64) * 1e12 - waste
-        best_idx = int(np.argmax(scores))
-
-        assert self.grid_pinpoints is not None
-        best_h, best_w = self.grid_pinpoints[best_idx]
+        best_h, best_w = select_best_resolution([orig_h, orig_w], self.grid_pinpoints)
         gh = best_h // self.patch_size
         gw = best_w // self.patch_size
         return (gh, gw)
@@ -1585,13 +1649,23 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             unpad_indices = None
             if num_images > 0 and has_pixel_values:
                 assert pv is not None  # Guarded by has_pixel_values
-                if num_images == 1:
-                    # Single image: use anyres with all patches
+                if num_images == 1 and not self.disable_anyres:
+                    # Single image with anyres: use all patches from processor output
                     pixel_values = pv[pv_start]
                     if self.max_num_patches is not None:
                         pixel_values, grid_mask = self._pad_pixel_values(
                             pixel_values,
                             valid_patches=pixel_values.shape[0],
+                            batch_max_patches=max_num_images_in_batch,
+                        )
+                elif num_images == 1 and self.disable_anyres:
+                    # Single image with disable_anyres: only use base patch (first patch)
+                    # HF processor always outputs base + anyres patches, but we only want base
+                    pixel_values = pv[pv_start][0:1]  # Take only first patch
+                    if self.max_num_patches is not None:
+                        pixel_values, grid_mask = self._pad_pixel_values(
+                            pixel_values,
+                            valid_patches=1,  # Only 1 valid patch (base)
                             batch_max_patches=max_num_images_in_batch,
                         )
                 else:
@@ -1940,6 +2014,20 @@ class ImageTaskConfig(abc.ABC):
     """Override image grid pinpoints for anyres processing.
     Set to [[image_size, image_size]] to disable anyres (single resolution only)."""
 
+    vision_aspect_ratio: Optional[str] = None
+    """Override vision aspect ratio for anyres processing.
+    Set to "single" to disable anyres (single resolution only).
+    Common values: "single" (base patch only), "anyres_max_9" (up to 9 grid patches)."""
+
+    use_full_padded_tokens: bool = True
+    """Use Levanter-style full padded token count for training.
+
+    When True (default, Levanter mode): token_count = num_tiles × features_per_patch
+    When False (HF mode): token_count = base_tokens + unpadded_features
+
+    Levanter mode is required for training because the model uses grid_mask for JIT-compatible
+    fixed-shape tensors. HF mode is for inference with HF's spatial unpadding."""
+
     @cached_property
     def the_processor(self) -> ProcessorMixin:
         proc = load_processor(self.processor)
@@ -1947,12 +2035,18 @@ class ImageTaskConfig(abc.ABC):
         if self.image_grid_pinpoints is not None and hasattr(proc, "image_processor"):
             proc.image_processor.image_grid_pinpoints = self.image_grid_pinpoints
 
+        # Override vision_aspect_ratio if specified (e.g., for disable_anyres)
+        if self.vision_aspect_ratio is not None and hasattr(proc, "image_processor"):
+            proc.image_processor.vision_aspect_ratio = self.vision_aspect_ratio
+
         # If custom tokenizer is specified, wrap with CustomVLMProcessor
         if self.tokenizer is not None:
             from transformers import AutoTokenizer
 
             custom_tokenizer = AutoTokenizer.from_pretrained(self.tokenizer, trust_remote_code=True)
-            proc = CustomVLMProcessor.from_processor_and_tokenizer(proc, custom_tokenizer)
+            proc = CustomVLMProcessor.from_processor_and_tokenizer(
+                proc, custom_tokenizer, use_full_padded_tokens=self.use_full_padded_tokens
+            )
 
         return proc
 
@@ -2039,6 +2133,7 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         images_key: str = "images",
         cache_size: int = DEFAULT_CACHE_SIZE,
         max_num_patches: Optional[int] = None,
+        vision_feature_height: Optional[int] = None,
     ):
         super().__init__()
         self.source = source
@@ -2050,7 +2145,7 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         self.cache_size = cache_size
 
         # Extract grid_pinpoints and related params from processor for anyres support
-        grid_pinpoints, patch_size, vision_feature_height, extracted_max_num_patches = _extract_anyres_params(
+        grid_pinpoints, patch_size, extracted_vision_feature_height, extracted_max_num_patches = _extract_anyres_params(
             processor
         )
         # Use passed max_num_patches if provided, otherwise use extracted value
@@ -2058,6 +2153,13 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
             final_max_num_patches = max_num_patches
         else:
             final_max_num_patches = extracted_max_num_patches
+
+        # Use passed vision_feature_height if provided, otherwise use extracted value
+        # This allows overriding when the model uses a different patch size than the HF processor
+        if vision_feature_height is not None:
+            final_vision_feature_height = vision_feature_height
+        else:
+            final_vision_feature_height = extracted_vision_feature_height
 
         # Build the batch processor (runs on CPU in background thread)
         self._batch_processor = BatchImageProcessor(
@@ -2068,7 +2170,7 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
             images_key=images_key,
             grid_pinpoints=grid_pinpoints,
             patch_size=patch_size,
-            vision_feature_height=vision_feature_height,
+            vision_feature_height=final_vision_feature_height,
             max_num_patches=final_max_num_patches,
         )
 
@@ -2382,8 +2484,16 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         images_key: str = "images",
         cache_size: int = DEFAULT_CACHE_SIZE,
         max_num_patches: Optional[int] = None,
+        vision_feature_height: Optional[int] = None,
     ) -> "StreamingImageDataset":
-        """Build a streaming dataset from a source."""
+        """Build a streaming dataset from a source.
+
+        Args:
+            vision_feature_height: Override the vision feature height extracted from processor.
+                This is useful when using a custom vision encoder with different patch size.
+                For example, if your vision encoder outputs 24x24=576 features per image,
+                set this to 24 (not 27 which is the default for some HF processors).
+        """
         return StreamingImageDataset(
             source=source,
             processor=processor,
@@ -2393,6 +2503,7 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
             images_key=images_key,
             cache_size=cache_size,
             max_num_patches=max_num_patches,
+            vision_feature_height=vision_feature_height,
         )
 
 
@@ -2816,6 +2927,15 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
     """Block size for the mixture dataset."""
     use_cache: bool = True
     """Whether to cache preprocessed data. Set to False for streaming mode (saves disk space)."""
+    vision_feature_height: Optional[int] = None
+    """Override vision feature height extracted from HF processor.
+
+    This is useful when using a custom vision encoder with different patch size than
+    what the HF processor expects. For example:
+    - HF processor (llava-onevision) expects 27x27=729 features (384/14)
+    - Your vision encoder (SigLIP with patch_size=16) outputs 24x24=576 features (384/16)
+
+    Set this to 24 (= image_size / patch_size) to match your model's actual output."""
 
     def __post_init__(self):
         if len(self.configs) == 0:
@@ -2934,6 +3054,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
                 messages_key=messages_key,
                 images_key=images_key,
                 max_num_patches=max_num_patches,
+                vision_feature_height=self.vision_feature_height,
             )
 
             datasets_dict[name] = streaming_ds
@@ -3310,6 +3431,15 @@ class LlavaOnevisionProcessor(ProcessorMixin):
         )
         scale_height, scale_width = height_best_resolution // height, width_best_resolution // width
 
+        # Levanter mode: return full padded token count (num_tiles × base_tokens)
+        # Vision encoder outputs features for all tiles, unpadding handled via grid_mask/unpad_indices
+        if self.use_full_padded_tokens:
+            num_sub_patches = scale_height * scale_width
+            num_tiles = num_sub_patches + 1  # sub-patches + base tile
+            total_features = num_tiles * self.num_image_tokens  # e.g., 10 × 729 = 7290
+            return total_features
+
+        # HF-style: return unpadded features count
         patches_height = patches_width = int(math.sqrt(self.num_image_tokens))
         unpadded_features, newline_features = self._get_unpadded_features(
             orig_height, orig_width, patches_height, patches_width, scale_height, scale_width

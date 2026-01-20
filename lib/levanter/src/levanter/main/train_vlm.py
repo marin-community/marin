@@ -472,6 +472,28 @@ def main(config: TrainVLMConfig):
         converter = config.model.hf_checkpoint_converter(ref_checkpoint=config.data.processor)
         converter = converter.replaced(tokenizer=tokenizer)
 
+    # === VALIDATION: Check vision_feature_height consistency ===
+    # Ensure data config's vision_feature_height matches model's expected output
+    model_vision_feature_height = config.model.vision_feature_height
+    data_vision_feature_height = getattr(config.data, "vision_feature_height", None)
+    if data_vision_feature_height is not None and data_vision_feature_height != model_vision_feature_height:
+        raise ValueError(
+            f"vision_feature_height mismatch between data config and model config!\n"
+            f"  Data config: vision_feature_height={data_vision_feature_height} "
+            f"(features_per_patch={data_vision_feature_height**2})\n"
+            f"  Model config: vision_feature_height={model_vision_feature_height} "
+            f"(features_per_patch={model_vision_feature_height**2})\n"
+            f"  Model vision encoder: image_size={config.model.vision_config.image_size}, "
+            f"patch_size={config.model.vision_config.patch_size}\n"
+            f"Please update data config's vision_feature_height to {model_vision_feature_height} "
+            f"to match the model's vision encoder output."
+        )
+    elif data_vision_feature_height is not None:
+        logger.info(
+            f"vision_feature_height validated: {data_vision_feature_height} "
+            f"(matches model's {config.model.vision_config.image_size}//{config.model.vision_config.patch_size})"
+        )
+
     levanter.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 

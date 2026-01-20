@@ -102,6 +102,11 @@ text_config = Qwen3Config(
     flash_attention_block_size=FLASH_ATTENTION_BLOCK_SIZE,
 )
 
+# Get image token ID from Qwen3 tokenizer (different from default which is for Qwen2)
+from transformers import AutoTokenizer
+_qwen3_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-1.7B")
+IMAGE_TOKEN_INDEX = _qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+
 # Combined VLM config
 vlm_config = LlavaOnevisionConfig(
     vision_config=vision_config,
@@ -112,6 +117,8 @@ vlm_config = LlavaOnevisionConfig(
     # Set disable_anyres=True to use single resolution (base patch only).
     # This reduces memory usage and speeds up training but may lose image details.
     disable_anyres=True,
+    # Use Qwen3's <|image_pad|> token ID (default 151646 is for Qwen2)
+    image_token_index=IMAGE_TOKEN_INDEX,
 )
 
 # ============================================================================
@@ -137,6 +144,12 @@ data_source = ConversationDatasetSourceConfig(
     images_key="images",
 )
 
+# Compute vision_feature_height from model config to match data pipeline with model
+# This is critical: the HF processor assumes 27x27=729 tokens (384//14), but our
+# SigLIP vision encoder with patch_size=16 outputs 24x24=576 tokens (384//16).
+# Without this override, training loss won't decrease due to index wrapping.
+VISION_FEATURE_HEIGHT = vision_config.image_size // vision_config.patch_size  # 384 // 16 = 24
+
 data_config = ImageMixtureDatasetConfig(
     cache_dir="cache/vlm_demo",
     # Processor for image preprocessing
@@ -147,6 +160,11 @@ data_config = ImageMixtureDatasetConfig(
     train_weights={"train": 1.0},
     use_cache=False,  # Streaming mode (no disk caching)
     max_length=2048,  # Match model's max_seq_len to avoid truncation issues
+    vision_feature_height=VISION_FEATURE_HEIGHT,  # Override: use model's actual feature size
+    # Disable anyres to match model config (disable_anyres=True sets vision_aspect_ratio="single")
+    # Without this, the HF processor uses anyres_max_9 which calculates extra tokens for grid patches
+    vision_aspect_ratio="single",
+    image_grid_pinpoints=[[384, 384]],  # Single resolution only
 )
 
 # ============================================================================

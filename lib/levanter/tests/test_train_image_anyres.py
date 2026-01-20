@@ -125,7 +125,7 @@ def test_vlm_numerical_correctness():
     hf_model.model.config.image_grid_pinpoints = grid_pinpoints
     hf_model.model.config.vision_aspect_ratio = "single"  # disable_anyres mode
     hf_model.model.image_newline = None
-    hf_model.config.image_token_id = image_token_id  # Use Qwen3's image token ID
+    hf_model.config.image_token_index = image_token_id  # Use Qwen3's image token ID
     hf_model.eval()
 
     lev_config = _load_levanter_config(model_name, enable_flash_attention=False, gradient_checkpointing=False)
@@ -256,7 +256,7 @@ def test_vlm_loss_and_gradients():
     hf_model.model.config.image_grid_pinpoints = grid_pinpoints
     hf_model.model.config.vision_aspect_ratio = "single"  # disable_anyres mode
     hf_model.model.image_newline = None
-    hf_model.config.image_token_id = image_token_id  # Use Qwen3's image token ID
+    hf_model.config.image_token_index = image_token_id  # Use Qwen3's image token ID
     hf_model.eval()
 
     # Prepare HF inputs - use Levanter's input_ids (Qwen3 tokenized)
@@ -549,7 +549,7 @@ def test_vlm_loss_and_gradients_interleved():
     hf_model.model.config.image_grid_pinpoints = grid_pinpoints
     hf_model.model.config.vision_aspect_ratio = "single"  # disable_anyres mode
     hf_model.model.image_newline = None
-    hf_model.config.image_token_id = image_token_id  # Use Qwen3's image token ID
+    hf_model.config.image_token_index = image_token_id  # Use Qwen3's image token ID
     hf_model.eval()
 
     # Prepare HF inputs - use Levanter's input_ids (Qwen3 tokenized)
@@ -1081,7 +1081,7 @@ def test_vlm_batch_loss_consistency():
     hf_model.model.config.image_grid_pinpoints = grid_pinpoints
     hf_model.model.config.vision_aspect_ratio = "single"
     hf_model.model.image_newline = None
-    hf_model.config.image_token_id = image_token_id  # Use Qwen3's image token ID
+    hf_model.config.image_token_index = image_token_id  # Use Qwen3's image token ID
     hf_model.eval()
 
     # Monkey-patch for disable_anyres mode

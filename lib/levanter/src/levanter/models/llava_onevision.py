@@ -145,6 +145,25 @@ class LlavaOnevisionConfig:
         return self.text_config.vocab_size
 
     @property
+    def vision_feature_height(self) -> int:
+        """Return the vision encoder's output feature height (tokens per spatial dimension).
+
+        This is computed as image_size // patch_size. For example:
+        - SigLIP with 384x384 images and patch_size=16: 384 // 16 = 24
+        - LLaVA-OneVision default with patch_size=14: 384 // 14 = 27
+
+        Use this to validate that data preprocessing uses the correct vision_feature_height.
+        """
+        image_size = self.vision_config.image_size
+        patch_size = self.vision_config.patch_size
+        return image_size // patch_size
+
+    @property
+    def features_per_patch(self) -> int:
+        """Return the total number of features per image patch (vision_feature_height^2)."""
+        return self.vision_feature_height ** 2
+
+    @property
     def model_type(self) -> Type["LlavaOnevisionModel"]:
         """Return the model class type."""
         return LlavaOnevisionModel
@@ -807,6 +826,40 @@ class LlavaOnevisionModel(eqx.Module):
         # Get placeholder mask: where image tokens should be inserted
         special_image_mask = self.get_placeholder_mask(input_ids)
 
+        # === VALIDATION: Check image token count matches vision features ===
+        # This runs inside JIT via debug.callback to detect mismatched vision_feature_height
+        def _validate_token_feature_match(mask_array, total_features, grid_mask_array, features_per_patch_val):
+            """Validate that image token count in input_ids matches vision encoder output.
+
+            When grid_mask is provided (disable_anyres mode), validates against the number
+            of valid patches indicated by grid_mask, not the total padded patches.
+            """
+            n_image_tokens_per_batch = jnp.sum(mask_array, axis=-1)  # (batch,)
+            # Check first batch element (assuming all batches have same structure)
+            n_image_tokens = int(n_image_tokens_per_batch[0])
+
+            # Calculate expected features based on grid_mask if provided
+            if grid_mask_array is not None:
+                # Use number of valid patches (True values in grid_mask)
+                num_valid_patches = int(jnp.sum(grid_mask_array[0]))  # First batch element
+                expected_features = num_valid_patches * features_per_patch_val
+            else:
+                expected_features = total_features
+
+            if n_image_tokens > 0 and n_image_tokens != expected_features:
+                raise ValueError(
+                    f"Image token count mismatch! "
+                    f"input_ids has {n_image_tokens} image placeholder tokens, "
+                    f"but vision encoder produces {expected_features} features. "
+                    f"This usually means data config's vision_feature_height doesn't match the model. "
+                    f"Expected vision_feature_height={int(expected_features**0.5)} based on model config "
+                    f"(image_size={self.config.vision_config.image_size}, "
+                    f"patch_size={self.config.vision_config.patch_size})."
+                )
+
+        grid_mask_array = grid_mask.array if grid_mask is not None else None
+        jax.debug.callback(_validate_token_feature_match, special_image_mask.array, total_image_tokens, grid_mask_array, features_per_patch)
+
         # Compute gather indices: for each placeholder, which image token to gather
         def compute_indices(mask):
             return (jnp.cumsum(mask.astype(jnp.int32)) - 1) % total_image_tokens
@@ -828,8 +881,18 @@ class LlavaOnevisionModel(eqx.Module):
             # Compute on device (fallback for inference or when not precomputed)
             # Combined validity mask: valid text OR valid image at placeholder positions
             if unpad_indices is not None:
-                # When unpad_indices is provided, all image tokens are valid (they're the unpadded ones)
-                combined_mask = jnp.where(special_image_mask.array, 1, text_mask.array).astype(jnp.int32)
+                # Only the first num_unpadded_tokens image placeholders are valid
+                # The remaining are padding and should not get incrementing position IDs
+                num_unpadded_tokens = unpad_indices.axis_size("num_image_tokens")
+
+                # Map each image placeholder to its index (0, 1, 2, ...)
+                image_token_indices = jnp.cumsum(special_image_mask.array.astype(jnp.int32), axis=-1) - 1
+
+                # Mark as valid only if the index is within the unpadded range
+                image_validity = (image_token_indices < num_unpadded_tokens).astype(jnp.int32)
+
+                # Combine: valid text OR valid image placeholder
+                combined_mask = jnp.where(special_image_mask.array, image_validity, text_mask.array).astype(jnp.int32)
             else:
                 # Need to check grid_mask validity for each placeholder position
                 # Use ACTUAL valid patches from grid_mask (more robust)
@@ -1133,7 +1196,12 @@ class _LlavaInferenceWrapper(eqx.Module):
         return self.model.language_model
 
     def decode(self, tokens, kv_cache, batch_info, pos_ids):
-        """Decode using dynamically computed embeddings for prefill, language model for decode."""
+        """Decode using dynamically computed embeddings for prefill, language model for decode.
+
+        For VLM with masked tokens (e.g., anyres padding):
+        - During prefill: Uses position IDs from _compute_embeddings() which skip masked tokens
+        - During decode: Uses position IDs from inference engine (continues from prefill)
+        """
         is_prefill = tokens.axis_size("position") > 1
         lm = self.model.language_model
 

@@ -7,9 +7,23 @@ sys.path.insert(0, "/home/ruili/marin_private3/lib/levanter/tests")
 import numpy as np
 import tempfile
 from test_image_utils import prepare_batched_test_data, get_interleaved_data, SINGLE_PATCH_GRID_PINPOINTS
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoProcessor
 
 QWEN3_MODEL = "Qwen/Qwen3-0.6B"
+
+# Model and processor configuration
+MODEL_NAME = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
+
+# Load processor to get image_size
+_processor = AutoProcessor.from_pretrained(MODEL_NAME)
+IMAGE_SIZE = _processor.image_processor.size['height']  # 384
+
+# Vision encoder patch size (SigLIP uses 16, not 14)
+VISION_PATCH_SIZE = 16
+
+# Calculate vision_feature_height from image_size and patch_size
+# This is critical: HF processor assumes 27 (384//14), but SigLIP outputs 24 (384//16)
+VISION_FEATURE_HEIGHT = IMAGE_SIZE // VISION_PATCH_SIZE  # 384 // 16 = 24
 
 
 def print_array_info(name: str, arr, max_print: int = 20):
@@ -85,6 +99,7 @@ def main():
             grid_pinpoints=SINGLE_PATCH_GRID_PINPOINTS,
             max_num_patches=1,
             disable_anyres=True,
+            vision_feature_height=VISION_FEATURE_HEIGHT,
         )
 
     print(f"\nLoaded {len(test_pairs)} test pairs")

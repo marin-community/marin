@@ -107,6 +107,14 @@ def parse_args():
         default=2048,
         help="Maximum sequence length",
     )
+    parser.add_argument(
+        "--tokenizer",
+        type=str,
+        default="Qwen/Qwen3-1.7B",
+        help="Custom tokenizer name (e.g., 'Qwen/Qwen3-1.7B'). "
+        "Creates a CustomVLMProcessor that combines the processor's image processing "
+        "with the custom tokenizer.",
+    )
 
     # Model arguments
     parser.add_argument(
@@ -304,6 +312,12 @@ def parse_args():
 
 def get_model_config(args) -> LlavaOnevisionConfig:
     """Get model configuration based on arguments with performance optimizations."""
+    from transformers import AutoTokenizer
+
+    # Get image token ID from tokenizer (Qwen3 uses different ID than Qwen2)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    image_token_index = tokenizer.convert_tokens_to_ids("<|image_pad|>")
+    logger.info(f"Using image_token_index={image_token_index} from {args.tokenizer}")
 
     # Determine gradient checkpointing setting
     use_gradient_checkpointing = not args.no_gradient_checkpointing
@@ -382,6 +396,8 @@ def get_model_config(args) -> LlavaOnevisionConfig:
         text_config=text_config,
         gradient_checkpointing=use_gradient_checkpointing,
         disable_anyres=args.disable_anyres,
+        # Use tokenizer's <|image_pad|> token ID (Qwen3 differs from Qwen2)
+        image_token_index=image_token_index,
     )
 
     # Log optimization settings
@@ -407,6 +423,7 @@ def main():
     logger.info(f"Training data: {args.train_data}")
     logger.info(f"Validation data: {args.val_data}")
     logger.info(f"Model: {args.model_name}")
+    logger.info(f"Tokenizer: {args.tokenizer}")
     logger.info(f"Initialize from HF: {args.initialize_from_hf}")
     logger.info(f"Num train steps: {args.num_train_steps}")
     logger.info(f"Batch size: {args.train_batch_size}")
@@ -429,6 +446,17 @@ def main():
             return path
         return f"file://{path}"
 
+    # Calculate vision_feature_height from model config
+    # This is critical: HF processor assumes 27x27=729 tokens (384//14), but
+    # SigLIP with patch_size=16 outputs 24x24=576 tokens (384//16)
+    if args.use_small_model:
+        # Small model uses default patch_size=16
+        vision_feature_height = 384 // 16  # = 24
+    else:
+        # Custom config: SigLIP2 with patch_size=16
+        vision_feature_height = 384 // 16  # = 24
+    logger.info(f"Using vision_feature_height={vision_feature_height} (features_per_patch={vision_feature_height**2})")
+
     # Create data config
     data_config = ImageMixtureDatasetConfig(
         cache_dir=args.cache_dir,
@@ -441,8 +469,14 @@ def main():
         },
         train_weights={"train": 1.0},
         processor=args.model_name,
+        tokenizer=args.tokenizer,  # Use CustomVLMProcessor with custom tokenizer (e.g., Qwen3)
         max_length=args.max_length,
         use_cache=not args.no_cache,  # Use streaming mode if --no_cache is set
+        vision_feature_height=vision_feature_height,  # Must match model's vision encoder output
+        # Pass anyres settings to data config to sync with model config
+        # Without this, HF processor uses anyres_max_9 which calculates extra tokens for grid patches
+        vision_aspect_ratio="single" if args.disable_anyres else None,
+        image_grid_pinpoints=[[384, 384]] if args.disable_anyres else None,
     )
 
     if args.no_cache:

@@ -281,7 +281,8 @@ def _create_processors(
         effective_max_num_patches = max_num_patches
         effective_grid_pinpoints = grid_pinpoints
         max_image_tiles = max_num_patches + 1  # e.g., 10 for anyres_max_9
-        effective_vision_aspect_ratio = None  # Use model config default
+        # Explicitly set anyres mode for single-image processing
+        effective_vision_aspect_ratio = f"anyres_max_{max_num_patches}"
 
     # Try to import custom processor first (for proper do_pad support)
     try:
@@ -305,11 +306,13 @@ def _create_processors(
             custom_tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
 
             # Wrap both processors with CustomVLMProcessor for consistent tokenization
+            # HF uses unpadded tokens (spatial unpadding in vision encoder)
+            # Levanter uses full padded tokens (unpadding via grid_mask/unpad_indices)
             hf_processor = CustomVLMProcessor.from_processor_and_tokenizer(
-                base_processor, custom_tokenizer
+                base_processor, custom_tokenizer, use_full_padded_tokens=False
             )
             lev_processor = CustomVLMProcessor.from_processor_and_tokenizer(
-                base_processor, custom_tokenizer
+                base_processor, custom_tokenizer, use_full_padded_tokens=True
             )
         else:
             # Use original processor (same tokenizer as model)
@@ -334,6 +337,7 @@ def _create_processors(
         patch_size=patch_size,
         vision_feature_height=vision_feature_height,
         add_generation_prompt=add_generation_prompt,
+        disable_anyres=disable_anyres,
     )
 
     return hf_processor, lev_batch_processor
@@ -563,9 +567,13 @@ def prepare_test_data_single(
     hf_pixel_values = hf_processed["pixel_values"]
     hf_image_sizes = hf_processed["image_sizes"]
 
+    # Convert pixel_values to numpy array if it's a list (CustomVLMProcessor returns lists)
+    if isinstance(hf_pixel_values, list):
+        hf_pixel_values = np.array(hf_pixel_values)
+
     # For single image, extract from batch dimension
-    # Multi-image keeps 5D format: (num_images, patches, C, H, W)
-    if not (isinstance(hf_pixel_values, np.ndarray) and hf_pixel_values.ndim == 5 and is_multi_image):
+    # Multi-image keeps full tensor (may be 4D or 5D)
+    if not is_multi_image:
         hf_pixel_values = hf_pixel_values[0]
         hf_image_sizes = hf_image_sizes[0]
 
@@ -787,29 +795,54 @@ def compare_logits_by_region(
         image_mean_diff = 0.0
         image_max_diff = 0.0
 
-    # 3. Post-image text
+    # 3. Post-image text (filter by attention_mask if provided)
     if post_image_start < seq_len:
-        diff = np.abs(hf_logits[post_image_start:] - lev_logits[post_image_start:])
-        post_image_mean_diff = float(np.mean(diff))
-        post_image_max_diff = float(np.max(diff))
+        post_image_hf = hf_logits[post_image_start:]
+        post_image_lev = lev_logits[post_image_start:]
+        if attention_mask is not None:
+            # Filter out padding positions in post-image region
+            post_image_mask = attention_mask[post_image_start:].astype(bool)
+            if post_image_mask.any():
+                diff = np.abs(post_image_hf[post_image_mask] - post_image_lev[post_image_mask])
+                post_image_mean_diff = float(np.mean(diff))
+                post_image_max_diff = float(np.max(diff))
+            else:
+                # All post-image positions are padding
+                post_image_mean_diff = 0.0
+                post_image_max_diff = 0.0
+        else:
+            diff = np.abs(post_image_hf - post_image_lev)
+            post_image_mean_diff = float(np.mean(diff))
+            post_image_max_diff = float(np.max(diff))
     else:
         post_image_mean_diff = 0.0
         post_image_max_diff = 0.0
 
-    # Overall
-    overall_mean_diff = float(np.mean(np.abs(hf_logits - lev_logits)))
-    overall_max_diff = float(np.max(np.abs(hf_logits - lev_logits)))
+    # Overall (filter by attention_mask if provided)
+    if attention_mask is not None:
+        overall_diff = np.abs(hf_logits[valid_mask] - lev_logits[valid_mask])
+        overall_mean_diff = float(np.mean(overall_diff))
+        overall_max_diff = float(np.max(overall_diff))
+    else:
+        overall_mean_diff = float(np.mean(np.abs(hf_logits - lev_logits)))
+        overall_max_diff = float(np.max(np.abs(hf_logits - lev_logits)))
 
     # Pass/fail per region
     passed = pre_image_mean_diff < tolerance and image_mean_diff < tolerance and post_image_mean_diff < tolerance
+
+    # Calculate valid post-image token count for verbose output
+    if attention_mask is not None and post_image_start < seq_len:
+        valid_post_image_count = int(attention_mask[post_image_start:].sum())
+    else:
+        valid_post_image_count = seq_len - post_image_start
 
     if verbose:
         print(f"Pre-image ({image_start}): mean={pre_image_mean_diff:.6e}, max={pre_image_max_diff:.6e}")
         print(f"Image ({num_image_tokens}): mean={image_mean_diff:.6e}, max={image_max_diff:.6e}")
         print(
-            f"Post-image ({seq_len - post_image_start}): mean={post_image_mean_diff:.6e}, max={post_image_max_diff:.6e}"
+            f"Post-image ({valid_post_image_count}): mean={post_image_mean_diff:.6e}, max={post_image_max_diff:.6e}"
         )
-        print(f"Overall: mean={overall_mean_diff:.6e}, max={overall_max_diff:.6e}")
+        print(f"Overall ({int(valid_count) if attention_mask is not None else seq_len}): mean={overall_mean_diff:.6e}, max={overall_max_diff:.6e}")
         print(f"{'PASS' if passed else 'FAIL'} (tol={tolerance})")
 
     return LogitsComparisonResult(

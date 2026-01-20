@@ -152,15 +152,18 @@ def test_llava_with_image_dataloader(processor, dataset):
 
     # Create base processors
     base_padded_processor = create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=grid_pinpoints, vision_aspect_ratio="single")
-    unpadded_processor = create_custom_processor(model_name, do_pad=False, image_grid_pinpoints=grid_pinpoints, vision_aspect_ratio="single")
+    base_unpadded_processor = create_custom_processor(model_name, do_pad=False, image_grid_pinpoints=grid_pinpoints, vision_aspect_ratio="single")
 
-    # Use Qwen3 tokenizer for Levanter's data processing (consistent with other tests)
+    # Use Qwen3 tokenizer for both Levanter and HF processing (consistent tokenization)
     from transformers import AutoTokenizer
     from levanter.data.image import CustomVLMProcessor
 
     qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
     padded_processor = CustomVLMProcessor.from_processor_and_tokenizer(
         base_padded_processor, qwen3_tokenizer
+    )
+    unpadded_processor = CustomVLMProcessor.from_processor_and_tokenizer(
+        base_unpadded_processor, qwen3_tokenizer
     )
 
     batch_processor = BatchImageProcessor(
@@ -210,11 +213,15 @@ def test_llava_with_image_dataloader(processor, dataset):
         max_image_tokens = max_num_patches_actual * features_per_patch
         NumImageTokens = hax.Axis("num_image_tokens", max_image_tokens)
 
+        # Get image_token_id for Qwen3 tokenizer (used by both HF and Levanter)
+        image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+
         # Load HF model with disable_anyres configuration
         hf_model = HfLlavaOnevision.from_pretrained(model_name, torch_dtype=torch.float32)
         hf_model.model.config.image_grid_pinpoints = SINGLE_PATCH_GRID_PINPOINTS
         hf_model.model.config.vision_aspect_ratio = "single"  # disable_anyres mode
         hf_model.model.image_newline = None
+        hf_model.config.image_token_id = image_token_id  # Use Qwen3's image token ID
         hf_model.eval()
 
         # Load Levanter model
@@ -233,8 +240,7 @@ def test_llava_with_image_dataloader(processor, dataset):
             config, vision_config=vision_config_updated, text_config=text_config_updated, gradient_checkpointing=False
         )
 
-        # Update config with correct image_token_id for Qwen3 tokenizer
-        image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+        # Update Levanter config with correct image_token_id for Qwen3 tokenizer
         config = config.with_token_ids(image_token_id=image_token_id)
 
         trainer_config = TrainerConfig()
@@ -302,12 +308,26 @@ def test_llava_with_image_dataloader(processor, dataset):
                     if images is not None and len(images) > 0:
                         pil_images = [load_image(img) for img in images]
                         hf_inputs = unpadded_processor(text=prompt_text, images=pil_images, return_tensors="pt")
+                        # CustomVLMProcessor may return lists, convert to tensors for HF model
+                        if "pixel_values" in hf_inputs and isinstance(hf_inputs["pixel_values"], list):
+                            hf_inputs["pixel_values"] = torch.tensor(np.array(hf_inputs["pixel_values"]))
+                        if "input_ids" in hf_inputs and isinstance(hf_inputs["input_ids"], list):
+                            hf_inputs["input_ids"] = torch.tensor(np.array(hf_inputs["input_ids"]))
+                        if "attention_mask" in hf_inputs and isinstance(hf_inputs["attention_mask"], list):
+                            hf_inputs["attention_mask"] = torch.tensor(np.array(hf_inputs["attention_mask"]))
+                        if "image_sizes" in hf_inputs and isinstance(hf_inputs["image_sizes"], list):
+                            hf_inputs["image_sizes"] = torch.tensor(np.array(hf_inputs["image_sizes"]))
                         # For disable_anyres mode: truncate to base patch only
                         # HF processor outputs base + anyres patches, but we only want base patch
                         if "pixel_values" in hf_inputs and hf_inputs["pixel_values"].dim() == 5:
                             hf_inputs["pixel_values"] = hf_inputs["pixel_values"][:, 0:1, :, :, :]
                     else:
                         hf_inputs = unpadded_processor(text=prompt_text, return_tensors="pt")
+                        # CustomVLMProcessor may return lists, convert to tensors for HF model
+                        if "input_ids" in hf_inputs and isinstance(hf_inputs["input_ids"], list):
+                            hf_inputs["input_ids"] = torch.tensor(np.array(hf_inputs["input_ids"]))
+                        if "attention_mask" in hf_inputs and isinstance(hf_inputs["attention_mask"], list):
+                            hf_inputs["attention_mask"] = torch.tensor(np.array(hf_inputs["attention_mask"]))
 
                     hf_input_ids = hf_inputs["input_ids"]
                     hf_input_ids_list.append(hf_input_ids[0].numpy())
