@@ -333,9 +333,7 @@ def load_tokenizer_with_backoff(
     if os.path.exists(success_file):
         log_obj.debug(f"Tokenizer {tokenizer_name} already cached locally, loading offline")
         try:
-            return transformers.AutoTokenizer.from_pretrained(
-                tokenizer_name, local_files_only=True, **kwargs
-            )
+            return transformers.AutoTokenizer.from_pretrained(tokenizer_name, local_files_only=True, **kwargs)
         except Exception as e:
             # If local loading fails, the cache might be corrupted - remove marker and retry
             log_obj.warning(f"Failed to load tokenizer from local cache: {e}, will re-download")
@@ -353,9 +351,7 @@ def load_tokenizer_with_backoff(
         if os.path.exists(success_file):
             log_obj.debug(f"Tokenizer {tokenizer_name} downloaded by another process, loading offline")
             try:
-                return transformers.AutoTokenizer.from_pretrained(
-                    tokenizer_name, local_files_only=True, **kwargs
-                )
+                return transformers.AutoTokenizer.from_pretrained(tokenizer_name, local_files_only=True, **kwargs)
             except Exception as e:
                 log_obj.warning(f"Failed to load from local cache after lock: {e}")
                 os.remove(success_file)

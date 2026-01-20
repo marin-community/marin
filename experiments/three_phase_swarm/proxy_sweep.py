@@ -17,7 +17,7 @@ Proxy/swarm model training configurations based on:
 
 1. OLMo 3 (arXiv:2512.13961) - Constrained data mixing swarm procedure
    - 30M parameter OLMo3 architecture models
-   - 3B tokens per proxy (5× Chinchilla)
+   - 3B tokens per proxy (5x Chinchilla)
 
 2. RegMix (arXiv:2407.01492) - Regression-based mixture optimization
    - 1M non-embedding parameter models
@@ -246,6 +246,7 @@ def compute_llama_non_embedding_params(config: LlamaConfig) -> int:
 # Training Configuration
 # =============================================================================
 
+
 def get_num_train_steps(total_tokens: int, batch_size: int, seq_len: int) -> int:
     """Compute the number of training steps for a given token budget."""
     tokens_per_step = batch_size * seq_len
@@ -257,7 +258,7 @@ def build_olmo3_proxy_config() -> tuple[str, SpeedrunConfig]:
     Build OLMo3 30M proxy configuration.
 
     Training setup:
-    - 3B tokens (5× Chinchilla for 30M model; Chinchilla optimal is 20× params)
+    - 3B tokens (5x Chinchilla for 30M model; Chinchilla optimal is 20x params)
     - MuonH optimizer (hyperparameters scaled from 130M Qwen3 config)
     - Batch size chosen for v5p-8
     """
@@ -297,7 +298,7 @@ def build_olmo3_proxy_config() -> tuple[str, SpeedrunConfig]:
 
     # Print parameter counts
     params = compute_olmo3_params(model_config, llama3_tokenizer_vocab_size)
-    logger.info(f"OLMo3 30M proxy config:")
+    logger.info("OLMo3 30M proxy config:")
     logger.info(f"  Total parameters: {params['total']:,}")
     logger.info(f"  Non-embedding parameters: {params['non_embedding']:,}")
     logger.info(f"  Embedding parameters: {params['embeddings']:,}")
@@ -306,7 +307,7 @@ def build_olmo3_proxy_config() -> tuple[str, SpeedrunConfig]:
 
     config = SpeedrunConfig(
         author=AUTHOR,
-        description="OLMo3 ~30M proxy model for swarm data mixing (3B tokens, 5× Chinchilla, MuonH)",
+        description="OLMo3 ~30M proxy model for swarm data mixing (3B tokens, 5x Chinchilla, MuonH)",
         model_config=model_config,
         train_config=train_config,
     )
@@ -360,7 +361,7 @@ def build_regmix_proxy_config() -> tuple[str, SpeedrunConfig]:
     # Print parameter counts
     non_emb_params = compute_llama_non_embedding_params(model_config)
     total_params = model_config.total_trainable_params(llama3_tokenizer_vocab_size)
-    logger.info(f"RegMix 1M proxy config:")
+    logger.info("RegMix 1M proxy config:")
     logger.info(f"  Non-embedding parameters: {non_emb_params:,}")
     logger.info(f"  Total parameters: {total_params:,}")
     logger.info(f"  Tokens to train: {total_tokens:,}")
@@ -422,7 +423,7 @@ def build_regmix_60m_proxy_config() -> tuple[str, SpeedrunConfig]:
     # Print parameter counts
     non_emb_params = compute_llama_non_embedding_params(model_config)
     total_params = model_config.total_trainable_params(llama3_tokenizer_vocab_size)
-    logger.info(f"RegMix 60M proxy config:")
+    logger.info("RegMix 60M proxy config:")
     logger.info(f"  Non-embedding parameters: {non_emb_params:,}")
     logger.info(f"  Total parameters: {total_params:,}")
     logger.info(f"  Tokens to train: {total_tokens:,}")
@@ -678,10 +679,7 @@ def main():
     steps.extend(default_speedrun(regmix_1m_name, regmix_1m_config))
     steps.extend(default_speedrun(regmix_60m_name, regmix_60m_config))
 
-    executor_main(
-        steps=steps,
-        description="Proxy model training runs for data mixture optimization (OLMo3 + RegMix)"
-    )
+    executor_main(steps=steps, description="Proxy model training runs for data mixture optimization (OLMo3 + RegMix)")
 
 
 def main_batch_sweep():
@@ -756,14 +754,12 @@ def main_batch_sweep():
         config.print_run_info()
         steps.extend(default_speedrun(name, config))
 
-    executor_main(
-        steps=steps,
-        description="Proxy model batch size sweep (OLMo3 30M, RegMix 1M, RegMix 60M)"
-    )
+    executor_main(steps=steps, description="Proxy model batch size sweep (OLMo3 30M, RegMix 1M, RegMix 60M)")
 
 
 def _parse_args():
     import argparse
+
     parser = argparse.ArgumentParser(description="Proxy/swarm model training for data mixture optimization.")
     parser.add_argument(
         "--mode",

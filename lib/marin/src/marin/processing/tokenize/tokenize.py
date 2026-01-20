@@ -27,7 +27,6 @@ import re
 from collections.abc import Iterator, Sequence
 
 import draccus
-import transformers
 from datasets import load_dataset_builder
 from fray.job import create_job_ctx, get_default_job_ctx
 from levanter.data.text import (

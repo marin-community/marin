@@ -20,12 +20,18 @@ Provides tools for:
 - Comparing phase importance
 """
 
+from __future__ import annotations
+
 import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +64,7 @@ def collect_results_from_wandb(
     entity: str = "marin",
     project: str = "marin",
     metrics: list[str] | None = None,
-) -> "pd.DataFrame":
+) -> pd.DataFrame:
     """Collect training results from W&B for all runs.
 
     Args:
@@ -73,8 +79,8 @@ def collect_results_from_wandb(
     try:
         import pandas as pd
         import wandb
-    except ImportError:
-        raise ImportError("pandas and wandb are required for W&B analysis")
+    except ImportError as err:
+        raise ImportError("pandas and wandb are required for W&B analysis") from err
 
     if metrics is None:
         metrics = [
@@ -118,7 +124,7 @@ def collect_results_from_wandb(
 def build_features_from_configs(
     configs: list[dict],
     phase: str | None = None,
-) -> tuple["np.ndarray", list[str]]:
+) -> tuple[np.ndarray, list[str]]:
     """Build feature matrix from weight configurations.
 
     Args:
@@ -152,8 +158,8 @@ def build_features_from_configs(
 
 
 def run_regression_analysis(
-    features: "np.ndarray",
-    targets: "np.ndarray",
+    features: np.ndarray,
+    targets: np.ndarray,
     feature_names: list[str],
     alpha: float = 1.0,
 ) -> RegressionResults:
@@ -171,8 +177,8 @@ def run_regression_analysis(
     try:
         from sklearn.linear_model import Ridge
         from sklearn.preprocessing import StandardScaler
-    except ImportError:
-        raise ImportError("scikit-learn is required for regression analysis")
+    except ImportError as err:
+        raise ImportError("scikit-learn is required for regression analysis") from err
 
     # Remove samples with missing targets
     mask = ~np.isnan(targets)
@@ -192,7 +198,7 @@ def run_regression_analysis(
 
     return RegressionResults(
         feature_names=feature_names,
-        coefficients=dict(zip(feature_names, model.coef_)),
+        coefficients=dict(zip(feature_names, model.coef_, strict=True)),
         r2_score=model.score(X_scaled, y),
         n_samples=len(y),
     )
@@ -200,7 +206,7 @@ def run_regression_analysis(
 
 def compare_phase_importance(
     configs: list[dict],
-    targets: "np.ndarray",
+    targets: np.ndarray,
     target_name: str = "eval/loss",
 ) -> dict[str, RegressionResults]:
     """Compare the relative importance of each training phase.
@@ -223,10 +229,7 @@ def compare_phase_importance(
         try:
             phase_results = run_regression_analysis(features, targets, feature_names)
             results[phase] = phase_results
-            logger.info(
-                f"{phase} R2 for {target_name}: {phase_results.r2_score:.4f} "
-                f"(n={phase_results.n_samples})"
-            )
+            logger.info(f"{phase} R2 for {target_name}: {phase_results.r2_score:.4f} " f"(n={phase_results.n_samples})")
         except ValueError as e:
             logger.warning(f"Skipping {phase}: {e}")
 
@@ -235,7 +238,7 @@ def compare_phase_importance(
 
 def analyze_sft_importance(
     configs: list[dict],
-    targets: "np.ndarray",
+    targets: np.ndarray,
     target_name: str = "eval/loss",
 ) -> dict:
     """Analyze the importance of SFT data weight in each phase.
@@ -255,9 +258,7 @@ def analyze_sft_importance(
 
     for phase in ["phase1", "phase2", "phase3"]:
         # Extract SFT weights for this phase
-        sft_weights = np.array(
-            [config[f"{phase}_weights"].get("sft", 0.0) for config in configs]
-        )
+        sft_weights = np.array([config[f"{phase}_weights"].get("sft", 0.0) for config in configs])
 
         # Remove samples with missing targets
         mask = ~np.isnan(targets)
@@ -277,9 +278,7 @@ def analyze_sft_importance(
             "n_samples": len(y),
         }
 
-        logger.info(
-            f"{phase} SFT weight correlation with {target_name}: {correlation:.4f}"
-        )
+        logger.info(f"{phase} SFT weight correlation with {target_name}: {correlation:.4f}")
 
     return results
 
@@ -308,9 +307,7 @@ def print_analysis_summary(
     print("\n2. Top Coefficients per Phase:")
     print("-" * 40)
     for phase, results in sorted(phase_results.items()):
-        sorted_coefs = sorted(
-            results.coefficients.items(), key=lambda x: abs(x[1]), reverse=True
-        )
+        sorted_coefs = sorted(results.coefficients.items(), key=lambda x: abs(x[1]), reverse=True)
         print(f"  {phase}:")
         for name, coef in sorted_coefs[:3]:
             print(f"    {name}: {coef:.4f}")
@@ -318,10 +315,7 @@ def print_analysis_summary(
     print("\n3. SFT Weight Correlation by Phase:")
     print("-" * 40)
     for phase, stats in sorted(sft_analysis.items()):
-        print(
-            f"  {phase}: corr={stats['correlation']:.4f}, "
-            f"mean_weight={stats['mean_sft_weight']:.3f}"
-        )
+        print(f"  {phase}: corr={stats['correlation']:.4f}, " f"mean_weight={stats['mean_sft_weight']:.3f}")
 
     # Highlight key finding
     if sft_analysis:

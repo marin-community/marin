@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Weight sampling for three-phase data mixture experiments.
+"""Weight sampling for n-domain, n-phase data mixture experiments.
 
 Adapted from RegMix (arXiv:2407.01492) synthesize_mixture.py to support
-three-partition (pretrain, midtrain, SFT) sampling across three training phases.
+arbitrary domain partitions and phase counts.
 """
 
 import hashlib
@@ -23,207 +23,167 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from experiments.three_phase_swarm.config import WeightConfig, ExperimentConfig
+
 
 @dataclass
-class ThreePartitionWeightConfig:
-    """Configuration for a single three-phase training run.
+class DirichletSamplingParams:
+    """Parameters for Dirichlet-based weight sampling.
 
-    Each phase has its own weight distribution over the three data partitions.
-    Weights sum to 1.0 within each phase.
+    Attributes:
+        temp: Temperature for the prior distribution (0.5 smooths skewed distributions).
+        min_strength: Minimum Dirichlet concentration parameter.
+        max_strength: Maximum Dirichlet concentration parameter.
+        min_weight: Minimum weight threshold for statistical significance.
+        max_ratio: Maximum ratio vs natural proportion to prevent extreme weights.
     """
 
-    run_id: int
-    phase1_weights: dict[str, float]  # {"pretrain": 0.8, "midtrain": 0.15, "sft": 0.05}
-    phase2_weights: dict[str, float]  # {"pretrain": 0.3, "midtrain": 0.6, "sft": 0.1}
-    phase3_weights: dict[str, float]  # {"pretrain": 0.1, "midtrain": 0.2, "sft": 0.7}
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary for serialization."""
-        return {
-            "run_id": self.run_id,
-            "phase1_weights": self.phase1_weights,
-            "phase2_weights": self.phase2_weights,
-            "phase3_weights": self.phase3_weights,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "ThreePartitionWeightConfig":
-        """Create from dictionary."""
-        return cls(
-            run_id=d["run_id"],
-            phase1_weights=d["phase1_weights"],
-            phase2_weights=d["phase2_weights"],
-            phase3_weights=d["phase3_weights"],
-        )
+    temp: float = 0.5
+    min_strength: float = 0.1
+    max_strength: float = 5.0
+    min_weight: float = 2e-4
+    max_ratio: float = 15.0
 
 
-class ThreePartitionWeightSampler:
-    """Samples mixture weights for three-partition, three-phase training.
+class WeightSampler:
+    """Samples mixture weights for n-domain, n-phase training.
 
     Uses temperature-scaled Dirichlet sampling with reject sampling for constraints,
     following the RegMix methodology.
-
-    Parameters adapted from RegMix synthesize_mixture.py:
-    - TEMP: Temperature for the prior distribution (0.5 smooths skewed distributions)
-    - MIN_STRENGTH/MAX_STRENGTH: Range for Dirichlet concentration parameter
-    - MIN_WEIGHT: Minimum weight threshold for statistical significance
-    - MAX_RATIO: Maximum ratio vs natural proportion to prevent extreme weights
     """
 
-    PARTITIONS = ["pretrain", "midtrain", "sft"]
-
-    # RegMix hyperparameters
-    TEMP = 0.5  # Temperature for Dirichlet sampling
-    MIN_STRENGTH = 0.1  # Minimum concentration parameter
-    MAX_STRENGTH = 5.0  # Maximum concentration parameter
-    MIN_WEIGHT = 2e-4  # Minimum weight threshold
-    MAX_RATIO = 15.0  # Maximum ratio vs natural proportion
-    SAMPLE_MULTIPLIER = 100  # Oversample for reject sampling
-
-    # Natural proportions reflecting typical training data distribution
-    # These are used as the prior for Dirichlet sampling
-    DEFAULT_NATURAL_PROPORTIONS = {
-        "pretrain": 0.70,  # Most data is pretraining
-        "midtrain": 0.25,  # Some midtraining
-        "sft": 0.05,  # Small amount of SFT
-    }
+    SAMPLE_MULTIPLIER = 100  # Oversample factor for reject sampling
 
     def __init__(
         self,
+        domain_names: list[str],
+        phase_names: list[str],
         natural_proportions: dict[str, float] | None = None,
         seed: int = 42,
-        temp: float | None = None,
-        min_strength: float | None = None,
-        max_strength: float | None = None,
-        min_weight: float | None = None,
-        max_ratio: float | None = None,
+        params: DirichletSamplingParams | None = None,
     ):
         """Initialize the weight sampler.
 
         Args:
-            natural_proportions: Prior proportions for each partition. If None, uses defaults.
+            domain_names: List of domain names to sample weights for.
+            phase_names: List of phase names (for labeling output).
+            natural_proportions: Prior proportions for each domain. If None, uses uniform.
             seed: Random seed for reproducibility.
-            temp: Temperature for Dirichlet sampling. If None, uses TEMP.
-            min_strength: Minimum concentration parameter. If None, uses MIN_STRENGTH.
-            max_strength: Maximum concentration parameter. If None, uses MAX_STRENGTH.
-            min_weight: Minimum weight threshold. If None, uses MIN_WEIGHT.
-            max_ratio: Maximum ratio vs natural proportion. If None, uses MAX_RATIO.
+            params: Dirichlet sampling parameters. If None, uses defaults.
         """
-        self.natural_proportions = natural_proportions or self.DEFAULT_NATURAL_PROPORTIONS.copy()
+        self.domain_names = list(domain_names)
+        self.phase_names = list(phase_names)
+        self.n_domains = len(self.domain_names)
+        self.n_phases = len(self.phase_names)
+
+        # Set natural proportions
+        if natural_proportions is None:
+            # Uniform proportions
+            self.natural_proportions = {d: 1.0 / self.n_domains for d in self.domain_names}
+        else:
+            # Normalize provided proportions
+            total = sum(natural_proportions.get(d, 1.0) for d in self.domain_names)
+            self.natural_proportions = {d: natural_proportions.get(d, 1.0) / total for d in self.domain_names}
+
         self.rng = np.random.default_rng(seed)
+        self.params = params or DirichletSamplingParams()
 
-        # Allow overriding hyperparameters
-        self.temp = temp if temp is not None else self.TEMP
-        self.min_strength = min_strength if min_strength is not None else self.MIN_STRENGTH
-        self.max_strength = max_strength if max_strength is not None else self.MAX_STRENGTH
-        self.min_weight = min_weight if min_weight is not None else self.MIN_WEIGHT
-        self.max_ratio = max_ratio if max_ratio is not None else self.MAX_RATIO
-
-        # Normalize natural proportions
-        total = sum(self.natural_proportions.values())
-        self.natural_proportions = {k: v / total for k, v in self.natural_proportions.items()}
-
-        # Compute upper bounds for reject sampling (max ratio constraint)
+        # Compute upper bounds for reject sampling
         self.upper_bounds = {
-            name: min(prop * self.max_ratio, 1.0) for name, prop in self.natural_proportions.items()
+            name: min(prop * self.params.max_ratio, 1.0) for name, prop in self.natural_proportions.items()
         }
+
+    @classmethod
+    def from_experiment_config(
+        cls,
+        config: ExperimentConfig,
+        seed: int = 42,
+        params: DirichletSamplingParams | None = None,
+    ) -> "WeightSampler":
+        """Create a sampler from an experiment configuration.
+
+        Args:
+            config: The experiment configuration.
+            seed: Random seed.
+            params: Optional sampling parameters.
+
+        Returns:
+            WeightSampler configured for the experiment.
+        """
+        return cls(
+            domain_names=config.domain_names,
+            phase_names=config.phase_schedule.phase_names,
+            natural_proportions=config.get_natural_proportions(),
+            seed=seed,
+            params=params,
+        )
 
     def sample_phase_weights(self) -> dict[str, float]:
         """Sample weights for a single phase using Dirichlet distribution.
 
-        Uses temperature-scaled alphas and reject sampling to enforce constraints.
-
         Returns:
-            Dictionary mapping partition names to weights (sums to 1.0).
+            Dictionary mapping domain names to weights (sums to 1.0).
         """
-        # Sample concentration parameter (strength) from log-uniform distribution
-        log_min = np.log10(self.min_strength)
-        log_max = np.log10(self.max_strength)
+        # Sample concentration parameter from log-uniform distribution
+        log_min = np.log10(self.params.min_strength)
+        log_max = np.log10(self.params.max_strength)
         strength = 10 ** self.rng.uniform(log_min, log_max)
 
         # Create temperature-scaled alpha vector
-        alphas = np.array(
-            [strength * (self.natural_proportions[p] ** self.temp) for p in self.PARTITIONS]
-        )
+        alphas = np.array([strength * (self.natural_proportions[d] ** self.params.temp) for d in self.domain_names])
 
         # Rejection sampling loop
         max_attempts = 1000
         for _ in range(max_attempts):
             weights = self.rng.dirichlet(alphas)
-            weights_dict = dict(zip(self.PARTITIONS, weights))
+            weights_dict = dict(zip(self.domain_names, weights, strict=True))
 
             if self._check_constraints(weights_dict):
                 return self._normalize(weights_dict)
 
-        # Fallback to natural proportions if rejection sampling fails
+        # Fallback to natural proportions
         return self._normalize(self.natural_proportions.copy())
 
     def _check_constraints(self, weights: dict[str, float]) -> bool:
-        """Check if weights satisfy all constraints.
-
-        Constraints:
-        1. Maximum ratio constraint: weight <= natural_prop * MAX_RATIO
-        2. Minimum weight threshold is applied during normalization, not rejection
-
-        Args:
-            weights: Dictionary of partition weights.
-
-        Returns:
-            True if weights satisfy constraints, False otherwise.
-        """
+        """Check if weights satisfy the max ratio constraint."""
         for name, w in weights.items():
-            upper_bound = self.upper_bounds[name]
-            if w > upper_bound:
+            if w > self.upper_bounds[name]:
                 return False
         return True
 
     def _normalize(self, weights: dict[str, float]) -> dict[str, float]:
-        """Normalize weights to sum to 1.0 and apply minimum threshold.
-
-        Weights below the minimum threshold are set to zero, then remaining
-        weights are renormalized.
-
-        Args:
-            weights: Dictionary of partition weights.
-
-        Returns:
-            Normalized weights summing to 1.0.
-        """
+        """Normalize weights and apply minimum threshold."""
         # Zero out very small weights
-        weights = {k: (v if v >= self.min_weight else 0.0) for k, v in weights.items()}
+        weights = {k: v if v >= self.params.min_weight else 0.0 for k, v in weights.items()}
 
         total = sum(weights.values())
         if total > 0:
             return {k: v / total for k, v in weights.items()}
 
-        # Fallback to uniform if all weights are zero
-        n = len(weights)
-        return {k: 1.0 / n for k in weights}
+        # Fallback to uniform
+        return {k: 1.0 / self.n_domains for k in weights}
 
-    def sample_config(self, run_id: int) -> ThreePartitionWeightConfig:
-        """Sample a complete three-phase weight configuration.
-
-        Each phase's weights are sampled independently.
+    def sample_config(self, run_id: int) -> WeightConfig:
+        """Sample a complete weight configuration for all phases.
 
         Args:
             run_id: Identifier for this configuration.
 
         Returns:
-            ThreePartitionWeightConfig with sampled weights for all phases.
+            WeightConfig with sampled weights for all phases.
         """
-        return ThreePartitionWeightConfig(
-            run_id=run_id,
-            phase1_weights=self.sample_phase_weights(),
-            phase2_weights=self.sample_phase_weights(),
-            phase3_weights=self.sample_phase_weights(),
-        )
+        phase_weights = {}
+        for phase_name in self.phase_names:
+            phase_weights[phase_name] = self.sample_phase_weights()
+
+        return WeightConfig(run_id=run_id, phase_weights=phase_weights)
 
     def sample_n_configs(
         self,
         n: int,
         deduplicate: bool = True,
         precision: int = 2,
-    ) -> list[ThreePartitionWeightConfig]:
+    ) -> list[WeightConfig]:
         """Sample n unique configurations with optional deduplication.
 
         Args:
@@ -232,9 +192,9 @@ class ThreePartitionWeightSampler:
             precision: Decimal places for deduplication comparison.
 
         Returns:
-            List of n ThreePartitionWeightConfig instances.
+            List of n WeightConfig instances.
         """
-        configs: list[ThreePartitionWeightConfig] = []
+        configs: list[WeightConfig] = []
         seen_hashes: set[str] = set()
 
         attempts = 0
@@ -262,52 +222,36 @@ class ThreePartitionWeightSampler:
 
         return configs
 
-    def _config_hash(self, config: ThreePartitionWeightConfig, precision: int = 2) -> str:
-        """Create a hash for deduplication based on quantized weights.
-
-        Args:
-            config: Configuration to hash.
-            precision: Decimal places for quantization.
-
-        Returns:
-            Hash string for the configuration.
-        """
+    def _config_hash(self, config: WeightConfig, precision: int = 2) -> str:
+        """Create a hash for deduplication."""
 
         def quantize(weights: dict[str, float]) -> tuple:
             return tuple(sorted((k, round(v, precision)) for k, v in weights.items()))
 
-        key = (
-            quantize(config.phase1_weights),
-            quantize(config.phase2_weights),
-            quantize(config.phase3_weights),
-        )
+        key = tuple((phase, quantize(weights)) for phase, weights in sorted(config.phase_weights.items()))
         return hashlib.md5(str(key).encode()).hexdigest()
 
-    def summarize_configs(self, configs: list[ThreePartitionWeightConfig]) -> dict:
+    def summarize_configs(self, configs: list[WeightConfig]) -> dict:
         """Generate summary statistics for a set of configurations.
 
         Args:
             configs: List of configurations to summarize.
 
         Returns:
-            Dictionary with summary statistics.
+            Dictionary with summary statistics per phase and domain.
         """
-        phase1_weights = np.array([[c.phase1_weights[p] for p in self.PARTITIONS] for c in configs])
-        phase2_weights = np.array([[c.phase2_weights[p] for p in self.PARTITIONS] for c in configs])
-        phase3_weights = np.array([[c.phase3_weights[p] for p in self.PARTITIONS] for c in configs])
+        result = {"n_configs": len(configs)}
 
-        def stats(arr: np.ndarray, partition_idx: int) -> dict:
-            col = arr[:, partition_idx]
-            return {
-                "mean": float(np.mean(col)),
-                "std": float(np.std(col)),
-                "min": float(np.min(col)),
-                "max": float(np.max(col)),
-            }
+        for phase_name in self.phase_names:
+            phase_data = {}
+            for domain_name in self.domain_names:
+                weights = [c.phase_weights[phase_name][domain_name] for c in configs]
+                phase_data[domain_name] = {
+                    "mean": float(np.mean(weights)),
+                    "std": float(np.std(weights)),
+                    "min": float(np.min(weights)),
+                    "max": float(np.max(weights)),
+                }
+            result[phase_name] = phase_data
 
-        return {
-            "n_configs": len(configs),
-            "phase1": {p: stats(phase1_weights, i) for i, p in enumerate(self.PARTITIONS)},
-            "phase2": {p: stats(phase2_weights, i) for i, p in enumerate(self.PARTITIONS)},
-            "phase3": {p: stats(phase3_weights, i) for i, p in enumerate(self.PARTITIONS)},
-        }
+        return result
