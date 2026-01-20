@@ -25,14 +25,11 @@ import logging
 import os
 import re
 from collections.abc import Iterator, Sequence
-from pathlib import Path
 
 import draccus
 import transformers
 from datasets import load_dataset_builder
-from filelock import FileLock
 from fray.job import create_job_ctx, get_default_job_ctx
-from huggingface_hub import snapshot_download
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -49,67 +46,6 @@ from marin.execution.executor import ExecutorStep, InputName, VersionedValue
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
-
-_TOKENIZER_CACHE: dict[str, transformers.PreTrainedTokenizerBase] = {}
-
-
-def _localize_tokenizer_if_needed(tokenizer_id_or_path: str) -> str:
-    """Return a local path to the tokenizer files, avoiding Hub lookups in tight loops."""
-    if Path(tokenizer_id_or_path).exists():
-        return tokenizer_id_or_path
-
-    cache_root = Path(os.environ.get("MARIN_TOKENIZER_CACHE_DIR", "/tmp/marin_tokenizers"))
-    local_dir = cache_root / tokenizer_id_or_path.replace("/", "__")
-    local_dir.mkdir(parents=True, exist_ok=True)
-
-    # If we already have tokenizer files locally, avoid any Hub API calls entirely.
-    cached_any = any(
-        (local_dir / name).exists()
-        for name in (
-            "tokenizer.json",
-            "tokenizer.model",
-            "tokenizer_config.json",
-            "special_tokens_map.json",
-            "vocab.json",
-            "merges.txt",
-        )
-    )
-    if cached_any:
-        return str(local_dir)
-
-    # Only download tokenizer-related files; never pull full model weights.
-    allow_patterns = [
-        "tokenizer.*",
-        "tokenizer_config.json",
-        "special_tokens_map.json",
-        "added_tokens.json",
-        "vocab.json",
-        "merges.txt",
-        "chat_template.json",
-        "config.json",
-    ]
-    lock = FileLock(str(local_dir) + ".lock")
-    with lock:
-        cached_any = any((local_dir / name).exists() for name in ("tokenizer.json", "tokenizer.model"))
-        if not cached_any:
-            snapshot_download(
-                repo_id=tokenizer_id_or_path,
-                local_dir=str(local_dir),
-                allow_patterns=allow_patterns,
-                token=os.environ.get("HF_TOKEN") or None,
-            )
-
-    return str(local_dir)
-
-
-def _get_tokenizer(tokenizer_id_or_path: str) -> transformers.PreTrainedTokenizerBase:
-    if tokenizer_id_or_path in _TOKENIZER_CACHE:
-        return _TOKENIZER_CACHE[tokenizer_id_or_path]
-
-    localized = _localize_tokenizer_if_needed(tokenizer_id_or_path)
-    tokenizer = transformers.AutoTokenizer.from_pretrained(localized, local_files_only=True)
-    _TOKENIZER_CACHE[tokenizer_id_or_path] = tokenizer
-    return tokenizer
 
 
 @dataclasses.dataclass(frozen=True)
@@ -311,7 +247,7 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer = _get_tokenizer(config.tokenizer)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     for batch in batches:
