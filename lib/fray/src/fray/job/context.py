@@ -512,6 +512,7 @@ def create_job_ctx(
         >>> context = create_job_ctx("sync")
         >>> context = create_job_ctx("threadpool", max_workers=4)
         >>> context = create_job_ctx("ray")
+        >>> context = create_job_ctx("ray", num_cpus=2, memory=2**30)
     """
     if context_type == "auto":
         import ray
