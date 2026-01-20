@@ -15,12 +15,11 @@ import haliax.partitioning
 import jax
 import numpy as np
 from haliax import is_named_array
-from haliax._src.util import index_where
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceAxis, ResourceMapping
 from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
-from jax.experimental.multihost_utils import host_local_array_to_global_array
+from jax.experimental.multihost_utils import host_local_array_to_global_array, process_allgather
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
 
@@ -399,47 +398,90 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
      2. Then, inside jit, we select the source'th element of the array, then reshard with the out_axis_specs
 
     """
-    current_mesh: jax.sharding.Mesh = hax.partitioning._get_mesh()
+    # NOTE: Prior implementations attempted to use `jax.make_array_from_callback` with a `NamedSharding` constructed
+    # from the active training mesh. On multi-host TPU, that can crash with "not fully addressable" / "not addressable
+    # sharding" errors.
+    #
+    # We broadcast using a temporary mesh over ("processes", "local_devices") and a reduction across the sharded
+    # "processes" axis. Some callers (notably eval-harness control-plane messages) use `PartitionSpec()` (replicated)
+    # outputs; in that case we intentionally return host-local arrays to avoid device-order mismatches between the
+    # temporary mesh and the active training mesh.
 
-    axis_names = current_mesh.axis_names
-
-    valid_device_for_process = index_where(lambda d: d.host_id == source, current_mesh.devices.flatten())
-    sharding = NamedSharding(
-        current_mesh,
-        PartitionSpec(
-            axis_names,
-        ),
-    )
-
-    def pre_jit(x):
-        if jax.process_index() == source:
-            inp = np.array(x)
-        else:
-            inp = jnp.zeros(x.shape, dtype=x.dtype)
-
-        shape = (len(jax.devices()),) + inp.shape
-        inp = jnp.expand_dims(inp, axis=0)
-        out = jax.make_array_from_callback(shape, sharding, lambda _: inp)
-
-        return out
-
-    def in_jit(x, pspec):
-        if isinstance(x, hax.NamedArray):
-            arr = x.array
-        else:
-            arr = x
-        arr = jax.lax.with_sharding_constraint(arr[valid_device_for_process], pspec)
-
-        if isinstance(x, hax.NamedArray):
-            return hax.named(arr, x.axis_names)
-        else:
+    def _maybe_constrain(arr: jax.Array, spec: Any) -> jax.Array:
+        # `jax.jit` (and some multihost contexts) can error if we try to apply a sharding constraint with a sharding
+        # that isn't fully addressable from the current host. In practice, callers like eval-harness pass
+        # `NamedSharding` objects produced from a global mesh; for robustness we avoid constraining in that case and
+        # let downstream `named_jit` / pjitted functions reshard as needed.
+        if spec is None:
             return arr
+        if isinstance(spec, PartitionSpec):
+            resolved_mesh = haliax.partitioning._get_mesh()
+            return jax.lax.with_sharding_constraint(arr, NamedSharding(resolved_mesh, spec))
+        return arr
 
-    x = jax.tree.map(pre_jit, x)
-    # q = eqx.filter_jit(jax.tree.map).lower(in_jit, x, out_axis_specs, is_leaf=is_named_array).as_text()
-    out = eqx.filter_jit(jax.tree.map)(in_jit, x, out_axis_specs, is_leaf=is_named_array)
+    def _replicated_out_specs(specs: Any) -> bool:
+        if specs is None:
+            return True
+        if isinstance(specs, PartitionSpec):
+            return specs == PartitionSpec()
+        leaves = jax.tree_util.tree_leaves(specs, is_leaf=lambda s: isinstance(s, PartitionSpec))
+        if not leaves:
+            return False
+        for leaf in leaves:
+            if leaf is None:
+                continue
+            if not isinstance(leaf, PartitionSpec) or leaf != PartitionSpec():
+                return False
+        return True
 
-    return out
+    if jax.process_count() == 1:
+
+        def in_jit_single(x_leaf: Any, spec: Any) -> Any:
+            arr = x_leaf.array if isinstance(x_leaf, hax.NamedArray) else x_leaf
+            arr = _maybe_constrain(arr, spec)
+            return hax.named(arr, x_leaf.axis_names) if isinstance(x_leaf, hax.NamedArray) else arr
+
+        return eqx.filter_jit(jax.tree.map)(in_jit_single, x, out_axis_specs, is_leaf=is_named_array)
+
+    active_mesh = haliax.partitioning._get_mesh()
+    devices: np.ndarray = np.asarray(active_mesh.devices).reshape(jax.process_count(), jax.local_device_count())
+    global_mesh = Mesh(devices, ("processes", "local_devices"))
+    in_pspec = PartitionSpec("processes")
+
+    def pre_jit(x_leaf: Any) -> jax.Array:
+        arr = x_leaf.array if isinstance(x_leaf, hax.NamedArray) else x_leaf
+        # `host_local_array_to_global_array` expects the leading axis to be shardable by the requested mesh axis.
+        # In particular, for `PartitionSpec("processes")` it requires the leading dimension to be divisible by
+        # `jax.process_count()`. Construct a leading "processes" axis explicitly.
+        payload = np.asarray(arr) if jax.process_index() == source else np.zeros(arr.shape, dtype=arr.dtype)
+
+        host = np.zeros((jax.process_count(),) + payload.shape, dtype=payload.dtype)
+        if jax.process_index() == source:
+            host[source] = payload
+
+        return host_local_array_to_global_array(host, global_mesh, in_pspec)
+
+    if _replicated_out_specs(out_axis_specs):
+        # Broadcast to all hosts, then materialize host-local arrays. This avoids JAX errors when the active training
+        # mesh uses a device order that differs from `jax.devices()` order (common on multi-host TPU).
+        x_global = jax.tree.map(pre_jit, x, is_leaf=is_named_array)
+        with haliax.partitioning.set_mesh(global_mesh):
+            reduced = jax.jit(_psum, out_shardings=NamedSharding(global_mesh, PartitionSpec()))(x_global)
+
+        def post_jit(x_leaf: Any, x_leaf_orig: Any) -> Any:
+            host_arr = jax.device_get(x_leaf.addressable_data(0))
+            arr = jnp.asarray(host_arr)
+            return hax.named(arr, x_leaf_orig.axis_names) if isinstance(x_leaf_orig, hax.NamedArray) else arr
+
+        return jax.tree.map(post_jit, reduced, x, is_leaf=is_named_array)
+
+    def in_jit(x_global: jax.Array, spec: Any, x_leaf: Any) -> Any:
+        arr = jnp.sum(x_global, axis=0)
+        arr = _maybe_constrain(arr, spec)
+        return hax.named(arr, x_leaf.axis_names) if isinstance(x_leaf, hax.NamedArray) else arr
+
+    x_global = jax.tree.map(pre_jit, x, is_leaf=is_named_array)
+    return eqx.filter_jit(jax.tree.map)(in_jit, x_global, out_axis_specs, x, is_leaf=is_named_array)
 
 
 def tree_broadcast_to(prefix: PyTree[L], t: T, *, is_leaf: Optional[Callable[[Any], bool]] = None) -> T:
@@ -482,27 +524,21 @@ def broadcast_one_to_all(in_tree: Any, is_source: bool | None = None) -> Any:
         return jax.tree.map(np.asarray, in_tree)
 
     if is_source is None:
-        is_source = jax.process_index() == 0
+        source_process = 0
+    else:
+        flags = process_allgather(np.asarray(1 if is_source else 0, dtype=np.int32))
+        flags_sum = int(np.sum(flags))
+        if flags_sum != 1:
+            raise ValueError(f"broadcast_one_to_all expected exactly one source process, got sum={flags_sum}.")
+        source_process = int(np.argmax(flags))
 
-    devices: np.ndarray = np.array(jax.devices()).reshape(jax.process_count(), jax.local_device_count())
-    global_mesh = jax.sharding.Mesh(devices, ("processes", "local_devices"))
-    pspec = PartitionSpec("processes")
+    gathered = process_allgather(jax.tree.map(np.asarray, in_tree))
 
-    def pre_jit(x):
-        if is_source:
-            inp = x
-        else:
-            inp = np.zeros_like(x)
-        inp = np.expand_dims(inp, axis=0)
-        return host_local_array_to_global_array(inp, global_mesh, pspec)
+    def _select_source(x: np.ndarray) -> np.ndarray:
+        # `process_allgather` stacks over a new leading axis (processes).
+        return np.asarray(x[source_process])
 
-    def post_jit(x):
-        return jax.device_get(x.addressable_data(0))
-
-    with haliax.partitioning.set_mesh(global_mesh):
-        in_tree = jax.tree.map(pre_jit, in_tree)
-        out_tree = jax.jit(_psum, out_shardings=jax.sharding.NamedSharding(global_mesh, PartitionSpec()))(in_tree)
-        return jax.tree.map(post_jit, out_tree)
+    return jax.tree.map(_select_source, gathered)
 
 
 def assert_equal(in_tree, fail_message: str = ""):

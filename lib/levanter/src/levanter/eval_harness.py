@@ -27,7 +27,7 @@ import tempfile
 import typing
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Iterator, List, Optional, Tuple, Union
+from typing import Any, Iterator, List, Optional, Tuple, Union
 
 import equinox as eqx
 import haliax
@@ -37,8 +37,6 @@ import jax.random as jrandom
 import jmp
 import numpy as np
 from haliax import NamedArray
-from jax.sharding import PartitionSpec
-
 import levanter.tracker
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
 from levanter.data.packing import (
@@ -80,7 +78,7 @@ from levanter.data import batched
 from levanter.data.loader import stack_batches
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
+from levanter.utils.jax_utils import broadcast_one_to_all, parameter_count, use_cpu_device
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
 
@@ -261,26 +259,56 @@ class _LmEvalHarnessWorker:
                 raise ValueError(f"Unknown message type: {message}")
 
     def _receive_message(self):
-        stop_message = jnp.array(_Message.STOP)
-        message = broadcast_shard(stop_message, PartitionSpec())
+        # Use a host-level broadcast for control-plane messages. These values are consumed on host
+        # (via `.item()`), so we don't need to shard onto the training mesh.
+        message = broadcast_one_to_all(np.array(_Message.STOP))
         return message.item()
 
-    def _receive_payload(self):
-        payload = broadcast_shard(
-            self._dummy_batch,
-            hax.partitioning.infer_resource_partitions(self._dummy_batch),
+    def _broadcast_payload_like_dummy(self, payload: Any | None, *, is_source: bool) -> Any:
+        def _to_host_array(x: Any) -> np.ndarray:
+            if isinstance(x, hax.NamedArray):
+                x = x.array
+            return np.asarray(jax.device_get(x))
+
+        template = self._dummy_batch
+        tree_for_bcast = payload if is_source else template
+
+        host_tree = jax.tree.map(
+            _to_host_array,
+            tree_for_bcast,
+            is_leaf=lambda x: isinstance(x, hax.NamedArray),
         )
-        return payload
+
+        host_payload = broadcast_one_to_all(host_tree, is_source=is_source)
+
+        def _rebuild(template_leaf: Any, host_leaf: Any) -> Any:
+            if isinstance(template_leaf, hax.NamedArray):
+                return hax.named(jnp.asarray(host_leaf), template_leaf.axes)
+            if isinstance(template_leaf, jax.Array) or isinstance(template_leaf, np.ndarray):
+                return jnp.asarray(host_leaf)
+            return host_leaf
+
+        return jax.tree.map(
+            _rebuild,
+            template,
+            host_payload,
+            is_leaf=lambda x: isinstance(x, hax.NamedArray),
+        )
+
+    def _receive_payload(self):
+        mapping = hax.partitioning.infer_resource_partitions(self._dummy_batch)
+        payload = self._broadcast_payload_like_dummy(None, is_source=False)
+        return hax.partitioning.shard(payload, mapping)
 
     def _send_message(self, message):
         assert jax.process_index() == 0
-        out = broadcast_shard(jnp.array(message), PartitionSpec())
-        return out
+        return broadcast_one_to_all(np.array(message))
 
     def _send_payload(self, payload):
         assert jax.process_index() == 0
-        out = broadcast_shard(payload, hax.partitioning.infer_resource_partitions(payload))
-        return out
+        mapping = hax.partitioning.infer_resource_partitions(self._dummy_batch)
+        payload = self._broadcast_payload_like_dummy(payload, is_source=True)
+        return hax.partitioning.shard(payload, mapping)
 
     def process_loglikelihood(self, packed_request):
         out = self._jit_loglikelihood(self.model, packed_request)
@@ -538,16 +566,12 @@ class LevanterHarnessLM(TemplateLM):
             # Handle profiler start/stop based on step
             self._handle_profiler_step()
 
-            batch = hax.shard(batch, self.axis_resources)
-
+            # These helpers need host-local arrays. Don't call them after sharding, since sharding can produce global
+            # arrays that are not fully addressable on every host.
             segments_this_batch = get_segment_ids_from_batch(
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
-
             padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
-            batch = jax.device_put(batch)
-
-            batch = jax.device_put(batch)
 
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
 
