@@ -22,23 +22,29 @@ checkpoints are read by the rollout workers to update their models.
 
 import dataclasses
 import logging
+import time
 from dataclasses import dataclass
 
 import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
+import wandb
+from levanter import callbacks
+from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
+from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from transformers import PreTrainedTokenizer
 
 from marin.rl import weight_transfer
+from fray.job import get_default_job_ctx
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_transfer import WeightTransferConfig
 
-from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader
+from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, RolloutWithCount
 from .rl_losses import RLLossModule
 from .rollout_storage import RolloutStorageConfig
 from .train_batch import create_training_batch_from_rollouts
@@ -93,26 +99,61 @@ class StreamingRolloutLoader:
         self.config = config
         self.timeout = 60.0
 
-        # Get max_tokens from curriculum
-        self.max_tokens = self.config.curriculum_config.max_tokens
+        # Get max_seq_len from curriculum (total sequence length for prompt + response)
+        self.max_tokens = self.config.curriculum_config.max_seq_len
+
+        is_splash = getattr(self.config.model, "attn_backend", None) == AttentionBackend.SPLASH
+        flash_block_size = getattr(self.config.model, "flash_attention_block_size", None)
+
+        if is_splash:
+            self.pad_to_multiple = flash_block_size or DEFAULT_SPLASH_BLOCK_SIZE
+        else:
+            self.pad_to_multiple = flash_block_size or DEFAULT_FLASH_BLOCK_SIZE
 
         self.pad_token_id = self.config.tokenizer.pad_token_id
         if self.pad_token_id is None:
             self.pad_token_id = self.config.tokenizer.eos_token_id
 
+        # Track batch prep time for forward/backward calculation
+        self._last_batch_prep_time: float = 0.0
+        self._last_rollouts: list[RolloutWithCount] | None = None
+
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
         while True:
+            fetch_start = time.time()
             rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
+            fetch_time = time.time() - fetch_start
+
+            self._last_rollouts = rollouts
+
             if not rollouts:
                 logger.warning("No rollouts received from data loader within timeout, retrying...")
                 continue
 
-            # Convert rollouts to training batch
-            batch = create_training_batch_from_rollouts(rollouts, self.max_tokens, self.pad_token_id)
-            # shard onto the device mesh
+            # Measure batch creation time
+            batch_start = time.time()
+            batch = create_training_batch_from_rollouts(
+                rollouts, self.max_tokens, self.pad_token_id, self.pad_to_multiple
+            )
+            batch_time = time.time() - batch_start
+
+            # Measure sharding time
+            shard_start = time.time()
             with hax.set_mesh(self.config.trainer.device_mesh):
                 sharded_batch = hax.shard(batch, self.config.trainer.compute_axis_mapping)
+            shard_time = time.time() - shard_start
+
+            total_time = fetch_time + batch_time + shard_time
+            self._last_batch_prep_time = total_time
+            logger.info(
+                "Batch prep: fetch=%.3fs, create=%.3fs, shard=%.3fs, total=%.3fs, rollouts=%d",
+                fetch_time,
+                batch_time,
+                shard_time,
+                total_time,
+                len(rollouts),
+            )
 
             yield sharded_batch
 
@@ -147,6 +188,7 @@ class TrainWorker:
 
         config.trainer.id = f"{config.run_id}-train"
         levanter.initialize(config.trainer)
+
         self.config = config
         self._should_stop = False
         self.tokenizer = config.tokenizer
@@ -213,6 +255,35 @@ class TrainWorker:
 
         self.reference_model = _load_model()
 
+    def _wait_for_initial_rollouts(self, max_wait_time: float = 1200.0, poll_interval: float = 5.0) -> bool:
+        """Wait for initial rollouts from step -1 to be received.
+
+        Args:
+            max_wait_time: Maximum time to wait in seconds (default: 20 minutes)
+            poll_interval: How often to check for rollouts in seconds (default: 5 seconds)
+
+        Returns:
+            True if initial rollouts were received, False if timeout
+        """
+        logger.info("Waiting for initial rollouts from step -1...")
+        start_time = time.time()
+
+        while time.time() - start_time < max_wait_time:
+            buffer_size = self.replay_buffer.size()
+            if buffer_size > 0:
+                elapsed = time.time() - start_time
+                logger.info(f"Received initial rollouts! Buffer size: {buffer_size} (waited {elapsed:.1f}s)")
+                return True
+
+            elapsed = time.time() - start_time
+            if int(elapsed) % 10 == 0 and elapsed > 0:  # Log every 10 seconds
+                logger.info(f"Still waiting for initial rollouts (elapsed: {elapsed:.0f}s, buffer size: {buffer_size})")
+
+            time.sleep(poll_interval)
+
+        logger.warning(f"Timeout waiting for initial rollouts after {max_wait_time}s")
+        return False
+
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
         logger.info("Starting RLOO training with Levanter...")
@@ -233,8 +304,12 @@ class TrainWorker:
             state = trainer.initial_state(training_key, model=self.reference_model)
 
             # Always transfer initial weights to rollout workers before we attempt to start training
-            self.transfer_server.serve_weights(state.int_step, state.model)
-            self.replay_buffer.set_current_step(state.int_step)
+            self.transfer_server.serve_weights(-1, state.model)
+            self.replay_buffer.set_current_step(-1)
+
+            # Wait for initial rollouts to ensure we have baseline measurements
+            if not self._wait_for_initial_rollouts():
+                raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
 
             self._configure_training_hooks(trainer)
 
@@ -263,10 +338,59 @@ class TrainWorker:
 
         trainer.add_hook(_stop_on_signal, every=1)
 
+        # Log training step timing for RL analysis
+        def _log_step_timing(info: levanter.callbacks.StepInfo):
+            # Get batch prep time from the data loader
+            batch_prep_time = self.data_loader._last_batch_prep_time
+
+            # Forward/backward = total step duration - batch prep time
+            forward_backward_duration = max(0.0, info.step_duration - batch_prep_time)
+
+            metrics = {
+                "throughput/step_duration_seconds": info.step_duration,
+                "throughput/batch_prep_duration_seconds": batch_prep_time,
+                "throughput/forward_backward_duration_seconds": forward_backward_duration,
+                "train/loss": float(info.loss),
+            }
+            trainer.tracker.log(metrics, step=info.step)
+            logger.info(
+                "Training step %d completed: duration=%.2fs (batch_prep=%.2fs, fwd_bwd=%.2fs), loss=%.4f",
+                info.step,
+                info.step_duration,
+                batch_prep_time,
+                forward_backward_duration,
+                info.loss,
+            )
+
+        trainer.add_hook(_log_step_timing, every=1)
+
+        def _log_samples_hook(info: levanter.callbacks.StepInfo):
+            rollouts = self.data_loader._last_rollouts
+            if rollouts is not None:
+                self._log_samples(trainer, info.step, rollouts)
+
+        trainer.add_hook(_log_samples_hook, every=1)
+
+        # Add MFU (Model FLOPs Utilization) logging
+        vocab_size = len(self.tokenizer)
+        tokens_per_example = self.config.curriculum_config.max_seq_len
+        flops_per_token = self.config.model.flops_per_token(vocab_size, tokens_per_example)
+        flops_per_example = 3 * flops_per_token * tokens_per_example if flops_per_token is not None else None
+        trainer.add_hook(
+            callbacks.log_performance_stats(
+                tokens_per_example=tokens_per_example,
+                batch_schedule=self.config.trainer.train_batch_size,
+                flops_per_example=flops_per_example,
+                prefix="throughput",
+            ),
+            every=1,
+        )
+
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
             try:
-                self._curriculum_actor.save_checkpoint.call(checkpoint_dir)
+                future = self._curriculum_actor.save_checkpoint.remote(checkpoint_dir)
+                get_default_job_ctx().get(future)
             except Exception as e:
                 logger.error(f"Failed to save curriculum checkpoint: {e}")
 
@@ -283,12 +407,43 @@ class TrainWorker:
         )
 
         model_params = state.model
+
+        # Measure weight transfer time
+        transfer_start = time.time()
         self.transfer_server.serve_weights(step, model_params)
-        metrics = {
-            f"train.weight_transfer.{k}": v for k, v in dataclasses.asdict(self.transfer_server.get_metrics()).items()
-        }
+        transfer_time = time.time() - transfer_start
+
+        metrics = {f"weight_transfer/{k}": v for k, v in dataclasses.asdict(self.transfer_server.get_metrics()).items()}
+        metrics["weight_transfer/serve_time_seconds"] = transfer_time
+
         trainer.tracker.log(metrics, step=step)
-        logger.info(f"Successfully transferred weights with ID {step}")
+        logger.info("Successfully transferred weights with ID %d (transfer_time=%.2fs)", step, transfer_time)
+
+    def _log_samples(self, trainer, step, rollouts):
+        """Log trainer samples for the first 5 prompts to wandb table."""
+        # group by prompt
+        prompts = {}
+        for r_adv in rollouts:
+            r = r_adv.rollout
+            pid = r.env_example_id
+            if pid not in prompts:
+                prompts[pid] = []
+            prompts[pid].append(r)
+
+        # take first 5 prompts
+        first_5_pids = list(prompts.keys())[:5]
+
+        columns = ["step", "prompt_id", "prompt", "response", "reward"]
+        data = []
+        for pid in first_5_pids:
+            prompt_rs = prompts[pid]
+            prompt_text = self.tokenizer.decode(prompt_rs[0].prompt_tokens, skip_special_tokens=False)
+            for r in prompt_rs:
+                response_text = self.tokenizer.decode(r.response_tokens, skip_special_tokens=False)
+                data.append([step, pid, prompt_text, response_text, float(r.episode_reward)])
+
+        table = wandb.Table(columns=columns, data=data)
+        trainer.tracker.log({"train/samples": table}, step=step)
 
     def stop(self):
         """Stop the training worker."""

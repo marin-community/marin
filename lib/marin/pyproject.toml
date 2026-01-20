@@ -25,6 +25,7 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "jax==0.8.0",  # vllm-tpu currently requires this exact version
+    "jaxopt>=0.8.3",
     "haliax",
     "levanter[serve]",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
@@ -37,6 +38,7 @@ dependencies = [
     "numpy",
     "openai",
     "pandas",
+    "plotly",
     "pyarrow>=22",
     "ray==2.53.0",
     "regex",
@@ -44,7 +46,7 @@ dependencies = [
     "s3fs>=2024",
     "toml",
     "torch>=2.7.0",
-    "torchvision>=0.22.0,<0.24",
+    "torchvision==0.24.0",
     "tqdm",
     "tqdm-loggable",
     "wandb",
@@ -66,6 +68,8 @@ test = [
     # need this for integration tests
     "pip",
     "openai-responses",
+    # for scaling law plotting tests
+    "plotly",
 ]
 lint = [
     "ruff==0.14.3",
@@ -111,16 +115,33 @@ conflicts = [
         { extra = "gpu" },
         { extra = "cpu" },
     ],
+    [
+        { extra = "vllm" },
+        { extra = "cpu" },
+    ],
+    [
+        { extra = "vllm" },
+        { extra = "cuda12" },
+    ],
 ]
 
 
 [project.optional-dependencies]
 
-gpu = ["jax[cuda12]==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.24"]
+gpu = ["jax[cuda12]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
 
-tpu = ["jax[tpu]==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.24"]
+tpu = ["jax[tpu]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
 
-cpu = ["jax==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.24"]
+cpu = [
+  "jax==0.8.0",
+  "torch==2.9.0",
+  # Linux x86_64
+  "torchvision==0.24.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  # Windows x86_64 (AMD64)
+  "torchvision==0.24.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  # Linux aarch64, macOS arm64: PyPI default wheel
+  "torchvision==0.24.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+]
 
 rl = [
     "prime",
@@ -132,6 +153,12 @@ eval = [
     "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
 ]
 
+vllm =[
+    "vllm-tpu==0.13.2.post6",
+    "triton==3.5.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
+]
+
+math = ["pylatexenc", "sympy"]
 
 [[tool.uv.index]]
 name = "marin-resiliparse"
