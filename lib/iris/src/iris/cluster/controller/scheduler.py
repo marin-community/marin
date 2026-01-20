@@ -34,81 +34,95 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class WorkerCapacity:
-    """Available resources on a worker (mutable during scheduling)."""
+    """Available capacity on a worker for scheduling.
 
+    Initialized from worker's current available resources. The deduct() method
+    reduces capacity as tasks are tentatively assigned during a scheduling cycle.
+    """
+
+    worker: ControllerWorker
     available_cpu: int
-    available_memory: int  # bytes
+    available_memory: int
     available_gpus: int
-    device_type: str  # "cpu", "gpu", "tpu"
+    device_type: str
     device_variant: str | None
 
+    @staticmethod
+    def from_worker(worker: ControllerWorker) -> "WorkerCapacity":
+        """Create capacity snapshot from a worker's current state."""
+        return WorkerCapacity(
+            worker=worker,
+            available_cpu=worker.available_cpu,
+            available_memory=worker.available_memory,
+            available_gpus=worker.available_gpus,
+            device_type=worker.device_type,
+            device_variant=worker.device_variant,
+        )
 
-def worker_can_fit_task(capacity: WorkerCapacity, job: ControllerJob) -> bool:
-    """Check if worker capacity can fit task. Tasks use the job's resource spec."""
-    res = job.request.resources
+    def can_fit_job(self, job: ControllerJob) -> bool:
+        """Check if this capacity can fit the job's resource requirements."""
+        res = job.request.resources
 
-    if res.cpu > capacity.available_cpu:
-        return False
+        if res.cpu > self.available_cpu:
+            return False
 
-    if res.memory_bytes > capacity.available_memory:
-        return False
+        if res.memory_bytes > self.available_memory:
+            return False
 
-    job_device_type = get_device_type(res.device)
-    if job_device_type != capacity.device_type:
-        return False
+        job_device_type = get_device_type(res.device)
+        if job_device_type != self.device_type:
+            return False
 
-    job_variant = get_device_variant(res.device)
-    if job_variant and job_variant != "auto" and job_variant != capacity.device_variant:
-        return False
+        job_variant = get_device_variant(res.device)
+        if job_variant and job_variant != "auto" and job_variant != self.device_variant:
+            return False
 
-    if job_device_type == "gpu" and get_gpu_count(res.device) > capacity.available_gpus:
-        return False
+        if job_device_type == "gpu" and get_gpu_count(res.device) > self.available_gpus:
+            return False
 
-    return True
+        return True
 
-
-def deduct_task_from_capacity(capacity: WorkerCapacity, job: ControllerJob) -> None:
-    """Deduct task's resources from capacity (mutates capacity). Uses job's resource spec."""
-    res = job.request.resources
-    capacity.available_cpu -= res.cpu
-    capacity.available_memory -= res.memory_bytes
-    capacity.available_gpus -= get_gpu_count(res.device)
-
-
-def compute_worker_capacity(worker: ControllerWorker) -> WorkerCapacity:
-    """Compute current available capacity for a worker."""
-    committed_cpu, committed_mem, committed_gpu = worker.get_committed_resources()
-    metadata = worker.metadata
-    return WorkerCapacity(
-        available_cpu=metadata.cpu_count - committed_cpu,
-        available_memory=metadata.memory_bytes - committed_mem,
-        available_gpus=get_gpu_count(metadata.device) - committed_gpu,
-        device_type=get_device_type(metadata.device),
-        device_variant=get_device_variant(metadata.device),
-    )
+    def deduct(self, job: ControllerJob) -> None:
+        """Deduct job's resources from available capacity."""
+        res = job.request.resources
+        self.available_cpu -= res.cpu
+        self.available_memory -= res.memory_bytes
+        self.available_gpus -= get_gpu_count(res.device)
 
 
 @dataclass
-class SchedulingTransaction:
-    """Accumulates tentative task assignments that can be rolled back."""
+class TaskScheduleResult:
+    """Result of attempting to schedule a single task.
 
-    state: ControllerState
+    Either contains a successful assignment (worker is set) or explains
+    why scheduling failed (failure_reason is set).
+    """
+
+    task: ControllerTask
+    worker: ControllerWorker | None = None
+    failure_reason: str | None = None
+    timed_out: bool = False
+
+    @property
+    def success(self) -> bool:
+        return self.worker is not None
+
+
+@dataclass
+class SchedulingResult:
+    """Result of a scheduling cycle - pure data, no state mutation.
+
+    Only contains successful assignments and timed-out tasks.
+    Failure details are available via get_task_schedule_status() for dashboard use.
+    """
+
     assignments: list[tuple[ControllerTask, ControllerWorker]] = field(default_factory=list)
     timed_out_tasks: list[ControllerTask] = field(default_factory=list)
-
-    def tentatively_assign(self, task: ControllerTask, worker: ControllerWorker) -> None:
-        """Assign task to worker immediately (updates running_tasks and removes from queue)."""
-        self.state.assign_task_to_worker(worker.worker_id, task.task_id)
-        self.assignments.append((task, worker))
-
-    def rollback_assignment(self, task: ControllerTask, worker: ControllerWorker) -> None:
-        """Rollback a single failed assignment."""
-        self.state.rollback_task_assignment(worker.worker_id, task)
 
 
 def build_capacity_map(workers: list[ControllerWorker]) -> dict[WorkerId, WorkerCapacity]:
     """Build capacity map for all healthy workers."""
-    return {w.worker_id: compute_worker_capacity(w) for w in workers if w.healthy}
+    return {w.worker_id: WorkerCapacity.from_worker(w) for w in workers if w.healthy}
 
 
 class Scheduler:
@@ -117,12 +131,61 @@ class Scheduler:
     def __init__(self, state: ControllerState):
         self._state = state
 
+    def try_schedule_task(
+        self,
+        task: ControllerTask,
+        capacities: dict[WorkerId, WorkerCapacity],
+    ) -> TaskScheduleResult:
+        """Attempt to schedule a single task.
+
+        Returns a TaskScheduleResult indicating success (with assigned worker)
+        or failure (with reason). Used by both the scheduling loop and dashboard.
+
+        Args:
+            task: The task to schedule
+            capacities: Current worker capacities (may have tentative deductions)
+
+        Returns:
+            TaskScheduleResult with either worker assignment or failure reason
+        """
+        if not task.can_be_scheduled():
+            return TaskScheduleResult(
+                task=task,
+                failure_reason="Task has non-terminal attempt (waiting for worker to report state)",
+            )
+
+        job = self._state.get_job(task.job_id)
+        if not job:
+            return TaskScheduleResult(task=task, failure_reason="Job not found")
+
+        if self._is_task_timed_out(task, job):
+            return TaskScheduleResult(task=task, timed_out=True)
+
+        if not capacities:
+            return TaskScheduleResult(task=task, failure_reason="No healthy workers available")
+
+        # Try to find a worker that can fit this task
+        for capacity in capacities.values():
+            if capacity.can_fit_job(job):
+                capacity.deduct(job)
+                return TaskScheduleResult(task=task, worker=capacity.worker)
+
+        # No worker could fit the task - build detailed reason
+        res = job.request.resources
+        return TaskScheduleResult(
+            task=task,
+            failure_reason=(f"No worker has sufficient resources " f"(need cpu={res.cpu}, memory={res.memory_bytes})"),
+        )
+
     def find_assignments(
         self,
         pending_tasks: list[ControllerTask],
         workers: list[ControllerWorker],
-    ) -> SchedulingTransaction:
-        """Match pending tasks to available workers one at a time.
+    ) -> SchedulingResult:
+        """Match pending tasks to available workers.
+
+        Pure function - does not mutate ControllerState. Returns assignments
+        for the controller to execute.
 
         Uses first-fit algorithm, skipping tasks that don't fit any worker.
         Also identifies tasks that have exceeded their scheduling timeout.
@@ -136,44 +199,33 @@ class Scheduler:
             workers: Available workers (only healthy ones should be passed)
 
         Returns:
-            SchedulingTransaction with assignments and timed-out tasks
+            SchedulingResult with successful assignments and timed-out tasks only
         """
-        transaction = SchedulingTransaction(self._state)
+        result = SchedulingResult()
         capacities = build_capacity_map(workers)
 
         for task in pending_tasks:
-            job = self._state.get_job(task.job_id)
-            if not job:
-                continue
+            task_result = self.try_schedule_task(task, capacities)
 
-            if self._is_task_timed_out(task, job):
-                transaction.timed_out_tasks.append(task)
-                continue
-
-            for worker in workers:
-                if not worker.healthy:
-                    continue
-                capacity = capacities[worker.worker_id]
-                if worker_can_fit_task(capacity, job):
-                    deduct_task_from_capacity(capacity, job)
-                    transaction.tentatively_assign(task, worker)
-                    break
+            if task_result.success and task_result.worker:
+                result.assignments.append((task, task_result.worker))
+            elif task_result.timed_out:
+                result.timed_out_tasks.append(task)
             else:
                 logger.debug(
-                    "No suitable worker for task %s (cpu=%d, memory_bytes=%d)",
+                    "Task %s not scheduled: %s",
                     task.task_id,
-                    job.request.resources.cpu,
-                    job.request.resources.memory_bytes,
+                    task_result.failure_reason,
                 )
 
-        if transaction.assignments or transaction.timed_out_tasks:
+        if result.assignments or result.timed_out_tasks:
             logger.debug(
                 "Scheduling cycle: %d pending, %d assigned, %d timed_out",
                 len(pending_tasks),
-                len(transaction.assignments),
-                len(transaction.timed_out_tasks),
+                len(result.assignments),
+                len(result.timed_out_tasks),
             )
-        return transaction
+        return result
 
     def _is_task_timed_out(self, task: ControllerTask, job: ControllerJob) -> bool:
         """Check if a task has exceeded its scheduling timeout."""
@@ -184,3 +236,13 @@ class Scheduler:
         pending_duration_ms = now_ms() - task.submitted_at_ms
         timeout_ms = timeout_seconds * 1000
         return pending_duration_ms > timeout_ms
+
+    def get_task_schedule_status(self, task: ControllerTask) -> TaskScheduleResult:
+        """Get the current scheduling status of a task.
+
+        Used by the dashboard to show why a task is pending.
+        Builds fresh capacity map to reflect current state.
+        """
+        workers = self._state.get_available_workers()
+        capacities = build_capacity_map(workers)
+        return self.try_schedule_task(task, capacities)

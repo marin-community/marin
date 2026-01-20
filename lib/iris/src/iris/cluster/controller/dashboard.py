@@ -23,6 +23,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
+from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import JobId
 from iris.rpc import cluster_pb2
@@ -700,11 +701,13 @@ class ControllerDashboard:
     def __init__(
         self,
         service: ControllerServiceImpl,
+        scheduler: Scheduler,
         host: str = "0.0.0.0",
         port: int = 8080,
     ):
         self._service = service
         self._state = service._state
+        self._scheduler = scheduler
         self._host = host
         self._port = port
         self._app = self._create_app()
@@ -881,27 +884,8 @@ class ControllerDashboard:
             # Add diagnostic information for pending tasks
             pending_reason = None
             if t.state == cluster_pb2.TASK_STATE_PENDING:
-                if not t.can_be_scheduled():
-                    pending_reason = "Task has non-terminal attempt (waiting for worker to report state)"
-                else:
-                    # Check if any workers can fit this task
-                    workers = self._state.get_available_workers()
-                    if not workers:
-                        pending_reason = "No healthy workers available"
-                    else:
-                        # Check resource constraints
-                        from iris.cluster.controller.scheduler import build_capacity_map, worker_can_fit_task
-
-                        capacities = build_capacity_map(workers)
-                        can_fit_any = any(worker_can_fit_task(cap, job) for cap in capacities.values())
-                        if not can_fit_any:
-                            pending_reason = (
-                                f"No worker has sufficient resources "
-                                f"(need cpu={job.request.resources.cpu}, "
-                                f"memory={job.request.resources.memory_bytes})"
-                            )
-                        else:
-                            pending_reason = "Waiting for scheduler to assign"
+                schedule_status = self._scheduler.get_task_schedule_status(t)
+                pending_reason = schedule_status.failure_reason
 
             task_data.append(
                 {

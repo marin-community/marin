@@ -803,6 +803,31 @@ class ControllerWorker:
         self.committed_mem -= resources.memory_bytes
         self.committed_gpu -= get_gpu_count(resources.device)
 
+    @property
+    def available_cpu(self) -> int:
+        """Available CPU cores after subtracting committed resources."""
+        return self.metadata.cpu_count - self.committed_cpu
+
+    @property
+    def available_memory(self) -> int:
+        """Available memory bytes after subtracting committed resources."""
+        return self.metadata.memory_bytes - self.committed_mem
+
+    @property
+    def available_gpus(self) -> int:
+        """Available GPU count after subtracting committed resources."""
+        return get_gpu_count(self.metadata.device) - self.committed_gpu
+
+    @property
+    def device_type(self) -> str:
+        """Device type from worker metadata."""
+        return get_device_type(self.metadata.device)
+
+    @property
+    def device_variant(self) -> str | None:
+        """Device variant from worker metadata."""
+        return get_device_variant(self.metadata.device)
+
 
 @dataclass
 class ControllerEndpoint:
@@ -842,18 +867,18 @@ class ControllerState:
        - Use for: external triggers, worker reports, system events
        - Returns TransactionLog for debugging
 
-    2. Coordination API (Scheduler Transaction Support):
-       - assign_task_to_worker() - Tentative assignment within scheduling
-       - rollback_task_assignment() - Rollback on dispatch failure
-       - Internal to SchedulingTransaction, not for general use
-
-    3. Query API (Read-Only Access):
+    2. Query API (Read-Only Access):
        - peek_pending_tasks(), get_available_workers(), get_job(), etc.
        - Used by scheduler and controller for reads
 
-    4. Test Utilities (Setup Helpers):
+    3. Test Utilities (Setup Helpers):
        - add_job(), add_worker() - Direct object creation for tests
        - Bypass event logs for test convenience
+
+    State Commitment Flow:
+       The scheduler returns pure assignment pairs without mutating state.
+       State is only committed after successful dispatch RPC via TASK_ASSIGNED event,
+       which creates the attempt and commits resources.
     """
 
     def __init__(self):
@@ -1030,14 +1055,12 @@ class ControllerState:
     # -------------------------------------------------------------------------
 
     def _on_task_assigned(self, txn: TransactionLog, event: Event) -> None:
-        """Handle task assignment to a worker.
+        """Handle successful task assignment to a worker.
+
+        Called AFTER successful dispatch RPC. Commits resources and creates attempt.
 
         Creates an attempt in PENDING state. The task transitions to RUNNING
         when the worker reports TASK_STATE_CHANGED with RUNNING.
-
-        This handler maintains the worker's running_tasks set for worker failure
-        cascading. Resource commitment and queue removal are handled by the
-        scheduler's coordination API (assign_task_to_worker) before this event.
         """
         assert event.task_id and event.worker_id
         task = self._tasks[event.task_id]
@@ -1047,9 +1070,8 @@ class ControllerState:
         old_state = task.state
         task.create_attempt(event.worker_id, initial_state=cluster_pb2.TASK_STATE_PENDING)
 
-        # Add to worker's running_tasks (needed for worker failure cascading)
-        # Resource commitment was already done by assign_task_to_worker()
-        worker.running_tasks.add(event.task_id)
+        # Commit resources and add to running_tasks
+        worker.assign_task(event.task_id, job.request.resources)
 
         # Update job counters (state stays PENDING, so no job state change expected)
         new_job_state = job.on_task_transition(old_state, task.state)
@@ -1213,40 +1235,6 @@ class ControllerState:
                 if task and task.can_be_scheduled():
                     pending.append(task)
             return pending
-
-    def assign_task_to_worker(self, worker_id: WorkerId, task_id: TaskId) -> bool:
-        """Tentatively assign task to worker (scheduler coordination).
-
-        This is a coordination method used by SchedulingTransaction during
-        the scheduling cycle. It updates worker.running_tasks and removes
-        the task from the queue.
-
-        For observable task assignment, use Event(TASK_ASSIGNED) instead.
-
-        Updates the worker's committed resources based on the job's resource requirements.
-        """
-        with self._lock:
-            worker = self._workers[worker_id]
-            task = self._tasks[task_id]
-            job = self._jobs[task.job_id]
-
-            worker.assign_task(task_id, job.request.resources)
-            self._task_queue = deque(tid for tid in self._task_queue if tid != task_id)
-            return True
-
-    def rollback_task_assignment(self, worker_id: WorkerId, task: ControllerTask) -> None:
-        """Rollback a failed assignment: unassign from worker and re-queue.
-
-        This is a coordination method used by SchedulingTransaction when
-        task dispatch fails. It reverses the tentative assignment made by
-        assign_task_to_worker().
-        """
-        with self._lock:
-            worker = self._workers[worker_id]
-            job = self._jobs[task.job_id]
-            worker.unassign_task(task.task_id, job.request.resources)
-            if task.task_id not in self._task_queue:
-                self._task_queue.append(task.task_id)
 
     def _finalize_job_state(
         self,

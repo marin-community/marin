@@ -21,6 +21,7 @@ from starlette.testclient import TestClient
 
 from iris.rpc import cluster_pb2
 from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import (
     ControllerEndpoint,
@@ -37,15 +38,20 @@ def state():
 
 
 @pytest.fixture
-def service(state):
-    scheduler = Mock()
-    scheduler.wake = Mock()
-    return ControllerServiceImpl(state, scheduler)
+def scheduler(state):
+    return Scheduler(state)
 
 
 @pytest.fixture
-def client(service):
-    dashboard = ControllerDashboard(service)
+def service(state, scheduler):
+    controller_mock = Mock()
+    controller_mock.wake = Mock()
+    return ControllerServiceImpl(state, controller_mock)
+
+
+@pytest.fixture
+def client(service, scheduler):
+    dashboard = ControllerDashboard(service, scheduler)
     return TestClient(dashboard._app)
 
 

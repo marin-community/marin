@@ -23,7 +23,7 @@ from typing import Protocol
 import uvicorn
 
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.scheduler import Scheduler, SchedulingTransaction
+from iris.cluster.controller.scheduler import Scheduler, SchedulingResult
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.events import Event, EventType
 from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
@@ -145,7 +145,7 @@ class Controller:
         self._state = ControllerState()
         self._scheduler = Scheduler(self._state)
         self._service = ControllerServiceImpl(self._state, self, bundle_dir=config.bundle_dir)
-        self._dashboard = ControllerDashboard(self._service, host=config.host, port=config.port)
+        self._dashboard = ControllerDashboard(self._service, self._scheduler, host=config.host, port=config.port)
 
         # Background loop state
         self._stop = False
@@ -222,38 +222,31 @@ class Controller:
         result = self._scheduler.find_assignments(pending_tasks, workers)
         self._apply_schedule_result(result)
 
-    def _apply_schedule_result(self, transaction: SchedulingTransaction) -> None:
+    def _apply_schedule_result(self, result: SchedulingResult) -> None:
         """Apply scheduling results: dispatch tasks and handle timeouts."""
-        for task in transaction.timed_out_tasks:
+        for task in result.timed_out_tasks:
             self._mark_task_unschedulable(task)
 
-        for task, worker in transaction.assignments:
-            self._dispatch_task(transaction, task, worker)
+        for task, worker in result.assignments:
+            self._dispatch_task(task, worker)
 
     def _dispatch_task(
         self,
-        transaction: SchedulingTransaction,
         task: ControllerTask,
         worker: ControllerWorker,
     ) -> None:
         """Dispatch a task to a worker via RPC.
 
-        Worker assignment is already handled by the scheduler's tentatively_assign().
-        This method creates an attempt and sends the RPC. The worker reports all state
-        transitions (BUILDING, RUNNING, SUCCEEDED, etc.) via ReportTaskState.
+        State is committed only after successful dispatch:
+        1. Attempt RPC
+        2. On success: fire TASK_ASSIGNED event (commits resources + creates attempt)
+        3. On failure: fire WORKER_FAILED event (task will be rescheduled next cycle)
+
+        The task remains schedulable until TASK_ASSIGNED creates a non-terminal attempt.
         """
         job = self._state.get_job(task.job_id)
         if not job:
             return
-
-        # Use TASK_ASSIGNED event to create attempt
-        self._state.handle_event(
-            Event(
-                event_type=EventType.TASK_ASSIGNED,
-                task_id=task.task_id,
-                worker_id=worker.worker_id,
-            )
-        )
 
         try:
             stub = self._stub_factory.get_stub(worker.address)
@@ -282,13 +275,19 @@ class Controller:
             )
             stub.run_task(request)
 
+            # SUCCESS: Now commit state via TASK_ASSIGNED event
+            self._state.handle_event(
+                Event(
+                    event_type=EventType.TASK_ASSIGNED,
+                    task_id=task.task_id,
+                    worker_id=worker.worker_id,
+                )
+            )
+
             logger.info(f"Successfully dispatched task {task.task_id} to worker {worker.worker_id}")
 
         except Exception as e:
-            # Rollback scheduler state (coordination API)
-            transaction.rollback_assignment(task, worker)
-
-            # Mark worker failed (event API - will cascade to task)
+            # FAILURE: Mark worker failed (task will be rescheduled on next cycle)
             self._state.handle_event(
                 Event(
                     event_type=EventType.WORKER_FAILED,
@@ -342,7 +341,7 @@ class Controller:
             self._server = uvicorn.Server(config)
             self._server.run()
         except Exception as e:
-            print(f"Controller server error: {e}")
+            logger.exception("Controller server error: %s", e)
 
     def launch_job(
         self,
@@ -381,5 +380,15 @@ class Controller:
         return self._state
 
     @property
+    def port(self) -> int:
+        """Actual bound port (may differ from config if port=0 was specified)."""
+        if self._server and self._server.servers:
+            # Get actual port from the first server socket
+            sockets = self._server.servers[0].sockets
+            if sockets:
+                return sockets[0].getsockname()[1]
+        return self._config.port
+
+    @property
     def url(self) -> str:
-        return f"http://{self._config.host}:{self._config.port}"
+        return f"http://{self._config.host}:{self.port}"
