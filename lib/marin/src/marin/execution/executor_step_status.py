@@ -29,6 +29,7 @@ import time
 from dataclasses import asdict, dataclass
 
 import fsspec
+from google.api_core.exceptions import NotFound
 from google.cloud import storage
 
 logger = logging.getLogger("ray")
@@ -153,11 +154,24 @@ class StatusFile:
             client = storage.Client()
             bucket_name, blob_path = self._parse_gcs_path(self._lock_path)
             bucket = client.bucket(bucket_name)
-            blob = bucket.get_blob(blob_path)
-            if blob is None:
-                return (0, None)
-            data = json.loads(blob.download_as_string())
-            return (blob.generation, Lease(**data))
+            for attempt in range(3):
+                blob = bucket.get_blob(blob_path)
+                if blob is None:
+                    return (0, None)
+                try:
+                    data = json.loads(blob.download_as_string())
+                except NotFound:
+                    # The lock blob can be overwritten/deleted between metadata fetch and the actual download.
+                    # Treat this as a transient race and retry.
+                    logger.info(
+                        "[%s] Lock blob generation raced; retrying read (attempt %s)",
+                        self.worker_id,
+                        attempt + 1,
+                    )
+                    time.sleep(0.1 * (2**attempt))
+                    continue
+                return (blob.generation, Lease(**data))
+            return (0, None)
         else:
             import fcntl
 
