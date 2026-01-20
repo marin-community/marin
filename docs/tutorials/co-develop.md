@@ -41,4 +41,4 @@ git commit -m "Update LEVANTER_BRANCH branch with new changes"
 
 This commits the changes to the `LEVANTER_BRANCH` branch of Levanter.
 
-Tip: When submitting Ray jobs via `marin/run/ray_run.py`, the runtime automatically includes `submodules/*` and their `src/` in `PYTHONPATH`, which also supports co-development on cluster jobs.
+Tip: When submitting Ray jobs via [`lib/marin/src/marin/run/ray_run.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/run/ray_run.py), the runtime automatically includes `submodules/*` and their `src/` in `PYTHONPATH`, which also supports co-development on cluster jobs.
