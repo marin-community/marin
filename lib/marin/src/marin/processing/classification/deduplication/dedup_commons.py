@@ -41,9 +41,9 @@ logger = logging.getLogger(__name__)
 class DedupMode(StrEnum):
     """Mode in which deduplication is performed"""
 
-    EXACT_PARAGRAPH_DUPLICATE = auto()
-    EXACT_DOCUMENT_DUPLICATE = auto()
-    FUZZY_DOCUMENT_DUPLICATE = auto()
+    EXACT_PARAGRAPH = auto()
+    EXACT_DOCUMENT = auto()
+    FUZZY_DOCUMENT = auto()
 
 
 @dataclass(frozen=True)
@@ -66,7 +66,7 @@ class DedupConfig:
     filetypes: list[str] = field(default_factory=lambda: ["jsonl", "jsonl.gz", "jsonl.zst", "parquet"])
     output_path: str = THIS_OUTPUT_PATH
     processes: int = 1
-    mode: DedupMode = DedupMode.EXACT_PARAGRAPH_DUPLICATE
+    mode: DedupMode = DedupMode.EXACT_PARAGRAPH
     # field to use for text content in Parquet files
     text_field: str = "text"
     ray_num_cpus: int = 2
@@ -75,15 +75,15 @@ class DedupConfig:
 
 def deduplicate(config: DedupConfig):
     """Main entry point for deduplication"""
-    if config.mode == DedupMode.EXACT_PARAGRAPH_DUPLICATE:
+    if config.mode == DedupMode.EXACT_PARAGRAPH:
         from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
 
         return dedup_exact_paragraph(config)
-    elif config.mode == DedupMode.EXACT_DOCUMENT_DUPLICATE:
+    elif config.mode == DedupMode.EXACT_DOCUMENT:
         from marin.processing.classification.deduplication.exact import dedup_exact_document
 
         return dedup_exact_document(config)
-    elif config.mode == DedupMode.FUZZY_DOCUMENT_DUPLICATE:
+    elif config.mode == DedupMode.FUZZY_DOCUMENT:
         from marin.processing.classification.deduplication.fuzzy import dedup_fuzzy_document
 
         return dedup_fuzzy_document(config)

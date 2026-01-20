@@ -82,7 +82,7 @@ def dedup_exact_paragraph(config: dedup_commons.DedupConfig):
             yield dupekit.mark_paragraph_duplicates(
                 batch,
                 dup_map,
-                attribute_name=str(dedup_commons.DedupMode.EXACT_PARAGRAPH_DUPLICATE),
+                attribute_name=str(dedup_commons.DedupMode.EXACT_PARAGRAPH),
                 algorithm=dupekit.HashAlgorithm.Xxh3_128,
             )
 
@@ -108,7 +108,7 @@ def dedup_exact_paragraph(config: dedup_commons.DedupConfig):
     if wandb.run:
         wandb.finish()
 
-    return {"success": True, "mode": str(dedup_commons.DedupMode.EXACT_PARAGRAPH_DUPLICATE)} | exact_cnts.to_dict()
+    return {"success": True, "mode": str(dedup_commons.DedupMode.EXACT_PARAGRAPH)} | exact_cnts.to_dict()
 
 
 def dedup_exact_document(config: dedup_commons.DedupConfig):
@@ -174,7 +174,7 @@ def dedup_exact_document(config: dedup_commons.DedupConfig):
             b = dupekit.mark_document_duplicates(
                 prepared_batch,
                 dup_map,
-                attribute_name=str(dedup_commons.DedupMode.EXACT_DOCUMENT_DUPLICATE),
+                attribute_name=str(dedup_commons.DedupMode.EXACT_DOCUMENT),
                 hash_col="hash",
             )
             yield from b.to_pylist()
@@ -201,4 +201,4 @@ def dedup_exact_document(config: dedup_commons.DedupConfig):
     if wandb.run:
         wandb.finish()
 
-    return {"success": True, "mode": str(dedup_commons.DedupMode.EXACT_DOCUMENT_DUPLICATE)} | exact_cnts.to_dict()
+    return {"success": True, "mode": str(dedup_commons.DedupMode.EXACT_DOCUMENT)} | exact_cnts.to_dict()

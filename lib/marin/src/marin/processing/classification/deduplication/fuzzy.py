@@ -149,7 +149,7 @@ def dedup_fuzzy_document(config: dedup_commons.DedupConfig):
         for doc in docs:
             is_fuzzy_dup = fuzzy_dup_map.get(doc["id"], False)
             doc["attributes"] = {}
-            doc["attributes"][str(dedup_commons.DedupMode.FUZZY_DOCUMENT_DUPLICATE)] = is_fuzzy_dup
+            doc["attributes"][str(dedup_commons.DedupMode.FUZZY_DOCUMENT)] = is_fuzzy_dup
             yield doc
 
     base_path = dedup_commons.find_base_path(config.input_paths, input_files)
@@ -174,4 +174,4 @@ def dedup_fuzzy_document(config: dedup_commons.DedupConfig):
     if wandb.run:
         wandb.finish()
 
-    return {"success": True, "mode": str(dedup_commons.DedupMode.FUZZY_DOCUMENT_DUPLICATE)} | fuzzy_cnt.to_dict()
+    return {"success": True, "mode": str(dedup_commons.DedupMode.FUZZY_DOCUMENT)} | fuzzy_cnt.to_dict()

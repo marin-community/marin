@@ -79,9 +79,9 @@ def _get_deduped_data_mixture(*, variant: str, mode: DedupMode, max_parallelism:
     )
 
     dedup_mode_to_filter_type = {
-        DedupMode.EXACT_PARAGRAPH_DUPLICATE: FilterType.REMOVE_SPANS,
-        DedupMode.EXACT_DOCUMENT_DUPLICATE: FilterType.REMOVE_DOC,
-        DedupMode.FUZZY_DOCUMENT_DUPLICATE: FilterType.REMOVE_DOC,
+        DedupMode.EXACT_PARAGRAPH: FilterType.REMOVE_SPANS,
+        DedupMode.EXACT_DOCUMENT: FilterType.REMOVE_DOC,
+        DedupMode.FUZZY_DOCUMENT: FilterType.REMOVE_DOC,
     }
 
     consolidate_step = ExecutorStep(

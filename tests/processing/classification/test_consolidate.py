@@ -163,13 +163,13 @@ def test_dedupe_consolidate_integration(fox_corpus):
     dedupe_config = DedupConfig(
         input_paths=fox_corpus["test_dir"],
         output_path=dedupe_output_dir,
-        mode=DedupMode.EXACT_PARAGRAPH_DUPLICATE,
+        mode=DedupMode.EXACT_PARAGRAPH,
         processes=1,
     )
 
     result = deduplicate(dedupe_config)
     assert result["success"]
-    assert result["mode"] == DedupMode.EXACT_PARAGRAPH_DUPLICATE
+    assert result["mode"] == DedupMode.EXACT_PARAGRAPH
 
     # Verify dedupe output exists and has same structure as input
     dedupe_output_files = list(Path(dedupe_output_dir).glob("data/*.jsonl.gz"))
@@ -185,7 +185,7 @@ def test_dedupe_consolidate_integration(fox_corpus):
             FilterConfig(
                 type=FilterType.REMOVE_SPANS,
                 attribute_path=f"{dedupe_output_dir}/data",
-                name=DedupMode.EXACT_PARAGRAPH_DUPLICATE,
+                name=DedupMode.EXACT_PARAGRAPH,
             )
         ],
     )

@@ -141,7 +141,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=DedupConfig(
             input_paths=transform_hq_data_step,
             output_path=this_output_path(),
-            mode=DedupMode.EXACT_PARAGRAPH_DUPLICATE,
+            mode=DedupMode.EXACT_PARAGRAPH,
             ray_memory=humanfriendly.parse_size("1GB", binary=True),
             ray_num_cpus=1,
         ),
@@ -152,7 +152,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=DedupConfig(
             input_paths=transform_hq_data_step,
             output_path=this_output_path(),
-            mode=DedupMode.EXACT_DOCUMENT_DUPLICATE,
+            mode=DedupMode.EXACT_DOCUMENT,
             ray_memory=humanfriendly.parse_size("1GB", binary=True),
             ray_num_cpus=1,
         ),
@@ -172,12 +172,12 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 FilterConfig(
                     type=FilterType.REMOVE_SPANS,
                     attribute_path=dedup_exact_paragraph_step.cd("data"),
-                    name=str(DedupMode.EXACT_PARAGRAPH_DUPLICATE),
+                    name=str(DedupMode.EXACT_PARAGRAPH),
                 ),
                 FilterConfig(
                     type=FilterType.REMOVE_DOC,
                     attribute_path=dedup_exact_document_step.cd("data"),
-                    name=str(DedupMode.EXACT_DOCUMENT_DUPLICATE),
+                    name=str(DedupMode.EXACT_DOCUMENT),
                 ),
             ],
         ),

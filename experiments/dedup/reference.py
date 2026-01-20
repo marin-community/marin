@@ -31,7 +31,7 @@ def build_dedup_step(dataset: InputName, max_parallelism: int) -> ExecutorStep:
     """
     config = DedupConfig(
         input_paths=dataset,
-        mode=DedupMode.FUZZY_DOCUMENT_DUPLICATE,
+        mode=DedupMode.FUZZY_DOCUMENT,
         processes=max_parallelism,
     )
 
