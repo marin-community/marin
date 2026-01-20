@@ -65,7 +65,7 @@ class DownloadConfig:
         # spaces/ for spaces, and models do not need a prefix in the URL.
     )
 
-    zephyr_max_parallelism: int = 1024
+    zephyr_max_parallelism: int = 512
     """Maximum parallelism of the Zephyr download job"""
 
 
@@ -116,7 +116,7 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
                     try:
                         wait_base += int(e.response.headers["RateLimit"].split(";")[-1].split("=")[-1])
                     except Exception:
-                        logger.exception("Failed to parse RateLimit header")
+                        logger.warning("Failed to parse rate limit header, using default wait period")
 
             jitter = random.uniform(0, wait_base)
             wait_time = wait_base + jitter
