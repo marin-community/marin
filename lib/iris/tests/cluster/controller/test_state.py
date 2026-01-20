@@ -304,6 +304,60 @@ def test_worker_failure_cascades_to_running_tasks(job_request, worker_metadata):
     assert len(pending) == 1
 
 
+def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, worker_metadata):
+    """E2E: Dispatch RPC failure (task in PENDING) -> worker failed event cascades to task."""
+    state = ControllerState()
+
+    worker = ControllerWorker(
+        worker_id=WorkerId("w1"),
+        address="host:8080",
+        metadata=worker_metadata(),
+    )
+    state.add_worker(worker)
+
+    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"))
+    tasks = state.add_job(job)
+    task = tasks[0]
+    task.max_retries_preemption = 1
+
+    # Task gets assigned (creates attempt, puts in PENDING state)
+    state.handle_event(
+        Event(
+            EventType.TASK_ASSIGNED,
+            task_id=task.task_id,
+            worker_id=worker.worker_id,
+        )
+    )
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.current_attempt_id == 0
+
+    # Dispatch RPC fails -> WORKER_FAILED event
+    state.handle_event(
+        Event(
+            EventType.WORKER_FAILED,
+            worker_id=worker.worker_id,
+            error="Dispatch RPC failed: Connection refused",
+        )
+    )
+
+    # Verify cascade:
+    # 1. Worker marked unhealthy
+    assert worker.healthy is False
+
+    # 2. Task marked as WORKER_FAILED (retriable)
+    assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert task.preemption_count == 1
+    assert task.can_be_scheduled()
+
+    # 3. Task should be requeued for retry
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 1
+    assert pending[0].task_id == task.task_id
+
+    # 4. Worker no longer has task assigned
+    assert task.task_id not in worker.running_tasks
+
+
 # =============================================================================
 # Failure Domain Tests (max_task_failures)
 # =============================================================================

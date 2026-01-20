@@ -408,39 +408,7 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
     .status-failed { color: #e74c3c; }
     .status-killed { color: #95a5a6; }
     .status-worker_failed { color: #9b59b6; }
-    .log-tabs {
-      display: flex;
-      gap: 10px;
-      margin-bottom: 10px;
-    }
-    .log-tab {
-      padding: 8px 16px;
-      background: #ecf0f1;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 14px;
-    }
-    .log-tab.active {
-      background: #3498db;
-      color: white;
-    }
-    .log-container {
-      background: #1e1e1e;
-      color: #d4d4d4;
-      padding: 15px;
-      border-radius: 8px;
-      font-family: "Monaco", "Menlo", "Ubuntu Mono", monospace;
-      font-size: 13px;
-      max-height: 500px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      word-wrap: break-word;
-    }
-    .log-line { padding: 2px 0; }
-    .log-stdout { color: #d4d4d4; }
-    .log-stderr { color: #f48771; }
-    .log-build { color: #9cdcfe; }
+    .status-unschedulable { color: #e74c3c; }
     .error-message {
       background: #fee;
       border: 1px solid #e74c3c;
@@ -449,13 +417,33 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
       border-radius: 8px;
       margin-bottom: 20px;
     }
-    .no-worker-warning {
-      background: #fff3cd;
-      border: 1px solid #ffc107;
-      color: #856404;
-      padding: 15px;
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
       border-radius: 8px;
-      margin-bottom: 20px;
+      overflow: hidden;
+      margin-top: 20px;
+    }
+    th {
+      background-color: #3498db;
+      color: white;
+      padding: 12px;
+      text-align: left;
+      font-weight: 600;
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #ecf0f1;
+    }
+    tr:hover {
+      background-color: #f8f9fa;
+    }
+    .pending-reason {
+      font-size: 12px;
+      color: #7f8c8d;
+      font-style: italic;
     }
   </style>
 </head>
@@ -463,15 +451,11 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
   <a href="/" class="back-link">&larr; Back to Dashboard</a>
   <h1>Job: {{job_id}}</h1>
 
-  <div id="no-worker-warning" class="no-worker-warning" style="display: none;">
-    No worker assigned to this job. Job may be pending or completed. Limited information available.
-  </div>
-
   <div id="error-container"></div>
 
   <div class="info-grid">
     <div class="info-card">
-      <h3>Status</h3>
+      <h3>Job Status</h3>
       <div class="info-row">
         <span class="info-label">State</span>
         <span class="info-value" id="job-state">-</span>
@@ -495,48 +479,64 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
     </div>
 
     <div class="info-card">
-      <h3>Resources</h3>
+      <h3>Task Summary</h3>
       <div class="info-row">
-        <span class="info-label">Memory Used</span>
-        <span class="info-value" id="resource-memory">-</span>
+        <span class="info-label">Total Tasks</span>
+        <span class="info-value" id="total-tasks">-</span>
       </div>
       <div class="info-row">
-        <span class="info-label">CPU Usage</span>
-        <span class="info-value" id="resource-cpu">-</span>
+        <span class="info-label">Completed</span>
+        <span class="info-value" id="completed-tasks">-</span>
       </div>
       <div class="info-row">
-        <span class="info-label">Disk Used</span>
-        <span class="info-value" id="resource-disk">-</span>
+        <span class="info-label">Running</span>
+        <span class="info-value" id="running-tasks">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Pending</span>
+        <span class="info-value" id="pending-tasks">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Failed</span>
+        <span class="info-value" id="failed-tasks">-</span>
       </div>
     </div>
 
     <div class="info-card">
-      <h3>Build Info</h3>
+      <h3>Resource Request</h3>
       <div class="info-row">
-        <span class="info-label">Image Tag</span>
-        <span class="info-value" id="build-image">-</span>
+        <span class="info-label">CPU</span>
+        <span class="info-value" id="resource-cpu">-</span>
       </div>
       <div class="info-row">
-        <span class="info-label">Cache Status</span>
-        <span class="info-value" id="build-cache">-</span>
+        <span class="info-label">Memory</span>
+        <span class="info-value" id="resource-memory">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Replicas</span>
+        <span class="info-value" id="resource-replicas">-</span>
       </div>
     </div>
   </div>
 
-  <h2>Logs</h2>
-  <div class="log-tabs">
-    <button class="log-tab active" data-filter="all">ALL</button>
-    <button class="log-tab" data-filter="stdout">STDOUT</button>
-    <button class="log-tab" data-filter="stderr">STDERR</button>
-    <button class="log-tab" data-filter="build">BUILD</button>
-  </div>
-  <div class="log-container" id="log-container">Loading logs...</div>
+  <h2>Tasks</h2>
+  <table id="tasks-table">
+    <tr>
+      <th>Task ID</th>
+      <th>Index</th>
+      <th>State</th>
+      <th>Worker</th>
+      <th>Attempts</th>
+      <th>Started</th>
+      <th>Duration</th>
+      <th>Exit Code</th>
+      <th>Error</th>
+    </tr>
+  </table>
 
   <script>
     const jobId = '{{job_id}}';
-    const workerAddress = '{{worker_address}}';
-    let allLogs = [];
-    let currentFilter = 'all';
+    const controllerAddress = window.location.origin;
 
     function escapeHtml(text) {
       const div = document.createElement('div');
@@ -547,6 +547,14 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
     function formatTimestamp(ms) {
       if (!ms) return '-';
       return new Date(ms).toLocaleString();
+    }
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
     }
 
     function formatDuration(startMs, endMs) {
@@ -566,75 +574,40 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
         'succeeded': 'status-succeeded',
         'failed': 'status-failed',
         'killed': 'status-killed',
-        'worker_failed': 'status-worker_failed'
+        'worker_failed': 'status-worker_failed',
+        'unschedulable': 'status-unschedulable'
       };
       return stateMap[state] || '';
     }
 
-    function renderLogs() {
-      const container = document.getElementById('log-container');
-      const filtered = currentFilter === 'all'
-        ? allLogs
-        : allLogs.filter(l => l.stream === currentFilter);
-
-      if (filtered.length === 0) {
-        container.innerHTML = '<div class="log-line">No logs available</div>';
-        return;
-      }
-
-      container.innerHTML = filtered.map(l => {
-        const streamClass = l.stream === 'stderr' ? 'log-stderr' :
-                           l.stream === 'build' ? 'log-build' : 'log-stdout';
-        return `<div class="log-line ${streamClass}">${escapeHtml(l.line)}</div>`;
-      }).join('');
-
-      container.scrollTop = container.scrollHeight;
-    }
-
-    async function fetchJobStatus() {
-      if (!workerAddress) {
-        document.getElementById('no-worker-warning').style.display = 'block';
-        return;
-      }
-
+    async function refresh() {
       try {
-        const response = await fetch(`http://${workerAddress}/api/jobs/${jobId}`);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        const job = await response.json();
+        // Fetch job status from controller
+        const [jobResponse, tasksResponse] = await Promise.all([
+          fetch(`/api/jobs`).then(r => r.json()),
+          fetch(`/api/jobs/${encodeURIComponent(jobId)}/tasks`).then(r => r.json())
+        ]);
 
-        // Update status (worker returns 'status' not 'state')
+        const job = jobResponse.find(j => j.job_id === jobId);
+        if (!job) {
+          document.getElementById('error-container').innerHTML =
+            '<div class="error-message">Job not found</div>';
+          return;
+        }
+
+        // Update job status
         const stateEl = document.getElementById('job-state');
-        stateEl.textContent = job.status || '-';
-        stateEl.className = 'info-value ' + getStateClass(job.status);
+        stateEl.textContent = job.state || '-';
+        stateEl.className = 'info-value ' + getStateClass(job.state);
 
         document.getElementById('job-exit-code').textContent =
-          job.exit_code !== undefined && job.exit_code !== null ? job.exit_code : '-';
+          job.failure_count > 0 ? 'Failed' : (job.state === 'succeeded' ? '0' : '-');
         document.getElementById('job-started').textContent =
-          formatTimestamp(job.started_at);
+          formatTimestamp(job.started_at_ms);
         document.getElementById('job-finished').textContent =
-          formatTimestamp(job.finished_at);
+          formatTimestamp(job.finished_at_ms);
         document.getElementById('job-duration').textContent =
-          formatDuration(job.started_at, job.finished_at);
-
-        // Update resources (worker returns resources.memory_mb etc)
-        if (job.resources) {
-          document.getElementById('resource-memory').textContent =
-            job.resources.memory_mb ? `${job.resources.memory_mb} MB (peak: ${job.resources.memory_peak_mb || 0})` : '-';
-          document.getElementById('resource-cpu').textContent =
-            job.resources.cpu_percent !== undefined ? `${job.resources.cpu_percent}%` : '-';
-          document.getElementById('resource-disk').textContent =
-            job.resources.disk_mb ? `${job.resources.disk_mb} MB` : '-';
-        }
-
-        // Update build info (worker returns build.from_cache, build.image_tag)
-        if (job.build) {
-          document.getElementById('build-image').textContent =
-            job.build.image_tag || '-';
-          document.getElementById('build-cache').textContent =
-            job.build.from_cache ? 'Cache Hit' : 'Cache Miss';
-        }
+          formatDuration(job.started_at_ms, job.finished_at_ms);
 
         // Show error if present
         if (job.error) {
@@ -643,45 +616,74 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
         } else {
           document.getElementById('error-container').innerHTML = '';
         }
+
+        // Update resource info
+        document.getElementById('resource-cpu').textContent = job.resources.cpu || '-';
+        document.getElementById('resource-memory').textContent =
+          job.resources.memory_bytes ? formatBytes(job.resources.memory_bytes) : '-';
+        document.getElementById('resource-replicas').textContent = tasksResponse.length || '-';
+
+        // Count task states
+        const stateCounts = {
+          total: tasksResponse.length,
+          completed: 0,
+          running: 0,
+          pending: 0,
+          failed: 0
+        };
+
+        tasksResponse.forEach(t => {
+          if (t.state === 'succeeded' || t.state === 'killed') stateCounts.completed++;
+          else if (t.state === 'running' || t.state === 'building') stateCounts.running++;
+          else if (t.state === 'pending') stateCounts.pending++;
+          else if (t.state === 'failed' || t.state === 'worker_failed') stateCounts.failed++;
+        });
+
+        document.getElementById('total-tasks').textContent = stateCounts.total;
+        document.getElementById('completed-tasks').textContent = stateCounts.completed;
+        document.getElementById('running-tasks').textContent = stateCounts.running;
+        document.getElementById('pending-tasks').textContent = stateCounts.pending;
+        document.getElementById('failed-tasks').textContent = stateCounts.failed;
+
+        // Update tasks table
+        const tasksHtml = tasksResponse.map(t => {
+          const errorText = t.error || '';
+          const pendingInfo = t.pending_reason
+            ? `<br><span class="pending-reason">${escapeHtml(t.pending_reason)}</span>`
+            : '';
+
+          return `<tr>
+            <td>${escapeHtml(t.task_id)}</td>
+            <td>${t.task_index}</td>
+            <td class="${getStateClass(t.state)}">${escapeHtml(t.state)}${pendingInfo}</td>
+            <td>${escapeHtml(t.worker_id || '-')}</td>
+            <td>${t.num_attempts}</td>
+            <td>${formatTimestamp(t.started_at_ms)}</td>
+            <td>${formatDuration(t.started_at_ms, t.finished_at_ms)}</td>
+            <td>${t.exit_code !== null && t.exit_code !== undefined ? t.exit_code : '-'}</td>
+            <td>${escapeHtml(errorText) || '-'}</td>
+          </tr>`;
+        }).join('');
+
+        const tableHeader = `<tr>
+          <th>Task ID</th>
+          <th>Index</th>
+          <th>State</th>
+          <th>Worker</th>
+          <th>Attempts</th>
+          <th>Started</th>
+          <th>Duration</th>
+          <th>Exit Code</th>
+          <th>Error</th>
+        </tr>`;
+
+        document.getElementById('tasks-table').innerHTML = tableHeader + tasksHtml;
+
       } catch (e) {
-        console.error('Failed to fetch job status:', e);
+        console.error('Failed to refresh:', e);
+        document.getElementById('error-container').innerHTML =
+          `<div class="error-message">Failed to load job details: ${escapeHtml(e.message)}</div>`;
       }
-    }
-
-    async function fetchLogs() {
-      if (!workerAddress) return;
-
-      try {
-        const response = await fetch(`http://${workerAddress}/api/jobs/${jobId}/logs`);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        const logs = await response.json();
-        // Worker returns array directly with {timestamp, source, data}
-        allLogs = Array.isArray(logs) ? logs.map(l => ({
-          stream: l.source,
-          line: `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.data}`
-        })) : [];
-        renderLogs();
-      } catch (e) {
-        console.error('Failed to fetch logs:', e);
-        document.getElementById('log-container').innerHTML =
-          '<div class="log-line">Failed to load logs</div>';
-      }
-    }
-
-    // Tab click handlers
-    document.querySelectorAll('.log-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.log-tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        currentFilter = tab.dataset.filter;
-        renderLogs();
-      });
-    });
-
-    async function refresh() {
-      await Promise.all([fetchJobStatus(), fetchLogs()]);
     }
 
     refresh();
@@ -876,6 +878,31 @@ class ControllerDashboard:
                 if worker:
                     worker_address = worker.address
 
+            # Add diagnostic information for pending tasks
+            pending_reason = None
+            if t.state == cluster_pb2.TASK_STATE_PENDING:
+                if not t.can_be_scheduled():
+                    pending_reason = "Task has non-terminal attempt (waiting for worker to report state)"
+                else:
+                    # Check if any workers can fit this task
+                    workers = self._state.get_available_workers()
+                    if not workers:
+                        pending_reason = "No healthy workers available"
+                    else:
+                        # Check resource constraints
+                        from iris.cluster.controller.scheduler import build_capacity_map, worker_can_fit_task
+
+                        capacities = build_capacity_map(workers)
+                        can_fit_any = any(worker_can_fit_task(cap, job) for cap in capacities.values())
+                        if not can_fit_any:
+                            pending_reason = (
+                                f"No worker has sufficient resources "
+                                f"(need cpu={job.request.resources.cpu}, "
+                                f"memory={job.request.resources.memory_bytes})"
+                            )
+                        else:
+                            pending_reason = "Waiting for scheduler to assign"
+
             task_data.append(
                 {
                     "task_id": str(t.task_id),
@@ -889,6 +916,8 @@ class ControllerDashboard:
                     "error": t.error or "",
                     "current_attempt_id": t.current_attempt_id,
                     "num_attempts": len(t.attempts),
+                    "pending_reason": pending_reason,
+                    "can_be_scheduled": t.can_be_scheduled(),
                 }
             )
 
@@ -912,10 +941,7 @@ class ControllerDashboard:
 
     def _job_detail_page(self, request: Request) -> HTMLResponse:
         job_id = request.path_params["job_id"]
-        # Jobs don't execute on workers - tasks do
-        # worker_address is kept empty for now (UI will be updated to show task-level workers)
-        worker_address = ""
-        return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", job_id).replace("{{worker_address}}", worker_address))
+        return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", job_id))
 
     def _health(self, _request: Request) -> JSONResponse:
         workers = self._state.list_all_workers()

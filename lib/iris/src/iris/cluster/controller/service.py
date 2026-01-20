@@ -28,7 +28,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from iris.cluster.controller.events import Event, EventType
-from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerWorker
+from iris.cluster.controller.state import ControllerEndpoint, ControllerState
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
@@ -384,27 +384,17 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.RegisterWorkerResponse:
         """Register a new worker or process a heartbeat from an existing worker."""
-        ts = now_ms()
-        worker_id = WorkerId(request.worker_id)
-
-        # Try heartbeat update first (worker already exists)
-        if self._state.update_worker_heartbeat(
-            worker_id,
-            ts,
-            metadata=request.metadata,
-        ):
-            return cluster_pb2.Controller.RegisterWorkerResponse(accepted=True)
-
-        # New worker registration
-        worker = ControllerWorker(
-            worker_id=worker_id,
-            address=request.address,
-            metadata=request.metadata,
-            last_heartbeat_ms=ts,
+        # Use WORKER_REGISTERED event for both new and existing workers
+        self._state.handle_event(
+            Event(
+                event_type=EventType.WORKER_REGISTERED,
+                worker_id=WorkerId(request.worker_id),
+                address=request.address,
+                metadata=request.metadata,
+                timestamp_ms=now_ms(),
+            )
         )
-        self._state.add_worker(worker)
         self._scheduler.wake()
-
         return cluster_pb2.Controller.RegisterWorkerResponse(accepted=True)
 
     def list_workers(

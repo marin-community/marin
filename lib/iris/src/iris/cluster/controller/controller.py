@@ -247,9 +247,14 @@ class Controller:
         if not job:
             return
 
-        # Create attempt for this dispatch. Scheduler already assigned to worker,
-        # so we just need to track the attempt.
-        task.create_attempt(worker.worker_id, initial_state=cluster_pb2.TASK_STATE_PENDING)
+        # Use TASK_ASSIGNED event to create attempt
+        self._state.handle_event(
+            Event(
+                event_type=EventType.TASK_ASSIGNED,
+                task_id=task.task_id,
+                worker_id=worker.worker_id,
+            )
+        )
 
         try:
             stub = self._stub_factory.get_stub(worker.address)
@@ -271,14 +276,27 @@ class Controller:
                 ports=list(job.request.ports),
                 attempt_id=task.current_attempt_id,
             )
+
+            logger.info(
+                f"Dispatching task {task.task_id} to worker {worker.worker_id} at {worker.address} "
+                f"(cpu={job.request.resources.cpu}, memory={job.request.resources.memory_bytes})"
+            )
             stub.run_task(request)
 
-            logger.info(f"Dispatched task {task.task_id} to worker {worker.worker_id}")
+            logger.info(f"Successfully dispatched task {task.task_id} to worker {worker.worker_id}")
 
-        except Exception:
-            self._state.revert_task_dispatch(task)
+        except Exception as e:
+            # Rollback scheduler state (coordination API)
             transaction.rollback_assignment(task, worker)
-            self._state.mark_worker_unhealthy(worker.worker_id)
+
+            # Mark worker failed (event API - will cascade to task)
+            self._state.handle_event(
+                Event(
+                    event_type=EventType.WORKER_FAILED,
+                    worker_id=worker.worker_id,
+                    error=f"Dispatch RPC failed: {e}",
+                )
+            )
             logger.exception("Failed to dispatch task %s to worker %s", task.task_id, worker.address)
 
     def _mark_task_unschedulable(self, task: ControllerTask) -> None:

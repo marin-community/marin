@@ -187,19 +187,21 @@ def test_job_detail_page_includes_worker_address(client, state, job_request, mak
     response = client.get("/job/j1")
 
     assert response.status_code == 200
-    # Jobs don't execute on workers - tasks do
-    assert "const workerAddress = '';" in response.text
+    # New dashboard shows task table
+    assert "Tasks</h2>" in response.text
+    assert "tasks-table" in response.text
 
 
 def test_job_detail_page_empty_worker_for_pending_job(client, state, job_request):
-    """Job detail page has empty worker address for unassigned jobs."""
+    """Job detail page shows task summary for pending jobs."""
     state.add_job(ControllerJob(job_id=JobId("pending-job"), request=job_request, state=cluster_pb2.JOB_STATE_PENDING))
 
     response = client.get("/job/pending-job")
 
     assert response.status_code == 200
-    # Worker address placeholder should be empty
-    assert "const workerAddress = '';" in response.text
+    # New dashboard shows task summary
+    assert "Task Summary" in response.text
+    assert "tasks-table" in response.text
 
 
 def test_jobs_state_names_mapped_correctly(client, state, job_request):

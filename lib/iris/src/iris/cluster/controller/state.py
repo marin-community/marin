@@ -835,12 +835,25 @@ class ControllerEndpoint:
 class ControllerState:
     """Thread-safe controller state managing jobs, tasks, workers, endpoints, and queues.
 
-    All production state transitions go through the unified handle_event() API,
-    which provides transaction logging for debugging and supports cascading effects.
+    API Design:
 
-    Low-level methods like add_job(), assign_task_to_worker(), etc. exist for:
-    - Test setup (creating initial state)
-    - Scheduler operations (tentative assignment/rollback)
+    1. Event API (Observable State Transitions):
+       - handle_event() - Main entry point for all observable state changes
+       - Use for: external triggers, worker reports, system events
+       - Returns TransactionLog for debugging
+
+    2. Coordination API (Scheduler Transaction Support):
+       - assign_task_to_worker() - Tentative assignment within scheduling
+       - rollback_task_assignment() - Rollback on dispatch failure
+       - Internal to SchedulingTransaction, not for general use
+
+    3. Query API (Read-Only Access):
+       - peek_pending_tasks(), get_available_workers(), get_job(), etc.
+       - Used by scheduler and controller for reads
+
+    4. Test Utilities (Setup Helpers):
+       - add_job(), add_worker() - Direct object creation for tests
+       - Bypass event logs for test convenience
     """
 
     def __init__(self):
@@ -891,6 +904,13 @@ class ControllerState:
                     self._on_task_state_changed(txn, event)
 
             self._transactions.append(txn)
+
+            # Log transaction for debugging
+            if txn.actions:
+                logger.info(f"Event {event.event_type.name}: {len(txn.actions)} actions")
+                for action in txn.actions:
+                    logger.info(f"  - {action.action} {action.entity_id} {action.details}")
+
             return txn
 
     # -------------------------------------------------------------------------
@@ -898,15 +918,28 @@ class ControllerState:
     # -------------------------------------------------------------------------
 
     def _on_worker_registered(self, txn: TransactionLog, event: Event) -> None:
-        assert event.worker_id and event.address and event.metadata
-        worker = ControllerWorker(
-            worker_id=event.worker_id,
-            address=event.address,
-            metadata=event.metadata,
-            last_heartbeat_ms=event.timestamp_ms or now_ms(),
-        )
-        self._workers[event.worker_id] = worker
-        txn.log("worker_registered", event.worker_id, address=event.address)
+        assert event.worker_id
+        worker = self._workers.get(event.worker_id)
+
+        if worker:
+            # Existing worker - heartbeat update
+            worker.last_heartbeat_ms = event.timestamp_ms or now_ms()
+            worker.healthy = True
+            worker.consecutive_failures = 0
+            if event.metadata:
+                worker.metadata = event.metadata
+            txn.log("worker_heartbeat", event.worker_id)
+        else:
+            # New worker - full registration
+            assert event.address and event.metadata
+            worker = ControllerWorker(
+                worker_id=event.worker_id,
+                address=event.address,
+                metadata=event.metadata,
+                last_heartbeat_ms=event.timestamp_ms or now_ms(),
+            )
+            self._workers[event.worker_id] = worker
+            txn.log("worker_registered", event.worker_id, address=event.address)
 
     def _on_worker_heartbeat(self, txn: TransactionLog, event: Event) -> None:
         assert event.worker_id and event.timestamp_ms is not None
@@ -922,11 +955,12 @@ class ControllerState:
         worker.healthy = False
         txn.log("worker_failed", event.worker_id, error=event.error)
 
-        # Cascade to running tasks - call handler directly, same transaction
+        # Cascade to all tasks on this worker (RUNNING or PENDING) - call handler directly, same transaction
         for task_id in list(worker.running_tasks):
             task = self._tasks[task_id]
             assert task.worker_id == event.worker_id
-            if task.state != cluster_pb2.TASK_STATE_RUNNING:
+            # Skip terminal states
+            if task.state in TERMINAL_TASK_STATES:
                 continue
 
             cascade_event = Event(
@@ -1000,19 +1034,22 @@ class ControllerState:
 
         Creates an attempt in PENDING state. The task transitions to RUNNING
         when the worker reports TASK_STATE_CHANGED with RUNNING.
+
+        This handler maintains the worker's running_tasks set for worker failure
+        cascading. Resource commitment and queue removal are handled by the
+        scheduler's coordination API (assign_task_to_worker) before this event.
         """
         assert event.task_id and event.worker_id
         task = self._tasks[event.task_id]
-        worker = self._workers[event.worker_id]
         job = self._jobs[task.job_id]
+        worker = self._workers[event.worker_id]
 
         old_state = task.state
         task.create_attempt(event.worker_id, initial_state=cluster_pb2.TASK_STATE_PENDING)
 
-        worker.assign_task(event.task_id, job.request.resources)
-
-        # Remove from queue
-        self._task_queue = deque(tid for tid in self._task_queue if tid != event.task_id)
+        # Add to worker's running_tasks (needed for worker failure cascading)
+        # Resource commitment was already done by assign_task_to_worker()
+        worker.running_tasks.add(event.task_id)
 
         # Update job counters (state stays PENDING, so no job state change expected)
         new_job_state = job.on_task_transition(old_state, task.state)
@@ -1098,7 +1135,10 @@ class ControllerState:
     # --- Job Management ---
 
     def add_job(self, job: ControllerJob, tasks: list[ControllerTask] | None = None) -> list[ControllerTask]:
-        """Add a job to state, automatically creating tasks from replicas.
+        """Add job directly to state (test utility).
+
+        For production use, create Event(JOB_SUBMITTED) instead.
+        This method bypasses event logging and is intended for test setup only.
 
         If tasks are not provided, they are automatically created based on
         the job's resources.replicas field (defaulting to 1). Each task gets
@@ -1175,7 +1215,13 @@ class ControllerState:
             return pending
 
     def assign_task_to_worker(self, worker_id: WorkerId, task_id: TaskId) -> bool:
-        """Assign a task to a worker and remove from queue.
+        """Tentatively assign task to worker (scheduler coordination).
+
+        This is a coordination method used by SchedulingTransaction during
+        the scheduling cycle. It updates worker.running_tasks and removes
+        the task from the queue.
+
+        For observable task assignment, use Event(TASK_ASSIGNED) instead.
 
         Updates the worker's committed resources based on the job's resource requirements.
         """
@@ -1189,22 +1235,18 @@ class ControllerState:
             return True
 
     def rollback_task_assignment(self, worker_id: WorkerId, task: ControllerTask) -> None:
-        """Rollback a failed assignment: unassign from worker and re-queue."""
+        """Rollback a failed assignment: unassign from worker and re-queue.
+
+        This is a coordination method used by SchedulingTransaction when
+        task dispatch fails. It reverses the tentative assignment made by
+        assign_task_to_worker().
+        """
         with self._lock:
             worker = self._workers[worker_id]
             job = self._jobs[task.job_id]
             worker.unassign_task(task.task_id, job.request.resources)
             if task.task_id not in self._task_queue:
                 self._task_queue.append(task.task_id)
-
-    def revert_task_dispatch(self, task: ControllerTask) -> None:
-        """Revert a failed dispatch and update job state counts."""
-        with self._lock:
-            job = self._jobs[task.job_id]
-            old_state = task.state
-            task.revert_attempt()
-            job.task_state_counts[old_state] -= 1
-            job.task_state_counts[task.state] += 1
 
     def _finalize_job_state(
         self,
@@ -1267,6 +1309,11 @@ class ControllerState:
     # --- Worker Management ---
 
     def add_worker(self, worker: ControllerWorker) -> None:
+        """Add worker directly to state (test utility).
+
+        For production use, create Event(WORKER_REGISTERED) instead.
+        This method bypasses event logging and is intended for test setup only.
+        """
         with self._lock:
             self._workers[worker.worker_id] = worker
 
@@ -1285,29 +1332,6 @@ class ControllerState:
     def list_all_workers(self) -> list[ControllerWorker]:
         with self._lock:
             return list(self._workers.values())
-
-    def mark_worker_unhealthy(self, worker_id: WorkerId) -> ControllerWorker | None:
-        with self._lock:
-            worker = self._workers.get(worker_id)
-            if worker:
-                worker.healthy = False
-            return worker
-
-    def update_worker_heartbeat(
-        self,
-        worker_id: WorkerId,
-        now_ms: int,
-        metadata: cluster_pb2.WorkerMetadata | None = None,
-    ) -> bool:
-        with self._lock:
-            worker = self._workers.get(worker_id)
-            if not worker:
-                return False
-            worker.last_heartbeat_ms = now_ms
-            worker.healthy = True
-            if metadata is not None:
-                worker.metadata = metadata
-            return True
 
     def load_workers_from_config(self, configs: list[WorkerConfig]) -> None:
         """Load workers from static configuration."""

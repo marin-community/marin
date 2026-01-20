@@ -14,6 +14,7 @@
 
 """WorkerService RPC implementation using Connect RPC."""
 
+import logging
 import re
 import time
 from typing import Protocol
@@ -25,6 +26,8 @@ from connectrpc.request import RequestContext
 from iris.cluster.worker.worker_types import Task
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
+
+logger = logging.getLogger(__name__)
 
 
 class TaskProvider(Protocol):
@@ -51,11 +54,19 @@ class WorkerServiceImpl:
     ) -> cluster_pb2.Worker.RunTaskResponse:
         """Start execution of a task."""
         with rpc_error_handler("running task"):
+            logger.info(
+                f"Received run_task RPC for task {request.task_id} "
+                f"(job={request.job_id}, attempt={request.attempt_id}, "
+                f"cpu={request.resources.cpu}, memory={request.resources.memory_bytes})"
+            )
+
             task_id = self._provider.submit_task(request)
             task = self._provider.get_task(task_id)
 
             if not task:
                 raise ConnectError(Code.INTERNAL, f"Task {task_id} not found after submission")
+
+            logger.info(f"Task {task_id} submitted successfully with state {task.to_proto().state}")
 
             return cluster_pb2.Worker.RunTaskResponse(
                 task_id=task_id,
