@@ -23,7 +23,7 @@
 - Assume Python >=3.11.
 - Always use `uv run` for Python entry points. If that fails, try `.venv/bin/python` directly.
 - Run `uv run python infra/pre-commit.py --all-files` before sending changes; formatting and linting are enforced with `ruff`.
-- Keep type hints passing under `uv run mypy`; configuration lives in `pyproject.toml`.
+- Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
 
 ### Communication & Commits
 
@@ -89,6 +89,15 @@ You don't generate comments that merely restate the code, e.g.
 - Avoid “tautological” tests that merely restate implementation logic as asserts; prefer tests that validate externally-observable behavior, integration points, or realistic failure modes.
 - Run the appropriate tests for your changes (for example, `uv run pytest` under the relevant directory); consult subproject guides for preferred markers.
 - Use pytest features like fixtures and parameterization to avoid duplication and write clean code.
+
+PREFER:
+
+- Integration style tests which exercise behavior and test the output
+
+DO NOT:
+
+- Create tests which validate obvious features: if a type exists, a constant has a value, etc.
+
 
 ## Environment
 
