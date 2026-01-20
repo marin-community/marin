@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
 import pytest
 import os
 import tempfile
-from zephyr import write_jsonl_file
+from zephyr import load_jsonl, write_jsonl_file
 
 
 @pytest.fixture
@@ -152,3 +153,19 @@ def fox_corpus():
             "test_dir": test_dir,
             "output_dir": output_dir,
         }
+
+
+def load_dedup_outputs(output_dir: str) -> dict[str, dict]:
+    """Load all dedupe output files and return as id->doc mapping.
+
+    Args:
+        output_dir: Directory containing .jsonl.gz output files
+
+    Returns:
+        Dictionary mapping document IDs to document records
+    """
+    output_files = list(Path(output_dir).glob("**/*.jsonl.gz"))
+    results = []
+    for output_file in output_files:
+        results.extend(load_jsonl(str(output_file)))
+    return {r["id"]: r for r in results}
