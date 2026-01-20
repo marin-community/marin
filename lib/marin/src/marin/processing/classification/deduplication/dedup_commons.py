@@ -42,16 +42,23 @@ class DedupMode(StrEnum):
     """Mode in which deduplication is performed"""
 
     EXACT_PARAGRAPH = auto()
+    """
+    Identify exact duplicate paragraphs within documents.
+    """
     EXACT_DOCUMENT = auto()
+    """
+    Identify exact duplicate documents.
+    """
     FUZZY_DOCUMENT = auto()
+    """
+    Identify documents that are similar but not necessarily identical.
+    """
 
 
 @dataclass(frozen=True)
 class DedupConfig:
     """
     Configuration class for running deduplication on docs using Zephyr.
-
-    Deduplication will identify spans of text in documents that are duplicate.
 
     Attributes:
         input_paths: Path(s) of files to apply deduplication to. This could be across multiple directories/datasets.
