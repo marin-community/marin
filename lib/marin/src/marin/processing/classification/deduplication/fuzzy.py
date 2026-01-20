@@ -135,6 +135,7 @@ def dedup_fuzzy_document(config: dedup_commons.DedupConfig):
         .reshard(num_shards=42)
         .write_parquet(f"{config.output_path}/metadata/fuzzy-dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
         context=ctx,
+        verbose=True,
     )
 
     fuzzy_cnt = _compute_fuzzy_dedup_stats(cc_files, method="fuzzy", level="document")

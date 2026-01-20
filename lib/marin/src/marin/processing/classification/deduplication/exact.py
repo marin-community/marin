@@ -103,6 +103,7 @@ def dedup_exact_paragraph(config: dedup_commons.DedupConfig):
             skip_existing=True,
         ),
         context=ctx,
+        verbose=True,
     )
 
     if wandb.run:
