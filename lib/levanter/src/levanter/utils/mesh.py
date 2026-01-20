@@ -75,6 +75,8 @@ class MeshConfig:
         Computes the ICI and DCN axis sizes based on the configuration. num_devices is the total number of devices,
         which are split over num_slices slices.
         """
+        if num_devices <= 0:
+            raise ValueError("num_devices must be positive")
         if num_slices <= 0:
             raise ValueError("num_slices must be positive")
         if num_devices % num_slices != 0:

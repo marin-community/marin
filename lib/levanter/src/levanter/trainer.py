@@ -1017,6 +1017,9 @@ class TrainerConfig:
         if self.per_device_parallelism == -1:
             if isinstance(self.train_batch_size, int):
                 self.per_device_parallelism = self.train_batch_size // self.data_axis_size
+                # Ensure at least 1 when allow_nondivisible_batch_size is set
+                if self.allow_nondivisible_batch_size and self.per_device_parallelism == 0:
+                    self.per_device_parallelism = 1
             else:
                 logger.info(
                     "per_device_parallelism is not set and train_batch_size is not an int. "
@@ -1027,7 +1030,7 @@ class TrainerConfig:
             self.train_batch_size = self.per_device_parallelism * self.data_axis_size
 
         # validate size of per_device_parallelism
-        if self.per_device_parallelism != -1:
+        if self.per_device_parallelism != -1 and not self.allow_nondivisible_batch_size:
             if isinstance(self.train_batch_size, Sequence):
                 for phase in self.train_batch_size:
                     assert isinstance(phase, ScheduleStep)

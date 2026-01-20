@@ -42,9 +42,9 @@ class QwenConfig(LlamaConfig):
     max_window_layers: int = 0  # Only apply sliding window beyond this layer
 
     def __post_init__(self):
-        assert (
-            self.num_heads % self.num_kv_heads == 0
-        ), f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
+        assert self.num_heads % self.num_kv_heads == 0, (
+            f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
+        )
 
     def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter["QwenConfig"]:  # type: ignore
         return HFCheckpointConverter(
@@ -59,6 +59,10 @@ class QwenConfig(LlamaConfig):
     def from_hf_config(cls, hf_config: HfConfig):
         rope_theta = hf_config.rope_theta
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
+        use_bias = getattr(hf_config, "attention_bias", None)
+        if use_bias is None:
+            # Qwen2Config in newer transformers drops no_bias; assume bias by default
+            use_bias = not getattr(hf_config, "no_bias", True)
         return QwenConfig(
             max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
@@ -74,7 +78,7 @@ class QwenConfig(LlamaConfig):
             layer_norm_epsilon=hf_config.rms_norm_eps,
             tie_word_embeddings=hf_config.tie_word_embeddings,
             rope=rope_config,
-            use_bias=not getattr(hf_config, "no_bias", True),
+            use_bias=use_bias,
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfQwenConfig:
