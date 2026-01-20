@@ -41,6 +41,7 @@ from functools import partial
 import haliax as hax
 import haliax.state_dict as hsd
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
@@ -316,10 +317,22 @@ class MarinFlightServer(flight.FlightServerBase):
 
 @jax.jit
 def copy_and_flatten(model: PyTree) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
-    """Convert `model` into a state with flattened arrays and shapes."""
+    """Convert `model` into a state with flattened arrays and shapes.
+
+    Converts weights to bfloat16 for efficient transfer to inference workers.
+    This provides several benefits:
+    1. Reduces network transfer size by 50% (float32 -> bfloat16)
+    2. Reduces device-to-host copy bandwidth by 50%
+    3. Eliminates dtype conversion overhead in vLLM
+    4. Reduces memory fragmentation from temporary conversion buffers
+
+    The training model remains in float32 for numerical stability during optimization.
+    """
     state_dict = hsd.to_state_dict(model)
     shape_dict = jax.tree.map(lambda y: y.shape, state_dict)
-    flat_dict = jax.tree.map(lambda y: y.reshape(-1), state_dict)
+    # Convert to bfloat16 for inference - happens on GPU before device_get
+    bf16_dict = jax.tree.map(lambda y: y.astype(jnp.bfloat16), state_dict)
+    flat_dict = jax.tree.map(lambda y: y.reshape(-1), bf16_dict)
     return flat_dict, shape_dict
 
 
