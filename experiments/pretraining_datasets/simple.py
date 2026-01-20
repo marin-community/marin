@@ -87,7 +87,7 @@ downloads = {
                 fn=download_hf,
                 config=DownloadConfig(
                     hf_dataset_id="HuggingFaceFW/fineweb-edu",
-                    revision=(revision := "87f0914"),
+                    revision=versioned((revision := "87f0914")),
                     gcs_output_path=this_output_path(),
                     wait_for_completion=True,
                 ),
