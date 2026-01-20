@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING
 import fsspec
 import numpy as np
 
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
+from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -69,8 +69,8 @@ DEFAULT_METRICS = [
 class CollectResultsConfig:
     """Configuration for the analysis executor step."""
 
-    weight_configs_path: str  # Path to weight_configs.json (GCS or local)
-    output_path: str  # Where to write results CSV (GCS or local)
+    weight_configs_path: InputName | str  # Path to weight_configs.json (GCS or local)
+    output_path: InputName | str  # Where to write results CSV (GCS or local)
     wandb_entity: str = "marin"
     wandb_project: str = "marin"
     wandb_tags: tuple[str, ...] = ()  # Tags to filter runs
@@ -335,7 +335,7 @@ def create_analysis_step(
         description="Collect W&B results and generate analysis CSV",
         fn=collect_results,
         config=CollectResultsConfig(
-            weight_configs_path=os.path.join(output_path_of(weight_configs_step), "weight_configs.json"),
+            weight_configs_path=output_path_of(weight_configs_step, "weight_configs.json"),
             output_path=this_output_path(),
             wandb_entity=wandb_entity,
             wandb_project=wandb_project,

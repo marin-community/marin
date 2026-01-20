@@ -124,6 +124,7 @@ def main(
     seed: int = 42,
     name_prefix: str = "pinlin_calvin_xu/data_mixture/3_partitions_3_phases",
     analyze: bool = False,
+    batch_size: int | None = None,
 ):
     """Main entry point for running the swarm experiment.
 
@@ -132,6 +133,7 @@ def main(
         seed: Random seed for weight sampling.
         name_prefix: Prefix for run names.
         analyze: If True, only run analysis step (collect results from W&B).
+        batch_size: If set, run training steps in batches of this size to limit parallelism.
     """
     if os.getenv("CI", None) is not None:
         logger.info("Skipping experiment execution on CI environment.")
@@ -169,12 +171,32 @@ def main(
     logger.info(f"Total steps per run: {total_steps:,}")
     logger.info(f"Phase boundaries: step {phase1_end} (33%), step {phase2_end} (67%)")
 
-    # All steps: weight configs first, then training runs, then analysis
-    all_steps = [weight_configs_step, *training_steps, analysis_step]
-
+    # Run weight configs step first
     executor_main(
-        steps=all_steps,
-        description=f"Three-phase data mixture swarm: {n_runs} runs with independently sampled weights per phase",
+        steps=[weight_configs_step],
+        description=f"Save weight configurations for {name_prefix}",
+    )
+
+    # Run training steps (optionally in batches)
+    if batch_size is not None:
+        logger.info(f"Running training steps in batches of {batch_size}")
+        for i in range(0, len(training_steps), batch_size):
+            batch = training_steps[i : i + batch_size]
+            logger.info(f"Running batch {i // batch_size + 1}: steps {i} to {i + len(batch) - 1}")
+            executor_main(
+                steps=batch,
+                description=f"Batch {i // batch_size + 1}: {len(batch)} training runs",
+            )
+    else:
+        executor_main(
+            steps=list(training_steps),
+            description=f"Three-phase data mixture swarm: {n_runs} runs",
+        )
+
+    # Run analysis step last
+    executor_main(
+        steps=[analysis_step],
+        description=f"Analysis for {name_prefix}",
     )
 
 
@@ -205,6 +227,12 @@ def _parse_args():
         action="store_true",
         help="Run analysis only (collect results from W&B and export CSV).",
     )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=None,
+        help="Run training steps in batches of this size to limit parallelism.",
+    )
     return parser.parse_known_args()
 
 
@@ -219,4 +247,5 @@ if __name__ == "__main__":
         seed=args.seed,
         name_prefix=args.name_prefix,
         analyze=args.analyze,
+        batch_size=args.batch_size,
     )
