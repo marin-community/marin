@@ -49,11 +49,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_METRICS = [
     "eval/loss",
     "eval/paloma/c4_en/bpb",
-    "eval/paloma/wikipedia_en/bpb",
-    "eval_harness/gsm8k/acc",
-    "eval_harness/mmlu/acc",
-    "eval_harness/hellaswag/acc",
-    "eval_harness/arc_challenge/acc",
+    "eval/paloma/m2d2_wikipedia_unsplit/bpb",
+    "lm_eval/arc_challenge/acc",
+    "lm_eval/arc_challenge/acc_norm",
+    "lm_eval/hellaswag_0shot/acc",
+    "lm_eval/hellaswag_0shot/acc_norm",
+    "lm_eval/piqa/acc",
+    "lm_eval/boolq/acc",
+    "lm_eval/averages/macro_avg_acc",
 ]
 
 
@@ -114,7 +117,7 @@ def collect_results(config: CollectResultsConfig):
     logger.info(f"Found {len(runs)} W&B runs")
 
     # 3. Match runs to configs by run_id
-    matched = match_runs_to_configs(runs, configs)
+    matched = match_runs_to_configs(runs, configs, experiment_name=experiment_name)
     logger.info(f"Matched {sum(1 for m in matched if m.get('wandb_run_id'))} runs to configs")
 
     # 4. Build DataFrame with all weights and metrics
@@ -203,22 +206,29 @@ def query_wandb_runs(
     return results
 
 
-def match_runs_to_configs(runs: list[dict], configs: list[dict]) -> list[dict]:
+def match_runs_to_configs(
+    runs: list[dict], configs: list[dict], experiment_name: str
+) -> list[dict]:
     """Match W&B runs to weight configurations by run_id pattern.
 
-    Extracts run_id from W&B run names (e.g., "experiment/run_042" -> 42)
-    and matches to the corresponding config.
+    Extracts run_id from W&B run names and matches to the corresponding config.
+    Tries multiple patterns to handle different W&B naming conventions:
+    1. Full path: "pinlin_calvin_xu/data_mixture/3_partitions_3_phases/run_00042"
+    2. Short name: "run_00042-abc123" (W&B may truncate long names)
 
     Args:
         runs: List of W&B run dictionaries.
         configs: List of weight configuration dictionaries.
+        experiment_name: Experiment name prefix to filter runs (required to avoid false positives).
 
     Returns:
         List of matched dictionaries with config + run info.
     """
     # Build lookup from run_id to W&B run
     run_by_id: dict[int, dict] = {}
-    run_id_pattern = re.compile(r"run_(\d+)")
+
+    escaped_name = re.escape(experiment_name)
+    run_id_pattern = re.compile(rf"{escaped_name}/run_(\d+)")
 
     for run in runs:
         name = run.get("wandb_run_name", "")

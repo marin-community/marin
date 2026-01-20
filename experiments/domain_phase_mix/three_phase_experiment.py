@@ -21,7 +21,11 @@ This experiment creates ~100 proxy model training runs with:
 - Three data domains: pretrain (Nemotron), midtrain (full Dolmino), SFT
 
 Usage:
+    # Run training
     python -m experiments.domain_phase_mix.three_phase_experiment [--n_runs N] [--seed SEED]
+
+    # Run analysis (after training completes)
+    python -m experiments.domain_phase_mix.three_phase_experiment --analyze
 """
 
 import logging
@@ -29,6 +33,7 @@ import os
 
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
+from experiments.domain_phase_mix.analysis import create_analysis_step
 from marin.execution.executor import executor_main
 
 from experiments.domain_phase_mix.config import PhaseSchedule
@@ -63,7 +68,7 @@ PHASE_BOUNDARIES = [0.33, 0.67]  # Creates 3 phases: [0, 0.33), [0.33, 0.67), [0
 
 
 def create_three_phase_experiment(
-    name: str = "pinlin_calvin_xu/data_mixture/domain_phase_mix",
+    name: str = "pinlin_calvin_xu/data_mixture/3_partitions_3_phases",
     experiment_budget: int = EXPERIMENT_BUDGET,
     target_budget: int = TARGET_BUDGET,
     batch_size: int = BATCH_SIZE,
@@ -117,7 +122,8 @@ def create_three_phase_experiment(
 def main(
     n_runs: int = 100,
     seed: int = 42,
-    name_prefix: str = "pinlin_calvin_xu/data_mixture/domain_phase_mix",
+    name_prefix: str = "pinlin_calvin_xu/data_mixture/3_partitions_3_phases",
+    analyze: bool = False,
 ):
     """Main entry point for running the swarm experiment.
 
@@ -125,18 +131,32 @@ def main(
         n_runs: Number of training runs.
         seed: Random seed for weight sampling.
         name_prefix: Prefix for run names.
+        analyze: If True, only run analysis step (collect results from W&B).
     """
     if os.getenv("CI", None) is not None:
         logger.info("Skipping experiment execution on CI environment.")
         return
 
-    # Create experiment
     experiment = create_three_phase_experiment(name=name_prefix)
 
-    # Create steps (weight_configs_step saves to GCS, training_steps run the models)
     weight_configs_step, training_steps = experiment.create_swarm_steps(
         n_runs=n_runs, seed=seed, name_prefix=name_prefix
     )
+    
+    analysis_step = create_analysis_step(
+        weight_configs_step=weight_configs_step,
+        name_prefix=name_prefix,
+    )
+
+    if analyze:
+        # Only run analysis
+        logger.info("Running analysis only (collecting results from W&B)")
+        all_steps = [weight_configs_step, analysis_step]
+        executor_main(
+            steps=all_steps,
+            description=f"Analysis for {name_prefix}",
+        )
+        return
 
     # Log experiment details
     tokens_per_step = BATCH_SIZE * SEQ_LEN
@@ -144,13 +164,13 @@ def main(
     phase1_end = int(total_steps * PHASE_BOUNDARIES[0])
     phase2_end = int(total_steps * PHASE_BOUNDARIES[1])
 
-    logger.info(f"Created {len(training_steps)} training steps + 1 weight configs step")
+    logger.info(f"Created {len(training_steps)} training steps + 1 weight configs step + 1 analysis step")
     logger.info(f"Total tokens per run: {EXPERIMENT_BUDGET:,}")
     logger.info(f"Total steps per run: {total_steps:,}")
     logger.info(f"Phase boundaries: step {phase1_end} (33%), step {phase2_end} (67%)")
 
-    # All steps: weight configs first, then training runs
-    all_steps = [weight_configs_step, *training_steps]
+    # All steps: weight configs first, then training runs, then analysis
+    all_steps = [weight_configs_step, *training_steps, analysis_step]
 
     executor_main(
         steps=all_steps,
@@ -177,8 +197,13 @@ def _parse_args():
     parser.add_argument(
         "--name_prefix",
         type=str,
-        default="pinlin_calvin_xu/data_mixture/domain_phase_mix",
+        default="pinlin_calvin_xu/data_mixture/3_partitions_3_phases",
         help="Prefix for run names.",
+    )
+    parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help="Run analysis only (collect results from W&B and export CSV).",
     )
     return parser.parse_known_args()
 
@@ -193,4 +218,5 @@ if __name__ == "__main__":
         n_runs=args.n_runs,
         seed=args.seed,
         name_prefix=args.name_prefix,
+        analyze=args.analyze,
     )
