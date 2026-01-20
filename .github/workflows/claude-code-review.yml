@@ -18,7 +18,7 @@ jobs:
   claude-review:
     # Only run if:
     # 1. PR event from a repo writer (OWNER, MEMBER, or COLLABORATOR)
-    # 2. Comment from a repo writer containing "@claude-review"
+    # 2. Comment from a repo writer containing "/review"
     if: |
       (github.event_name == 'pull_request' &&
        (github.event.pull_request.author_association == 'OWNER' ||
@@ -29,25 +29,26 @@ jobs:
        (github.event.comment.author_association == 'OWNER' ||
         github.event.comment.author_association == 'MEMBER' ||
         github.event.comment.author_association == 'COLLABORATOR') &&
-       contains(github.event.comment.body, '@claude-review')) ||
+       contains(github.event.comment.body, '/review')) ||
       (github.event_name == 'pull_request_review_comment' &&
        (github.event.comment.author_association == 'OWNER' ||
         github.event.comment.author_association == 'MEMBER' ||
         github.event.comment.author_association == 'COLLABORATOR') &&
-       contains(github.event.comment.body, '@claude-review'))
+       contains(github.event.comment.body, '/review'))
 
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pull-requests: read
-      issues: read
+      contents: write
+      pull-requests: write
+      issues: write
       id-token: write
+      actions: read
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 10
 
       - name: Get PR number
         id: pr-number
