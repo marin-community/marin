@@ -22,15 +22,16 @@ import json
 import logging
 import os
 from collections.abc import Sequence
-from pathlib import Path
+from dataclasses import dataclass
 
+import fsspec
 from levanter.main.train_lm import LmConfig
 
 from experiments.defaults import simulated_epoching_train
 from experiments.evals.task_configs import EvalTaskConfig, CORE_TASKS
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 from experiments.three_phase_swarm.config import (
@@ -42,6 +43,47 @@ from experiments.three_phase_swarm.config import (
 from experiments.three_phase_swarm.weight_sampler import WeightSampler, DirichletSamplingParams
 
 logger = logging.getLogger("ray")
+
+
+# ============================================================================
+# WEIGHT CONFIG STEP
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class SaveWeightConfigsConfig:
+    """Configuration for saving weight configs to GCS."""
+
+    output_path: str
+    experiment_name: str
+    seed: int
+    n_runs: int
+    domains: tuple[str, ...]
+    phases: tuple[str, ...]
+    summary: str  # JSON-encoded summary
+    configs: str  # JSON-encoded list of configs
+
+
+def save_weight_configs(config: SaveWeightConfigsConfig):
+    """Save weight configurations to GCS.
+
+    This is an ExecutorStep function that writes weight_configs.json.
+    """
+    configs_data = {
+        "experiment_name": config.experiment_name,
+        "seed": config.seed,
+        "n_runs": config.n_runs,
+        "domains": list(config.domains),
+        "phases": list(config.phases),
+        "summary": json.loads(config.summary),
+        "configs": json.loads(config.configs),
+    }
+
+    output_file = os.path.join(config.output_path, "weight_configs.json")
+    with fsspec.open(output_file, "w") as f:
+        json.dump(configs_data, f, indent=2)
+
+    logger.info(f"Saved weight configurations to {output_file}")
 
 
 class MixtureExperiment:
@@ -64,7 +106,9 @@ class MixtureExperiment:
         model_config: LmConfig,
         batch_size: int = 128,
         seq_len: int = 2048,
+        learning_rate: float = 0.02,
         num_train_steps: int | None = None,
+        steps_per_eval: int = 1000,
         experiment_budget: int | None = None,
         target_budget: int | None = None,
         resources: ResourceConfig | None = None,
@@ -80,6 +124,7 @@ class MixtureExperiment:
             model_config: Model configuration (LlamaConfig, etc.).
             batch_size: Training batch size.
             seq_len: Sequence length.
+            learning_rate: Learning rate for training.
             num_train_steps: Number of training steps. If None, computed from experiment_budget.
             experiment_budget: Total tokens to train on. If None, computed from num_train_steps.
             target_budget: Target budget for simulated epoching. If None, no simulated epoching.
@@ -93,6 +138,8 @@ class MixtureExperiment:
         self.model_config = model_config
         self.batch_size = batch_size
         self.seq_len = seq_len
+        self.learning_rate = learning_rate
+        self.steps_per_eval = steps_per_eval
         self.resources = resources or ResourceConfig.with_tpu("v5p-8")
         self.eval_harness_tasks = eval_harness_tasks
         self.sampling_params = sampling_params or DirichletSamplingParams()
@@ -176,7 +223,8 @@ class MixtureExperiment:
             "resources": self.resources,
             "train_batch_size": self.batch_size,
             "num_train_steps": self.num_train_steps,
-            "steps_per_eval": 500,
+            "learning_rate": self.learning_rate,
+            "steps_per_eval": self.steps_per_eval,
             "steps_per_export": self.num_train_steps,  # Save only at the end
             "data_seed": run_id,
         }
@@ -227,25 +275,58 @@ class MixtureExperiment:
                 eval_harness_tasks=self.eval_harness_tasks,
             )
 
+    def create_weight_configs_step(
+        self,
+        configs: list[WeightConfig],
+        summary: dict,
+        seed: int,
+        name_prefix: str | None = None,
+    ) -> ExecutorStep:
+        """Create an ExecutorStep that saves weight configurations to GCS.
+
+        Args:
+            configs: List of weight configurations.
+            summary: Summary statistics from the sampler.
+            seed: Random seed used for sampling.
+            name_prefix: Prefix for the step name.
+
+        Returns:
+            ExecutorStep that saves weight_configs.json.
+        """
+        prefix = name_prefix or self.name
+
+        return ExecutorStep(
+            name=f"{prefix}/weight_configs",
+            description=f"Save weight configurations for {len(configs)} runs",
+            fn=save_weight_configs,
+            config=SaveWeightConfigsConfig(
+                output_path=this_output_path(),
+                experiment_name=self.name,
+                seed=seed,
+                n_runs=len(configs),
+                domains=tuple(self.experiment_config.domain_names),
+                phases=tuple(self.phase_schedule.phase_names),
+                summary=json.dumps(summary),
+                configs=json.dumps([c.to_dict() for c in configs]),
+            ),
+        )
+
     def create_swarm_steps(
         self,
         n_runs: int = 100,
         seed: int = 42,
         name_prefix: str | None = None,
-        save_configs: bool = True,
-        output_dir: str | None = None,
-    ) -> Sequence[ExecutorStep]:
-        """Create all training steps for the swarm.
+    ) -> tuple[ExecutorStep, Sequence[ExecutorStep]]:
+        """Create all steps for the swarm experiment.
 
         Args:
             n_runs: Number of training runs to create.
             seed: Random seed for weight sampling.
             name_prefix: Prefix for run names.
-            save_configs: Whether to save weight configurations to disk.
-            output_dir: Directory to save configurations.
 
         Returns:
-            List of ExecutorSteps for all training runs.
+            Tuple of (weight_configs_step, training_steps).
+            The weight_configs_step saves configurations to GCS.
         """
         prefix = name_prefix or self.name
 
@@ -265,33 +346,21 @@ class MixtureExperiment:
                     f"std={stats['std']:.3f}, range=[{stats['min']:.3f}, {stats['max']:.3f}]"
                 )
 
-        # Save configurations if requested
-        if save_configs:
-            if output_dir is None:
-                output_dir = f"experiments/three_phase_swarm/configs/{prefix}"
-            os.makedirs(output_dir, exist_ok=True)
-
-            configs_path = Path(output_dir) / "weight_configs.json"
-            configs_data = {
-                "experiment_name": self.name,
-                "seed": seed,
-                "n_runs": n_runs,
-                "domains": self.experiment_config.domain_names,
-                "phases": self.phase_schedule.phase_names,
-                "summary": summary,
-                "configs": [c.to_dict() for c in configs],
-            }
-            with open(configs_path, "w") as f:
-                json.dump(configs_data, f, indent=2)
-            logger.info(f"Saved weight configurations to {configs_path}")
+        # Create weight configs step (saves to GCS)
+        weight_configs_step = self.create_weight_configs_step(
+            configs=configs,
+            summary=summary,
+            seed=seed,
+            name_prefix=prefix,
+        )
 
         # Create training steps
-        steps = []
+        training_steps = []
         for config in configs:
             step = self.create_training_step(config, name_prefix=prefix)
-            steps.append(step)
+            training_steps.append(step)
 
-        return steps
+        return weight_configs_step, training_steps
 
     def run(
         self,
@@ -310,9 +379,9 @@ class MixtureExperiment:
             logger.info("Skipping experiment execution on CI environment.")
             return
 
-        steps = self.create_swarm_steps(n_runs=n_runs, seed=seed, name_prefix=name_prefix)
+        weight_configs_step, training_steps = self.create_swarm_steps(n_runs=n_runs, seed=seed, name_prefix=name_prefix)
 
-        logger.info(f"Created {len(steps)} training steps")
+        logger.info(f"Created {len(training_steps)} training steps")
         logger.info(f"Experiment: {self.name}")
         logger.info(f"Domains: {self.experiment_config.domain_names}")
         logger.info(f"Phases: {self.phase_schedule.phase_names}")
@@ -321,8 +390,11 @@ class MixtureExperiment:
         if self.target_budget:
             logger.info(f"Target budget (simulated): {self.target_budget:,}")
 
+        # Include weight_configs_step first, then all training steps
+        all_steps = [weight_configs_step, *training_steps]
+
         executor_main(
-            steps=steps,
+            steps=all_steps,
             description=f"{self.name}: {n_runs} runs with {self.experiment_config.n_phases} phases "
             f"and {self.experiment_config.n_domains} domains",
         )

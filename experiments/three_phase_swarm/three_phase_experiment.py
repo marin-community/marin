@@ -28,7 +28,7 @@ import logging
 import os
 
 from experiments.evals.task_configs import CORE_TASKS
-from experiments.speedrun.swarm_proxy_runs.proxy_sweep import regmix_60m_proxy
+from experiments.three_phase_swarm.proxy_sweep import regmix_60m_proxy
 from marin.execution.executor import executor_main
 
 from experiments.three_phase_swarm.config import PhaseSchedule
@@ -117,7 +117,7 @@ def create_three_phase_experiment(
 def main(
     n_runs: int = 100,
     seed: int = 42,
-    name_prefix: str = "three_phase_swarm",
+    name_prefix: str = "pinlin_calvin_xu/data_mixture/three_phase_swarm",
 ):
     """Main entry point for running the swarm experiment.
 
@@ -133,8 +133,10 @@ def main(
     # Create experiment
     experiment = create_three_phase_experiment(name=name_prefix)
 
-    # Create training steps
-    steps = experiment.create_swarm_steps(n_runs=n_runs, seed=seed, name_prefix=name_prefix)
+    # Create steps (weight_configs_step saves to GCS, training_steps run the models)
+    weight_configs_step, training_steps = experiment.create_swarm_steps(
+        n_runs=n_runs, seed=seed, name_prefix=name_prefix
+    )
 
     # Log experiment details
     tokens_per_step = BATCH_SIZE * SEQ_LEN
@@ -142,13 +144,16 @@ def main(
     phase1_end = int(total_steps * PHASE_BOUNDARIES[0])
     phase2_end = int(total_steps * PHASE_BOUNDARIES[1])
 
-    logger.info(f"Created {len(steps)} training steps")
+    logger.info(f"Created {len(training_steps)} training steps + 1 weight configs step")
     logger.info(f"Total tokens per run: {EXPERIMENT_BUDGET:,}")
     logger.info(f"Total steps per run: {total_steps:,}")
     logger.info(f"Phase boundaries: step {phase1_end} (33%), step {phase2_end} (67%)")
 
+    # All steps: weight configs first, then training runs
+    all_steps = [weight_configs_step, *training_steps]
+
     executor_main(
-        steps=steps,
+        steps=all_steps,
         description=f"Three-phase data mixture swarm: {n_runs} runs with independently sampled weights per phase",
     )
 
@@ -172,8 +177,8 @@ def _parse_args():
     parser.add_argument(
         "--name_prefix",
         type=str,
-        default="three_phase_swarm",
-        help="Prefix for run names (default: three_phase_swarm).",
+        default="pinlin_calvin_xu/data_mixture/three_phase_swarm",
+        help="Prefix for run names.",
     )
     return parser.parse_known_args()
 

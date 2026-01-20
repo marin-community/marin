@@ -12,23 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Analysis utilities for three-phase data mixture swarm experiments.
+"""Analysis utilities for data mixture swarm experiments.
 
-Provides tools for:
-- Collecting results from W&B
-- Running regression analysis on weight configurations
-- Comparing phase importance
+This module provides an ExecutorStep for collecting results from W&B and
+joining them with weight configurations to produce a consolidated CSV file
+for exploratory analysis.
+
+The analysis step:
+1. Reads weight_configs.json from GCS (saved by the experiment)
+2. Queries W&B for runs matching the experiment tags
+3. Matches runs to configurations by run_id
+4. Outputs results.csv with all weights and metrics
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
+import fsspec
 import numpy as np
+
+from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -36,301 +45,293 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class RegressionResults:
-    """Results from regression analysis."""
+# Default metrics to collect from W&B
+DEFAULT_METRICS = [
+    "eval/loss",
+    "eval/paloma/c4_en/bpb",
+    "eval/paloma/wikipedia_en/bpb",
+    "eval_harness/gsm8k/acc",
+    "eval_harness/mmlu/acc",
+    "eval_harness/hellaswag/acc",
+    "eval_harness/arc_challenge/acc",
+]
 
-    feature_names: list[str]
-    coefficients: dict[str, float]
-    r2_score: float
-    n_samples: int
+
+# ============================================================================
+# ANALYSIS EXECUTOR STEP
+# ============================================================================
 
 
-def load_weight_configs(config_path: str | Path) -> dict:
-    """Load weight configurations from a JSON file.
+@dataclass(frozen=True)
+class CollectResultsConfig:
+    """Configuration for the analysis executor step."""
+
+    weight_configs_path: str  # Path to weight_configs.json (GCS or local)
+    output_path: str  # Where to write results CSV (GCS or local)
+    wandb_entity: str = "marin"
+    wandb_project: str = "marin"
+    wandb_tags: tuple[str, ...] = ()  # Tags to filter runs
+    metrics: tuple[str, ...] = tuple(DEFAULT_METRICS)  # Metrics to collect
+
+
+def collect_results(config: CollectResultsConfig):
+    """Collect results from W&B and join with weight configs.
+
+    This is an ExecutorStep function that:
+    1. Loads weight configurations from GCS
+    2. Queries W&B for matching runs
+    3. Matches runs to configs by run_id pattern
+    4. Writes consolidated CSV to GCS
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("pandas") is None or importlib.util.find_spec("wandb") is None:
+        raise ImportError("pandas and wandb are required for analysis")
+
+    # 1. Load weight configurations from GCS
+    logger.info(f"Loading weight configs from {config.weight_configs_path}")
+    weight_configs = load_weight_configs(config.weight_configs_path)
+
+    experiment_name = weight_configs["experiment_name"]
+    domains = weight_configs["domains"]
+    phases = weight_configs["phases"]
+    configs = weight_configs["configs"]
+
+    logger.info(f"Loaded {len(configs)} weight configurations")
+    logger.info(f"Domains: {domains}")
+    logger.info(f"Phases: {phases}")
+
+    # 2. Query W&B for runs matching tags
+    tags = list(config.wandb_tags) if config.wandb_tags else [experiment_name]
+    logger.info(f"Querying W&B for runs with tags: {tags}")
+
+    runs = query_wandb_runs(
+        entity=config.wandb_entity,
+        project=config.wandb_project,
+        tags=tags,
+        metrics=list(config.metrics),
+    )
+    logger.info(f"Found {len(runs)} W&B runs")
+
+    # 3. Match runs to configs by run_id
+    matched = match_runs_to_configs(runs, configs)
+    logger.info(f"Matched {sum(1 for m in matched if m.get('wandb_run_id'))} runs to configs")
+
+    # 4. Build DataFrame with all weights and metrics
+    df = build_results_dataframe(matched, domains, phases, list(config.metrics))
+
+    # 5. Write CSV to GCS
+    csv_path = os.path.join(config.output_path, "results.csv")
+    logger.info(f"Writing results to {csv_path}")
+    with fsspec.open(csv_path, "w") as f:
+        df.to_csv(f, index=False)
+
+    # 6. Write summary JSON
+    summary = {
+        "experiment_name": experiment_name,
+        "n_configs": len(configs),
+        "n_matched": sum(1 for m in matched if m.get("wandb_run_id")),
+        "n_completed": sum(1 for m in matched if m.get("status") == "completed"),
+        "domains": domains,
+        "phases": phases,
+        "metrics": list(config.metrics),
+    }
+    summary_path = os.path.join(config.output_path, "summary.json")
+    with fsspec.open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+
+    logger.info(f"Analysis complete: {summary['n_completed']}/{summary['n_configs']} runs completed")
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+
+def load_weight_configs(path: str) -> dict:
+    """Load weight configurations from a JSON file (GCS or local).
 
     Args:
-        config_path: Path to the weight_configs.json file.
+        path: Path to the weight_configs.json file.
 
     Returns:
-        Dictionary containing seed, n_runs, summary, and configs.
+        Dictionary containing experiment metadata and configs.
     """
-    with open(config_path) as f:
+    with fsspec.open(path) as f:
         return json.load(f)
 
 
-def collect_results_from_wandb(
-    run_ids: list[str],
-    entity: str = "marin",
-    project: str = "marin",
-    metrics: list[str] | None = None,
-) -> pd.DataFrame:
-    """Collect training results from W&B for all runs.
+def query_wandb_runs(
+    entity: str,
+    project: str,
+    tags: list[str],
+    metrics: list[str],
+) -> list[dict]:
+    """Query W&B API for runs with specific tags.
 
     Args:
-        run_ids: List of W&B run IDs.
         entity: W&B entity name.
         project: W&B project name.
-        metrics: List of metric keys to collect. If None, uses defaults.
+        tags: Tags to filter runs (runs must have at least one of these tags).
+        metrics: List of metric keys to collect.
 
     Returns:
-        DataFrame with run configurations and metrics.
+        List of dictionaries with run info and metrics.
     """
-    try:
-        import pandas as pd
-        import wandb
-    except ImportError as err:
-        raise ImportError("pandas and wandb are required for W&B analysis") from err
-
-    if metrics is None:
-        metrics = [
-            "eval/loss",
-            "eval/paloma/c4_en/bpb",
-            "eval/paloma/wikipedia_en/bpb",
-            "eval_harness/gsm8k/acc",
-            "eval_harness/mmlu/acc",
-            "eval_harness/hellaswag/acc",
-        ]
+    import wandb
 
     api = wandb.Api()
+
+    # Query runs with any of the specified tags
+    filters = {"tags": {"$in": tags}}
+    runs = api.runs(f"{entity}/{project}", filters=filters)
+
     results = []
-
-    for run_id in run_ids:
-        try:
-            run = api.run(f"{entity}/{project}/{run_id}")
-
-            # Extract metrics from run summary
-            row = {"run_id": run_id}
-            for metric in metrics:
-                row[metric] = run.summary.get(metric)
-
-            # Extract weight configuration from run config if available
-            config = run.config
-            for phase in ["phase1", "phase2", "phase3"]:
-                weights_key = f"{phase}_weights"
-                if weights_key in config:
-                    for partition, weight in config[weights_key].items():
-                        row[f"{phase}_{partition}_weight"] = weight
-
-            results.append(row)
-
-        except Exception as e:
-            logger.warning(f"Failed to fetch run {run_id}: {e}")
-            continue
-
-    return pd.DataFrame(results)
-
-
-def build_features_from_configs(
-    configs: list[dict],
-    phase: str | None = None,
-) -> tuple[np.ndarray, list[str]]:
-    """Build feature matrix from weight configurations.
-
-    Args:
-        configs: List of configuration dictionaries.
-        phase: If specified, only use weights from this phase ("phase1", "phase2", "phase3").
-               If None, use all phases.
-
-    Returns:
-        Tuple of (feature_matrix, feature_names).
-    """
-    from experiments.three_phase_swarm.weight_sampler import ThreePartitionWeightSampler
-
-    partitions = ThreePartitionWeightSampler.PARTITIONS
-    phases = ["phase1", "phase2", "phase3"] if phase is None else [phase]
-
-    feature_names = []
-    for p in phases:
-        for partition in partitions:
-            feature_names.append(f"{p}_{partition}")
-
-    features = []
-    for config in configs:
-        row = []
-        for p in phases:
-            weights = config[f"{p}_weights"]
-            for partition in partitions:
-                row.append(weights.get(partition, 0.0))
-        features.append(row)
-
-    return np.array(features), feature_names
-
-
-def run_regression_analysis(
-    features: np.ndarray,
-    targets: np.ndarray,
-    feature_names: list[str],
-    alpha: float = 1.0,
-) -> RegressionResults:
-    """Run Ridge regression to identify important features.
-
-    Args:
-        features: Feature matrix of shape (n_samples, n_features).
-        targets: Target vector of shape (n_samples,).
-        feature_names: Names of the features.
-        alpha: Regularization strength for Ridge regression.
-
-    Returns:
-        RegressionResults with coefficients and R2 score.
-    """
-    try:
-        from sklearn.linear_model import Ridge
-        from sklearn.preprocessing import StandardScaler
-    except ImportError as err:
-        raise ImportError("scikit-learn is required for regression analysis") from err
-
-    # Remove samples with missing targets
-    mask = ~np.isnan(targets)
-    X = features[mask]
-    y = targets[mask]
-
-    if len(y) < 10:
-        raise ValueError(f"Not enough samples for regression: {len(y)}")
-
-    # Standardize features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    # Fit Ridge regression
-    model = Ridge(alpha=alpha)
-    model.fit(X_scaled, y)
-
-    return RegressionResults(
-        feature_names=feature_names,
-        coefficients=dict(zip(feature_names, model.coef_, strict=True)),
-        r2_score=model.score(X_scaled, y),
-        n_samples=len(y),
-    )
-
-
-def compare_phase_importance(
-    configs: list[dict],
-    targets: np.ndarray,
-    target_name: str = "eval/loss",
-) -> dict[str, RegressionResults]:
-    """Compare the relative importance of each training phase.
-
-    Runs separate regressions for each phase to see which phase's
-    weight distribution has the strongest predictive power.
-
-    Args:
-        configs: List of configuration dictionaries.
-        targets: Target metric values.
-        target_name: Name of the target metric (for logging).
-
-    Returns:
-        Dictionary mapping phase names to RegressionResults.
-    """
-    results = {}
-
-    for phase in ["phase1", "phase2", "phase3"]:
-        features, feature_names = build_features_from_configs(configs, phase=phase)
-        try:
-            phase_results = run_regression_analysis(features, targets, feature_names)
-            results[phase] = phase_results
-            logger.info(f"{phase} R2 for {target_name}: {phase_results.r2_score:.4f} " f"(n={phase_results.n_samples})")
-        except ValueError as e:
-            logger.warning(f"Skipping {phase}: {e}")
-
-    return results
-
-
-def analyze_sft_importance(
-    configs: list[dict],
-    targets: np.ndarray,
-    target_name: str = "eval/loss",
-) -> dict:
-    """Analyze the importance of SFT data weight in each phase.
-
-    This directly tests the hypothesis that SFT data weight in Phase 3
-    correlates most strongly with final performance.
-
-    Args:
-        configs: List of configuration dictionaries.
-        targets: Target metric values.
-        target_name: Name of the target metric.
-
-    Returns:
-        Dictionary with SFT correlations per phase.
-    """
-    results = {}
-
-    for phase in ["phase1", "phase2", "phase3"]:
-        # Extract SFT weights for this phase
-        sft_weights = np.array([config[f"{phase}_weights"].get("sft", 0.0) for config in configs])
-
-        # Remove samples with missing targets
-        mask = ~np.isnan(targets)
-        sft_w = sft_weights[mask]
-        y = targets[mask]
-
-        if len(y) < 10:
-            continue
-
-        # Compute correlation
-        correlation = np.corrcoef(sft_w, y)[0, 1]
-
-        results[phase] = {
-            "correlation": float(correlation),
-            "mean_sft_weight": float(np.mean(sft_w)),
-            "std_sft_weight": float(np.std(sft_w)),
-            "n_samples": len(y),
+    for run in runs:
+        row = {
+            "wandb_run_id": run.id,
+            "wandb_run_name": run.name,
+            "status": run.state,
         }
 
-        logger.info(f"{phase} SFT weight correlation with {target_name}: {correlation:.4f}")
+        # Extract metrics from run summary
+        for metric in metrics:
+            row[metric] = run.summary.get(metric)
+
+        results.append(row)
 
     return results
 
 
-def print_analysis_summary(
-    phase_results: dict[str, RegressionResults],
-    sft_analysis: dict,
-    target_name: str = "eval/loss",
-):
-    """Print a summary of the analysis results.
+def match_runs_to_configs(runs: list[dict], configs: list[dict]) -> list[dict]:
+    """Match W&B runs to weight configurations by run_id pattern.
+
+    Extracts run_id from W&B run names (e.g., "experiment/run_042" -> 42)
+    and matches to the corresponding config.
 
     Args:
-        phase_results: Results from compare_phase_importance.
-        sft_analysis: Results from analyze_sft_importance.
-        target_name: Name of the target metric.
+        runs: List of W&B run dictionaries.
+        configs: List of weight configuration dictionaries.
+
+    Returns:
+        List of matched dictionaries with config + run info.
     """
-    print(f"\n{'='*60}")
-    print(f"Analysis Summary for {target_name}")
-    print("=" * 60)
+    # Build lookup from run_id to W&B run
+    run_by_id: dict[int, dict] = {}
+    run_id_pattern = re.compile(r"run_(\d+)")
 
-    print("\n1. Phase Importance (R2 scores):")
-    print("-" * 40)
-    for phase, results in sorted(phase_results.items()):
-        print(f"  {phase}: R2 = {results.r2_score:.4f} (n={results.n_samples})")
+    for run in runs:
+        name = run.get("wandb_run_name", "")
+        match = run_id_pattern.search(name)
+        if match:
+            run_id = int(match.group(1))
+            # Keep the most recent run if there are duplicates
+            if run_id not in run_by_id or run["status"] == "finished":
+                run_by_id[run_id] = run
 
-    print("\n2. Top Coefficients per Phase:")
-    print("-" * 40)
-    for phase, results in sorted(phase_results.items()):
-        sorted_coefs = sorted(results.coefficients.items(), key=lambda x: abs(x[1]), reverse=True)
-        print(f"  {phase}:")
-        for name, coef in sorted_coefs[:3]:
-            print(f"    {name}: {coef:.4f}")
+    # Match configs to runs
+    matched = []
+    for config in configs:
+        run_id = config["run_id"]
+        row = {"run_id": run_id, **config.get("phase_weights", {})}
 
-    print("\n3. SFT Weight Correlation by Phase:")
-    print("-" * 40)
-    for phase, stats in sorted(sft_analysis.items()):
-        print(f"  {phase}: corr={stats['correlation']:.4f}, " f"mean_weight={stats['mean_sft_weight']:.3f}")
+        if run_id in run_by_id:
+            run = run_by_id[run_id]
+            row["wandb_run_id"] = run["wandb_run_id"]
+            row["wandb_run_name"] = run["wandb_run_name"]
+            row["status"] = "completed" if run["status"] == "finished" else run["status"]
 
-    # Highlight key finding
-    if sft_analysis:
-        phase3_corr = sft_analysis.get("phase3", {}).get("correlation", 0)
-        phase1_corr = sft_analysis.get("phase1", {}).get("correlation", 0)
-
-        print("\n" + "=" * 60)
-        if abs(phase3_corr) > abs(phase1_corr):
-            print(
-                "KEY FINDING: Phase 3 SFT weight has stronger correlation "
-                f"({phase3_corr:.4f}) than Phase 1 ({phase1_corr:.4f})"
-            )
+            # Copy metrics
+            for key, value in run.items():
+                if key not in ["wandb_run_id", "wandb_run_name", "status"]:
+                    row[key] = value
         else:
-            print(
-                "NOTE: Phase 1 SFT weight has stronger correlation "
-                f"({phase1_corr:.4f}) than Phase 3 ({phase3_corr:.4f})"
-            )
-    print("=" * 60 + "\n")
+            row["wandb_run_id"] = None
+            row["wandb_run_name"] = None
+            row["status"] = "not_found"
+
+        matched.append(row)
+
+    return matched
+
+
+def build_results_dataframe(
+    matched: list[dict],
+    domains: list[str],
+    phases: list[str],
+    metrics: list[str],
+) -> pd.DataFrame:
+    """Build a pandas DataFrame from matched results.
+
+    Args:
+        matched: List of matched config + run dictionaries.
+        domains: List of domain names.
+        phases: List of phase names.
+        metrics: List of metric names.
+
+    Returns:
+        DataFrame with one row per run.
+    """
+    import pandas as pd
+
+    rows = []
+    for m in matched:
+        row = {
+            "run_id": m["run_id"],
+            "wandb_run_id": m.get("wandb_run_id"),
+            "status": m.get("status", "not_found"),
+        }
+
+        # Flatten phase weights into columns
+        for phase in phases:
+            phase_weights = m.get(phase, {})
+            for domain in domains:
+                col_name = f"{phase}_{domain}"
+                row[col_name] = phase_weights.get(domain, np.nan)
+
+        # Add metrics
+        for metric in metrics:
+            row[metric] = m.get(metric)
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+# ============================================================================
+# STEP CREATION HELPER
+# ============================================================================
+
+
+def create_analysis_step(
+    weight_configs_step: ExecutorStep,
+    name_prefix: str,
+    wandb_entity: str = "marin",
+    wandb_project: str = "marin",
+    metrics: list[str] | None = None,
+) -> ExecutorStep:
+    """Create an analysis ExecutorStep.
+
+    Args:
+        weight_configs_step: The ExecutorStep that saves weight configurations.
+        name_prefix: Experiment name prefix (used as W&B tag).
+        wandb_entity: W&B entity name.
+        wandb_project: W&B project name.
+        metrics: Metrics to collect (defaults to DEFAULT_METRICS).
+
+    Returns:
+        ExecutorStep that collects results and writes CSV.
+    """
+    return ExecutorStep(
+        name=f"{name_prefix}/analysis",
+        description="Collect W&B results and generate analysis CSV",
+        fn=collect_results,
+        config=CollectResultsConfig(
+            weight_configs_path=os.path.join(output_path_of(weight_configs_step), "weight_configs.json"),
+            output_path=this_output_path(),
+            wandb_entity=wandb_entity,
+            wandb_project=wandb_project,
+            wandb_tags=(name_prefix,),
+            metrics=tuple(metrics or DEFAULT_METRICS),
+        ),
+    )
