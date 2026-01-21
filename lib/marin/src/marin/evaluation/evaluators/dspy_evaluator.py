@@ -104,18 +104,7 @@ class DspyEvaluator(Evaluator):
 
         cfg = InferenceServerConfig(host="0.0.0.0", port=8000)
         server = InferenceServer(cfg)
-
-        if hasattr(server, "start"):
-            server.start()
-        elif hasattr(server, "run"):
-            server.run()
-        elif hasattr(server, "serve"):
-            server.serve()
-        else:
-            raise RuntimeError(
-                "InferenceServer has no start/run/serve method. "
-                "Please check levanter.inference.openai.InferenceServer API."
-            )
+        server.start()
 
         return default_endpoint
 
