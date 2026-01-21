@@ -303,6 +303,8 @@ SFT_TOKENS = {
 }
 
 # SFT dataset HuggingFace IDs
+# For datasets with custom splits, the HF ID includes the split name (e.g., smoltalk2/split_name)
+# For standard datasets, just use the dataset ID and splits=["train"] will be used
 SFT_HF_IDS = {
     "tulu_3_sft_mixture": "allenai/tulu-3-sft-mixture",
     "openthoughts_114k_math": "open-r1/OpenThoughts-114k-math",
@@ -313,7 +315,14 @@ SFT_HF_IDS = {
     "dolphin_r1_nonreasoning": "cognitivecomputations/dolphin-r1-nonreasoning",
     "dolphin_r1_reasoning": "cognitivecomputations/dolphin-r1-reasoning",
     "bespoke_stratos_17k": "bespokelabs/Bespoke-Stratos-17k",
+    # smoltalk2 uses named splits, not "train" - the HF ID includes the split name
     "openthoughts3_1.2m": "HuggingFaceTB/smoltalk2/OpenThoughts3_1.2M_think",
+}
+
+# Datasets that use named splits instead of "train"
+# These are registered in INSTRUCTION_DATASET_NAME_TO_CONFIG with their split as part of the key
+SFT_CUSTOM_SPLIT_DATASETS = {
+    "openthoughts3_1.2m",  # Uses split name "OpenThoughts3_1.2M_think"
 }
 
 # Pre-tokenized paths (if available)
@@ -333,27 +342,79 @@ SFT_TOKENIZED_PATHS = {
 _sft_cache: dict = {}
 
 
+def _create_pretokenized_step(cache_path: str, tokenizer: str, dataset_format: ChatLmDatasetFormat):
+    """Create a step that references an existing pre-tokenized cache.
+
+    This creates an ExecutorStep with no dependencies that points to
+    an existing tokenized cache. The step will not trigger any re-tokenization
+    or downloads because:
+    1. with_output_path() sets the output to the existing cache location
+    2. The executor sees STATUS_SUCCESS at that location and skips execution
+    3. The placeholder train_paths won't be used since execution is skipped
+
+    Args:
+        cache_path: Path to the pre-tokenized cache (relative to MARIN_PREFIX)
+        tokenizer: Tokenizer identifier used for the cache
+        dataset_format: Dataset format used during tokenization
+    """
+    from marin.execution.executor import ExecutorStep, this_output_path, versioned
+    from marin.processing.tokenize import TokenizeConfig, tokenize
+
+    config = TokenizeConfig(
+        # Placeholder path - won't be used since cache exists with SUCCESS status.
+        # We need at least one path due to validation in TokenizeConfig.__post_init__.
+        train_paths=["__pretokenized_cache_reference__"],
+        validation_paths=versioned([]),
+        cache_path=this_output_path(),
+        tokenizer=versioned(tokenizer),
+        format=dataset_format,
+    )
+    # Create step and use with_output_path to point to the existing cache.
+    # The executor will find STATUS_SUCCESS at this path and skip execution.
+    step = ExecutorStep(
+        name=f"sft_pretokenized/{cache_path.split('/')[-1]}",  # Clean name for logging
+        fn=tokenize,
+        config=config,
+    )
+    return step.with_output_path(cache_path)
+
+
 def _sft_step(dataset_name: str):
     """Create a tokenization step for an SFT dataset (lazy).
 
-    Creates a tokenization pipeline from the HF dataset, and uses pre-tokenized
-    paths if available to skip re-tokenization.
+    If a pre-tokenized cache exists (in SFT_TOKENIZED_PATHS), creates a lightweight
+    step that references it without triggering HuggingFace downloads.
+    Otherwise, creates the full tokenization pipeline.
     """
     if dataset_name not in _sft_cache:
         if dataset_name not in SFT_HF_IDS:
             raise ValueError(f"SFT dataset {dataset_name} not found in SFT_HF_IDS")
-        # Full tokenization pipeline
-        hf_id = SFT_HF_IDS[dataset_name]
-        dataset = get_instruction_dataset(hf_id, splits=["train"])
-        step = default_tokenize(
-            name=f"sft/{dataset_name}",
-            dataset=dataset / "**/*.jsonl.gz",
-            tokenizer=marin_tokenizer,
-            format=ChatLmDatasetFormat(chat_template=MARIN_CHAT_TEMPLATE),
-        )
-        # Use pre-tokenized path if available
+
+        # Check if pre-tokenized cache exists - if so, use direct reference
         if dataset_name in SFT_TOKENIZED_PATHS:
-            step = step.with_output_path(SFT_TOKENIZED_PATHS[dataset_name])
+            step = _create_pretokenized_step(
+                cache_path=SFT_TOKENIZED_PATHS[dataset_name],
+                tokenizer=marin_tokenizer,
+                dataset_format=ChatLmDatasetFormat(chat_template=MARIN_CHAT_TEMPLATE),
+            )
+        else:
+            # Full tokenization pipeline (will download from HF)
+            hf_id = SFT_HF_IDS[dataset_name]
+
+            # For datasets with custom splits (like smoltalk2), don't pass splits=["train"]
+            # The split is already part of the HF ID
+            if dataset_name in SFT_CUSTOM_SPLIT_DATASETS:
+                dataset = get_instruction_dataset(hf_id)  # Uses default splits from config
+            else:
+                dataset = get_instruction_dataset(hf_id, splits=["train"])
+
+            step = default_tokenize(
+                name=f"sft/{dataset_name}",
+                dataset=dataset / "**/*.jsonl.gz",
+                tokenizer=marin_tokenizer,
+                format=ChatLmDatasetFormat(chat_template=MARIN_CHAT_TEMPLATE),
+            )
+
         _sft_cache[dataset_name] = step
     return _sft_cache[dataset_name]
 
