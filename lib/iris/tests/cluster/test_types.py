@@ -18,12 +18,11 @@ import os
 from unittest.mock import patch
 
 from iris.cluster.types import EnvironmentSpec, ResourceSpec
+from iris.rpc import cluster_pb2
 
 
 def test_resource_spec_with_device():
     """Verify ResourceSpec copies device configuration to proto."""
-    from iris.rpc import cluster_pb2
-
     gpu_device = cluster_pb2.DeviceConfig(gpu=cluster_pb2.GpuDevice(count=2, variant="a100"))
     spec = ResourceSpec(cpu=4, memory="16g", device=gpu_device)
     proto = spec.to_proto()
@@ -34,8 +33,6 @@ def test_resource_spec_with_device():
 
 def test_resource_spec_with_all_fields():
     """Verify all ResourceSpec fields are copied to proto."""
-    from iris.rpc import cluster_pb2
-
     tpu_device = cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16"))
     spec = ResourceSpec(
         cpu=8,

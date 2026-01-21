@@ -52,6 +52,14 @@ Don't use TYPE_CHECKING. Use the real import. If there is a circular dependency:
 * Prefer to resolve it with refactoring when sensible
 * Otherwise use a protocol if you simply need the type information
 
+## RPC/API Accessibility
+
+Any functionality exposed by the worker or controller dashboards must also be
+available via RPC. The dashboards should be a friendly interface on top of the
+machine accessible RPC API, and should not use internal APIs (except for
+efficiency). For example, if we wanted to show the scheduling status for a task,
+we should define a new RPC endpoint `/TestSchedule(task_id)` and use that from
+the dashboard, rather than creating a scheduler and running it manually.
 
 ## Architecture Notes
 

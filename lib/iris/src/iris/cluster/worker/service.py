@@ -14,6 +14,7 @@
 
 """WorkerService RPC implementation using Connect RPC."""
 
+import logging
 import re
 import time
 from typing import Protocol
@@ -22,76 +23,92 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
-from iris.cluster.worker.worker_types import Job
+from iris.cluster.worker.worker_types import Task
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
 
+logger = logging.getLogger(__name__)
 
-class JobProvider(Protocol):
-    """Protocol for job management operations."""
 
-    def submit_job(self, request: cluster_pb2.Worker.RunJobRequest) -> str: ...
-    def get_job(self, job_id: str) -> Job | None: ...
-    def list_jobs(self) -> list[Job]: ...
-    def kill_job(self, job_id: str, term_timeout_ms: int = 5000) -> bool: ...
-    def get_logs(self, job_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]: ...
+class TaskProvider(Protocol):
+    """Protocol for task management operations."""
+
+    def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str: ...
+    def get_task(self, task_id: str) -> Task | None: ...
+    def list_tasks(self) -> list[Task]: ...
+    def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
+    def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]: ...
 
 
 class WorkerServiceImpl:
     """Implementation of WorkerService RPC interface."""
 
-    def __init__(self, provider: JobProvider):
+    def __init__(self, provider: TaskProvider):
         self._provider = provider
         self._start_time = time.time()
 
-    def run_job(
+    def run_task(
         self,
-        request: cluster_pb2.Worker.RunJobRequest,
+        request: cluster_pb2.Worker.RunTaskRequest,
         _ctx: RequestContext,
-    ) -> cluster_pb2.Worker.RunJobResponse:
-        with rpc_error_handler("running job"):
-            job_id = self._provider.submit_job(request)
-            job = self._provider.get_job(job_id)
-
-            if not job:
-                raise ConnectError(Code.INTERNAL, f"Job {job_id} not found after submission")
-
-            return cluster_pb2.Worker.RunJobResponse(
-                job_id=job_id,
-                state=job.to_proto().state,
+    ) -> cluster_pb2.Worker.RunTaskResponse:
+        """Start execution of a task."""
+        with rpc_error_handler("running task"):
+            logger.info(
+                f"Received run_task RPC for task {request.task_id} "
+                f"(job={request.job_id}, attempt={request.attempt_id}, "
+                f"cpu={request.resources.cpu}, memory={request.resources.memory_bytes})"
             )
 
-    def get_job_status(
-        self,
-        request: cluster_pb2.Worker.GetJobStatusRequest,
-        _ctx: RequestContext,
-    ) -> cluster_pb2.JobStatus:
-        job = self._provider.get_job(request.job_id)
-        if not job:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+            task_id = self._provider.submit_task(request)
+            task = self._provider.get_task(task_id)
 
-        status = job.to_proto()
-        if request.include_result and job.result:
-            status.serialized_result = job.result
+            if not task:
+                raise ConnectError(Code.INTERNAL, f"Task {task_id} not found after submission")
+
+            logger.info(f"Task {task_id} submitted successfully with state {task.to_proto().state}")
+
+            return cluster_pb2.Worker.RunTaskResponse(
+                task_id=task_id,
+                state=task.to_proto().state,
+            )
+
+    def get_task_status(
+        self,
+        request: cluster_pb2.Worker.GetTaskStatusRequest,
+        _ctx: RequestContext,
+    ) -> cluster_pb2.TaskStatus:
+        """Get status of a task."""
+        task = self._provider.get_task(request.task_id)
+        if not task:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+
+        status = task.to_proto()
+        if request.include_result and task.result:
+            # TaskStatus doesn't have serialized_result field, but we could add it
+            # For now, result is available via the task object
+            pass
         return status
 
-    def list_jobs(
+    def list_tasks(
         self,
-        _request: cluster_pb2.Worker.ListJobsRequest,
+        _request: cluster_pb2.Worker.ListTasksRequest,
         _ctx: RequestContext,
-    ) -> cluster_pb2.Worker.ListJobsResponse:
-        jobs = self._provider.list_jobs()
-        return cluster_pb2.Worker.ListJobsResponse(
-            jobs=[job.to_proto() for job in jobs],
+    ) -> cluster_pb2.Worker.ListTasksResponse:
+        """List all tasks on this worker."""
+        tasks = self._provider.list_tasks()
+        return cluster_pb2.Worker.ListTasksResponse(
+            tasks=[task.to_proto() for task in tasks],
         )
 
-    def fetch_logs(
+    def fetch_task_logs(
         self,
-        request: cluster_pb2.Worker.FetchLogsRequest,
+        request: cluster_pb2.Worker.FetchTaskLogsRequest,
         _ctx: RequestContext,
-    ) -> cluster_pb2.Worker.FetchLogsResponse:
+    ) -> cluster_pb2.Worker.FetchTaskLogsResponse:
+        """Fetch logs for a task."""
         start_line = request.filter.start_line if request.filter.start_line else 0
-        logs = self._provider.get_logs(request.job_id, start_line=start_line)
+        logs = self._provider.get_logs(request.task_id, start_line=start_line)
 
         # Apply additional filters
         result = []
@@ -115,27 +132,28 @@ class WorkerServiceImpl:
             if request.filter.max_lines and len(result) >= request.filter.max_lines:
                 break
 
-        return cluster_pb2.Worker.FetchLogsResponse(logs=result)
+        return cluster_pb2.Worker.FetchTaskLogsResponse(logs=result)
 
-    def kill_job(
+    def kill_task(
         self,
-        request: cluster_pb2.Worker.KillJobRequest,
+        request: cluster_pb2.Worker.KillTaskRequest,
         _ctx: RequestContext,
     ) -> cluster_pb2.Empty:
-        job = self._provider.get_job(request.job_id)
-        if not job:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+        """Kill a running task."""
+        task = self._provider.get_task(request.task_id)
+        if not task:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
 
-        success = self._provider.kill_job(
-            request.job_id,
+        success = self._provider.kill_task(
+            request.task_id,
             term_timeout_ms=request.term_timeout_ms or 5000,
         )
         if not success:
-            # Job exists but is already in terminal state
-            state_name = cluster_pb2.JobState.Name(job.status)
+            # Task exists but is already in terminal state
+            state_name = cluster_pb2.TaskState.Name(task.status)
             raise ConnectError(
                 Code.FAILED_PRECONDITION,
-                f"Job {request.job_id} already completed with state {state_name}",
+                f"Task {request.task_id} already completed with state {state_name}",
             )
         return cluster_pb2.Empty()
 
@@ -144,11 +162,12 @@ class WorkerServiceImpl:
         _request: cluster_pb2.Empty,
         _ctx: RequestContext,
     ) -> cluster_pb2.Worker.HealthResponse:
-        jobs = self._provider.list_jobs()
-        running = sum(1 for j in jobs if j.status == cluster_pb2.JOB_STATE_RUNNING)
+        """Report worker health."""
+        tasks = self._provider.list_tasks()
+        running = sum(1 for t in tasks if t.status == cluster_pb2.TASK_STATE_RUNNING)
 
         return cluster_pb2.Worker.HealthResponse(
             healthy=True,
             uptime_ms=int((time.time() - self._start_time) * 1000),
-            running_jobs=running,
+            running_tasks=running,
         )

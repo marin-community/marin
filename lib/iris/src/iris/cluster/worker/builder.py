@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.worker.docker import DockerImageBuilder
-from iris.cluster.worker.worker_types import JobLogs
+from iris.cluster.worker.worker_types import TaskLogs
 
 
 class VenvCache:
@@ -63,7 +63,7 @@ class ImageProvider(Protocol):
         extras: list[str],
         job_id: str,
         deps_hash: str,
-        job_logs: JobLogs | None = None,
+        task_logs: TaskLogs | None = None,
     ) -> BuildResult: ...
 
     def protect(self, tag: str) -> None:
@@ -160,7 +160,7 @@ class ImageCache:
         extras: list[str],
         job_id: str,
         deps_hash: str,
-        job_logs: JobLogs | None = None,
+        task_logs: TaskLogs | None = None,
     ) -> BuildResult:
         if self._registry:
             image_tag = f"{self._registry}/iris-job-{job_id}:{deps_hash[:8]}"
@@ -169,8 +169,8 @@ class ImageCache:
 
         # Check if image exists locally
         if self._docker.exists(image_tag):
-            if job_logs:
-                job_logs.add("build", f"Using cached image: {image_tag}")
+            if task_logs:
+                task_logs.add("build", f"Using cached image: {image_tag}")
             return BuildResult(
                 image_tag=image_tag,
                 deps_hash=deps_hash,
@@ -185,7 +185,7 @@ class ImageCache:
             base_image=base_image,
             extras_flags=extras_flags,
         )
-        self._docker.build(bundle_path, dockerfile, image_tag, job_logs)
+        self._docker.build(bundle_path, dockerfile, image_tag, task_logs)
         build_time_ms = int((time.time() - start) * 1000)
 
         self._evict_old_images()

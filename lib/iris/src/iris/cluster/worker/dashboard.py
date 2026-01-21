@@ -49,16 +49,19 @@ DASHBOARD_HTML = """
     .status-running { color: blue; }
     .status-succeeded { color: green; }
     .status-failed { color: red; }
-    .job-link { color: #2196F3; text-decoration: none; font-weight: bold; }
-    .job-link:hover { text-decoration: underline; }
+    .task-link { color: #2196F3; text-decoration: none; font-weight: bold; }
+    .task-link:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
   <h1>Iris Worker Dashboard</h1>
   <div id="stats"></div>
-  <h2>Jobs</h2>
-  <table id="jobs">
-    <tr><th>ID</th><th>Status</th><th>Exit</th><th>Memory</th><th>CPU</th><th>Started</th><th>Finished</th><th>Error</th></tr>
+  <h2>Tasks</h2>
+  <table id="tasks">
+    <tr>
+      <th>Task ID</th><th>Job ID</th><th>Index</th><th>Status</th><th>Exit</th>
+      <th>Memory</th><th>CPU</th><th>Started</th><th>Finished</th><th>Error</th>
+    </tr>
   </table>
   <script>
     async function refresh() {
@@ -67,27 +70,29 @@ DASHBOARD_HTML = """
         `<b>Running:</b> ${stats.running} | <b>Pending:</b> ${stats.pending} | ` +
         `<b>Building:</b> ${stats.building} | <b>Completed:</b> ${stats.completed}`;
 
-      const jobs = await fetch('/api/jobs').then(r => r.json());
-      const tbody = jobs.map(j => {
-        const started = j.started_at ? new Date(j.started_at).toLocaleString() : '-';
-        const finished = j.finished_at ? new Date(j.finished_at).toLocaleString() : '-';
-        const exitCode = j.exit_code !== null && j.exit_code !== undefined ? j.exit_code : '-';
-        const jobDisplay = j.attempt_id > 0
-          ? `${j.job_id.slice(0, 8)}... (attempt ${j.attempt_id})`
-          : `${j.job_id.slice(0, 8)}...`;
+      const tasks = await fetch('/api/tasks').then(r => r.json());
+      const tbody = tasks.map(t => {
+        const started = t.started_at ? new Date(t.started_at).toLocaleString() : '-';
+        const finished = t.finished_at ? new Date(t.finished_at).toLocaleString() : '-';
+        const exitCode = t.exit_code !== null && t.exit_code !== undefined ? t.exit_code : '-';
+        const taskDisplay = t.attempt_id > 0
+          ? `${t.task_id.slice(0, 12)}... (attempt ${t.attempt_id})`
+          : `${t.task_id.slice(0, 12)}...`;
         return `<tr>
-          <td><a href="/job/${j.job_id}" class="job-link" target="_blank">${jobDisplay}</a></td>
-          <td class="status-${j.status}">${j.status}</td>
+          <td><a href="/task/${encodeURIComponent(t.task_id)}" class="task-link" target="_blank">${taskDisplay}</a></td>
+          <td>${t.job_id.slice(0, 8)}...</td>
+          <td>${t.task_index}/${t.num_tasks || '?'}</td>
+          <td class="status-${t.status}">${t.status}</td>
           <td>${exitCode}</td>
-          <td>${j.memory_mb || 0}/${j.memory_peak_mb || 0} MB</td>
-          <td>${j.cpu_percent || 0}%</td>
+          <td>${t.memory_mb || 0}/${t.memory_peak_mb || 0} MB</td>
+          <td>${t.cpu_percent || 0}%</td>
           <td>${started}</td>
           <td>${finished}</td>
-          <td>${j.error || '-'}</td>
+          <td>${t.error || '-'}</td>
         </tr>`;
       }).join('');
-      document.getElementById('jobs').innerHTML =
-        '<tr><th>ID</th><th>Status</th><th>Exit</th><th>Memory</th><th>CPU</th>' +
+      document.getElementById('tasks').innerHTML =
+        '<tr><th>Task ID</th><th>Job ID</th><th>Index</th><th>Status</th><th>Exit</th><th>Memory</th><th>CPU</th>' +
         '<th>Started</th><th>Finished</th><th>Error</th></tr>' + tbody;
     }
     refresh();
@@ -98,11 +103,11 @@ DASHBOARD_HTML = """
 """
 
 
-JOB_DETAIL_HTML = """
+TASK_DETAIL_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Job {{job_id}} - Iris Worker</title>
+  <title>Task {{task_id}} - Iris Worker</title>
   <style>
     body { font-family: sans-serif; margin: 20px; }
     .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
@@ -124,7 +129,7 @@ JOB_DETAIL_HTML = """
   </style>
 </head>
 <body>
-  <h1>Job: <code>{{job_id}}</code></h1>
+  <h1>Task: <code>{{task_id}}</code></h1>
   <a href="/">← Back to Dashboard</a>
 
   <div class="section">
@@ -157,46 +162,48 @@ JOB_DETAIL_HTML = """
   </div>
 
   <script>
-    const jobId = "{{job_id}}";
+    const taskId = "{{task_id}}";
 
     async function refresh() {
-      const job = await fetch(`/api/jobs/${jobId}`).then(r => r.json());
-      if (job.error === "Not found") {
+      const task = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`).then(r => r.json());
+      if (task.error === "Not found") {
         document.getElementById('status').textContent = "Not Found";
         return;
       }
 
-      document.getElementById('status').innerHTML = `<span class="status-${job.status}">${job.status}</span>`;
+      document.getElementById('status').innerHTML = `<span class="status-${task.status}">${task.status}</span>`;
       document.getElementById('details').innerHTML = `
-        <p><b>Attempt:</b> ${job.attempt_id}</p>
-        <p><b>Started:</b> ${job.started_at ? new Date(job.started_at).toLocaleString() : '-'}</p>
-        <p><b>Finished:</b> ${job.finished_at ? new Date(job.finished_at).toLocaleString() : '-'}</p>
-        <p><b>Exit Code:</b> ${job.exit_code !== null ? job.exit_code : '-'}</p>
-        <p><b>Error:</b> ${job.error || '-'}</p>
-        <p><b>Ports:</b> ${JSON.stringify(job.ports)}</p>
+        <p><b>Job ID:</b> ${task.job_id}</p>
+        <p><b>Task Index:</b> ${task.task_index}</p>
+        <p><b>Attempt:</b> ${task.attempt_id}</p>
+        <p><b>Started:</b> ${task.started_at ? new Date(task.started_at).toLocaleString() : '-'}</p>
+        <p><b>Finished:</b> ${task.finished_at ? new Date(task.finished_at).toLocaleString() : '-'}</p>
+        <p><b>Exit Code:</b> ${task.exit_code !== null ? task.exit_code : '-'}</p>
+        <p><b>Error:</b> ${task.error || '-'}</p>
+        <p><b>Ports:</b> ${JSON.stringify(task.ports)}</p>
       `;
 
       document.getElementById('resources').innerHTML = `
-        <div class="metric"><div class="metric-value">${job.resources.memory_mb}</div>
+        <div class="metric"><div class="metric-value">${task.resources.memory_mb}</div>
           <div class="metric-label">Memory (MB)</div></div>
-        <div class="metric"><div class="metric-value">${job.resources.memory_peak_mb}</div>
+        <div class="metric"><div class="metric-value">${task.resources.memory_peak_mb}</div>
           <div class="metric-label">Peak Memory (MB)</div></div>
-        <div class="metric"><div class="metric-value">${job.resources.cpu_percent}%</div>
+        <div class="metric"><div class="metric-value">${task.resources.cpu_percent}%</div>
           <div class="metric-label">CPU</div></div>
-        <div class="metric"><div class="metric-value">${job.resources.process_count}</div>
+        <div class="metric"><div class="metric-value">${task.resources.process_count}</div>
           <div class="metric-label">Processes</div></div>
-        <div class="metric"><div class="metric-value">${job.resources.disk_mb}</div>
+        <div class="metric"><div class="metric-value">${task.resources.disk_mb}</div>
           <div class="metric-label">Disk (MB)</div></div>
       `;
 
-      const buildDuration = job.build.duration_ms > 0 ? (job.build.duration_ms / 1000).toFixed(2) + 's' : '-';
+      const buildDuration = task.build.duration_ms > 0 ? (task.build.duration_ms / 1000).toFixed(2) + 's' : '-';
       document.getElementById('build').innerHTML = `
-        <p><b>Image:</b> <code>${job.build.image_tag || '-'}</code></p>
+        <p><b>Image:</b> <code>${task.build.image_tag || '-'}</code></p>
         <p><b>Build Time:</b> ${buildDuration}</p>
-        <p><b>From Cache:</b> ${job.build.from_cache ? 'Yes' : 'No'}</p>
+        <p><b>From Cache:</b> ${task.build.from_cache ? 'Yes' : 'No'}</p>
       `;
 
-      const logs = await fetch(`/api/jobs/${jobId}/logs`).then(r => r.json());
+      const logs = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/logs`).then(r => r.json());
       const format = (logs) => logs.map(l =>
         `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.data}`
       ).join('\\n') || 'No logs';
@@ -249,12 +256,13 @@ class WorkerDashboard:
         routes = [
             # Web dashboard
             Route("/", self._dashboard),
-            Route("/job/{job_id}", self._job_detail_page),
+            Route("/task/{task_id:path}", self._task_detail_page),
             # REST API (for dashboard)
+            # Note: logs route must come before get_task to avoid {task_id:path} matching "task-id/logs"
             Route("/api/stats", self._stats),
-            Route("/api/jobs", self._list_jobs),
-            Route("/api/jobs/{job_id}", self._get_job),
-            Route("/api/jobs/{job_id}/logs", self._get_logs),
+            Route("/api/tasks", self._list_tasks),
+            Route("/api/tasks/{task_id:path}/logs", self._get_logs),
+            Route("/api/tasks/{task_id:path}", self._get_task),
             # Connect RPC - mount WSGI app wrapped for ASGI
             Mount(rpc_wsgi_app.path, app=rpc_app),
         ]
@@ -263,115 +271,119 @@ class WorkerDashboard:
     def _dashboard(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(DASHBOARD_HTML)
 
-    def _job_detail_page(self, request: Request) -> HTMLResponse:
-        job_id = request.path_params["job_id"]
-        return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", job_id))
+    def _task_detail_page(self, request: Request) -> HTMLResponse:
+        task_id = request.path_params["task_id"]
+        return HTMLResponse(TASK_DETAIL_HTML.replace("{{task_id}}", task_id))
 
     def _stats(self, _request: Request) -> JSONResponse:
         ctx = FakeRequestContext()
-        response = self._service.list_jobs(cluster_pb2.Worker.ListJobsRequest(), ctx)
-        jobs = response.jobs
+        response = self._service.list_tasks(cluster_pb2.Worker.ListTasksRequest(), ctx)
+        tasks = response.tasks
 
         return JSONResponse(
             {
-                "running": sum(1 for j in jobs if j.state == cluster_pb2.JOB_STATE_RUNNING),
-                "pending": sum(1 for j in jobs if j.state == cluster_pb2.JOB_STATE_PENDING),
-                "building": sum(1 for j in jobs if j.state == cluster_pb2.JOB_STATE_BUILDING),
+                "running": sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_RUNNING),
+                "pending": sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_PENDING),
+                "building": sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_BUILDING),
                 "completed": sum(
                     1
-                    for j in jobs
-                    if j.state
+                    for t in tasks
+                    if t.state
                     in (
-                        cluster_pb2.JOB_STATE_SUCCEEDED,
-                        cluster_pb2.JOB_STATE_FAILED,
-                        cluster_pb2.JOB_STATE_KILLED,
+                        cluster_pb2.TASK_STATE_SUCCEEDED,
+                        cluster_pb2.TASK_STATE_FAILED,
+                        cluster_pb2.TASK_STATE_KILLED,
                     )
                 ),
             }
         )
 
-    def _list_jobs(self, _request: Request) -> JSONResponse:
+    def _list_tasks(self, _request: Request) -> JSONResponse:
         ctx = FakeRequestContext()
-        response = self._service.list_jobs(cluster_pb2.Worker.ListJobsRequest(), ctx)
-        jobs = response.jobs
+        response = self._service.list_tasks(cluster_pb2.Worker.ListTasksRequest(), ctx)
+        tasks = response.tasks
 
         return JSONResponse(
             [
                 {
-                    "job_id": j.job_id,
-                    "attempt_id": j.current_attempt_id,
-                    "status": self._status_name(j.state),
-                    "started_at": j.started_at_ms,
-                    "finished_at": j.finished_at_ms,
-                    "exit_code": j.exit_code,
-                    "error": j.error,
+                    "task_id": t.task_id,
+                    "job_id": t.job_id,
+                    "task_index": t.task_index,
+                    "attempt_id": t.current_attempt_id,
+                    "status": self._status_name(t.state),
+                    "started_at": t.started_at_ms,
+                    "finished_at": t.finished_at_ms,
+                    "exit_code": t.exit_code,
+                    "error": t.error,
                     # Add resource metrics
-                    "memory_mb": j.resource_usage.memory_mb,
-                    "memory_peak_mb": j.resource_usage.memory_peak_mb,
-                    "cpu_percent": j.resource_usage.cpu_percent,
-                    "process_count": j.resource_usage.process_count,
-                    "disk_mb": j.resource_usage.disk_mb,
+                    "memory_mb": t.resource_usage.memory_mb,
+                    "memory_peak_mb": t.resource_usage.memory_peak_mb,
+                    "cpu_percent": t.resource_usage.cpu_percent,
+                    "process_count": t.resource_usage.process_count,
+                    "disk_mb": t.resource_usage.disk_mb,
                     # Add build metrics
-                    "build_from_cache": j.build_metrics.from_cache,
-                    "image_tag": j.build_metrics.image_tag,
+                    "build_from_cache": t.build_metrics.from_cache,
+                    "image_tag": t.build_metrics.image_tag,
                 }
-                for j in jobs
+                for t in tasks
             ]
         )
 
-    def _get_job(self, request: Request) -> JSONResponse:
-        job_id = request.path_params["job_id"]
+    def _get_task(self, request: Request) -> JSONResponse:
+        task_id = request.path_params["task_id"]
         ctx = FakeRequestContext()
         try:
-            job = self._service.get_job_status(cluster_pb2.Worker.GetJobStatusRequest(job_id=job_id), ctx)
+            task = self._service.get_task_status(cluster_pb2.Worker.GetTaskStatusRequest(task_id=task_id), ctx)
         except Exception:
-            # RPC raises ConnectError with NOT_FOUND for missing jobs
+            # RPC raises ConnectError with NOT_FOUND for missing tasks
             return JSONResponse({"error": "Not found"}, status_code=404)
 
         return JSONResponse(
             {
-                "job_id": job.job_id,
-                "attempt_id": job.current_attempt_id,
-                "status": self._status_name(job.state),
-                "started_at": job.started_at_ms,
-                "finished_at": job.finished_at_ms,
-                "exit_code": job.exit_code,
-                "error": job.error,
-                "ports": dict(job.ports),
+                "task_id": task.task_id,
+                "job_id": task.job_id,
+                "task_index": task.task_index,
+                "attempt_id": task.current_attempt_id,
+                "status": self._status_name(task.state),
+                "started_at": task.started_at_ms,
+                "finished_at": task.finished_at_ms,
+                "exit_code": task.exit_code,
+                "error": task.error,
+                "ports": dict(task.ports),
                 "resources": {
-                    "memory_mb": job.resource_usage.memory_mb,
-                    "memory_peak_mb": job.resource_usage.memory_peak_mb,
-                    "cpu_percent": job.resource_usage.cpu_percent,
-                    "disk_mb": job.resource_usage.disk_mb,
-                    "process_count": job.resource_usage.process_count,
+                    "memory_mb": task.resource_usage.memory_mb,
+                    "memory_peak_mb": task.resource_usage.memory_peak_mb,
+                    "cpu_percent": task.resource_usage.cpu_percent,
+                    "disk_mb": task.resource_usage.disk_mb,
+                    "process_count": task.resource_usage.process_count,
                 },
                 "build": {
-                    "started_ms": job.build_metrics.build_started_ms,
-                    "finished_ms": job.build_metrics.build_finished_ms,
+                    "started_ms": task.build_metrics.build_started_ms,
+                    "finished_ms": task.build_metrics.build_finished_ms,
                     "duration_ms": (
-                        (job.build_metrics.build_finished_ms - job.build_metrics.build_started_ms)
-                        if job.build_metrics.build_started_ms
+                        (task.build_metrics.build_finished_ms - task.build_metrics.build_started_ms)
+                        if task.build_metrics.build_started_ms
                         else 0
                     ),
-                    "from_cache": job.build_metrics.from_cache,
-                    "image_tag": job.build_metrics.image_tag,
+                    "from_cache": task.build_metrics.from_cache,
+                    "image_tag": task.build_metrics.image_tag,
                 },
             }
         )
 
     def _get_logs(self, request: Request) -> JSONResponse:
-        job_id = request.path_params["job_id"]
+        task_id = request.path_params["task_id"]
         tail = request.query_params.get("tail")
         start_line = -int(tail) if tail else 0
         source = request.query_params.get("source")
         ctx = FakeRequestContext()
         log_filter = cluster_pb2.Worker.FetchLogsFilter(start_line=start_line)
         try:
-            response = self._service.fetch_logs(
-                cluster_pb2.Worker.FetchLogsRequest(job_id=job_id, filter=log_filter), ctx
+            response = self._service.fetch_task_logs(
+                cluster_pb2.Worker.FetchTaskLogsRequest(task_id=task_id, filter=log_filter), ctx
             )
         except Exception:
-            # RPC raises ConnectError with NOT_FOUND for missing jobs
+            # RPC raises ConnectError with NOT_FOUND for missing tasks
             return JSONResponse({"error": "Not found"}, status_code=404)
 
         logs = [
@@ -389,14 +401,14 @@ class WorkerDashboard:
 
         return JSONResponse(logs)
 
-    def _status_name(self, status: cluster_pb2.JobState) -> str:
+    def _status_name(self, status: cluster_pb2.TaskState) -> str:
         status_map = {
-            cluster_pb2.JOB_STATE_PENDING: "pending",
-            cluster_pb2.JOB_STATE_BUILDING: "building",
-            cluster_pb2.JOB_STATE_RUNNING: "running",
-            cluster_pb2.JOB_STATE_SUCCEEDED: "succeeded",
-            cluster_pb2.JOB_STATE_FAILED: "failed",
-            cluster_pb2.JOB_STATE_KILLED: "killed",
+            cluster_pb2.TASK_STATE_PENDING: "pending",
+            cluster_pb2.TASK_STATE_BUILDING: "building",
+            cluster_pb2.TASK_STATE_RUNNING: "running",
+            cluster_pb2.TASK_STATE_SUCCEEDED: "succeeded",
+            cluster_pb2.TASK_STATE_FAILED: "failed",
+            cluster_pb2.TASK_STATE_KILLED: "killed",
         }
         return status_map.get(status, "unknown")
 

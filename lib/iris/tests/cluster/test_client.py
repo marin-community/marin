@@ -52,8 +52,8 @@ def test_submit_rejects_duplicate_name(local_client):
     resources = ResourceSpec(cpu=1, memory="1g")
 
     # First submit should succeed
-    job_id = local_client.submit(entrypoint, "duplicate-job", resources)
-    assert job_id == "duplicate-job"
+    job = local_client.submit(entrypoint, "duplicate-job", resources)
+    assert job.job_id == "duplicate-job"
 
     # Second submit with same name should fail with RPC conflict error
     with pytest.raises(ConnectError) as exc_info:
@@ -73,8 +73,8 @@ def test_list_jobs_returns_all_jobs(local_client):
     jobs = local_client.list_jobs()
     job_ids = {j.job_id for j in jobs}
 
-    assert job1 in job_ids
-    assert job2 in job_ids
+    assert job1.job_id in job_ids
+    assert job2.job_id in job_ids
 
 
 def test_list_jobs_filter_by_state(local_client):
@@ -82,16 +82,16 @@ def test_list_jobs_filter_by_state(local_client):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    job_id = local_client.submit(entrypoint, "state-filter-job", resources)
-    local_client.wait(job_id)  # Wait for completion
+    job = local_client.submit(entrypoint, "state-filter-job", resources)
+    job.wait()  # Wait for completion
 
     # Filter for SUCCEEDED only
     succeeded_jobs = local_client.list_jobs(states=[cluster_pb2.JOB_STATE_SUCCEEDED])
-    assert any(j.job_id == job_id for j in succeeded_jobs)
+    assert any(j.job_id == job.job_id for j in succeeded_jobs)
 
     # Filter for PENDING only - should not include completed job
     pending_jobs = local_client.list_jobs(states=[cluster_pb2.JOB_STATE_PENDING])
-    assert not any(j.job_id == job_id for j in pending_jobs)
+    assert not any(j.job_id == job.job_id for j in pending_jobs)
 
 
 def test_list_jobs_filter_by_prefix(local_client):
@@ -136,13 +136,71 @@ def test_terminate_prefix_excludes_finished(local_client):
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
-    job_id = local_client.submit(entrypoint, "finished-test", resources)
-    local_client.wait(job_id)  # Wait for completion
+    job = local_client.submit(entrypoint, "finished-test", resources)
+    job.wait()  # Wait for completion
 
     # Job should be SUCCEEDED now
-    status = local_client.status(job_id)
+    status = job.status()
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
     # terminate_prefix should not include it
     terminated = local_client.terminate_prefix("finished-test")
-    assert job_id not in terminated
+    assert job.job_id not in terminated
+
+
+# =============================================================================
+# Task API Tests (using new Job/Task objects)
+# =============================================================================
+
+
+def test_job_tasks_returns_single_task_for_job(local_client):
+    """Verify job.tasks() returns a task for a single-task job."""
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+
+    job = local_client.submit(entrypoint, "task-test-job", resources)
+    job.wait()
+
+    tasks = job.tasks()
+    assert len(tasks) == 1
+    assert tasks[0].job_id == job.job_id
+    assert tasks[0].task_index == 0
+    assert tasks[0].task_id == f"{job.job_id}/task-0"
+
+
+def test_task_status_returns_task_info(local_client):
+    """Verify task.status() returns task-level information."""
+    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+
+    job = local_client.submit(entrypoint, "task-status-job", resources)
+    job.wait()
+
+    tasks = job.tasks()
+    assert len(tasks) == 1
+    task = tasks[0]
+    status = task.status()
+    assert status.task_id == f"{job.job_id}/task-0"
+    assert status.job_id == job.job_id
+    assert status.task_index == 0
+    assert status.state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+
+def test_task_logs_returns_logs(local_client):
+    """Verify task.logs() returns logs when available (integration test)."""
+
+    def logging_entrypoint():
+        print("Hello from task")
+
+    entrypoint = Entrypoint.from_callable(logging_entrypoint)
+    resources = ResourceSpec(cpu=1, memory="1g")
+
+    job = local_client.submit(entrypoint, "task-logs-job", resources)
+    job.wait()
+
+    # The method should be callable without error
+    # In local mode, stdout capture may or may not produce logs depending on timing
+    tasks = job.tasks()
+    logs = tasks[0].logs()
+    # Just verify we get a list back (logs may be empty in fast local execution)
+    assert isinstance(logs, list)

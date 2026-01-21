@@ -72,12 +72,17 @@ def my_task():
     print("Hello from iris!")
 
 client = IrisClient.remote("http://controller:8080", workspace=Path("."))
-job_id = client.submit(
+job = client.submit(
     name="my-job",
     entrypoint=Entrypoint.from_callable(my_task),
     resources=ResourceSpec(cpu=1, memory="2GB"),
 )
-client.wait(job_id)
+job.wait()  # Blocks until complete, raises JobFailedError on failure
+
+# Access task-level information
+for task in job.tasks():
+    for entry in task.logs():
+        print(entry.data)
 ```
 
 ### Running an Actor Server
@@ -111,7 +116,7 @@ result = pool.call().predict([1, 2, 3])
 
 ```python
 from iris.client import IrisClient, WorkerPool, WorkerPoolConfig
-from iris.rpc.cluster_pb2 import ResourceSpec
+from iris.cluster.types import ResourceSpec
 
 client = IrisClient.remote("http://controller:8080", workspace=Path("."))
 config = WorkerPoolConfig(num_workers=10, resources=ResourceSpec(cpu=2))

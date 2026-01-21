@@ -199,38 +199,73 @@ class RemoteClusterClient:
             client.close()
         self._worker_clients.clear()
 
-    def fetch_logs(
+    def get_task_status(self, job_id: str, task_index: int) -> cluster_pb2.TaskStatus:
+        """Get status of a specific task within a job.
+
+        Args:
+            job_id: Parent job ID
+            task_index: 0-indexed task number
+
+        Returns:
+            TaskStatus proto for the requested task
+        """
+        request = cluster_pb2.Controller.GetTaskStatusRequest(
+            job_id=job_id,
+            task_index=task_index,
+        )
+        response = self._client.get_task_status(request)
+        return response.task
+
+    def list_tasks(self, job_id: str) -> list[cluster_pb2.TaskStatus]:
+        """List all tasks for a job.
+
+        Args:
+            job_id: Job ID to query tasks for
+
+        Returns:
+            List of TaskStatus protos, one per task in the job
+        """
+        request = cluster_pb2.Controller.ListTasksRequest(job_id=job_id)
+        response = self._client.list_tasks(request)
+        return list(response.tasks)
+
+    def fetch_task_logs(
         self,
-        job_id: str,
-        *,
+        task_id: str,
         start_ms: int = 0,
         max_lines: int = 0,
     ) -> list[cluster_pb2.Worker.LogEntry]:
-        """Fetch logs for a job, routing to the correct worker.
+        """Fetch logs for a specific task.
+
+        Queries the controller to find which worker is running the task,
+        then fetches logs directly from that worker.
 
         Args:
-            job_id: Job ID to fetch logs for
-            start_ms: Only return logs after this timestamp (exclusive, for incremental polling)
-            max_lines: Maximum number of lines to return (0 = unlimited)
+            task_id: Full task ID in format "{job_id}/task-{index}"
+            start_ms: Only return logs after this timestamp (milliseconds since epoch)
+            max_lines: Maximum number of log lines to return (0 = unlimited)
 
         Returns:
-            List of LogEntry protos
-
-        Raises:
-            ValueError: If job has no worker assigned (not yet scheduled)
+            List of LogEntry protos from the worker
         """
-        status = self.get_job_status(job_id)
-        if not status.worker_address:
-            raise ValueError(f"Job {job_id} has no worker assigned (state: {cluster_pb2.JobState.Name(status.state)})")
+        if "/task-" not in task_id:
+            raise ValueError(f"Invalid task_id format: {task_id}. Expected 'job_id/task-index'")
 
-        worker_client = self._get_worker_client(status.worker_address)
+        job_id, task_suffix = task_id.rsplit("/", 1)
+        task_index = int(task_suffix.split("-")[1])
+
+        task_status = self.get_task_status(job_id, task_index)
+        if not task_status.worker_address:
+            return []
+
+        worker_client = self._get_worker_client(task_status.worker_address)
         filter_proto = cluster_pb2.Worker.FetchLogsFilter(
             start_ms=start_ms,
             max_lines=max_lines,
         )
-        request = cluster_pb2.Worker.FetchLogsRequest(
-            job_id=job_id,
+        request = cluster_pb2.Worker.FetchTaskLogsRequest(
+            task_id=task_id,
             filter=filter_proto,
         )
-        response = worker_client.fetch_logs(request)
+        response = worker_client.fetch_task_logs(request)
         return list(response.logs)

@@ -18,7 +18,8 @@ import pytest
 
 from iris.actor import ActorClient, ActorServer
 from iris.actor.resolver import FixedResolver
-from iris.client import IrisContext, iris_ctx, iris_ctx_scope
+from iris.client import iris_ctx
+from iris.rpc import actor_pb2
 
 
 class Calculator:
@@ -65,35 +66,9 @@ def test_actor_exception_propagation():
         client.divide(1, 0)
 
 
-@pytest.mark.skip(reason="Context injection removed in Step 1 - ActorServer is now 'dumb'. Will be handled in Step 3.")
-def test_actor_context_injection():
-    """Test that IrisContext is properly injected and accessible.
-
-    NOTE: This test is disabled as part of the actor layer cleanup (Step 1).
-    ActorServer no longer automatically injects context. Context management
-    will be handled by higher-level helpers in iris.client (Step 3).
-    """
-    ctx = IrisContext(
-        job_id="test-job-123",
-        worker_id="test-worker",
-    )
-
-    # Set up context before starting server (server captures context at serve_background time)
-    with iris_ctx_scope(ctx):
-        server = ActorServer(host="127.0.0.1")
-        server.register("ctx_actor", ContextAwareActor())
-        port = server.serve_background()
-
-    resolver = FixedResolver({"ctx_actor": f"http://127.0.0.1:{port}"})
-    client = ActorClient(resolver, "ctx_actor")
-    assert client.get_job_id() == "test-job-123"
-
-
 @pytest.mark.asyncio
 async def test_list_actors():
     """Test that list_actors returns registered actors."""
-    from iris.rpc import actor_pb2
-
     server = ActorServer(host="127.0.0.1")
     actor_id1 = server.register("calc", Calculator())
     actor_id2 = server.register("ctx", ContextAwareActor())
@@ -119,8 +94,6 @@ async def test_list_actors():
 @pytest.mark.asyncio
 async def test_list_methods():
     """Test that list_methods returns method info for an actor."""
-    from iris.rpc import actor_pb2
-
     server = ActorServer(host="127.0.0.1")
     server.register("calc", Calculator())
     server.serve_background()
@@ -141,7 +114,6 @@ async def test_list_methods():
 @pytest.mark.asyncio
 async def test_list_methods_with_docstring():
     """Test that list_methods includes docstrings when present."""
-    from iris.rpc import actor_pb2
 
     class DocumentedActor:
         def documented_method(self) -> str:
@@ -170,8 +142,6 @@ async def test_list_methods_with_docstring():
 @pytest.mark.asyncio
 async def test_list_methods_missing_actor():
     """Test that list_methods returns empty response for missing actor."""
-    from iris.rpc import actor_pb2
-
     server = ActorServer(host="127.0.0.1")
     server.register("calc", Calculator())
     server.serve_background()

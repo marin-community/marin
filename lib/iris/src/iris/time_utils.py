@@ -18,6 +18,11 @@ import time
 from collections.abc import Callable
 
 
+def now_ms() -> int:
+    """Return current Unix timestamp in milliseconds."""
+    return int(time.time() * 1000)
+
+
 class ExponentialBackoff:
     """Exponential backoff with jitter for polling/retry loops.
 
