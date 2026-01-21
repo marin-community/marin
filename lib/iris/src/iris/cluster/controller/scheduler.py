@@ -15,6 +15,7 @@
 """Pure task-to-worker matching without threading, dispatch, or state mutation."""
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from iris.cluster.controller.state import (
@@ -27,9 +28,74 @@ from iris.cluster.controller.state import (
     get_gpu_count,
 )
 from iris.cluster.types import AttributeValue, WorkerId
+from iris.rpc import cluster_pb2
 from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
+
+
+def _evaluate_constraint(
+    attr: AttributeValue | None,
+    constraint: cluster_pb2.Constraint,
+) -> bool:
+    """Evaluate a single constraint against a worker attribute.
+
+    Args:
+        attr: Worker attribute value (None if attribute doesn't exist)
+        constraint: Constraint to evaluate
+
+    Returns:
+        True if constraint is satisfied, False otherwise
+    """
+    op = constraint.op
+
+    # EXISTS/NOT_EXISTS don't need a value comparison
+    if op == cluster_pb2.CONSTRAINT_OP_EXISTS:
+        return attr is not None
+    if op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS:
+        return attr is None
+
+    # All other operators require the attribute to exist
+    if attr is None:
+        return False
+
+    target = AttributeValue.from_proto(constraint.value)
+
+    match op:
+        case cluster_pb2.CONSTRAINT_OP_EQ:
+            return attr.value == target.value
+        case cluster_pb2.CONSTRAINT_OP_NE:
+            return attr.value != target.value
+        case cluster_pb2.CONSTRAINT_OP_GT:
+            return attr.value > target.value
+        case cluster_pb2.CONSTRAINT_OP_GE:
+            return attr.value >= target.value
+        case cluster_pb2.CONSTRAINT_OP_LT:
+            return attr.value < target.value
+        case cluster_pb2.CONSTRAINT_OP_LE:
+            return attr.value <= target.value
+        case _:
+            return False
+
+
+def _worker_matches_constraints(
+    capacity: "WorkerCapacity",
+    constraints: Sequence[cluster_pb2.Constraint],
+) -> bool:
+    """Check if a worker matches all constraints.
+
+    Args:
+        capacity: Worker capacity with attributes
+        constraints: Sequence of constraints (all must match)
+
+    Returns:
+        True if worker matches all constraints, False otherwise
+    """
+    for constraint in constraints:
+        attr = capacity.attributes.get(constraint.key)
+        if not _evaluate_constraint(attr, constraint):
+            return False
+    return True
 
 
 @dataclass
@@ -166,14 +232,27 @@ class Scheduler:
         if not capacities:
             return TaskScheduleResult(task=task, failure_reason="No healthy workers available")
 
-        # Try to find a worker that can fit this task
+        constraints = list(job.request.constraints)
+
+        # Try to find a worker that can fit this task and matches constraints
         for capacity in capacities.values():
+            if not _worker_matches_constraints(capacity, constraints):
+                continue
             if capacity.can_fit_job(job):
                 capacity.deduct(job)
                 return TaskScheduleResult(task=task, worker=capacity.worker)
 
         # No worker could fit the task - build detailed reason
         res = job.request.resources
+        if constraints:
+            return TaskScheduleResult(
+                task=task,
+                failure_reason=(
+                    f"No worker matches constraints and has sufficient resources "
+                    f"(need cpu={res.cpu}, memory={res.memory_bytes}, "
+                    f"constraints={[c.key for c in constraints]})"
+                ),
+            )
         return TaskScheduleResult(
             task=task,
             failure_reason=(f"No worker has sufficient resources " f"(need cpu={res.cpu}, memory={res.memory_bytes})"),

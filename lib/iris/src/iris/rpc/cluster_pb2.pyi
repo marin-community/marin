@@ -30,6 +30,17 @@ class TaskState(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     TASK_STATE_KILLED: _ClassVar[TaskState]
     TASK_STATE_WORKER_FAILED: _ClassVar[TaskState]
     TASK_STATE_UNSCHEDULABLE: _ClassVar[TaskState]
+
+class ConstraintOp(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    CONSTRAINT_OP_EQ: _ClassVar[ConstraintOp]
+    CONSTRAINT_OP_NE: _ClassVar[ConstraintOp]
+    CONSTRAINT_OP_EXISTS: _ClassVar[ConstraintOp]
+    CONSTRAINT_OP_NOT_EXISTS: _ClassVar[ConstraintOp]
+    CONSTRAINT_OP_GT: _ClassVar[ConstraintOp]
+    CONSTRAINT_OP_GE: _ClassVar[ConstraintOp]
+    CONSTRAINT_OP_LT: _ClassVar[ConstraintOp]
+    CONSTRAINT_OP_LE: _ClassVar[ConstraintOp]
 JOB_STATE_UNSPECIFIED: JobState
 JOB_STATE_PENDING: JobState
 JOB_STATE_BUILDING: JobState
@@ -48,6 +59,14 @@ TASK_STATE_FAILED: TaskState
 TASK_STATE_KILLED: TaskState
 TASK_STATE_WORKER_FAILED: TaskState
 TASK_STATE_UNSCHEDULABLE: TaskState
+CONSTRAINT_OP_EQ: ConstraintOp
+CONSTRAINT_OP_NE: ConstraintOp
+CONSTRAINT_OP_EXISTS: ConstraintOp
+CONSTRAINT_OP_NOT_EXISTS: ConstraintOp
+CONSTRAINT_OP_GT: ConstraintOp
+CONSTRAINT_OP_GE: ConstraintOp
+CONSTRAINT_OP_LT: ConstraintOp
+CONSTRAINT_OP_LE: ConstraintOp
 
 class Empty(_message.Message):
     __slots__ = ()
@@ -272,6 +291,16 @@ class AttributeValue(_message.Message):
     float_value: float
     def __init__(self, string_value: _Optional[str] = ..., int_value: _Optional[int] = ..., float_value: _Optional[float] = ...) -> None: ...
 
+class Constraint(_message.Message):
+    __slots__ = ("key", "op", "value")
+    KEY_FIELD_NUMBER: _ClassVar[int]
+    OP_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    key: str
+    op: ConstraintOp
+    value: AttributeValue
+    def __init__(self, key: _Optional[str] = ..., op: _Optional[_Union[ConstraintOp, str]] = ..., value: _Optional[_Union[AttributeValue, _Mapping]] = ...) -> None: ...
+
 class WorkerMetadata(_message.Message):
     __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "disk_bytes", "device", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone", "attributes")
     class AttributesEntry(_message.Message):
@@ -318,7 +347,7 @@ class WorkerMetadata(_message.Message):
 class Controller(_message.Message):
     __slots__ = ()
     class LaunchJobRequest(_message.Message):
-        __slots__ = ("name", "serialized_entrypoint", "resources", "environment", "bundle_gcs_path", "bundle_hash", "bundle_blob", "scheduling_timeout_seconds", "ports", "parent_job_id", "max_task_failures", "max_retries_failure", "max_retries_preemption")
+        __slots__ = ("name", "serialized_entrypoint", "resources", "environment", "bundle_gcs_path", "bundle_hash", "bundle_blob", "scheduling_timeout_seconds", "ports", "parent_job_id", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints")
         NAME_FIELD_NUMBER: _ClassVar[int]
         SERIALIZED_ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
         RESOURCES_FIELD_NUMBER: _ClassVar[int]
@@ -332,6 +361,7 @@ class Controller(_message.Message):
         MAX_TASK_FAILURES_FIELD_NUMBER: _ClassVar[int]
         MAX_RETRIES_FAILURE_FIELD_NUMBER: _ClassVar[int]
         MAX_RETRIES_PREEMPTION_FIELD_NUMBER: _ClassVar[int]
+        CONSTRAINTS_FIELD_NUMBER: _ClassVar[int]
         name: str
         serialized_entrypoint: bytes
         resources: ResourceSpecProto
@@ -345,7 +375,8 @@ class Controller(_message.Message):
         max_task_failures: int
         max_retries_failure: int
         max_retries_preemption: int
-        def __init__(self, name: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout_seconds: _Optional[int] = ..., ports: _Optional[_Iterable[str]] = ..., parent_job_id: _Optional[str] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ...) -> None: ...
+        constraints: _containers.RepeatedCompositeFieldContainer[Constraint]
+        def __init__(self, name: _Optional[str] = ..., serialized_entrypoint: _Optional[bytes] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_gcs_path: _Optional[str] = ..., bundle_hash: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout_seconds: _Optional[int] = ..., ports: _Optional[_Iterable[str]] = ..., parent_job_id: _Optional[str] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ...) -> None: ...
     class LaunchJobResponse(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
