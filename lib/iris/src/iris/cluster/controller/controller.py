@@ -363,10 +363,15 @@ class Controller:
                 except Exception as e:
                     failed.append((task, worker, str(e)))
         except TimeoutError:
-            # Some futures didn't complete in time, mark them as failed
+            # Some futures didn't complete in time - check all futures
             for future, (task, worker) in futures.items():
                 if not future.done():
                     failed.append((task, worker, "Dispatch RPC timed out"))
+                else:
+                    # Future completed - check if it raised an exception we missed
+                    exc = future.exception()
+                    if exc is not None:
+                        failed.append((task, worker, str(exc)))
 
         # Phase 4: Handle failures sequentially (fire events)
         # WorkerFailedEvent will cascade to all tasks on the worker, transitioning them
@@ -446,10 +451,15 @@ class Controller:
                 except Exception as e:
                     failed.append((task, worker, str(e)))
         except TimeoutError:
-            # Some futures didn't complete in time
+            # Some futures didn't complete in time - check all futures
             for future, (task, worker) in futures.items():
                 if not future.done():
                     failed.append((task, worker, "Dispatch RPC timed out"))
+                else:
+                    # Future completed - check if it raised an exception we missed
+                    exc = future.exception()
+                    if exc is not None:
+                        failed.append((task, worker, str(exc)))
 
         # Phase 4: Handle failures
         # For coscheduled jobs, if ANY task fails to dispatch, we have a problem.
