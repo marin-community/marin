@@ -1199,6 +1199,20 @@ class ControllerState:
         # Handle side effects based on result
         self._handle_task_side_effects(task, job, result, txn)
 
+        # Coscheduled group failure: if one task fails terminally, kill all running siblings.
+        # For multi-host TPU jobs, if one host fails the other hosts cannot continue
+        # (collective ops will timeout), so we immediately kill all running siblings.
+        if (
+            job.is_coscheduled
+            and task.is_finished()
+            and task.state
+            in (
+                cluster_pb2.TASK_STATE_FAILED,
+                cluster_pb2.TASK_STATE_WORKER_FAILED,
+            )
+        ):
+            self._cascade_coscheduled_failure(task, job, txn)
+
         # Update job state counters and finalize if needed
         new_job_state = job.on_task_transition(old_state, task.state)
         if new_job_state is not None:
@@ -1247,6 +1261,45 @@ class ControllerState:
         if task.task_id not in self._task_queue:
             self._task_queue.append(task.task_id)
         txn.log("task_requeued", task.task_id)
+
+    def _cascade_coscheduled_failure(
+        self,
+        trigger_task: ControllerTask,
+        job: ControllerJob,
+        txn: TransactionLog,
+    ) -> None:
+        """Kill all running siblings when a coscheduled task fails terminally.
+
+        For multi-host TPU jobs, if one host fails the other hosts cannot continue
+        because collective operations will timeout. We immediately mark all running
+        siblings as WORKER_FAILED (terminal, with no retries) so they can be cleaned up.
+        """
+        for sibling_id in self._tasks_by_job.get(job.job_id, []):
+            if sibling_id == trigger_task.task_id:
+                continue
+
+            sibling = self._tasks[sibling_id]
+            if sibling.state != cluster_pb2.TASK_STATE_RUNNING:
+                continue
+
+            sibling_old = sibling.state
+
+            # Set preemption count so that after handle_attempt_result increments it,
+            # the sibling becomes terminal (is_finished() returns True). This prevents
+            # _mark_remaining_tasks_killed from overwriting the state (it skips finished tasks).
+            sibling.preemption_count = sibling.max_retries_preemption
+
+            sibling.handle_attempt_result(
+                cluster_pb2.TASK_STATE_WORKER_FAILED,
+                error=f"Coscheduled sibling {trigger_task.task_id} failed",
+            )
+            job.on_task_transition(sibling_old, sibling.state)
+            txn.tasks_to_kill.add(sibling_id)
+            txn.log(
+                "coscheduled_sibling_killed",
+                sibling_id,
+                trigger_task=str(trigger_task.task_id),
+            )
 
     def get_transactions(self, limit: int = 100) -> list[TransactionLog]:
         """Return recent transactions for debugging."""

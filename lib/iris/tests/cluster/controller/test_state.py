@@ -893,3 +893,235 @@ def test_worker_without_attributes():
     worker_id = register_worker(state, "w1", "host:8080", metadata)
     worker = state.get_worker(worker_id)
     assert worker.attributes == {}
+
+
+# =============================================================================
+# Coscheduled Failure Cascade Tests
+# =============================================================================
+
+
+def test_coscheduled_task_failure_kills_siblings(worker_metadata):
+    """When one coscheduled task fails terminally, all running siblings are killed."""
+    state = ControllerState()
+
+    # Register 4 workers (one per task)
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    # Create coscheduled job with 4 tasks
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    tasks = submit_job(state, "j1", req)
+
+    job = state.get_job(JobId("j1"))
+    assert job.is_coscheduled
+
+    # Dispatch all tasks
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    # Fail task-0 (terminal failure with no retries)
+    txn = state.handle_event(
+        TaskStateChangedEvent(
+            task_id=tasks[0].task_id,
+            new_state=cluster_pb2.TASK_STATE_FAILED,
+            error="OOM",
+        )
+    )
+
+    # Task-0 should be FAILED, all other tasks should be WORKER_FAILED
+    assert tasks[0].state == cluster_pb2.TASK_STATE_FAILED
+    for task in tasks[1:]:
+        assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+        assert task.task_id in txn.tasks_to_kill
+
+
+def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
+    """WORKER_FAILED also triggers sibling kill when retries exhausted."""
+    state = ControllerState()
+
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    # Use max_retries_preemption=1 (not 0 because 0 gets defaulted to 100)
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        max_retries_preemption=1,  # Allow one retry, so second failure is terminal
+    )
+    req.coscheduling.group_by = "tpu-name"
+    tasks = submit_job(state, "j1", req)
+
+    # Dispatch all tasks
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    # First WORKER_FAILED is retriable (retries remaining)
+    state.handle_event(
+        TaskStateChangedEvent(
+            task_id=tasks[0].task_id,
+            new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+            error="Worker crashed (first)",
+        )
+    )
+
+    # Task-0 is retriable, siblings still running
+    assert tasks[0].preemption_count == 1
+    assert tasks[0].can_be_scheduled()
+    for task in tasks[1:]:
+        assert task.state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Re-dispatch task-0
+    dispatch_task(state, tasks[0], WorkerId("w0"))
+
+    # Second WORKER_FAILED exhausts retries - now terminal
+    txn = state.handle_event(
+        TaskStateChangedEvent(
+            task_id=tasks[0].task_id,
+            new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+            error="Worker crashed (second)",
+        )
+    )
+
+    assert tasks[0].state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert tasks[0].is_finished()
+    for task in tasks[1:]:
+        assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+        assert task.task_id in txn.tasks_to_kill
+
+
+def test_coscheduled_task_success_does_not_affect_siblings(worker_metadata):
+    """Task success does NOT kill siblings."""
+    state = ControllerState()
+
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    tasks = submit_job(state, "j1", req)
+
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    # Task-0 succeeds
+    txn = state.handle_event(
+        TaskStateChangedEvent(
+            task_id=tasks[0].task_id,
+            new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+        )
+    )
+
+    # Task-0 succeeded, siblings still running
+    assert tasks[0].state == cluster_pb2.TASK_STATE_SUCCEEDED
+    for task in tasks[1:]:
+        assert task.state == cluster_pb2.TASK_STATE_RUNNING
+    assert len(txn.tasks_to_kill) == 0
+
+
+def test_non_coscheduled_task_failure_does_not_kill_siblings(worker_metadata):
+    """Regular jobs don't cascade failures to siblings."""
+    state = ControllerState()
+
+    for i in range(4):
+        register_worker(state, f"w{i}", f"addr{i}:8080", worker_metadata())
+
+    # Regular job (no coscheduling)
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="regular-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        max_task_failures=3,  # Allow failures without killing the job
+    )
+    tasks = submit_job(state, "j1", req)
+
+    job = state.get_job(JobId("j1"))
+    assert not job.is_coscheduled
+
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    # Fail task-0
+    txn = state.handle_event(
+        TaskStateChangedEvent(
+            task_id=tasks[0].task_id,
+            new_state=cluster_pb2.TASK_STATE_FAILED,
+            error="OOM",
+        )
+    )
+
+    # Task-0 failed, but siblings are still running (no cascade)
+    assert tasks[0].state == cluster_pb2.TASK_STATE_FAILED
+    for task in tasks[1:]:
+        assert task.state == cluster_pb2.TASK_STATE_RUNNING
+
+    # No tasks marked to kill from coscheduling cascade
+    assert len(txn.tasks_to_kill) == 0
+
+
+def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
+    """When a coscheduled task fails but has retries remaining, siblings are NOT killed."""
+    state = ControllerState()
+
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        max_retries_failure=1,  # Allow one retry
+        max_task_failures=4,  # Don't fail job on task failure
+    )
+    req.coscheduling.group_by = "tpu-name"
+    tasks = submit_job(state, "j1", req)
+
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    # Fail task-0 (first failure, has retry remaining)
+    txn = state.handle_event(
+        TaskStateChangedEvent(
+            task_id=tasks[0].task_id,
+            new_state=cluster_pb2.TASK_STATE_FAILED,
+            error="OOM",
+        )
+    )
+
+    # Task-0 failed but is retriable (not terminal)
+    assert tasks[0].state == cluster_pb2.TASK_STATE_FAILED
+    assert tasks[0].can_be_scheduled()  # Can retry
+    assert not tasks[0].is_finished()  # Not terminal
+
+    # Siblings should still be running (no cascade for retriable failures)
+    for task in tasks[1:]:
+        assert task.state == cluster_pb2.TASK_STATE_RUNNING
+
+    # No tasks marked for kill
+    assert len(txn.tasks_to_kill) == 0
