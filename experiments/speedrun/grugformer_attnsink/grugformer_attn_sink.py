@@ -81,7 +81,7 @@ def _batch_sizes() -> dict[str, int]:
 
 
 def _size_presets() -> dict[str, "GrugformerAttnSinkLmConfig"]:
-    base = dict(max_seq_len=2048, tie_embeddings=False, head_dim=None)
+    base = dict(max_seq_len=2048, head_dim=None)
     return {
         "130m": GrugformerAttnSinkLmConfig(
             hidden_dim=512,
@@ -355,7 +355,6 @@ class GrugformerAttnSinkLmConfig(LmConfig[GrugWrapper]):
     num_heads: int = 16
     num_kv_heads: int = 16
     head_dim: int | None = None
-    tie_embeddings: bool = False
     rope_theta: float = 10000.0
 
     sink: GrugformerAttnSinkConfig = dataclasses.field(default_factory=GrugformerAttnSinkConfig)
@@ -378,7 +377,6 @@ class GrugformerAttnSinkLmConfig(LmConfig[GrugWrapper]):
             num_kv_heads=self.num_kv_heads,
             head_dim=self.head_dim,
             max_seq_len=self.max_seq_len,
-            tie_embeddings=self.tie_embeddings,
         )
 
     def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> GrugWrapper:
@@ -415,9 +413,8 @@ class GrugformerAttnSinkLmConfig(LmConfig[GrugWrapper]):
         )
         mlp = 3 * self.hidden_dim * self.intermediate_dim
         transformer = self.num_layers * (attn + mlp + 2 * self.hidden_dim) + self.hidden_dim
-        head = 0 if self.tie_embeddings else token_embedding
         sinks = self.num_layers * self.num_heads
-        return int(transformer + token_embedding + head + sinks)
+        return int(transformer + 2 * token_embedding + sinks)
 
 
 speedrun_config = SpeedrunConfig(
@@ -434,7 +431,6 @@ speedrun_config = SpeedrunConfig(
         num_layers=12,
         num_heads=16,
         num_kv_heads=16,
-        tie_embeddings=False,
         sink=GrugformerAttnSinkConfig(num_sinks=1, init_logit=0.0),
     ),
     train_config=SimpleTrainConfig(

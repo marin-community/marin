@@ -108,10 +108,6 @@ class GrugformerConfig(LmConfig[GrugWrapper]):
     num_kv_heads: int = 16
     head_dim: int | None = None
 
-    # Grug core currently always has separate token embed + output projection; keep this knob
-    # for param counting / compatibility with other LmConfig-based scripts.
-    tie_embeddings: bool = False
-
     # ---- LmConfig API ----
     @property
     def model_type(self) -> type[GrugWrapper]:
@@ -157,8 +153,7 @@ class GrugformerConfig(LmConfig[GrugWrapper]):
         )
         mlp = 3 * self.hidden_dim * self.intermediate_dim
         transformer = self.num_layers * (attn + mlp + 2 * self.hidden_dim) + self.hidden_dim
-        head = 0 if self.tie_embeddings else token_embedding
-        return int(transformer + token_embedding + head)
+        return int(transformer + 2 * token_embedding)
 
 
 def build_run(size: str, *, use_tpu: bool = False) -> tuple[str, SpeedrunConfig]:
