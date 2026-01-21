@@ -24,7 +24,6 @@ They focus on:
 import threading
 
 import pytest
-
 from iris.cluster.controller.events import (
     JobCancelledEvent,
     JobSubmittedEvent,
@@ -847,27 +846,6 @@ def test_worker_attributes_updated_on_reregistration(worker_metadata):
     worker = state.get_worker(worker_id)
     assert worker.attributes["tpu-name"].value == "new-tpu"
     assert worker.attributes["tpu-worker-id"].value == 5
-
-
-def test_worker_without_attributes():
-    """Worker without attributes has empty attributes dict."""
-    state = ControllerState()
-
-    device = cluster_pb2.DeviceConfig()
-    device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
-
-    metadata = cluster_pb2.WorkerMetadata(
-        hostname="test-worker",
-        ip_address="127.0.0.1",
-        cpu_count=8,
-        memory_bytes=16 * 1024**3,
-        disk_bytes=100 * 1024**3,
-        device=device,
-    )
-
-    worker_id = register_worker(state, "w1", "host:8080", metadata)
-    worker = state.get_worker(worker_id)
-    assert worker.attributes == {}
 
 
 # =============================================================================

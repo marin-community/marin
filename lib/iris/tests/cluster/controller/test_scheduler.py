@@ -459,215 +459,156 @@ def test_constraint_filters_workers_by_attribute(scheduler, state, job_request, 
     assert result.assignments[0][1].worker_id == WorkerId("w1")
 
 
-def test_constraint_eq_operator(scheduler, state, job_request, worker_metadata):
-    """EQ constraint matches exact value."""
+@pytest.mark.parametrize(
+    "op,worker_value,constraint_value,should_match",
+    [
+        # EQ operator tests
+        (cluster_pb2.CONSTRAINT_OP_EQ, "us-west", "us-west", True),
+        (cluster_pb2.CONSTRAINT_OP_EQ, "us-east", "us-west", False),
+        # NE operator tests
+        (cluster_pb2.CONSTRAINT_OP_NE, "us-east", "us-west", True),
+        (cluster_pb2.CONSTRAINT_OP_NE, "us-west", "us-west", False),
+    ],
+    ids=[
+        "EQ-match",
+        "EQ-no-match",
+        "NE-match",
+        "NE-no-match",
+    ],
+)
+def test_constraint_string_operators(
+    scheduler, state, job_request, worker_metadata, op, worker_value, constraint_value, should_match
+):
+    """String equality operators (EQ, NE) filter workers by attribute value."""
     meta = worker_metadata()
-    meta.attributes["region"].string_value = "us-west"
+    meta.attributes["region"].string_value = worker_value
     register_worker(state, "w1", "addr", meta)
 
-    # Job requiring region = "us-west"
     req = job_request()
     constraint = req.constraints.add()
     constraint.key = "region"
-    constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
-    constraint.value.string_value = "us-west"
+    constraint.op = op
+    constraint.value.string_value = constraint_value
     submit_job(state, "j1", req)
 
     result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
 
-    assert len(result.assignments) == 1
-    assert result.assignments[0][1].worker_id == WorkerId("w1")
+    if should_match:
+        assert len(result.assignments) == 1
+        assert result.assignments[0][1].worker_id == WorkerId("w1")
+    else:
+        assert len(result.assignments) == 0
 
 
-def test_constraint_eq_no_match(scheduler, state, job_request, worker_metadata):
-    """EQ constraint excludes workers that don't match."""
+@pytest.mark.parametrize(
+    "op,worker_has_attribute,should_match",
+    [
+        (cluster_pb2.CONSTRAINT_OP_EXISTS, True, True),
+        (cluster_pb2.CONSTRAINT_OP_EXISTS, False, False),
+        (cluster_pb2.CONSTRAINT_OP_NOT_EXISTS, True, False),
+        (cluster_pb2.CONSTRAINT_OP_NOT_EXISTS, False, True),
+    ],
+    ids=[
+        "EXISTS-present",
+        "EXISTS-absent",
+        "NOT_EXISTS-present",
+        "NOT_EXISTS-absent",
+    ],
+)
+def test_constraint_existence_operators(
+    scheduler, state, job_request, worker_metadata, op, worker_has_attribute, should_match
+):
+    """Existence operators (EXISTS, NOT_EXISTS) check for attribute presence."""
     meta = worker_metadata()
-    meta.attributes["region"].string_value = "us-east"
+    if worker_has_attribute:
+        meta.attributes["gpu-model"].string_value = "A100"
     register_worker(state, "w1", "addr", meta)
 
-    # Job requiring region = "us-west" (doesn't match)
-    req = job_request()
-    constraint = req.constraints.add()
-    constraint.key = "region"
-    constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
-    constraint.value.string_value = "us-west"
-    submit_job(state, "j1", req)
-
-    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
-
-    assert len(result.assignments) == 0
-
-
-def test_constraint_ne_operator(scheduler, state, job_request, worker_metadata):
-    """NE constraint excludes matching value."""
-    # Worker 1 with region us-east
-    meta1 = worker_metadata()
-    meta1.attributes["region"].string_value = "us-east"
-    register_worker(state, "w1", "addr1", meta1)
-
-    # Worker 2 with region us-west
-    meta2 = worker_metadata()
-    meta2.attributes["region"].string_value = "us-west"
-    register_worker(state, "w2", "addr2", meta2)
-
-    # Job requiring region != "us-east"
-    req = job_request()
-    constraint = req.constraints.add()
-    constraint.key = "region"
-    constraint.op = cluster_pb2.CONSTRAINT_OP_NE
-    constraint.value.string_value = "us-east"
-    submit_job(state, "j1", req)
-
-    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
-
-    assert len(result.assignments) == 1
-    assert result.assignments[0][1].worker_id == WorkerId("w2")
-
-
-def test_constraint_exists_operator(scheduler, state, job_request, worker_metadata):
-    """EXISTS constraint matches if attribute present."""
-    # Worker 1 with attribute
-    meta1 = worker_metadata()
-    meta1.attributes["gpu-model"].string_value = "A100"
-    register_worker(state, "w1", "addr1", meta1)
-
-    # Worker 2 without attribute
-    meta2 = worker_metadata()
-    register_worker(state, "w2", "addr2", meta2)
-
-    # Job requiring gpu-model EXISTS
     req = job_request()
     constraint = req.constraints.add()
     constraint.key = "gpu-model"
-    constraint.op = cluster_pb2.CONSTRAINT_OP_EXISTS
+    constraint.op = op
     submit_job(state, "j1", req)
 
     result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
 
-    assert len(result.assignments) == 1
-    assert result.assignments[0][1].worker_id == WorkerId("w1")
+    if should_match:
+        assert len(result.assignments) == 1
+        assert result.assignments[0][1].worker_id == WorkerId("w1")
+    else:
+        assert len(result.assignments) == 0
 
 
-def test_constraint_not_exists_operator(scheduler, state, job_request, worker_metadata):
-    """NOT_EXISTS constraint matches if attribute absent."""
-    # Worker 1 with attribute
-    meta1 = worker_metadata()
-    meta1.attributes["preemptible"].string_value = "true"
-    register_worker(state, "w1", "addr1", meta1)
+@pytest.mark.parametrize(
+    "op,worker_value,constraint_value,should_match",
+    [
+        # GT: worker > constraint
+        (cluster_pb2.CONSTRAINT_OP_GT, 10, 5, True),
+        (cluster_pb2.CONSTRAINT_OP_GT, 5, 5, False),
+        (cluster_pb2.CONSTRAINT_OP_GT, 3, 5, False),
+        # GE: worker >= constraint
+        (cluster_pb2.CONSTRAINT_OP_GE, 10, 5, True),
+        (cluster_pb2.CONSTRAINT_OP_GE, 5, 5, True),
+        (cluster_pb2.CONSTRAINT_OP_GE, 3, 5, False),
+        # LT: worker < constraint
+        (cluster_pb2.CONSTRAINT_OP_LT, 3, 5, True),
+        (cluster_pb2.CONSTRAINT_OP_LT, 5, 5, False),
+        (cluster_pb2.CONSTRAINT_OP_LT, 10, 5, False),
+        # LE: worker <= constraint
+        (cluster_pb2.CONSTRAINT_OP_LE, 3, 5, True),
+        (cluster_pb2.CONSTRAINT_OP_LE, 5, 5, True),
+        (cluster_pb2.CONSTRAINT_OP_LE, 10, 5, False),
+    ],
+    ids=[
+        "GT-greater",
+        "GT-equal",
+        "GT-less",
+        "GE-greater",
+        "GE-equal",
+        "GE-less",
+        "LT-less",
+        "LT-equal",
+        "LT-greater",
+        "LE-less",
+        "LE-equal",
+        "LE-greater",
+    ],
+)
+def test_constraint_numeric_operators(
+    scheduler, state, job_request, worker_metadata, op, worker_value, constraint_value, should_match
+):
+    """Numeric comparison operators (GT, GE, LT, LE) compare attribute values."""
+    meta = worker_metadata()
+    meta.attributes["priority"].int_value = worker_value
+    register_worker(state, "w1", "addr", meta)
 
-    # Worker 2 without attribute
-    meta2 = worker_metadata()
-    register_worker(state, "w2", "addr2", meta2)
-
-    # Job requiring preemptible NOT_EXISTS
-    req = job_request()
-    constraint = req.constraints.add()
-    constraint.key = "preemptible"
-    constraint.op = cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
-    submit_job(state, "j1", req)
-
-    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
-
-    assert len(result.assignments) == 1
-    assert result.assignments[0][1].worker_id == WorkerId("w2")
-
-
-def test_constraint_gt_operator(scheduler, state, job_request, worker_metadata):
-    """GT constraint matches when attribute > value."""
-    # Worker 1 with tpu-worker-id = 0
-    meta1 = worker_metadata()
-    meta1.attributes["tpu-worker-id"].int_value = 0
-    register_worker(state, "w1", "addr1", meta1)
-
-    # Worker 2 with tpu-worker-id = 1
-    meta2 = worker_metadata()
-    meta2.attributes["tpu-worker-id"].int_value = 1
-    register_worker(state, "w2", "addr2", meta2)
-
-    # Worker 3 with tpu-worker-id = 2
-    meta3 = worker_metadata()
-    meta3.attributes["tpu-worker-id"].int_value = 2
-    register_worker(state, "w3", "addr3", meta3)
-
-    # Job requiring tpu-worker-id > 0
-    req = job_request()
-    constraint = req.constraints.add()
-    constraint.key = "tpu-worker-id"
-    constraint.op = cluster_pb2.CONSTRAINT_OP_GT
-    constraint.value.int_value = 0
-    submit_job(state, "j1", req)
-
-    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
-
-    # Should match w2 or w3 (both have id > 0)
-    assert len(result.assignments) == 1
-    assert result.assignments[0][1].worker_id in {WorkerId("w2"), WorkerId("w3")}
-
-
-def test_constraint_ge_operator(scheduler, state, job_request, worker_metadata):
-    """GE constraint matches when attribute >= value."""
-    meta1 = worker_metadata()
-    meta1.attributes["priority"].int_value = 5
-    register_worker(state, "w1", "addr1", meta1)
-
-    meta2 = worker_metadata()
-    meta2.attributes["priority"].int_value = 10
-    register_worker(state, "w2", "addr2", meta2)
-
-    # Job requiring priority >= 10
     req = job_request()
     constraint = req.constraints.add()
     constraint.key = "priority"
-    constraint.op = cluster_pb2.CONSTRAINT_OP_GE
-    constraint.value.int_value = 10
+    constraint.op = op
+    constraint.value.int_value = constraint_value
     submit_job(state, "j1", req)
 
     result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
 
-    assert len(result.assignments) == 1
-    assert result.assignments[0][1].worker_id == WorkerId("w2")
+    if should_match:
+        assert len(result.assignments) == 1
+        assert result.assignments[0][1].worker_id == WorkerId("w1")
+    else:
+        assert len(result.assignments) == 0
 
 
-def test_constraint_lt_operator(scheduler, state, job_request, worker_metadata):
-    """LT constraint matches when attribute < value."""
-    meta1 = worker_metadata()
-    meta1.attributes["load"].float_value = 0.3
-    register_worker(state, "w1", "addr1", meta1)
+def test_constraint_numeric_operators_with_floats(scheduler, state, job_request, worker_metadata):
+    """Numeric comparison operators work with float values."""
+    meta = worker_metadata()
+    meta.attributes["load"].float_value = 0.3
+    register_worker(state, "w1", "addr", meta)
 
-    meta2 = worker_metadata()
-    meta2.attributes["load"].float_value = 0.8
-    register_worker(state, "w2", "addr2", meta2)
-
-    # Job requiring load < 0.5
     req = job_request()
     constraint = req.constraints.add()
     constraint.key = "load"
     constraint.op = cluster_pb2.CONSTRAINT_OP_LT
     constraint.value.float_value = 0.5
-    submit_job(state, "j1", req)
-
-    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
-
-    assert len(result.assignments) == 1
-    assert result.assignments[0][1].worker_id == WorkerId("w1")
-
-
-def test_constraint_le_operator(scheduler, state, job_request, worker_metadata):
-    """LE constraint matches when attribute <= value."""
-    meta1 = worker_metadata()
-    meta1.attributes["version"].int_value = 2
-    register_worker(state, "w1", "addr1", meta1)
-
-    meta2 = worker_metadata()
-    meta2.attributes["version"].int_value = 3
-    register_worker(state, "w2", "addr2", meta2)
-
-    # Job requiring version <= 2
-    req = job_request()
-    constraint = req.constraints.add()
-    constraint.key = "version"
-    constraint.op = cluster_pb2.CONSTRAINT_OP_LE
-    constraint.value.int_value = 2
     submit_job(state, "j1", req)
 
     result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
@@ -987,7 +928,7 @@ def test_non_coscheduled_job_still_works(scheduler, state, job_request, worker_m
 
 
 def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata):
-    """Coscheduled job waits when some workers in group lack capacity."""
+    """Coscheduled job waits when some workers in group lack capacity, then schedules when capacity is added."""
     # Create 4 workers, but 2 have insufficient CPU
     for i in range(4):
         cpu = 2 if i < 2 else 1  # First 2 have 2 CPU, last 2 have only 1
@@ -1013,3 +954,21 @@ def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata
 
     # No assignments - only 2 workers have sufficient capacity
     assert len(result.assignments) == 0
+
+    # Now add a new TPU group with 4 workers, all with sufficient capacity
+    for i in range(4):
+        meta = worker_metadata(cpu=2)
+        meta.attributes["tpu-name"].string_value = "tpu-b"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"wb{i}", f"addrb{i}", meta)
+
+    # Re-run the scheduler - job should now be assigned to the new group
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+
+    # All 4 tasks should now be assigned to tpu-b
+    assert len(result.assignments) == 4
+    assigned_tpu_names = {w.attributes["tpu-name"].value for _, w in result.assignments}
+    assert assigned_tpu_names == {"tpu-b"}
