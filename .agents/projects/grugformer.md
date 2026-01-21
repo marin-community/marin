@@ -77,7 +77,7 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 
 ### CLI Entrypoint
 
-- `src/marin/grugpt/train.py` implements `def main(argv=None): ...` using `argparse` (no click). Steps:
+- Current entrypoint lives in `lib/levanter/src/levanter/grug/main.py` with `def main(argv=None): ...` using `argparse` (no click). Steps:
   1. Parse YAML/JSON or CLI flags into `RunConfig` (we can reuse Levanter’s draccus parser if convenient).
   2. Build mesh and set it globally.
   3. Initialize tokenizer + dataloader + tracker.
