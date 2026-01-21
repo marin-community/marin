@@ -26,7 +26,9 @@ from test_image_utils import (
     create_lev_jax_tensors,
     DEFAULT_GRID_PINPOINTS,
     get_real_data,
+    QWEN3_TOKENIZER,
 )
+from levanter.utils.mesh import MeshConfig
 
 from test_utils import skip_if_no_torch
 
@@ -66,9 +68,9 @@ def _load_levanter_config(model_name=MODEL_NAME, enable_flash_attention=False, g
 @pytest.mark.entry
 @skip_if_no_torch
 def test_vlm_numerical_correctness():
-    """Verify numerical correctness of Levanter VLM vs HuggingFace implementation."""
+    """Verify numerical correctness of Levanter VLM vs HuggingFace implementation (anyres mode)."""
     import torch
-    from transformers import AutoModelForVision2Seq
+    from transformers import AutoModelForVision2Seq, AutoTokenizer
     from levanter.models.llava_onevision import LlavaOnevisionModel
     from levanter.trainer import TrainerConfig
 
@@ -78,6 +80,10 @@ def test_vlm_numerical_correctness():
     model_name = MODEL_NAME
     grid_pinpoints = DEFAULT_GRID_PINPOINTS
     num_samples = 4
+
+    # Get Qwen3 image token ID
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         hf_dataset = get_real_data()
@@ -93,6 +99,7 @@ def test_vlm_numerical_correctness():
             grid_pinpoints=grid_pinpoints,
         )
 
+    # Load HF model with Qwen3 image token
     hf_model = AutoModelForVision2Seq.from_pretrained(
         model_name,
         torch_dtype=torch.float32,
@@ -100,9 +107,13 @@ def test_vlm_numerical_correctness():
     )
     hf_model.model.config.image_grid_pinpoints = grid_pinpoints
     hf_model.model.image_newline = None
+    hf_model.config.image_token_index = image_token_id
+    hf_model.config.image_token_id = image_token_id
     hf_model.eval()
 
+    # Load Levanter model with Qwen3 image token
     lev_config = _load_levanter_config(model_name, enable_flash_attention=False, gradient_checkpointing=False)
+    lev_config = lev_config.with_token_ids(image_token_id=image_token_id)
     trainer_config = TrainerConfig()
 
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
@@ -119,16 +130,26 @@ def test_vlm_numerical_correctness():
             resize_vocab_to_match_tokenizer=False,
         )
 
-        @eqx.filter_jit
-        def compute_forward(model, input_ids, pixel_values, grid_mask, unpad_indices):
-            return model(
-                input_ids, pixel_values=pixel_values, grid_mask=grid_mask, unpad_indices=unpad_indices, key=None
-            )
+        # Create a function factory that binds num_unpadded_features as a constant
+        # This is needed because num_unpadded_features is used for array slicing inside the model
+        def make_compute_forward(num_unpadded_features):
+            @eqx.filter_jit
+            def compute_forward(model, input_ids, pixel_values, grid_mask, unpad_indices):
+                return model(
+                    input_ids,
+                    pixel_values=pixel_values,
+                    grid_mask=grid_mask,
+                    unpad_indices=unpad_indices,
+                    num_unpadded_features=num_unpadded_features,
+                    key=None,
+                )
+            return compute_forward
 
         all_passed = []
 
         for sample_idx, pair in enumerate(test_pairs):
-            hf_input_ids = torch.from_numpy(pair.hf.input_ids).unsqueeze(0)
+            # HF: use pair.hf data directly (following test_train_image_anyres.py pattern)
+            hf_input_ids = torch.from_numpy(np.array(pair.hf.input_ids)).unsqueeze(0)
             hf_pixel_values = torch.from_numpy(pair.hf.pixel_values).unsqueeze(0)
             hf_image_sizes = torch.from_numpy(pair.hf.image_sizes).unsqueeze(0)
 
@@ -140,7 +161,13 @@ def test_vlm_numerical_correctness():
                 )
                 hf_logits = hf_output.logits[0].numpy()
 
+            # Levanter: use pair.lev via create_lev_jax_tensors
             jax_tensors = create_lev_jax_tensors(pair.lev, batch_size=1)
+
+            # Get num_unpadded_features as a concrete int (for JIT to treat as static)
+            num_unpadded = int(jax_tensors.num_unpadded_features) if jax_tensors.num_unpadded_features is not None else None
+            compute_forward = make_compute_forward(num_unpadded)
+
             lev_logits = compute_forward(
                 lev_model,
                 jax_tensors.input_ids,
@@ -150,11 +177,11 @@ def test_vlm_numerical_correctness():
             )
             lev_logits_np = np.array(lev_logits.array)[0]
 
-            image_token_id = hf_model.config.image_token_index
+            # Compare using pair.hf.input_ids
             result = compare_logits_by_region(
                 hf_logits=hf_logits,
                 lev_logits=lev_logits_np,
-                input_ids=pair.hf.input_ids,
+                input_ids=np.array(pair.hf.input_ids),
                 image_token_id=image_token_id,
                 tolerance=1e-3,
                 verbose=False,
@@ -192,7 +219,13 @@ def test_vlm_loss_and_gradients():
         pair = test_pairs[0]
 
     lev_config = _load_levanter_config(model_name, enable_flash_attention=True, gradient_checkpointing=True)
-    trainer_config = TrainerConfig(per_device_parallelism=1)
+
+    # Use tensor parallelism for batch_size=1 with anyres
+    mesh_config = MeshConfig(
+        axes={"model": -1},
+        shared_mapping={"mlp": "model", "heads": "replica"},
+    )
+    trainer_config = TrainerConfig(mesh=mesh_config)
 
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
         converter = lev_config.hf_checkpoint_converter(ref_checkpoint=model_name)
@@ -205,7 +238,7 @@ def test_vlm_loss_and_gradients():
             resize_vocab_to_match_tokenizer=False,
         )
 
-        jax_tensors = create_lev_jax_tensors(pair.lev, batch_size=8)
+        jax_tensors = create_lev_jax_tensors(pair.lev, batch_size=1)  # Use batch_size=1 to avoid OOM
         from levanter.data.image import ImageTextExample as ImgTextEx
 
         batch_example = ImgTextEx(
@@ -349,10 +382,12 @@ def test_vlm_loss_mask():
 @skip_if_no_torch
 def test_text_only_conversation():
     """Test BatchImageProcessor with text-only conversations."""
-    from transformers import AutoProcessor
-    from levanter.data.image import BatchImageProcessor
+    from transformers import AutoProcessor, AutoTokenizer
+    from levanter.data.image import BatchImageProcessor, CustomVLMProcessor
 
-    processor = AutoProcessor.from_pretrained(MODEL_NAME)
+    base_processor = AutoProcessor.from_pretrained(MODEL_NAME)
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    processor = CustomVLMProcessor.from_processor_and_tokenizer(base_processor, qwen3_tokenizer)
     bp = BatchImageProcessor(processor, max_length=2048, padding=True)
 
     messages = [

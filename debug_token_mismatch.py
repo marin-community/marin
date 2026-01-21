@@ -26,27 +26,50 @@ def create_test_image(width: int = 600, height: int = 400):
 def test_processor_token_count():
     """Test CustomVLMProcessor token expansion."""
     print("\n" + "="*80)
-    print("STEP 1: Testing CustomVLMProcessor")
+    print("STEP 1: Testing CustomVLMProcessor with ANYRES enabled")
     print("="*80)
 
     from levanter.data.image import CustomVLMProcessor
     from levanter.compat.hf_checkpoints import load_processor
-    from transformers import AutoTokenizer
+    from transformers import AutoTokenizer, AutoProcessor
 
-    # Load HF processor
+    # Load HF processor - use LlavaOnevision specifically
     model_name = "lmms-lab/llava-onevision-qwen2-7b-si"
     print(f"Loading HF processor from: {model_name}")
-    hf_processor = load_processor(model_name)
+
+    # Use AutoProcessor to get the proper LlavaOnevision processor
+    hf_processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
+
+    # Configure anyres mode
+    if hasattr(hf_processor, 'image_processor'):
+        # Set anyres mode
+        hf_processor.image_processor.vision_aspect_ratio = "anyres_max_9"
+        # Set grid pinpoints for anyres
+        hf_processor.image_processor.image_grid_pinpoints = [
+            [384, 384], [384, 768], [384, 1152], [384, 1536],
+            [768, 384], [768, 768], [768, 1152],
+            [1152, 384], [1152, 768], [1536, 384]
+        ]
+        print(f"Configured image_processor for anyres_max_9")
 
     print(f"HF processor type: {type(hf_processor)}")
     print(f"vision_aspect_ratio: {getattr(hf_processor, 'vision_aspect_ratio', 'N/A')}")
     print(f"num_image_tokens: {getattr(hf_processor, 'num_image_tokens', 'N/A')}")
+
+    # Check image_processor settings
+    if hasattr(hf_processor, 'image_processor'):
+        ip = hf_processor.image_processor
+        print(f"\nImage processor:")
+        print(f"  type: {type(ip)}")
+        print(f"  vision_aspect_ratio: {getattr(ip, 'vision_aspect_ratio', 'N/A')}")
+        print(f"  image_grid_pinpoints: {getattr(ip, 'image_grid_pinpoints', 'N/A')}")
 
     # Create CustomVLMProcessor with Qwen tokenizer
     print("\nLoading Qwen3 tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-1.7B", trust_remote_code=True)
 
     print("Creating CustomVLMProcessor...")
+    # model_name_or_path auto-detected from hf_processor.tokenizer.name_or_path
     custom_processor = CustomVLMProcessor.from_processor_and_tokenizer(
         hf_processor,
         tokenizer,
@@ -89,17 +112,33 @@ def test_processor_token_count():
             return_tensors="np",
         )
 
-        # Check pixel_values
+        # Check pixel_values - analyze shape carefully
         pixel_values = result.get("pixel_values")
         if pixel_values is not None:
             if isinstance(pixel_values, (list, tuple)):
-                print(f"pixel_values: list of {len(pixel_values)} arrays")
+                print(f"pixel_values: list of {len(pixel_values)} items")
                 for i, pv in enumerate(pixel_values):
-                    print(f"  [{i}] shape: {pv.shape}, num_patches={pv.shape[0]}")
+                    shape = pv.shape
+                    print(f"  [{i}] shape: {shape}")
+                    # Analyze the shape
+                    if len(shape) == 3:
+                        # Could be (C, H, W) for single patch or (num_patches, H, W) unlikely
+                        if shape[0] == 3:
+                            print(f"      -> Likely (C, H, W) format - single patch, NOT anyres!")
+                        else:
+                            print(f"      -> Ambiguous: could be {shape[0]} patches or channels")
+                    elif len(shape) == 4:
+                        # (num_patches, C, H, W)
+                        print(f"      -> (num_patches, C, H, W): {shape[0]} patches")
+                    else:
+                        print(f"      -> Unexpected shape!")
             else:
                 print(f"pixel_values shape: {pixel_values.shape}")
-                if hasattr(pixel_values, 'shape') and len(pixel_values.shape) >= 1:
-                    print(f"  num_patches: {pixel_values.shape[0]}")
+                shape = pixel_values.shape
+                if len(shape) == 3 and shape[0] == 3:
+                    print(f"  -> (C, H, W) format - single patch, NOT anyres!")
+                elif len(shape) == 4:
+                    print(f"  -> (num_patches, C, H, W): {shape[0]} patches")
 
         # Check input_ids for image tokens
         input_ids = result.get("input_ids")

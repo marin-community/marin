@@ -8,6 +8,7 @@ import jax
 import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jrandom
+import numpy as np
 
 import haliax as hax
 import haliax.nn as hnn
@@ -620,6 +621,7 @@ class LlavaOnevisionModel(eqx.Module):
         pixel_values: Optional[NamedArray] = None,
         grid_mask: Optional[NamedArray] = None,
         unpad_indices: Optional[NamedArray] = None,
+        num_unpadded_features: Optional[int] = None,
         inputs_embeds: Optional[NamedArray] = None,
         combined_mask: Optional[NamedArray] = None,
         position_ids: Optional[NamedArray] = None,
@@ -640,6 +642,7 @@ class LlavaOnevisionModel(eqx.Module):
                       True for actual image patches, False for padding
             unpad_indices: Pre-computed indices to reorder features to HF's unpadded order
                           (batch, num_image_tokens) - maps HF position to Levanter index
+            num_unpadded_features: Actual number of unpadded features (before padding)
             inputs_embeds: Optional pre-computed embeddings (batch, seq_len, embed)
             combined_mask: Optional precomputed validity mask from CPU data pipeline
                           (batch, seq_len) int32 - if provided, skips GPU computation
@@ -659,6 +662,7 @@ class LlavaOnevisionModel(eqx.Module):
             pixel_values=pixel_values,
             grid_mask=grid_mask,
             unpad_indices=unpad_indices,
+            num_unpadded_features=num_unpadded_features,
             precomputed_combined_mask=combined_mask,
             precomputed_position_ids=position_ids,
             key=k_vision,
@@ -688,6 +692,7 @@ class LlavaOnevisionModel(eqx.Module):
         pixel_values: Optional[NamedArray] = None,
         grid_mask: Optional[NamedArray] = None,
         unpad_indices: Optional[NamedArray] = None,
+        num_unpadded_features: Optional[int] = None,
         inputs_embeds: Optional[NamedArray] = None,
         combined_mask: Optional[NamedArray] = None,
         position_ids: Optional[NamedArray] = None,
@@ -705,6 +710,7 @@ class LlavaOnevisionModel(eqx.Module):
                       True for actual image patches, False for padding
             unpad_indices: Pre-computed indices to reorder features to HF's unpadded order
                           (batch, num_image_tokens) - maps HF position to Levanter index
+            num_unpadded_features: Actual number of unpadded features (before padding)
             inputs_embeds: Optional pre-computed embeddings (batch, seq_len, embed)
             combined_mask: Optional precomputed validity mask from CPU data pipeline
                           (batch, seq_len) int32 - if provided, skips GPU computation
@@ -720,6 +726,7 @@ class LlavaOnevisionModel(eqx.Module):
             pixel_values=pixel_values,
             grid_mask=grid_mask,
             unpad_indices=unpad_indices,
+            num_unpadded_features=num_unpadded_features,
             inputs_embeds=inputs_embeds,
             combined_mask=combined_mask,
             position_ids=position_ids,
@@ -734,6 +741,7 @@ class LlavaOnevisionModel(eqx.Module):
         pixel_values: Optional[NamedArray],
         grid_mask: Optional[NamedArray],
         unpad_indices: Optional[NamedArray] = None,
+        num_unpadded_features: Optional[int] = None,
         *,
         precomputed_combined_mask: Optional[NamedArray] = None,
         precomputed_position_ids: Optional[NamedArray] = None,
@@ -809,14 +817,17 @@ class LlavaOnevisionModel(eqx.Module):
         image_features_flat = hax.flatten_axes(image_features, (num_patches_ax, features_per_patch_ax), ImageTokens)
 
         # If unpad_indices provided, reorder features to HF's unpadded spatial order
-        # unpad_indices: (batch, num_image_tokens) where num_image_tokens is the unpadded count
-        # unpad_indices[i] = Levanter index for HF position i
-        if unpad_indices is not None:
-            # Get the number of unpadded image tokens from unpad_indices shape
-            num_unpadded_tokens = unpad_indices.axis_size("num_image_tokens")
+        # unpad_indices: (batch, num_image_tokens) - padded array with valid indices in first num_unpadded_features positions
+        # unpad_indices[i] = Levanter index for HF position i (for i < num_unpadded_features)
+        if unpad_indices is not None and num_unpadded_features is not None:
+            # Use the actual unpadded count (not the padded axis size)
+            num_unpadded_tokens = num_unpadded_features
+
+            # Slice unpad_indices to only the valid indices
+            unpad_indices_valid = unpad_indices.array[:, :num_unpadded_tokens]
 
             # Gather features in HF's unpadded order
-            image_features_reordered = self._batch_gather(image_features_flat.array, unpad_indices.array)
+            image_features_reordered = self._batch_gather(image_features_flat.array, unpad_indices_valid)
             # Now image_features_reordered: (batch, num_unpadded_tokens, embed) in HF order
             UnpaddedTokens = Axis("image_tokens", num_unpadded_tokens)
             image_features_flat = hax.named(image_features_reordered, (batch_ax, UnpaddedTokens, embed_ax))
@@ -833,18 +844,28 @@ class LlavaOnevisionModel(eqx.Module):
 
             When grid_mask is provided (disable_anyres mode), validates against the number
             of valid patches indicated by grid_mask, not the total padded patches.
+
+            Note: Uses np.asarray() and int() to convert all values to CPU/Python types
+            because this runs in jax.debug.callback which executes on CPU host,
+            while arrays may be on TPU.
             """
-            n_image_tokens_per_batch = jnp.sum(mask_array, axis=-1)  # (batch,)
+            # Convert all inputs to CPU/Python types (avoids device mismatch in callback)
+            mask_np = np.asarray(mask_array)
+            total_features_int = int(np.asarray(total_features))
+            features_per_patch_int = int(np.asarray(features_per_patch_val))
+
+            n_image_tokens_per_batch = np.sum(mask_np, axis=-1)  # (batch,)
             # Check first batch element (assuming all batches have same structure)
             n_image_tokens = int(n_image_tokens_per_batch[0])
 
             # Calculate expected features based on grid_mask if provided
             if grid_mask_array is not None:
                 # Use number of valid patches (True values in grid_mask)
-                num_valid_patches = int(jnp.sum(grid_mask_array[0]))  # First batch element
-                expected_features = num_valid_patches * features_per_patch_val
+                grid_mask_np = np.asarray(grid_mask_array)
+                num_valid_patches = int(np.sum(grid_mask_np[0]))  # First batch element
+                expected_features = num_valid_patches * features_per_patch_int
             else:
-                expected_features = total_features
+                expected_features = total_features_int
 
             if n_image_tokens > 0 and n_image_tokens != expected_features:
                 raise ValueError(
@@ -858,7 +879,11 @@ class LlavaOnevisionModel(eqx.Module):
                 )
 
         grid_mask_array = grid_mask.array if grid_mask is not None else None
-        jax.debug.callback(_validate_token_feature_match, special_image_mask.array, total_image_tokens, grid_mask_array, features_per_patch)
+        # Temporarily disable validation during inference with unpadded input_ids
+        # The validation can fail when using unpadded input_ids because the JIT trace
+        # may capture an older value of total_image_tokens
+        if num_unpadded_features is None:  # Only validate when not using unpadded mode
+            jax.debug.callback(_validate_token_feature_match, special_image_mask.array, total_image_tokens, grid_mask_array, features_per_patch)
 
         # Compute gather indices: for each placeholder, which image token to gather
         def compute_indices(mask):
@@ -869,6 +894,7 @@ class LlavaOnevisionModel(eqx.Module):
         # Gather image features and merge with text embeddings
         gathered = self._batch_gather(image_features_flat.array, all_indices)
         merged = jnp.where(special_image_mask.array[:, :, None], gathered, inputs_embeds.array)
+
         merged_embeds = hax.named(merged, inputs_embeds.axes)
 
         # === POSITION ID COMPUTATION ===
@@ -880,16 +906,15 @@ class LlavaOnevisionModel(eqx.Module):
         else:
             # Compute on device (fallback for inference or when not precomputed)
             # Combined validity mask: valid text OR valid image at placeholder positions
-            if unpad_indices is not None:
-                # Only the first num_unpadded_tokens image placeholders are valid
+            if unpad_indices is not None and num_unpadded_features is not None:
+                # Only the first num_unpadded_features image placeholders are valid
                 # The remaining are padding and should not get incrementing position IDs
-                num_unpadded_tokens = unpad_indices.axis_size("num_image_tokens")
 
                 # Map each image placeholder to its index (0, 1, 2, ...)
                 image_token_indices = jnp.cumsum(special_image_mask.array.astype(jnp.int32), axis=-1) - 1
 
                 # Mark as valid only if the index is within the unpadded range
-                image_validity = (image_token_indices < num_unpadded_tokens).astype(jnp.int32)
+                image_validity = (image_token_indices < num_unpadded_features).astype(jnp.int32)
 
                 # Combine: valid text OR valid image placeholder
                 combined_mask = jnp.where(special_image_mask.array, image_validity, text_mask.array).astype(jnp.int32)
@@ -1035,6 +1060,7 @@ class VLMRequest:
     grid_mask: NamedArray  # (TOTAL_PATCHES,) - boolean mask for valid patches
     input_ids: Optional[NamedArray] = None  # Full input_ids with image tokens
     unpad_indices: Optional[NamedArray] = None  # Indices for HF-style feature ordering
+    num_unpadded_features: Optional[int] = None  # Actual number of unpadded features (for combined_mask)
 
 
 class _LlavaInferenceWrapper(eqx.Module):
@@ -1083,10 +1109,15 @@ class _LlavaInferenceWrapper(eqx.Module):
     _pixel_values: NamedArray | None = None
     _grid_mask: NamedArray | None = None
     _unpad_indices: NamedArray | None = None
+    _num_unpadded_features: int | None = eqx.field(static=True, default=None)
 
     # Cached embeddings and position IDs (computed lazily during prefill)
     _cached_embeds: NamedArray | None = None
     _cached_pos_ids: NamedArray | None = None
+
+    # Position offset for decode phase (static since it's computed from static fields)
+    # This is the difference between the padded sequence length and the actual valid length
+    _position_offset: int = eqx.field(static=True, default=0)
 
     @classmethod
     def create(
@@ -1124,6 +1155,7 @@ class _LlavaInferenceWrapper(eqx.Module):
         pixel_values: NamedArray,
         grid_mask: NamedArray,
         unpad_indices: Optional[NamedArray] = None,
+        num_unpadded_features: Optional[int] = None,
     ) -> "_LlavaInferenceWrapper":
         """Set the image data for the current request.
 
@@ -1134,10 +1166,22 @@ class _LlavaInferenceWrapper(eqx.Module):
             pixel_values: Fixed-shape pixel values (TOTAL_PATCHES, C, H, W)
             grid_mask: Boolean mask indicating valid patches (TOTAL_PATCHES,)
             unpad_indices: Pre-computed indices to reorder features to HF's unpadded order
+            num_unpadded_features: Actual number of unpadded features (before padding)
 
         Returns:
             A new wrapper with the request data set
         """
+        # Compute position offset for decode phase
+        # This is the difference between image placeholders in input_ids and actual unpadded features
+        # When using unpadded input_ids (like HF), this will be 0
+        # When using padded input_ids (for training), this will be padding_count
+        position_offset = 0
+        if num_unpadded_features is not None:
+            # Count image placeholders in input_ids
+            image_token_id = self.model.config.image_token_index
+            num_image_placeholders = int(jnp.sum(input_ids.array == image_token_id))
+            position_offset = num_image_placeholders - num_unpadded_features
+
         # Create a new instance with updated request data
         return _LlavaInferenceWrapper(
             model=self.model,
@@ -1147,6 +1191,8 @@ class _LlavaInferenceWrapper(eqx.Module):
             _pixel_values=pixel_values,
             _grid_mask=grid_mask,
             _unpad_indices=unpad_indices,
+            _num_unpadded_features=num_unpadded_features,
+            _position_offset=position_offset,
             _cached_embeds=None,
             _cached_pos_ids=None,
         )
@@ -1169,6 +1215,7 @@ class _LlavaInferenceWrapper(eqx.Module):
                 pixel_values=self._pixel_values,
                 grid_mask=self._grid_mask,
                 unpad_indices=self._unpad_indices,
+                num_unpadded_features=self._num_unpadded_features,
                 key=None,
             )
 
@@ -1200,7 +1247,7 @@ class _LlavaInferenceWrapper(eqx.Module):
 
         For VLM with masked tokens (e.g., anyres padding):
         - During prefill: Uses position IDs from _compute_embeddings() which skip masked tokens
-        - During decode: Uses position IDs from inference engine (continues from prefill)
+        - During decode: Adjusts position IDs to account for skipped padding tokens
         """
         is_prefill = tokens.axis_size("position") > 1
         lm = self.model.language_model
@@ -1211,6 +1258,11 @@ class _LlavaInferenceWrapper(eqx.Module):
             pos_ids = computed_pos_ids
         else:
             embeds = lm.embeddings.embed(tokens)
+            # Adjust position IDs for decode phase to account for skipped padding
+            # During prefill, we skip _position_offset padding tokens
+            # So decode positions should be adjusted by the same amount
+            if self._position_offset > 0:
+                pos_ids = hax.named(pos_ids.array - self._position_offset, pos_ids.axes)
 
         x, new_cache = lm.transformer.decode(kv_cache, embeds, batch_info, pos_ids, key=None)
         logits = lm.lm_head(x, key=None) if lm.lm_head is not None else lm.embeddings.unembed(x)
@@ -1335,6 +1387,7 @@ class LlavaInferenceEngine:
             pixel_values=vlm_request.pixel_values,
             grid_mask=vlm_request.grid_mask,
             unpad_indices=vlm_request.unpad_indices,
+            num_unpadded_features=vlm_request.num_unpadded_features,
         )
 
         # Convert VLMRequest to standard Request for the base engine

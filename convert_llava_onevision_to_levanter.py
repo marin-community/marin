@@ -80,9 +80,10 @@ except ImportError:
 class AsyncShardWriter:
     """Background thread pool for writing shards concurrently."""
 
-    def __init__(self, output_path: str, fs=None, max_workers: int = 4):
+    def __init__(self, output_path: str, fs=None, max_workers: int = 4, temp_dir: str = None):
         self.output_path = output_path
         self.fs = fs
+        self.temp_dir = temp_dir  # Custom temp directory for GCS uploads
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.futures = []
         self.lock = threading.Lock()
@@ -106,10 +107,11 @@ class AsyncShardWriter:
         dataset = Dataset.from_list(rows)
 
         if self.fs is not None:
-            # Write to GCS
+            # Write to GCS via temp file
             full_path = f"{self.output_path.rstrip('/')}/{shard_name}"
             import tempfile
-            with tempfile.NamedTemporaryFile(suffix='.parquet', delete=False) as tmp:
+            # Use custom temp_dir if specified (e.g., /dev/shm for more space)
+            with tempfile.NamedTemporaryFile(suffix='.parquet', delete=False, dir=self.temp_dir) as tmp:
                 tmp_path = tmp.name
 
             try:
@@ -798,8 +800,12 @@ def process_dataset_download_first(
     # Create download directory
     Path(download_dir).mkdir(parents=True, exist_ok=True)
 
+    # Create temp directory for GCS uploads (use /run for more space than /tmp)
+    temp_upload_dir = "/run/upload_temp"
+    Path(temp_upload_dir).mkdir(parents=True, exist_ok=True)
+
     # Initialize async shard writer
-    shard_writer = AsyncShardWriter(output_path, fs, max_workers=num_workers)
+    shard_writer = AsyncShardWriter(output_path, fs, max_workers=num_workers, temp_dir=temp_upload_dir)
 
     # Processing state
     start_time = time.time()
@@ -827,6 +833,14 @@ def process_dataset_download_first(
 
     try:
         for batch_idx in range(start_batch_idx, num_batches):
+            # Check if we should stop BEFORE downloading
+            if max_rows is not None:
+                remaining_rows = max_rows - total_processed
+                if remaining_rows < rows_per_shard:
+                    print(f"\nStopping: remaining rows ({remaining_rows}) < rows_per_shard ({rows_per_shard})")
+                    print(f"Total processed: {total_processed:,}")
+                    break
+
             batch_start = batch_idx * batch_size
             batch_end = min(batch_start + batch_size, len(all_files))
             batch_files = all_files[batch_start:batch_end]
@@ -897,13 +911,20 @@ def process_dataset_download_first(
                     num_shards_in_batch = full_batch_shards
 
             if not reached_max_rows:
+                # Calculate sample ratio - if we're limiting shards, we need to sample fewer rows
+                sample_ratio = num_shards_in_batch / full_batch_shards
+                expected_rows = int(total_available_rows * sample_ratio)
                 print(f"  Will produce {num_shards_in_batch} shards from this batch")
+                print(f"  Sample ratio: {sample_ratio:.4f} (sampling ~{expected_rows:,} of {total_available_rows:,} rows)")
 
-                # Initialize shard buckets - each will hold data for one output shard
-                shard_buckets = [[] for _ in range(num_shards_in_batch)]
+                # ========== PASS 2: Stream processing - load, convert, and write shards incrementally ==========
+                # Use a single buffer instead of pre-allocating all shard buckets
+                # This keeps memory usage bounded to ~rows_per_shard items
+                print(f"Pass 2: Loading, sampling, and streaming to shards...")
 
-                # ========== PASS 2: Load each file, shuffle, and distribute to shard buckets ==========
-                print(f"Pass 2: Loading, shuffling, and distributing data to {num_shards_in_batch} shards...")
+                write_buffer = []
+                batch_rows_processed = 0
+                shards_written_in_batch = 0
 
                 for file_idx, local_path in enumerate(local_paths):
                     row_count = file_row_counts.get(local_path, 0)
@@ -913,57 +934,77 @@ def process_dataset_download_first(
                     try:
                         df = pd.read_parquet(local_path)
 
-                        # LAYER 2: Shuffle within each file
-                        df = df.sample(frac=1, random_state=seed + file_idx).reset_index(drop=True)
+                        # Sample only the rows we need (based on sample_ratio)
+                        rows_to_sample = max(1, int(row_count * sample_ratio))
+                        if rows_to_sample < len(df):
+                            df = df.sample(n=rows_to_sample, random_state=seed + file_idx).reset_index(drop=True)
+                        else:
+                            # LAYER 2: Shuffle within file
+                            df = df.sample(frac=1, random_state=seed + file_idx).reset_index(drop=True)
 
-                        # Distribute rows to shards proportionally
-                        # Each shard s gets rows [s * row_count / num_shards, (s+1) * row_count / num_shards)
-                        for shard_s in range(num_shards_in_batch):
-                            start_row = int(shard_s * row_count / num_shards_in_batch)
-                            end_row = int((shard_s + 1) * row_count / num_shards_in_batch)
+                        # Process each row and add to buffer
+                        for idx in range(len(df)):
+                            row = df.iloc[idx]
+                            item = row.to_dict()
+                            item_id = item.get('id', '')
 
-                            for idx in range(start_row, end_row):
-                                row = df.iloc[idx]
-                                item = row.to_dict()
-                                item_id = item.get('id', '')
+                            # Track source
+                            source = extract_source(item_id)
+                            source_counts[source] += 1
 
-                                # Track source
-                                source = extract_source(item_id)
-                                source_counts[source] += 1
+                            # Convert to Levanter format
+                            try:
+                                converted = convert_to_levanter(item)
+                                write_buffer.append(converted)
+                                batch_rows_processed += 1
+                            except Exception as e:
+                                print(f"Error converting item {item_id}: {e}", file=sys.stderr)
 
-                                # Convert to Levanter format
-                                try:
-                                    converted = convert_to_levanter(item)
-                                    shard_buckets[shard_s].append(converted)
-                                except Exception as e:
-                                    print(f"Error converting item {item_id}: {e}", file=sys.stderr)
+                            # When buffer is full, write a shard immediately
+                            if len(write_buffer) >= rows_per_shard:
+                                # LAYER 3: Shuffle within shard
+                                random.shuffle(write_buffer)
+                                shard_writer.submit_shard(write_buffer, shard_idx)
+                                total_processed += len(write_buffer)
+                                shard_idx += 1
+                                shards_written_in_batch += 1
+                                write_buffer = []  # Clear buffer
+
+                                # Check for completed writes periodically
+                                completed = shard_writer.wait_for_completed()
+                                for completed_idx, written in completed:
+                                    total_written += written
+
+                                # Stop if we've written enough shards for this batch
+                                if shards_written_in_batch >= num_shards_in_batch:
+                                    break
 
                         # Free memory after processing this file
                         del df
+
+                        # Early exit if we've written enough shards
+                        if shards_written_in_batch >= num_shards_in_batch:
+                            break
 
                     except Exception as e:
                         print(f"Error reading {local_path}: {e}", file=sys.stderr)
                         continue
 
-                # ========== Write all shards from this batch ==========
-                batch_rows_processed = sum(len(bucket) for bucket in shard_buckets)
-                print(f"Loaded {batch_rows_processed} items, writing {len(shard_buckets)} shards...")
+                # Write any remaining data as a final partial shard
+                if write_buffer and shards_written_in_batch < num_shards_in_batch:
+                    random.shuffle(write_buffer)
+                    shard_writer.submit_shard(write_buffer, shard_idx)
+                    total_processed += len(write_buffer)
+                    shard_idx += 1
+                    shards_written_in_batch += 1
+                    write_buffer = []
 
-                for shard_s, bucket in enumerate(shard_buckets):
-                    if bucket:
-                        # LAYER 3: Final shuffle within each shard
-                        random.shuffle(bucket)
-                        shard_writer.submit_shard(bucket, shard_idx)
-                        shard_idx += 1
-                        total_processed += len(bucket)
-
-                # Check completed shards
+                # Wait for any pending writes
                 completed = shard_writer.wait_for_completed()
                 for completed_idx, written in completed:
                     total_written += written
 
-                # Free shard buckets memory
-                del shard_buckets
+                print(f"Processed {batch_rows_processed} items, wrote {shards_written_in_batch} shards")
 
             # Clean up downloaded files to free space
             print(f"Cleaning up batch {batch_idx + 1} files...")

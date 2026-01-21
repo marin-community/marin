@@ -460,11 +460,20 @@ class CustomVLMProcessor(ProcessorMixin):
             pixel_values = image_inputs.get("pixel_values")
             if pixel_values is not None:
                 if isinstance(pixel_values, (list, tuple)):
-                    # Multiple images: each has shape (num_patches, C, H, W)
-                    actual_patch_counts = [pv.shape[0] for pv in pixel_values]
-                elif hasattr(pixel_values, 'shape') and len(pixel_values.shape) >= 1:
-                    # Single image or batch: pixel_values has shape (num_patches, C, H, W)
-                    actual_patch_counts = [pixel_values.shape[0]]
+                    # Multiple images: each can be 4D (num_patches, C, H, W) or 3D (C, H, W)
+                    actual_patch_counts = []
+                    for i, pv in enumerate(pixel_values):
+                        if len(pv.shape) == 4:
+                            actual_patch_counts.append(pv.shape[0])  # num_patches
+                        else:
+                            actual_patch_counts.append(1)  # single patch (3D: C, H, W)
+                elif hasattr(pixel_values, 'shape'):
+                    if len(pixel_values.shape) == 4:
+                        # 4D: (num_patches, C, H, W)
+                        actual_patch_counts = [pixel_values.shape[0]]
+                    else:
+                        # 3D: (C, H, W) - single patch
+                        actual_patch_counts = [1]
 
         # 2. Expand image tokens in text
         if text is not None and images is not None:
@@ -552,16 +561,11 @@ class CustomVLMProcessor(ProcessorMixin):
                 is_single_image = num_images_in_sample == 1
                 base_tokens = self.num_image_tokens or 576
 
-                # DEBUG: Print values for diagnosis
-                logger.info(f"[_expand_image_tokens] image_idx={image_idx}, actual_patch_counts={actual_patch_counts}, "
-                           f"base_tokens={base_tokens}, self.num_image_tokens={self.num_image_tokens}, "
-                           f"use_full_padded_tokens={self.use_full_padded_tokens}")
-
                 # For Levanter (use_full_padded_tokens=True): use actual_patch_counts * base_tokens
                 # For HF (use_full_padded_tokens=False): use _get_number_of_features for unpadded count
                 if self.use_full_padded_tokens:
                     # Levanter mode: full padded tokens (unpadding handled via grid_mask/unpad_indices)
-                    if actual_patch_counts is not None and image_idx < len(actual_patch_counts):
+                    if is_anyres_enabled and actual_patch_counts is not None and image_idx < len(actual_patch_counts):
                         # actual_patch_counts[i] = number of patches (tiles) from HF processor
                         tokens_per_image = actual_patch_counts[image_idx] * base_tokens
                     elif is_anyres_enabled and is_single_image and image_sizes is not None:
@@ -581,9 +585,6 @@ class CustomVLMProcessor(ProcessorMixin):
                     # Multi-image or disable_anyres: use base tokens
                     # Levanter doesn't use newline separator
                     tokens_per_image = base_tokens
-
-                # DEBUG: Print final tokens_per_image
-                logger.info(f"[_expand_image_tokens] Final tokens_per_image={tokens_per_image}")
 
                 # Replace <image> with <|vision_start|><|image_pad|>*N<|vision_end|>
                 result = result.replace(
@@ -949,6 +950,8 @@ class ImageTextDict(TypedDict, total=False):
     grid_mask: Optional[np.ndarray]  # (TOTAL_PATCHES,) boolean - True for valid patches
     # Unpad indices for anyres processing
     unpad_indices: Optional[np.ndarray]  # (num_image_tokens,) - indices for unpadding image features
+    # Actual number of unpadded features (before padding unpad_indices)
+    num_unpadded_features: Optional[int]  # scalar - used for combined_mask computation
     # Precomputed validity mask for attention (1 for valid text/image, 0 for padding)
     combined_mask: Optional[np.ndarray]  # (seq_len,) int32 - validity mask
     # Precomputed position IDs (cumsum of combined_mask - 1, clamped to 0)
@@ -963,6 +966,7 @@ ImageTextDict_exemplar: ImageTextDict = {
     "loss_mask": np.zeros((1,), dtype=np.float32),
     "grid_mask": None,  # Always included, may be None
     "unpad_indices": None,  # Always included, may be None
+    "num_unpadded_features": None,  # Always included, may be None
     "combined_mask": None,  # Always included, may be None
     "position_ids": None,  # Always included, may be None
 }
@@ -1192,8 +1196,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         # different sizes (e.g., 576 = 24x24 for SigLIP with patch_size=16)
         if vision_feature_height is not None:
             num_image_tokens = vision_feature_height * vision_feature_height
-            if hasattr(processor, 'num_image_tokens'):
-                processor.num_image_tokens = num_image_tokens
+            # Always set num_image_tokens - don't check hasattr, just set it
+            processor.num_image_tokens = num_image_tokens
 
         # Pre-compute grid_pinpoints arrays for vectorized _compute_grid_shape
         # Note: empty list [] is treated as no grid pinpoints (disable_anyres case)
@@ -1209,7 +1213,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         # Create a custom processor with the new tokenizer if specified
         if tokenizer is not None:
             self.processor = CustomVLMProcessor.from_processor_and_tokenizer(
-                processor, tokenizer, use_full_padded_tokens=True
+                processor, tokenizer,
+                use_full_padded_tokens=True,
             )
 
         # Cache padding mode for __call__
@@ -1499,6 +1504,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         unpad_indices: Optional[np.ndarray],
         features_per_patch: int,
         total_patches: int,
+        num_unpadded_features: Optional[int] = None,
     ) -> np.ndarray:
         """Compute combined validity mask on CPU.
 
@@ -1511,6 +1517,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             unpad_indices: Unpad indices (num_image_tokens,) or None
             features_per_patch: Number of features per patch (e.g., 729 for 27x27)
             total_patches: Total number of patches (TOTAL_PATCHES)
+            num_unpadded_features: Actual number of unpadded features (before padding).
+                                   Required when unpad_indices is provided.
 
         Returns:
             combined_mask: Validity mask (seq_len,) int32
@@ -1525,9 +1533,12 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         # Create text_mask: valid text tokens (not padding)
         text_mask = (input_ids != pad_token_id).astype(np.int32)
 
-        if unpad_indices is not None:
-            # When unpad_indices is provided, all image tokens are valid
-            combined_mask = np.where(special_image_mask, 1, text_mask).astype(np.int32)
+        if unpad_indices is not None and num_unpadded_features is not None:
+            # Only the first num_unpadded_features image placeholders are valid
+            # The remaining are padding and should not get incrementing position IDs
+            image_token_indices = np.cumsum(special_image_mask.astype(np.int32)) - 1
+            image_validity = (image_token_indices < num_unpadded_features).astype(np.int32)
+            combined_mask = np.where(special_image_mask, image_validity, text_mask).astype(np.int32)
         elif grid_mask is not None:
             # Need to check grid_mask validity for each placeholder position
             # Use ACTUAL valid patches from grid_mask (more robust than total_patches parameter)
@@ -1647,6 +1658,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             # Get pixel_values for this example and create grid_mask
             grid_mask = None
             unpad_indices = None
+            num_unpadded_features = None  # Actual number of unpadded features (before padding)
             if num_images > 0 and has_pixel_values:
                 assert pv is not None  # Guarded by has_pixel_values
                 if num_images == 1 and not self.disable_anyres:
@@ -1671,7 +1683,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 else:
                     # Multiple images: only use base patch (first patch) from each image
                     # This matches HF behavior where multi-image doesn't use anyres
-                    base_patches = [pv[j][0] for j in range(pv_start, pv_end)]
+                    # pv[pv_start + img_idx] has shape (patches, C, H, W), take [0] for base patch
+                    base_patches = [pv[pv_start + img_idx][0] for img_idx in range(num_images)]
                     pixel_values = np.stack(base_patches, axis=0)  # (num_images, C, H, W)
                     if self.max_num_patches is not None:
                         pixel_values, grid_mask = self._pad_pixel_values(
@@ -1713,6 +1726,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                         scale_width=gw,
                         features_per_patch=features_per_patch,
                     )
+                    # Store actual number of unpadded features before padding
+                    num_unpadded_features = np.int32(len(unpad_indices_raw))
                     # Pad unpad_indices to fixed size for consistent array shapes
                     if self.max_num_patches is not None:
                         max_features = (self.max_num_patches + 1) * features_per_patch
@@ -1743,6 +1758,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 unpad_indices=unpad_indices,
                 features_per_patch=features_per_patch,
                 total_patches=total_patches,
+                num_unpadded_features=num_unpadded_features,
             )
             position_ids = self._compute_position_ids(combined_mask)
 
@@ -1755,6 +1771,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 "loss_mask": self._create_loss_mask(input_ids),
                 "grid_mask": grid_mask,
                 "unpad_indices": unpad_indices,
+                "num_unpadded_features": num_unpadded_features,
                 "combined_mask": combined_mask,
                 "position_ids": position_ids,
             }
@@ -1780,11 +1797,12 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             # Fixed-size pixel_values for cache schema
             exemplar["pixel_values"] = np.zeros((total_patches, 3, self.patch_size, self.patch_size), dtype=np.float32)
             exemplar["grid_mask"] = np.zeros((total_patches,), dtype=np.bool_)
-            # Include sized unpad_indices when vision_feature_height is also configured
+            # Include sized unpad_indices and num_unpadded_features when vision_feature_height is also configured
             if self.vision_feature_height is not None:
                 features_per_patch = self.vision_feature_height * self.vision_feature_height
                 max_features = (self.max_num_patches + 1) * features_per_patch
                 exemplar["unpad_indices"] = np.zeros((max_features,), dtype=np.int32)
+                exemplar["num_unpadded_features"] = np.int32(0)  # Scalar for actual unpadded feature count
         # Add combined_mask and position_ids with max_length shape
         exemplar["combined_mask"] = np.zeros((self.max_length,), dtype=np.int32)
         exemplar["position_ids"] = np.zeros((self.max_length,), dtype=np.int32)
@@ -2028,9 +2046,15 @@ class ImageTaskConfig(abc.ABC):
     Levanter mode is required for training because the model uses grid_mask for JIT-compatible
     fixed-shape tensors. HF mode is for inference with HF's spatial unpadding."""
 
+    vision_feature_height: Optional[int] = None
+    """Vision encoder output tokens per spatial dimension.
+    E.g., 24 for SigLIP2 (384/16=24), 27 for LLaVA original (378/14=27).
+    If not specified, uses the HF processor's default (usually 27×27=729)."""
+
     @cached_property
     def the_processor(self) -> ProcessorMixin:
         proc = load_processor(self.processor)
+
         # Override image_grid_pinpoints if specified (e.g., for disable_anyres)
         if self.image_grid_pinpoints is not None and hasattr(proc, "image_processor"):
             proc.image_processor.image_grid_pinpoints = self.image_grid_pinpoints
@@ -2039,13 +2063,53 @@ class ImageTaskConfig(abc.ABC):
         if self.vision_aspect_ratio is not None and hasattr(proc, "image_processor"):
             proc.image_processor.vision_aspect_ratio = self.vision_aspect_ratio
 
+        # Replace SiglipImageProcessor with LlavaOnevisionImageProcessor for anyres support
+        # SiglipImageProcessor doesn't support multi-patch output needed for anyres
+        if hasattr(proc, "image_processor"):
+            image_processor_class = type(proc.image_processor).__name__
+            if image_processor_class == "SiglipImageProcessor":
+                try:
+                    from transformers.models.llava_onevision.image_processing_llava_onevision import (
+                        LlavaOnevisionImageProcessor,
+                    )
+
+                    logger.info(
+                        f"Replacing {image_processor_class} with LlavaOnevisionImageProcessor "
+                        f"for anyres support (loading from {self.processor})"
+                    )
+                    new_image_processor = LlavaOnevisionImageProcessor.from_pretrained(
+                        self.processor, trust_remote_code=True
+                    )
+                    # Copy over any overridden attributes
+                    if self.vision_aspect_ratio is not None:
+                        new_image_processor.vision_aspect_ratio = self.vision_aspect_ratio
+                    if self.image_grid_pinpoints is not None:
+                        new_image_processor.image_grid_pinpoints = self.image_grid_pinpoints
+                    proc.image_processor = new_image_processor
+                    logger.info(
+                        f"LlavaOnevisionImageProcessor loaded: "
+                        f"vision_aspect_ratio={getattr(new_image_processor, 'vision_aspect_ratio', 'N/A')}, "
+                        f"image_grid_pinpoints count={len(getattr(new_image_processor, 'image_grid_pinpoints', []))}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to load LlavaOnevisionImageProcessor: {e}")
+
+        # Override num_image_tokens based on vision_feature_height
+        # This is critical for correct token expansion when vision encoder uses different patch size
+        if self.vision_feature_height is not None:
+            num_image_tokens = self.vision_feature_height * self.vision_feature_height
+            proc.num_image_tokens = num_image_tokens
+            logger.info(f"Set processor.num_image_tokens={num_image_tokens} "
+                       f"(vision_feature_height={self.vision_feature_height})")
+
         # If custom tokenizer is specified, wrap with CustomVLMProcessor
         if self.tokenizer is not None:
             from transformers import AutoTokenizer
 
             custom_tokenizer = AutoTokenizer.from_pretrained(self.tokenizer, trust_remote_code=True)
             proc = CustomVLMProcessor.from_processor_and_tokenizer(
-                proc, custom_tokenizer, use_full_padded_tokens=self.use_full_padded_tokens
+                proc, custom_tokenizer,
+                use_full_padded_tokens=self.use_full_padded_tokens,
             )
 
         return proc
@@ -3210,9 +3274,11 @@ class LlavaOnevisionProcessor(ProcessorMixin):
         video_token="<video>",
         vision_aspect_ratio="anyres_max_9",
         max_image_tiles: Optional[int] = None,
+        use_full_padded_tokens: bool = False,
         **kwargs,
     ):
         self.num_image_tokens = num_image_tokens
+        self.use_full_padded_tokens = use_full_padded_tokens
         self.vision_feature_select_strategy = vision_feature_select_strategy
         self.image_token = tokenizer.image_token if hasattr(tokenizer, "image_token") else image_token
         self.video_token = tokenizer.video_token if hasattr(tokenizer, "video_token") else video_token

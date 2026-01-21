@@ -673,6 +673,8 @@ def test_llava_onevision_real_image_text():
     num_valid_image_tokens = int(valid_image_mask.sum())
 
     # Trim unpad_indices to actual count (remove padding zeros)
+    # Save the unpadded features count for the model
+    num_unpadded_features = num_valid_image_tokens
     test_pair.lev.unpad_indices = test_pair.lev.unpad_indices[:num_valid_image_tokens]
 
     # Create JAX tensors with batch_size=1
@@ -683,17 +685,18 @@ def test_llava_onevision_real_image_text():
     unpad_indices = jax_tensors.unpad_indices
 
     @hax.named_jit
-    def compute_lev(model, input_ids, pixel_values, grid_mask, unpad_indices):
+    def compute_lev(model, input_ids, pixel_values, grid_mask, unpad_indices, num_unpadded_features):
         return model(
             input_ids,
             pixel_values=pixel_values,
             grid_mask=grid_mask,
             unpad_indices=unpad_indices,
+            num_unpadded_features=num_unpadded_features,
             key=None,
         )
 
     # Forward pass
-    lev_logits = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
+    lev_logits = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices, num_unpadded_features)
     lev_logits = lev_logits.array
 
     # Compare logits
@@ -986,16 +989,17 @@ def test_llava_onevision_real_image_text_0_5b_batch():
         unpad_indices = hax.named(jnp.array(unpad_indices_np, dtype=jnp.int32), (Batch, NumImageTokens))
 
         @hax.named_jit
-        def compute_lev(model, input_ids, pixel_values, grid_mask, unpad_indices):
+        def compute_lev(model, input_ids, pixel_values, grid_mask, unpad_indices, num_unpadded_features):
             return model(
                 input_ids,
                 pixel_values=pixel_values,
                 grid_mask=grid_mask,
                 unpad_indices=unpad_indices,
+                num_unpadded_features=num_unpadded_features,
                 key=None,
             )
 
-        lev_logits = compute_lev(lev_model, input_ids_lev, pixel_values_lev, grid_mask, unpad_indices)
+        lev_logits = compute_lev(lev_model, input_ids_lev, pixel_values_lev, grid_mask, unpad_indices, int(num_image_tokens))
         lev_logits.array.block_until_ready()
 
         lev_logits_np = np.array(lev_logits.array[0])
@@ -1343,8 +1347,16 @@ def test_llava_onevision_generation_with_inference_engine():
             mesh=mesh,
         )
 
-        # Use Levanter's input_ids as prompt_tokens (matches input_ids used in _compute_embeddings)
-        prompt_tokens = list(test_pair.lev.input_ids[:actual_content_len])
+        # Use HF's unpadded input_ids directly for inference (matches HF's generation)
+        # This avoids padding issues that cause KV cache pollution
+        hf_prompt_tokens = list(test_pair.hf.input_ids)
+        hf_prompt_len = len(hf_prompt_tokens)
+
+        # Create HF-style input_ids as NamedArray (unpadded)
+        batch_ax = hax.Axis("batch", 1)
+        position_ax = hax.Axis("position", hf_prompt_len)
+        hf_input_ids_array = jnp.array(hf_prompt_tokens, dtype=jnp.int32).reshape(1, -1)
+        hf_input_ids = hax.named(hf_input_ids_array, (batch_ax, position_ax))
 
         eos_token_id = processor.tokenizer.eos_token_id
         if eos_token_id is not None:
@@ -1359,20 +1371,27 @@ def test_llava_onevision_generation_with_inference_engine():
             stop_tokens=stop_tokens,
         )
 
+
         vlm_request = VLMRequest(
-            prompt_tokens=prompt_tokens,
+            prompt_tokens=hf_prompt_tokens,
             request_id=0,
             decode_params=decode_params,
             n_generations=1,
             pixel_values=jax_tensors.pixel_values,
-            input_ids=jax_tensors.input_ids,
+            input_ids=hf_input_ids,
             grid_mask=jax_tensors.grid_mask,
             unpad_indices=jax_tensors.unpad_indices,
+            num_unpadded_features=jax_tensors.num_unpadded_features,
         )
 
         result = engine.generate([vlm_request])
 
     lev_generated_ids = np.array(result.tokens[0])
+
+    # Debug: print generation results
+    print(f"\n=== GENERATION RESULTS ===")
+    print(f"HF generated {len(hf_generated_ids)} tokens: {hf_generated_ids[:10]}...")
+    print(f"LEV generated {len(lev_generated_ids)} tokens: {lev_generated_ids}")
 
     # Compare results
     min_len = min(len(hf_generated_ids), len(lev_generated_ids))
@@ -1530,6 +1549,7 @@ def test_llava_onevision_generation_with_inference_engine_multi():
             input_ids=jax_tensors.input_ids,
             grid_mask=jax_tensors.grid_mask,
             unpad_indices=jax_tensors.unpad_indices,
+            num_unpadded_features=jax_tensors.num_unpadded_features,
         )
 
         result = engine.generate([vlm_request])

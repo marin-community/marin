@@ -198,6 +198,7 @@ class LevProcessedData:
     grid_mask: np.ndarray  # (TOTAL_PATCHES,) - True for valid patches
     unpad_indices: Optional[np.ndarray]  # (num_image_tokens,) - for HF compatibility
     loss_mask: np.ndarray  # (seq_len,) float32 - 1.0 for compute loss, 0.0 for ignore
+    num_unpadded_features: Optional[int] = None  # Actual number of unpadded features (before padding)
     combined_mask: Optional[np.ndarray] = None  # (seq_len,) int32 - precomputed validity mask
     position_ids: Optional[np.ndarray] = None  # (seq_len,) int32 - precomputed position IDs
 
@@ -312,7 +313,7 @@ def _create_processors(
                 base_processor, custom_tokenizer, use_full_padded_tokens=False
             )
             lev_processor = CustomVLMProcessor.from_processor_and_tokenizer(
-                base_processor, custom_tokenizer, use_full_padded_tokens=True
+                base_processor, custom_tokenizer, use_full_padded_tokens=False
             )
         else:
             # Use original processor (same tokenizer as model)
@@ -474,6 +475,7 @@ def prepare_test_data(
             grid_mask=lev_result["grid_mask"],
             unpad_indices=lev_result.get("unpad_indices"),
             loss_mask=lev_result["loss_mask"],
+            num_unpadded_features=lev_result.get("num_unpadded_features"),
             combined_mask=lev_result.get("combined_mask"),
             position_ids=lev_result.get("position_ids"),
         )
@@ -606,6 +608,7 @@ def prepare_test_data_single(
         grid_mask=lev_result["grid_mask"],
         unpad_indices=lev_result.get("unpad_indices"),
         loss_mask=lev_result["loss_mask"],
+        num_unpadded_features=lev_result.get("num_unpadded_features"),
         combined_mask=lev_result.get("combined_mask"),
         position_ids=lev_result.get("position_ids"),
     )
@@ -903,6 +906,7 @@ class LevJaxTensors:
     pixel_values: Any  # NamedArray (Batch, NumPatches, Channels, Height, Width)
     grid_mask: Any  # NamedArray (Batch, GridMask)
     unpad_indices: Optional[Any] = None  # NamedArray (Batch, NumImageTokens) - None for multi-image
+    num_unpadded_features: Optional[int] = None  # Actual number of unpadded features (for combined_mask)
     loss_mask: Any = None  # NamedArray (Batch, Position) - mask for loss computation
     combined_mask: Optional[Any] = None  # NamedArray (Batch, Position) int32 - precomputed validity mask
     position_ids: Optional[Any] = None  # NamedArray (Batch, Position) int32 - precomputed position IDs
@@ -1018,6 +1022,7 @@ def create_lev_jax_tensors(
         pixel_values=pixel_values,
         grid_mask=grid_mask,
         unpad_indices=unpad_indices,
+        num_unpadded_features=lev_data.num_unpadded_features,
         loss_mask=loss_mask,
         combined_mask=combined_mask,
         position_ids=position_ids,

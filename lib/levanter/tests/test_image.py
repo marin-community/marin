@@ -11,7 +11,7 @@ from levanter.store.cache import SerialCacheWriter
 import jax
 import jax.numpy as jnp
 
-from test_image_utils import get_real_data, DEFAULT_GRID_PINPOINTS
+from test_image_utils import get_real_data, DEFAULT_GRID_PINPOINTS, QWEN3_TOKENIZER
 import numpy as np
 import haliax as hax
 from jax.sharding import Mesh
@@ -133,11 +133,11 @@ def test_llava_with_image_dataloader(processor, dataset):
 
     import dataclasses
     import torch
-    from levanter.data.image import ImageDataLoader, ImageTextExample, create_custom_processor
+    from levanter.data.image import ImageDataLoader, ImageTextExample, create_custom_processor, CustomVLMProcessor
     from levanter.models.llava_onevision import LlavaOnevisionConfig, LlavaOnevisionModel
     from levanter.layers.attention import AttentionBackend
     from levanter.trainer import TrainerConfig
-    from transformers import LlavaOnevisionForConditionalGeneration as HfLlavaOnevision, AutoConfig
+    from transformers import LlavaOnevisionForConditionalGeneration as HfLlavaOnevision, AutoConfig, AutoTokenizer
     import equinox as eqx
 
     model_name = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
@@ -151,8 +151,18 @@ def test_llava_with_image_dataloader(processor, dataset):
     if vision_aspect_ratio and "anyres_max_" in vision_aspect_ratio:
         max_num_patches = int(vision_aspect_ratio.split("anyres_max_")[-1])
 
-    padded_processor = create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=grid_pinpoints)
-    unpadded_processor = create_custom_processor(model_name, do_pad=False, image_grid_pinpoints=grid_pinpoints)
+    # Create base processors
+    base_padded_processor = create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=grid_pinpoints)
+    base_unpadded_processor = create_custom_processor(model_name, do_pad=False, image_grid_pinpoints=grid_pinpoints)
+
+    # Use Qwen3 tokenizer for both Levanter and HF processing
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    padded_processor = CustomVLMProcessor.from_processor_and_tokenizer(
+        base_padded_processor, qwen3_tokenizer
+    )
+    unpadded_processor = CustomVLMProcessor.from_processor_and_tokenizer(
+        base_unpadded_processor, qwen3_tokenizer
+    )
 
     batch_processor = BatchImageProcessor(
         padded_processor,
@@ -207,6 +217,10 @@ def test_llava_with_image_dataloader(processor, dataset):
         hf_model.model.image_newline = None
         hf_model.eval()
 
+        # Get image_token_id for Qwen3 tokenizer
+        image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+        hf_model.config.image_token_id = image_token_id
+
         # Load Levanter model
         hf_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
         config = LlavaOnevisionConfig.from_hf_config(hf_config)
@@ -222,6 +236,8 @@ def test_llava_with_image_dataloader(processor, dataset):
         config = dataclasses.replace(
             config, vision_config=vision_config_updated, text_config=text_config_updated, gradient_checkpointing=False
         )
+        # Update config with Qwen3 tokenizer's image_token_id
+        config = config.with_token_ids(image_token_id=image_token_id)
 
         trainer_config = TrainerConfig()
 
@@ -263,7 +279,7 @@ def test_llava_with_image_dataloader(processor, dataset):
             batch_pixel_values = np.array(batch.pixel_values.array)
             batch_grid_mask = np.array(batch.grid_mask.array) if batch.grid_mask is not None else None
 
-            image_token_id = hf_model.config.image_token_index
+            # image_token_id is already defined above with Qwen3 tokenizer's <|image_pad|> token
 
             # HF forward pass
             hf_logits_list = []
@@ -279,8 +295,22 @@ def test_llava_with_image_dataloader(processor, dataset):
                 if images is not None and len(images) > 0:
                     pil_images = [load_image(img) for img in images]
                     hf_inputs = unpadded_processor(text=prompt_text, images=pil_images, return_tensors="pt")
+                    # CustomVLMProcessor may return lists, convert to tensors for HF model
+                    if "pixel_values" in hf_inputs and isinstance(hf_inputs["pixel_values"], list):
+                        hf_inputs["pixel_values"] = torch.tensor(np.array(hf_inputs["pixel_values"]))
+                    if "input_ids" in hf_inputs and isinstance(hf_inputs["input_ids"], list):
+                        hf_inputs["input_ids"] = torch.tensor(np.array(hf_inputs["input_ids"]))
+                    if "attention_mask" in hf_inputs and isinstance(hf_inputs["attention_mask"], list):
+                        hf_inputs["attention_mask"] = torch.tensor(np.array(hf_inputs["attention_mask"]))
+                    if "image_sizes" in hf_inputs and isinstance(hf_inputs["image_sizes"], list):
+                        hf_inputs["image_sizes"] = torch.tensor(np.array(hf_inputs["image_sizes"]))
                 else:
                     hf_inputs = unpadded_processor(text=prompt_text, return_tensors="pt")
+                    # CustomVLMProcessor may return lists, convert to tensors for HF model
+                    if "input_ids" in hf_inputs and isinstance(hf_inputs["input_ids"], list):
+                        hf_inputs["input_ids"] = torch.tensor(np.array(hf_inputs["input_ids"]))
+                    if "attention_mask" in hf_inputs and isinstance(hf_inputs["attention_mask"], list):
+                        hf_inputs["attention_mask"] = torch.tensor(np.array(hf_inputs["attention_mask"]))
 
                 hf_input_ids = hf_inputs["input_ids"]
                 hf_input_ids_list.append(hf_input_ids[0].numpy())
@@ -292,9 +322,14 @@ def test_llava_with_image_dataloader(processor, dataset):
 
             # Levanter forward pass
             @eqx.filter_jit
-            def compute_forward_single(model, input_ids, pixel_values, grid_mask, unpad_indices):
+            def compute_forward_single(model, input_ids, pixel_values, grid_mask, unpad_indices, num_unpadded_features):
                 return model(
-                    input_ids, pixel_values=pixel_values, grid_mask=grid_mask, unpad_indices=unpad_indices, key=None
+                    input_ids,
+                    pixel_values=pixel_values,
+                    grid_mask=grid_mask,
+                    unpad_indices=unpad_indices,
+                    num_unpadded_features=num_unpadded_features,
+                    key=None,
                 )
 
             lev_logits_list = []
@@ -330,11 +365,13 @@ def test_llava_with_image_dataloader(processor, dataset):
                     unpad_indices_lev = hax.named(
                         jnp.array(unpad_indices_np, dtype=jnp.int32), (Batch1, NumImageTokensSample)
                     )
+                    num_unpadded_features = int(num_hf_image_tokens)
                 else:
                     unpad_indices_lev = None
+                    num_unpadded_features = None
 
                 lev_logits_sample = compute_forward_single(
-                    lev_model, input_ids_lev, pixel_values_lev, grid_mask_lev, unpad_indices_lev
+                    lev_model, input_ids_lev, pixel_values_lev, grid_mask_lev, unpad_indices_lev, num_unpadded_features
                 )
                 lev_logits_sample.array.block_until_ready()
                 lev_logits_list.append(np.array(lev_logits_sample.array)[0])
