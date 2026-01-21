@@ -67,6 +67,11 @@ class DedupConfig:
         processes: number of processes to use for deduplication
         mode: switch between decontamination (build filter) and regular deduplication
         text_field: field to use for text content in Parquet files
+        fuzzy_minhash_num_perms: Number of permutations for MinHash signature.
+            Must be divisible by fuzzy_minhash_num_bands. Defaults are from OLMo 3: 26 bands x 11 rows = 286.
+        fuzzy_minhash_num_bands: Number of bands for LSH. More bands = higher recall, lower precision.
+        fuzzy_minhash_ngram_size: Size of character n-grams/shingles to extract from text.
+        fuzzy_minhash_seed: Random seed for MinHash permutation generation.
     """
 
     input_paths: str | list[str]
@@ -78,6 +83,11 @@ class DedupConfig:
     text_field: str = "text"
     ray_num_cpus: int = 2
     ray_memory: int = humanfriendly.parse_size("64GB", binary=True)
+    # MinHash LSH parameters (only used for FUZZY_DOCUMENT mode)
+    fuzzy_minhash_num_perms: int = 286
+    fuzzy_minhash_num_bands: int = 26
+    fuzzy_minhash_ngram_size: int = 5
+    fuzzy_minhash_seed: int = 42
 
 
 def deduplicate(config: DedupConfig):

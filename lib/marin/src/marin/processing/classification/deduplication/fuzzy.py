@@ -82,6 +82,12 @@ def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
 def dedup_fuzzy_document(config: DedupConfig):
     """Perform fuzzy document-level deduplication"""
 
+    if config.fuzzy_minhash_num_perms % config.fuzzy_minhash_num_bands != 0:
+        raise ValueError(
+            f"minhash_num_perms ({config.fuzzy_minhash_num_perms}) must be divisible by "
+            f"minhash_num_bands ({config.fuzzy_minhash_num_bands})"
+        )
+
     import dupekit
     from dupekit import Transformation
 
@@ -101,11 +107,13 @@ def dedup_fuzzy_document(config: DedupConfig):
             Transformation.MinHash(
                 input_col="clean_text",
                 output_col="signature",
-                num_perms=286,  # 26 bands * 11 rows
-                ngram_size=5,
-                seed=42,
+                num_perms=config.fuzzy_minhash_num_perms,
+                ngram_size=config.fuzzy_minhash_ngram_size,
+                seed=config.fuzzy_minhash_seed,
             ),
-            Transformation.MinHashLSH(input_col="signature", output_col="buckets", num_bands=26),
+            Transformation.MinHashLSH(
+                input_col="signature", output_col="buckets", num_bands=config.fuzzy_minhash_num_bands
+            ),
             Transformation.SelectColumns(columns=["resolved_id", "buckets"]),
         ]
 
