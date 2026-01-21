@@ -88,8 +88,8 @@ def make_train_step(
         metrics = {"loss": loss, "ppl": jnp.exp(loss)}
         return loss, metrics
 
-    def step(state, batch):
-        (loss, metrics), grads = jax.value_and_grad(loss_and_metrics, has_aux=True)(state.params, batch)
+    def step(state: TrainingState, batch: dict[str, jax.Array]):
+        (_loss, metrics), grads = jax.value_and_grad(loss_and_metrics, has_aux=True)(state.params, batch)
         updates, new_opt_state = optimizer.update(grads, state.opt_state, state.params)
         new_params = optax.apply_updates(state.params, updates)
         new_state = replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
