@@ -4511,7 +4511,7 @@ requires-dist = [
     { name = "multiprocess", specifier = "==0.70.16" },
     { name = "numpy" },
     { name = "openai" },
-    { name = "pandas" },
+    { name = "pandas", specifier = ">=2.0" },
     { name = "plotly" },
     { name = "prime", marker = "extra == 'rl'" },
     { name = "pyarrow", specifier = ">=22" },
