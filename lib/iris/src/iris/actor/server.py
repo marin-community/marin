@@ -24,7 +24,6 @@ import inspect
 import logging
 import socket
 import threading
-import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -37,7 +36,7 @@ from connectrpc.request import RequestContext
 
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import ExponentialBackoff, now_ms
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +50,7 @@ class RegisteredActor:
     actor_id: ActorId
     instance: Any
     methods: dict[str, Callable]
-    registered_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
+    registered_at_ms: int = field(default_factory=now_ms)
 
 
 class ActorServer:
