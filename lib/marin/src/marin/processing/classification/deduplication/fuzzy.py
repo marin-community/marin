@@ -166,7 +166,8 @@ def dedup_fuzzy_document(config: DedupConfig):
 
         for doc in docs:
             is_fuzzy_dup = fuzzy_dup_map.get(doc["id"], False)
-            doc["attributes"] = {}
+            doc["attributes"] = doc.get("attributes", {})
+            assert DedupMode.FUZZY_DOCUMENT not in doc["attributes"]
             doc["attributes"][str(DedupMode.FUZZY_DOCUMENT)] = is_fuzzy_dup
             yield doc
 

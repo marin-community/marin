@@ -162,7 +162,7 @@ def _collect_input_files(*, input_paths: str | list[str], filetypes: list[str]) 
             if not any(path.endswith(ext) for ext in filetypes):
                 raise FileNotFoundError(f"No files found in path: {path}")
             all_files.append(path)  # Assume it's a single file
-    assert all_files, "No input files found to deduplication."
+    assert all_files, "No input files found for deduplication."
     return all_files
 
 
