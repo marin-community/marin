@@ -25,7 +25,11 @@ import uvicorn
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.scheduler import Scheduler, SchedulingResult
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.events import Event, EventType
+from iris.cluster.controller.events import (
+    TaskAssignedEvent,
+    TaskStateChangedEvent,
+    WorkerFailedEvent,
+)
 from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
@@ -254,8 +258,7 @@ class Controller:
 
         # Create attempt BEFORE RPC so worker state reports have a valid attempt_id
         self._state.handle_event(
-            Event(
-                event_type=EventType.TASK_ASSIGNED,
+            TaskAssignedEvent(
                 task_id=task.task_id,
                 worker_id=worker.worker_id,
             )
@@ -294,8 +297,7 @@ class Controller:
             # FAILURE: Revert attempt and mark worker failed
             task.revert_attempt()
             self._state.handle_event(
-                Event(
-                    event_type=EventType.WORKER_FAILED,
+                WorkerFailedEvent(
                     worker_id=worker.worker_id,
                     error=f"Dispatch RPC failed: {e}",
                 )
@@ -308,8 +310,7 @@ class Controller:
         timeout_seconds = job.request.scheduling_timeout_seconds if job else 0
         logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout_seconds}s), marking as UNSCHEDULABLE")
         self._state.handle_event(
-            Event(
-                EventType.TASK_STATE_CHANGED,
+            TaskStateChangedEvent(
                 task_id=task.task_id,
                 new_state=cluster_pb2.TASK_STATE_UNSCHEDULABLE,
                 error=f"Scheduling timeout exceeded ({timeout_seconds}s)",
@@ -328,8 +329,7 @@ class Controller:
                 )
                 # Use WORKER_FAILED event which will cascade to running tasks
                 self._state.handle_event(
-                    Event(
-                        EventType.WORKER_FAILED,
+                    WorkerFailedEvent(
                         worker_id=worker.worker_id,
                         error=f"Worker {worker.worker_id} timed out",
                     )

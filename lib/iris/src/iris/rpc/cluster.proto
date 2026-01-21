@@ -117,23 +117,15 @@ message JobStatus {
 
   BuildMetrics build_metrics = 10;
 
-  // Fields 11-12 removed: Jobs don't execute on workers (tasks do)
-  // string worker_id = 11;
-  // string worker_address = 12;
-
   bytes serialized_result = 13;  // cloudpickle serialized return value (if requested)
 
   // Parent job ID for hierarchical job tracking (empty string if root job)
   string parent_job_id = 14;
 
-  // Fields 15-16 removed: Jobs don't have attempts (tasks do)
-  // int32 current_attempt_id = 15;
-  // repeated JobAttempt attempts = 16;
-
   int32 failure_count = 17;                // Total task failures (aggregated)
   int32 preemption_count = 18;             // Total task preemptions (aggregated)
 
-  // Task information (populated for jobs with replicas > 1)
+  // Per-task status information
   int32 num_tasks = 19;
   int32 tasks_pending = 20;
   int32 tasks_running = 21;

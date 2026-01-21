@@ -27,7 +27,12 @@ from typing import Any, Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.cluster.controller.events import Event, EventType
+from iris.cluster.controller.events import (
+    JobCancelledEvent,
+    JobSubmittedEvent,
+    TaskStateChangedEvent,
+    WorkerRegisteredEvent,
+)
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
@@ -101,8 +106,7 @@ class ControllerServiceImpl:
 
             # Submit job via event API
             self._state.handle_event(
-                Event(
-                    EventType.JOB_SUBMITTED,
+                JobSubmittedEvent(
                     job_id=JobId(job_id),
                     request=request,
                     timestamp_ms=now_ms(),
@@ -219,8 +223,7 @@ class ControllerServiceImpl:
 
         # Cancel the job via event API (this will kill all tasks)
         self._state.handle_event(
-            Event(
-                EventType.JOB_CANCELLED,
+            JobCancelledEvent(
                 job_id=job_id,
                 reason="Terminated by user",
             )
@@ -359,8 +362,7 @@ class ControllerServiceImpl:
         new_state = request.state
 
         self._state.handle_event(
-            Event(
-                EventType.TASK_STATE_CHANGED,
+            TaskStateChangedEvent(
                 task_id=task_id,
                 new_state=new_state,
                 error=request.error if request.error else None,
@@ -386,8 +388,7 @@ class ControllerServiceImpl:
         """Register a new worker or process a heartbeat from an existing worker."""
         # Use WORKER_REGISTERED event for both new and existing workers
         self._state.handle_event(
-            Event(
-                event_type=EventType.WORKER_REGISTERED,
+            WorkerRegisteredEvent(
                 worker_id=WorkerId(request.worker_id),
                 address=request.address,
                 metadata=request.metadata,

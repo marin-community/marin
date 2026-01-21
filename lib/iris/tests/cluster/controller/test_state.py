@@ -25,16 +25,23 @@ import threading
 
 import pytest
 
-from iris.cluster.controller.events import Event, EventType
+from iris.cluster.controller.events import (
+    JobCancelledEvent,
+    JobSubmittedEvent,
+    TaskAssignedEvent,
+    TaskStateChangedEvent,
+    WorkerFailedEvent,
+    WorkerRegisteredEvent,
+)
 from iris.cluster.controller.state import (
     ControllerEndpoint,
     ControllerJob,
     ControllerState,
     ControllerTask,
-    ControllerWorker,
 )
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
+from iris.time_utils import now_ms
 
 # =============================================================================
 # Test Helpers
@@ -44,15 +51,13 @@ from iris.rpc import cluster_pb2
 def dispatch_task(state: ControllerState, task: ControllerTask, worker_id: WorkerId) -> None:
     """Dispatch a task to a worker: assign + mark running."""
     state.handle_event(
-        Event(
-            EventType.TASK_ASSIGNED,
+        TaskAssignedEvent(
             task_id=task.task_id,
             worker_id=worker_id,
         )
     )
     state.handle_event(
-        Event(
-            EventType.TASK_STATE_CHANGED,
+        TaskStateChangedEvent(
             task_id=task.task_id,
             new_state=cluster_pb2.TASK_STATE_RUNNING,
         )
@@ -69,8 +74,7 @@ def transition_task(
 ) -> None:
     """Transition a task to a new state via handle_event."""
     state.handle_event(
-        Event(
-            EventType.TASK_STATE_CHANGED,
+        TaskStateChangedEvent(
             task_id=task_id,
             new_state=new_state,
             error=error,
@@ -118,9 +122,40 @@ def worker_metadata():
     return _make
 
 
-def _add_job(state, job):
-    """Add a job with auto-expanded tasks."""
-    return state.add_job(job)
+def register_worker(
+    state: ControllerState,
+    worker_id: str,
+    address: str,
+    metadata: cluster_pb2.WorkerMetadata,
+) -> WorkerId:
+    """Register a worker via event."""
+    wid = WorkerId(worker_id)
+    state.handle_event(
+        WorkerRegisteredEvent(
+            worker_id=wid,
+            address=address,
+            metadata=metadata,
+            timestamp_ms=now_ms(),
+        )
+    )
+    return wid
+
+
+def submit_job(
+    state: ControllerState,
+    job_id: str,
+    request: cluster_pb2.Controller.LaunchJobRequest,
+) -> list[ControllerTask]:
+    """Submit a job via event and return tasks."""
+    jid = JobId(job_id)
+    state.handle_event(
+        JobSubmittedEvent(
+            job_id=jid,
+            request=request,
+            timestamp_ms=now_ms(),
+        )
+    )
+    return state.get_job_tasks(jid)
 
 
 # =============================================================================
@@ -133,27 +168,15 @@ def test_job_lifecycle_success(job_request, worker_metadata):
     state = ControllerState()
 
     # Setup: register worker
-    worker = ControllerWorker(
-        worker_id=WorkerId("w1"),
-        address="host:8080",
-        metadata=worker_metadata(),
-    )
-    state.add_worker(worker)
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+    worker = state.get_worker(worker_id)
 
     # Submit job via event
     req = job_request("test-job")
     req.resources.replicas = 2
-    state.handle_event(
-        Event(
-            EventType.JOB_SUBMITTED,
-            job_id=JobId("j1"),
-            request=req,
-            timestamp_ms=1000,
-        )
-    )
+    tasks = submit_job(state, "j1", req)
 
     job = state.get_job(JobId("j1"))
-    tasks = state.get_job_tasks(JobId("j1"))
 
     assert job is not None
     assert len(tasks) == 2
@@ -161,7 +184,7 @@ def test_job_lifecycle_success(job_request, worker_metadata):
 
     # Dispatch and succeed all tasks
     for task in tasks:
-        dispatch_task(state, task, WorkerId("w1"))
+        dispatch_task(state, task, worker_id)
         transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
 
     # Verify final state
@@ -176,19 +199,16 @@ def test_job_lifecycle_failure_exhausted_retries(job_request, worker_metadata):
     """E2E: Task failure with no retries -> job fails."""
     state = ControllerState()
 
-    worker = ControllerWorker(
-        worker_id=WorkerId("w1"),
-        address="host:8080",
-        metadata=worker_metadata(),
-    )
-    state.add_worker(worker)
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+    worker = state.get_worker(worker_id)
 
-    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"))
-    tasks = _add_job(state, job)
+    req = job_request("job1")
+    tasks = submit_job(state, "j1", req)
     task = tasks[0]
+    job = state.get_job(JobId("j1"))
 
     # Dispatch and fail (default max_retries_failure=0)
-    dispatch_task(state, task, WorkerId("w1"))
+    dispatch_task(state, task, worker_id)
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_FAILED, error="Task failed")
 
     # Verify final state
@@ -202,21 +222,17 @@ def test_task_failure_with_retry_requeues(job_request, worker_metadata):
     """E2E: Task failure with retries -> task requeued, job stays running."""
     state = ControllerState()
 
-    worker = ControllerWorker(
-        worker_id=WorkerId("w1"),
-        address="host:8080",
-        metadata=worker_metadata(),
-    )
-    state.add_worker(worker)
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
     req = job_request("job1")
     req.max_task_failures = 1
-    job = ControllerJob(job_id=JobId("j1"), request=req, max_retries_failure=1)
-    tasks = _add_job(state, job)
+    req.max_retries_failure = 1
+    tasks = submit_job(state, "j1", req)
     task = tasks[0]
+    job = state.get_job(JobId("j1"))
 
     # First attempt fails
-    dispatch_task(state, task, WorkerId("w1"))
+    dispatch_task(state, task, worker_id)
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_FAILED)
 
     # Verify: task requeued, job still running
@@ -232,26 +248,20 @@ def test_job_cancellation_kills_all_tasks(job_request, worker_metadata):
     """E2E: Job cancellation -> all tasks killed."""
     state = ControllerState()
 
-    worker = ControllerWorker(
-        worker_id=WorkerId("w1"),
-        address="host:8080",
-        metadata=worker_metadata(),
-    )
-    state.add_worker(worker)
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
     req = job_request("test-job")
     req.resources.replicas = 3
-    job = ControllerJob(job_id=JobId("j1"), request=req)
-    tasks = state.add_job(job)
+    tasks = submit_job(state, "j1", req)
+    job = state.get_job(JobId("j1"))
 
     # Dispatch 2 tasks, leave 1 pending
-    dispatch_task(state, tasks[0], WorkerId("w1"))
-    dispatch_task(state, tasks[1], WorkerId("w1"))
+    dispatch_task(state, tasks[0], worker_id)
+    dispatch_task(state, tasks[1], worker_id)
 
     # Cancel job
     state.handle_event(
-        Event(
-            EventType.JOB_CANCELLED,
+        JobCancelledEvent(
             job_id=JobId("j1"),
             reason="User cancelled",
         )
@@ -272,24 +282,20 @@ def test_worker_failure_cascades_to_running_tasks(job_request, worker_metadata):
     """E2E: Worker failure -> running tasks transition to WORKER_FAILED and requeue."""
     state = ControllerState()
 
-    worker = ControllerWorker(
-        worker_id=WorkerId("w1"),
-        address="host:8080",
-        metadata=worker_metadata(),
-    )
-    state.add_worker(worker)
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+    worker = state.get_worker(worker_id)
 
-    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"), max_retries_preemption=1)
-    tasks = state.add_job(job)
+    req = job_request("job1")
+    req.max_retries_preemption = 1
+    tasks = submit_job(state, "j1", req)
     task = tasks[0]
 
-    dispatch_task(state, task, WorkerId("w1"))
+    dispatch_task(state, task, worker_id)
 
     # Worker fails
     state.handle_event(
-        Event(
-            EventType.WORKER_FAILED,
-            worker_id=WorkerId("w1"),
+        WorkerFailedEvent(
+            worker_id=worker_id,
             error="Connection lost",
         )
     )
@@ -306,23 +312,19 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, wor
     """E2E: Dispatch RPC failure (task in PENDING) -> worker failed event cascades to task."""
     state = ControllerState()
 
-    worker = ControllerWorker(
-        worker_id=WorkerId("w1"),
-        address="host:8080",
-        metadata=worker_metadata(),
-    )
-    state.add_worker(worker)
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+    worker = state.get_worker(worker_id)
 
-    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"), max_retries_preemption=1)
-    tasks = state.add_job(job)
+    req = job_request("job1")
+    req.max_retries_preemption = 1
+    tasks = submit_job(state, "j1", req)
     task = tasks[0]
 
     # Task gets assigned (creates attempt, puts in PENDING state)
     state.handle_event(
-        Event(
-            EventType.TASK_ASSIGNED,
+        TaskAssignedEvent(
             task_id=task.task_id,
-            worker_id=worker.worker_id,
+            worker_id=worker_id,
         )
     )
     assert task.state == cluster_pb2.TASK_STATE_PENDING
@@ -330,9 +332,8 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, wor
 
     # Dispatch RPC fails -> WORKER_FAILED event
     state.handle_event(
-        Event(
-            EventType.WORKER_FAILED,
-            worker_id=worker.worker_id,
+        WorkerFailedEvent(
+            worker_id=worker_id,
             error="Dispatch RPC failed: Connection refused",
         )
     )
@@ -364,12 +365,7 @@ def test_failure_domain_kills_remaining_tasks(worker_metadata):
     """E2E: One task fails beyond retries -> remaining tasks killed, job fails."""
     state = ControllerState()
 
-    worker = ControllerWorker(
-        worker_id=WorkerId("w1"),
-        address="host:8080",
-        metadata=worker_metadata(),
-    )
-    state.add_worker(worker)
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-task-job",
@@ -378,12 +374,12 @@ def test_failure_domain_kills_remaining_tasks(worker_metadata):
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         max_task_failures=0,
     )
-    job = ControllerJob(job_id=JobId("j1"), request=req)
-    tasks = state.add_job(job)
+    tasks = submit_job(state, "j1", req)
+    job = state.get_job(JobId("j1"))
 
     # Dispatch 2 tasks, leave 1 pending
-    dispatch_task(state, tasks[0], WorkerId("w1"))
-    dispatch_task(state, tasks[1], WorkerId("w1"))
+    dispatch_task(state, tasks[0], worker_id)
+    dispatch_task(state, tasks[1], worker_id)
 
     # Task-0 fails
     transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_FAILED, error="Task failed")
@@ -399,12 +395,7 @@ def test_max_task_failures_tolerance(worker_metadata):
     """E2E: Job tolerates max_task_failures, then fails on next failure."""
     state = ControllerState()
 
-    worker = ControllerWorker(
-        worker_id=WorkerId("w1"),
-        address="host:8080",
-        metadata=worker_metadata(),
-    )
-    state.add_worker(worker)
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="tolerant-job",
@@ -413,11 +404,11 @@ def test_max_task_failures_tolerance(worker_metadata):
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         max_task_failures=1,
     )
-    job = ControllerJob(job_id=JobId("j1"), request=req)
-    tasks = state.add_job(job)
+    tasks = submit_job(state, "j1", req)
+    job = state.get_job(JobId("j1"))
 
     for task in tasks:
-        dispatch_task(state, task, WorkerId("w1"))
+        dispatch_task(state, task, worker_id)
 
     # First failure - job should keep running
     transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_FAILED, error="First")
@@ -436,12 +427,7 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
     """E2E: Worker failures (preemptions) don't count toward max_task_failures."""
     state = ControllerState()
 
-    worker = ControllerWorker(
-        worker_id=WorkerId("w1"),
-        address="host:8080",
-        metadata=worker_metadata(),
-    )
-    state.add_worker(worker)
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="preemption-job",
@@ -449,11 +435,12 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=2),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         max_task_failures=0,
+        max_retries_preemption=1,
     )
-    job = ControllerJob(job_id=JobId("j1"), request=req, max_retries_preemption=1)
-    tasks = state.add_job(job)
+    tasks = submit_job(state, "j1", req)
+    job = state.get_job(JobId("j1"))
 
-    dispatch_task(state, tasks[0], WorkerId("w1"))
+    dispatch_task(state, tasks[0], worker_id)
     transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker died")
 
     # Preemption doesn't count toward failure threshold
@@ -471,18 +458,13 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
     """E2E: Task reaching terminal state removes associated endpoints."""
     state = ControllerState()
 
-    worker = ControllerWorker(
-        worker_id=WorkerId("w1"),
-        address="host:8080",
-        metadata=worker_metadata(),
-    )
-    state.add_worker(worker)
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
-    job = ControllerJob(job_id=JobId("j1"), request=job_request("job1"))
-    tasks = _add_job(state, job)
+    req = job_request("job1")
+    tasks = submit_job(state, "j1", req)
     task = tasks[0]
 
-    dispatch_task(state, task, WorkerId("w1"))
+    dispatch_task(state, task, worker_id)
 
     ep = ControllerEndpoint(
         endpoint_id="ep1",
@@ -502,16 +484,16 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
     assert state.lookup_endpoints("j1/actor") == []
 
 
-def test_endpoint_visibility_by_job_state():
+def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
     """E2E: Endpoints only visible for RUNNING jobs."""
     state = ControllerState()
 
-    job = ControllerJob(
-        job_id=JobId("ns-1"),
-        request=cluster_pb2.Controller.LaunchJobRequest(name="test"),
-        state=cluster_pb2.JOB_STATE_PENDING,
-    )
-    state.add_job(job)
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("test")
+    tasks = submit_job(state, "ns-1", req)
+    job = state.get_job(JobId("ns-1"))
+    task = tasks[0]
 
     ep = ControllerEndpoint(
         endpoint_id="ep-1",
@@ -524,31 +506,32 @@ def test_endpoint_visibility_by_job_state():
     # Not visible while pending
     assert len(state.lookup_endpoints("ns-1/actor")) == 0
 
-    # Transition to running
-    job.state = cluster_pb2.JOB_STATE_RUNNING
+    # Transition to running by dispatching task
+    dispatch_task(state, task, worker_id)
+    assert job.state == cluster_pb2.JOB_STATE_RUNNING
     assert len(state.lookup_endpoints("ns-1/actor")) == 1
 
     # Not visible after completion
-    job.state = cluster_pb2.JOB_STATE_SUCCEEDED
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+    assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
     assert len(state.lookup_endpoints("ns-1/actor")) == 0
 
 
-def test_namespace_isolation():
+def test_namespace_isolation(job_request, worker_metadata):
     """E2E: Endpoints are isolated by namespace prefix."""
     state = ControllerState()
 
-    job1 = ControllerJob(
-        job_id=JobId("ns-1"),
-        request=cluster_pb2.Controller.LaunchJobRequest(name="test1"),
-        state=cluster_pb2.JOB_STATE_RUNNING,
-    )
-    job2 = ControllerJob(
-        job_id=JobId("ns-2"),
-        request=cluster_pb2.Controller.LaunchJobRequest(name="test2"),
-        state=cluster_pb2.JOB_STATE_RUNNING,
-    )
-    state.add_job(job1)
-    state.add_job(job2)
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req1 = job_request("test1")
+    req2 = job_request("test2")
+
+    tasks1 = submit_job(state, "ns-1", req1)
+    tasks2 = submit_job(state, "ns-2", req2)
+
+    # Dispatch tasks to transition jobs to RUNNING state
+    dispatch_task(state, tasks1[0], worker_id)
+    dispatch_task(state, tasks2[0], worker_id)
 
     state.add_endpoint(
         ControllerEndpoint(
@@ -585,10 +568,11 @@ def test_namespace_isolation():
 def test_task_queue_fifo_order(job_request):
     """Tasks are returned in FIFO order."""
     state = ControllerState()
-    job1 = ControllerJob(job_id=JobId("j1"), request=job_request("job1"), submitted_at_ms=100)
-    job2 = ControllerJob(job_id=JobId("j2"), request=job_request("job2"), submitted_at_ms=200)
-    _add_job(state, job1)
-    _add_job(state, job2)
+
+    req1 = job_request("job1")
+    req2 = job_request("job2")
+    submit_job(state, "j1", req1)
+    submit_job(state, "j2", req2)
 
     pending = state.peek_pending_tasks()
     assert len(pending) == 2
@@ -597,15 +581,18 @@ def test_task_queue_fifo_order(job_request):
 
 
 def test_gang_job_tracking(job_request):
-    """Gang jobs are tracked correctly."""
+    """Gang jobs are tracked correctly.
+
+    Note: gang_id is not in the proto, so this test uses add_job() directly.
+    """
     state = ControllerState()
     job1 = ControllerJob(job_id=JobId("j1"), request=job_request("job1"), gang_id="gang1")
     job2 = ControllerJob(job_id=JobId("j2"), request=job_request("job2"), gang_id="gang1")
     job3 = ControllerJob(job_id=JobId("j3"), request=job_request("job3"), gang_id="gang2")
 
-    _add_job(state, job1)
-    _add_job(state, job2)
-    _add_job(state, job3)
+    state.add_job(job1)
+    state.add_job(job2)
+    state.add_job(job3)
 
     gang1_jobs = state.get_gang_jobs("gang1")
     assert len(gang1_jobs) == 2
@@ -621,27 +608,20 @@ def test_hierarchical_job_tracking(job_request):
     """Parent-child job relationships are tracked correctly."""
     state = ControllerState()
 
-    parent = ControllerJob(job_id=JobId("parent"), request=job_request("parent"))
-    child1 = ControllerJob(
-        job_id=JobId("child1"),
-        request=job_request("child1"),
-        parent_job_id=JobId("parent"),
-    )
-    child2 = ControllerJob(
-        job_id=JobId("child2"),
-        request=job_request("child2"),
-        parent_job_id=JobId("parent"),
-    )
-    grandchild = ControllerJob(
-        job_id=JobId("grandchild"),
-        request=job_request("grandchild"),
-        parent_job_id=JobId("child1"),
-    )
+    parent_req = job_request("parent")
+    submit_job(state, "parent", parent_req)
 
-    _add_job(state, parent)
-    _add_job(state, child1)
-    _add_job(state, child2)
-    _add_job(state, grandchild)
+    child1_req = job_request("child1")
+    child1_req.parent_job_id = "parent"
+    submit_job(state, "child1", child1_req)
+
+    child2_req = job_request("child2")
+    child2_req.parent_job_id = "parent"
+    submit_job(state, "child2", child2_req)
+
+    grandchild_req = job_request("grandchild")
+    grandchild_req.parent_job_id = "child1"
+    submit_job(state, "grandchild", grandchild_req)
 
     # get_children only returns direct children
     children = state.get_children(JobId("parent"))
@@ -665,8 +645,8 @@ def test_thread_safety(job_request):
             barrier.wait()
             for i in range(jobs_per_thread):
                 job_id = f"t{thread_id}_j{i}"
-                job = ControllerJob(job_id=JobId(job_id), request=job_request(f"job-{job_id}"))
-                _add_job(state, job)
+                req = job_request(f"job-{job_id}")
+                submit_job(state, job_id, req)
         except Exception as e:
             errors.append(e)
 

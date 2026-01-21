@@ -139,7 +139,7 @@ class Scheduler:
         """Attempt to schedule a single task.
 
         Returns a TaskScheduleResult indicating success (with assigned worker)
-        or failure (with reason). Used by both the scheduling loop and dashboard.
+        or failure (with reason).
 
         Args:
             task: The task to schedule

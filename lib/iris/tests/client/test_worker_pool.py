@@ -14,14 +14,8 @@
 
 """Tests for WorkerPool behavior.
 
-These tests exercise the WorkerPool through its public interface, testing
-observable behavior rather than implementation details.
-
-Unit tests for TaskExecutorActor and WorkerDispatcher use real ActorServers
-but bypass job infrastructure for fast, focused testing.
-
-E2E tests use LocalClusterClient to exercise the full job submission flow:
-WorkerPool -> IrisClient -> LocalClusterClient -> Controller -> Worker -> task execution.
+Unit tests use real ActorServers but bypass job infrastructure for fast testing.
+E2E tests use LocalClusterClient for full job submission flow.
 """
 
 import time

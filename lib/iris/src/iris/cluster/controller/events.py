@@ -15,73 +15,92 @@
 """Event types for controller state transitions.
 
 All state changes flow through ControllerState.handle_event(), which dispatches
-to handlers and logs actions to a transaction log for debugging.
+to handlers based on event type and logs actions to a transaction log for debugging.
 """
 
 from dataclasses import dataclass, field
-from enum import Enum, auto
 from typing import Any
 
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import now_ms
 
-
-class EventType(Enum):
-    """Discriminator for controller state change events."""
-
-    # Worker lifecycle
-    WORKER_REGISTERED = auto()
-    WORKER_HEARTBEAT = auto()
-    WORKER_FAILED = auto()
-
-    # Job lifecycle
-    JOB_SUBMITTED = auto()
-    JOB_CANCELLED = auto()
-
-    # Task lifecycle
-    TASK_ASSIGNED = auto()  # Creates attempt, assigns to worker
-    TASK_STATE_CHANGED = auto()  # All task state transitions (new_state field carries target)
+# =============================================================================
+# Typed Event Classes
+# =============================================================================
 
 
 @dataclass(frozen=True)
 class Event:
-    """All state change events. Fields are optional based on event_type.
+    """Base class for controller state change events."""
 
-    This is a single event class with optional fields rather than a hierarchy
-    of event subclasses. The event_type discriminator indicates which fields
-    are relevant for each event.
+    pass
 
-    Examples:
-        Event(EventType.WORKER_FAILED, worker_id=worker_id, error="Connection lost")
-        Event(EventType.TASK_STATE_CHANGED, task_id=task_id,
-              new_state=cluster_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
-        Event(EventType.TASK_STATE_CHANGED, task_id=task_id,
-              new_state=cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker died")
-    """
 
-    event_type: EventType
+@dataclass(frozen=True)
+class WorkerRegisteredEvent(Event):
+    """Worker registration or heartbeat update."""
 
-    # Entity IDs (use whichever are relevant)
-    task_id: TaskId | None = None
-    worker_id: WorkerId | None = None
-    job_id: JobId | None = None
+    worker_id: WorkerId
+    address: str
+    metadata: cluster_pb2.WorkerMetadata
+    timestamp_ms: int
 
-    # For TASK_STATE_CHANGED - the target task state
-    new_state: int | None = None
 
-    # Event data
+@dataclass(frozen=True)
+class WorkerHeartbeatEvent(Event):
+    """Worker heartbeat timestamp update."""
+
+    worker_id: WorkerId
+    timestamp_ms: int
+
+
+@dataclass(frozen=True)
+class WorkerFailedEvent(Event):
+    """Worker marked as failed."""
+
+    worker_id: WorkerId
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class JobSubmittedEvent(Event):
+    """New job submission."""
+
+    job_id: JobId
+    request: cluster_pb2.Controller.LaunchJobRequest
+    timestamp_ms: int
+
+
+@dataclass(frozen=True)
+class JobCancelledEvent(Event):
+    """Job termination request."""
+
+    job_id: JobId
+    reason: str
+
+
+@dataclass(frozen=True)
+class TaskAssignedEvent(Event):
+    """Task assigned to worker (creates attempt, commits resources)."""
+
+    task_id: TaskId
+    worker_id: WorkerId
+
+
+@dataclass(frozen=True)
+class TaskStateChangedEvent(Event):
+    """Task state transition."""
+
+    task_id: TaskId
+    new_state: int  # cluster_pb2.TaskState
     error: str | None = None
     exit_code: int | None = None
-    reason: str | None = None
-    timestamp_ms: int | None = None
 
-    # For WORKER_REGISTERED
-    address: str | None = None
-    metadata: cluster_pb2.WorkerMetadata | None = None
 
-    # For JOB_SUBMITTED
-    request: cluster_pb2.Controller.LaunchJobRequest | None = None
+# =============================================================================
+# Transaction Logging
+# =============================================================================
 
 
 @dataclass
@@ -98,7 +117,7 @@ class Action:
 class TransactionLog:
     """Records actions from handling one event.
 
-    Each call to handle_event() creates a TransactionLog that captures all
+    Calls to handle_event() produce a TransactionLog that captures all
     the actions taken during that event's processing. This includes both
     the direct effects of the event and any cascading effects (e.g., worker
     failure causing task failures).

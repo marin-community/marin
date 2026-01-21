@@ -24,7 +24,7 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.cluster.controller.events import Event, EventType
+from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEvent
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerState, ControllerTask
 from iris.cluster.types import JobId, WorkerId
@@ -38,15 +38,13 @@ from iris.rpc import cluster_pb2
 def dispatch_task(state: ControllerState, task: ControllerTask, worker_id: WorkerId) -> None:
     """Dispatch a task to a worker: assign + mark running."""
     state.handle_event(
-        Event(
-            EventType.TASK_ASSIGNED,
+        TaskAssignedEvent(
             task_id=task.task_id,
             worker_id=worker_id,
         )
     )
     state.handle_event(
-        Event(
-            EventType.TASK_STATE_CHANGED,
+        TaskStateChangedEvent(
             task_id=task.task_id,
             new_state=cluster_pb2.TASK_STATE_RUNNING,
         )
@@ -56,8 +54,7 @@ def dispatch_task(state: ControllerState, task: ControllerTask, worker_id: Worke
 def transition_task(state: ControllerState, task: ControllerTask, new_state: int, *, error: str | None = None) -> None:
     """Transition a task to a new state via handle_event."""
     state.handle_event(
-        Event(
-            EventType.TASK_STATE_CHANGED,
+        TaskStateChangedEvent(
             task_id=task.task_id,
             new_state=new_state,
             error=error,

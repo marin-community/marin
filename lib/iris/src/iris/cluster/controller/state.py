@@ -32,7 +32,17 @@ from dataclasses import dataclass, field
 from enum import Enum
 from threading import RLock
 
-from iris.cluster.controller.events import Event, EventType, TransactionLog
+from iris.cluster.controller.events import (
+    Event,
+    JobCancelledEvent,
+    JobSubmittedEvent,
+    TaskAssignedEvent,
+    TaskStateChangedEvent,
+    TransactionLog,
+    WorkerFailedEvent,
+    WorkerHeartbeatEvent,
+    WorkerRegisteredEvent,
+)
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import now_ms
@@ -900,7 +910,7 @@ class ControllerState:
     def handle_event(self, event: Event) -> TransactionLog:
         """Main entry point for all event-driven state changes.
 
-        Dispatches to the appropriate handler based on event_type and records
+        Dispatches to the appropriate handler based on event type and records
         all actions to a transaction log for debugging.
 
         Args:
@@ -912,27 +922,29 @@ class ControllerState:
         with self._lock:
             txn = TransactionLog(event=event)
 
-            match event.event_type:
-                case EventType.WORKER_REGISTERED:
+            match event:
+                case WorkerRegisteredEvent():
                     self._on_worker_registered(txn, event)
-                case EventType.WORKER_HEARTBEAT:
+                case WorkerHeartbeatEvent():
                     self._on_worker_heartbeat(txn, event)
-                case EventType.WORKER_FAILED:
+                case WorkerFailedEvent():
                     self._on_worker_failed(txn, event)
-                case EventType.JOB_SUBMITTED:
+                case JobSubmittedEvent():
                     self._on_job_submitted(txn, event)
-                case EventType.JOB_CANCELLED:
+                case JobCancelledEvent():
                     self._on_job_cancelled(txn, event)
-                case EventType.TASK_ASSIGNED:
+                case TaskAssignedEvent():
                     self._on_task_assigned(txn, event)
-                case EventType.TASK_STATE_CHANGED:
+                case TaskStateChangedEvent():
                     self._on_task_state_changed(txn, event)
+                case _:
+                    raise TypeError(f"Unhandled event type: {type(event).__name__}")
 
             self._transactions.append(txn)
 
             # Log transaction for debugging
             if txn.actions:
-                logger.info(f"Event {event.event_type.name}: {len(txn.actions)} actions")
+                logger.info(f"Event {type(event).__name__}: {len(txn.actions)} actions")
                 for action in txn.actions:
                     logger.info(f"  - {action.action} {action.entity_id} {action.details}")
 
@@ -942,40 +954,35 @@ class ControllerState:
     # Worker Event Handlers
     # -------------------------------------------------------------------------
 
-    def _on_worker_registered(self, txn: TransactionLog, event: Event) -> None:
-        assert event.worker_id
+    def _on_worker_registered(self, txn: TransactionLog, event: WorkerRegisteredEvent) -> None:
         worker = self._workers.get(event.worker_id)
 
         if worker:
             # Existing worker - heartbeat update
-            worker.last_heartbeat_ms = event.timestamp_ms or now_ms()
+            worker.last_heartbeat_ms = event.timestamp_ms
             worker.healthy = True
             worker.consecutive_failures = 0
-            if event.metadata:
-                worker.metadata = event.metadata
+            worker.metadata = event.metadata
             txn.log("worker_heartbeat", event.worker_id)
         else:
             # New worker - full registration
-            assert event.address and event.metadata
             worker = ControllerWorker(
                 worker_id=event.worker_id,
                 address=event.address,
                 metadata=event.metadata,
-                last_heartbeat_ms=event.timestamp_ms or now_ms(),
+                last_heartbeat_ms=event.timestamp_ms,
             )
             self._workers[event.worker_id] = worker
             txn.log("worker_registered", event.worker_id, address=event.address)
 
-    def _on_worker_heartbeat(self, txn: TransactionLog, event: Event) -> None:
-        assert event.worker_id and event.timestamp_ms is not None
+    def _on_worker_heartbeat(self, txn: TransactionLog, event: WorkerHeartbeatEvent) -> None:
         worker = self._workers[event.worker_id]
         worker.last_heartbeat_ms = event.timestamp_ms
         worker.healthy = True
         worker.consecutive_failures = 0
         txn.log("heartbeat", event.worker_id)
 
-    def _on_worker_failed(self, txn: TransactionLog, event: Event) -> None:
-        assert event.worker_id
+    def _on_worker_failed(self, txn: TransactionLog, event: WorkerFailedEvent) -> None:
         worker = self._workers[event.worker_id]
         worker.healthy = False
         txn.log("worker_failed", event.worker_id, error=event.error)
@@ -988,10 +995,8 @@ class ControllerState:
             if task.state in TERMINAL_TASK_STATES:
                 continue
 
-            cascade_event = Event(
-                EventType.TASK_STATE_CHANGED,
+            cascade_event = TaskStateChangedEvent(
                 task_id=task_id,
-                worker_id=event.worker_id,
                 new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
                 error=f"Worker {event.worker_id} failed: {event.error or 'unknown'}",
             )
@@ -1001,8 +1006,7 @@ class ControllerState:
     # Job Event Handlers
     # -------------------------------------------------------------------------
 
-    def _on_job_submitted(self, txn: TransactionLog, event: Event) -> None:
-        assert event.job_id and event.request
+    def _on_job_submitted(self, txn: TransactionLog, event: JobSubmittedEvent) -> None:
         parent_job_id = JobId(event.request.parent_job_id) if event.request.parent_job_id else None
 
         # Read retry limits from request, using defaults if not set
@@ -1012,7 +1016,7 @@ class ControllerState:
         job = ControllerJob(
             job_id=event.job_id,
             request=event.request,
-            submitted_at_ms=event.timestamp_ms or now_ms(),
+            submitted_at_ms=event.timestamp_ms,
             parent_job_id=parent_job_id,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
@@ -1035,8 +1039,7 @@ class ControllerState:
 
         txn.log("job_submitted", event.job_id, num_tasks=job.num_tasks)
 
-    def _on_job_cancelled(self, txn: TransactionLog, event: Event) -> None:
-        assert event.job_id and event.reason
+    def _on_job_cancelled(self, txn: TransactionLog, event: JobCancelledEvent) -> None:
         job = self._jobs[event.job_id]
 
         for task_id in self._tasks_by_job.get(event.job_id, []):
@@ -1044,8 +1047,7 @@ class ControllerState:
             if task.state in TERMINAL_TASK_STATES:
                 continue
 
-            cascade_event = Event(
-                EventType.TASK_STATE_CHANGED,
+            cascade_event = TaskStateChangedEvent(
                 task_id=task_id,
                 new_state=cluster_pb2.TASK_STATE_KILLED,
                 error=event.reason,
@@ -1061,7 +1063,7 @@ class ControllerState:
     # Task Event Handlers
     # -------------------------------------------------------------------------
 
-    def _on_task_assigned(self, txn: TransactionLog, event: Event) -> None:
+    def _on_task_assigned(self, txn: TransactionLog, event: TaskAssignedEvent) -> None:
         """Handle successful task assignment to a worker.
 
         Called AFTER successful dispatch RPC. Commits resources and creates attempt.
@@ -1069,7 +1071,6 @@ class ControllerState:
         Creates an attempt in PENDING state. The task transitions to RUNNING
         when the worker reports TASK_STATE_CHANGED with RUNNING.
         """
-        assert event.task_id and event.worker_id
         task = self._tasks[event.task_id]
         job = self._jobs[task.job_id]
         worker = self._workers[event.worker_id]
@@ -1087,13 +1088,12 @@ class ControllerState:
 
         txn.log("task_assigned", event.task_id, worker_id=str(event.worker_id))
 
-    def _on_task_state_changed(self, txn: TransactionLog, event: Event) -> None:
+    def _on_task_state_changed(self, txn: TransactionLog, event: TaskStateChangedEvent) -> None:
         """Handle all task state transitions.
 
         Delegates to task.handle_attempt_result() which contains the canonical
         state transition logic including retry budget management.
         """
-        assert event.task_id and event.new_state is not None
         task = self._tasks[event.task_id]
         job = self._jobs[task.job_id]
         old_state = task.state
