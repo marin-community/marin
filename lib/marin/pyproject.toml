@@ -37,7 +37,7 @@ dependencies = [
     "multiprocess==0.70.16",
     "numpy",
     "openai",
-    "pandas",
+    "pandas>=2.0",
     "plotly",
     "pyarrow>=22",
     "ray==2.53.0",
