@@ -26,9 +26,7 @@ from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlparse
 
-import fsspec
 import requests
-from fsspec.implementations.local import LocalFileSystem
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
@@ -48,17 +46,6 @@ _SENSITIVE_ENV_KEYS = frozenset(
         "AWS_SESSION_TOKEN",
         "GITHUB_TOKEN",
     }
-)
-
-TOKENIZER_FILENAMES: tuple[str, ...] = (
-    "tokenizer_config.json",
-    "tokenizer.json",
-    "tokenizer.model",
-    "special_tokens_map.json",
-    "added_tokens.json",
-    "merges.txt",
-    "vocab.json",
-    "config.json",
 )
 
 
@@ -98,17 +85,36 @@ class VllmServerHandle:
         raise RuntimeError(f"Unexpected output from docker inspect: {output!r}")
 
     def logs_tail(self, *, max_lines: int = 200) -> str:
-        container_name = self._require_docker_container()
-        result = subprocess.run(
-            ["docker", "logs", "--tail", str(max_lines), container_name],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            stderr = (result.stderr or "").strip()
-            return f"<failed to read docker logs for {container_name}: {stderr}>"
-        return result.stdout
+        if self.mode == "docker":
+            container_name = self._require_docker_container()
+            result = subprocess.run(
+                ["docker", "logs", "--tail", str(max_lines), container_name],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                return f"<failed to read docker logs for {container_name}: {stderr}>"
+            return result.stdout
+        elif self.mode == "native":
+            if not self.log_dir:
+                return "<no log directory available for native vLLM server>"
+
+            stdout_path = os.path.join(self.log_dir, "stdout.log")
+            stderr_path = os.path.join(self.log_dir, "stderr.log")
+
+            def _tail(path: str) -> str:
+                try:
+                    with open(path, "r") as f:
+                        lines = f.readlines()
+                    return "".join(lines[-max_lines:])
+                except Exception as exc:
+                    return f"<failed to read {path}: {exc}>"
+
+            return "--- stdout (tail) ---\n" f"{_tail(stdout_path)}\n" "--- stderr (tail) ---\n" f"{_tail(stderr_path)}"
+        else:
+            raise RuntimeError(f"Unknown vLLM server mode {self.mode!r} for logs_tail().")
 
     def inspect(self) -> str:
         container_name = self._require_docker_container()
@@ -142,11 +148,6 @@ def resolve_vllm_mode(mode: Literal["native", "docker"] | None) -> Literal["nati
 def _is_object_store_path(path: str) -> bool:
     parsed = urlparse(path)
     return parsed.scheme in {"gs", "s3"}
-
-
-def _is_remote_path(path: str) -> bool:
-    fs, _ = fsspec.core.url_to_fs(path)
-    return not isinstance(fs, LocalFileSystem)
 
 
 def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
@@ -183,33 +184,6 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     return args
 
 
-def _stage_remote_tokenizer_dir(remote_dir: str) -> str | None:
-    local_dir = tempfile.mkdtemp(prefix="marin-tokenizer-")
-    copied_any = False
-    try:
-        for filename in TOKENIZER_FILENAMES:
-            remote_path = f"{remote_dir.rstrip('/')}/{filename}"
-            if not _is_remote_path(remote_path):
-                continue
-            fs, fs_path = fsspec.core.url_to_fs(remote_path)
-            if not fs.exists(fs_path):
-                continue
-            local_path = os.path.join(local_dir, filename)
-            with fsspec.open(remote_path, "rb") as src:
-                data = src.read()
-            with open(local_path, "wb") as dst:
-                dst.write(data)
-            copied_any = True
-    except Exception:
-        shutil.rmtree(local_dir, ignore_errors=True)
-        raise
-
-    if not copied_any:
-        shutil.rmtree(local_dir, ignore_errors=True)
-        return None
-    return local_dir
-
-
 def _get_first_model_id(server_url: str) -> str:
     response = requests.get(f"{server_url}/models", timeout=30)
     response.raise_for_status()
@@ -237,7 +211,6 @@ class VllmEnvironment:
         docker_image: str | None = None,
         docker_run_args: list[str] | None = None,
         extra_args: list[str] | None = None,
-        use_server: bool | None = None,
     ) -> None:
         self.model_name_or_path, self.model = resolve_model_name_or_path(model)
         self.mode = resolve_vllm_mode(mode)
@@ -247,15 +220,13 @@ class VllmEnvironment:
         self.docker_image = docker_image
         self.docker_run_args = docker_run_args
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
-        self.use_server = use_server if use_server is not None else (self.mode == "docker")
 
         self.vllm_server: VllmServerHandle | None = None
-        self.staged_tokenizer_dir: str | None = None
         self.model_id: str | None = None
         self._started = False
 
     def __enter__(self) -> "VllmEnvironment":
-        if self.use_server and self.vllm_server is None:
+        if self.vllm_server is None:
             logger.info(
                 "Starting vLLM environment",
                 extra={
@@ -289,16 +260,21 @@ class VllmEnvironment:
                 )
             except Exception:
                 logger.exception("Failed to start vLLM environment", extra=self.debug_snapshot())
-                if self.vllm_server is not None and self.vllm_server.mode == "docker":
+                if self.vllm_server is not None:
                     try:
-                        if self.vllm_server.docker_run_cmd:
-                            logger.error("vLLM Docker run command (redacted): %s", self.vllm_server.docker_run_cmd)
-                        logs = self.vllm_server.logs_tail()
-                        inspect = self.vllm_server.inspect()
-                        logger.error("vLLM Docker logs (tail):\n%s", logs)
-                        logger.error("vLLM Docker inspect:\n%s", inspect)
+                        if self.vllm_server.mode == "docker":
+                            if self.vllm_server.docker_run_cmd:
+                                logger.error("vLLM Docker run command (redacted): %s", self.vllm_server.docker_run_cmd)
+                            logs = self.vllm_server.logs_tail()
+                            inspect = self.vllm_server.inspect()
+                            logger.error("vLLM Docker logs (tail):\n%s", logs)
+                            logger.error("vLLM Docker inspect:\n%s", inspect)
+                        else:
+                            logger.error("vLLM native log dir: %s", self.vllm_server.log_dir)
+                            logs = self.vllm_server.logs_tail()
+                            logger.error("vLLM native logs (tail):\n%s", logs)
                     except Exception:
-                        logger.exception("Failed to collect vLLM Docker diagnostics")
+                        logger.exception("Failed to collect vLLM diagnostics")
                 raise
         self._started = True
         return self
@@ -310,9 +286,6 @@ class VllmEnvironment:
         if self.vllm_server is not None:
             self.vllm_server.stop()
             self.vllm_server = None
-        if self.staged_tokenizer_dir and os.path.exists(self.staged_tokenizer_dir):
-            shutil.rmtree(self.staged_tokenizer_dir, ignore_errors=True)
-            self.staged_tokenizer_dir = None
 
     @property
     def server_url(self) -> str:
@@ -331,58 +304,6 @@ class VllmEnvironment:
             "docker_image": self.vllm_server.docker_image if self.vllm_server else self.docker_image,
             "docker_run_cmd": self.vllm_server.docker_run_cmd if self.vllm_server else None,
         }
-
-    def lm_eval_config(self) -> tuple[str, str]:
-        if self.use_server:
-            if not self._started or self.vllm_server is None or self.model_id is None:
-                raise RuntimeError("VllmEnvironment must be entered before requesting lm-eval config.")
-
-            tokenizer = None
-            if isinstance(self.model.engine_kwargs.get("tokenizer"), str):
-                tokenizer = self.model.engine_kwargs.get("tokenizer")
-            elif _is_remote_path(self.model_name_or_path):
-                self.staged_tokenizer_dir = _stage_remote_tokenizer_dir(self.model_name_or_path)
-                if self.staged_tokenizer_dir is None:
-                    raise ValueError(
-                        "lm-eval's `local-completions` model requires a Hugging Face tokenizer name/path, but "
-                        f"the served model id is a remote object-store URI: {self.model_id!r}, and no tokenizer files "
-                        f"were found under {self.model_name_or_path!r}. "
-                        "Set `engine_kwargs['tokenizer']` to an HF tokenizer id (e.g. "
-                        "'meta-llama/Llama-3.1-8B-Instruct') or a local tokenizer path."
-                    )
-                tokenizer = self.staged_tokenizer_dir
-
-            if self.model.apply_chat_template:
-                lm_eval_model = "local-chat-completions"
-                pretrained_args = (
-                    f"model={self.model_id},"
-                    f"base_url={self.server_url}/chat/completions,"
-                    "tokenizer_backend=huggingface,"
-                    "tokenized_requests=False"
-                )
-            else:
-                lm_eval_model = "local-completions"
-                pretrained_args = (
-                    f"model={self.model_id},"
-                    f"base_url={self.server_url}/completions,"
-                    "tokenizer_backend=huggingface,"
-                    "tokenized_requests=False"
-                )
-            if tokenizer is not None:
-                pretrained_args += f",tokenizer={tokenizer}"
-            if self.model.engine_kwargs:
-                for key, value in self.model.engine_kwargs.items():
-                    if key == "tokenizer":
-                        continue
-                    pretrained_args += f",{key}={value}"
-            return lm_eval_model, pretrained_args
-
-        lm_eval_model = "vllm"
-        pretrained_args = f"pretrained={self.model_name_or_path}"
-        if self.model.engine_kwargs:
-            for key, value in self.model.engine_kwargs.items():
-                pretrained_args += f",{key}={value}"
-        return lm_eval_model, pretrained_args
 
 
 def _pick_free_port(host: str) -> int:

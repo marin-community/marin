@@ -15,11 +15,11 @@
 import logging
 from abc import ABC
 
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.cluster import ResourceConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.utils import remove_tpu_lockfile_on_exit
+from marin.evaluation.evaluators.ray_helpers import launch_evaluate_with_ray
 
 logger = logging.getLogger(__name__)
 
@@ -56,20 +56,15 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """
         Launches the evaluation run with Fray.
         """
-
-        def _run():
-            with remove_tpu_lockfile_on_exit():
-                self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
-
-        job_request = JobRequest(
-            name="levanter-tpu-eval",
-            entrypoint=Entrypoint.from_callable(_run),
-            resources=resource_config,
-            environment=EnvironmentConfig.create(
-                extras=["eval", "tpu"],
-            ),
+        launch_evaluate_with_ray(
+            evaluator=self,
+            job_name="levanter-tpu-eval",
+            model=model,
+            evals=evals,
+            output_path=output_path,
+            resource_config=resource_config,
+            max_eval_instances=max_eval_instances,
+            wandb_tags=wandb_tags,
+            extras=("eval", "tpu"),
+            configure_logging=False,
         )
-
-        cluster = current_cluster()
-        job_id = cluster.launch(job_request)
-        cluster.wait(job_id, raise_on_failure=True)

@@ -57,7 +57,6 @@ def run_one_query(
         timeout_seconds=3600,
         mode=mode,
         docker_image=docker_image,
-        use_server=True,
     )
     try:
         with env:
