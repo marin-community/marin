@@ -41,14 +41,11 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from levanter.utils import fsspec_utils
 
-from experiments.anneal_config import AnnealConfig
 from experiments.evals.task_configs import (
     CORE_TASKS,
-    MMLU_TASKS,
     convert_to_levanter_task_config,
-    convert_to_task_metrics,
 )
-from experiments.llama import compute_num_parameters, llama_8b
+from experiments.llama import compute_num_parameters
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
@@ -59,7 +56,6 @@ from marin.execution.executor import (
     InputName,
     VersionedValue,
     ensure_versioned,
-    get_executor_step,
     this_output_path,
     unwrap_versioned_value,
 )
@@ -72,7 +68,6 @@ from marin.processing.tokenize import (
     tokenize,
 )
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
-from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
     TrainLmOnPodConfig,
     run_levanter_train_lm,
@@ -509,77 +504,6 @@ def default_sft(
     )
 
 
-def default_anneal(name: str, anneal_config: AnnealConfig) -> ExecutorStep:
-    """
-
-    Runs an annealing training run. This is a kind of continued pre-training intended
-    to replicate Llama 3-style data ablations (or XXX databricks microannealing)
-
-    Args:
-        name: The name of the training run. Will form the basis of the output path for the executor step.
-              `checkpoints/` will be prepended to the name.
-        anneal_config: Configuration for the annealing run.
-    Returns:
-
-        An ExecutorStep configured for annealing.
-
-    """
-    checkpoint_path = anneal_config.initialize_from_checkpoint_path
-    imputed_checkpoint_step = _impute_checkpoint_step(checkpoint_path)
-
-    num_anneal_steps = anneal_config.num_anneal_training_tokens / (
-        anneal_config.train_batch_size * AnnealConfig.LLAMA_MAX_SEQ_LEN
-    )
-    num_train_steps = imputed_checkpoint_step + num_anneal_steps
-
-    # We need to simulate having a learning rate that decays from anneal_config.learning rate to 0
-    # over the course of the training. However, we have already taken anneal_config.checkpoint_step steps,
-    # so we need to calculate what the max lr would've been if we had started training with a linear schedule
-    # and then decayed it to 0 over the course of the training.
-    # The formula for the max lr is:
-    # max_lr = num_train_steps * slope
-    # slope = anneal_config.learning_rate / num_anneal_steps
-
-    learning_rate = num_train_steps * (anneal_config.learning_rate / num_anneal_steps)
-
-    anneal_stage_train_config = SimpleTrainConfig(
-        resources=anneal_config.resources,
-        train_batch_size=anneal_config.train_batch_size,
-        num_train_steps=num_train_steps,
-        learning_rate=learning_rate,
-        weight_decay=anneal_config.weight_decay,
-        min_lr_ratio=anneal_config.min_lr_ratio,
-        steps_per_export=anneal_config.steps_per_export,
-        lr_schedule=anneal_config.lr_schedule,
-        initialize_from_checkpoint_path=checkpoint_path,
-    )
-
-    return default_train(
-        name=name,
-        tokenized=anneal_config.dataset_config,
-        model_config=llama_8b,
-        train_config=anneal_stage_train_config,
-        use_default_validation=anneal_config.use_default_validation,
-        eval_harness_tasks=MMLU_TASKS,
-    )
-
-
-def _impute_checkpoint_step(checkpoint_path: str | InputName) -> int:
-    """
-    Extracts the checkpoint step from a checkpoint path.
-    Args:
-        checkpoint_path:
-
-    Returns:
-
-    """
-    if isinstance(checkpoint_path, InputName):
-        checkpoint_path = checkpoint_path.name
-    imputed_checkpoint_steps = checkpoint_path.index("step-")
-    imputed_checkpoint_step = int(checkpoint_path[imputed_checkpoint_steps + len("step-") :])
-    return imputed_checkpoint_step
-
-
 @lru_cache
 def _cached_load_tokenizer(tokenizer_name: str):
     return load_tokenizer(tokenizer_name)
@@ -637,41 +561,3 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 
     return tokenizer
-
-
-def default_scaling_law_pred(
-    ladder_runs: Sequence[ExecutorStep | InputName | str],
-    pred_run: ExecutorStep | InputName | str | None = None,
-    task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb",),
-    task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] | None = None,
-):
-    """
-    Given a suite of small models, predict the performance on a number of (N, D) values.
-    """
-    # get the executor steps or run IDs for the ladder runs and the pred run
-    ladder_steps_or_ids = [get_executor_step(run) if not isinstance(run, str) else run for run in ladder_runs]
-
-    pred_run_or_id = None
-    if pred_run:
-        pred_run_or_id = get_executor_step(pred_run) if not isinstance(pred_run, str) else pred_run
-
-    # convert the task accuracies to strings if they are `EvalTaskConfig`s
-    if task_accuracies is not None:
-        task_accuracies = convert_to_task_metrics(task_accuracies, metric="acc")
-
-    if pred_run_or_id:
-        name = pred_run_or_id if isinstance(pred_run_or_id, str) else pred_run_or_id.name
-    else:
-        name = "projection"
-
-    return ExecutorStep(
-        name=f"""scaling_laws/{name}""",
-        fn=run_scaling_law_analysis,
-        config=ScalingLawConfig(
-            name=name,
-            ladder_model_steps=ladder_steps_or_ids,
-            pred_model_step=pred_run_or_id,
-            task_losses=task_losses,
-            task_accuracies=task_accuracies,
-        ),
-    )

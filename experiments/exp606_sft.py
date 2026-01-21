@@ -12,13 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from experiments.defaults import default_sft, default_tokenize
-from experiments.exp964_custom_chat_tokenizer import llama3_instruct_chat_format
-from experiments.llama import llama3_instruct_tokenizer, llama_8b
+"""
+SFT dataset definitions for Tulu-3 instruction tuning.
+
+This module provides the `tulu3_llama_data_old` dataset configuration and
+`tulu_sft_config` used by various SFT training experiments.
+"""
+
+from fray.cluster import ResourceConfig
+
+from experiments.defaults import default_tokenize
+from experiments.llama import llama3_instruct_chat_format, llama3_instruct_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
-from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_data_config
 
 # Get instruction dataset
@@ -53,11 +59,3 @@ tulu_sft_config = SimpleSFTConfig(
     max_seq_len=4096,
     seed=1,
 )
-
-# Configure SFT training
-sft_step = default_sft(
-    name="tulu3_llama3_sft", tokenized=tulu3_llama_data_old, model_config=llama_8b, sft_config=tulu_sft_config
-)
-
-if __name__ == "__main__":
-    executor_main(steps=[tulu3_llama_tokenize_step, sft_step])

@@ -9,11 +9,12 @@ description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
-    "marin",
-    "levanter",
-    "zephyr",
-    "haliax",
+    "iris",
     "fray",
+    "haliax",
+    "levanter",
+    "marin",
+    "zephyr",
 ]
 
 [tool.uv]
@@ -25,14 +26,16 @@ override-dependencies = [
 
 [tool.uv.workspace]
 members = [
-    "lib/marin",
-    "lib/levanter",
-    "lib/zephyr",
-    "lib/haliax",
+    "lib/iris",
     "lib/fray",
+    "lib/haliax",
+    "lib/levanter",
+    "lib/marin",
+    "lib/zephyr",
 ]
 
 [tool.uv.sources]
+iris = { workspace = true }
 fray = { workspace = true }
 haliax = { workspace = true }
 levanter = { workspace = true }
@@ -103,7 +106,6 @@ project-excludes = [
     "tests/**",
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
-    "lib/**/post_training/**",  # No longer used
     "lib/marin/src/marin/processing/classification/deduplication/vendor", # Exclude vendor stuff in dedupe
 ]
 
