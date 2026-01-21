@@ -16,6 +16,8 @@
 
 import logging
 import threading
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -30,13 +32,16 @@ from iris.cluster.controller.events import (
     TaskStateChangedEvent,
     WorkerFailedEvent,
 )
-from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
-from iris.cluster.types import TaskId
+from iris.cluster.controller.state import ControllerJob, ControllerState, ControllerTask, ControllerWorker
+from iris.cluster.types import JobId, TaskId
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import ExponentialBackoff, now_ms
 
 logger = logging.getLogger(__name__)
+
+# RPC timeout for dispatch - worker should respond immediately since execution is async
+DISPATCH_RPC_TIMEOUT_SECONDS = 5.0
 
 
 class WorkerClient(Protocol):
@@ -106,6 +111,7 @@ class ControllerConfig:
         bundle_dir: Directory for storing uploaded job bundles (optional)
         scheduler_interval_seconds: How often the scheduler checks for pending tasks (default: 0.5)
         worker_timeout_seconds: Time after which a worker without heartbeat is marked unhealthy (default: 60.0)
+        max_dispatch_parallelism: Maximum concurrent dispatch RPCs (default: 32)
     """
 
     host: str = "127.0.0.1"
@@ -113,6 +119,7 @@ class ControllerConfig:
     bundle_dir: Path | None = None
     scheduler_interval_seconds: float = 0.5
     worker_timeout_seconds: float = 60.0
+    max_dispatch_parallelism: int = 32
 
 
 class Controller:
@@ -166,6 +173,12 @@ class Controller:
         self._scheduling_loop_thread: threading.Thread | None = None
         self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
+
+        # Thread pool for parallel task dispatch
+        self._dispatch_executor = ThreadPoolExecutor(
+            max_workers=config.max_dispatch_parallelism,
+            thread_name_prefix="dispatch",
+        )
 
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
@@ -223,6 +236,9 @@ class Controller:
         if self._server_thread:
             self._server_thread.join(timeout=5.0)
 
+        # Shutdown dispatch executor
+        self._dispatch_executor.shutdown(wait=True, cancel_futures=True)
+
     def _run_scheduling_loop(self) -> None:
         """Main controller loop running scheduling and worker timeout checks."""
         while not self._stop:
@@ -252,39 +268,62 @@ class Controller:
             self._apply_schedule_result(result)
 
     def _apply_schedule_result(self, result: SchedulingResult) -> None:
-        """Apply scheduling results: dispatch tasks and handle timeouts."""
+        """Apply scheduling results: dispatch tasks and handle timeouts.
+
+        Groups assignments by job for coscheduled handling. All tasks are
+        dispatched in parallel for performance, with resource commits
+        happening synchronously before RPC dispatch.
+        """
         for task in result.timed_out_tasks:
             self._mark_task_unschedulable(task)
 
-        for task, worker in result.assignments:
-            self._dispatch_task(task, worker)
-
-    def _dispatch_task(
-        self,
-        task: ControllerTask,
-        worker: ControllerWorker,
-    ) -> None:
-        """Dispatch a task to a worker via RPC.
-
-        Creates attempt before RPC so worker reports are always valid:
-        1. Fire TASK_ASSIGNED event (commits resources + creates attempt)
-        2. Send RPC with valid attempt_id
-        3. On failure: revert attempt and mark worker failed
-        """
-        job = self._state.get_job(task.job_id)
-        if not job:
+        if not result.assignments:
             return
 
-        # Create attempt BEFORE RPC so worker state reports have a valid attempt_id
-        self._state.handle_event(
-            TaskAssignedEvent(
-                task_id=task.task_id,
-                worker_id=worker.worker_id,
-            )
-        )
+        # Group assignments by job for coscheduled handling
+        by_job: dict[JobId, list[tuple[ControllerTask, ControllerWorker]]] = defaultdict(list)
+        for task, worker in result.assignments:
+            by_job[task.job_id].append((task, worker))
 
-        try:
-            stub = self._stub_factory.get_stub(worker.address)
+        for job_id, job_assignments in by_job.items():
+            job = self._state.get_job(job_id)
+            if job is None:
+                continue
+
+            if job.is_coscheduled:
+                self._dispatch_coscheduled_group(job_assignments, job)
+            else:
+                self._dispatch_tasks_parallel(job_assignments)
+
+    def _dispatch_tasks_parallel(
+        self,
+        assignments: list[tuple[ControllerTask, ControllerWorker]],
+    ) -> None:
+        """Dispatch multiple independent tasks in parallel.
+
+        Flow:
+        1. Commit all resources synchronously (fire events sequentially)
+        2. Send all RPCs in parallel with timeout
+        3. Handle failures by reverting attempt and marking worker failed
+        """
+        if not assignments:
+            return
+
+        # Phase 1: Commit all resources synchronously and build RPC requests
+        committed: list[tuple[ControllerTask, ControllerWorker, cluster_pb2.Worker.RunTaskRequest]] = []
+        for task, worker in assignments:
+            job = self._state.get_job(task.job_id)
+            if not job:
+                continue
+
+            # Create attempt BEFORE RPC so worker state reports have a valid attempt_id
+            self._state.handle_event(
+                TaskAssignedEvent(
+                    task_id=task.task_id,
+                    worker_id=worker.worker_id,
+                )
+            )
+
             request = cluster_pb2.Worker.RunTaskRequest(
                 job_id=str(task.job_id),
                 task_id=str(task.task_id),
@@ -303,27 +342,145 @@ class Controller:
                 ports=list(job.request.ports),
                 attempt_id=task.current_attempt_id,
             )
+            committed.append((task, worker, request))
 
-            logger.info(
-                f"Dispatching task {task.task_id} to worker {worker.worker_id} at {worker.address} "
-                f"(cpu={job.request.resources.cpu}, memory={job.request.resources.memory_bytes})"
-            )
-            stub.run_task(request)
+        if not committed:
+            return
 
-            logger.info(f"Successfully dispatched task {task.task_id} to worker {worker.worker_id}")
+        # Phase 2: Send RPCs in parallel
+        futures = {
+            self._dispatch_executor.submit(self._send_run_task_rpc, task, worker, request): (task, worker)
+            for task, worker, request in committed
+        }
 
-        except Exception as e:
-            # FAILURE: Revert attempt and mark worker failed
-            task.revert_attempt()
+        # Phase 3: Collect results and handle failures
+        failed: list[tuple[ControllerTask, ControllerWorker, str]] = []
+        try:
+            for future in as_completed(futures, timeout=DISPATCH_RPC_TIMEOUT_SECONDS + 1):
+                task, worker = futures[future]
+                try:
+                    future.result(timeout=0)
+                except Exception as e:
+                    failed.append((task, worker, str(e)))
+        except TimeoutError:
+            # Some futures didn't complete in time, mark them as failed
+            for future, (task, worker) in futures.items():
+                if not future.done():
+                    failed.append((task, worker, "Dispatch RPC timed out"))
+
+        # Phase 4: Handle failures sequentially (fire events)
+        # WorkerFailedEvent will cascade to all tasks on the worker, transitioning them
+        # to WORKER_FAILED state. Don't call revert_attempt() - the event handler manages
+        # the full task lifecycle.
+        all_tasks_to_kill: set[TaskId] = set()
+        for task, worker, error in failed:
+            logger.warning(f"Dispatch failed for {task.task_id}: {error}")
             txn = self._state.handle_event(
                 WorkerFailedEvent(
                     worker_id=worker.worker_id,
-                    error=f"Dispatch RPC failed: {e}",
+                    error=f"Dispatch RPC failed: {error}",
                 )
             )
-            logger.exception("Failed to dispatch task %s to worker %s", task.task_id, worker.address)
-            if txn.tasks_to_kill:
-                self._kill_tasks_on_workers(txn.tasks_to_kill)
+            all_tasks_to_kill.update(txn.tasks_to_kill)
+
+        if all_tasks_to_kill:
+            self._kill_tasks_on_workers(all_tasks_to_kill)
+
+    def _dispatch_coscheduled_group(
+        self,
+        assignments: list[tuple[ControllerTask, ControllerWorker]],
+        job: ControllerJob,
+    ) -> None:
+        """Dispatch all tasks in a coscheduled group in parallel.
+
+        Commits all resources first, then sends all RPCs in parallel.
+        On any RPC failure, releases resources for failed tasks.
+        Successfully dispatched tasks continue running.
+        """
+        if not assignments:
+            return
+
+        # Phase 1: Commit all resources synchronously and build RPC requests
+        committed: list[tuple[ControllerTask, ControllerWorker, cluster_pb2.Worker.RunTaskRequest]] = []
+        for task, worker in assignments:
+            self._state.handle_event(
+                TaskAssignedEvent(
+                    task_id=task.task_id,
+                    worker_id=worker.worker_id,
+                )
+            )
+
+            request = cluster_pb2.Worker.RunTaskRequest(
+                job_id=str(task.job_id),
+                task_id=str(task.task_id),
+                task_index=task.task_index,
+                num_tasks=len(self._state.get_job_tasks(task.job_id)),
+                serialized_entrypoint=job.request.serialized_entrypoint,
+                environment=cluster_pb2.EnvironmentConfig(
+                    workspace=job.request.environment.workspace,
+                    env_vars=dict(job.request.environment.env_vars),
+                ),
+                bundle_gcs_path=job.request.bundle_gcs_path,
+                resources=cluster_pb2.ResourceSpecProto(
+                    cpu=job.request.resources.cpu,
+                    memory_bytes=job.request.resources.memory_bytes,
+                ),
+                ports=list(job.request.ports),
+                attempt_id=task.current_attempt_id,
+            )
+            committed.append((task, worker, request))
+
+        # Phase 2: Send all RPCs in parallel
+        futures = {
+            self._dispatch_executor.submit(self._send_run_task_rpc, task, worker, request): (task, worker)
+            for task, worker, request in committed
+        }
+
+        # Phase 3: Collect results
+        failed: list[tuple[ControllerTask, ControllerWorker, str]] = []
+        try:
+            for future in as_completed(futures, timeout=DISPATCH_RPC_TIMEOUT_SECONDS + 1):
+                task, worker = futures[future]
+                try:
+                    future.result(timeout=0)
+                except Exception as e:
+                    failed.append((task, worker, str(e)))
+        except TimeoutError:
+            # Some futures didn't complete in time
+            for future, (task, worker) in futures.items():
+                if not future.done():
+                    failed.append((task, worker, "Dispatch RPC timed out"))
+
+        # Phase 4: Handle failures
+        # For coscheduled jobs, if ANY task fails to dispatch, we have a problem.
+        # The successfully dispatched tasks will start running, but the group is incomplete.
+        # WorkerFailedEvent will cascade to tasks, marking them WORKER_FAILED. The running
+        # tasks will eventually fail due to missing peers (e.g., collective ops will timeout).
+        all_tasks_to_kill: set[TaskId] = set()
+        for task, worker, error in failed:
+            logger.warning(f"Coscheduled dispatch failed for {task.task_id}: {error}")
+            txn = self._state.handle_event(
+                WorkerFailedEvent(
+                    worker_id=worker.worker_id,
+                    error=f"Dispatch RPC failed: {error}",
+                )
+            )
+            all_tasks_to_kill.update(txn.tasks_to_kill)
+
+        if all_tasks_to_kill:
+            self._kill_tasks_on_workers(all_tasks_to_kill)
+
+    def _send_run_task_rpc(
+        self,
+        task: ControllerTask,
+        worker: ControllerWorker,
+        request: cluster_pb2.Worker.RunTaskRequest,
+    ) -> None:
+        """Send run_task RPC with timeout. Called from thread pool."""
+        logger.info(f"Dispatching task {task.task_id} to worker {worker.worker_id} at {worker.address}")
+        stub = self._stub_factory.get_stub(worker.address)
+        stub.run_task(request)
+        logger.info(f"Successfully dispatched task {task.task_id} to worker {worker.worker_id}")
 
     def _mark_task_unschedulable(self, task: ControllerTask) -> None:
         """Mark a task as unschedulable due to timeout."""

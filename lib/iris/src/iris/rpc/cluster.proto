@@ -279,6 +279,11 @@ message WorkerMetadata {
   //   tpu-topology: TPU topology variant, e.g. "v5litepod-16" (string)
   //   tpu-vm-count: Number of VMs in the TPU slice (int)
   map<string, AttributeValue> attributes = 40;
+
+  // Taints for constraint-based scheduling.
+  // Each taint string (e.g., "maintenance") is exposed as attribute "taint:<name>" = "true".
+  // Jobs can filter out tainted workers using NOT_EXISTS constraints.
+  repeated string taints = 41;
 }
 
 // ============================================================================

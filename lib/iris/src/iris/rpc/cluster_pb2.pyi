@@ -131,7 +131,7 @@ class TaskAttempt(_message.Message):
     started_at_ms: int
     finished_at_ms: int
     is_worker_failure: bool
-    def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., is_worker_failure: bool = ...) -> None: ...
+    def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., is_worker_failure: _Optional[bool] = ...) -> None: ...
 
 class ResourceUsage(_message.Message):
     __slots__ = ("memory_mb", "disk_mb", "cpu_millicores", "memory_peak_mb", "cpu_percent", "process_count")
@@ -159,7 +159,7 @@ class BuildMetrics(_message.Message):
     build_finished_ms: int
     from_cache: bool
     image_tag: str
-    def __init__(self, build_started_ms: _Optional[int] = ..., build_finished_ms: _Optional[int] = ..., from_cache: bool = ..., image_tag: _Optional[str] = ...) -> None: ...
+    def __init__(self, build_started_ms: _Optional[int] = ..., build_finished_ms: _Optional[int] = ..., from_cache: _Optional[bool] = ..., image_tag: _Optional[str] = ...) -> None: ...
 
 class JobStatus(_message.Message):
     __slots__ = ("job_id", "state", "exit_code", "error", "started_at_ms", "finished_at_ms", "ports", "resource_usage", "status_message", "build_metrics", "serialized_result", "parent_job_id", "failure_count", "preemption_count", "num_tasks", "tasks_pending", "tasks_running", "tasks_succeeded", "tasks_failed", "tasks")
@@ -260,7 +260,7 @@ class ResourceSpecProto(_message.Message):
     replicas: int
     preemptible: bool
     regions: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., preemptible: bool = ..., regions: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., preemptible: _Optional[bool] = ..., regions: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
     __slots__ = ("workspace", "pip_packages", "env_vars", "extras")
@@ -308,7 +308,7 @@ class CoschedulingConfig(_message.Message):
     def __init__(self, group_by: _Optional[str] = ...) -> None: ...
 
 class WorkerMetadata(_message.Message):
-    __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "disk_bytes", "device", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone", "attributes")
+    __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "disk_bytes", "device", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone", "attributes", "taints")
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -332,6 +332,7 @@ class WorkerMetadata(_message.Message):
     GCE_INSTANCE_NAME_FIELD_NUMBER: _ClassVar[int]
     GCE_ZONE_FIELD_NUMBER: _ClassVar[int]
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
+    TAINTS_FIELD_NUMBER: _ClassVar[int]
     hostname: str
     ip_address: str
     cpu_count: int
@@ -348,7 +349,8 @@ class WorkerMetadata(_message.Message):
     gce_instance_name: str
     gce_zone: str
     attributes: _containers.MessageMap[str, AttributeValue]
-    def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ...) -> None: ...
+    taints: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., taints: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class Controller(_message.Message):
     __slots__ = ()
@@ -396,7 +398,7 @@ class Controller(_message.Message):
         INCLUDE_RESULT_FIELD_NUMBER: _ClassVar[int]
         job_id: str
         include_result: bool
-        def __init__(self, job_id: _Optional[str] = ..., include_result: bool = ...) -> None: ...
+        def __init__(self, job_id: _Optional[str] = ..., include_result: _Optional[bool] = ...) -> None: ...
     class GetJobStatusResponse(_message.Message):
         __slots__ = ("job",)
         JOB_FIELD_NUMBER: _ClassVar[int]
@@ -463,7 +465,7 @@ class Controller(_message.Message):
         CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
         accepted: bool
         controller_address: str
-        def __init__(self, accepted: bool = ..., controller_address: _Optional[str] = ...) -> None: ...
+        def __init__(self, accepted: _Optional[bool] = ..., controller_address: _Optional[str] = ...) -> None: ...
     class WorkerHealthStatus(_message.Message):
         __slots__ = ("worker_id", "healthy", "consecutive_failures", "last_heartbeat_ms", "running_job_ids")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -476,7 +478,7 @@ class Controller(_message.Message):
         consecutive_failures: int
         last_heartbeat_ms: int
         running_job_ids: _containers.RepeatedScalarFieldContainer[str]
-        def __init__(self, worker_id: _Optional[str] = ..., healthy: bool = ..., consecutive_failures: _Optional[int] = ..., last_heartbeat_ms: _Optional[int] = ..., running_job_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+        def __init__(self, worker_id: _Optional[str] = ..., healthy: _Optional[bool] = ..., consecutive_failures: _Optional[int] = ..., last_heartbeat_ms: _Optional[int] = ..., running_job_ids: _Optional[_Iterable[str]] = ...) -> None: ...
     class ListWorkersRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
@@ -619,7 +621,7 @@ class Worker(_message.Message):
         INCLUDE_RESULT_FIELD_NUMBER: _ClassVar[int]
         task_id: str
         include_result: bool
-        def __init__(self, task_id: _Optional[str] = ..., include_result: bool = ...) -> None: ...
+        def __init__(self, task_id: _Optional[str] = ..., include_result: _Optional[bool] = ...) -> None: ...
     class ListTasksRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
@@ -677,5 +679,5 @@ class Worker(_message.Message):
         healthy: bool
         uptime_ms: int
         running_tasks: int
-        def __init__(self, healthy: bool = ..., uptime_ms: _Optional[int] = ..., running_tasks: _Optional[int] = ...) -> None: ...
+        def __init__(self, healthy: _Optional[bool] = ..., uptime_ms: _Optional[int] = ..., running_tasks: _Optional[int] = ...) -> None: ...
     def __init__(self) -> None: ...

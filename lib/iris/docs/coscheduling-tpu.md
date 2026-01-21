@@ -1311,3 +1311,39 @@ Each stage can be merged independently and provides incremental value.
 
 ## Verdict
 The design is now theoretically sound and safe to implement. Proceed with implementation, keeping the above warnings in mind regarding timeouts and multi-job support.
+
+# Review Feedback
+
+## Verification Results
+
+### 1. Scheduler Logic (✅ Implemented)
+The `Scheduler` class correctly implements the design:
+- It remains stateless and uses `SchedulingContext` for efficient constraint matching.
+- Coscheduling logic correctly groups workers and ensures atomic assignment.
+- Constraints (EQ, NE, GT, GE, LT, LE, EXISTS, NOT_EXISTS) are fully supported.
+- Tests in `test_scheduler.py` cover these cases well.
+
+### 2. State Management (✅ Implemented)
+`ControllerState` correctly handles:
+- Coscheduled failure cascading: if one task fails, siblings are killed.
+- Job state derivation from task states.
+- Retry logic for failure vs preemption.
+
+### 3. Data Model (✅ Implemented)
+- `cluster.proto` includes `AttributeValue`, `Constraint`, and removing `gang_id`.
+- `types.py` has the corresponding Python types.
+
+## Missing Items / Issues
+
+### 1. Parallel Dispatch (❌ Missing)
+The design document specifies that the `Controller` should dispatch RPCs in parallel using a `ThreadPoolExecutor` to prevent slow workers from blocking the control plane.
+- **Current State**: `lib/iris/src/iris/cluster/controller/controller.py` was not modified and performs serial dispatch.
+- **Action**: Update `Controller` to use `ThreadPoolExecutor` for dispatch as described in the "Controller Integration" section.
+
+### 2. Taints Support (❌ Missing)
+The design mentions mapping taints to `taint:<name>` attributes.
+- **Current State**: `WorkerMetadata` in `cluster.proto` is missing the `taints` field. `env_probe.py` does not populate `taint:*` attributes.
+- **Action**: Add `repeated string taints` to `WorkerMetadata` in `cluster.proto` and update `env_probe.py` to populate corresponding attributes.
+
+### 3. Integration Tests
+While unit tests for the scheduler are good, we need integration tests ensuring that the `Controller` actually uses the new scheduler logic correctly, especially the event flow for coscheduling failure cascades.

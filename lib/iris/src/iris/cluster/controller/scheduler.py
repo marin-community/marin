@@ -35,6 +35,17 @@ from iris.time_utils import now_ms
 logger = logging.getLogger(__name__)
 
 
+def device_compatible(job_device_type: str, worker_device_type: str) -> bool:
+    """Check if a job's device requirement is compatible with a worker's device.
+
+    CPU jobs can run on any worker since every host has a CPU.
+    Accelerator jobs (GPU, TPU) require the specific hardware.
+    """
+    if job_device_type == "cpu":
+        return True
+    return job_device_type == worker_device_type
+
+
 def _evaluate_constraint(
     attr: AttributeValue | None,
     constraint: cluster_pb2.Constraint,
@@ -278,7 +289,7 @@ class WorkerCapacity:
             return False
 
         job_device_type = get_device_type(res.device)
-        if job_device_type != self.device_type:
+        if not device_compatible(job_device_type, self.device_type):
             return False
 
         job_variant = get_device_variant(res.device)

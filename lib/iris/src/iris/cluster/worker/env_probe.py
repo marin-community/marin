@@ -133,10 +133,19 @@ def collect_workdir_size_mb(workdir: Path) -> int:
     return int(size_str)
 
 
+def _get_taints() -> list[str]:
+    """Get worker taints from IRIS_WORKER_TAINTS env var (comma-separated)."""
+    taints_env = os.environ.get("IRIS_WORKER_TAINTS", "")
+    if not taints_env:
+        return []
+    return [t.strip() for t in taints_env.split(",") if t.strip()]
+
+
 def _build_worker_attributes(
     tpu_name: str,
     tpu_worker_id: str,
     device: cluster_pb2.DeviceConfig,
+    taints: list[str],
 ) -> dict[str, cluster_pb2.AttributeValue]:
     """Build worker attributes for constraint-based scheduling.
 
@@ -145,6 +154,7 @@ def _build_worker_attributes(
     - tpu-worker-id: Worker ID within the slice (0-indexed)
     - tpu-topology: TPU topology variant (e.g., "v5litepod-16")
     - tpu-vm-count: Number of VMs in the TPU slice
+    - taint:<name>: "true" for each taint (enables NOT_EXISTS filtering)
     """
     attributes: dict[str, cluster_pb2.AttributeValue] = {}
 
@@ -164,6 +174,10 @@ def _build_worker_attributes(
             except ValueError:
                 # Unknown topology - don't add vm-count attribute
                 logger.warning("Unknown TPU topology: %s", tpu_variant)
+
+    # Add taint attributes for constraint-based filtering
+    for taint in taints:
+        attributes[f"taint:{taint}"] = cluster_pb2.AttributeValue(string_value="true")
 
     return attributes
 
@@ -210,19 +224,23 @@ class DefaultEnvironmentProvider:
         else:
             device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
 
+        # Get worker taints
+        taints = _get_taints()
+
         memory_gb = memory_bytes // (1024**3)
         logger.info(
-            "Worker environment: hostname=%s ip=%s cpu=%d memory=%dGB gpu=%d tpu=%s",
+            "Worker environment: hostname=%s ip=%s cpu=%d memory=%dGB gpu=%d tpu=%s taints=%s",
             hostname,
             ip_address,
             cpu_count,
             memory_gb,
             gpu_count,
             tpu_name or "none",
+            taints or "none",
         )
 
         # Build worker attributes for constraint-based scheduling
-        attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device)
+        attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device, taints)
 
         return cluster_pb2.WorkerMetadata(
             hostname=hostname,
@@ -241,4 +259,5 @@ class DefaultEnvironmentProvider:
             gce_zone=gce_zone,
             device=device,
             attributes=attributes,
+            taints=taints,
         )

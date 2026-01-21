@@ -972,3 +972,116 @@ def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata
     assert len(result.assignments) == 4
     assigned_tpu_names = {w.attributes["tpu-name"].value for _, w in result.assignments}
     assert assigned_tpu_names == {"tpu-b"}
+
+
+# =============================================================================
+# Taint Constraint Tests
+# =============================================================================
+
+
+def test_taint_filters_out_workers(scheduler, state, job_request, worker_metadata):
+    """Job with NOT_EXISTS taint constraint excludes tainted workers."""
+    # Create 2 workers: one tainted, one not
+    meta1 = worker_metadata()
+    meta1.attributes["taint:maintenance"].string_value = "true"
+    register_worker(state, "w1", "addr1", meta1)
+
+    meta2 = worker_metadata()
+    # No taint attribute
+    register_worker(state, "w2", "addr2", meta2)
+
+    # Job with NOT_EXISTS constraint to exclude tainted workers
+    req = job_request()
+    c = req.constraints.add()
+    c.key = "taint:maintenance"
+    c.op = cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
+    submit_job(state, "j1", req)
+
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+
+    # Task should only be assigned to w2 (untainted)
+    assert len(result.assignments) == 1
+    assert result.assignments[0][1].worker_id == WorkerId("w2")
+
+
+def test_multiple_taints_filter_correctly(scheduler, state, job_request, worker_metadata):
+    """Multiple taint constraints AND together correctly."""
+    # Create 3 workers with different taint combinations
+    # w1: has both taints
+    meta1 = worker_metadata()
+    meta1.attributes["taint:maintenance"].string_value = "true"
+    meta1.attributes["taint:draining"].string_value = "true"
+    register_worker(state, "w1", "addr1", meta1)
+
+    # w2: has only maintenance taint
+    meta2 = worker_metadata()
+    meta2.attributes["taint:maintenance"].string_value = "true"
+    register_worker(state, "w2", "addr2", meta2)
+
+    # w3: no taints
+    meta3 = worker_metadata()
+    register_worker(state, "w3", "addr3", meta3)
+
+    # Job with NOT_EXISTS constraints for both taints
+    req = job_request()
+    c1 = req.constraints.add()
+    c1.key = "taint:maintenance"
+    c1.op = cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
+    c2 = req.constraints.add()
+    c2.key = "taint:draining"
+    c2.op = cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
+    submit_job(state, "j1", req)
+
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+
+    # Task should only be assigned to w3 (no taints)
+    assert len(result.assignments) == 1
+    assert result.assignments[0][1].worker_id == WorkerId("w3")
+
+
+def test_tainted_worker_not_used_for_coscheduled_job(scheduler, state, worker_metadata):
+    """Coscheduled job skips groups containing tainted workers."""
+    # Create TPU group "tpu-a" with 4 workers, one tainted
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        if i == 0:
+            meta.attributes["taint:maintenance"].string_value = "true"
+        register_worker(state, f"wa{i}", f"addra{i}", meta)
+
+    # Create TPU group "tpu-b" with 4 workers, none tainted
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes["tpu-name"].string_value = "tpu-b"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"wb{i}", f"addrb{i}", meta)
+
+    # Coscheduled job with 4 replicas + NOT_EXISTS taint constraint
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    c = req.constraints.add()
+    c.key = "taint:maintenance"
+    c.op = cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
+    submit_job(state, "j1", req)
+
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+
+    # All 4 tasks should be assigned to tpu-b (tpu-a has a tainted worker)
+    assert len(result.assignments) == 4
+    assigned_tpu_names = {w.attributes["tpu-name"].value for _, w in result.assignments}
+    assert assigned_tpu_names == {"tpu-b"}
