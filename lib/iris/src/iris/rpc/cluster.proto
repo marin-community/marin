@@ -278,12 +278,9 @@ message WorkerMetadata {
   //   tpu-worker-id: Worker ID within slice (int)
   //   tpu-topology: TPU topology variant, e.g. "v5litepod-16" (string)
   //   tpu-vm-count: Number of VMs in the TPU slice (int)
+  // Additional attributes can be set via IRIS_WORKER_ATTRIBUTES env var
+  // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
   map<string, AttributeValue> attributes = 40;
-
-  // Taints for constraint-based scheduling.
-  // Each taint string (e.g., "maintenance") is exposed as attribute "taint:<name>" = "true".
-  // Jobs can filter out tainted workers using NOT_EXISTS constraints.
-  repeated string taints = 41;
 }
 
 // ============================================================================
