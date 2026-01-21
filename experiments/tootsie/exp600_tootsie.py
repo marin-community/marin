@@ -31,7 +31,6 @@ import dataclasses
 
 from levanter.schedule import ScheduleStep
 
-from experiments.cooldown_anneal import dolmino_dclm
 from experiments.pretraining_datasets.dclm import (
     DCLM_MIXTURE_WEIGHTS,
     dclm_components_llama3,
@@ -209,7 +208,7 @@ dolma_splits = [
 all_dolma_steps = tokenize_dolma(tokenizer=llama3_tokenizer)
 phase_3_tokenized.update({dataset: step for dataset, step in all_dolma_steps.items() if dataset in dolma_splits})
 phase_3_tokenized["finemath_3_plus"] = finemath_3_plus_tokenized
-phase_3_tokenized["dolmino_dclm"] = dolmino_dclm
+phase_3_tokenized["dolmino_dclm"] = tokenize_dolmino_subset("dclm")
 
 
 # Dolma counts are done with llama 3 tokens (https://docs.google.com/spreadsheets/d/1ykVJ1EGJvA1zwF67FZGFBzlm7P0ZBIMuCpBW9Pqp7cY/edit?gid=0#gid=0)

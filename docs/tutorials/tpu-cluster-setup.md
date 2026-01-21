@@ -101,7 +101,7 @@ to setup the required keys for accessing the Marin Ray clusters.
 2. We have made a thin wrapper on top of `ray submit` called [ray-run](https://github.com/marin-community/tree/main/marin/run/ray_run.py) which can be used to easily specify the additional pip requirements and environment variables (Apart from those specified in the Dockerfile or cluster config). Ray run ensures following stuff:
    - All the dependencies in pyproject.toml are installed
    - Some of the necessary environment variables are set from file [vars.py](https://github.com/marin-community/tree/main/marin/run/vars.py)
-   - `src` directories of submodules are added to `PYTHONPATH`. This is useful for [co-developing](./co-develop.md)
+   - `src` directories of submodules are added to `PYTHONPATH`.
 
 
 You can use `--env_vars` and `--pip_deps` to specify additional environment variables and pip dependencies. For example, to run a job with additional pip dependencies `jax==0.4.35 and async-lru, along with the environment variable WANDB_API_KEY, you can use:

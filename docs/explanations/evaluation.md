@@ -26,7 +26,7 @@ The list of tasks we evaluate models on is configured in [`task_configs.py`](htt
 
 !!! note
 
-    See [`levanter_lm_eval_evaluator.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/evaluation/evaluators/levanter_lm_eval_evaluator.py) for the default evaluator code. For other evaluators, including running `lm-evaluation-harness` on GPU, HELM, and Alpaca, see [evaluators](https://github.com/marin-community/marin/tree/main/marin/evaluation/evaluators).
+    See [`levanter_lm_eval_evaluator.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/evaluation/evaluators/levanter_lm_eval_evaluator.py) for the default evaluator code. For other evaluators, including running `lm-evaluation-harness` on GPU, HELM, and Alpaca, see [evaluators](https://github.com/marin-community/marin/tree/main/lib/marin/src/marin/evaluation/evaluators).
 
 #### Evaluation Metrics
 
@@ -48,7 +48,6 @@ See the [`task_configs.py`](https://github.com/marin-community/marin/blob/main/e
 Because vLLM is not on the original cluster, you will need to use the `Dockerfile.vllm` to run these tasks or use the separate vLLM ray cluster (e.g. [`marin-us-east5-b-vllm.yaml`](https://github.com/marin-community/marin/blob/main/infra/marin-us-east5-b-vllm.yaml)).
 The entrypoint to the key evals that we seek to run is in [`run_key_evals.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/run_key_evals.py). We currently support models up to around 100B parameters.
 For an 8B model, you can run the model using a single TPU v6e-8 chip, but for larger models like 70B, you may need to specify to use tensor parallelism.
-You can also specify the node type in the [`resource_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/resource_configs.py) file.
 
 
 TODO: flesh this out, add a tutorial

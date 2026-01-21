@@ -6,7 +6,7 @@ This tutorial walks through setting up a Google Cloud Storage (GCS) bucket that 
 ## When You Need This
 
 - Running local GPU or TPU experiments that write checkpoints to `gs://...` paths.
-- Launching TPU jobs with `scripts/tpu/launch.py` or Ray clusters, where every worker streams artifacts to a shared prefix.
+- Launching TPU jobs with [`scripts/ray/cluster.py`](https://github.com/marin-community/marin/blob/main/scripts/ray/cluster.py) or Ray clusters, where every worker streams artifacts to a shared prefix.
 - Hosting tokenized datasets or compilation caches that multiple jobs should reuse.
 
 If you only run experiments locally with `local_store/` you can skip this, but migrating to GCS early prevents churn later.
