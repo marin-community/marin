@@ -211,12 +211,6 @@ class MixtureDataset(AsyncDataset[T]):
         stage_starts = np.array([start for start, _ in self.weight_stages])
         return max(0, np.searchsorted(stage_starts, block_start, side="right") - 1)
 
-    def get_weights_for_seq_index(self, seq_index: int) -> tuple[int, dict[str, float]]:
-        """Returns (stage_index, weights_dict) for the given sequence index."""
-        block_id = seq_index // self.block_size
-        stage = self._get_stage_for_block(block_id)
-        return stage, self.weight_stages[stage][1]
-
     @alru_cache(maxsize=32)
     async def _get_block(self, index: int) -> Optional[np.ndarray]:
         stage = self._get_stage_for_block(index)
