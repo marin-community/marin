@@ -123,12 +123,26 @@ class PhaseConfig:
         """Get the ending step index for this phase."""
         return int(total_steps * self.end_fraction)
 
-    def get_start_sequence(self, total_steps: int, batch_size: int) -> int:
+    def get_start_sequence(self, total_steps: int, batch_size: int, mixture_block_size: int = 2048) -> int:
         """Get the starting sequence index for this phase.
 
         This is used by lm_varying_mixture_data_config which uses sequence indices.
+        The result is aligned to mixture_block_size boundaries, as required by
+        Levanter's MixtureDataset.
+
+        Args:
+            total_steps: Total number of training steps.
+            batch_size: Training batch size.
+            mixture_block_size: Block size used by MixtureDataset (default 2048).
+                Phase transitions must occur at block boundaries.
+
+        Returns:
+            Starting sequence index, aligned to mixture_block_size.
         """
-        return self.get_start_step(total_steps) * batch_size
+        raw_start_seq = self.get_start_step(total_steps) * batch_size
+        # Align to mixture_block_size boundary by rounding down
+        # (rounding down ensures we don't exceed the intended phase boundary)
+        return (raw_start_seq // mixture_block_size) * mixture_block_size
 
 
 @dataclass

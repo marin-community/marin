@@ -47,6 +47,8 @@ logger = logging.getLogger("ray")
 # EXPERIMENT CONFIGURATION
 # ============================================================================
 
+NAME = "pinlin_calvin_xu/data_mixture/3_partitions_3_phases_3"
+
 # Token budget: 1B tokens (as specified in RegMix paper)
 EXPERIMENT_BUDGET = 1_000_000_000  # Actual tokens we train with
 
@@ -68,7 +70,7 @@ PHASE_BOUNDARIES = [0.33, 0.67]  # Creates 3 phases: [0, 0.33), [0.33, 0.67), [0
 
 
 def create_three_phase_experiment(
-    name: str = "pinlin_calvin_xu/data_mixture/3_partitions_3_phases",
+    name: str = NAME,
     experiment_budget: int = EXPERIMENT_BUDGET,
     target_budget: int = TARGET_BUDGET,
     batch_size: int = BATCH_SIZE,
@@ -122,7 +124,7 @@ def create_three_phase_experiment(
 def main(
     n_runs: int = 100,
     seed: int = 42,
-    name_prefix: str = "pinlin_calvin_xu/data_mixture/3_partitions_3_phases",
+    name_prefix: str = NAME,
     analyze: bool = False,
     batch_size: int | None = None,
 ):
@@ -219,7 +221,7 @@ def _parse_args():
     parser.add_argument(
         "--name_prefix",
         type=str,
-        default="pinlin_calvin_xu/data_mixture/3_partitions_3_phases",
+        default=NAME,
         help="Prefix for run names.",
     )
     parser.add_argument(

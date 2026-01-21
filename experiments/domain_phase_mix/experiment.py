@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 import fsspec
 from levanter.main.train_lm import LmConfig
+from levanter.optim import MuonHConfig
 
 from experiments.defaults import simulated_epoching_train
 from experiments.evals.task_configs import EvalTaskConfig, CORE_TASKS
@@ -41,6 +42,22 @@ from experiments.domain_phase_mix.config import (
     WeightConfig,
 )
 from experiments.domain_phase_mix.weight_sampler import WeightSampler, DirichletSamplingParams
+
+
+# Default MuonH optimizer configuration from proxy_sweep.py
+# This is adapted from 130M Qwen3 config for small models
+DEFAULT_MUON_CONFIG = MuonHConfig(
+    learning_rate=0.02,
+    adam_lr=0.008,
+    min_lr_ratio=0,
+    momentum=0.95,
+    beta1=0.9,
+    beta2=0.98,
+    epsilon=1e-15,
+    muon_epsilon=1e-5,
+    max_grad_norm=1,
+    warmup=1000,
+)
 
 logger = logging.getLogger("ray")
 
@@ -114,6 +131,8 @@ class MixtureExperiment:
         resources: ResourceConfig | None = None,
         eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
         sampling_params: DirichletSamplingParams | None = None,
+        mixture_block_size: int = 2048,
+        optimizer_config: MuonHConfig | None = None,
     ):
         """Initialize the experiment.
 
@@ -131,6 +150,10 @@ class MixtureExperiment:
             resources: Resource configuration for training.
             eval_harness_tasks: Evaluation tasks to run.
             sampling_params: Parameters for weight sampling.
+            mixture_block_size: Block size for mixture dataset. Phase transitions must
+                occur at block boundaries. Default 2048.
+            optimizer_config: Optimizer configuration. Defaults to MuonH optimizer
+                with hyperparameters from proxy_sweep.py.
         """
         self.name = name
         self.domains = domains
@@ -143,6 +166,8 @@ class MixtureExperiment:
         self.resources = resources or ResourceConfig.with_tpu("v5p-8")
         self.eval_harness_tasks = eval_harness_tasks
         self.sampling_params = sampling_params or DirichletSamplingParams()
+        self.mixture_block_size = mixture_block_size
+        self.optimizer_config = optimizer_config or DEFAULT_MUON_CONFIG
 
         # Compute training steps and budget
         self.tokens_per_step = batch_size * seq_len
@@ -197,8 +222,10 @@ class MixtureExperiment:
             # Expand to component weights
             component_weights = self.experiment_config.expand_domain_weights(domain_weights)
 
-            # Get sequence index for phase start
-            start_seq = phase.get_start_sequence(self.num_train_steps, self.batch_size)
+            # Get sequence index for phase start (aligned to mixture_block_size)
+            start_seq = phase.get_start_sequence(
+                self.num_train_steps, self.batch_size, self.mixture_block_size
+            )
 
             weights_list.append((start_seq, component_weights))
 
@@ -207,6 +234,7 @@ class MixtureExperiment:
             weights_list=weights_list,
             permutation_type="feistel",
             shuffle=True,
+            mixture_block_size=self.mixture_block_size,
         )
 
     def create_train_config(self, run_id: int, **kwargs) -> SimpleTrainConfig:
@@ -224,6 +252,7 @@ class MixtureExperiment:
             "train_batch_size": self.batch_size,
             "num_train_steps": self.num_train_steps,
             "learning_rate": self.learning_rate,
+            "optimizer_config": self.optimizer_config,
             "steps_per_eval": self.steps_per_eval,
             "steps_per_export": self.num_train_steps,  # Save only at the end
             "data_seed": run_id,
