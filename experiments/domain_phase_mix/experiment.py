@@ -214,6 +214,10 @@ class MixtureExperiment:
         all_components = self.experiment_config.get_all_components()
 
         # Build weights list for each phase transition
+        # NOTE: weights_list uses step indices, not sequence indices!
+        # LMMixtureDatasetConfig.train_set() calls rescale_mixture_schedule_for_batch_schedule()
+        # which converts step indices to sequence indices using the batch schedule.
+        # The step indices must be chosen so that step * batch_size is a multiple of mixture_block_size.
         weights_list = []
         for phase in self.phase_schedule.phases:
             # Get domain weights for this phase
@@ -222,12 +226,12 @@ class MixtureExperiment:
             # Expand to component weights
             component_weights = self.experiment_config.expand_domain_weights(domain_weights)
 
-            # Get sequence index for phase start (aligned to mixture_block_size)
-            start_seq = phase.get_start_sequence(
+            # Get step index for phase start (aligned for block_size constraints)
+            start_step = phase.get_start_step_aligned(
                 self.num_train_steps, self.batch_size, self.mixture_block_size
             )
 
-            weights_list.append((start_seq, component_weights))
+            weights_list.append((start_step, component_weights))
 
         return lm_varying_mixture_data_config(
             components=all_components,

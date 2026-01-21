@@ -218,10 +218,12 @@ def lm_varying_mixture_data_config(
 
     Args:
         components: dict from names of datasets to the steps that produced them.
-        weights_list: list of tuples of (start_seq_index, weights_dict)
+        weights_list: list of tuples of (start_step, weights_dict)
             weights_dict maps dataset names to their weights.
-            The weights will change at each start_seq_index. start_seq_index's must be sorted in ascending order.
-            Note that start_seq_index should be the index of the sequence (not batch) where the transition should occur.
+            The weights will change at each start_step. start_step values must be sorted in ascending order.
+            Note: start_step is a training step index (batch index), not a sequence index.
+            LMMixtureDatasetConfig.train_set() will convert step indices to sequence indices
+            using rescale_mixture_schedule_for_batch_schedule().
         shuffle: shuffling policy. int means era shuffling (~shuffle buffer).
         permutation_type: Strategy used to permute data. Defaults to "feistel".
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets

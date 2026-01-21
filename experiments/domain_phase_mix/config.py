@@ -123,6 +123,36 @@ class PhaseConfig:
         """Get the ending step index for this phase."""
         return int(total_steps * self.end_fraction)
 
+    def get_start_step_aligned(self, total_steps: int, batch_size: int, mixture_block_size: int = 2048) -> int:
+        """Get the starting step index, aligned for block-size constraints.
+
+        When using varying mixture weights, LMMixtureDatasetConfig.train_set() converts
+        step indices to sequence indices via `step * batch_size`. The resulting sequence
+        index must be a multiple of mixture_block_size.
+
+        This method returns a step index that, when multiplied by batch_size, produces
+        a sequence index aligned to mixture_block_size boundaries.
+
+        Args:
+            total_steps: Total number of training steps.
+            batch_size: Training batch size.
+            mixture_block_size: Block size used by MixtureDataset (default 2048).
+
+        Returns:
+            Starting step index that produces an aligned sequence index.
+        """
+        import math
+
+        raw_step = self.get_start_step(total_steps)
+
+        # We need: (step * batch_size) % block_size == 0
+        # This means step must be a multiple of: block_size / gcd(batch_size, block_size)
+        gcd = math.gcd(batch_size, mixture_block_size)
+        step_alignment = mixture_block_size // gcd
+
+        # Round down to nearest aligned step
+        return (raw_step // step_alignment) * step_alignment
+
     def get_start_sequence(self, total_steps: int, batch_size: int, mixture_block_size: int = 2048) -> int:
         """Get the starting sequence index for this phase.
 
