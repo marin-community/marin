@@ -9,7 +9,6 @@ import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import AttentionMask, attention, reference_attention
-from levanter.grug.attention import _positions_from_segment_ids_2d as grug_positions_from_segments
 from levanter.grug.model import GrugModelConfig
 from levanter.grug.sharding import Pbatch
 from levanter.grug.model import forward, init_parameters
@@ -145,26 +144,6 @@ def test_attentionmask_materialize_segment_ids_per_batch():
     assert allowed is not None
     assert allowed.shape == (2, 3, 4)
     assert jnp.array_equal(allowed, expected)
-
-
-def test_positions_from_segment_ids_resets_per_segment():
-    segment_ids = jnp.array(
-        [
-            [0, 0, 1, 1, -1, -1],
-            [5, 5, 5, 6, 6, 6],
-        ],
-        dtype=jnp.int32,
-    )
-    pos = grug_positions_from_segments(segment_ids, pad_value=-1)
-    expected = jnp.array(
-        [
-            [0, 1, 0, 1, -1, -1],
-            [0, 1, 2, 0, 1, 2],
-        ],
-        dtype=jnp.int32,
-    )
-    assert pos.shape == segment_ids.shape
-    assert jnp.array_equal(pos, expected)
 
 
 @pytest.mark.parametrize("mode", ["causal", "causal_window", "causal_window_segments"])
