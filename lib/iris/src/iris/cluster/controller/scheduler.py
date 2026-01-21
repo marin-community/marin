@@ -26,7 +26,7 @@ from iris.cluster.controller.state import (
     get_device_variant,
     get_gpu_count,
 )
-from iris.cluster.types import WorkerId
+from iris.cluster.types import AttributeValue, WorkerId
 from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,7 @@ class WorkerCapacity:
     available_gpus: int
     device_type: str
     device_variant: str | None
+    attributes: dict[str, AttributeValue] = field(default_factory=dict)
 
     @staticmethod
     def from_worker(worker: ControllerWorker) -> "WorkerCapacity":
@@ -57,6 +58,7 @@ class WorkerCapacity:
             available_gpus=worker.available_gpus,
             device_type=worker.device_type,
             device_variant=worker.device_variant,
+            attributes=dict(worker.attributes),
         )
 
     def can_fit_job(self, job: ControllerJob) -> bool:

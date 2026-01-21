@@ -22,6 +22,7 @@ import urllib.request
 from pathlib import Path
 from typing import Protocol
 
+from iris.cluster.types import get_tpu_topology
 from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,41 @@ def collect_workdir_size_mb(workdir: Path) -> int:
     return int(size_str)
 
 
+def _build_worker_attributes(
+    tpu_name: str,
+    tpu_worker_id: str,
+    device: cluster_pb2.DeviceConfig,
+) -> dict[str, cluster_pb2.AttributeValue]:
+    """Build worker attributes for constraint-based scheduling.
+
+    Populates standard attributes from the TPU environment:
+    - tpu-name: TPU slice name
+    - tpu-worker-id: Worker ID within the slice (0-indexed)
+    - tpu-topology: TPU topology variant (e.g., "v5litepod-16")
+    - tpu-vm-count: Number of VMs in the TPU slice
+    """
+    attributes: dict[str, cluster_pb2.AttributeValue] = {}
+
+    if tpu_name:
+        attributes["tpu-name"] = cluster_pb2.AttributeValue(string_value=tpu_name)
+        attributes["tpu-worker-id"] = cluster_pb2.AttributeValue(int_value=int(tpu_worker_id) if tpu_worker_id else 0)
+
+        # Extract topology from device config if available
+        if device.HasField("tpu") and device.tpu.variant:
+            tpu_variant = device.tpu.variant
+            attributes["tpu-topology"] = cluster_pb2.AttributeValue(string_value=tpu_variant)
+
+            # Look up VM count from topology
+            try:
+                topo = get_tpu_topology(tpu_variant)
+                attributes["tpu-vm-count"] = cluster_pb2.AttributeValue(int_value=topo.vm_count)
+            except ValueError:
+                # Unknown topology - don't add vm-count attribute
+                logger.warning("Unknown TPU topology: %s", tpu_variant)
+
+    return attributes
+
+
 class EnvironmentProvider(Protocol):
     """Protocol for worker environment probing."""
 
@@ -185,6 +221,9 @@ class DefaultEnvironmentProvider:
             tpu_name or "none",
         )
 
+        # Build worker attributes for constraint-based scheduling
+        attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device)
+
         return cluster_pb2.WorkerMetadata(
             hostname=hostname,
             ip_address=ip_address,
@@ -201,4 +240,5 @@ class DefaultEnvironmentProvider:
             gce_instance_name=gce_instance_name,
             gce_zone=gce_zone,
             device=device,
+            attributes=attributes,
         )

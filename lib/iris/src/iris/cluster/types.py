@@ -38,6 +38,40 @@ WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
 
 
+@dataclass(frozen=True)
+class AttributeValue:
+    """Typed attribute value for worker attributes and constraint matching.
+
+    Used for coscheduling and constraint-based worker filtering.
+    Values can be strings, integers, or floats.
+    """
+
+    value: str | int | float
+
+    def to_proto(self) -> cluster_pb2.AttributeValue:
+        """Convert to protobuf representation."""
+        proto = cluster_pb2.AttributeValue()
+        if isinstance(self.value, str):
+            proto.string_value = self.value
+        elif isinstance(self.value, int):
+            proto.int_value = self.value
+        elif isinstance(self.value, float):
+            proto.float_value = self.value
+        return proto
+
+    @staticmethod
+    def from_proto(proto: cluster_pb2.AttributeValue) -> "AttributeValue":
+        """Convert from protobuf representation."""
+        if proto.HasField("string_value"):
+            return AttributeValue(proto.string_value)
+        elif proto.HasField("int_value"):
+            return AttributeValue(proto.int_value)
+        elif proto.HasField("float_value"):
+            return AttributeValue(proto.float_value)
+        # Default to empty string if no value set
+        return AttributeValue("")
+
+
 def parse_memory_string(memory_str: str) -> int:
     """Parse human-readable memory string to bytes.
 

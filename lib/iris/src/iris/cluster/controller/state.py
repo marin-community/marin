@@ -43,7 +43,7 @@ from iris.cluster.controller.events import (
     WorkerHeartbeatEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.types import JobId, TaskId, WorkerId
+from iris.cluster.types import AttributeValue, JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import now_ms
 
@@ -832,6 +832,7 @@ class ControllerWorker:
         committed_cpu: Total CPU cores committed to running tasks
         committed_mem: Total memory bytes committed to running tasks
         committed_gpu: Total GPUs committed to running tasks
+        attributes: Typed attributes for constraint-based scheduling (e.g., tpu-name, tpu-worker-id)
     """
 
     worker_id: WorkerId
@@ -850,6 +851,9 @@ class ControllerWorker:
     committed_cpu: int = 0
     committed_mem: int = 0
     committed_gpu: int = 0
+
+    # Worker attributes for constraint-based scheduling
+    attributes: dict[str, AttributeValue] = field(default_factory=dict)
 
     def get_committed_resources(self) -> tuple[int, int, int]:
         """Return committed (cpu, memory_bytes, gpu_count) for this worker."""
@@ -1013,12 +1017,16 @@ class ControllerState:
     def _on_worker_registered(self, txn: TransactionLog, event: WorkerRegisteredEvent) -> None:
         worker = self._workers.get(event.worker_id)
 
+        # Extract attributes from metadata proto
+        attributes = {k: AttributeValue.from_proto(v) for k, v in event.metadata.attributes.items()}
+
         if worker:
             # Existing worker - heartbeat update
             worker.last_heartbeat_ms = event.timestamp_ms
             worker.healthy = True
             worker.consecutive_failures = 0
             worker.metadata = event.metadata
+            worker.attributes = attributes
             txn.log("worker_heartbeat", event.worker_id)
         else:
             # New worker - full registration
@@ -1027,6 +1035,7 @@ class ControllerState:
                 address=event.address,
                 metadata=event.metadata,
                 last_heartbeat_ms=event.timestamp_ms,
+                attributes=attributes,
             )
             self._workers[event.worker_id] = worker
             txn.log("worker_registered", event.worker_id, address=event.address)

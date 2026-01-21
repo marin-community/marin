@@ -809,3 +809,87 @@ def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_meta
     # Scheduler should not assign the third task (no capacity)
     result = scheduler.find_assignments(pending, state.get_available_workers())
     assert len(result.assignments) == 0
+
+
+# =============================================================================
+# Worker Attributes Tests
+# =============================================================================
+
+
+def test_worker_registers_with_attributes(worker_metadata):
+    """Worker attributes are extracted from metadata and stored on registration."""
+    state = ControllerState()
+
+    metadata = worker_metadata()
+    metadata.attributes["tpu-name"].string_value = "my-tpu"
+    metadata.attributes["tpu-worker-id"].int_value = 0
+
+    worker_id = register_worker(state, "w1", "host:8080", metadata)
+
+    worker = state.get_worker(worker_id)
+    assert worker is not None
+    assert "tpu-name" in worker.attributes
+    assert worker.attributes["tpu-name"].value == "my-tpu"
+    assert "tpu-worker-id" in worker.attributes
+    assert worker.attributes["tpu-worker-id"].value == 0
+
+
+def test_worker_attributes_with_multiple_types(worker_metadata):
+    """Worker attributes support string, int, and float values."""
+    state = ControllerState()
+
+    metadata = worker_metadata()
+    metadata.attributes["string-attr"].string_value = "hello"
+    metadata.attributes["int-attr"].int_value = 42
+    metadata.attributes["float-attr"].float_value = 3.14
+
+    worker_id = register_worker(state, "w1", "host:8080", metadata)
+
+    worker = state.get_worker(worker_id)
+    assert worker.attributes["string-attr"].value == "hello"
+    assert worker.attributes["int-attr"].value == 42
+    assert worker.attributes["float-attr"].value == 3.14
+
+
+def test_worker_attributes_updated_on_reregistration(worker_metadata):
+    """Worker attributes are updated when worker re-registers."""
+    state = ControllerState()
+
+    # Initial registration with one attribute
+    metadata1 = worker_metadata()
+    metadata1.attributes["tpu-name"].string_value = "old-tpu"
+    worker_id = register_worker(state, "w1", "host:8080", metadata1)
+
+    worker = state.get_worker(worker_id)
+    assert worker.attributes["tpu-name"].value == "old-tpu"
+
+    # Re-registration with updated attribute
+    metadata2 = worker_metadata()
+    metadata2.attributes["tpu-name"].string_value = "new-tpu"
+    metadata2.attributes["tpu-worker-id"].int_value = 5
+    register_worker(state, "w1", "host:8080", metadata2)
+
+    worker = state.get_worker(worker_id)
+    assert worker.attributes["tpu-name"].value == "new-tpu"
+    assert worker.attributes["tpu-worker-id"].value == 5
+
+
+def test_worker_without_attributes():
+    """Worker without attributes has empty attributes dict."""
+    state = ControllerState()
+
+    device = cluster_pb2.DeviceConfig()
+    device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+
+    metadata = cluster_pb2.WorkerMetadata(
+        hostname="test-worker",
+        ip_address="127.0.0.1",
+        cpu_count=8,
+        memory_bytes=16 * 1024**3,
+        disk_bytes=100 * 1024**3,
+        device=device,
+    )
+
+    worker_id = register_worker(state, "w1", "host:8080", metadata)
+    worker = state.get_worker(worker_id)
+    assert worker.attributes == {}

@@ -202,6 +202,21 @@ message EnvironmentConfig {
 }
 
 // ============================================================================
+// WORKER ATTRIBUTES
+// ============================================================================
+
+// Typed attribute value for worker attributes and constraint matching.
+// Workers report attributes (e.g., tpu-name, tpu-worker-id) at registration.
+// Jobs can filter workers using constraints on these attributes.
+message AttributeValue {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double float_value = 3;
+  }
+}
+
+// ============================================================================
 // WORKER METADATA
 // ============================================================================
 
@@ -229,6 +244,14 @@ message WorkerMetadata {
   // GCE instance metadata
   string gce_instance_name = 30;
   string gce_zone = 31;
+
+  // Worker attributes for constraint-based scheduling.
+  // Standard attributes include:
+  //   tpu-name: TPU slice name (string)
+  //   tpu-worker-id: Worker ID within slice (int)
+  //   tpu-topology: TPU topology variant, e.g. "v5litepod-16" (string)
+  //   tpu-vm-count: Number of VMs in the TPU slice (int)
+  map<string, AttributeValue> attributes = 40;
 }
 
 // ============================================================================
