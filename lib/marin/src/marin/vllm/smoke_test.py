@@ -13,10 +13,10 @@
 # limitations under the License.
 
 import argparse
-import json
 import os
 import sys
 import time
+import traceback
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -24,22 +24,8 @@ import requests
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
-from marin.vllm.vllm_server import VllmServerHandle
+from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
 from marin.utils import remove_tpu_lockfile_on_exit
-
-
-def _get_first_model_id(server_url: str) -> str:
-    response = requests.get(f"{server_url}/models", timeout=30)
-    response.raise_for_status()
-    payload = response.json()
-    data = payload.get("data", [])
-    if not data:
-        raise RuntimeError(f"No models returned from {server_url}/models: {json.dumps(payload)[:2000]}")
-    model_id = data[0].get("id")
-    if not model_id:
-        raise RuntimeError(f"Missing model id in {server_url}/models response: {json.dumps(payload)[:2000]}")
-    return str(model_id)
 
 
 def run_one_query(
@@ -64,37 +50,53 @@ def run_one_query(
     else:
         model = ModelConfig(name=model_name_or_path, path=None, engine_kwargs=engine_kwargs)
 
-    vllm_server: VllmServerHandle | None = None
+    env = VllmEnvironment(
+        model=model,
+        host="127.0.0.1",
+        port=None,
+        timeout_seconds=3600,
+        mode=mode,
+        docker_image=docker_image,
+        use_server=True,
+    )
     try:
-        vllm_server = VllmTpuEvaluator.start_vllm_server_in_background(
-            model=model,
-            host="127.0.0.1",
-            port=None,
-            timeout_seconds=3600,
-            extra_args=None,
-            mode=mode,
-            docker_image=docker_image,
-        )
-
-        model_id = _get_first_model_id(vllm_server.server_url)
-        response = requests.post(
-            f"{vllm_server.server_url}/chat/completions",
-            json={
-                "model": model_id,
-                "messages": [
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.2,
-                "max_tokens": 128,
-            },
-            timeout=180,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        return payload["choices"][0]["message"]["content"]
+        with env:
+            if env.model_id is None:
+                raise RuntimeError("Expected vLLM server to expose a model id.")
+            model_id = env.model_id
+            response = requests.post(
+                f"{env.server_url}/chat/completions",
+                json={
+                    "model": model_id,
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful assistant."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 128,
+                },
+                timeout=180,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload["choices"][0]["message"]["content"]
+    except Exception as exc:
+        print("Smoke test failed with exception:", exc)
+        print("Environment snapshot:", env.debug_snapshot())
+        if env.vllm_server is not None and env.vllm_server.mode == "docker":
+            try:
+                if env.vllm_server.docker_run_cmd:
+                    print("vLLM Docker run command (redacted):", env.vllm_server.docker_run_cmd)
+                print("vLLM Docker logs (tail):")
+                print(env.vllm_server.logs_tail())
+                print("vLLM Docker inspect:")
+                print(env.vllm_server.inspect())
+            except Exception as diag_exc:
+                print("Failed to collect Docker diagnostics:", diag_exc)
+        traceback.print_exc()
+        raise
     finally:
-        VllmTpuEvaluator.cleanup(model, vllm_server=vllm_server)
+        model.cleanup()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -177,9 +179,7 @@ def main(argv: list[str] | None = None) -> int:
             print(output)
         return 0
 
-    mode_str = (args.mode if args.mode is not None else os.environ.get("MARIN_VLLM_MODE", "docker")).lower()
-    if mode_str not in ("native", "docker"):
-        raise ValueError(f"Unknown mode={mode_str!r}; expected 'native' or 'docker'.")
+    mode_str = resolve_vllm_mode(args.mode)
 
     env_vars: dict[str, str] = {}
     if args.mode is not None:
@@ -194,14 +194,18 @@ def main(argv: list[str] | None = None) -> int:
         with remove_tpu_lockfile_on_exit():
             for i in range(args.repeat):
                 start = time.time()
-                output = run_one_query(
-                    model_name_or_path=args.model,
-                    prompt=args.prompt,
-                    load_format=args.load_format,
-                    max_model_len=args.max_model_len,
-                    mode=args.mode,
-                    docker_image=args.docker_image,
-                )
+                try:
+                    output = run_one_query(
+                        model_name_or_path=args.model,
+                        prompt=args.prompt,
+                        load_format=args.load_format,
+                        max_model_len=args.max_model_len,
+                        mode=args.mode,
+                        docker_image=args.docker_image,
+                    )
+                except Exception:
+                    traceback.print_exc()
+                    raise
                 elapsed = time.time() - start
                 print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
                 print(output)
@@ -214,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         resources=resources,
         environment=EnvironmentConfig.create(
             extras=["eval", "tpu"],
-            pip_packages=("vllm-tpu",) if mode_str == "native" else (),
+            pip_packages=VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else (),
             env_vars=env_vars or None,
         ),
     )

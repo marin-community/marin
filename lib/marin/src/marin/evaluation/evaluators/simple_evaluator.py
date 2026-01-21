@@ -17,9 +17,12 @@ import traceback
 from dataclasses import dataclass
 from typing import ClassVar
 
+from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, resolve_model_name_or_path, resolve_vllm_mode
+from marin.utils import remove_tpu_lockfile_on_exit
 
 
 @dataclass(frozen=True)
@@ -34,7 +37,7 @@ class TestPlan:
     temperature: float = 0
 
 
-class SimpleEvaluator(VllmTpuEvaluator):
+class SimpleEvaluator(Evaluator):
     """
     A simple evaluator for testing purposes.
     Runs inference with a given model on some prompts and computes the total inference time.
@@ -145,7 +148,7 @@ class SimpleEvaluator(VllmTpuEvaluator):
 
             # Download and load the model with vLLM
             # Use the model name if a path is not specified (e.g., for Hugging Face models)
-            model_name_or_path, model = self.resolve_model_name_or_path(model)
+            model_name_or_path, model = resolve_model_name_or_path(model)
             llm = LLM(model=model_name_or_path, enforce_eager=False, trust_remote_code=True)
 
             inference_times: dict[str, float] = {}
@@ -181,4 +184,51 @@ class SimpleEvaluator(VllmTpuEvaluator):
             traceback.print_exc()
             raise RuntimeError("SimpleEvaluator failed. Please check the logs for more information.") from e
         finally:
-            self.cleanup(model)
+            model.cleanup()
+
+    def launch_evaluate_with_ray(
+        self,
+        model: ModelConfig,
+        evals: list[EvalTaskConfig],
+        output_path: str,
+        resource_config: ResourceConfig,
+        max_eval_instances: int | None = None,
+        wandb_tags: list[str] | None = None,
+    ) -> None:
+        """Launch the evaluation run with Fray."""
+
+        def launch(
+            model: ModelConfig,
+            evals: list[EvalTaskConfig],
+            output_path: str,
+            max_eval_instances: int | None = None,
+            wandb_tags: list[str] | None = None,
+        ) -> None:
+            import logging
+
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
+
+        def _run() -> None:
+            with remove_tpu_lockfile_on_exit():
+                launch(model, evals, output_path, max_eval_instances, wandb_tags)
+
+        if resource_config is None:
+            resource_config = ResourceConfig()
+
+        mode_str = resolve_vllm_mode(None)
+        pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
+
+        job_request = JobRequest(
+            name="simple-eval",
+            entrypoint=Entrypoint.from_callable(_run),
+            resources=resource_config,
+            environment=EnvironmentConfig.create(
+                extras=["eval", "tpu"],
+                pip_packages=pip_packages,
+            ),
+        )
+
+        cluster = current_cluster()
+        job_id = cluster.launch(job_request)
+        cluster.wait(job_id, raise_on_failure=True)
