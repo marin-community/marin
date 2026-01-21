@@ -83,6 +83,8 @@ class WeightTransferConfig:
     # Arrow Flight specific
     flight_host: str = "0.0.0.0"
     flight_port: int = 0  # 0 = auto-assign
+    convert_to_bfloat16: bool = True
+    """Whether to convert weights to bfloat16 during transfer. Reduces transfer size by 50% for float32 weights."""
 
 
 class WeightTransferServer(ABC):
