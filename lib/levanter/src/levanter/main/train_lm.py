@@ -229,7 +229,9 @@ def main(config: TrainLmConfig):
             def log_mixture_weights(step_info):
                 nonlocal last_stage
                 seq_index = trainer.config.batch_schedule.global_data_offset_by_step(step_info.step)
-                stage, weights = train_dataset.get_weights_for_seq_index(seq_index)
+                block_id = seq_index // train_dataset.block_size
+                stage = train_dataset._get_stage_for_block(block_id)
+                weights = train_dataset.weight_stages[stage][1]
                 if stage != last_stage:
                     metrics = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
                     metrics["mixture/stage"] = stage
