@@ -16,6 +16,7 @@ from levanter.callbacks._core import Callback, CBInfo, JitCallback, LambdaCallba
 from levanter.callbacks._metrics import (
     _tqdm_logging_one_time_setup,
     log_epoch_progress,
+    log_mixture_weights,
     log_performance_stats,
     log_step_info,
     logger,
@@ -294,6 +295,7 @@ __all__ = [
     "LambdaCallback",
     "StepInfo",
     "log_epoch_progress",
+    "log_mixture_weights",
     "log_performance_stats",
     "log_step_info",
     "pbar_logger",

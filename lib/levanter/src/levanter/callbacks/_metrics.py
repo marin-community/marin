@@ -125,6 +125,34 @@ def log_performance_stats(
     return log_performance_stats
 
 
+def log_mixture_weights(mixture_dataset, batch_schedule: BatchSchedule, prefix: str = "mixture"):
+    """
+    Creates a callback that logs mixture dataset weights to the tracker when the stage changes.
+
+    Args:
+        mixture_dataset: The MixtureDataset instance to monitor
+        batch_schedule: The BatchSchedule to convert steps to sequence indices
+        prefix: Prefix for logged metrics (default: "mixture")
+
+    Returns:
+        A callback function that logs weights when the stage changes
+    """
+    last_stage = -1
+
+    def callback(step_info: StepInfo):
+        nonlocal last_stage
+        seq_index = batch_schedule.global_data_offset_by_step(step_info.step)
+        stage, weights = mixture_dataset.get_weights_for_seq_index(seq_index)
+
+        if stage != last_stage:
+            metrics = {f"{prefix}/weight/{name}": weight for name, weight in weights.items()}
+            metrics[f"{prefix}/stage"] = stage
+            levanter.tracker.log(metrics, step=step_info.step)
+            last_stage = stage
+
+    return callback
+
+
 def pbar_logger(iterable=None, desc="train", **tqdm_mkwargs):
     kwargs = copy.copy(tqdm_mkwargs)
     if "desc" not in kwargs:
