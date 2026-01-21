@@ -47,7 +47,7 @@ logger = logging.getLogger("ray")
 # EXPERIMENT CONFIGURATION
 # ============================================================================
 
-NAME = "pinlin_calvin_xu/data_mixture/3_partitions_3_phases_3"
+NAME = "pinlin_calvin_xu/data_mixture/3_partitions_3_phases_4"
 
 # Token budget: 1B tokens (as specified in RegMix paper)
 EXPERIMENT_BUDGET = 1_000_000_000  # Actual tokens we train with
