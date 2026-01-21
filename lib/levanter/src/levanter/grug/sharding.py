@@ -6,10 +6,8 @@ from jax import P
 from jax.sharding import reshard
 
 # convenience shorthand for batch sharding.
-# if this were Haliax, we'd say {"batch": ("replica_dcn", "replica", "data")}
-Pbatch = P(
-    ("replica_dcn", "replica", "data"),
-)
+# if this were Haliax, we'd say {"batch": ("data",)}
+Pbatch = P(("data",))
 Pvocab = P(None, None)
 
 

@@ -69,11 +69,11 @@ def create_mesh(*, global_batch_size: int | None = None) -> jax.sharding.Mesh:
                 data_size,
             )
 
-    mesh_devices = np.array(devices[:data_size]).reshape(1, 1, data_size, 1)
+    mesh_devices = np.array(devices[:data_size]).reshape(data_size, 1)
     mesh = jax.sharding.Mesh(
         mesh_devices,
-        axis_names=("replica_dcn", "replica", "data", "model"),
-        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        axis_names=("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
     )
     return mesh
 

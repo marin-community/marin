@@ -30,7 +30,6 @@ import functools
 import logging
 import math
 import os
-from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
@@ -126,7 +125,7 @@ class GrugformerAttnSinkConfig:
     init_logit: float = 0.0
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class GrugformerAttnSinkModelConfig:
     """Config object carried by GrugWrapper for this speedrun.
 
@@ -187,9 +186,6 @@ def _splash_attention_with_sink(
 
     if mask is None:
         mask = AttentionMask.causal()
-
-    if mask.causal_offset != 0:
-        raise NotImplementedError("Grug AttentionMask.causal_offset is not supported by splash attention.")
 
     if softmax_aux is None:
         raise ValueError("softmax_aux (sink logits) must be provided for the attn sink speedrun.")
@@ -255,9 +251,9 @@ def _splash_attention_with_sink(
         q_seg, kv_seg = mask.segment_ids
         segment_ids = SplashSegmentIds(q_seg.astype(jnp.int32), kv_seg.astype(jnp.int32))
 
-    q_spec = PartitionSpec(("replica_dcn", "replica", "data"), None, None, None)
-    k_spec = PartitionSpec(("replica_dcn", "replica", "data"), None, None, None)
-    v_spec = PartitionSpec(("replica_dcn", "replica", "data"), None, None, None)
+    q_spec = PartitionSpec(("data",), None, None, None)
+    k_spec = PartitionSpec(("data",), None, None, None)
+    v_spec = PartitionSpec(("data",), None, None, None)
     sinks_spec = PartitionSpec(None)
 
     if segment_ids is None:
@@ -275,8 +271,8 @@ def _splash_attention_with_sink(
         out_bhsd = _call_splash_attention(q_bhsd, k_bhsd, v_bhsd, sinks)
     else:
         segment_ids_spec = SplashSegmentIds(
-            PartitionSpec(("replica_dcn", "replica", "data"), None),
-            PartitionSpec(("replica_dcn", "replica", "data"), None),
+            PartitionSpec(("data",), None),
+            PartitionSpec(("data",), None),
         )
 
         @functools.partial(
@@ -341,11 +337,11 @@ def _lm_head_from_sink_params(params: dict) -> jax.Array:
     return params["core"].output_proj
 
 
-_PBATCH = jax.sharding.PartitionSpec(("replica_dcn", "replica", "data"), None)
+_PBATCH = jax.sharding.PartitionSpec(("data",), None)
 
 
 @LmConfig.register_subclass("grugformer_attn_sink")
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class GrugformerAttnSinkLmConfig(LmConfig[GrugWrapper]):
     max_seq_len: int = 2048
 

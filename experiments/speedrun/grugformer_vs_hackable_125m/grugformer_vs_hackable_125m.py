@@ -74,8 +74,6 @@ class GrugformerH2HConfig(LmConfig[GrugWrapper]):
     num_kv_heads: int = 8
     head_dim: int | None = None
 
-    tie_embeddings: bool = False
-
     # NOTE: `None` means "single full-vocab block" in grug's blockwise CE. For the 125M head-to-head
     # speedrun we observed MFU jump from ~20 -> ~40 by disabling chunking; keep it simple for now.
     cross_entropy_block_size: int | None = None
@@ -99,7 +97,6 @@ class GrugformerH2HConfig(LmConfig[GrugWrapper]):
             num_kv_heads=self.num_kv_heads,
             head_dim=self.head_dim,
             max_seq_len=self.max_seq_len,
-            tie_embeddings=self.tie_embeddings,
             cross_entropy_block_size=self.cross_entropy_block_size,
         )
         return GrugWrapper.init(Vocab, grug_cfg, key=key)
@@ -126,8 +123,7 @@ class GrugformerH2HConfig(LmConfig[GrugWrapper]):
         )
         mlp = 3 * self.hidden_dim * self.intermediate_dim
         transformer = self.num_layers * (attn + mlp + 2 * self.hidden_dim) + self.hidden_dim
-        head = 0 if self.tie_embeddings else token_embedding
-        return int(transformer + token_embedding + head)
+        return int(transformer + token_embedding + token_embedding)
 
 
 def _hackable_125m_config() -> HackableTransformerConfig:
@@ -141,7 +137,6 @@ def _hackable_125m_config() -> HackableTransformerConfig:
         num_kv_heads=8,
         head_dim=None,
         use_attention_sink=False,
-        tie_word_embeddings=False,
     )
 
 
@@ -154,7 +149,6 @@ def _grug_125m_config() -> GrugformerH2HConfig:
         num_heads=8,
         num_kv_heads=8,
         head_dim=None,
-        tie_embeddings=False,
     )
 
 
@@ -175,6 +169,7 @@ def _train_config(
         weight_decay=0.1,
         steps_per_hf_export=-1,
         explicit_mesh_axes=explicit_mesh_axes,
+        profiler=True,
     )
 
 
@@ -227,8 +222,8 @@ def main() -> None:
         raise AssertionError("Grug speedrun vocab_size mismatch; expected llama3_tokenizer_vocab_size")
 
     steps = []
-    steps.extend(default_speedrun(f"hackable_compare_125m_{max_seq_len}", hack_speedrun))
-    steps.extend(default_speedrun(f"grug_compare_125m_{max_seq_len}", grug_speedrun))
+    steps.extend(default_speedrun(f"hackable_compare_125m_{max_seq_len}-profile2", hack_speedrun))
+    steps.extend(default_speedrun(f"grug_compare_125m_{max_seq_len}-profile2", grug_speedrun))
     executor_main(steps=steps, description="Head-to-head: hackable transformer vs grugformer (~125M, no sinks)")
 
 

@@ -17,9 +17,9 @@ from levanter.grug.model import init_parameters, loss_fn
 
 def _make_abstract_mesh(*, data: int, model: int) -> AbstractMesh:
     return AbstractMesh(
-        axis_sizes=(1, 1, data, model),
-        axis_names=("replica_dcn", "replica", "data", "model"),
-        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        axis_sizes=(data, model),
+        axis_names=("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
     )
 
 

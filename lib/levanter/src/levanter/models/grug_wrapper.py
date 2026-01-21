@@ -63,7 +63,6 @@ def _mask_from_levanter(attn_mask: LevanterAttentionMask | NamedArray | None) ->
             segment_ids = (q_seg.array, kv_seg.array)
         mask = AttentionMask(
             is_causal=attn_mask.is_causal,
-            causal_offset=0,
             segment_ids=segment_ids,
             sliding_window=attn_mask.sliding_window,
         )

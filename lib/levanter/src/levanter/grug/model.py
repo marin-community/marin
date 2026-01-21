@@ -22,8 +22,6 @@ from .sharding import Pbatch, Pvocab, unshard
 #### Conventions
 
 # Mesh meanings:
-# - "replica_dcn": replica for multislice or similar training setups. We replicate parameters over this axis.
-# - "replica": standard data parallel replica axis. We replicate parameters over this axis.
 # - "data": data parallel sharding axis. We also shard parameters over this axis.
 # - "model": model parallel sharding axis. TP
 
@@ -49,7 +47,6 @@ class GrugModelConfig:
     num_kv_heads: int = 16
     head_dim: int | None = None
     max_seq_len: int = 4096
-    dropout_rate: float = 0.0
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)

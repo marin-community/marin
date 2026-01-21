@@ -18,11 +18,11 @@ def _make_grug_mesh() -> Mesh:
     devices = jax.devices()
     if not devices:
         raise RuntimeError("No JAX devices available")
-    mesh_devices = np.array(devices).reshape(1, 1, 1, len(devices))
+    mesh_devices = np.array(devices).reshape(len(devices), 1)
     return Mesh(
         mesh_devices,
-        axis_names=("replica_dcn", "replica", "data", "model"),
-        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        axis_names=("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
     )
 
 
@@ -76,7 +76,7 @@ def test_parameter_sharding_specs_are_named():
 def test_full_like_preserves_sharding_under_mesh():
     mesh = _make_grug_mesh()
     with jax.set_mesh(mesh):
-        sharding = NamedSharding(mesh, P(("replica_dcn", "replica", "data"), None))
+        sharding = NamedSharding(mesh, P(("data",), None))
         segment_ids = jax.device_put(jnp.array([[0, 0, 1, 1], [5, 5, 5, -1]], dtype=jnp.int32), sharding)
 
         batch_slice = segment_ids[:, 0]
