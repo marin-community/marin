@@ -33,11 +33,13 @@ Example:
 """
 
 import argparse
+import gc
 import gzip
 import io
 import json
 import os
 import random
+import subprocess
 import sys
 import time
 import threading
@@ -64,6 +66,15 @@ import shutil
 import glob as glob_module
 
 try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+    # Fallback: simple iterator that does nothing
+    def tqdm(iterable, **kwargs):
+        return iterable
+
+try:
     from huggingface_hub import HfApi, hf_hub_download
     HF_HUB_AVAILABLE = True
 except ImportError:
@@ -71,103 +82,170 @@ except ImportError:
 
 try:
     import pandas as pd
+    import pyarrow as pa
     import pyarrow.parquet as pq
     PANDAS_AVAILABLE = True
 except ImportError:
     PANDAS_AVAILABLE = False
 
 
-class AsyncShardWriter:
-    """Background thread pool for writing shards concurrently."""
+class AsyncGCSUploader:
+    """
+    Background thread pool for uploading files to GCS.
 
-    def __init__(self, output_path: str, fs=None, max_workers: int = 4, temp_dir: str = None):
-        self.output_path = output_path
+    This class ONLY handles GCS uploads (I/O bound), NOT parquet conversion (CPU bound).
+    Parquet conversion should be done serially before calling this uploader.
+    """
+
+    def __init__(self, fs, max_workers: int = 8):
         self.fs = fs
-        self.temp_dir = temp_dir  # Custom temp directory for GCS uploads
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.futures = []
         self.lock = threading.Lock()
-        self.total_written = 0
-        self.shards_completed = 0
+        self.total_uploaded = 0
+        self.files_completed = 0
 
-    def submit_shard(self, rows: List[Dict[str, Any]], shard_idx: int) -> None:
-        """Submit a shard for async writing."""
-        future = self.executor.submit(self._write_shard, rows, shard_idx)
+    def submit_upload(self, local_path: str, remote_path: str, num_rows: int = 0) -> None:
+        """Submit a file for async upload to GCS."""
+        future = self.executor.submit(self._upload_file, local_path, remote_path)
         with self.lock:
-            self.futures.append((future, shard_idx, len(rows)))
+            self.futures.append((future, local_path, remote_path, num_rows))
 
-    def _write_shard(self, rows: List[Dict[str, Any]], shard_idx: int) -> int:
-        """Write a single shard (runs in thread pool)."""
-        if not rows:
-            return 0
-
-        shard_name = f"train-{shard_idx:05d}.parquet"
-
-        # Create dataset from list
-        dataset = Dataset.from_list(rows)
-
-        if self.fs is not None:
-            # Write to GCS via temp file
-            full_path = f"{self.output_path.rstrip('/')}/{shard_name}"
-            import tempfile
-            # Use custom temp_dir if specified (e.g., /dev/shm for more space)
-            with tempfile.NamedTemporaryFile(suffix='.parquet', delete=False, dir=self.temp_dir) as tmp:
-                tmp_path = tmp.name
-
+    def _upload_file(self, local_path: str, remote_path: str) -> bool:
+        """Upload a single file to GCS using gcloud storage (faster than gcsfs)."""
+        try:
+            # Use gcloud storage cp (recommended by Google, 2-3x faster than gsutil)
+            result = subprocess.run(
+                ["gcloud", "storage", "cp", "--quiet", local_path, remote_path],
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+            if result.returncode == 0:
+                return True
+            else:
+                # gcloud failed, try fallback to gcsfs
+                print(f"gcloud upload failed ({result.returncode}), falling back to gcsfs: {result.stderr.strip()}", file=sys.stderr)
+                self.fs.put(local_path, remote_path)
+                return True
+        except subprocess.TimeoutExpired:
+            print(f"Upload timeout for {local_path}, falling back to gcsfs", file=sys.stderr)
             try:
-                dataset.to_parquet(tmp_path)
-                self.fs.put(tmp_path, full_path)
-            finally:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-        else:
-            # Write to local filesystem
-            output_dir = Path(self.output_path)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            shard_path = output_dir / shard_name
-            dataset.to_parquet(str(shard_path))
+                self.fs.put(local_path, remote_path)
+                return True
+            except Exception as e:
+                print(f"Fallback upload also failed: {e}", file=sys.stderr)
+                return False
+        except FileNotFoundError:
+            # gcloud not installed, use gcsfs
+            try:
+                self.fs.put(local_path, remote_path)
+                return True
+            except Exception as e:
+                print(f"Error uploading {local_path} to {remote_path}: {e}", file=sys.stderr)
+                return False
+        except Exception as e:
+            print(f"Error uploading {local_path} to {remote_path}: {e}", file=sys.stderr)
+            return False
 
-        return len(rows)
-
-    def wait_for_completed(self) -> List[Tuple[int, int]]:
-        """Check for completed futures and return (shard_idx, rows_written) for each."""
+    def wait_for_completed(self, delete_local: bool = True) -> List[Tuple[str, int]]:
+        """
+        Check for completed uploads and return list of (remote_path, num_rows).
+        Optionally delete local files after successful upload.
+        """
         completed = []
         with self.lock:
             remaining = []
-            for future, shard_idx, num_rows in self.futures:
+            for future, local_path, remote_path, num_rows in self.futures:
                 if future.done():
                     try:
-                        written = future.result()
-                        completed.append((shard_idx, written))
-                        self.total_written += written
-                        self.shards_completed += 1
+                        success = future.result()
+                        if success:
+                            completed.append((remote_path, num_rows))
+                            self.total_uploaded += num_rows
+                            self.files_completed += 1
+                            # Delete local file after successful upload
+                            if delete_local and os.path.exists(local_path):
+                                os.remove(local_path)
                     except Exception as e:
-                        print(f"Error writing shard {shard_idx}: {e}", file=sys.stderr)
+                        print(f"Error in upload future for {local_path}: {e}", file=sys.stderr)
                 else:
-                    remaining.append((future, shard_idx, num_rows))
+                    remaining.append((future, local_path, remote_path, num_rows))
             self.futures = remaining
         return completed
 
-    def wait_all(self) -> int:
-        """Wait for all pending writes to complete. Returns total rows written."""
+    def wait_all(self, delete_local: bool = True) -> int:
+        """Wait for all pending uploads to complete. Returns total rows uploaded."""
         with self.lock:
             futures_to_wait = list(self.futures)
             self.futures = []
 
-        for future, shard_idx, num_rows in futures_to_wait:
+        for future, local_path, remote_path, num_rows in futures_to_wait:
             try:
-                written = future.result()
-                self.total_written += written
-                self.shards_completed += 1
-                print(f"  Shard {shard_idx} written ({written} rows)")
+                success = future.result()
+                if success:
+                    self.total_uploaded += num_rows
+                    self.files_completed += 1
+                    print(f"  Uploaded {Path(local_path).name} ({num_rows} rows)")
+                    # Delete local file after successful upload
+                    if delete_local and os.path.exists(local_path):
+                        os.remove(local_path)
+                else:
+                    print(f"  Failed to upload {local_path}", file=sys.stderr)
             except Exception as e:
-                print(f"Error writing shard {shard_idx}: {e}", file=sys.stderr)
+                print(f"Error uploading {local_path}: {e}", file=sys.stderr)
 
-        return self.total_written
+        return self.total_uploaded
+
+    def pending_count(self) -> int:
+        """Return the number of pending uploads."""
+        with self.lock:
+            return len(self.futures)
 
     def shutdown(self):
         """Shutdown the executor."""
         self.executor.shutdown(wait=True)
+
+
+def write_shard_to_local(
+    rows: List[Dict[str, Any]],
+    shard_idx: int,
+    local_dir: str
+) -> Tuple[str, int]:
+    """
+    Write a shard to local filesystem (SERIAL, not async).
+
+    Uses Dataset.from_list which properly handles complex nested structures
+    (like images with bytes). Includes explicit memory cleanup.
+
+    Args:
+        rows: List of row dictionaries
+        shard_idx: Shard index for naming
+        local_dir: Local directory to write to
+
+    Returns:
+        Tuple of (local_path, num_rows)
+    """
+    if not rows:
+        return None, 0
+
+    shard_name = f"train-{shard_idx:05d}.parquet"
+    local_path = str(Path(local_dir) / shard_name)
+
+    # Ensure directory exists
+    Path(local_dir).mkdir(parents=True, exist_ok=True)
+
+    num_rows = len(rows)
+
+    # Use Dataset.from_list (handles complex nested structures like images)
+    dataset = Dataset.from_list(rows)
+    dataset.to_parquet(local_path)
+
+    # Explicit memory cleanup
+    del dataset
+    gc.collect()
+
+    return local_path, num_rows
 
 
 class ProgressTracker:
@@ -450,6 +528,9 @@ def convert_to_levanter(item: Dict[str, Any], include_source: bool = True) -> Di
         # Save as PNG to preserve quality
         image.save(img_byte_arr, format='PNG')
         image_bytes = img_byte_arr.getvalue()
+        # Explicitly close and delete BytesIO to free memory
+        img_byte_arr.close()
+        del img_byte_arr
     elif isinstance(image, dict) and 'bytes' in image:
         image_bytes = image['bytes']
     elif isinstance(image, bytes):
@@ -539,39 +620,112 @@ def write_shard(
 # Download-First Mode: Parallel batch downloading and processing
 # ============================================================================
 
-def list_dataset_parquet_files(repo_id: str = "mvp-lab/LLaVA-OneVision-1.5-Mid-Training-85M") -> List[str]:
-    """List all parquet files in the dataset repository."""
+def list_dataset_parquet_files_with_sizes(repo_id: str = "mvp-lab/LLaVA-OneVision-1.5-Mid-Training-85M") -> List[Tuple[str, int]]:
+    """
+    List all parquet files in the dataset repository with their sizes.
+
+    Returns:
+        List of (filename, size_in_bytes) tuples
+    """
     if not HF_HUB_AVAILABLE:
         raise RuntimeError("huggingface_hub not installed. Install with: pip install huggingface_hub")
 
     api = HfApi()
-    files = api.list_repo_files(repo_id, repo_type="dataset")
-    parquet_files = [f for f in files if f.endswith('.parquet')]
-    print(f"Found {len(parquet_files)} parquet files in dataset")
-    return parquet_files
+    print(f"Fetching file list and sizes from {repo_id}...")
+
+    # Use list_repo_tree to get file info including sizes
+    files_with_sizes = []
+    for item in api.list_repo_tree(repo_id, repo_type="dataset", recursive=True):
+        if item.path.endswith('.parquet'):
+            # item.size is in bytes
+            files_with_sizes.append((item.path, item.size or 0))
+
+    total_size_gb = sum(size for _, size in files_with_sizes) / (1024**3)
+    print(f"Found {len(files_with_sizes)} parquet files, total size: {total_size_gb:.1f} GB")
+    return files_with_sizes
 
 
-def get_download_first_checkpoint_path(output_path: str) -> str:
-    """Get the checkpoint file path for download-first mode."""
-    return f"{output_path.rstrip('/')}/checkpoint_download_first.json.gz"
+def create_size_limited_batches(
+    files_with_sizes: List[Tuple[str, int]],
+    max_batch_bytes: int
+) -> Tuple[List[List[str]], List[int]]:
+    """
+    Create batches of files where each batch doesn't exceed max_batch_bytes.
+
+    Args:
+        files_with_sizes: List of (filename, size_in_bytes) tuples
+        max_batch_bytes: Maximum total size per batch in bytes
+
+    Returns:
+        Tuple of (batches, batch_sizes) where:
+        - batches: List of batches, each batch is a list of filenames
+        - batch_sizes: List of total sizes in bytes for each batch
+    """
+    batches = []
+    batch_sizes = []
+    current_batch = []
+    current_size = 0
+
+    for filename, size in files_with_sizes:
+        # If adding this file would exceed limit, start new batch
+        if current_size + size > max_batch_bytes and current_batch:
+            batches.append(current_batch)
+            batch_sizes.append(current_size)
+            current_batch = []
+            current_size = 0
+
+        current_batch.append(filename)
+        current_size += size
+
+    # Don't forget the last batch
+    if current_batch:
+        batches.append(current_batch)
+        batch_sizes.append(current_size)
+
+    return batches, batch_sizes
+
+
+def get_download_first_checkpoint_path(output_path: str, local_checkpoint_dir: Optional[str] = None) -> str:
+    """
+    Get the checkpoint file path for download-first mode.
+
+    Args:
+        output_path: The output path (GCS or local)
+        local_checkpoint_dir: If specified, save checkpoint locally instead of with output.
+                             This is useful when output is on GCS to avoid slow checkpoint I/O.
+
+    Returns:
+        Local file path for the checkpoint
+    """
+    if local_checkpoint_dir:
+        # Use local directory for checkpoint
+        Path(local_checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        # Create a unique checkpoint name based on output path hash to avoid conflicts
+        import hashlib
+        path_hash = hashlib.md5(output_path.encode()).hexdigest()[:8]
+        return str(Path(local_checkpoint_dir) / f"checkpoint_download_first_{path_hash}.json.gz")
+    else:
+        # Save with output (original behavior for local output)
+        return f"{output_path.rstrip('/')}/checkpoint_download_first.json.gz"
 
 
 def load_download_first_checkpoint(
-    checkpoint_path: str,
-    fs=None
-) -> Tuple[List[str], int, int, Counter, int, int]:
+    checkpoint_path: str
+) -> Tuple[List[List[str]], List[int], int, int, Counter, int, int]:
     """
-    Load checkpoint for download-first mode.
+    Load checkpoint for download-first mode from LOCAL filesystem.
 
     Returns:
-        shuffled_files: The shuffled file list (to maintain same order on resume)
+        batches: Pre-computed batches (list of file lists) to maintain same batching on resume
+        batch_sizes: Size in bytes for each batch
         batch_idx: Current batch index to resume from
         shard_idx: Current shard index to continue from
         source_counts: Source distribution counter
         total_processed: Total rows processed so far
         total_written: Total rows written so far
     """
-    shuffled_files: List[str] = []
+    batches: List[List[str]] = []
+    batch_sizes: List[int] = []
     batch_idx = 0
     shard_idx = 0
     source_counts: Counter = Counter()
@@ -579,29 +733,27 @@ def load_download_first_checkpoint(
     total_written = 0
 
     try:
-        data = None
-        if fs is not None:
-            # GCS
-            if fs.exists(checkpoint_path):
-                with fs.open(checkpoint_path, 'rb') as f:
-                    with gzip.open(f, 'rt', encoding='utf-8') as gz:
-                        data = json.load(gz)
-        else:
-            # Local
-            path = Path(checkpoint_path)
-            if path.exists():
-                with gzip.open(path, 'rt', encoding='utf-8') as gz:
-                    data = json.load(gz)
+        path = Path(checkpoint_path)
+        if path.exists():
+            with gzip.open(path, 'rt', encoding='utf-8') as gz:
+                data = json.load(gz)
 
-        if data:
-            shuffled_files = data.get('shuffled_files', [])
+            # Support both old format (shuffled_files) and new format (batches)
+            if 'batches' in data:
+                batches = data.get('batches', [])
+                batch_sizes = data.get('batch_sizes', [0] * len(batches))  # Default to 0 if not present
+            elif 'shuffled_files' in data:
+                # Old format - convert to single batch (will need re-batching)
+                print("Warning: Old checkpoint format detected, will re-batch files")
+                batches = []  # Signal that re-batching is needed
             batch_idx = data.get('batch_idx', 0)
             shard_idx = data.get('shard_idx', 0)
             source_counts = Counter(data.get('source_counts', {}))
             total_processed = data.get('total_processed', 0)
             total_written = data.get('total_written', 0)
 
-            print(f"Loaded download-first checkpoint:")
+            print(f"Loaded download-first checkpoint from: {checkpoint_path}")
+            print(f"  Number of batches: {len(batches)}")
             print(f"  Batch to resume: {batch_idx}")
             print(f"  Shard index: {shard_idx}")
             print(f"  Total processed: {total_processed:,}")
@@ -610,22 +762,23 @@ def load_download_first_checkpoint(
     except Exception as e:
         print(f"Warning: Could not load checkpoint: {e}")
 
-    return shuffled_files, batch_idx, shard_idx, source_counts, total_processed, total_written
+    return batches, batch_sizes, batch_idx, shard_idx, source_counts, total_processed, total_written
 
 
 def save_download_first_checkpoint(
     checkpoint_path: str,
-    shuffled_files: List[str],
+    batches: List[List[str]],
+    batch_sizes: List[int],
     batch_idx: int,
     shard_idx: int,
     source_counts: Counter,
     total_processed: int,
-    total_written: int,
-    fs=None
+    total_written: int
 ):
-    """Save checkpoint for download-first mode (gzip compressed JSON)."""
+    """Save checkpoint for download-first mode to LOCAL filesystem (gzip compressed JSON)."""
     data = {
-        'shuffled_files': shuffled_files,
+        'batches': batches,
+        'batch_sizes': batch_sizes,
         'batch_idx': batch_idx,
         'shard_idx': shard_idx,
         'source_counts': dict(source_counts),
@@ -635,25 +788,12 @@ def save_download_first_checkpoint(
     }
 
     try:
-        if fs is not None:
-            # GCS - write to temp file then upload
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix='.json.gz', delete=False) as tmp:
-                tmp_path = tmp.name
-
-            with gzip.open(tmp_path, 'wt', encoding='utf-8') as gz:
-                json.dump(data, gz)
-
-            fs.put(tmp_path, checkpoint_path)
-            os.remove(tmp_path)
-        else:
-            # Local
-            Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
-            with gzip.open(checkpoint_path, 'wt', encoding='utf-8') as gz:
-                json.dump(data, gz)
-
+        Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
+        with gzip.open(checkpoint_path, 'wt', encoding='utf-8') as gz:
+            json.dump(data, gz)
+        print(f"  Checkpoint saved: {checkpoint_path} (batch {batch_idx})")
     except Exception as e:
-        print(f"Warning: Could not save checkpoint: {e}", file=sys.stderr)
+        print(f"ERROR: Could not save checkpoint to {checkpoint_path}: {e}", file=sys.stderr)
 
 
 def download_parquet_batch(
@@ -696,21 +836,31 @@ def download_parquet_batch(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(download_file, f): f for f in files}
 
-        for i, future in enumerate(as_completed(futures)):
+        # Use tqdm for progress bar
+        pbar = tqdm(
+            as_completed(futures),
+            total=len(files),
+            desc="  Downloading",
+            unit="file"
+        )
+
+        for future in pbar:
             result = future.result()
             if result:
                 local_paths.append(result)
+                pbar.set_postfix(ok=len(local_paths), err=len(download_errors))
             else:
                 download_errors.append(futures[future])
+                pbar.set_postfix(ok=len(local_paths), err=len(download_errors))
 
-            # Progress update every 10 files
-            if (i + 1) % 10 == 0 or i + 1 == len(files):
-                elapsed = time.time() - start_time
-                rate = (i + 1) / elapsed if elapsed > 0 else 0
-                print(f"  Downloaded {i + 1}/{len(files)} files ({rate:.1f} files/sec)")
+        pbar.close()
+
+    elapsed = time.time() - start_time
+    rate = len(files) / elapsed if elapsed > 0 else 0
+    print(f"  Download complete: {len(local_paths)} files in {elapsed:.1f}s ({rate:.1f} files/sec)")
 
     if download_errors:
-        print(f"Warning: Failed to download {len(download_errors)} files")
+        print(f"  Warning: Failed to download {len(download_errors)} files")
 
     return local_paths
 
@@ -720,13 +870,18 @@ def process_dataset_download_first(
     download_dir: str,
     buffer_size: int = 100000,
     rows_per_shard: int = 10000,
-    batch_size: int = 500,
+    max_batch_gb: float = 150.0,
     max_rows: Optional[int] = None,
     seed: int = 42,
     use_gcs: bool = False,
-    num_workers: int = 4,
+    upload_workers: int = 8,
     download_workers: int = 16,
-    resume: bool = False
+    read_workers: int = 8,
+    write_workers: int = 8,
+    resume: bool = False,
+    checkpoint_dir: Optional[str] = None,
+    local_shard_dir: Optional[str] = None,
+    max_local_shards: int = 20
 ):
     """
     Process dataset using download-first mode with batch processing.
@@ -737,6 +892,11 @@ def process_dataset_download_first(
     3. Write-time shuffle: Shuffle buffer before writing shard
 
     Supports resume from checkpoint with --resume flag.
+    Batches are limited by size (max_batch_gb) to avoid disk space issues.
+    Checkpoint is saved locally (not on GCS) for faster I/O.
+
+    Parquet conversion (CPU-intensive) is done serially.
+    GCS uploads (I/O-intensive) are done in parallel.
     """
     if not PANDAS_AVAILABLE:
         raise RuntimeError("pandas/pyarrow not installed. Install with: pip install pandas pyarrow")
@@ -754,70 +914,91 @@ def process_dataset_download_first(
     else:
         print(f"Using local filesystem, output: {output_path}")
 
-    # Checkpoint path
-    checkpoint_path = get_download_first_checkpoint_path(output_path)
+    # Checkpoint path (always local for faster I/O)
+    # Default to download_dir if no checkpoint_dir specified
+    effective_checkpoint_dir = checkpoint_dir or download_dir
+    checkpoint_path = get_download_first_checkpoint_path(output_path, effective_checkpoint_dir)
+    print(f"Checkpoint will be saved locally at: {checkpoint_path}")
 
     # Initialize state (may be overwritten by checkpoint)
-    all_files: List[str] = []
+    batches: List[List[str]] = []
+    batch_sizes: List[int] = []
     start_batch_idx = 0
     shard_idx = 0
     source_counts: Counter = Counter()
     total_processed = 0
     total_written = 0
 
-    # Load checkpoint if resuming
+    # Load checkpoint if resuming (always from local filesystem)
     if resume:
         print(f"Checking for checkpoint at: {checkpoint_path}")
         (
-            checkpoint_files,
+            checkpoint_batches,
+            checkpoint_batch_sizes,
             start_batch_idx,
             shard_idx,
             source_counts,
             total_processed,
             total_written
-        ) = load_download_first_checkpoint(checkpoint_path, fs)
+        ) = load_download_first_checkpoint(checkpoint_path)
 
-        if checkpoint_files:
-            all_files = checkpoint_files
-            print(f"Resuming from batch {start_batch_idx} with {len(all_files)} files")
+        if checkpoint_batches:
+            batches = checkpoint_batches
+            batch_sizes = checkpoint_batch_sizes
+            print(f"Resuming from batch {start_batch_idx} with {len(batches)} total batches")
         else:
             print("No valid checkpoint found, starting fresh")
             resume = False
 
-    # If not resuming (or no valid checkpoint), list and shuffle files
-    if not all_files:
+    # If not resuming (or no valid checkpoint), list files and create size-limited batches
+    if not batches:
         # Set random seed
         random.seed(seed)
 
-        # List all parquet files
+        # List all parquet files with sizes
         print("Listing parquet files from HuggingFace...")
-        all_files = list_dataset_parquet_files()
+        files_with_sizes = list_dataset_parquet_files_with_sizes()
 
         # LAYER 1: File-level shuffle
-        print(f"Shuffling {len(all_files)} files (seed={seed})...")
-        random.shuffle(all_files)
+        print(f"Shuffling {len(files_with_sizes)} files (seed={seed})...")
+        random.shuffle(files_with_sizes)
+
+        # Create size-limited batches
+        max_batch_bytes = int(max_batch_gb * 1024 * 1024 * 1024)
+        batches, batch_sizes = create_size_limited_batches(files_with_sizes, max_batch_bytes)
+        print(f"Created {len(batches)} batches with max {max_batch_gb:.1f} GB each")
 
     # Create download directory
     Path(download_dir).mkdir(parents=True, exist_ok=True)
 
-    # Create temp directory for GCS uploads (use /run for more space than /tmp)
-    temp_upload_dir = "/run/upload_temp"
-    Path(temp_upload_dir).mkdir(parents=True, exist_ok=True)
+    # Create local shard directory for temporary parquet files
+    effective_local_shard_dir = local_shard_dir or f"{download_dir}/shards"
+    Path(effective_local_shard_dir).mkdir(parents=True, exist_ok=True)
 
-    # Initialize async shard writer
-    shard_writer = AsyncShardWriter(output_path, fs, max_workers=num_workers, temp_dir=temp_upload_dir)
+    # Initialize GCS uploader (only for GCS mode)
+    gcs_uploader = None
+    if use_gcs and fs is not None:
+        gcs_uploader = AsyncGCSUploader(fs, max_workers=upload_workers)
 
     # Processing state
     start_time = time.time()
+
+    # Calculate total files across all batches
+    total_files = sum(len(batch) for batch in batches)
 
     print()
     print("=" * 60)
     print("Download-First Mode with Proportional Sampling")
     print("=" * 60)
-    print(f"  Total files: {len(all_files)}")
-    print(f"  Batch size: {batch_size} files")
+    print(f"  Total files: {total_files}")
+    print(f"  Total batches: {len(batches)}")
+    print(f"  Max batch size: {max_batch_gb:.1f} GB")
     print(f"  Download workers: {download_workers}")
-    print(f"  Write workers: {num_workers}")
+    print(f"  Read workers: {read_workers}")
+    print(f"  Write workers: {write_workers}")
+    print(f"  Upload workers: {upload_workers}")
+    print(f"  Local shard dir: {effective_local_shard_dir}")
+    print(f"  Max local shards: {max_local_shards}")
     print(f"  Rows per shard: {rows_per_shard}")
     print(f"  Max rows: {max_rows or 'all'}")
     print(f"  Resume mode: {resume}")
@@ -828,8 +1009,8 @@ def process_dataset_download_first(
     print("=" * 60)
     print()
 
-    # Process in batches
-    num_batches = (len(all_files) + batch_size - 1) // batch_size
+    # Process batches
+    num_batches = len(batches)
 
     try:
         for batch_idx in range(start_batch_idx, num_batches):
@@ -841,13 +1022,12 @@ def process_dataset_download_first(
                     print(f"Total processed: {total_processed:,}")
                     break
 
-            batch_start = batch_idx * batch_size
-            batch_end = min(batch_start + batch_size, len(all_files))
-            batch_files = all_files[batch_start:batch_end]
+            batch_files = batches[batch_idx]
+            batch_size_gb = batch_sizes[batch_idx] / (1024**3) if batch_idx < len(batch_sizes) else 0
 
             print()
             print(f"{'=' * 60}")
-            print(f"Batch {batch_idx + 1}/{num_batches}: files {batch_start}-{batch_end - 1}")
+            print(f"Batch {batch_idx + 1}/{num_batches}: {len(batch_files)} files, {batch_size_gb:.1f} GB")
             print(f"{'=' * 60}")
 
             # Download this batch
@@ -917,94 +1097,288 @@ def process_dataset_download_first(
                 print(f"  Will produce {num_shards_in_batch} shards from this batch")
                 print(f"  Sample ratio: {sample_ratio:.4f} (sampling ~{expected_rows:,} of {total_available_rows:,} rows)")
 
-                # ========== PASS 2: Stream processing - load, convert, and write shards incrementally ==========
-                # Use a single buffer instead of pre-allocating all shard buckets
-                # This keeps memory usage bounded to ~rows_per_shard items
-                print(f"Pass 2: Loading, sampling, and streaming to shards...")
+                # ========== PASS 2: Batch Shard Processing (I/O Efficient) ==========
+                # Process N output shards at a time:
+                #   - Keep N shard buffers in memory
+                #   - Read each source file ONCE and distribute to all N shards
+                #   - Shuffle and write all N shards
+                # This reduces file reads from (num_shards × num_files) to (num_files × num_shard_batches)
 
-                write_buffer = []
+                # Number of shards to process in parallel (memory vs I/O tradeoff)
+                shards_per_round = min(max_local_shards, num_shards_in_batch)  # Use max_local_shards as batch size
+                num_rounds = (num_shards_in_batch + shards_per_round - 1) // shards_per_round
+
+                print(f"Pass 2: Processing {num_shards_in_batch} shards in {num_rounds} rounds ({shards_per_round} shards/round)...")
+                print(f"  File reads reduced from {num_shards_in_batch * len(local_paths)} to {num_rounds * len(local_paths)}")
+
                 batch_rows_processed = 0
+                local_shard_files = []
                 shards_written_in_batch = 0
 
-                for file_idx, local_path in enumerate(local_paths):
-                    row_count = file_row_counts.get(local_path, 0)
-                    if row_count == 0:
-                        continue
+                # Calculate how many rows each file contributes per shard
+                # a_i = file_row_count / num_shards (fractional)
+                samples_per_file = {}
+                for local_path, row_count in file_row_counts.items():
+                    if row_count > 0:
+                        samples_per_file[local_path] = row_count / num_shards_in_batch
 
-                    try:
-                        df = pd.read_parquet(local_path)
+                # Pre-shuffle row indices for each file (for better shuffle quality)
+                print(f"  Pre-shuffling row indices for {len(local_paths)} files...")
+                file_shuffled_indices = {}
+                for local_path in local_paths:
+                    n_rows = file_row_counts.get(local_path, 0)
+                    if n_rows > 0:
+                        indices = list(range(n_rows))
+                        random.shuffle(indices)
+                        file_shuffled_indices[local_path] = indices
 
-                        # Sample only the rows we need (based on sample_ratio)
-                        rows_to_sample = max(1, int(row_count * sample_ratio))
-                        if rows_to_sample < len(df):
-                            df = df.sample(n=rows_to_sample, random_state=seed + file_idx).reset_index(drop=True)
-                        else:
-                            # LAYER 2: Shuffle within file
-                            df = df.sample(frac=1, random_state=seed + file_idx).reset_index(drop=True)
+                # Track pending uploads for pipeline parallelism
+                # GCS upload runs in parallel with next round's file reading
+                pending_upload_files = []
 
-                        # Process each row and add to buffer
-                        for idx in range(len(df)):
-                            row = df.iloc[idx]
-                            item = row.to_dict()
-                            item_id = item.get('id', '')
+                # Process shards in rounds
+                for round_idx in range(num_rounds):
+                    round_start_shard = round_idx * shards_per_round
+                    round_end_shard = min((round_idx + 1) * shards_per_round, num_shards_in_batch)
+                    num_shards_in_round = round_end_shard - round_start_shard
 
-                            # Track source
-                            source = extract_source(item_id)
-                            source_counts[source] += 1
+                    print(f"  Round {round_idx + 1}/{num_rounds}: shards {round_start_shard}-{round_end_shard - 1}")
 
-                            # Convert to Levanter format
+                    # Create buffers for all shards in this round
+                    shard_buffers = [[] for _ in range(num_shards_in_round)]
+
+                    # ===== Parallel file reading and distribution =====
+                    def read_and_distribute_file(args):
+                        """Read one file and return data grouped by shard (thread-safe)."""
+                        local_path, row_count, a_i, shuffled_indices, round_start, n_shards, n_shards_total = args
+
+                        # Results: list of converted items for each shard
+                        shard_results = [[] for _ in range(n_shards)]
+                        local_source_counts = Counter()
+                        rows_processed = 0
+
+                        try:
+                            df = pd.read_parquet(local_path)
+
+                            for shard_offset in range(n_shards):
+                                shard_k = round_start + shard_offset
+                                is_last_shard = (shard_k == n_shards_total - 1)
+
+                                start_idx = int(shard_k * a_i)
+                                end_idx = int((shard_k + 1) * a_i)
+
+                                if is_last_shard:
+                                    end_idx = row_count
+
+                                if start_idx >= end_idx or start_idx >= row_count:
+                                    continue
+
+                                indices_to_read = shuffled_indices[start_idx:min(end_idx, len(shuffled_indices))]
+
+                                for idx in indices_to_read:
+                                    if idx >= len(df):
+                                        continue
+
+                                    row = df.iloc[idx]
+                                    item = row.to_dict()
+                                    item_id = item.get('id', '')
+
+                                    source = extract_source(item_id)
+                                    local_source_counts[source] += 1
+
+                                    try:
+                                        converted = convert_to_levanter(item)
+                                        shard_results[shard_offset].append(converted)
+                                        rows_processed += 1
+                                    except Exception as e:
+                                        print(f"Error converting item {item_id}: {e}", file=sys.stderr)
+
+                                    del row, item
+
+                            del df
+
+                        except Exception as e:
+                            print(f"Error reading {local_path}: {e}", file=sys.stderr)
+
+                        return shard_results, local_source_counts, rows_processed
+
+                    # Prepare tasks for parallel execution
+                    read_tasks = []
+                    for local_path in local_paths:
+                        row_count = file_row_counts.get(local_path, 0)
+                        if row_count == 0:
+                            continue
+                        a_i = samples_per_file.get(local_path, 0)
+                        if a_i == 0:
+                            continue
+                        shuffled_indices = file_shuffled_indices.get(local_path, [])
+                        if not shuffled_indices:
+                            continue
+                        read_tasks.append((
+                            local_path, row_count, a_i, shuffled_indices,
+                            round_start_shard, num_shards_in_round, num_shards_in_batch
+                        ))
+
+                    # Parallel read using ThreadPoolExecutor
+                    num_file_readers = min(read_workers, len(read_tasks))
+                    print(f"    Reading {len(read_tasks)} files in parallel ({num_file_readers} workers)...")
+
+                    with ThreadPoolExecutor(max_workers=num_file_readers) as read_executor:
+                        futures = [read_executor.submit(read_and_distribute_file, task) for task in read_tasks]
+
+                        file_pbar = tqdm(
+                            as_completed(futures),
+                            total=len(futures),
+                            desc=f"    Reading files",
+                            unit="file",
+                            leave=False
+                        )
+
+                        for future in file_pbar:
                             try:
-                                converted = convert_to_levanter(item)
-                                write_buffer.append(converted)
-                                batch_rows_processed += 1
+                                shard_results, local_counts, rows_processed = future.result()
+                                # Merge results into shard_buffers
+                                for shard_offset, results in enumerate(shard_results):
+                                    shard_buffers[shard_offset].extend(results)
+                                source_counts.update(local_counts)
+                                batch_rows_processed += rows_processed
+                                file_pbar.set_postfix(rows=batch_rows_processed)
                             except Exception as e:
-                                print(f"Error converting item {item_id}: {e}", file=sys.stderr)
+                                print(f"Error in parallel file read: {e}", file=sys.stderr)
 
-                            # When buffer is full, write a shard immediately
-                            if len(write_buffer) >= rows_per_shard:
-                                # LAYER 3: Shuffle within shard
-                                random.shuffle(write_buffer)
-                                shard_writer.submit_shard(write_buffer, shard_idx)
-                                total_processed += len(write_buffer)
-                                shard_idx += 1
-                                shards_written_in_batch += 1
-                                write_buffer = []  # Clear buffer
+                        file_pbar.close()
 
-                                # Check for completed writes periodically
-                                completed = shard_writer.wait_for_completed()
-                                for completed_idx, written in completed:
-                                    total_written += written
+                    # ===== Shuffle all shard buffers (can run in parallel with upload) =====
+                    print(f"    Shuffling {num_shards_in_round} shard buffers...")
+                    for shard_buffer in shard_buffers:
+                        if shard_buffer:
+                            random.shuffle(shard_buffer)
 
-                                # Stop if we've written enough shards for this batch
-                                if shards_written_in_batch >= num_shards_in_batch:
-                                    break
+                    # ===== Wait for previous round's upload before writing to local cache =====
+                    # This prevents local disk from filling up
+                    if gcs_uploader and pending_upload_files:
+                        print(f"    Waiting for previous upload to complete...")
+                        gcs_uploader.wait_all(delete_local=True)
+                        uploaded_rows = sum(nrows for _, _, nrows in pending_upload_files)
+                        total_written += uploaded_rows
+                        print(f"    Upload complete: {len(pending_upload_files)} shards, {uploaded_rows:,} rows uploaded to GCS")
+                        pending_upload_files = []
 
-                        # Free memory after processing this file
-                        del df
+                    # ===== Parallel write shards (already shuffled) =====
+                    def write_shard_only(args):
+                        """Write a single shard to local disk (already shuffled)."""
+                        shard_buffer, shard_idx_to_write, local_dir = args
+                        if not shard_buffer:
+                            return None, 0
+                        # Write to local (no shuffle needed, already done)
+                        local_path, num_rows = write_shard_to_local(
+                            shard_buffer, shard_idx_to_write, local_dir
+                        )
+                        return local_path, num_rows
 
-                        # Early exit if we've written enough shards
-                        if shards_written_in_batch >= num_shards_in_batch:
-                            break
+                    # Prepare write tasks
+                    write_tasks = []
+                    for shard_offset in range(num_shards_in_round):
+                        shard_buffer = shard_buffers[shard_offset]
+                        current_shard_idx = shard_idx + shard_offset
+                        if shard_buffer:
+                            # Make a copy of the buffer for thread safety
+                            write_tasks.append((
+                                list(shard_buffer),  # Copy to avoid race conditions
+                                current_shard_idx,
+                                effective_local_shard_dir
+                            ))
+                            shard_buffer.clear()  # Clear original immediately
 
-                    except Exception as e:
-                        print(f"Error reading {local_path}: {e}", file=sys.stderr)
-                        continue
+                    # Parallel write using ThreadPoolExecutor
+                    num_write_workers = min(write_workers, len(write_tasks))
+                    print(f"    Writing {len(write_tasks)} shards in parallel ({num_write_workers} workers)...")
 
-                # Write any remaining data as a final partial shard
-                if write_buffer and shards_written_in_batch < num_shards_in_batch:
-                    random.shuffle(write_buffer)
-                    shard_writer.submit_shard(write_buffer, shard_idx)
-                    total_processed += len(write_buffer)
-                    shard_idx += 1
-                    shards_written_in_batch += 1
-                    write_buffer = []
+                    write_results = []
+                    with ThreadPoolExecutor(max_workers=num_write_workers) as write_executor:
+                        futures = {write_executor.submit(write_shard_only, task): task[1]
+                                   for task in write_tasks}
 
-                # Wait for any pending writes
-                completed = shard_writer.wait_for_completed()
-                for completed_idx, written in completed:
-                    total_written += written
+                        write_pbar = tqdm(
+                            as_completed(futures),
+                            total=len(futures),
+                            desc=f"    Writing shards",
+                            unit="shard",
+                            leave=False
+                        )
 
-                print(f"Processed {batch_rows_processed} items, wrote {shards_written_in_batch} shards")
+                        for future in write_pbar:
+                            shard_idx_written = futures[future]
+                            try:
+                                local_path, num_rows = future.result()
+                                if local_path and num_rows > 0:
+                                    write_results.append((local_path, shard_idx_written, num_rows))
+                                    write_pbar.set_postfix(shard=shard_idx_written, rows=num_rows)
+                            except Exception as e:
+                                print(f"Error writing shard {shard_idx_written}: {e}", file=sys.stderr)
+
+                        write_pbar.close()
+
+                    # Process write results
+                    for local_path, written_shard_idx, num_rows in write_results:
+                        total_processed += num_rows
+                        shards_written_in_batch += 1
+                        shard_name = f"train-{written_shard_idx:05d}.parquet"
+                        remote_path = f"{output_path.rstrip('/')}/{shard_name}"
+                        local_shard_files.append((local_path, remote_path, num_rows))
+
+                    # Update shard_idx for next round
+                    shard_idx += num_shards_in_round
+
+                    # Clear all shard buffers for this round
+                    del shard_buffers
+                    gc.collect()
+
+                    # ===== Start async upload (don't wait - runs in parallel with next round) =====
+                    if gcs_uploader and local_shard_files:
+                        print(f"    Starting async upload of {len(local_shard_files)} shards...")
+                        for lpath, rpath, nrows in local_shard_files:
+                            gcs_uploader.submit_upload(lpath, rpath, nrows)
+                        # Store for tracking, don't wait - will be checked in next round
+                        pending_upload_files = local_shard_files
+                        local_shard_files = []
+                        print(f"    Round {round_idx + 1} complete: {shards_written_in_batch} shards, {total_processed:,} rows (upload in background)")
+
+                # Clear pre-shuffled indices to free memory
+                del file_shuffled_indices
+                gc.collect()
+
+                # Wait for any pending uploads from the last round
+                print(f"Processed {batch_rows_processed} items, wrote {shards_written_in_batch} shards locally")
+                if gcs_uploader and pending_upload_files:
+                    print(f"Waiting for final upload to complete ({len(pending_upload_files)} shards)...")
+                    gcs_uploader.wait_all(delete_local=True)
+                    uploaded_rows = sum(nrows for _, _, nrows in pending_upload_files)
+                    total_written += uploaded_rows
+                    print(f"Final upload complete: {len(pending_upload_files)} shards, {uploaded_rows:,} rows uploaded to GCS")
+                    pending_upload_files = []
+
+                # Upload any remaining local shards (edge case)
+                if gcs_uploader and local_shard_files:
+                    print(f"Uploading {len(local_shard_files)} remaining shards to GCS...")
+                    for lpath, rpath, nrows in local_shard_files:
+                        gcs_uploader.submit_upload(lpath, rpath, nrows)
+                    gcs_uploader.wait_all(delete_local=True)
+                    uploaded_rows = sum(nrows for _, _, nrows in local_shard_files)
+                    total_written += uploaded_rows
+                    print(f"Upload complete: {len(local_shard_files)} shards, {uploaded_rows:,} rows uploaded to GCS")
+                    local_shard_files = []
+                elif not gcs_uploader:
+                    # Local mode - files are already in the right place, just count them
+                    total_written += sum(nrows for _, _, nrows in local_shard_files)
+                    # Move files to final output directory if different from local_shard_dir
+                    if effective_local_shard_dir != output_path:
+                        for lpath, _, _ in local_shard_files:
+                            dest_path = Path(output_path) / Path(lpath).name
+                            Path(output_path).mkdir(parents=True, exist_ok=True)
+                            shutil.move(lpath, dest_path)
+                    local_shard_files = []
+                print(f"Batch {batch_idx + 1} complete: wrote {shards_written_in_batch} shards")
 
             # Clean up downloaded files to free space
             print(f"Cleaning up batch {batch_idx + 1} files...")
@@ -1025,6 +1399,9 @@ def process_dataset_download_first(
             except Exception:
                 pass
 
+            # Force garbage collection after batch cleanup
+            gc.collect()
+
             # Progress update
             elapsed = time.time() - start_time
             rate = total_processed / elapsed if elapsed > 0 else 0
@@ -1033,8 +1410,8 @@ def process_dataset_download_first(
 
             # Save checkpoint after each batch (save next batch index)
             save_download_first_checkpoint(
-                checkpoint_path, all_files, batch_idx + 1, shard_idx,
-                source_counts, total_processed, total_written, fs
+                checkpoint_path, batches, batch_sizes, batch_idx + 1, shard_idx,
+                source_counts, total_processed, total_written
             )
 
             # Check max rows - break after this batch if limit reached
@@ -1048,24 +1425,30 @@ def process_dataset_download_first(
         print("\nInterrupted! Saving checkpoint...")
         # Save checkpoint with current batch index (will resume this batch)
         save_download_first_checkpoint(
-            checkpoint_path, all_files, batch_idx, shard_idx,
-            source_counts, total_processed, total_written, fs
+            checkpoint_path, batches, batch_sizes, batch_idx, shard_idx,
+            source_counts, total_processed, total_written
         )
         print(f"Checkpoint saved. Run with --resume to continue from batch {batch_idx}.")
 
-    # Wait for pending writes
-    print("Waiting for pending writes...")
-    pending_written = shard_writer.wait_all()
-    total_written += pending_written
+    # Wait for any pending GCS uploads
+    if gcs_uploader:
+        print("Waiting for any pending GCS uploads...")
+        gcs_uploader.wait_all(delete_local=True)
+        gcs_uploader.shutdown()
 
-    shard_writer.shutdown()
-
-    # Clean up download directory
+    # Clean up download directory and local shard directory
     print(f"Cleaning up download directory: {download_dir}")
     try:
         shutil.rmtree(download_dir, ignore_errors=True)
     except Exception:
         pass
+
+    if effective_local_shard_dir != output_path:
+        print(f"Cleaning up local shard directory: {effective_local_shard_dir}")
+        try:
+            shutil.rmtree(effective_local_shard_dir, ignore_errors=True)
+        except Exception:
+            pass
 
     # Summary
     elapsed = time.time() - start_time
@@ -1555,7 +1938,7 @@ def main():
         "--num-workers",
         type=int,
         default=4,
-        help="Number of parallel workers for writing shards (default: 4)"
+        help="(Deprecated, use --upload-workers) Number of parallel workers"
     )
     parser.add_argument(
         "--prefetch",
@@ -1583,10 +1966,46 @@ def main():
         help="Number of parallel download workers (default: 16)"
     )
     parser.add_argument(
-        "--batch-size",
+        "--upload-workers",
         type=int,
-        default=40,
-        help="Number of parquet files per batch in download-first mode (default: 40, ~144GB per batch with 3.6GB/file avg)"
+        default=8,
+        help="Number of parallel GCS upload workers (default: 8). Parquet conversion is done serially."
+    )
+    parser.add_argument(
+        "--max-batch-gb",
+        type=float,
+        default=150.0,
+        help="Maximum size per batch in GB for download-first mode (default: 150 GB). Batches are created based on actual file sizes to avoid disk space issues."
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default=None,
+        help="Directory for saving checkpoint locally (default: same as --download-dir). Checkpoint is always saved locally for faster I/O, even when output is on GCS."
+    )
+    parser.add_argument(
+        "--local-shard-dir",
+        type=str,
+        default=None,
+        help="Directory for temporary local parquet shards before GCS upload (default: {download-dir}/shards)"
+    )
+    parser.add_argument(
+        "--max-local-shards",
+        type=int,
+        default=20,
+        help="Maximum number of local shards before triggering GCS upload (default: 20). Lower values use less disk space."
+    )
+    parser.add_argument(
+        "--read-workers",
+        type=int,
+        default=8,
+        help="Number of parallel workers for reading parquet files during shard processing (default: 8). Higher values speed up processing but use more memory."
+    )
+    parser.add_argument(
+        "--write-workers",
+        type=int,
+        default=8,
+        help="Number of parallel workers for writing shards to local disk (default: 8). Higher values speed up writing but use more memory."
     )
 
     args = parser.parse_args()
@@ -1625,9 +2044,14 @@ def main():
 
     if args.download_first:
         print(f"Download dir: {args.download_dir}")
+        print(f"Checkpoint dir: {args.checkpoint_dir or args.download_dir} (local)")
+        print(f"Local shard dir: {args.local_shard_dir or args.download_dir + '/shards'}")
         print(f"Download workers: {args.download_workers}")
-        print(f"Batch size: {args.batch_size} files")
-        print(f"Write workers: {args.num_workers}")
+        print(f"Read workers: {args.read_workers}")
+        print(f"Write workers: {args.write_workers}")
+        print(f"Upload workers: {args.upload_workers}")
+        print(f"Max batch size: {args.max_batch_gb} GB")
+        print(f"Max local shards: {args.max_local_shards}")
         print(f"Resume mode: {args.resume}")
     else:
         print(f"Shuffle buffer size (HF): {args.shuffle_buffer_size}")
@@ -1646,13 +2070,18 @@ def main():
             download_dir=args.download_dir,
             buffer_size=args.buffer_size,
             rows_per_shard=args.rows_per_shard,
-            batch_size=args.batch_size,
+            max_batch_gb=args.max_batch_gb,
             max_rows=args.max_rows,
             seed=args.seed,
             use_gcs=use_gcs,
-            num_workers=args.num_workers,
+            upload_workers=args.upload_workers,
             download_workers=args.download_workers,
-            resume=args.resume
+            read_workers=args.read_workers,
+            write_workers=args.write_workers,
+            resume=args.resume,
+            checkpoint_dir=args.checkpoint_dir,
+            local_shard_dir=args.local_shard_dir,
+            max_local_shards=args.max_local_shards
         )
     else:
         # Use streaming mode (original)
