@@ -55,9 +55,7 @@ def _positions_from_segment_ids_2d(segment_ids: Int[Array, "B S"], *, pad_value:
     return jnp.swapaxes(pos_tm, 0, 1)
 
 
-@functools.partial(
-    register_dataclass, data_fields=["segment_ids"], meta_fields=["is_causal", "causal_offset", "sliding_window"]
-)
+@functools.partial(register_dataclass, data_fields=["segment_ids"], meta_fields=["is_causal", "sliding_window"])
 @dataclass(frozen=True)
 class AttentionMask:
     """Grug attention mask spec.
@@ -68,13 +66,12 @@ class AttentionMask:
     """
 
     is_causal: bool = False
-    causal_offset: int = 0
     segment_ids: tuple[jax.Array, jax.Array] | None = None
     sliding_window: int | None = None
 
     @classmethod
-    def causal(cls, *, offset: int = 0, sliding_window: int | None = None) -> "AttentionMask":
-        return cls(is_causal=True, causal_offset=offset, sliding_window=sliding_window)
+    def causal(cls, *, sliding_window: int | None = None) -> "AttentionMask":
+        return cls(is_causal=True, sliding_window=sliding_window)
 
     def with_segment_ids(
         self, q_segment_ids: Int[Array, "..."], kv_segment_ids: Int[Array, "..."] | None = None
@@ -82,7 +79,6 @@ class AttentionMask:
         kv_ids = q_segment_ids if kv_segment_ids is None else kv_segment_ids
         return AttentionMask(
             is_causal=self.is_causal,
-            causal_offset=self.causal_offset,
             segment_ids=(q_segment_ids, kv_ids),
             sliding_window=self.sliding_window,
         )
@@ -90,7 +86,6 @@ class AttentionMask:
     def with_sliding_window(self, sliding_window: int | None) -> "AttentionMask":
         return AttentionMask(
             is_causal=self.is_causal,
-            causal_offset=self.causal_offset,
             segment_ids=self.segment_ids,
             sliding_window=sliding_window,
         )
@@ -107,7 +102,7 @@ class AttentionMask:
         if self.is_causal:
             q_idx = jnp.arange(q_len)[:, None]
             k_idx = jnp.arange(k_len)[None, :]
-            allowed = k_idx <= q_idx + self.causal_offset
+            allowed = k_idx <= q_idx
             mask = allowed
 
         if self.sliding_window is not None:
@@ -347,9 +342,6 @@ def _tpu_splash_attention(
         segment_ids_axes = None
         segment_batch_axis = None
     elif isinstance(mask, AttentionMask):
-        if mask.causal_offset != 0:
-            raise NotImplementedError("Causal offsets are not supported for splash attention.")
-
         if mask.is_causal:
             base_mask = splash_attention_mask.CausalMask((Sq, Sk), offset=0, shard_count=q_seq_shards)
         else:

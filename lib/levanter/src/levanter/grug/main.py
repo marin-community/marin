@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import logging
 from dataclasses import dataclass, replace
 from typing import Iterator
 
@@ -60,6 +61,13 @@ def create_mesh(*, global_batch_size: int | None = None) -> jax.sharding.Mesh:
     if global_batch_size is not None and global_batch_size > 0:
         while data_size > 1 and global_batch_size % data_size != 0:
             data_size -= 1
+        if data_size < len(devices):
+            logging.getLogger(__name__).warning(
+                "global_batch_size=%s is not divisible by device count=%s; using %s data devices",
+                global_batch_size,
+                len(devices),
+                data_size,
+            )
 
     mesh_devices = np.array(devices[:data_size]).reshape(1, 1, data_size, 1)
     mesh = jax.sharding.Mesh(
