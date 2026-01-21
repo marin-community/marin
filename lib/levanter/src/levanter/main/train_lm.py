@@ -224,10 +224,19 @@ def main(config: TrainLmConfig):
         )
 
         if isinstance(train_dataset, MixtureDataset):
-            trainer.add_hook(
-                callbacks.log_mixture_weights(train_dataset, trainer.config.batch_schedule),
-                every=1,
-            )
+            last_stage = -1
+
+            def log_mixture_weights(step_info):
+                nonlocal last_stage
+                seq_index = trainer.config.batch_schedule.global_data_offset_by_step(step_info.step)
+                stage, weights = train_dataset.get_weights_for_seq_index(seq_index)
+                if stage != last_stage:
+                    metrics = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
+                    metrics["mixture/stage"] = stage
+                    levanter.tracker.log(metrics, step=step_info.step)
+                    last_stage = stage
+
+            trainer.add_hook(log_mixture_weights, every=1)
         # trainer.add_hook(callbacks.GradWatchCallback(include_histograms=True), every=5)
 
         if config.hf_save_path is not None and config.hf_save_steps is not None:

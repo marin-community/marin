@@ -143,3 +143,25 @@ async def test_mixture_dataset_block_boundaries():
 
     assert all(x < 10 for x in first_half), f"Unexpected values at end of first stage: {first_half}"
     assert all(10 <= x < 100 for x in second_half), f"Unexpected values at start of second stage: {second_half}"
+
+
+@pytest.mark.asyncio
+async def test_get_weights_for_seq_index():
+    """Sanity check for get_weights_for_seq_index returning correct stage and weights."""
+    datasets = create_datasets()
+    stages = [
+        (0, {"ds1": 0.8, "ds2": 0.2, "ds3": 0.0}),
+        (20, {"ds1": 0.0, "ds2": 0.5, "ds3": 0.5}),
+    ]
+
+    mixture_ds = MixtureDataset(datasets, stages, block_size=10, key=jax.random.PRNGKey(42))
+
+    # Stage 0
+    stage, weights = mixture_ds.get_weights_for_seq_index(0)
+    assert stage == 0
+    assert weights == {"ds1": 0.8, "ds2": 0.2, "ds3": 0.0}
+
+    # Stage 1 (after transition at seq_index 20)
+    stage, weights = mixture_ds.get_weights_for_seq_index(20)
+    assert stage == 1
+    assert weights == {"ds1": 0.0, "ds2": 0.5, "ds3": 0.5}
