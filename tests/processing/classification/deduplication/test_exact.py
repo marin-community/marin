@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from marin.processing.classification.deduplication.dedup_commons import DedupMode, DedupConfig, deduplicate
-from tests.processing.classification.conftest import load_dedup_outputs
+from tests.processing.classification.deduplication.conftest import load_dedup_outputs
 
 
 def test_exact_paragraph_deduplication(fox_corpus):

@@ -27,8 +27,7 @@ from marin.processing.classification.consolidate import (
     calculate_percentile_thresholds,
     consolidate,
 )
-
-from tests.processing.classification.conftest import load_dedup_outputs
+from zephyr.readers import load_parquet
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -136,13 +135,12 @@ def test_consolidate_filters_and_writes_output(tmp_path):
 
     consolidate(config)
 
-    output_file = output_root / "part-0000.jsonl.gz"
+    output_file = output_root / "part-0000.parquet"
     assert (
         output_file.exists()
     ), f"Expected consolidated output file to be written. Files in {output_root}: {list(output_root.iterdir())}"
 
-    with gzip.open(output_file, "rt", encoding="utf-8") as handle:
-        output_rows = [json.loads(line) for line in handle if line.strip()]
+    output_rows = load_parquet(output_file)
 
     kept_ids = {row["id"] for row in output_rows}
     assert kept_ids == {"doc-1", "doc-2"}, f"Expected to keep doc-1 and doc-2, but got {kept_ids}"
@@ -193,7 +191,7 @@ def test_dedupe_consolidate_integration(fox_corpus):
     consolidate(consolidate_config)
 
     # Read consolidated output
-    consolidated_by_id = load_dedup_outputs(consolidated_dir)
+    consolidated_by_id = {row["id"]: row for row in load_parquet(consolidated_dir)}
     assert len(consolidated_by_id) > 0
 
     # Verify that duplicate spans have been removed

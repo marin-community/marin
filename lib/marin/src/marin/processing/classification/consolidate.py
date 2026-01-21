@@ -330,7 +330,7 @@ def consolidate(config: ConsolidateConfig):
     input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
     logger.info(f"Consolidating {len(input_paths)} document files")
 
-    output_pattern = f"{config.output_path}/part-{{shard:04d}}.snappy.parquet"
+    output_pattern = f"{config.output_path}/part-{{shard:04d}}.parquet"
 
     results = Backend.execute(
         Dataset.from_list(input_paths)
