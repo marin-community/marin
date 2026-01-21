@@ -47,14 +47,14 @@ logger = logging.getLogger("ray")
 # EXPERIMENT CONFIGURATION
 # ============================================================================
 
-NAME = "pinlin_calvin_xu/data_mixture/3_partitions_3_phases_4"
+NAME = "pinlin_calvin_xu/data_mixture/3_partitions_3_phases_6"
 
 # Token budget: 1B tokens (as specified in RegMix paper)
 EXPERIMENT_BUDGET = 1_000_000_000  # Actual tokens we train with
 
 # Target budget: simulates a large-scale run (e.g., 2.5T tokens)
 # This controls the simulated epoching ratio
-TARGET_BUDGET = 2_500_000_000_000  # 2.5T tokens
+TARGET_BUDGET = 5_700_000_000_000  # 5.7T tokens
 
 # Batch and sequence configuration
 BATCH_SIZE = 128
@@ -126,7 +126,6 @@ def main(
     seed: int = 42,
     name_prefix: str = NAME,
     analyze: bool = False,
-    batch_size: int | None = None,
 ):
     """Main entry point for running the swarm experiment.
 
@@ -135,7 +134,10 @@ def main(
         seed: Random seed for weight sampling.
         name_prefix: Prefix for run names.
         analyze: If True, only run analysis step (collect results from W&B).
-        batch_size: If set, run training steps in batches of this size to limit parallelism.
+
+    Note:
+        Additional executor options like --max_concurrent and --force_run_failed
+        are handled by executor_main via draccus CLI parsing.
     """
     if os.getenv("CI", None) is not None:
         logger.info("Skipping experiment execution on CI environment.")
@@ -173,32 +175,12 @@ def main(
     logger.info(f"Total steps per run: {total_steps:,}")
     logger.info(f"Phase boundaries: step {phase1_end} (33%), step {phase2_end} (67%)")
 
-    # Run weight configs step first
+    # Run all steps through executor_main, which handles --max_concurrent and
+    # --force_run_failed via draccus CLI parsing
+    all_steps = [weight_configs_step, *training_steps, analysis_step]
     executor_main(
-        steps=[weight_configs_step],
-        description=f"Save weight configurations for {name_prefix}",
-    )
-
-    # Run training steps (optionally in batches)
-    if batch_size is not None:
-        logger.info(f"Running training steps in batches of {batch_size}")
-        for i in range(0, len(training_steps), batch_size):
-            batch = training_steps[i : i + batch_size]
-            logger.info(f"Running batch {i // batch_size + 1}: steps {i} to {i + len(batch) - 1}")
-            executor_main(
-                steps=batch,
-                description=f"Batch {i // batch_size + 1}: {len(batch)} training runs",
-            )
-    else:
-        executor_main(
-            steps=list(training_steps),
-            description=f"Three-phase data mixture swarm: {n_runs} runs",
-        )
-
-    # Run analysis step last
-    executor_main(
-        steps=[analysis_step],
-        description=f"Analysis for {name_prefix}",
+        steps=all_steps,
+        description=f"Three-phase data mixture swarm: {n_runs} runs",
     )
 
 
@@ -229,12 +211,8 @@ def _parse_args():
         action="store_true",
         help="Run analysis only (collect results from W&B and export CSV).",
     )
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=None,
-        help="Run training steps in batches of this size to limit parallelism.",
-    )
+    # Note: --max_concurrent and --force_run_failed are handled by executor_main
+    # via draccus CLI parsing, so they don't need to be defined here.
     return parser.parse_known_args()
 
 
@@ -249,5 +227,4 @@ if __name__ == "__main__":
         seed=args.seed,
         name_prefix=args.name_prefix,
         analyze=args.analyze,
-        batch_size=args.batch_size,
     )
