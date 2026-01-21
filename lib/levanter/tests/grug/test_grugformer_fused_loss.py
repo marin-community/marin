@@ -7,10 +7,7 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import AxisType, Mesh
 
-from levanter.grug.loss import (
-    linear_softmax_cross_entropy_loss_and_logz,
-    next_token_linear_softmax_cross_entropy,
-)
+from levanter.grug.loss import linear_softmax_cross_entropy_loss_and_logz
 
 
 def _make_grug_mesh() -> Mesh:
@@ -18,11 +15,11 @@ def _make_grug_mesh() -> Mesh:
     if not devices:
         raise RuntimeError("No JAX devices available")
     # We only require a mesh context here so the loss can provide `out_sharding=...`.
-    mesh_devices = np.array(devices).reshape(1, 1, 1, len(devices))
+    mesh_devices = np.array(devices).reshape(len(devices), 1)
     return Mesh(
         mesh_devices,
-        axis_names=("replica_dcn", "replica", "data", "model"),
-        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        axis_names=("data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
     )
 
 
@@ -116,34 +113,3 @@ def test_linear_softmax_cross_entropy_grad_matches_full():
         assert jnp.allclose(g_blk, g_full, atol=5e-4, rtol=5e-3)
     else:
         assert jnp.allclose(g_blk, g_full, atol=1e-4, rtol=1e-4)
-
-
-def test_next_token_loss_ignores_last_position():
-    key = jax.random.key(0)
-    b, s, h, v = 2, 6, 8, 19
-    token_ids = jax.random.randint(key, (b, s), 0, v, dtype=jnp.int32)
-    hidden = jax.random.normal(jax.random.key(1), (b, s, h), dtype=jnp.float32)
-    lm_head = jax.random.normal(jax.random.key(2), (h, v), dtype=jnp.float32)
-
-    mesh = _make_grug_mesh()
-    with jax.set_mesh(mesh):
-        # reference next-token: labels are shifted left, last ignored
-        labels = jnp.concatenate([token_ids[:, 1:], jnp.zeros((b, 1), dtype=jnp.int32)], axis=-1)
-        loss_full, _ = _full_loss_and_logz(hidden, lm_head, labels, precision=jax.lax.Precision.HIGHEST)
-        loss_full = loss_full[:, :-1]
-
-        loss_blk = next_token_linear_softmax_cross_entropy(
-            token_ids,
-            hidden,
-            lm_head,
-            block_size=7,
-            reduction="none",
-            dtype=jnp.float32,
-            precision=jax.lax.Precision.HIGHEST,
-        )
-    assert loss_blk.shape == (b, s)
-    if jax.default_backend() == "tpu":
-        assert jnp.allclose(loss_blk[:, :-1], loss_full, atol=5e-3, rtol=5e-3)
-    else:
-        assert jnp.allclose(loss_blk[:, :-1], loss_full, atol=1e-4, rtol=1e-4)
-    assert jnp.allclose(loss_blk[:, -1], jnp.zeros((b,), dtype=jnp.float32))

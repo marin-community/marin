@@ -15,8 +15,6 @@ Design notes:
 
 from __future__ import annotations
 
-from typing import Literal
-
 import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
@@ -33,7 +31,6 @@ def linear_softmax_cross_entropy_loss_and_logz(
     p_batch: P = Pbatch,
     block_size: int | None = None,
     dtype: jnp.dtype = jnp.float32,
-    logit_soft_cap: float | None = None,
     precision: PrecisionLike = None,
 ) -> tuple[jax.Array, jax.Array]:
     """Compute per-position cross entropy without materializing full logits.
@@ -44,7 +41,6 @@ def linear_softmax_cross_entropy_loss_and_logz(
         labels: Integer array with shape (...,).
         block_size: Vocab block size for logsumexp.
         dtype: Accumulator dtype for logsumexp.
-        logit_soft_cap: Optional tanh soft cap for logits (applied before exp).
         p_batch: Sharding for the gathered correct-class weights. Defaults to Pbatch.
 
     Returns:
@@ -76,9 +72,6 @@ def linear_softmax_cross_entropy_loss_and_logz(
 
     w_y = lm_head.T.at[flat_labels].get(out_sharding=p_batch).astype(dtype)
     logit_y = jnp.sum(flat_hidden * w_y, axis=-1)
-    if logit_soft_cap is not None:
-        logit_y = jnp.tanh(logit_y / logit_soft_cap) * logit_soft_cap
-
     neg_inf = jnp.array(-jnp.inf, dtype=dtype)
     # Match the sharding of the computed per-example logits so the loop carry types are stable.
     m0 = jnp.full_like(logit_y, neg_inf)
@@ -98,8 +91,6 @@ def linear_softmax_cross_entropy_loss_and_logz(
         )
         valid = jnp.arange(block_size) < (vocab_size - start)
         logits = jnp.where(valid[None, :], logits, neg_inf_logits)
-        if logit_soft_cap is not None:
-            logits = jnp.tanh(logits / logit_soft_cap) * logit_soft_cap
         block_max = jnp.max(logits, axis=-1)
         new_m = jnp.maximum(m, block_max)
         s = s * jnp.exp(m - new_m) + jnp.sum(jnp.exp(logits - new_m[:, None]), axis=-1)
@@ -112,62 +103,6 @@ def linear_softmax_cross_entropy_loss_and_logz(
     return loss.reshape(labels.shape), logz.reshape(labels.shape)
 
 
-def next_token_linear_softmax_cross_entropy(
-    token_ids: jax.Array,
-    hidden: jax.Array,
-    lm_head: jax.Array,
-    *,
-    block_size: int,
-    reduction: Literal["mean", "sum", "none"] = "mean",
-    dtype: jnp.dtype = jnp.float32,
-    logsumexp_weight: float | None = None,
-    logit_soft_cap: float | None = None,
-    precision: PrecisionLike = None,
-) -> jax.Array:
-    """Next-token loss using blockwise logits.
-
-    This matches the common "predict token t+1 from hidden at t" loss.
-    The last position is ignored.
-    """
-    if token_ids.ndim < 1:
-        raise ValueError("token_ids must have at least 1 dimension")
-
-    # Shift tokens left: label[t] = token_ids[t+1]
-    labels = jnp.concatenate([token_ids[..., 1:], token_ids[..., :1] * 0], axis=-1)
-    weight = jnp.concatenate(
-        [
-            jnp.ones(token_ids.shape[:-1] + (token_ids.shape[-1] - 1,), dtype=dtype),
-            jnp.zeros(token_ids.shape[:-1] + (1,), dtype=dtype),
-        ],
-        axis=-1,
-    )
-
-    loss, logz = linear_softmax_cross_entropy_loss_and_logz(
-        hidden,
-        lm_head,
-        labels,
-        block_size=block_size,
-        dtype=dtype,
-        logit_soft_cap=logit_soft_cap,
-        precision=precision,
-    )
-    loss = loss * weight
-
-    if logsumexp_weight is not None and logsumexp_weight != 0.0:
-        loss = loss + logsumexp_weight * (logz**2) * weight
-
-    if reduction == "none":
-        return loss
-    if reduction == "sum":
-        return jnp.sum(loss)
-    if reduction == "mean":
-        denom = jnp.sum(weight)
-        return jnp.sum(loss) / jnp.maximum(denom, jnp.array(1.0, dtype=dtype))
-
-    raise ValueError(f"Unknown reduction: {reduction}")
-
-
 __all__ = [
     "linear_softmax_cross_entropy_loss_and_logz",
-    "next_token_linear_softmax_cross_entropy",
 ]

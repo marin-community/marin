@@ -15,7 +15,6 @@ from jax.sharding import AxisType
 
 from levanter.store.cache import TreeCache
 
-from levanter.grug.config import GrugTrainingConfig
 from levanter.grug.data import DEFAULT_AXIS_MAPPING, build_token_loader
 from levanter.grug.model import GrugModelConfig, GrugModelParameters, forward, init_parameters
 
@@ -47,6 +46,18 @@ def dataloader_iterator(
         batch = next(loader)
         tokens = batch[:, :seq_len]
         yield {"tokens": tokens[:, :-1], "labels": tokens[:, 1:]}
+
+
+@dataclass(frozen=True)
+class GrugTrainingConfig:
+    """Full training recipe, nested around a model."""
+
+    model: GrugModelConfig
+    learning_rate: float = 1e-3
+    weight_decay: float = 0.01
+    seed: int = 0
+    steps: int = 10
+    global_batch_size: int = 8
 
 
 def create_mesh(*, global_batch_size: int | None = None) -> jax.sharding.Mesh:

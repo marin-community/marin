@@ -17,7 +17,7 @@
 
 import jax
 
-from levanter.grug.config import GrugTrainingConfig
+from levanter.grug.main import GrugTrainingConfig
 from levanter.grug.model import GrugModelConfig
 from levanter.grug.main import run_training
 

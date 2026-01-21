@@ -242,7 +242,6 @@ def loss_fn(
     reduction: str = "mean",
     logsumexp_weight: float | None = None,
     loss_dtype: jnp.dtype = jnp.float32,
-    logit_soft_cap: float | None = None,
 ) -> jax.Array:
     """Compute next-token cross-entropy loss for a batch.
 
@@ -257,7 +256,6 @@ def loss_fn(
         reduction: One of {"mean", "sum", "none"}.
         logsumexp_weight: Optional z-loss weight (logsumexp^2 term).
         loss_dtype: Accumulator dtype for logsumexp / loss.
-        logit_soft_cap: Optional tanh soft cap for logits (applied before exp).
 
     Returns:
         If reduction=="none": array with shape (batch, seq).
@@ -279,7 +277,6 @@ def loss_fn(
         labels,
         block_size=block_size,
         dtype=loss_dtype,
-        logit_soft_cap=logit_soft_cap,
     )
     per_pos_loss = per_pos_loss.astype(loss_dtype) * loss_weight
     if logsumexp_weight is not None and logsumexp_weight != 0.0:
