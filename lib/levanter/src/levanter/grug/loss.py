@@ -76,6 +76,8 @@ def linear_softmax_cross_entropy_loss_and_logz(
 
     w_y = lm_head.T.at[flat_labels].get(out_sharding=p_batch).astype(dtype)
     logit_y = jnp.sum(flat_hidden * w_y, axis=-1)
+    if logit_soft_cap is not None:
+        logit_y = jnp.tanh(logit_y / logit_soft_cap) * logit_soft_cap
 
     neg_inf = jnp.array(-jnp.inf, dtype=dtype)
     # Match the sharding of the computed per-example logits so the loop carry types are stable.
