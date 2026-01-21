@@ -146,13 +146,13 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             ray_num_cpus=1,
         ),
     )
-    dedup_exact_document_step = ExecutorStep(
-        name=os.path.join(prefix, "dedup_exact_document"),
+    dedup_fuzzy_document_step = ExecutorStep(
+        name=os.path.join(prefix, "dedup_fuzzy_document"),
         fn=deduplicate,
         config=DedupConfig(
             input_paths=transform_hq_data_step,
             output_path=this_output_path(),
-            mode=DedupMode.EXACT_DOCUMENT,
+            mode=DedupMode.FUZZY_DOCUMENT,
             ray_memory=humanfriendly.parse_size("1GB", binary=True),
             ray_num_cpus=1,
         ),
@@ -176,8 +176,8 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 ),
                 FilterConfig(
                     type=FilterType.REMOVE_DOC,
-                    attribute_path=dedup_exact_document_step.cd("data"),
-                    name=str(DedupMode.EXACT_DOCUMENT),
+                    attribute_path=dedup_fuzzy_document_step.cd("data"),
+                    name=str(DedupMode.FUZZY_DOCUMENT),
                 ),
             ],
         ),
@@ -247,7 +247,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         inference_hq_step,
         inference_lq_step,
         dedup_exact_paragraph_step,
-        dedup_exact_document_step,
+        dedup_fuzzy_document_step,
         consolidate_step,
         tokenize_step,
         train_step,
