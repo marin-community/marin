@@ -704,6 +704,18 @@ class ControllerJob:
         """Total number of retries (failure + preemption retries)."""
         return self.failure_count + self.preemption_count
 
+    @property
+    def is_coscheduled(self) -> bool:
+        """Whether this job uses coscheduling (all tasks assigned atomically)."""
+        return self.request.HasField("coscheduling")
+
+    @property
+    def coscheduling_group_by(self) -> str | None:
+        """The attribute key used to group workers for coscheduling, or None."""
+        if self.is_coscheduled:
+            return self.request.coscheduling.group_by
+        return None
+
 
 # =============================================================================
 # Job Helper Functions

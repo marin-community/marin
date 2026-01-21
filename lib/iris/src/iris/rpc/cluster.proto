@@ -236,6 +236,13 @@ message Constraint {
   AttributeValue value = 3; // Value to compare against (ignored for EXISTS/NOT_EXISTS)
 }
 
+// Coscheduling configuration for multi-host jobs.
+// When set, all tasks in the job must be scheduled atomically onto workers
+// that share the same value for the specified group_by attribute.
+message CoschedulingConfig {
+  string group_by = 1;  // Attribute key to group workers by (e.g., "tpu-name")
+}
+
 // ============================================================================
 // WORKER METADATA
 // ============================================================================
@@ -318,6 +325,12 @@ message Controller {
     // Constraints for filtering workers by attribute.
     // All constraints must match for a worker to be eligible (AND semantics).
     repeated Constraint constraints = 14;
+
+    // Coscheduling configuration for multi-host jobs (e.g., multi-host TPU).
+    // When set, all tasks are scheduled atomically to workers sharing the same
+    // group_by attribute value. If not enough workers are available in any group,
+    // the job stays pending.
+    CoschedulingConfig coscheduling = 15;
   }
 
   message LaunchJobResponse {

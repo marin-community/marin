@@ -15,6 +15,7 @@
 """Pure task-to-worker matching without threading, dispatch, or state mutation."""
 
 import logging
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
@@ -27,7 +28,7 @@ from iris.cluster.controller.state import (
     get_device_variant,
     get_gpu_count,
 )
-from iris.cluster.types import AttributeValue, WorkerId
+from iris.cluster.types import AttributeValue, JobId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import now_ms
 
@@ -255,7 +256,7 @@ class Scheduler:
             )
         return TaskScheduleResult(
             task=task,
-            failure_reason=(f"No worker has sufficient resources " f"(need cpu={res.cpu}, memory={res.memory_bytes})"),
+            failure_reason=(f"No worker has sufficient resources (need cpu={res.cpu}, memory={res.memory_bytes})"),
         )
 
     def find_assignments(
@@ -268,12 +269,14 @@ class Scheduler:
         Pure function - does not mutate ControllerState. Returns assignments
         for the controller to execute.
 
-        Uses first-fit algorithm, skipping tasks that don't fit any worker.
-        Also identifies tasks that have exceeded their scheduling timeout.
+        Coscheduled jobs are processed first: all tasks must be assigned atomically
+        to workers sharing the same group_by attribute value. If not enough workers
+        are available in any group, the job stays pending.
 
-        The algorithm prevents head-of-line blocking: if a large task at the
-        front of the queue doesn't fit, smaller tasks behind it can still be
-        scheduled.
+        Non-coscheduled jobs use first-fit algorithm, skipping tasks that don't
+        fit any worker. The algorithm prevents head-of-line blocking: if a large
+        task at the front of the queue doesn't fit, smaller tasks behind it can
+        still be scheduled.
 
         Args:
             pending_tasks: Tasks waiting to be scheduled (in FIFO order)
@@ -284,8 +287,35 @@ class Scheduler:
         """
         result = SchedulingResult()
         capacities = build_capacity_map(workers)
+        scheduled_task_ids: set[str] = set()
 
+        # Group tasks by job for coscheduled handling
+        tasks_by_job: dict[JobId, list[ControllerTask]] = defaultdict(list)
         for task in pending_tasks:
+            tasks_by_job[task.job_id].append(task)
+
+        # Handle coscheduled jobs first (all-or-nothing assignment)
+        for job_id, job_tasks in tasks_by_job.items():
+            job = self._state.get_job(job_id)
+            if job is None or not job.is_coscheduled:
+                continue
+
+            coscheduled_result = self._find_coscheduled_assignments(capacities, job_tasks, job)
+            if coscheduled_result:
+                result.assignments.extend(coscheduled_result)
+                for task, _ in coscheduled_result:
+                    scheduled_task_ids.add(str(task.task_id))
+
+        # Handle remaining non-coscheduled tasks (first-fit)
+        for task in pending_tasks:
+            if str(task.task_id) in scheduled_task_ids:
+                continue
+
+            # Skip coscheduled jobs entirely - they were handled above
+            job = self._state.get_job(task.job_id)
+            if job is not None and job.is_coscheduled:
+                continue
+
             task_result = self.try_schedule_task(task, capacities)
 
             if task_result.success and task_result.worker:
@@ -307,6 +337,83 @@ class Scheduler:
                 len(result.timed_out_tasks),
             )
         return result
+
+    def _find_coscheduled_assignments(
+        self,
+        capacities: dict[WorkerId, WorkerCapacity],
+        tasks: list[ControllerTask],
+        job: ControllerJob,
+    ) -> list[tuple[ControllerTask, ControllerWorker]] | None:
+        """Find atomic assignment for a coscheduled task group.
+
+        All tasks must be assigned to workers sharing the same group_by attribute
+        value. Tasks are sorted by task_index and assigned to workers sorted by
+        tpu-worker-id for deterministic ordering.
+
+        Returns None if no valid worker group exists with sufficient capacity.
+        """
+        group_by = job.coscheduling_group_by
+        if group_by is None:
+            return None
+
+        # Filter to only schedulable tasks
+        schedulable_tasks = [t for t in tasks if t.can_be_scheduled()]
+        if not schedulable_tasks:
+            return None
+
+        num_tasks = len(schedulable_tasks)
+        constraints = list(job.request.constraints)
+
+        # Get workers matching all constraints
+        matching_worker_ids = [
+            worker_id for worker_id, capacity in capacities.items() if _worker_matches_constraints(capacity, constraints)
+        ]
+
+        # Group workers by the coscheduling key
+        groups: dict[str, list[WorkerId]] = defaultdict(list)
+        for worker_id in matching_worker_ids:
+            capacity = capacities[worker_id]
+            key_value = capacity.attributes.get(group_by)
+            if key_value is not None:
+                groups[str(key_value.value)].append(worker_id)
+
+        # Find first group with enough workers that have capacity
+        for group_key, group_worker_ids in groups.items():
+            # Filter to workers with available capacity
+            available = [worker_id for worker_id in group_worker_ids if capacities[worker_id].can_fit_job(job)]
+
+            if len(available) < num_tasks:
+                continue
+
+            # Sort workers by tpu-worker-id for deterministic task-to-worker mapping
+            available.sort(key=lambda w: capacities[w].attributes.get("tpu-worker-id", AttributeValue(0)).value)
+
+            # Sort tasks by task_index
+            sorted_tasks = sorted(schedulable_tasks, key=lambda t: t.task_index)
+
+            # Assign tasks to workers in order
+            assignments: list[tuple[ControllerTask, ControllerWorker]] = []
+            for task, worker_id in zip(sorted_tasks, available[:num_tasks], strict=False):
+                # Deduct capacity tentatively
+                capacities[worker_id].deduct(job)
+                assignments.append((task, capacities[worker_id].worker))
+
+            logger.debug(
+                "Coscheduled job %s: assigned %d tasks to group %s",
+                job.job_id,
+                len(assignments),
+                group_key,
+            )
+            return assignments
+
+        # No group had enough capacity
+        logger.debug(
+            "Coscheduled job %s: no group with %d available workers for group_by=%s",
+            job.job_id,
+            num_tasks,
+            group_by,
+        )
+        return None
 
     def _is_task_timed_out(self, task: ControllerTask, job: ControllerJob) -> bool:
         """Check if a task has exceeded its scheduling timeout."""

@@ -754,3 +754,262 @@ def test_job_without_constraints_schedules_anywhere(scheduler, state, job_reques
 
     # Should be assigned to either worker
     assert len(result.assignments) == 1
+
+
+# =============================================================================
+# Coscheduling Tests
+# =============================================================================
+
+
+def test_coscheduled_job_assigns_all_tasks_atomically(scheduler, state, worker_metadata):
+    """Coscheduled job assigns all tasks to workers in the same group."""
+    # Create 4 workers on tpu-a
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}", meta)
+
+    # Create coscheduled job with 4 replicas
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    submit_job(state, "j1", req)
+
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+
+    # All 4 tasks should be assigned
+    assert len(result.assignments) == 4
+
+    # All assigned to workers with same tpu-name
+    assigned_tpu_names = {w.attributes["tpu-name"].value for _, w in result.assignments}
+    assert assigned_tpu_names == {"tpu-a"}
+
+    # Tasks assigned in order: task-0 -> worker-0, task-1 -> worker-1, etc.
+    for task, worker in result.assignments:
+        expected_worker_id = f"w{task.task_index}"
+        assert worker.worker_id == WorkerId(expected_worker_id)
+
+
+def test_coscheduled_job_waits_when_insufficient_workers(scheduler, state, worker_metadata):
+    """Coscheduled job stays pending when not enough workers in any group."""
+    # Only 2 workers on tpu-a
+    for i in range(2):
+        meta = worker_metadata()
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}", meta)
+
+    # Job requires 4 replicas
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    submit_job(state, "j1", req)
+
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+
+    # No assignments - job stays pending
+    assert len(result.assignments) == 0
+
+
+def test_coscheduled_job_chooses_group_with_capacity(scheduler, state, worker_metadata):
+    """Coscheduled job chooses the group that has capacity."""
+    # tpu-a: 4 workers, 2 are busy (low capacity)
+    for i in range(4):
+        meta = worker_metadata(cpu=2)  # Each worker has 2 CPUs
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"wa{i}", f"addra{i}", meta)
+
+    # Consume capacity on first 2 workers of tpu-a by submitting a job
+    busy_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="busy-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3, replicas=2),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    submit_job(state, "busy", busy_req)
+
+    # Assign the busy job's tasks to wa0 and wa1
+    busy_tasks = state.get_job_tasks(JobId("busy"))
+    assign_task_to_worker(state, busy_tasks[0], WorkerId("wa0"))
+    assign_task_to_worker(state, busy_tasks[1], WorkerId("wa1"))
+    transition_task_to_running(state, busy_tasks[0])
+    transition_task_to_running(state, busy_tasks[1])
+
+    # tpu-b: 4 workers, all free
+    for i in range(4):
+        meta = worker_metadata(cpu=2)
+        meta.attributes["tpu-name"].string_value = "tpu-b"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"wb{i}", f"addrb{i}", meta)
+
+    # Coscheduled job requiring 4 replicas, 2 CPUs each
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3, replicas=4),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    submit_job(state, "j1", req)
+
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+
+    # Job should be assigned to tpu-b (has 4 free workers)
+    assert len(result.assignments) == 4
+    assigned_tpu_names = {w.attributes["tpu-name"].value for _, w in result.assignments}
+    assert assigned_tpu_names == {"tpu-b"}
+
+
+def test_coscheduled_job_assigns_tasks_in_order(scheduler, state, worker_metadata):
+    """Task indices map to worker IDs in sorted order."""
+    # Create workers with non-sequential IDs to verify sorting
+    worker_ids = [3, 1, 0, 2]  # Deliberately out of order
+    for i, wid in enumerate(worker_ids):
+        meta = worker_metadata()
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = wid
+        register_worker(state, f"w{wid}", f"addr{i}", meta)
+
+    # Create coscheduled job with 4 replicas
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    submit_job(state, "j1", req)
+
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+
+    assert len(result.assignments) == 4
+
+    # Verify task-0 -> worker with tpu-worker-id=0, task-1 -> worker with tpu-worker-id=1, etc.
+    for task, worker in result.assignments:
+        worker_tpu_id = worker.attributes["tpu-worker-id"].value
+        assert (
+            task.task_index == worker_tpu_id
+        ), f"Task {task.task_index} assigned to worker with tpu-worker-id={worker_tpu_id}"
+
+
+def test_coscheduled_job_with_constraints(scheduler, state, worker_metadata):
+    """Coscheduled job respects additional constraints."""
+    # tpu-a: 4 workers with region=us-west
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes["region"].string_value = "us-west"
+        register_worker(state, f"wa{i}", f"addra{i}", meta)
+
+    # tpu-b: 4 workers with region=us-east
+    for i in range(4):
+        meta = worker_metadata()
+        meta.attributes["tpu-name"].string_value = "tpu-b"
+        meta.attributes["tpu-worker-id"].int_value = i
+        meta.attributes["region"].string_value = "us-east"
+        register_worker(state, f"wb{i}", f"addrb{i}", meta)
+
+    # Coscheduled job requiring region=us-east
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    constraint = req.constraints.add()
+    constraint.key = "region"
+    constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
+    constraint.value.string_value = "us-east"
+    submit_job(state, "j1", req)
+
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+
+    # Should be assigned to tpu-b (only group matching region=us-east)
+    assert len(result.assignments) == 4
+    assigned_tpu_names = {w.attributes["tpu-name"].value for _, w in result.assignments}
+    assert assigned_tpu_names == {"tpu-b"}
+
+
+def test_non_coscheduled_job_still_works(scheduler, state, job_request, worker_metadata):
+    """Non-coscheduled jobs with replicas are scheduled individually (one task per worker)."""
+    # Create 2 workers, each with only 1 CPU capacity
+    for i in range(2):
+        meta = worker_metadata(cpu=1)  # Only 1 CPU each
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}", meta)
+
+    # Non-coscheduled job with 4 replicas (no coscheduling config)
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="normal-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    # No req.coscheduling.group_by set
+    submit_job(state, "j1", req)
+
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+
+    # Only 2 tasks can be scheduled (2 workers, 1 CPU each = 2 CPU total)
+    # Non-coscheduled jobs schedule tasks individually
+    assert len(result.assignments) == 2
+
+
+def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata):
+    """Coscheduled job waits when some workers in group lack capacity."""
+    # Create 4 workers, but 2 have insufficient CPU
+    for i in range(4):
+        cpu = 2 if i < 2 else 1  # First 2 have 2 CPU, last 2 have only 1
+        meta = worker_metadata(cpu=cpu)
+        meta.attributes["tpu-name"].string_value = "tpu-a"
+        meta.attributes["tpu-worker-id"].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}", meta)
+
+    # Coscheduled job requiring 4 replicas, 2 CPUs each
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3, replicas=4),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    submit_job(state, "j1", req)
+
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+
+    # No assignments - only 2 workers have sufficient capacity
+    assert len(result.assignments) == 0
