@@ -69,7 +69,6 @@ nav:
       - Data Browser: tutorials/data-browser.md
       - Training an LM: tutorials/train-an-lm.md
       - Submitting a Speedrun: tutorials/submitting-speedrun.md
-      - Co-Developing with Marin and Levanter: tutorials/co-develop.md
       - Adding an Optimizer for Speedrun: tutorials/add-optimizer.md
   - Explanations:
       - The Language Modeling Pipeline: explanations/lm-pipeline.md

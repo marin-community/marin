@@ -15,7 +15,7 @@ if [[ ! -d "${VENV_PATH}" || ! -f "${VENV_PATH}/bin/activate" ]]; then
 fi
 
 if [[ ! -d "submodules/maxtext" ]]; then
-  echo "Expected MaxText checkout under submodules/maxtext. Please follow docs/tutorials/co-develop.md." >&2
+  echo "Expected MaxText checkout under submodules/maxtext. Run: git clone https://github.com/AI-Hypercomputer/maxtext.git submodules/maxtext" >&2
   exit 1
 fi
 
