@@ -68,12 +68,13 @@ class JobContext(Protocol):
         """
         ...
 
-    def run(self, fn: Callable, *args) -> Any:
+    def run(self, fn: Callable, *args, name: str | None = None) -> Any:
         """Execute a function with arguments and return a future.
 
         Args:
             fn: Function to execute
             *args: Arguments to pass to function
+            name: Optional task name for debugging/monitoring (used by RayContext)
 
         Returns:
             Future representing the execution (type depends on context)
@@ -235,7 +236,9 @@ class SyncContext:
             return ref.result()
         return ref
 
-    def run(self, fn: Callable, *args) -> _ImmediateFuture | Generator[_ImmediateFuture, None, None]:
+    def run(
+        self, fn: Callable, *args, name: str | None = None
+    ) -> _ImmediateFuture | Generator[_ImmediateFuture, None, None]:
         """Execute function immediately and wrap result."""
         result = fn(*args)
         return _ImmediateFuture(result)
@@ -297,7 +300,7 @@ class ThreadContext:
             return ref.result()
         return ref
 
-    def run(self, fn: Callable, *args) -> Future | GeneratorFuture:
+    def run(self, fn: Callable, *args, name: str | None = None) -> Future | GeneratorFuture:
         """Submit function to thread pool, returning GeneratorFuture for generator functions."""
         if inspect.isgeneratorfunction(fn):
             future = self.executor.submit(lambda: list(fn(*args)))
@@ -386,7 +389,7 @@ class RayContext:
         """Retrieve an object from Ray's object store."""
         return ray.get(ref)
 
-    def run(self, fn: Callable, *args):
+    def run(self, fn: Callable, *args, name: str | None = None):
         """Execute function remotely with configured Ray options.
 
         Uses SPREAD scheduling strategy to avoid running on head node.
@@ -396,7 +399,10 @@ class RayContext:
         else:
             remote_fn = ray.remote(max_retries=100)(fn)
 
-        return remote_fn.options(scheduling_strategy="SPREAD").remote(*args)
+        options = {"scheduling_strategy": "SPREAD"}
+        if name:
+            options["name"] = name
+        return remote_fn.options(**options).remote(*args)
 
     def wait(self, futures: list, num_returns: int = 1) -> tuple[list, list]:
         """Wait for Ray futures to complete."""
@@ -506,6 +512,7 @@ def create_job_ctx(
         >>> context = create_job_ctx("sync")
         >>> context = create_job_ctx("threadpool", max_workers=4)
         >>> context = create_job_ctx("ray")
+        >>> context = create_job_ctx("ray", num_cpus=2, memory=2**30)
     """
     if context_type == "auto":
         import ray
