@@ -221,8 +221,7 @@ class Backend:
 
         logger.info("\nPhysical stages:")
         for i, stage in enumerate(plan.stages, 1):
-            op_names = [type(op).__name__ for op in stage.operations]
-            stage_desc = " → ".join(op_names)
+            stage_desc = stage.stage_name()
 
             hints = []
             if stage.stage_type == StageType.RESHARD:
@@ -302,7 +301,9 @@ class Backend:
         aux_shards_per_shard = self._compute_join_aux_shards(stage, shards, hints)
 
         # Single execution path - ForkChunks handles parallelism internally
-        return self._execute_shard_parallel(stage.operations, shards, aux_shards_per_shard, hints)
+        return self._execute_shard_parallel(
+            stage.operations, shards, aux_shards_per_shard, hints, stage.stage_name(max_length=42)
+        )
 
     def _compute_join_aux_shards(
         self,
@@ -348,9 +349,7 @@ class Backend:
         shards = self._execute_plan_stages(shards, plan, hints)
 
         # Materialize results
-        stage_names = []
-        for stage in plan.stages:
-            stage_names.extend(op.__class__.__name__ for op in stage.operations)
+        stage_names = [stage.stage_name() for stage in plan.stages]
         desc = f"Materialize [{' → '.join(stage_names)}]"
 
         def materialize_all():
@@ -363,12 +362,14 @@ class Backend:
         self,
         contexts: list[StageContext],
         operations: list[PhysicalOp],
+        stage_name: str | None = None,
     ) -> dict[int, list[tuple[ChunkHeader, Any]]]:
         """Run stage tasks for contexts, return results grouped by output shard_idx.
 
         Args:
             contexts: List of StageContext to process
             operations: Physical operations to execute
+            stage_name: Optional name for Ray task debugging/monitoring
 
         Returns:
             Dict mapping shard_idx -> list of (header, data_ref) tuples.
@@ -384,7 +385,7 @@ class Backend:
         # Start initial batch
         while len(active_gens) < self.config.max_parallelism and queued:
             ctx = queued.pop(0)
-            active_gens.append((self.context.run(run_stage, ctx, operations), ctx))
+            active_gens.append((self.context.run(run_stage, ctx, operations, name=stage_name), ctx))
 
         # Process results
         while active_gens or queued:
@@ -403,7 +404,10 @@ class Backend:
                             active_gens.remove((g, ctx))
                             if queued:
                                 next_ctx = queued.pop(0)
-                                active_gens.append((self.context.run(run_stage, next_ctx, operations), next_ctx))
+
+                                active_gens.append(
+                                    (self.context.run(run_stage, next_ctx, operations, name=stage_name), next_ctx)
+                                )
                         break
 
         return results_by_shard
@@ -414,6 +418,7 @@ class Backend:
         shards: list[Shard],
         aux_shards_per_shard: list[dict] | None,
         hints: ExecutionHint,
+        stage_name: str | None = None,
     ) -> list[Shard]:
         """Execute operations on shards with one task per shard.
 
@@ -422,6 +427,7 @@ class Backend:
             shards: List of input Shards
             aux_shards_per_shard: Optional list of aux_shards dicts, one per input shard.
             hints: Execution hints
+            stage_name: Optional name for Ray task debugging/monitoring
 
         Returns:
             List of output Shards assembled from streamed chunks
@@ -445,7 +451,7 @@ class Backend:
             for shard_idx, (shard, aux_shards) in enumerate(zip(shards, aux_shards_per_shard, strict=True))
         ]
 
-        results = self._run_tasks(contexts, operations)
+        results = self._run_tasks(contexts, operations, stage_name)
 
         # Use input shard count to preserve empty shards (important for joins)
         # TODO: the planner should just inform the controller about the number of output shards
