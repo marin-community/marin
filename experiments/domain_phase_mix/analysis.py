@@ -71,7 +71,7 @@ class CollectResultsConfig:
 
     weight_configs_path: InputName | str  # Path to weight_configs.json (GCS or local)
     output_path: InputName | str  # Where to write results CSV (GCS or local)
-    wandb_entity: str = "marin"
+    wandb_entity: str = "marin-community"
     wandb_project: str = "marin"
     wandb_tags: tuple[str, ...] = ()  # Tags to filter runs
     metrics: tuple[str, ...] = tuple(DEFAULT_METRICS)  # Metrics to collect
@@ -314,7 +314,7 @@ def build_results_dataframe(
 def create_analysis_step(
     weight_configs_step: ExecutorStep,
     name_prefix: str,
-    wandb_entity: str = "marin",
+    wandb_entity: str = "marin-community",
     wandb_project: str = "marin",
     metrics: list[str] | None = None,
 ) -> ExecutorStep:
