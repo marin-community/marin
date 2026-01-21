@@ -1,475 +1,387 @@
-# Copyright 2025 The Marin Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
+#!/usr/bin/env python3
 """
-VLM Image Caption Demo
+Analyze shuffle quality of converted LLaVA-OneVision dataset.
 
-Generate image descriptions using a trained Vision-Language Model.
-
-Architecture:
-- Vision Encoder: SigLIP (384x384, patch16)
-- Language Model: Qwen3-1.7B
-- Projector: 2-layer MLP
+This script reads parquet shards from GCS and analyzes how well the data
+from different sources (coyo, datacomp1b, imagenet, etc.) is shuffled
+across shards.
 
 Usage:
-    # Basic usage with default checkpoint
-    python experiments/VLM/demo_vlm_caption.py --image_path path/to/image.jpg
+    python analyze_shuffle_quality.py gs://your-bucket/llava_onevision_levanter/
 
-    # With custom prompt
-    python experiments/VLM/demo_vlm_caption.py \
-        --image_path path/to/image.jpg \
-        --prompt "What objects are in this image?"
+    # Analyze only first N shards
+    python analyze_shuffle_quality.py gs://your-bucket/path/ --max-shards 100
 
-    # With different checkpoint
-    python experiments/VLM/demo_vlm_caption.py \
-        --checkpoint gs://your-bucket/checkpoint-path \
-        --image_path path/to/image.jpg
+    # Save report to file
+    python analyze_shuffle_quality.py gs://your-bucket/path/ --output report.txt
 """
 
-import os
-
-# Set temporary directory to /dev/shm before other imports
-# This fixes "No usable temporary directory found" error
-os.environ["TMPDIR"] = "/dev/shm"
-
-import logging
-from dataclasses import dataclass, field
-from typing import Tuple
-
-import haliax as hax
-import jax
-import jax.numpy as jnp
-import jax.random as jrandom
-import jmp
+import argparse
+import sys
+from collections import Counter, defaultdict
+from typing import Dict, List, Optional, Tuple
 import numpy as np
-from haliax import Axis
-from haliax.partitioning import round_axis_for_partitioning
-from PIL import Image
-from transformers import AutoProcessor, AutoTokenizer
 
-import levanter
-from levanter.data.image import BatchImageProcessor, CustomVLMProcessor, create_custom_processor
-from levanter.inference.engine import InferenceEngineConfig
-from levanter.inference.jit_scheduler import SeqDecodingParams
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
-from levanter.models.llava_onevision import (
-    LlavaInferenceEngine,
-    LlavaOnevisionConfig,
-    LlavaOnevisionModel,
-    VLMRequest,
-)
-from levanter.models.qwen import Qwen3Config
-from levanter.models.siglip import SiglipVisionConfig
-from levanter.trainer import TrainerConfig
-
-logger = logging.getLogger(__name__)
-
-# Enable JAX compilation cache (use /dev/shm for faster access)
-jax.config.update("jax_compilation_cache_dir", "/dev/shm/jax_cache")
-jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+try:
+    import gcsfs
+    import pandas as pd
+    import pyarrow.parquet as pq
+except ImportError as e:
+    print(f"Missing required package: {e}")
+    print("Install with: pip install gcsfs pandas pyarrow")
+    sys.exit(1)
 
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
+def list_parquet_shards(gcs_path: str, fs) -> List[str]:
+    """List all parquet shard files in GCS path, sorted by name."""
+    # Remove gs:// prefix for gcsfs
+    path = gcs_path.replace("gs://", "")
+    path = path.rstrip("/")
+
+    try:
+        files = fs.ls(path)
+    except Exception as e:
+        print(f"Error listing files in {gcs_path}: {e}")
+        return []
+
+    # Filter for parquet files and sort
+    parquet_files = [f for f in files if f.endswith(".parquet")]
+    parquet_files.sort()
+
+    return parquet_files
 
 
-@dataclass
-class VLMCaptionConfig:
-    """Configuration for VLM Image Caption generation."""
-
-    # Checkpoint path (supports GCS)
-    checkpoint: str = "gs://marin-us-east1/checkpoints/vlm-official-qwen3-1.7b-8-c3e151/hf/vlm-official-qwen3-1.7b-8-c3e151/step-544"
-
-    # Image input
-    image_path: str = ""
-    prompt: str = "Describe this image in detail."
-
-    # Tokenizer and processor
-    tokenizer: str = "Qwen/Qwen3-1.7B"
-    processor: str = "llava-hf/llava-onevision-qwen2-0.5b-ov-hf"
-
-    # Generation parameters
-    max_tokens: int = 256
-    temperature: float = 0.7
-    seed: int = 42
-
-    # Trainer config for mesh/precision
-    trainer: TrainerConfig = field(
-        default_factory=lambda: TrainerConfig(
-            mp=jmp.get_policy("p=f32,c=bfloat16"),
-        )
-    )
-
-
-# ============================================================================
-# MODEL CONFIGURATION (matches demo_vlm_train.py)
-# ============================================================================
-
-
-def build_vlm_config(tokenizer_name: str) -> LlavaOnevisionConfig:
-    """Build LlavaOnevisionConfig matching demo_vlm_train.py."""
-
-    # Vision encoder: SigLIP (384x384, patch16)
-    vision_config = SiglipVisionConfig(
-        hidden_size=1152,
-        intermediate_size=4304,
-        num_hidden_layers=27,
-        num_attention_heads=16,
-        image_size=384,
-        patch_size=16,
-    )
-
-    # Language model: Qwen3-1.7B
-    text_config = Qwen3Config(
-        max_seq_len=2048,
-        hidden_dim=2048,
-        intermediate_dim=6144,
-        num_heads=16,
-        num_kv_heads=8,
-        num_layers=28,
-        rope=Llama3RotaryEmbeddingsConfig(),
-        tie_word_embeddings=True,
-    )
-
-    # Get image token ID from Qwen3 tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    image_token_index = tokenizer.convert_tokens_to_ids("<|image_pad|>")
-
-    # Combined VLM config
-    return LlavaOnevisionConfig(
-        vision_config=vision_config,
-        text_config=text_config,
-        vision_encoder_type="siglip",
-        vision_feature_select_strategy="full",
-        vision_aspect_ratio="single",  # Single resolution (no anyres)
-        disable_anyres=True,
-        image_token_index=image_token_index,
-        tokenizer=tokenizer_name,  # Set tokenizer to avoid inference from GCS path
-    )
-
-
-# ============================================================================
-# MODEL LOADING
-# ============================================================================
-
-
-def load_model(
-    config: VLMCaptionConfig,
-    vlm_config: LlavaOnevisionConfig,
-) -> Tuple[LlavaOnevisionModel, any, Axis]:
-    """Load VLM model from HuggingFace-format checkpoint.
-
-    The checkpoint should be in HuggingFace format (with config.json, model.safetensors, etc.)
-    Reference: lib/levanter/tests/test_llava_onevision.py
-
-    Args:
-        config: Caption configuration
-        vlm_config: VLM model configuration
+def analyze_shard(shard_path: str, fs) -> Tuple[Counter, int]:
+    """
+    Analyze source distribution in a single shard.
 
     Returns:
-        Tuple of (model, tokenizer, Vocab axis)
+        Tuple of (source_counts, total_rows)
     """
-    logger.info(f"Loading model from HF checkpoint: {config.checkpoint}")
+    try:
+        # Read only the 'source' column if it exists
+        with fs.open(shard_path, 'rb') as f:
+            table = pq.read_table(f, columns=['source'] if 'source' in pq.read_schema(f).names else None)
+            df = table.to_pandas()
 
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer)
-    vocab_size = len(tokenizer)
+        if 'source' in df.columns:
+            source_counts = Counter(df['source'].tolist())
+        else:
+            # If no source column, count as 'unknown'
+            source_counts = Counter({'unknown': len(df)})
 
-    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
-        Vocab = round_axis_for_partitioning(
-            Axis("vocab", vocab_size),
-            config.trainer.compute_axis_mapping,
-        )
-
-        # Use HFCheckpointConverter to load HuggingFace format checkpoint
-        converter = vlm_config.hf_checkpoint_converter(ref_checkpoint=config.checkpoint)
-        parameter_axis_mapping = config.trainer.parameter_axis_mapping
-
-        model = converter.load_pretrained(
-            LlavaOnevisionModel,
-            ref=config.checkpoint,
-            config=vlm_config,
-            axis_mapping=parameter_axis_mapping,
-            dtype=config.trainer.mp.compute_dtype,
-            resize_vocab_to_match_tokenizer=False,
-        )
-
-    logger.info("Model loaded successfully")
-    return model, tokenizer, Vocab
+        return source_counts, len(df)
+    except Exception as e:
+        print(f"  Warning: Error reading {shard_path}: {e}", file=sys.stderr)
+        return Counter(), 0
 
 
-# ============================================================================
-# IMAGE PROCESSING
-# ============================================================================
-
-
-def process_image(
-    config: VLMCaptionConfig,
-    vlm_config: LlavaOnevisionConfig,
-    tokenizer,
-) -> Tuple[VLMRequest, list]:
-    """Process image and create VLMRequest.
-
-    Uses BatchImageProcessor for consistent processing with training pipeline.
-    Reference: lib/levanter/tests/test_image_utils.py
-
-    Args:
-        config: Caption configuration
-        vlm_config: VLM model configuration
-        tokenizer: Tokenizer instance
-
-    Returns:
-        Tuple of (VLMRequest, prompt_tokens list)
+def calculate_shuffle_metrics(
+    shard_stats: Dict[str, Counter],
+    global_stats: Counter,
+    total_rows: int
+) -> Dict:
     """
-    logger.info(f"Processing image: {config.image_path}")
+    Calculate shuffle quality metrics using variance ratio method.
 
-    # Load image
-    image = Image.open(config.image_path).convert("RGB")
+    Good shuffle means each shard has similar source distribution to global distribution.
+    We compare observed variance to expected variance under perfect random shuffle.
+    """
+    if not shard_stats or total_rows == 0:
+        return {}
 
-    # Build conversation for chat template
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image"},
-                {"type": "text", "text": config.prompt},
-            ],
-        }
-    ]
+    # Get all sources
+    all_sources = list(global_stats.keys())
 
-    # Create processor using create_custom_processor (same as test utils)
-    # patch_size and vision_feature_height must match model config
-    patch_size = vlm_config.vision_config.image_size  # 384
-    vision_feature_height = patch_size // vlm_config.vision_config.patch_size  # 384/16=24
+    # Calculate global proportions
+    global_proportions = {
+        source: count / total_rows
+        for source, count in global_stats.items()
+    }
 
-    base_processor = create_custom_processor(
-        config.processor,
-        do_pad=True,
-        image_grid_pinpoints=[[patch_size, patch_size]],  # Single resolution
-        max_image_tiles=5,  # For disable_anyres, one tile per image
-        vision_aspect_ratio="single",
-    )
+    # Calculate average shard size
+    avg_shard_size = total_rows / len(shard_stats)
 
-    lev_processor = CustomVLMProcessor.from_processor_and_tokenizer(
-        base_processor,
-        tokenizer,
-        use_full_padded_tokens=False,  # HF-style unpadded tokens
-    )
+    # Calculate per-shard proportions
+    shard_proportions = {}
+    for shard_name, counts in shard_stats.items():
+        shard_total = sum(counts.values())
+        if shard_total > 0:
+            shard_proportions[shard_name] = {
+                source: counts.get(source, 0) / shard_total
+                for source in all_sources
+            }
 
-    # Create BatchImageProcessor for consistent grid_mask handling
-    batch_processor = BatchImageProcessor(
-        processor=lev_processor,
-        max_length=2048,
-        padding=True,
-        max_num_patches=0,  # disable_anyres: each image uses only base patch
-        grid_pinpoints=[[patch_size, patch_size]],
-        patch_size=patch_size,
-        vision_feature_height=vision_feature_height,
-        add_generation_prompt=True,
-        disable_anyres=True,
-    )
+    # Calculate variance for each source across shards
+    source_variances = {}
+    for source in all_sources:
+        proportions = [
+            props.get(source, 0)
+            for props in shard_proportions.values()
+        ]
+        if proportions:
+            source_variances[source] = np.var(proportions)
 
-    # Process image using BatchImageProcessor
-    example = {"messages": messages, "images": [image]}
-    processed = batch_processor([example])[0]
+    # Calculate expected variance under perfect random shuffle (binomial distribution)
+    # expected_var = p * (1-p) / n
+    expected_variances = {}
+    for source in all_sources:
+        p = global_proportions[source]
+        expected_variances[source] = p * (1 - p) / avg_shard_size
 
-    # Extract outputs from processed dict
-    input_ids = np.array(processed["input_ids"], dtype=np.int32)
-    pixel_values = np.array(processed["pixel_values"], dtype=np.float32)
-    grid_mask = np.array(processed["grid_mask"], dtype=bool)
-    attention_mask = np.array(processed["attention_mask"], dtype=np.int32)
+    # Calculate variance ratios (observed / expected)
+    variance_ratios = {}
+    for source in all_sources:
+        expected_var = expected_variances[source]
+        observed_var = source_variances.get(source, 0)
+        if expected_var > 0:
+            variance_ratios[source] = observed_var / expected_var
+        else:
+            variance_ratios[source] = 0.0
 
-    # Get actual content length (non-padding tokens)
-    actual_content_len = int(attention_mask.sum())
-    prompt_tokens = input_ids[:actual_content_len].tolist()
-
-    logger.info(f"Input tokens: {len(prompt_tokens)}, Total padded: {len(input_ids)}, Patches: {pixel_values.shape[0]}")
-
-    # Create NamedArrays for VLMRequest (with batch dimension)
-    batch_size = 1
-    total_patches = pixel_values.shape[0]
-    seq_len = len(input_ids)
-
-    Batch = Axis("batch", batch_size)
-    NumPatches = Axis("num_patches", total_patches)
-    Channels = Axis("channels", pixel_values.shape[1])
-    Height = Axis("height", pixel_values.shape[2])
-    Width = Axis("width", pixel_values.shape[3])
-    Position = Axis("position", seq_len)
-    GridMaskAxis = Axis("grid_mask", total_patches)
-
-    # Add batch dimension and create NamedArrays
-    pixel_values_batched = pixel_values.reshape(1, total_patches, pixel_values.shape[1], pixel_values.shape[2], pixel_values.shape[3])
-    grid_mask_batched = grid_mask.reshape(1, -1)
-    input_ids_batched = input_ids.reshape(1, -1)
-
-    pixel_values_named = hax.named(
-        jnp.array(pixel_values_batched, dtype=jnp.bfloat16),
-        (Batch, NumPatches, Channels, Height, Width),
-    )
-    grid_mask_named = hax.named(jnp.array(grid_mask_batched), (Batch, GridMaskAxis))
-    input_ids_named = hax.named(jnp.array(input_ids_batched, dtype=jnp.int32), (Batch, Position))
-
-    # Create decode params with EOS token as stop token
-    eos_token_id = tokenizer.eos_token_id
-    if eos_token_id is not None:
-        stop_tokens = hax.named(jnp.array([[eos_token_id]], dtype=jnp.int32), ("stop_seq", "position"))
+    # Calculate weighted average ratio (weighted by global proportion)
+    total_weight = sum(global_proportions[s] for s in variance_ratios if variance_ratios[s] > 0)
+    if total_weight > 0:
+        weighted_ratio = sum(
+            variance_ratios[s] * global_proportions[s]
+            for s in variance_ratios
+        ) / total_weight
     else:
-        stop_tokens = None
+        weighted_ratio = 1.0
 
-    decode_params = SeqDecodingParams(
-        max_num_tokens=jnp.array(config.max_tokens + actual_content_len, dtype=jnp.int32),
-        stop_tokens=stop_tokens,
-        temperature=jnp.array(config.temperature, dtype=jnp.float32),
-        key=jrandom.PRNGKey(config.seed),
-    )
+    # Calculate max deviation from global mean (kept for reference)
+    max_deviations = {}
+    for source in all_sources:
+        global_prop = global_proportions[source]
+        deviations = [
+            abs(props.get(source, 0) - global_prop)
+            for props in shard_proportions.values()
+        ]
+        if deviations:
+            max_deviations[source] = max(deviations)
 
-    # Create VLMRequest
-    vlm_request = VLMRequest(
-        prompt_tokens=prompt_tokens,
-        request_id=0,
-        decode_params=decode_params,
-        n_generations=1,
-        pixel_values=pixel_values_named,
-        grid_mask=grid_mask_named,
-        input_ids=input_ids_named,
-        unpad_indices=None,  # None for disable_anyres mode
-        num_unpadded_features=None,
-    )
+    # Overall metrics
+    avg_variance = np.mean(list(source_variances.values())) if source_variances else 0
+    max_deviation = max(max_deviations.values()) if max_deviations else 0
 
-    return vlm_request, prompt_tokens
+    # Shuffle quality score (0-100, higher is better)
+    # Based on variance ratio: ratio=1 means perfect random shuffle
+    # ratio=1 -> 100, ratio=10 -> 50, ratio=100 -> 0
+    if weighted_ratio <= 1:
+        # Better than random (stratified sampling) - cap at 100
+        quality_score = 100.0
+    else:
+        quality_score = max(0, 100 * (1 - np.log10(weighted_ratio) / 2))
+
+    return {
+        'global_proportions': global_proportions,
+        'shard_proportions': shard_proportions,
+        'source_variances': source_variances,
+        'expected_variances': expected_variances,
+        'variance_ratios': variance_ratios,
+        'weighted_ratio': weighted_ratio,
+        'avg_shard_size': avg_shard_size,
+        'max_deviations': max_deviations,
+        'avg_variance': avg_variance,
+        'max_deviation': max_deviation,
+        'quality_score': quality_score
+    }
 
 
-# ============================================================================
-# CAPTION GENERATION
-# ============================================================================
-
-
-def generate_caption(
-    model: LlavaOnevisionModel,
-    tokenizer,
-    Vocab: Axis,
-    vlm_request: VLMRequest,
-    config: VLMCaptionConfig,
+def generate_report(
+    gcs_path: str,
+    shard_stats: Dict[str, Counter],
+    global_stats: Counter,
+    total_rows: int,
+    metrics: Dict,
+    output_file: Optional[str] = None
 ) -> str:
-    """Generate image caption using LlavaInferenceEngine.
+    """Generate the shuffle quality report."""
+    lines = []
 
-    Reference: lib/levanter/tests/test_llava_onevision.py::test_llava_onevision_generation_with_inference_engine
+    lines.append("=" * 70)
+    lines.append("SHUFFLE QUALITY REPORT")
+    lines.append("=" * 70)
+    lines.append(f"Dataset: {gcs_path}")
+    lines.append(f"Total shards analyzed: {len(shard_stats)}")
+    lines.append(f"Total rows: {total_rows:,}")
+    lines.append("")
 
-    Args:
-        model: Loaded VLM model
-        tokenizer: Tokenizer instance
-        Vocab: Vocabulary axis
-        vlm_request: Processed VLM request
-        config: Caption configuration
+    # Global distribution
+    lines.append("-" * 70)
+    lines.append("GLOBAL DISTRIBUTION (across all shards)")
+    lines.append("-" * 70)
 
-    Returns:
-        Generated caption string
-    """
-    logger.info("Starting caption generation...")
+    sorted_sources = sorted(global_stats.items(), key=lambda x: -x[1])
+    for source, count in sorted_sources:
+        pct = 100 * count / total_rows if total_rows > 0 else 0
+        lines.append(f"  {source:25s}: {pct:6.2f}% ({count:,} samples)")
+    lines.append("")
 
-    # Estimate max sequence length for inference
-    prompt_len = len(vlm_request.prompt_tokens)
-    estimated_max_seq_len = prompt_len + config.max_tokens + 64
-    page_size = 16
+    # Per-shard distribution (summary)
+    lines.append("-" * 70)
+    lines.append("PER-SHARD DISTRIBUTION (all shards)")
+    lines.append("-" * 70)
 
-    # Create engine config (following test patterns)
-    engine_config = InferenceEngineConfig(
-        max_seq_len=estimated_max_seq_len,
-        page_size=page_size,
-        max_seqs=1,
-        max_rounds=32,
-        max_stop_seqs=1,
-        max_stop_tokens=4,
-        max_pages=800,
-        compute_dtype=jnp.bfloat16,
+    shard_names = sorted(shard_stats.keys())
+    top_sources = [s for s, _ in sorted_sources[:5]]  # Top 5 sources
+
+    # Header
+    header = f"  {'Shard':20s}"
+    for source in top_sources:
+        header += f" {source[:8]:>8s}"
+    header += "  (rows)"
+    lines.append(header)
+
+    for shard_name in shard_names:
+        counts = shard_stats[shard_name]
+        shard_total = sum(counts.values())
+
+        # Extract shard number from path
+        shard_display = shard_name.split("/")[-1].replace(".parquet", "")
+
+        row = f"  {shard_display:20s}"
+        for source in top_sources:
+            pct = 100 * counts.get(source, 0) / shard_total if shard_total > 0 else 0
+            row += f" {pct:7.1f}%"
+        row += f"  ({shard_total:,})"
+        lines.append(row)
+
+    lines.append("")
+
+    # Shuffle quality metrics
+    lines.append("-" * 70)
+    lines.append("SHUFFLE QUALITY METRICS (Variance Ratio Method)")
+    lines.append("-" * 70)
+
+    if metrics:
+        lines.append(f"  Average shard size: {metrics['avg_shard_size']:,.0f} rows")
+        lines.append(f"  Weighted variance ratio: {metrics['weighted_ratio']:.2f} (1.0 = perfect random shuffle)")
+        lines.append(f"  Shuffle quality score: {metrics['quality_score']:.1f}/100")
+
+        # Interpretation
+        score = metrics['quality_score']
+        if score >= 90:
+            interpretation = "EXCELLENT - Close to perfect random shuffle"
+        elif score >= 70:
+            interpretation = "GOOD - Shuffle quality is good"
+        elif score >= 50:
+            interpretation = "FAIR - Some clustering detected"
+        else:
+            interpretation = "POOR - Significant clustering, consider re-shuffling"
+
+        lines.append(f"  Interpretation: {interpretation}")
+        lines.append("")
+
+        # Per-source variance ratios
+        lines.append("  Per-source variance ratio (observed/expected, 1.0 = ideal):")
+        sorted_ratios = sorted(metrics['variance_ratios'].items(), key=lambda x: -x[1])
+        for source, ratio in sorted_ratios[:10]:
+            obs_var = metrics['source_variances'].get(source, 0)
+            exp_var = metrics['expected_variances'].get(source, 0)
+            lines.append(f"    {source:20s}: {ratio:6.2f}x  (obs={obs_var:.6f}, exp={exp_var:.6f})")
+    else:
+        lines.append("  (No metrics available)")
+
+    lines.append("")
+    lines.append("=" * 70)
+
+    report = "\n".join(lines)
+
+    # Output
+    print(report)
+
+    if output_file:
+        with open(output_file, 'w') as f:
+            f.write(report)
+        print(f"\nReport saved to: {output_file}")
+
+    return report
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Analyze shuffle quality of converted LLaVA-OneVision dataset",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    python analyze_shuffle_quality.py gs://your-bucket/llava_onevision_levanter/
+    python analyze_shuffle_quality.py gs://your-bucket/path/ --max-shards 100
+    python analyze_shuffle_quality.py gs://your-bucket/path/ --output report.txt
+        """
+    )
+    parser.add_argument(
+        "--gcs_path",
+        type=str,default='gs://marin-vlm/stage2_sharded/',
+        help="GCS path to the converted dataset (e.g., gs://bucket/path/)"
+    )
+    parser.add_argument(
+        "--max-shards",
+        type=int,
+        default=100,
+        help="Maximum number of shards to analyze (default: all)"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Output file for the report (default: print to stdout only)"
     )
 
-    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
-        mesh = config.trainer.device_mesh
+    args = parser.parse_args()
 
-        # Create inference engine
-        engine = LlavaInferenceEngine.from_model_with_config(
-            model=model,
-            tokenizer=tokenizer,
-            config=engine_config,
-            Vocab=Vocab,
-            mesh=mesh,
-        )
+    # Initialize GCS filesystem
+    print("Initializing GCS filesystem...")
+    fs = gcsfs.GCSFileSystem()
 
-        # Generate
-        result = engine.generate([vlm_request])
+    # List shards
+    print(f"Listing parquet files in {args.gcs_path}...")
+    shard_paths = list_parquet_shards(args.gcs_path, fs)
 
-    # Decode output tokens
-    output_tokens = result.tokens[0]  # First request
-    # Filter out invalid tokens
-    output_tokens = [t for t in output_tokens if t >= 0]
-    caption = tokenizer.decode(output_tokens, skip_special_tokens=True)
+    if not shard_paths:
+        print("No parquet files found!")
+        sys.exit(1)
 
-    logger.info(f"Generated {len(output_tokens)} tokens")
-    return caption
+    print(f"Found {len(shard_paths)} parquet files")
 
+    # Limit shards if requested
+    if args.max_shards and args.max_shards < len(shard_paths):
+        shard_paths = shard_paths[:args.max_shards]
+        print(f"Analyzing first {args.max_shards} shards...")
 
-# ============================================================================
-# MAIN
-# ============================================================================
+    # Analyze each shard
+    shard_stats = {}
+    global_stats = Counter()
+    total_rows = 0
 
+    print("Analyzing shards...")
+    for i, shard_path in enumerate(shard_paths):
+        if (i + 1) % 100 == 0 or i == 0 or i == len(shard_paths) - 1:
+            print(f"  Processing shard {i + 1}/{len(shard_paths)}...")
 
-def main(config: VLMCaptionConfig):
-    """Main entry point for VLM Image Caption demo."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
+        counts, rows = analyze_shard(shard_path, fs)
+
+        if rows > 0:
+            shard_stats[shard_path] = counts
+            global_stats.update(counts)
+            total_rows += rows
+
+    print(f"Analyzed {len(shard_stats)} shards with {total_rows:,} total rows")
+    print()
+
+    # Calculate metrics
+    metrics = calculate_shuffle_metrics(shard_stats, global_stats, total_rows)
+
+    # Generate report
+    generate_report(
+        args.gcs_path,
+        shard_stats,
+        global_stats,
+        total_rows,
+        metrics,
+        args.output
     )
-
-    # Validate inputs
-    if not config.image_path:
-        raise ValueError("--image_path is required")
-    if not os.path.exists(config.image_path):
-        raise FileNotFoundError(f"Image not found: {config.image_path}")
-
-    print("\n" + "=" * 60)
-    print("VLM Image Caption Demo")
-    print("=" * 60)
-    print(f"Checkpoint: {config.checkpoint}")
-    print(f"Image: {config.image_path}")
-    print(f"Prompt: {config.prompt}")
-    print("=" * 60 + "\n")
-
-    # Build model config
-    vlm_config = build_vlm_config(config.tokenizer)
-
-    # Load model
-    model, tokenizer, Vocab = load_model(config, vlm_config)
-
-    # Process image
-    vlm_request, prompt_tokens = process_image(config, vlm_config, tokenizer)
-
-    # Generate caption
-    caption = generate_caption(model, tokenizer, Vocab, vlm_request, config)
-
-    # Output result
-    print("\n" + "=" * 60)
-    print("Generated Caption:")
-    print("=" * 60)
-    print(caption)
-    print("=" * 60 + "\n")
-
-    return caption
 
 
 if __name__ == "__main__":
-    levanter.config.main(main)()
+    main()
