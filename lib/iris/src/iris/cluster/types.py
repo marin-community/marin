@@ -26,6 +26,7 @@ Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.pr
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from enum import IntEnum
 from typing import Any, NewType
 
 import humanfriendly
@@ -70,6 +71,112 @@ class AttributeValue:
             return AttributeValue(proto.float_value)
         # Default to empty string if no value set
         return AttributeValue("")
+
+
+class ConstraintOp(IntEnum):
+    """Constraint operators for worker attribute matching.
+
+    Used to define constraints that filter which workers can run a job.
+    Each operator compares a worker attribute against a constraint value.
+
+    Example:
+        >>> # Match workers where region equals "us-central1"
+        >>> Constraint(key="region", op=ConstraintOp.EQ, value="us-central1")
+        >>> # Match workers with memory > 32GB
+        >>> Constraint(key="memory_gb", op=ConstraintOp.GT, value=32)
+        >>> # Match workers that have the "gpu" attribute set
+        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
+    """
+
+    EQ = 0
+    NE = 1
+    EXISTS = 2
+    NOT_EXISTS = 3
+    GT = 4
+    GE = 5
+    LT = 6
+    LE = 7
+
+    def to_proto(self) -> cluster_pb2.ConstraintOp:
+        """Convert to protobuf ConstraintOp enum value."""
+        mapping = {
+            ConstraintOp.EQ: cluster_pb2.CONSTRAINT_OP_EQ,
+            ConstraintOp.NE: cluster_pb2.CONSTRAINT_OP_NE,
+            ConstraintOp.EXISTS: cluster_pb2.CONSTRAINT_OP_EXISTS,
+            ConstraintOp.NOT_EXISTS: cluster_pb2.CONSTRAINT_OP_NOT_EXISTS,
+            ConstraintOp.GT: cluster_pb2.CONSTRAINT_OP_GT,
+            ConstraintOp.GE: cluster_pb2.CONSTRAINT_OP_GE,
+            ConstraintOp.LT: cluster_pb2.CONSTRAINT_OP_LT,
+            ConstraintOp.LE: cluster_pb2.CONSTRAINT_OP_LE,
+        }
+        return mapping[self]
+
+
+@dataclass(frozen=True)
+class Constraint:
+    """Worker constraint for job scheduling.
+
+    Constraints filter which workers are eligible to run a job based on
+    worker attributes. Workers must satisfy all constraints to be considered.
+
+    Example:
+        >>> # Require a specific TPU pod
+        >>> Constraint(key="tpu-name", op=ConstraintOp.EQ, value="my-tpu-pod")
+        >>> # Require workers in a specific zone
+        >>> Constraint(key="zone", op=ConstraintOp.EQ, value="us-central1-a")
+        >>> # Require workers with at least 64GB memory
+        >>> Constraint(key="memory_gb", op=ConstraintOp.GE, value=64)
+        >>> # Require workers that have a GPU
+        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
+    """
+
+    key: str
+    op: ConstraintOp
+    value: str | int | float | None = None
+
+    def to_proto(self) -> cluster_pb2.Constraint:
+        """Convert to protobuf representation."""
+        proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto())
+        if self.value is not None:
+            proto.value.CopyFrom(AttributeValue(self.value).to_proto())
+        return proto
+
+
+@dataclass(frozen=True)
+class CoschedulingConfig:
+    """Configuration for coscheduling job tasks together.
+
+    Coscheduling ensures that all tasks of a job are scheduled on workers
+    that share a common attribute value. This is essential for multi-host
+    TPU jobs where all workers must belong to the same TPU pod.
+
+    Example:
+        >>> # Schedule all tasks on workers from the same TPU pod
+        >>> CoschedulingConfig(group_by="tpu-name")
+    """
+
+    group_by: str
+
+    def to_proto(self) -> cluster_pb2.CoschedulingConfig:
+        """Convert to protobuf representation."""
+        return cluster_pb2.CoschedulingConfig(group_by=self.group_by)
+
+
+def tpu_device(variant: str) -> cluster_pb2.DeviceConfig:
+    """Create a DeviceConfig for a TPU device.
+
+    Args:
+        variant: TPU variant string (e.g., "v5litepod-16", "v4-8", "v6e-256").
+
+    Returns:
+        DeviceConfig with the tpu field set to the specified variant.
+
+    Example:
+        >>> config = tpu_device("v5litepod-16")
+        >>> config.tpu.variant
+        'v5litepod-16'
+    """
+    return cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant=variant))
 
 
 def parse_memory_string(memory_str: str) -> int:

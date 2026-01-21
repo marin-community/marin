@@ -54,13 +54,28 @@ def _find_free_port() -> int:
 
 
 class LocalEnvironmentProvider:
-    def __init__(self, cpu: int = 1000, memory_gb: int = 1000):
+    def __init__(
+        self,
+        cpu: int = 1000,
+        memory_gb: int = 1000,
+        attributes: dict[str, str | int | float] | None = None,
+    ):
         self._cpu = cpu
         self._memory_gb = memory_gb
+        self._attributes = attributes or {}
 
     def probe(self) -> cluster_pb2.WorkerMetadata:
         device = cluster_pb2.DeviceConfig()
         device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+
+        proto_attrs = {}
+        for key, value in self._attributes.items():
+            if isinstance(value, str):
+                proto_attrs[key] = cluster_pb2.AttributeValue(string_value=value)
+            elif isinstance(value, int):
+                proto_attrs[key] = cluster_pb2.AttributeValue(int_value=value)
+            elif isinstance(value, float):
+                proto_attrs[key] = cluster_pb2.AttributeValue(float_value=value)
 
         return cluster_pb2.WorkerMetadata(
             hostname="local",
@@ -69,6 +84,7 @@ class LocalEnvironmentProvider:
             memory_bytes=self._memory_gb * 1024**3,
             disk_bytes=100 * 1024**3,  # Default 100GB for local
             device=device,
+            attributes=proto_attrs,
         )
 
 
@@ -357,6 +373,8 @@ class LocalClusterClient:
         environment: cluster_pb2.EnvironmentConfig | None = None,
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,
+        constraints: list[cluster_pb2.Constraint] | None = None,
+        coscheduling: cluster_pb2.CoschedulingConfig | None = None,
     ) -> None:
         self._remote_client.submit_job(
             job_id=job_id,
@@ -365,6 +383,8 @@ class LocalClusterClient:
             environment=environment,
             ports=ports,
             scheduling_timeout_seconds=scheduling_timeout_seconds,
+            constraints=constraints,
+            coscheduling=coscheduling,
         )
 
     def get_job_status(self, job_id: str) -> cluster_pb2.JobStatus:
