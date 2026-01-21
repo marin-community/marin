@@ -773,9 +773,11 @@ def save_download_first_checkpoint(
     shard_idx: int,
     source_counts: Counter,
     total_processed: int,
-    total_written: int
+    total_written: int,
+    gcs_checkpoint_path: Optional[str] = None,
+    fs=None
 ):
-    """Save checkpoint for download-first mode to LOCAL filesystem (gzip compressed JSON)."""
+    """Save checkpoint for download-first mode to LOCAL filesystem and optionally to GCS (gzip compressed JSON)."""
     data = {
         'batches': batches,
         'batch_sizes': batch_sizes,
@@ -787,13 +789,22 @@ def save_download_first_checkpoint(
         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
     }
 
+    # Save to local filesystem
     try:
         Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
         with gzip.open(checkpoint_path, 'wt', encoding='utf-8') as gz:
             json.dump(data, gz)
-        print(f"  Checkpoint saved: {checkpoint_path} (batch {batch_idx})")
+        print(f"  Checkpoint saved locally: {checkpoint_path} (batch {batch_idx})")
     except Exception as e:
         print(f"ERROR: Could not save checkpoint to {checkpoint_path}: {e}", file=sys.stderr)
+
+    # Also save to GCS if path provided
+    if gcs_checkpoint_path and fs is not None:
+        try:
+            fs.put(checkpoint_path, gcs_checkpoint_path)
+            print(f"  Checkpoint saved to GCS: {gcs_checkpoint_path}")
+        except Exception as e:
+            print(f"WARNING: Could not save checkpoint to GCS {gcs_checkpoint_path}: {e}", file=sys.stderr)
 
 
 def download_parquet_batch(
@@ -919,6 +930,12 @@ def process_dataset_download_first(
     effective_checkpoint_dir = checkpoint_dir or download_dir
     checkpoint_path = get_download_first_checkpoint_path(output_path, effective_checkpoint_dir)
     print(f"Checkpoint will be saved locally at: {checkpoint_path}")
+
+    # GCS checkpoint path (same directory as output data)
+    gcs_checkpoint_path = None
+    if use_gcs:
+        gcs_checkpoint_path = f"{output_path.rstrip('/')}/checkpoint_download_first.json.gz"
+        print(f"Checkpoint will also be saved to GCS: {gcs_checkpoint_path}")
 
     # Initialize state (may be overwritten by checkpoint)
     batches: List[List[str]] = []
@@ -1411,7 +1428,8 @@ def process_dataset_download_first(
             # Save checkpoint after each batch (save next batch index)
             save_download_first_checkpoint(
                 checkpoint_path, batches, batch_sizes, batch_idx + 1, shard_idx,
-                source_counts, total_processed, total_written
+                source_counts, total_processed, total_written,
+                gcs_checkpoint_path=gcs_checkpoint_path, fs=fs
             )
 
             # Check max rows - break after this batch if limit reached
@@ -1426,7 +1444,8 @@ def process_dataset_download_first(
         # Save checkpoint with current batch index (will resume this batch)
         save_download_first_checkpoint(
             checkpoint_path, batches, batch_sizes, batch_idx, shard_idx,
-            source_counts, total_processed, total_written
+            source_counts, total_processed, total_written,
+            gcs_checkpoint_path=gcs_checkpoint_path, fs=fs
         )
         print(f"Checkpoint saved. Run with --resume to continue from batch {batch_idx}.")
 
