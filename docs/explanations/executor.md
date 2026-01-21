@@ -4,6 +4,8 @@ Marin's executor framework manages the execution of experiments.
 This document is more about the mechanics, read [this](../explanations/experiments.md) to
 learn more about the conventions.
 
+## Steps
+
 An **experiment** is a sequence (really, a DAG) of steps, where each **step** is
 specified by the following:
 - **name**: an identifier describing the function (and its version)
@@ -47,12 +49,12 @@ The environment will have the following packages installed:
   [`pyproject.toml`](https://github.com/marin-community/marin/blob/main/pyproject.toml)), which include fsspec, draccus, etc.
 - **Step-specific packages**: each `ExecutorStep` can specify
   `pip_dependency_groups`, a list of either (i) a key from
-  `project.optional-dependencies` dictionary (e.g., `tokenize_train`), or (2) a
+  `project.optional-dependencies` dictionary (e.g., `rl`), or (2) a
   specific pip package.  This allows each step to have its own environment and
   not interfere with other steps.
 
 For example, to install the dependencies specified in the
-`quality_dedup_consolidate` groups and also uv pip install `google-cloud-logging`,
+`rl` extra and also uv pip install `google-cloud-logging`,
 one can do:
 
 ```python
@@ -60,7 +62,7 @@ number_of_restarts = ExecutorStep(
     name=...,
     fn=...,
     config=...,
-    pip_dependency_groups=["quality_dedup_consolidate", "google-cloud-logging"],
+    pip_dependency_groups=["rl", "google-cloud-logging"],
 )
 ```
 

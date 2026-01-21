@@ -38,11 +38,11 @@ import jmp
 import numpy as np
 from draccus import field
 from haliax import Axis
-from haliax.partitioning import ResourceAxis, ResourceMapping, named_jit
+from haliax.partitioning import ResourceMapping, named_jit
 from haliax.quantization import QuantizationConfig
 from haliax.types import Scalar
 from jax.experimental import multihost_utils
-from jax.sharding import Mesh
+from jax.sharding import AxisType, Mesh
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray, PyTree
 from optax import GradientTransformation
@@ -67,7 +67,8 @@ from levanter.tracker import TrackerConfig, capture_time
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils, fsspec_utils
-from levanter.utils.jax_utils import create_fsdp_mesh, zeros_like_tree
+from levanter.utils.jax_utils import zeros_like_tree
+from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ComputeLossFunction, FilterSpec
 
@@ -608,8 +609,9 @@ class Trainer:
             batch_name = batch.name
             batch_size = batch.size
         else:
-            batch_name = self.config.batch_axis
+            batch_name = self.config.batch_axis_name
             batch_size = self.config.train_batch_size
+
         return DataLoader(
             dataset,
             batch_size=batch_size,
@@ -648,7 +650,7 @@ class Trainer:
             self.loss_fn, model, *batch, **batch_kwargs, key=key
         )
 
-        # Sophia needs to be able to access the loss function in the optimizer
+        # Some optimizers need to be able to access the loss function
         def obj_fun(trainable_model):
             model = eqx.combine(trainable_model, state.model)
             with hax.axis_mapping(self.compute_axis_mapping):
@@ -686,7 +688,7 @@ class Trainer:
         Compute gradients, optionally with microbatching.
         Returns (loss, grads, dict[str, Metric]).
         """
-        Batch = _resolve_axis_in_tree((batch, batch_kwargs), self.config.batch_axis)
+        Batch = _resolve_axis_in_tree((batch, batch_kwargs), self.config.batch_axis_name)
 
         # loss_fn always returns (loss, metrics), so has_aux=True
         grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
@@ -780,24 +782,17 @@ class TrainerConfig:
     crash_on_inf: bool = True
 
     # config related to partitioning
+    mesh: MeshConfig = MeshConfig()
+    use_explicit_mesh_axes: bool = False
+    """If True, build the device mesh with `AxisType.Explicit` axes.
 
-    batch_axis: str = "batch"  # Batch axis for data parallel.
-    fsdp_axis: Optional[Union[str, List[str]]] = "embed"  # Axis/Axes to use for FSDP
-    tensor_parallel_axes: Optional[List[str]] = None  # Axes, if any, to use for tensor parallelism
+    This is required for code paths that call `jax.sharding.reshard(..., PartitionSpec(...))`,
+    because JAX disallows using named `PartitionSpec`s under `AxisType.Auto`/`AxisType.Manual` meshes.
+    """
 
-    axis_resources: Mapping[str, Union[Tuple[str], str]] = field(default_factory=dict)
-    """mapping from logical axis to physical axis. batch_axis, fsdp_axis, and tensor_parallel_axes are preferred"""
-    parameter_axis_resources: Mapping[str, Union[Tuple[str], str]] = field(
-        default_factory=dict
-    )  # overrides axis_mapping for parameter
-    """logical->physical mapping for parameter/optimizer sharding. fsdp_axis and tensor_parallel_axes are preferred"""
-
-    """Interchip Interconnect (ICI) & Data Center Networking (DCN) shardings https://cloud.google.com/tpu/docs/multislice-introduction"""
-    replica_ici_axis_size: int = 1
-    model_axis_size: int = 1
-    """how many devices within each slice for sharding with DP. Fix TP=1, the rest of the devices is for FSDP."""
-    replica_dcn_axis_size: int = 1
-    """how many slices in the multislice scheme for sharding with DP and TP. The rest of the devices is for FSDP."""
+    @property
+    def batch_axis_name(self) -> str | None:
+        return self.mesh.batch_axis_name
 
     # Config related to batch sizes
     train_batch_size: int | IntSchedule = 512
@@ -849,7 +844,7 @@ class TrainerConfig:
     def TrainBatch(self):
         if not isinstance(self.train_batch_size, int):
             raise ValueError("TrainBatch is only valid for a single batch size. Use batch_axis_at_step instead")
-        return Axis(self.batch_axis, self.train_batch_size)
+        return Axis(self.batch_axis_name, self.train_batch_size)
 
     @cached_property
     def batch_schedule(self):
@@ -857,11 +852,11 @@ class TrainerConfig:
 
     def batch_axis_at_step(self, step: int) -> Axis:
         bs = value_at_step(self.train_batch_size, step)
-        return Axis(self.batch_axis, bs)
+        return Axis(self.batch_axis_name, bs)
 
     @property
     def EvalBatch(self):
-        return Axis(self.batch_axis, self.eval_batch_size)
+        return Axis(self.batch_axis_name, self.eval_batch_size)
 
     @property
     def microbatch_size(self) -> int | None:
@@ -906,13 +901,12 @@ class TrainerConfig:
 
     @property
     def device_mesh(self) -> Mesh:
-        return create_fsdp_mesh(
-            self.replica_ici_axis_size,
-            self.data_ici_axis_size,
-            self.model_axis_size,
-            self.replica_dcn_axis_size,
-            self.data_dcn_axis_size,
-        )
+        ici, dcn = self.mesh.axis_shapes(jax.device_count(), self.num_slices)
+        axis_types = None
+        if self.use_explicit_mesh_axes:
+            axis_names = list(ici.keys()) + [k for k in dcn.keys() if k not in ici]
+            axis_types = tuple(AxisType.Explicit for _ in axis_names)
+        return create_mesh_from_axis_specs(ici_axes=ici, dcn_axes=dcn, axis_types=axis_types)
 
     def use_device_mesh(self) -> ContextManager[None]:
         """
@@ -937,63 +931,48 @@ class TrainerConfig:
         """number of devices within a slice"""
         return jax.device_count() // self.num_slices
 
-    @property
-    def data_ici_axis_size(self):
-        """size of the FSDP axis within slices"""
-        assert self.num_devices_per_slice % (self.replica_ici_axis_size * self.model_axis_size) == 0, (
-            f"num_devices_per_slice ({self.num_devices_per_slice}) must be divisible by "
-            f"replica_ici_axis_size ({self.replica_ici_axis_size}) * model_axis_size ({self.model_axis_size})"
-        )
-        return self.num_devices_per_slice // (self.replica_ici_axis_size * self.model_axis_size)
+    @cached_property
+    def mesh_axis_specs(self) -> List[str]:
+        """Materialized mesh axis names; validates mesh config."""
+        ici, dcn = self.mesh.axis_shapes(jax.device_count(), self.num_slices)
+        return list(ici.keys() | dcn.keys())
 
-    @property
-    def data_dcn_axis_size(self):
-        """size of the FSDP axis across slices"""
-        assert self.num_slices % self.replica_dcn_axis_size == 0
-        return self.num_slices // self.replica_dcn_axis_size
+    @cached_property
+    def _mesh_axis_totals(self) -> Dict[str, int]:
+        ici, dcn = self.mesh.axis_shapes(jax.device_count(), self.num_slices)
+        return {name: ici.get(name, 1) * dcn.get(name, 1) for name in set(ici) | set(dcn)}
+
+    def _axis_size(self, axis: str) -> int:
+        return self._mesh_axis_totals.get(axis, 1)
 
     @property
     def data_axis_size(self):
         """size of the data parallel/batch parallel axis."""
-        return (
-            self.data_dcn_axis_size * self.data_ici_axis_size * self.replica_dcn_axis_size * self.replica_ici_axis_size
-        )
+        batch_map = self.compute_axis_mapping.get(self.batch_axis_name, self.compute_axis_mapping.get("batch"))
+        if batch_map is None:
+            raise ValueError(
+                f"No mapping found for batch axis {self.batch_axis_name} in compute axis mapping."
+                f"In Levanter, you must specify a mapping for the batch axis. For instance, the default is:"
+                """
+                             mesh:
+                               compute_mapping:
+                                 batch: [replica_dcn, replica, data]
+                             """
+            )
+        axes = batch_map if isinstance(batch_map, tuple) else (batch_map,)
+        prod_size = 1
+        for ax in axes:
+            prod_size *= self._axis_size(ax)
+        return prod_size
 
     @property
-    def replica_axis_size(self):
-        """size of the data parallel/batch parallel axis."""
-        return self.replica_dcn_axis_size * self.replica_ici_axis_size
-
-    @cached_property
     def compute_axis_mapping(self) -> ResourceMapping:
         """Mapping from logical axis to physical axis for compute."""
-        axes_to_return = dict(self.axis_resources)
+        return self.mesh.resolved_compute_mapping
 
-        tp_axes = self.tensor_parallel_axes or []
-        if tp_axes and len(axes_to_return) > 0:
-            logger.warning(f"tensor parallelism axes {tp_axes} will override axis_resources {axes_to_return}")
-        for axis in tp_axes:
-            axes_to_return[axis] = ResourceAxis.MODEL
-
-        if self.batch_axis is not None:
-            axes_to_return[self.batch_axis] = (ResourceAxis.REPLICA, ResourceAxis.DATA)  # type: ignore
-
-        return axes_to_return
-
-    @cached_property
+    @property
     def parameter_axis_mapping(self) -> ResourceMapping:
-        mapping = dict(self.compute_axis_mapping)
-
-        for axis, resource in self.parameter_axis_resources.items():
-            mapping[axis] = resource
-
-        if isinstance(self.fsdp_axis, str):
-            mapping[self.fsdp_axis] = ResourceAxis.DATA
-        elif isinstance(self.fsdp_axis, list):
-            for axis in self.fsdp_axis:
-                mapping[axis] = ResourceAxis.DATA
-
-        return mapping
+        return self.mesh.resolved_param_mapping
 
     def _initialize_jax_config(self):
         for key, value in self.jax_config.items():
@@ -1029,16 +1008,8 @@ class TrainerConfig:
 
     # we can't do this in post_init because we don't want to call jax.device_count before calling distributed.initialize
     def _validate_and_set_defaults(self):
-        if jax.device_count() % self.model_axis_size != 0:
-            raise ValueError(
-                f"num_devices ({jax.device_count()}) is not divisible by model_axis_size ({self.model_axis_size})"
-            )
-
-        if (
-            jax.local_device_count() % self.model_axis_size != 0
-            and self.model_axis_size % jax.local_device_count() != 0
-        ):
-            raise ValueError("either model_axis_size or local_device_count must be divisible by the other")
+        # Validate mesh early
+        _ = self.mesh_axis_specs
 
         if self.train_batch_size == -1 and self.per_device_parallelism == -1:
             raise ValueError("either train_batch_size or per_device_parallelism must be specified (not -1)")
@@ -1082,10 +1053,6 @@ class TrainerConfig:
                 self.per_device_eval_parallelism = self.per_device_parallelism
 
             logger.info(f"Setting per_device_eval_parallelism to {self.per_device_eval_parallelism}")
-
-        if self.replica_dcn_axis_size == -1:
-            self.replica_dcn_axis_size = self.num_slices
-            logger.info(f"Setting replica_dcn_axis_size to {self.replica_dcn_axis_size}")
 
 
 class AllConfig(Protocol):

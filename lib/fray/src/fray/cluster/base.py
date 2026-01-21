@@ -157,7 +157,8 @@ TpuType = Literal[
 
 GpuType = Literal[
     "A10",
-    "A100",
+    "A100-40G",
+    "A100-80G",
     "A10G",
     "B100",
     "H100",
@@ -377,7 +378,7 @@ class ResourceConfig:
         return ResourceConfig(device=CpuConfig(), **kwargs)
 
 
-@dataclass
+@dataclass(frozen=True)
 class EnvironmentConfig:
     """Job environment configuration.
 
@@ -528,6 +529,7 @@ def create_environment(
         "TOKENIZERS_PARALLELISM": "false",
         "HF_TOKEN": os.getenv("HF_TOKEN"),
         "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+        "MARIN_CI_DISABLE_RUNTIME_ENVS": os.getenv("MARIN_CI_DISABLE_RUNTIME_ENVS"),
     }
 
     # Filter out None values - Ray requires all env var values to be strings

@@ -417,8 +417,8 @@ def _size_presets() -> dict[str, HackableTransformerConfig]:
 def _muon_presets() -> dict[str, MuonConfig]:
     return {
         "130m": MuonConfig(
-            learning_rate=0.032,
-            adam_lr=0.0064,
+            learning_rate=0.016,
+            adam_lr=0.0032,
             weight_decay=0.1,
             min_lr_ratio=0,
             warmup=0,
@@ -432,8 +432,8 @@ def _muon_presets() -> dict[str, MuonConfig]:
             decay=0.8,
         ),
         "300m": MuonConfig(
-            learning_rate=0.016,
-            adam_lr=0.0038,
+            learning_rate=0.008,
+            adam_lr=0.0024,
             weight_decay=0.1,
             min_lr_ratio=0,
             warmup=0,
@@ -447,8 +447,8 @@ def _muon_presets() -> dict[str, MuonConfig]:
             decay=0.8,
         ),
         "520m": MuonConfig(
-            learning_rate=0.016,
-            adam_lr=0.0038,
+            learning_rate=0.008,
+            adam_lr=0.0024,
             weight_decay=0.1,
             min_lr_ratio=0,
             warmup=0,
@@ -462,8 +462,8 @@ def _muon_presets() -> dict[str, MuonConfig]:
             decay=1,
         ),
         "1_2b": MuonConfig(
-            learning_rate=0.008,
-            adam_lr=0.0024,
+            learning_rate=0.004,
+            adam_lr=0.0012,
             weight_decay=0.1,
             min_lr_ratio=0,
             warmup=0,
@@ -482,7 +482,7 @@ def _muon_presets() -> dict[str, MuonConfig]:
 # =========================
 # Resource presets (IMPORTANT!)
 # TODO: edit tpu_type or accelerator_type to match what you have available on your hardware
-# e.g., GpuConfig(gpu_count=8, accelerator_type="H100"),
+# e.g., ResourceConfig.with_gpu("H100", count=8),
 # If you ignore this and there is a mismatch, training cannot start if an unavailable resource is requested!
 # =========================
 

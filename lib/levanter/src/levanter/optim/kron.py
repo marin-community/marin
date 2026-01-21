@@ -23,7 +23,6 @@ from optax._src.utils import canonicalize_dtype
 
 from levanter.optim.config import OptimizerConfig
 
-
 # Define type variables for the pytree structure
 T = TypeVar("T")
 PartitionSpecTree = TypeVar(
@@ -1029,39 +1028,6 @@ def kron(
     return chain(*optimizer)
 
 
-def get_opt_state_partition_specs(params: base.Params, scale_by_kron_only: bool = False, **kwargs):
-    """Get tree of PartitionSpecs for kron optimizer state.
-
-    params converted to jax.ShapeDtypeStructs, no arrays are used.
-
-    Args:
-        params: pytree of Arrays, nn.Partitioned, or jax.ShapeDtypeStruct.
-        scale_by_kron_only: bool, If True, only returns partition specs for the
-            `scale_by_kron` function, otherwise the `kron` function.
-        kwargs: kwargs for kron (or scale_by_kron).
-
-    Returns:
-        tree of PartitionSpecs for optimizer state.
-    """
-    params_flat, params_struct = jax.tree.flatten(params)
-    if have_flax:
-        if isinstance(params_flat[0], nn.Partitioned):
-            params_flat = [p.unbox(p) for p in params_flat]
-    if not isinstance(params_flat[0], jax.ShapeDtypeStruct):
-        params_flat = [jax.ShapeDtypeStruct(p.shape, p.dtype) for p in params_flat]
-    params = params_struct.unflatten(params_flat)
-
-    specs = scale_by_kron(**kwargs).init(params, return_partition_specs_only=True)
-
-    if not scale_by_kron_only:
-        specs = (specs,)
-        if kwargs.get("weight_decay", 0.0) > 0.0:
-            specs += (None,)
-        specs += (None,)
-
-    return specs
-
-
 def _get_preconditioner_types(
     shape: Tuple[int, ...], max_size: int, min_ndim: int, mem_save_mode: Optional[str]
 ) -> List[bool]:
@@ -1147,7 +1113,7 @@ def _init_Q_exprs(
                     if have_hax:
                         # if we're in haliax we can grab fsdp axis and shard accordingly
                         # get current mesh
-                        mesh = hax.partitioning._get_mesh()
+                        mesh = jax._src.mesh.get_concrete_mesh()
                         if mesh.devices.shape == ():
                             mesh = None
                         # get fsdp mesh axis

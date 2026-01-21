@@ -9,12 +9,12 @@ description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
-    "marin",
-    "levanter",
-    "zephyr",
-    "haliax",
+    "iris",
     "fray",
-    "dupekit"
+    "haliax",
+    "levanter",
+    "marin",
+    "zephyr",
 ]
 
 [tool.uv]
@@ -26,21 +26,24 @@ override-dependencies = [
 
 [tool.uv.workspace]
 members = [
-    "lib/marin",
-    "lib/levanter",
-    "lib/zephyr",
-    "lib/haliax",
+    "lib/iris",
     "lib/fray",
-    "lib/dupekit"
+    "lib/haliax",
+    "lib/levanter",
+    "lib/marin",
+    "lib/zephyr",
 ]
 
 [tool.uv.sources]
-fray.workspace = true
-haliax.workspace = true
-levanter.workspace = true
-marin.workspace = true
-zephyr.workspace = true
-dupekit.workspace = true
+iris = { workspace = true }
+fray = { workspace = true }
+haliax = { workspace = true }
+levanter = { workspace = true }
+marin = { workspace = true }
+zephyr = { workspace = true }
+# NOTE: dupekit is an optional dependency, it could be a workspace member but declaring
+# it as a path dependency makes it less likely to trigger unnecessary build
+dupekit = { path = "lib/dupekit", editable = true }
 
 [tool.black]
 line-length = 121
@@ -103,7 +106,7 @@ project-excludes = [
     "tests/**",
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
-    "lib/**/post_training/**",  # No longer used
+    "lib/marin/src/marin/processing/classification/deduplication/vendor", # Exclude vendor stuff in dedupe
 ]
 
 # Disable specific error codes that are primarily noise from missing type stubs
@@ -170,7 +173,7 @@ packages = ["experiments"]
 packages = ["experiments"]
 
 [tool.pytest.ini_options]
-timeout = 300
+timeout = 60
 filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
@@ -181,4 +184,4 @@ markers = [
 testpaths = ["tests", "experiments"]
 
 # Make sure we timeout before CI kills us, and don't run TPU or slow tests by default
-addopts = "--session-timeout=500 -m 'not tpu_ci and not slow'"
+addopts = "--session-timeout=480 -m 'not tpu_ci and not slow'"

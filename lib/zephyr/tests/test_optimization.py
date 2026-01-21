@@ -16,7 +16,7 @@
 
 from zephyr import Dataset, compute_plan
 from zephyr.dataset import FilterOp, MapOp, ReshardOp, TakePerShardOp
-from zephyr.plan import Map, Reshard
+from zephyr.plan import Map, PhysicalStage, Reshard
 
 
 def test_optimize_consecutive_maps():
@@ -97,9 +97,8 @@ def test_fused_execution_with_batch():
     Note: Batching happens per-shard. Since each input item becomes its own shard,
     and filtering may reduce items per shard, batches may not span across shards.
     """
-    from zephyr import create_backend
+    from zephyr import Backend
 
-    backend = create_backend("sync")
     # Use a flat_map to create multiple items in a single shard
     ds = (
         Dataset.from_list([[1, 2, 3, 4, 5, 6]])
@@ -109,5 +108,28 @@ def test_fused_execution_with_batch():
         .window(2)  # [[6, 8], [10, 12]]
     )
 
-    result = list(backend.execute(ds))
+    result = list(Backend.execute(ds))
     assert result == [[6, 8], [10, 12]]
+
+
+def test_stage_name():
+    """PhysicalStage.stage_name() generates descriptive names from operations."""
+    ds = Dataset(
+        source=[1, 2, 3],
+        operations=[
+            MapOp(lambda x: x * 2),
+            FilterOp(lambda x: x > 5),
+        ],
+    )
+    plan = compute_plan(ds)
+
+    assert len(plan.stages) == 1
+    assert plan.stages[0].stage_name() == "Map"
+
+
+def test_stage_name_truncation():
+    """PhysicalStage.stage_name() truncates long names."""
+    stage = PhysicalStage(operations=[Map(fn=lambda x: x) for _ in range(20)])
+    name = stage.stage_name(max_length=20)
+    assert len(name) <= 20
+    assert name.endswith("...")

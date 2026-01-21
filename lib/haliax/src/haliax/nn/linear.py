@@ -298,15 +298,19 @@ class MoELinear(eqx.Module):
 
 
 def _gmm(lhs, rhs, group_sizes, out_axes, sharded=False, ar=False):
+    # Important: when inputs are sharded, `haliax.partitioning.shard_map` calls `gmm_impl` on per-shard arrays.
+    # Constructing a `NamedArray` inside the shard_map body would then validate against the *local* shard shape,
+    # while `out_axes` describe the *global* shape, causing axis-size mismatches during shape inference/tracing.
+    # Return a raw array from the shard_map body and wrap it with global axes after shard_map reassembles it.
+
     def gmm_impl(lhs, rhs, group_sizes):
-        out = gmm_sharded(lhs.array, rhs.array, group_sizes.array, ar=ar)
-        return hax.NamedArray(out, out_axes)
+        return gmm_sharded(lhs.array, rhs.array, group_sizes.array, ar=ar)
 
     if sharded:
-        return gmm_impl(lhs, rhs, group_sizes)
+        return hax.named(gmm_impl(lhs, rhs, group_sizes), out_axes)
 
-    gmm_fn = shard_map(gmm_impl, check_rep=False)
-    return gmm_fn(lhs, rhs, group_sizes)
+    gmm_fn = shard_map(gmm_impl, out_specs=hax.partitioning.pspec_for_axis(out_axes), check_rep=False)
+    return hax.named(gmm_fn(lhs, rhs, group_sizes), out_axes)
 
 
 def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray, ar: bool = False) -> jnp.ndarray:

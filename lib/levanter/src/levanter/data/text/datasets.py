@@ -146,17 +146,23 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
         Pos: Axis,
         *,
         eos_id: Optional[int] = None,
+        block_cross_document_attention: bool = True,
     ):
         self.dataset = dataset
         self.Pos = Pos
         self.eos_id = eos_id
+        self.block_cross_document_attention = block_cross_document_attention
 
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
 
         @functools.partial(eqx.filter_jit)
         def _create_lm_example(tokens):
             tokens = hax.named(tokens, self.Pos)
-            example = LmExample.causal(tokens=tokens, eos_id=eos_id)
+            example = LmExample.causal(
+                tokens=tokens,
+                eos_id=eos_id,
+                block_cross_document_attention=block_cross_document_attention,
+            )
 
             example = jax.lax.with_sharding_constraint(example, sharding)
 
@@ -272,6 +278,12 @@ class LMTaskConfig(abc.ABC):
     cache_dir: Optional[str] = "cache/"
     cache_options: CacheOptions = field(default_factory=CacheOptions)
     enforce_eos: bool = True  # whether to append eos even if the tokenizer doesn't
+    auto_build_caches: bool = True
+    """Whether to build dataset caches automatically when they are missing.
+
+    If False, any attempt to access a cache that does not already exist will raise
+    a FileNotFoundError instead of building the cache on the fly.
+    """
 
     chat_template: str | None = None  # If set, use this template for chat datasets. Otherwise, use the tokenizer's.
 
@@ -283,6 +295,13 @@ class LMTaskConfig(abc.ABC):
     Type of permutation to use for shuffle.
 
     If None, defaults to linear, but this will change in the future since Feistel is better.
+    """
+
+    block_cross_document_attention: bool = True
+    """Whether to block attention across document boundaries.
+
+    If True (default), attention is blocked across documents using segment ids derived from EOS tokens.
+    If False, full causal attention is allowed across packed documents.
     """
 
     @cached_property
@@ -364,6 +383,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], LmExample]):
         Pos: Axis,
         max_segments_per_example: int = 64,
         slice_strategy: Literal["left", "right", "raise"] = "left",
+        block_cross_document_attention: bool = True,
     ):
         self.packed: GreedyPrepackedDataset[dict] = GreedyPrepackedDataset(
             cache.store.tree,
@@ -372,6 +392,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], LmExample]):
             slice_strategy=slice_strategy,
         )
         self.Pos = Pos
+        self.block_cross_document_attention = block_cross_document_attention
 
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
 
@@ -381,7 +402,12 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], LmExample]):
             tokens = hax.named(example["input_ids"], self.Pos)
             loss_weight = hax.ones_like(tokens)
             seg_ids_named = hax.named(seg_ids["input_ids"], self.Pos)
-            out = LmExample.causal(tokens=tokens, loss_weight=loss_weight, segment_ids=seg_ids_named)
+            out = LmExample.causal(
+                tokens=tokens,
+                loss_weight=loss_weight,
+                segment_ids=seg_ids_named,
+                block_cross_document_attention=block_cross_document_attention,
+            )
             out = jax.lax.with_sharding_constraint(out, sharding)
             return out
 
@@ -400,6 +426,7 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         max_segments_per_example: int = 64,
         slice_strategy: Literal["left", "right", "raise"] = "left",
         mask_user_turns: bool = True,
+        block_cross_document_attention: bool = True,
     ):
         self.packed: GreedyPrepackedDataset[ProcessedChatDict] = GreedyPrepackedDataset(
             cache.store.tree,
@@ -408,6 +435,7 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
             slice_strategy=slice_strategy,
         )
         self.Pos = Pos
+        self.block_cross_document_attention = block_cross_document_attention
 
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
         self.mask_user_turns = mask_user_turns
@@ -426,7 +454,12 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
 
             seg_ids_named = hax.named(seg_ids["input_ids"], self.Pos)
 
-            out = LmExample.causal(tokens=tokens, loss_weight=loss_weight, segment_ids=seg_ids_named)
+            out = LmExample.causal(
+                tokens=tokens,
+                loss_weight=loss_weight,
+                segment_ids=seg_ids_named,
+                block_cross_document_attention=block_cross_document_attention,
+            )
             out = jax.lax.with_sharding_constraint(out, sharding)
             return out
 
@@ -439,6 +472,7 @@ def dataset_for_component(
     cache: TreeCache[dict],
     *,
     eos_id: int | None,
+    block_cross_document_attention: bool,
 ) -> AsyncDataset[LmExample]:
     pack = _effective_pack(component)
     fmt = component.format
@@ -447,9 +481,19 @@ def dataset_for_component(
             raise NotImplementedError("Padding mode not yet implemented.")
         if pack:
             max_segments = 64 if pack is True else int(pack)
-            return PackedTokenDataset(cache, Pos, max_segments_per_example=max_segments)
+            return PackedTokenDataset(
+                cache,
+                Pos,
+                max_segments_per_example=max_segments,
+                block_cross_document_attention=block_cross_document_attention,
+            )
         else:
-            return CausalLmDataset(TokenSeqDataset(cache, Pos.size), Pos, eos_id=eos_id)
+            return CausalLmDataset(
+                TokenSeqDataset(cache, Pos.size),
+                Pos,
+                eos_id=eos_id,
+                block_cross_document_attention=block_cross_document_attention,
+            )
     elif isinstance(fmt, ChatLmDatasetFormat):
         effective_pack = pack
         if effective_pack == "pad":
@@ -458,7 +502,13 @@ def dataset_for_component(
             64 if effective_pack is True else (int(effective_pack) if isinstance(effective_pack, int) else 1)
         )
         mask_user_turns = fmt.mask_user_turns
-        return ChatDataset(cache, Pos, max_segments_per_example=max_segments, mask_user_turns=mask_user_turns)  # type: ignore
+        return ChatDataset(
+            cache,
+            Pos,
+            max_segments_per_example=max_segments,
+            mask_user_turns=mask_user_turns,
+            block_cross_document_attention=block_cross_document_attention,
+        )  # type: ignore
     else:
         raise ValueError(f"Unknown format {fmt}")
 
@@ -509,7 +559,13 @@ class LmDataConfig(LMTaskConfig):
 
     def build_token_datasets(self, caches: Mapping[str, TreeCache[dict]], Pos: Axis):
         return {
-            name: dataset_for_component(self.components[name], Pos, cache, eos_id=self.the_tokenizer.eos_token_id)
+            name: dataset_for_component(
+                self.components[name],
+                Pos,
+                cache,
+                eos_id=self.the_tokenizer.eos_token_id,
+                block_cross_document_attention=self.block_cross_document_attention,
+            )
             for name, cache in caches.items()
         }
 
@@ -660,6 +716,10 @@ class LmDataConfig(LMTaskConfig):
                 )
                 continue
 
+            if not self.auto_build_caches:
+                cache_path = os.path.join(cache_root, split)
+                raise FileNotFoundError(f"Cache not found at {cache_path} and auto_build_caches is disabled")
+
             caches[name] = build_lm_dataset_cache(
                 os.path.join(cache_root, split),
                 shard_source,
@@ -709,7 +769,13 @@ def count_corpus_sizes(
         metric_prefix = f"{prefix}train/{name}/"
         stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size
         stats[f"{metric_prefix}total_docs"] = cache.store.tree["input_ids"].num_rows
-        train_set = dataset_for_component(config.components[name], Pos, cache, eos_id=None)
+        train_set = dataset_for_component(
+            config.components[name],
+            Pos,
+            cache,
+            eos_id=None,
+            block_cross_document_attention=config.block_cross_document_attention,
+        )
         train_seqs = len(train_set.as_sync_dataset())
         stats[f"{metric_prefix}total_seqs"] = train_seqs
         padding_fraction = 1 - (cache.store.tree["input_ids"].data_size / (train_seqs * seq_len))
@@ -728,7 +794,13 @@ def count_corpus_sizes(
         metric_prefix = f"{prefix}validation/{name}/"
         stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size
         stats[f"{metric_prefix}total_docs"] = cache.store.tree["input_ids"].num_rows
-        validation_set = dataset_for_component(config.components[name], Pos, cache, eos_id=None)
+        validation_set = dataset_for_component(
+            config.components[name],
+            Pos,
+            cache,
+            eos_id=None,
+            block_cross_document_attention=config.block_cross_document_attention,
+        )
         stats[f"{metric_prefix}total_seqs"] = len(validation_set.as_sync_dataset())
 
     return stats

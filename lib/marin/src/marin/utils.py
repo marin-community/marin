@@ -13,8 +13,6 @@
 # limitations under the License.
 
 import functools
-import gzip
-import json
 import logging
 import os
 import random
@@ -29,7 +27,6 @@ from typing import Any, TypeVar
 import braceexpand
 import datasets
 import fsspec
-import pandas as pd
 import requests
 import transformers
 from huggingface_hub.utils import HfHubHTTPError
@@ -193,19 +190,6 @@ def fsspec_cpdir(dir_path: str, target_path: str) -> None:
 
     fs = fsspec.core.get_fs_token_paths(target_path, mode="wb")[0]
     fs.put(os.path.join(dir_path, "*"), target_path, recursive=True)
-
-
-def fsspec_cp(source_path: str, target_path: str) -> None:
-    """
-    Copies source file to target path.
-
-    Args:
-        source_path (str): The path of the file to copy.
-        target_path (str): The target path.
-    """
-
-    fs = fsspec.core.get_fs_token_paths(target_path, mode="wb")[0]
-    fs.put(source_path, target_path)
 
 
 _HF_RETRY_KEYWORDS = (
@@ -396,6 +380,7 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
     rel_path = os.path.relpath(file_path, base_in_path)
 
     # Construct the output file path
+    # TODO: if old_extension is not None, but new_extension is None, raise an error or warning?
     if new_extension:
         if old_extension:
             rel_path = rel_path[: rel_path.rfind(old_extension)] + new_extension
@@ -403,15 +388,6 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
             rel_path = rel_path[: rel_path.rfind(".")] + new_extension
     result = os.path.join(base_out_path, rel_path)
     return result
-
-
-def get_gcs_path(file_path):
-    """
-    Get the GCS path. If a path starts from gs:// then it returns the path as it is. else appends gs:// to the path.
-    """
-    if file_path.startswith("gs://"):
-        return file_path
-    return f"gs://{file_path}"
 
 
 def remove_tpu_lockfile_on_exit(fn=None):
@@ -467,16 +443,6 @@ def _hacky_remove_tpu_lockfile():
             pass
 
 
-def is_in_ci() -> bool:
-    """
-    Check if the code is running in a CI environment.
-
-    Returns:
-        bool: True if running in CI, False otherwise.
-    """
-    return "CI" in os.environ
-
-
 def get_directory_friendly_name(name: str) -> str:
     """Convert a huggingface repo name to a directory friendly name."""
     return name.replace("/", "--").replace(".", "-").replace("#", "-")
@@ -508,72 +474,3 @@ def asdict_excluding(obj, exclude: set[str]) -> dict:
             else:
                 result[f.name] = value
     return result
-
-
-def parquet_to_jsonl_gz(input_path: str, docs_dir: str, text_field: str = "text") -> None:
-    """
-    Convert Parquet files to gzip-compressed JSONL format for Dolma deduplication.
-
-    This function reads Parquet files and converts them to the JSONL.gz format required
-    by the Dolma deduplication pipeline. It handles both single Parquet files and
-    directories containing multiple Parquet files.
-
-    Args:
-        input_path (str): Path to a single Parquet file or directory containing Parquet files.
-                         If a directory, recursively searches for all .parquet files.
-        docs_dir (str): Output directory where converted JSONL.gz files will be written.
-        text_field (str, optional): Name of the column in Parquet files containing the text
-                                   content. Defaults to "text".
-
-    Returns:
-        None
-
-    Raises:
-        None: Errors are logged but do not raise exceptions to allow processing to continue.
-
-    Notes:
-        - Creates the output directory if it doesn't exist
-        - Skips empty Parquet files with a warning
-        - Skips files missing the specified text_field with an error
-        - Generates synthetic IDs for records missing an 'id' field
-        - Converts the text_field column to a 'text' field in the output JSONL
-        - Writes gzip-compressed JSONL files with .jsonl.gz extension
-        - Uses the original Parquet filename (without .parquet extension) for output files
-    """
-    os.makedirs(docs_dir, exist_ok=True)
-    # find all Parquet files
-    if input_path.endswith(".parquet"):
-        parquet_files = [input_path]
-    else:
-        path_to_glob = os.path.join(input_path, "**/*.parquet")
-        parquet_files = fsspec_glob(path_to_glob)
-    for pq in parquet_files:
-        try:
-            df = pd.read_parquet(pq)
-        except Exception as e:
-            logger.error(f"Failed to read parquet file {pq}: {e}")
-            continue
-
-        # Skip empty Parquet files gracefully
-        if df.empty:
-            print(f"Parquet file {pq} contains 0 rows, skipping conversion", flush=True)
-            continue
-        out_name = os.path.splitext(os.path.basename(pq))[0] + ".jsonl.gz"
-        out_path = os.path.join(docs_dir, out_name)
-
-        print(f"Converting {pq} with columns: {list(df.columns)}", flush=True)
-
-        if text_field not in df.columns:
-            logger.error(f"Parquet file {pq} missing '{text_field}' field, skipping this file")
-            continue
-
-        with gzip.open(out_path, "wt") as f:
-            for rec in df.to_dict(orient="records"):
-                rec["text"] = rec[text_field]
-
-                if "id" not in rec:
-                    # Generate a synthetic ID if missing
-                    logger.warning(f"Adding synthetic id to {pq}")
-                    rec["id"] = f"synthetic_{hash(str(rec))}"
-
-                f.write(json.dumps(rec) + "\n")

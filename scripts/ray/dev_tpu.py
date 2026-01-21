@@ -68,6 +68,8 @@ from fray.cluster import ray as ray_utils
 from marin.cluster.config import RayClusterConfig, find_config_by_region
 from marin.utils import _hacky_remove_tpu_lockfile
 
+from fray.cluster.ray.auth import maybe_fetch_local_ray_token
+
 # Register `marin.utils` by value, so it can work over `ray.remote` without `marin` being installed on the worker.
 # See also #1786 / #1789.
 cloudpickle.register_pickle_by_value(marin.utils)
@@ -105,6 +107,8 @@ DEFAULT_ENV_VARS = [
     "RAY_ADDRESS",
     "RAY_API_SERVER_ADDRESS",
     "RAY_DASHBOARD_ADDRESS",
+    "RAY_AUTH_MODE",
+    "RAY_AUTH_TOKEN_PATH",
     "WANDB_MODE",
     "RUN_ID",
 ]
@@ -545,6 +549,10 @@ def cli(ctx, config, cluster, tpu_name, verbose):
         ctx.obj.config_obj = RayClusterConfig.from_yaml(config)
         with open(config, "r", encoding="utf-8") as f:
             ctx.obj.config_data = yaml.safe_load(f)
+        gcp_project = (ctx.obj.config_data or {}).get("provider", {}).get("project_id")
+        token_path = maybe_fetch_local_ray_token(gcp_project=gcp_project)
+        os.environ["RAY_AUTH_TOKEN_PATH"] = token_path
+        os.environ["RAY_AUTH_MODE"] = "token"
 
 
 @cli.command("allocate")
@@ -658,7 +666,7 @@ def execute(ctx, command, username, sync_path, env, forward_all_env):
     # Build environment variables
     env_dict = build_env_dict(extra_env=list(env), forward_all=forward_all_env)
 
-    command_str = " ".join(command)
+    command_str = shlex.join(command)
     ssh_cmd = build_ssh_command(host_alias, command_str, env_dict)
 
     print(f"Running: {ssh_cmd}")
@@ -808,7 +816,7 @@ def watch(ctx, command, username, sync_path, debounce, env, forward_all_env):
     # Build environment variables
     env_dict = build_env_dict(extra_env=list(env), forward_all=forward_all_env)
 
-    command_str = " ".join(command)
+    command_str = shlex.join(command)
 
     process_mgr = RemoteProcessManager(host_alias, command_str, sync_path, env_dict)
     atexit.register(process_mgr.kill)  # ensure we clean up on exit

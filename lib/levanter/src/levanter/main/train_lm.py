@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import functools
 import gc
 import logging
 import os
@@ -22,10 +21,11 @@ import levanter.eval_harness
 from levanter import callbacks
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
+from levanter.data.mixture import MixtureDataset
 from levanter.data.text import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, compute_next_token_loss
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
@@ -102,7 +102,8 @@ def main(config: TrainLmConfig):
     levanter.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    loss_function = functools.partial(compute_next_token_loss, logsumexp_weight=config.z_loss_weight)
+    def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
+        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh
@@ -199,6 +200,11 @@ def main(config: TrainLmConfig):
         if len(tagged_eval_datasets) == 0:
             logger.warning("No evaluation datasets provided.")
         else:
+            # Write eval metrics to the same directory as checkpoints
+            checkpoint_path = None
+            if config.trainer.checkpointer is not None:
+                checkpoint_path = config.trainer.checkpointer.expanded_path(trainer.run_id)
+
             cb = levanter.eval.cb_tagged_lm_evaluate(
                 EvalBatch,
                 tagged_eval_datasets,
@@ -207,6 +213,7 @@ def main(config: TrainLmConfig):
                 compute_axis_mapping,
                 max_eval_examples_per_ds,
                 mp=config.trainer.mp,
+                checkpoint_path=checkpoint_path,
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
 
@@ -215,6 +222,23 @@ def main(config: TrainLmConfig):
         trainer.add_hook(
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1
         )
+
+        if isinstance(train_dataset, MixtureDataset):
+            last_stage = -1
+
+            def log_mixture_weights(step_info):
+                nonlocal last_stage
+                seq_index = trainer.config.batch_schedule.global_data_offset_by_step(step_info.step)
+                block_id = seq_index // train_dataset.block_size
+                stage = train_dataset._get_stage_for_block(block_id)
+                weights = train_dataset.weight_stages[stage][1]
+                if stage != last_stage:
+                    metrics = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
+                    metrics["mixture/stage"] = stage
+                    levanter.tracker.log(metrics, step=step_info.step)
+                    last_stage = stage
+
+            trainer.add_hook(log_mixture_weights, every=1)
         # trainer.add_hook(callbacks.GradWatchCallback(include_histograms=True), every=5)
 
         if config.hf_save_path is not None and config.hf_save_steps is not None:
@@ -248,11 +272,7 @@ def main(config: TrainLmConfig):
                 every=config.eval_harness_steps,
             )
 
-        @named_jit(
-            in_axis_resources=parameter_axis_mapping,
-            axis_resources=compute_axis_mapping,
-            out_axis_resources=compute_axis_mapping,
-        )
+        @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
             model = trainer.mp.cast_to_compute(model)
             activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)

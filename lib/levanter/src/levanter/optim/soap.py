@@ -7,6 +7,7 @@ from functools import partial
 from itertools import chain
 from typing import List, Optional, Tuple, Union
 
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.tree_util as jtu
@@ -20,8 +21,6 @@ from jax.sharding import PartitionSpec
 from jaxtyping import Array
 from optax import GradientTransformation, Updates
 from optax._src.utils import canonicalize_dtype
-
-import haliax as hax
 
 from levanter.optim.config import OptimizerConfig
 
@@ -833,43 +832,12 @@ def _get_preconditioner_types(shape: Tuple[int, ...], max_precond_dim: int, one_
     return new_result
 
 
-def infer_conditioner_sharding(p_shape, max_precond_dim: int, one_diag: bool):
-    if len(p_shape) == 1:
-        return [PartitionSpec()]
-
-    # sharding purpose
-    mesh = hax.partitioning._get_mesh()
-    if mesh.devices.shape == ():
-        mesh = None
-    # get fsdp mesh axis
-    if mesh is not None:
-        fsdp_axis_name = hax.partitioning.ResourceAxis.DATA
-        fsdp_axis = mesh.axis_names.index(fsdp_axis_name)
-        fsdp_size = mesh.devices.shape[fsdp_axis]
-
-    sharding_out = [PartitionSpec(None)] * len(p_shape)
-    flag = True
-    for i in range(len(p_shape)):
-        s = p_shape[i]
-        if (s < max_precond_dim) and (flag or (not one_diag)):
-            flag = False
-            if mesh is not None:
-                if s % fsdp_size == 0:
-                    q_sharding = PartitionSpec(fsdp_axis_name, None)
-                else:
-                    q_sharding = PartitionSpec(None, None)
-            else:
-                q_sharding = PartitionSpec(None, None)
-            sharding_out[i] = q_sharding
-    return sharding_out
-
-
 def init_conditioner(p_shape, max_precond_dim: int, dtype: Optional[Union[str, jnp.dtype]], one_diag: bool):
     if len(p_shape) == 1:
         return ([jnp.zeros((p_shape[0], p_shape[0]), dtype=dtype)], [PartitionSpec()])
 
     # sharding purpose
-    mesh = hax.partitioning._get_mesh()
+    mesh = jax._src.mesh.get_concrete_mesh()
     if mesh.devices.shape == ():
         mesh = None
     # get fsdp mesh axis

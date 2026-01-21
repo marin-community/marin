@@ -26,8 +26,7 @@ from pathlib import Path
 import click
 import humanfriendly
 
-from zephyr import set_flow_backend
-from zephyr.backend_factory import create_backend
+from fray.job.context import create_job_ctx, _job_context
 
 
 @dataclass
@@ -61,16 +60,17 @@ def run_local(
     Raises:
         SystemExit: If script execution fails
     """
-    backend = create_backend(
-        backend_type=config.backend,
-        max_parallelism=config.max_parallelism,
-        memory=config.memory,
-        num_cpus=config.num_cpus,
-        num_gpus=config.num_gpus,
-        dry_run=config.dry_run,
-        **config.ray_options,
+    ray_options = config.ray_options.copy()
+    if "memory" not in ray_options:
+        if config.memory:
+            ray_options["memory"] = humanfriendly.parse_size(config.memory, binary=True)
+
+    job_ctx = create_job_ctx(
+        context_type=config.backend,
+        max_workers=config.max_parallelism,
+        **ray_options,
     )
-    set_flow_backend(backend)
+    _job_context.set(job_ctx)
     sys.argv = [script_path, *script_args]
 
     script_path_obj = Path(script_path).resolve()

@@ -14,37 +14,36 @@ import urllib.parse
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Generic, Optional, Tuple, Type, TypeVar, Union, cast, Callable
+from typing import Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
 import fsspec
+import haliax
 import huggingface_hub
 import humanfriendly
 import jax
 import jax.numpy as jnp
-from jax._src.mesh import get_concrete_mesh
 import mergedeep
 import numpy as np
 import transformers.utils.hub
 from fsspec import AbstractFileSystem
-from fsspec.asyn import get_loop, sync as fsspec_sync
+from fsspec.asyn import get_loop
+from fsspec.asyn import sync as fsspec_sync
+from haliax import Axis
 from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like
-from haliax.state_dict import StateDict
-from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download
+from haliax.partitioning import ResourceMapping
+from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
+from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download, ModelInfo
 from huggingface_hub.file_download import repo_folder_name
-from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError, RepositoryNotFoundError
+from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
+from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from tqdm_loggable.auto import tqdm
-
-import haliax
-from haliax import Axis
-from haliax.partitioning import ResourceMapping
-from haliax.state_dict import from_torch_compatible_state_dict, save_state_dict
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
@@ -52,35 +51,61 @@ from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.hf_utils import HfTokenizer
-from levanter.utils.jax_utils import best_effort_sharding, use_cpu_device, sync_global_devices
+from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import dataclass_with_default_init
 
-
 silence_transformer_nag()
-from transformers import (  # noqa: E402
+from transformers import (  # noqa: E402  # noqa: E402
     AutoConfig,
     AutoModel,
     AutoModelForCausalLM,
     AutoProcessor,
     AutoTokenizer,
     FeatureExtractionMixin,
-)
-from transformers import PretrainedConfig as HfConfig  # noqa: E402
-from transformers import (  # noqa: E402
     PreTrainedTokenizer,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
     ProcessorMixin,
 )
+from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers.dynamic_module_utils import get_class_from_dynamic_module  # noqa: E402
 from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
-
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_to_hf_url(model_id: str, revision: Optional[str] = None) -> str:
+    """Convert a HuggingFace model ID to an hf:// URL for fsspec streaming.
+
+    Args:
+        model_id: HuggingFace model ID like "meta-llama/Llama-2-7b"
+        revision: Optional git revision (branch, tag, or commit hash)
+
+    Returns:
+        An hf:// URL like "hf://meta-llama/Llama-2-7b" or "hf://meta-llama/Llama-2-7b@main"
+    """
+    if revision:
+        return f"hf://{model_id}@{revision}"
+    return f"hf://{model_id}"
+
+
+def _is_hf_model_id(path: str) -> bool:
+    """Check if a path looks like a HuggingFace model ID (not a URL or local path)."""
+    # If it contains "://", it's already a URL
+    if "://" in path:
+        return False
+    # If it starts with "/" or "./" or "../", it's a local path
+    if path.startswith("/") or path.startswith("./") or path.startswith("../"):
+        return False
+    # If it exists as a local directory, it's a local path
+    if os.path.isdir(path):
+        return False
+    # Otherwise, assume it's an HF model ID
+    return True
 
 
 PYTORCH_MODEL = "pytorch_model.bin"
@@ -517,7 +542,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
         return ref.model_name_or_path, ref.revision
 
     def load_state_dict(self, ref: Optional[Union[str, RepoRef]] = None, dtype: Optional[jnp.dtype] = None) -> dict:
-        """Load a state dict from either HF Hub or a GCS path"""
+        """Load a state dict from either HF Hub or a GCS path.
+
+        HuggingFace model IDs are converted to hf:// URLs and streamed directly
+        without caching to local disk.
+        """
         if ref is None:
             ref = self.reference_checkpoint
         if ref is None:
@@ -529,6 +558,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
             if rev is not None:
                 raise ValueError("Revisions not supported for explicit URLs")
             return self._load_from_remote(id, dtype)
+
+        # Convert HF model IDs to hf:// URLs and stream directly
+        if _is_hf_model_id(id):
+            hf_url = _convert_to_hf_url(id, rev)
+            logger.info(f"Loading from HuggingFace Hub: {hf_url}")
+            return self._load_from_remote(hf_url, dtype)
 
         for index_file in [SAFE_TENSORS_INDEX_NAME, PYTORCH_WEIGHTS_INDEX_NAME]:
             try:
@@ -738,10 +773,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
         dict_config = config.to_dict()
 
         try:
-            for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
-                attr = getattr(self.default_hf_config, k, None)
-                if attr is not None:
-                    dict_config[k] = attr
+            base_config = self.default_hf_config
+        except ValueError:
+            # Training-from-scratch runs may intentionally omit a reference checkpoint. In that case, we can't pull
+            # metadata like `architectures` from an upstream config; the config produced by `to_hf_config()` is still
+            # sufficient for most built-in architectures.
+            base_config = None
+            logger.warning("No reference checkpoint set; skipping base HF config metadata copy.")
         except Exception as e:  # noqa: BLE001
             if isinstance(e, GatedRepoError) or isinstance(e.__cause__, GatedRepoError):
                 warnings.warn("Could not copy keys from base config because the repo is gated. Making assumptions.")
@@ -750,8 +788,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     "AutoConfig": self.HfConfigClass.__qualname__,
                 }
                 dict_config["architectures"] = [self.HFAutoModelClass(AutoModelForCausalLM).__name__]
+                base_config = None
             else:
                 raise
+
+        if base_config is not None:
+            for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
+                attr = getattr(base_config, k, None)
+                if attr is not None:
+                    dict_config[k] = attr
 
         if self.tokenizer:
             tokenizer_dependent_config = {}
@@ -1271,16 +1316,6 @@ def _shard_best_effort(array_or_slice, dtype) -> jax.Array:
     return jax.make_array_from_callback(tuple(shape), sharding, get_slice)
 
 
-def _is_hf_hub_model(ref: RepoRef):
-    api = HfApi()
-
-    try:
-        api.model_info(repo_id=ref.model_name_or_path)
-        return True
-    except RepositoryNotFoundError:
-        return False
-
-
 @contextlib.contextmanager
 def _patch_hf_hub_download():
     """
@@ -1338,9 +1373,21 @@ def _patch_hf_hub_download():
 
         huggingface_hub.utils._validators.validate_repo_id = custom_validate_repo_id
 
+        # transformers calls  model_info in _patch_mistral_regex to check if model is a base Mistral model
+        original_model_info = huggingface_hub.hf_api.model_info
+
+        def custom_model_info(repo_id, *args, **kwargs) -> ModelInfo:
+            if _is_url_like(repo_id):
+                # `tags=None` makes is_base_mistral return False, skipping the problematic code path
+                return ModelInfo(id="monkeypatched", tags=None)
+            return original_model_info(repo_id, *args, **kwargs)
+
+        huggingface_hub.hf_api.model_info = custom_model_info
+
         try:
             yield custom_hf_hub_download
         finally:
             # Restore the original implementation
             transformers.utils.hub.hf_hub_download = original_hf_hub_download
             huggingface_hub.utils._validators.validate_repo_id = original_validate_repo_id
+            huggingface_hub.hf_api.model_info = original_model_info

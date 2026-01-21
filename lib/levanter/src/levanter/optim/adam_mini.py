@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import optax
 from optax import tree_utils as otu
 
+import haliax
 from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
@@ -102,7 +103,7 @@ class MiniConfig(OptimizerConfig):
             else:
                 return "adamw"
 
-        return jax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
 
 
 class ScaleByMiniState(NamedTuple):

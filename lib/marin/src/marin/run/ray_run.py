@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# ruff: noqa
 
 import argparse
 import asyncio
@@ -25,6 +26,13 @@ import time
 from pathlib import Path
 
 import yaml
+
+os.environ.setdefault("RAY_AUTH_MODE", "token")
+_default_token_path = Path.home() / ".ray" / "auth_token"
+if _default_token_path.exists() and "RAY_AUTH_TOKEN_PATH" not in os.environ:
+    os.environ["RAY_AUTH_TOKEN_PATH"] = str(_default_token_path)
+
+
 from ray.job_submission import JobSubmissionClient
 
 from marin.cluster.config import find_config_by_region
@@ -34,6 +42,31 @@ from fray.cluster.ray.deps import build_runtime_env_for_packages, accelerator_ty
 logger = logging.getLogger(__name__)
 
 REMOTE_DASHBOARD_URL = "http://127.0.0.1:8265"
+
+
+def _maybe_enable_ray_token_auth(*, require_token: bool) -> None:
+    """Enable token auth client-side.
+
+    Ray only adds auth headers when `RAY_AUTH_MODE=token` is set in the client
+    process.
+    """
+    os.environ.setdefault("RAY_AUTH_MODE", "token")
+
+    if os.environ.get("RAY_AUTH_TOKEN"):
+        return
+
+    token_path = os.environ.get("RAY_AUTH_TOKEN_PATH")
+    if token_path and Path(token_path).expanduser().exists():
+        return
+
+    if (Path.home() / ".ray" / "auth_token").exists():
+        return
+
+    if require_token:
+        raise RuntimeError(
+            "Ray token authentication is enabled but no local token was found. "
+            "Create a token file at ~/.ray/auth_token, or set RAY_AUTH_TOKEN_PATH / RAY_AUTH_TOKEN."
+        )
 
 
 def parse_user_command_line(command: str) -> dict[str, str]:
@@ -76,11 +109,12 @@ def tpus_per_node(tpu_type: str) -> int:
 
 def make_client() -> JobSubmissionClient:
     """Create a JobSubmissionClient based on environment variables."""
-    if "RAY_ADDRESS" not in os.environ:
-        client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
-    else:
-        client = JobSubmissionClient()
-    return client
+    address = os.environ.get("RAY_ADDRESS", REMOTE_DASHBOARD_URL)
+    # Always pass an explicit HTTP dashboard URL. If Ray has to infer the Jobs
+    # API endpoint (e.g. from a `ray://...` address), it can resolve to the head
+    # node's internal `webui_url`, which isn't reachable from a developer laptop
+    # when using SSH port forwarding.
+    return JobSubmissionClient(address)
 
 
 async def submit_and_track_job(
@@ -287,6 +321,8 @@ def main():
             cluster_config = args.cluster
         else:
             cluster_config = find_config_by_region(args.cluster)
+
+    _maybe_enable_ray_token_auth(require_token=cluster_config is None)
 
     # Submit the job and track it asynchronously
     if args.submission_id:

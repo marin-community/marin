@@ -13,15 +13,12 @@
 # limitations under the License.
 
 import logging
-import os
 from abc import ABC
-from urllib.parse import urlparse
 
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.utils import is_remote_path
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
@@ -30,34 +27,12 @@ logger = logging.getLogger(__name__)
 class LevanterTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with Levanter (primarily Lm Eval Harness) on TPUs."""
 
-    # Where to store checkpoints, cache inference results, etc.
-    CACHE_PATH: str = "/opt/gcsfuse_mount/models"
-
     @staticmethod
-    def _looks_like_url(path: str) -> bool:
-        parsed = urlparse(path)
-        return bool(parsed.scheme and parsed.netloc)
-
-    @staticmethod
-    def download_model_if_necessary(model: ModelConfig) -> str:
-        """Return a path or identifier Levanter can read without copying checkpoints needlessly."""
-
-        if model.path:
-            if (
-                is_remote_path(model.path)
-                or os.path.isdir(model.path)
-                or LevanterTpuEvaluator._looks_like_url(model.path)
-            ):
-                return model.path
-
-        downloaded_path: str | None = model.ensure_downloaded(
-            local_path=os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
-        )
-
-        # Use the model name if a path is not specified (e.g., for Hugging Face models)
-        model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
-
-        return model_name_or_path
+    def model_name_or_path(model: ModelConfig) -> str:
+        """Return a reference Levanter can read without staging to local disk."""
+        if model.path is None:
+            return model.name
+        return model.path
 
     @staticmethod
     def cleanup(model: ModelConfig) -> None:

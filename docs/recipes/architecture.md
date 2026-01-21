@@ -14,7 +14,7 @@ Marin is a framework for building reproducible language model training pipelines
 
 ```
 marin/
-├── pyproject.toml              # Dependencies, extras (crawl, tokenize_train, post_training, etc.)
+├── pyproject.toml              # Dependencies, extras (gpu, tpu, cpu, rl, eval)
 ├── README.md, CLAUDE.md, AGENTS.md
 │
 ├── lib/marin/src/marin/                  # Core library organized by function
@@ -27,7 +27,6 @@ marin/
 │   ├── classifiers/            # Train quality classifiers (fasttext/, bert/, hf/, custom/)
 │   ├── training/               # Model training (training.py, scaling_laws.py)
 │   ├── rl/                     # Async PPO (rollout_worker.py, train_worker.py, replay_buffer.py, curriculum.py, environments/, weight_transfer/)
-│   ├── post_training/          # Deprecated, see rl/
 │   ├── evaluation/             # Evaluation (evaluators/, visualize.py)
 │   ├── datashop/               # LLM-based filtering (pipeline.py, dataset_processor.py, templates.py)
 │   ├── generation/             # LLM inference (inference.py, llm_generation.py, pipeline.py)
@@ -48,7 +47,7 @@ marin/
 │
 ├── tests/                      # Test suite
 │   ├── integration_test.py     # Full pipeline smoke test (<10min, no GPU)
-│   ├── processing/, rl/, post_training/, evals/, deduplication/, data-curation/, snapshots/, tpu/, vllm/
+│   ├── processing/, rl/, evals/, deduplication/, data-curation/, snapshots/, tpu/, vllm/
 │   └── quickstart-data/
 │
 ├── docs/                       # Documentation (tutorials/, explanations/, references/, recipes/, reports/, design/, dev-guide/, model-cards/)

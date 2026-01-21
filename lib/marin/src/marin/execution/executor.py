@@ -101,6 +101,7 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
+from pathlib import Path
 from threading import Event, Thread
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
@@ -108,6 +109,7 @@ from urllib.parse import urlparse
 import draccus
 import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
+
 from fray import (
     Cluster,
     Entrypoint,
@@ -130,6 +132,41 @@ from marin.execution.executor_step_status import (
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
+
+_LOCAL_DATA_BROWSER_PORT_RE = re.compile(r"^\s*port\s*:\s*(\d+)\s*(?:#.*)?$")
+_LOCAL_DATA_BROWSER_CONFIG_REL = Path("data_browser") / "conf" / "local.conf"
+
+
+def _find_data_browser_local_conf(max_parents: int = 6) -> Path | None:
+    here = Path.cwd().resolve()
+    for _ in range(max_parents + 1):
+        candidate = here / _LOCAL_DATA_BROWSER_CONFIG_REL
+        if candidate.exists():
+            return candidate
+        parent = here.parent
+        if parent == here:
+            break
+        here = parent
+    return None
+
+
+def _get_local_data_browser_port(default: int = 5000) -> int:
+    # looks for the port in the local data browser config file
+    config_path = _find_data_browser_local_conf()
+    if config_path is None:
+        return default
+
+    try:
+        with config_path.open() as fp:
+            for line in fp:
+                match = _LOCAL_DATA_BROWSER_PORT_RE.match(line)
+                if match:
+                    return int(match.group(1))
+    except OSError:
+        return default
+
+    return default
+
 
 ConfigT = TypeVar("ConfigT", covariant=True, bound=dataclass)
 T_co = TypeVar("T_co", covariant=True)
@@ -268,6 +305,9 @@ class ExecutorStep(Generic[ConfigT]):
 
     pip_dependency_groups: list[str] | None = None
     """List of `extra` dependencies from pyproject.toml to include with this step."""
+
+    resources: ResourceConfig | None = None
+    """Resource requirements for this step (GPU, TPU, CPU). If None, defaults to CPU."""
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -656,6 +696,9 @@ class Executor:
         self.step_runners: dict[ExecutorStep, StepRunner] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
+        # Populated during dry runs to summarize which steps would be executed.
+        # Tuple is (step_name, action, reason, output_path)
+        self._dry_run_plan: list[tuple[str, str, str, str]] = []
 
     def run(
         self,
@@ -670,7 +713,8 @@ class Executor:
 
         Args:
             steps: The steps to run.
-            dry_run: If True, only print out what needs to be done.
+            dry_run: If True, only print out what needs to be done. Reads existing
+                statuses to report which steps would actually be executed.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
         """
@@ -698,7 +742,12 @@ class Executor:
         self.write_infos()
 
         logger.info(f"### Launching {len(steps_to_run)} steps ###")
+        if dry_run:
+            self._dry_run_plan = []
         self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
+
+        if dry_run:
+            self._log_dry_run_summary()
 
         logger.info("### Waiting for all steps to finish ###")
         for runner in self.step_runners.values():
@@ -769,6 +818,14 @@ class Executor:
             logger.info("  %s = %s", dependency_index_str(i), self.output_paths[dep])
 
         if dry_run:
+            action, reason = self._plan_dry_run(step, force_run_failed=force_run_failed)
+            self._record_dry_run(step, action, reason, output_path)
+            if action == "run":
+                logger.info("[DRY RUN] Would run %s -> %s: %s", step.name, output_path, reason)
+            elif action == "wait":
+                logger.info("[DRY RUN] %s currently running elsewhere: %s", step.name, reason)
+            else:
+                logger.info("[DRY RUN] Skip %s: %s", step.name, reason)
             return None
 
         step_name = f"{step.name}: {get_fn_name(step.fn)}"
@@ -788,18 +845,70 @@ class Executor:
 
             step_fn = _call_remote
 
-        # always run driver functions on a non-preemptible node
-        non_preemptible_cpu = ResourceConfig.with_cpu(preemptible=False)
+        # Use the step's resources if specified, otherwise default to CPU
+        step_resources = step.resources if step.resources is not None else ResourceConfig.with_cpu(preemptible=False)
         fray_job = JobRequest(
             name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
             entrypoint=Entrypoint.from_callable(step_fn, args=[config]),
-            resources=non_preemptible_cpu,
+            resources=step_resources,
             environment=EnvironmentConfig.create(extras=step.pip_dependency_groups or []),
         )
 
         runner = StepRunner(self.cluster, status_file)
         runner.launch(fray_job)
         return runner
+
+    def _plan_dry_run(self, step: ExecutorStep, *, force_run_failed: bool) -> tuple[str, str]:
+        """Return a dry-run action and reason without acquiring locks or writing."""
+        status_file = StatusFile(self.output_paths[step], worker_id="dry-run")
+        status = status_file.status
+
+        if status == STATUS_SUCCESS:
+            return ("skip", "already succeeded")
+
+        if status in [STATUS_FAILED, STATUS_DEP_FAILED]:
+            if force_run_failed:
+                return ("run", f"previous status {status}; would rerun because force_run_failed=True")
+            raise PreviousTaskFailedError(
+                f"Step {step.name} failed previously with status {status}. "
+                "Rerun with force_run_failed=True to execute again."
+            )
+
+        if status == STATUS_RUNNING:
+            if status_file.has_active_lock():
+                return ("wait", "currently running with an active lock")
+            return ("run", "RUNNING with no active lock; would take over execution")
+
+        return ("run", "no status recorded")
+
+    def _record_dry_run(self, step: ExecutorStep, action: str, reason: str, output_path: str) -> None:
+        """Track dry-run decisions for summary output."""
+        self._dry_run_plan.append((step.name, action, reason, output_path))
+
+    def _log_dry_run_summary(self) -> None:
+        """Log a concise summary of dry-run decisions."""
+        if not self._dry_run_plan:
+            logger.info("### Dry run summary: no steps inspected ###")
+            return
+
+        to_run = [(name, path) for name, action, _, path in self._dry_run_plan if action == "run"]
+        waiting = [name for name, action, _, _ in self._dry_run_plan if action == "wait"]
+        skipped = [name for name, action, _, _ in self._dry_run_plan if action == "skip"]
+
+        logger.info("### Dry run summary ###")
+        if skipped:
+            formatted = "\n".join(f"- {name}" for name in skipped)
+            logger.info("Already succeeded:\n%s", formatted)
+
+        if to_run:
+            formatted = "\n".join(f"- {name} -> {path}" for name, path in to_run)
+            logger.info("Would run %d step(s):\n%s", len(to_run), formatted)
+        else:
+            logger.info("No steps need to be launched.")
+
+        if waiting:
+            formatted = "\n".join(f"- {name}" for name in waiting)
+            logger.info("Currently running (not relaunched):\n%s", formatted)
 
     def _compute_transitive_deps(self, steps: list[ExecutorStep], run_steps: list[str]) -> list[ExecutorStep]:
         """
@@ -968,11 +1077,10 @@ class Executor:
 
     def get_experiment_url(self) -> str:
         """Return the URL where the experiment can be viewed."""
-        # TODO: remove hardcoding
         if self.prefix.startswith("gs://"):
             host = "https://marin.community/data-browser"
         else:
-            host = "http://localhost:5000"
+            host = f"http://localhost:{_get_local_data_browser_port()}"
 
         return host + "/experiment?path=" + urllib.parse.quote(self.executor_info_path)
 
@@ -998,6 +1106,8 @@ class Executor:
 
         # Print where to find the executor info (experiments JSON)
         logger.info(f"Writing executor info to {self.executor_info_path}")
+        if not self.prefix.startswith("gs://"):
+            logger.info("Start data browser: cd data_browser && uv run python run-dev.py --config conf/local.conf")
         logger.info("To view the experiment page, go to:")
         logger.info("")
         logger.info(self.get_experiment_url())
@@ -1148,6 +1258,8 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     logger.info(f"Executor run took {time_out - time_in:.2f}s")
     # print json path again so it's easy to copy
     logger.info(f"Executor info written to {executor.executor_info_path}")
+    if not executor.prefix.startswith("gs://"):
+        logger.info("Start data browser: cd data_browser && uv run python run-dev.py --config conf/local.conf")
     logger.info(f"View the experiment at {executor.get_experiment_url()}")
 
 

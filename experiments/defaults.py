@@ -38,6 +38,7 @@ from levanter.optim import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from levanter.utils import fsspec_utils
 
 from experiments.anneal_config import AnnealConfig
@@ -45,7 +46,6 @@ from experiments.evals.task_configs import (
     CORE_TASKS,
     MMLU_TASKS,
     convert_to_levanter_task_config,
-    convert_to_task_metrics,
 )
 from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
@@ -58,7 +58,6 @@ from marin.execution.executor import (
     InputName,
     VersionedValue,
     ensure_versioned,
-    get_executor_step,
     this_output_path,
     unwrap_versioned_value,
 )
@@ -71,7 +70,6 @@ from marin.processing.tokenize import (
     tokenize,
 )
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfigBase
-from marin.scaling_laws.scaling_laws import ScalingLawConfig, run_scaling_law_analysis
 from marin.training.training import (
     TrainLmOnPodConfig,
     run_levanter_train_lm,
@@ -182,7 +180,6 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
         config=config,
-        pip_dependency_groups=["tokenize_train"],
     )
 
 
@@ -345,7 +342,14 @@ def default_train(
                 keep=[dict(every=steps_per_export)],
             ),
             model_averaging=model_averaging,
-            replica_dcn_axis_size=-1,
+            mesh=MeshConfig(
+                # Special axes for MoEs
+                # TODO: this is actually bad and we should remove, but keeping for now
+                compute_mapping={
+                    "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                    "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                }
+            ),
             allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             per_device_eval_parallelism=per_device_eval_parallelism,
             max_eval_batches=train_config.max_eval_batches,
@@ -356,11 +360,7 @@ def default_train(
             profiler=train_config.profiler,
             profiler_start_step=train_config.profiler_start_step,
             profiler_num_steps=train_config.profiler_num_steps,
-            axis_resources={
-                # Special axes for MoEs
-                "token": (ResourceAxis.REPLICA, ResourceAxis.DATA),
-                "token_repeat": (ResourceAxis.REPLICA, ResourceAxis.DATA),
-            },
+            use_explicit_mesh_axes=train_config.explicit_mesh_axes,
         ),
         initialize_from_checkpoint_path=(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
@@ -425,7 +425,6 @@ def default_train(
         ),
         fn=run_levanter_train_lm,
         config=config,
-        pip_dependency_groups=["tokenize_train"],
         override_output_path=override_output_path,
     )
 
@@ -635,41 +634,3 @@ def _get_tokenizer_for_train(tokenized: InputName | ExecutorStep | LMMixtureData
             raise ValueError(f"Could not determine tokenizer from {tokenized}")
 
     return tokenizer
-
-
-def default_scaling_law_pred(
-    ladder_runs: Sequence[ExecutorStep | InputName | str],
-    pred_run: ExecutorStep | InputName | str | None = None,
-    task_losses: Sequence[str] = ("eval/paloma/c4_en/bpb",),
-    task_accuracies: Sequence[str] | Sequence[EvalTaskConfig] | None = None,
-):
-    """
-    Given a suite of small models, predict the performance on a number of (N, D) values.
-    """
-    # get the executor steps or run IDs for the ladder runs and the pred run
-    ladder_steps_or_ids = [get_executor_step(run) if not isinstance(run, str) else run for run in ladder_runs]
-
-    pred_run_or_id = None
-    if pred_run:
-        pred_run_or_id = get_executor_step(pred_run) if not isinstance(pred_run, str) else pred_run
-
-    # convert the task accuracies to strings if they are `EvalTaskConfig`s
-    if task_accuracies is not None:
-        task_accuracies = convert_to_task_metrics(task_accuracies, metric="acc")
-
-    if pred_run_or_id:
-        name = pred_run_or_id if isinstance(pred_run_or_id, str) else pred_run_or_id.name
-    else:
-        name = "projection"
-
-    return ExecutorStep(
-        name=f"""scaling_laws/{name}""",
-        fn=run_scaling_law_analysis,
-        config=ScalingLawConfig(
-            name=name,
-            ladder_model_steps=ladder_steps_or_ids,
-            pred_model_step=pred_run_or_id,
-            task_losses=task_losses,
-            task_accuracies=task_accuracies,
-        ),
-    )

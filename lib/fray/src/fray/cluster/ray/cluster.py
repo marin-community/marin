@@ -38,8 +38,9 @@ from fray.cluster.base import (
     TpuConfig,
 )
 from fray.cluster.ray.config import find_config_by_region
-from fray.cluster.ray.deps import build_runtime_env_for_packages
+from fray.cluster.ray.deps import build_python_path, build_runtime_env_for_packages
 from fray.cluster.ray.tpu import run_on_pod_ray
+from fray.job.context import RayContext, fray_default_job_ctx
 
 logger = logging.getLogger("ray")
 
@@ -107,6 +108,11 @@ class RayCluster(Cluster):
         self._dashboard_address = dashboard_address or self._get_dashboard_address()
         self._jobs: dict[JobId, RayJobInfo] = {}
 
+        # Set default job context permanently to this cluster.
+        ray_ctx = RayContext(ray_options={})
+        fray_default_job_ctx(ray_ctx).__enter__()
+        logger.info("Set default job context to RayContext")
+
     @classmethod
     def from_spec(cls, query_params: dict[str, list[str]]) -> "RayCluster":
         namespace = None
@@ -160,13 +166,27 @@ class RayCluster(Cluster):
         entrypoint_params = self._get_entrypoint_params(request)
         logger.debug("Entrypoint params: %s", entrypoint_params)
 
-        submission_id = self._job_client().submit_job(
-            entrypoint=entrypoint_cmd,
-            runtime_env=runtime_env,
-            submission_id=f"{request.name}-{uuid.uuid4()}",
-            metadata={"name": request.name},
-            **entrypoint_params,
-        )
+        client = self._job_client()
+        submission_timeout_s = float(os.environ.get("FRAY_RAY_JOB_SUBMIT_TIMEOUT_S", "30"))
+        deadline = time.time() + submission_timeout_s
+        sleep_s = 0.5
+        while True:
+            try:
+                submission_id = client.submit_job(
+                    entrypoint=entrypoint_cmd,
+                    runtime_env=runtime_env,
+                    submission_id=f"{request.name}-{uuid.uuid4()}",
+                    metadata={"name": request.name},
+                    **entrypoint_params,
+                )
+                break
+            except RuntimeError as e:
+                # Ray can briefly return "No available agent to submit job" right after startup.
+                if "No available agent to submit job" not in str(e) or time.time() >= deadline:
+                    raise
+                logger.info("Ray job agent not ready yet, retrying submit in %.1fs...", sleep_s)
+                time.sleep(sleep_s)
+                sleep_s = min(5.0, sleep_s * 1.5)
         logger.info("Job submitted with ID: %s", submission_id)
         job_id = JobId(submission_id)
         self._jobs[job_id] = RayJobInfo.from_submission_id(submission_id, request.name)
@@ -236,11 +256,10 @@ class RayCluster(Cluster):
         environment = request.environment if request.environment else EnvironmentConfig.create()
 
         env_vars = dict(environment.env_vars)
-
         # disable access to the TPU if we're not a TPU job, otherwise
         # any import of JAX will claim the TPU and block other users.
         if isinstance(request.resources.device, CpuConfig):
-            if "JAX_PLATFORMS" in env_vars:
+            if "JAX_PLATFORMS" in env_vars and env_vars["JAX_PLATFORMS"] != "cpu":
                 logger.warning(
                     "Found existing JAX_PLATFORMS=%s, overriding for CPU only job.",
                     env_vars["JAX_PLATFORMS"],
@@ -252,7 +271,7 @@ class RayCluster(Cluster):
             env_vars["JAX_PLATFORMS"] = ""
         elif isinstance(request.resources.device, GpuConfig):
             if "gpu" not in environment.extras:
-                environment.extras.extend(["cuda12"])
+                environment.extras.append("gpu")
             env_vars["JAX_PLATFORMS"] = ""
 
         logger.info(
@@ -273,6 +292,16 @@ class RayCluster(Cluster):
             runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
             runtime_env["config"] = {"setup_timeout_seconds": 1800}
         else:
+            # No runtime package installation: rely on the existing environment.
+            # This is primarily used for local clusters (including CI), where workers share
+            # the submitting machine's filesystem and already have dependencies installed.
+            python_path = build_python_path(submodules_dir=os.path.join(environment.workspace, "submodules"))
+            python_path = [
+                p if os.path.isabs(p) else os.path.join(environment.workspace, p) for p in python_path if p.strip()
+            ]
+            if "PYTHONPATH" in env_vars:
+                python_path.extend([p for p in env_vars["PYTHONPATH"].split(":") if p.strip()])
+            env_vars["PYTHONPATH"] = ":".join(python_path)
             runtime_env = {"env_vars": env_vars}
 
         logger.info("Ray runtime env: %s", runtime_env)

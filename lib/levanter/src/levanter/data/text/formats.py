@@ -197,7 +197,21 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
     def _merge_split_encodings(batch, encoding, needs_merge):
         new_encoding = {}
         for k, v in encoding.items():
-            if isinstance(v[0], list):
+            if len(v) == 0:
+                continue
+            if isinstance(v[0], np.ndarray):
+                v_out = []
+                vs_to_merge = []
+                for i in range(len(batch)):
+                    if not needs_merge[i]:
+                        if len(vs_to_merge) > 0:
+                            v_out.append(np.concatenate(vs_to_merge))
+                        vs_to_merge = []
+                    vs_to_merge.append(v[i])
+                if len(vs_to_merge) > 0:
+                    v_out.append(np.concatenate(vs_to_merge))
+                new_encoding[k] = v_out
+            elif isinstance(v[0], list):
                 v_out = []
                 vs_to_merge = []
                 for i in range(len(batch)):
