@@ -37,7 +37,6 @@ from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.state import (
     MAX_REPLICAS_PER_JOB,
     ControllerEndpoint,
-    ControllerJob,
     ControllerState,
     ControllerTask,
 )
@@ -580,30 +579,6 @@ def test_task_queue_fifo_order(job_request):
     assert len(pending) == 2
     assert pending[0].job_id == JobId("j1")
     assert pending[1].job_id == JobId("j2")
-
-
-def test_gang_job_tracking(job_request):
-    """Gang jobs are tracked correctly.
-
-    Note: gang_id is not in the proto, so this test uses add_job() directly.
-    """
-    state = ControllerState()
-    job1 = ControllerJob(job_id=JobId("j1"), request=job_request("job1"), gang_id="gang1")
-    job2 = ControllerJob(job_id=JobId("j2"), request=job_request("job2"), gang_id="gang1")
-    job3 = ControllerJob(job_id=JobId("j3"), request=job_request("job3"), gang_id="gang2")
-
-    state.add_job(job1)
-    state.add_job(job2)
-    state.add_job(job3)
-
-    gang1_jobs = state.get_gang_jobs("gang1")
-    assert len(gang1_jobs) == 2
-    assert {j.job_id for j in gang1_jobs} == {"j1", "j2"}
-
-    gang2_jobs = state.get_gang_jobs("gang2")
-    assert len(gang2_jobs) == 1
-
-    assert state.get_gang_jobs("nonexistent") == []
 
 
 def test_hierarchical_job_tracking(job_request):

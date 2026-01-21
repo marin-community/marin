@@ -516,9 +516,6 @@ class ControllerJob:
     max_retries_failure: int = 0
     max_retries_preemption: int = DEFAULT_MAX_RETRIES_PREEMPTION
 
-    # Gang scheduling
-    gang_id: str | None = None
-
     # Hierarchical job tracking
     parent_job_id: JobId | None = None
 
@@ -722,54 +719,6 @@ class ControllerJob:
 # =============================================================================
 
 
-def handle_gang_failure(
-    jobs: list[ControllerJob],
-    is_worker_failure: bool,
-    error: str,
-) -> list[ControllerJob]:
-    """Handle gang failure with all-or-nothing retry.
-
-    All jobs in gang must have retries remaining for any to be retried.
-    This function coordinates multiple jobs, so it lives outside the ControllerJob class.
-
-    Args:
-        jobs: All jobs in the gang
-        is_worker_failure: Type of failure
-        error: Error message
-
-    Returns:
-        List of jobs to re-queue (empty if no retry)
-    """
-    if not jobs:
-        return []
-
-    # Check ALL jobs can retry (all-or-nothing)
-    if is_worker_failure:
-        can_retry = all(j.can_retry_preemption() for j in jobs)
-    else:
-        can_retry = all(j.can_retry_failure() for j in jobs)
-
-    if not can_retry:
-        # Mark all running jobs as killed
-        for job in jobs:
-            if job.state == cluster_pb2.JOB_STATE_RUNNING:
-                job.transition(cluster_pb2.JOB_STATE_KILLED, error=error)
-        return []
-
-    # Retry all jobs
-    to_requeue = []
-    for job in jobs:
-        result = job.transition(
-            cluster_pb2.JOB_STATE_FAILED,
-            is_worker_failure=is_worker_failure,
-            error=error,
-        )
-        if result == JobTransitionResult.SHOULD_RETRY:
-            to_requeue.append(job)
-
-    return to_requeue
-
-
 def expand_job_to_tasks(job: ControllerJob) -> list[ControllerTask]:
     """Expand a job into its constituent tasks based on replicas.
 
@@ -970,7 +919,6 @@ class ControllerState:
         self._tasks_by_job: dict[JobId, list[TaskId]] = {}
         self._workers: dict[WorkerId, ControllerWorker] = {}
         self._task_queue: deque[TaskId] = deque()  # FIFO queue of task IDs
-        self._gangs: dict[str, set[JobId]] = {}  # gang_id -> job_ids
         self._endpoints: dict[str, ControllerEndpoint] = {}  # endpoint_id -> endpoint
         self._endpoints_by_task: dict[TaskId, set[str]] = {}  # task_id -> endpoint_ids
         self._transactions: deque[TransactionLog] = deque(maxlen=1000)  # Event transaction log
@@ -1118,9 +1066,6 @@ class ControllerState:
             self._task_queue.append(task.task_id)
             job.task_state_counts[task.state] += 1
             txn.log("task_created", task.task_id, job_id=str(event.job_id))
-
-        if job.gang_id:
-            self._gangs.setdefault(job.gang_id, set()).add(event.job_id)
 
         txn.log("job_submitted", event.job_id, num_tasks=job.num_tasks)
 
@@ -1340,9 +1285,6 @@ class ControllerState:
                 self._task_queue.append(task.task_id)
                 job.task_state_counts[task.state] += 1
 
-            if job.gang_id:
-                self._gangs.setdefault(job.gang_id, set()).add(job.job_id)
-
             return tasks
 
     def get_job(self, job_id: JobId) -> ControllerJob | None:
@@ -1352,11 +1294,6 @@ class ControllerState:
     def list_all_jobs(self) -> list[ControllerJob]:
         with self._lock:
             return list(self._jobs.values())
-
-    def get_gang_jobs(self, gang_id: str) -> list[ControllerJob]:
-        with self._lock:
-            job_ids = self._gangs.get(gang_id, set())
-            return [self._jobs[jid] for jid in job_ids if jid in self._jobs]
 
     def get_children(self, job_id: JobId) -> list[ControllerJob]:
         with self._lock:
