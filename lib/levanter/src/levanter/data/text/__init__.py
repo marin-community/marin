@@ -19,7 +19,6 @@ from .datasets import (
     count_corpus_sizes,
 )
 from .formats import (
-    BatchTokenizer,
     ChatLmDatasetFormat,
     ChatProcessor,
     LmDatasetFormatBase,
@@ -27,6 +26,7 @@ from .formats import (
     TextLmDatasetFormat,
     preprocessor_for_format,
 )
+from ._batch_tokenizer import BatchTokenizer
 
 __all__ = [
     "BatchTokenizer",
