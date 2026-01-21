@@ -49,6 +49,12 @@ from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
 
+MAX_REPLICAS_PER_JOB = 10000
+"""Maximum replicas allowed per job to prevent resource exhaustion."""
+
+DEFAULT_MAX_RETRIES_PREEMPTION = 100
+"""Default preemption retries. High because worker failures are typically transient."""
+
 # =============================================================================
 # Device Helper Functions
 # =============================================================================
@@ -177,6 +183,47 @@ class ControllerTask:
     Task owns its state directly - these are dataclass fields, not delegated to attempts.
     Attempts are pure execution history, tracking each time a task was dispatched to a worker.
 
+    State Diagram::
+
+                            +-----------+
+                            |  PENDING  |<-----------------+
+                            +-----+-----+                  |
+                                  |                        |
+                            dispatch to worker             |
+                                  |                        |
+                                  v                        |
+                            +-----------+                  |
+                            |  RUNNING  |                  |
+                            +-----+-----+                  |
+                                  |                        |
+              +-------------------+-------------------+    |
+              |                   |                   |    |
+              v                   v                   v    |
+        +-----------+       +-----------+      +-----------+
+        | SUCCEEDED |       |  FAILED   |----->| (retry)   |
+        +-----------+       +-----------+      +-----------+
+                                  |                  ^
+                                  | exhausted        |
+                                  v                  |
+                            (terminal)               |
+                                                     |
+                            +-----------+            |
+                            |WORKER_FAIL|------------+
+                            +-----------+
+                                  |
+                                  | exhausted
+                                  v
+                            (terminal)
+
+        Other terminal states: KILLED, UNSCHEDULABLE (no retry)
+
+    Retry Semantics:
+        - failure_count: Incremented on TASK_STATE_FAILED. Checked against max_retries_failure.
+        - preemption_count: Incremented on TASK_STATE_WORKER_FAILED. Checked against max_retries_preemption.
+
+        When a task fails with retry budget remaining, it stays in the failure state but
+        can_be_scheduled() returns True. The scheduler creates a new attempt when re-dispatching.
+
     State transitions are handled via handle_attempt_result(), which updates both
     the attempt and task-level state, returning a TaskTransitionResult indicating
     what the caller should do.
@@ -195,7 +242,7 @@ class ControllerTask:
 
     # Retry policy (immutable after creation)
     max_retries_failure: int = 0
-    max_retries_preemption: int = 100
+    max_retries_preemption: int = DEFAULT_MAX_RETRIES_PREEMPTION
 
     # Retry counters (task-level, not attempt-level)
     failure_count: int = 0
@@ -467,7 +514,7 @@ class ControllerJob:
     failure_count: int = 0
     preemption_count: int = 0
     max_retries_failure: int = 0
-    max_retries_preemption: int = 100
+    max_retries_preemption: int = DEFAULT_MAX_RETRIES_PREEMPTION
 
     # Gang scheduling
     gang_id: str | None = None
@@ -722,8 +769,17 @@ def expand_job_to_tasks(job: ControllerJob) -> list[ControllerTask]:
 
     Returns:
         List of ControllerTask objects for this job
+
+    Raises:
+        ValueError: If replicas is < 1 or exceeds MAX_REPLICAS_PER_JOB
     """
     num_replicas = job.request.resources.replicas or 1
+
+    if num_replicas < 1:
+        raise ValueError(f"Job {job.job_id} has invalid replicas={num_replicas}; must be >= 1")
+    if num_replicas > MAX_REPLICAS_PER_JOB:
+        raise ValueError(f"Job {job.job_id} replicas={num_replicas} exceeds max {MAX_REPLICAS_PER_JOB}")
+
     tasks = []
 
     for i in range(num_replicas):
@@ -1011,7 +1067,7 @@ class ControllerState:
 
         # Read retry limits from request, using defaults if not set
         max_retries_failure = event.request.max_retries_failure  # proto default: 0
-        max_retries_preemption = event.request.max_retries_preemption or 100  # default: 100
+        max_retries_preemption = event.request.max_retries_preemption or DEFAULT_MAX_RETRIES_PREEMPTION
 
         job = ControllerJob(
             job_id=event.job_id,
@@ -1024,7 +1080,15 @@ class ControllerState:
         self._jobs[event.job_id] = job
         self._tasks_by_job[event.job_id] = []
 
-        tasks = expand_job_to_tasks(job)
+        try:
+            tasks = expand_job_to_tasks(job)
+        except ValueError as e:
+            job.state = cluster_pb2.JOB_STATE_FAILED
+            job.error = str(e)
+            job.finished_at_ms = now_ms()
+            txn.log("job_validation_failed", event.job_id, error=str(e))
+            return
+
         job.num_tasks = len(tasks)
 
         for task in tasks:
@@ -1046,6 +1110,12 @@ class ControllerState:
             task = self._tasks[task_id]
             if task.state in TERMINAL_TASK_STATES:
                 continue
+
+            # Track running tasks for kill RPC. Unlike task failures that trigger
+            # _finalize_job_state (which populates tasks_to_kill), job cancellation
+            # sets job state directly, so we must track kill targets here.
+            if task.worker_id:
+                txn.tasks_to_kill.add(task_id)
 
             cascade_event = TaskStateChangedEvent(
                 task_id=task_id,
@@ -1111,7 +1181,8 @@ class ControllerState:
         # Update job state counters and finalize if needed
         new_job_state = job.on_task_transition(old_state, task.state)
         if new_job_state is not None:
-            self._finalize_job_state(job, new_job_state)
+            killed_tasks = self._finalize_job_state(job, new_job_state, txn)
+            txn.tasks_to_kill.update(killed_tasks)
 
         txn.log(
             "task_state_changed",
@@ -1247,22 +1318,32 @@ class ControllerState:
         self,
         job: ControllerJob,
         new_state: int,
-    ) -> None:
-        """Apply a job state change and handle associated actions."""
+        txn: TransactionLog,
+    ) -> set[TaskId]:
+        """Apply a job state change and handle associated actions.
+
+        Returns:
+            Set of TaskIds that were killed and had workers assigned. These need
+            KILL RPCs sent to workers. Empty for SUCCEEDED state; populated for
+            FAILED, KILLED, and UNSCHEDULABLE states.
+        """
         job.state = new_state
         job.finished_at_ms = now_ms()
 
+        killed_tasks: set[TaskId] = set()
         if new_state == cluster_pb2.JOB_STATE_FAILED:
             job.error = self._get_first_task_error(job.job_id)
-            self._kill_remaining_tasks(job.job_id, "Job exceeded max_task_failures")
+            killed_tasks = self._mark_remaining_tasks_killed(job.job_id, "Job exceeded max_task_failures", txn)
         elif new_state == cluster_pb2.JOB_STATE_SUCCEEDED:
             pass
         elif new_state == cluster_pb2.JOB_STATE_KILLED:
             job.error = self._get_first_task_error(job.job_id)
-            self._kill_remaining_tasks(job.job_id, "Job was terminated.")
+            killed_tasks = self._mark_remaining_tasks_killed(job.job_id, "Job was terminated.", txn)
         elif new_state == cluster_pb2.JOB_STATE_UNSCHEDULABLE:
             job.error = self._get_first_task_error(job.job_id)
-            self._kill_remaining_tasks(job.job_id, "Job could not be scheduled.")
+            killed_tasks = self._mark_remaining_tasks_killed(job.job_id, "Job could not be scheduled.", txn)
+
+        return killed_tasks
 
     def _get_first_task_error(self, job_id: JobId) -> str | None:
         """Get the first error message from failed/killed tasks in a job."""
@@ -1272,19 +1353,34 @@ class ControllerState:
                 return task.error
         return None
 
-    def _kill_remaining_tasks(self, job_id: JobId, error: str) -> None:
-        """Kill all non-finished tasks in a job (failure domain).
+    def _mark_remaining_tasks_killed(
+        self,
+        job_id: JobId,
+        error: str,
+        txn: TransactionLog,
+    ) -> set[TaskId]:
+        """Mark all non-finished tasks in a job as killed (state-only).
 
         Updates job.task_state_counts incrementally for each killed task.
+        The actual KILL RPCs to workers happen elsewhere; this method only
+        updates internal state.
+
+        Returns the set of killed TaskIds that had workers assigned
+        (these are the tasks that need KILL RPCs).
         """
         job = self._jobs.get(job_id)
         ts = now_ms()
+        tasks_needing_kill_rpc: set[TaskId] = set()
+        tasks_to_remove_from_queue: set[TaskId] = set()
+
         for task_id in self._tasks_by_job.get(job_id, []):
             task = self._tasks.get(task_id)
             if not task or task.is_finished():
                 continue
 
             old_state = task.state
+            had_worker = task.worker_id is not None
+
             task.state = cluster_pb2.TASK_STATE_KILLED
             task.finished_at_ms = ts
             task.error = error
@@ -1294,12 +1390,25 @@ class ControllerState:
                 job.task_state_counts[old_state] -= 1
                 job.task_state_counts[cluster_pb2.TASK_STATE_KILLED] += 1
 
-            self._task_queue = deque(tid for tid in self._task_queue if tid != task_id)
+            tasks_to_remove_from_queue.add(task_id)
+
+            # Only track tasks with workers assigned for kill RPC
+            if had_worker:
+                tasks_needing_kill_rpc.add(task_id)
+
             if task.worker_id and job:
                 worker = self._workers.get(task.worker_id)
                 if worker:
                     worker.unassign_task(task_id, job.request.resources)
             self._remove_endpoints_for_task(task_id)
+
+            txn.log("task_killed", task_id, old_state=old_state, error=error)
+
+        # Filter the queue once after collecting all task IDs to remove (O(N) instead of O(N²))
+        if tasks_to_remove_from_queue:
+            self._task_queue = deque(tid for tid in self._task_queue if tid not in tasks_to_remove_from_queue)
+
+        return tasks_needing_kill_rpc
 
     # --- Worker Management ---
 

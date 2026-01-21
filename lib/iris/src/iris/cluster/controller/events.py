@@ -126,6 +126,7 @@ class TransactionLog:
     event: Event
     timestamp_ms: int = field(default_factory=now_ms)
     actions: list[Action] = field(default_factory=list)
+    tasks_to_kill: set[TaskId] = field(default_factory=set)
 
     def log(self, action: str, entity_id: str, **details: Any) -> None:
         """Record an action taken during event handling."""

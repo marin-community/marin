@@ -33,7 +33,9 @@ from iris.cluster.controller.events import (
     WorkerFailedEvent,
     WorkerRegisteredEvent,
 )
+from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.state import (
+    MAX_REPLICAS_PER_JOB,
     ControllerEndpoint,
     ControllerJob,
     ControllerState,
@@ -660,3 +662,150 @@ def test_thread_safety(job_request):
     expected_count = num_threads * jobs_per_thread
     pending = state.peek_pending_tasks()
     assert len(pending) == expected_count
+
+
+# =============================================================================
+# Validation Tests
+# =============================================================================
+
+
+def test_excessive_replicas_fails_job(job_request):
+    """E2E: Job with replicas exceeding MAX_REPLICAS_PER_JOB fails immediately."""
+    state = ControllerState()
+
+    req = job_request("too-many-replicas")
+    req.resources.replicas = MAX_REPLICAS_PER_JOB + 1
+
+    tasks = submit_job(state, "j1", req)
+    job = state.get_job(JobId("j1"))
+
+    assert job is not None
+    assert job.state == cluster_pb2.JOB_STATE_FAILED
+    assert f"exceeds max {MAX_REPLICAS_PER_JOB}" in job.error
+    assert len(tasks) == 0
+    assert len(state.peek_pending_tasks()) == 0
+
+
+# =============================================================================
+# Worker Resource Commitment Tests
+# =============================================================================
+
+
+@pytest.fixture
+def make_job_request():
+    """Create a LaunchJobRequest with configurable resources."""
+
+    def _make(
+        name: str = "test-job",
+        cpu: int = 1,
+        memory_bytes: int = 1024**3,
+    ) -> cluster_pb2.Controller.LaunchJobRequest:
+        return cluster_pb2.Controller.LaunchJobRequest(
+            name=name,
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
+            environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        )
+
+    return _make
+
+
+def test_worker_cannot_accept_task_when_resources_committed(make_job_request, worker_metadata):
+    """E2E: A worker with committed resources cannot accept tasks that exceed remaining capacity.
+
+    This exercises the full flow: task assignment commits resources, and the scheduler
+    respects committed resources when evaluating capacity for subsequent tasks.
+    """
+    state = ControllerState()
+
+    # Worker with 4 CPUs
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata(cpu=4))
+
+    # First job uses 3 CPUs
+    tasks1 = submit_job(state, "j1", make_job_request(cpu=3))
+    dispatch_task(state, tasks1[0], worker_id)
+
+    # Second job needs 2 CPUs - should not fit (only 1 CPU remaining)
+    submit_job(state, "j2", make_job_request(cpu=2))
+
+    # Scheduler should not assign the second task to this worker
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 1  # j2's task is still pending
+
+    workers = state.get_available_workers()
+    scheduler = Scheduler(state)
+    result = scheduler.find_assignments(pending, workers)
+
+    # The task cannot be scheduled - no worker has sufficient capacity
+    assert len(result.assignments) == 0
+    assert pending[0].job_id == JobId("j2")
+
+
+def test_worker_can_accept_new_task_after_previous_completes(make_job_request, worker_metadata):
+    """E2E: After a task completes, its resources are freed and new tasks can be scheduled.
+
+    This verifies that task completion releases committed resources back to the worker.
+    """
+    state = ControllerState()
+
+    # Worker with 4 CPUs
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata(cpu=4))
+
+    # First job uses 3 CPUs
+    tasks1 = submit_job(state, "j1", make_job_request(cpu=3))
+    dispatch_task(state, tasks1[0], worker_id)
+
+    # Second job needs 3 CPUs - cannot fit while first is running
+    submit_job(state, "j2", make_job_request(cpu=3))
+
+    scheduler = Scheduler(state)
+
+    # Verify second task cannot be scheduled yet
+    pending = state.peek_pending_tasks()
+    result = scheduler.find_assignments(pending, state.get_available_workers())
+    assert len(result.assignments) == 0
+
+    # Complete the first task
+    transition_task(state, tasks1[0].task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+
+    # Now the second task can be scheduled
+    pending = state.peek_pending_tasks()
+    result = scheduler.find_assignments(pending, state.get_available_workers())
+    assert len(result.assignments) == 1
+    assert result.assignments[0][0].job_id == JobId("j2")
+
+
+def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_metadata):
+    """E2E: Multiple small tasks can fill a worker's capacity, blocking further assignments.
+
+    This verifies that the scheduler correctly tracks cumulative resource usage across
+    multiple running tasks.
+    """
+    state = ControllerState()
+
+    # Worker with 4 CPUs
+    register_worker(state, "w1", "host:8080", worker_metadata(cpu=4))
+
+    # Submit 3 jobs, each using 2 CPUs
+    for i in range(3):
+        submit_job(state, f"j{i}", make_job_request(cpu=2))
+
+    scheduler = Scheduler(state)
+
+    # First scheduling cycle: 2 tasks should fit (4 CPUs / 2 CPUs each = 2 tasks)
+    pending = state.peek_pending_tasks()
+    result = scheduler.find_assignments(pending, state.get_available_workers())
+    assert len(result.assignments) == 2
+
+    # Apply the assignments to state
+    for task, worker in result.assignments:
+        dispatch_task(state, task, worker.worker_id)
+
+    # Third task should still be pending
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 1
+    assert pending[0].job_id == JobId("j2")
+
+    # Scheduler should not assign the third task (no capacity)
+    result = scheduler.find_assignments(pending, state.get_available_workers())
+    assert len(result.assignments) == 0

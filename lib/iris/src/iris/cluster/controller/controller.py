@@ -31,6 +31,7 @@ from iris.cluster.controller.events import (
     WorkerFailedEvent,
 )
 from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
+from iris.cluster.types import TaskId
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import ExponentialBackoff, now_ms
@@ -63,6 +64,11 @@ class WorkerClient(Protocol):
         self,
         request: cluster_pb2.Empty,
     ) -> cluster_pb2.Worker.HealthResponse: ...
+
+    def kill_task(
+        self,
+        request: cluster_pb2.Worker.KillTaskRequest,
+    ) -> cluster_pb2.Empty: ...
 
 
 class WorkerStubFactory(Protocol):
@@ -154,6 +160,9 @@ class Controller:
         # Background loop state
         self._stop = False
         self._wake_event = threading.Event()
+        # Prevents concurrent scheduling cycles from double-assigning the same task.
+        # The entire peek → assign → dispatch sequence runs under this lock.
+        self._scheduler_lock = threading.Lock()
         self._scheduling_loop_thread: threading.Thread | None = None
         self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
@@ -167,6 +176,15 @@ class Controller:
         - Task finished (freeing capacity)
         """
         self._wake_event.set()
+
+    def kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
+        """Send KILL RPCs to workers for killed tasks.
+
+        Called by the service after state transitions that kill tasks.
+        Delegates to _kill_tasks_on_workers which has access to the stub factory.
+        """
+        if task_ids:
+            self._kill_tasks_on_workers(task_ids)
 
     def start(self) -> None:
         """Start main controller loop and dashboard server in background daemon threads."""
@@ -223,14 +241,15 @@ class Controller:
 
     def _run_scheduling(self) -> None:
         """Run one scheduling cycle."""
-        pending_tasks = self._state.peek_pending_tasks()
-        workers = self._state.get_available_workers()
+        with self._scheduler_lock:
+            pending_tasks = self._state.peek_pending_tasks()
+            workers = self._state.get_available_workers()
 
-        if not pending_tasks:
-            return
+            if not pending_tasks:
+                return
 
-        result = self._scheduler.find_assignments(pending_tasks, workers)
-        self._apply_schedule_result(result)
+            result = self._scheduler.find_assignments(pending_tasks, workers)
+            self._apply_schedule_result(result)
 
     def _apply_schedule_result(self, result: SchedulingResult) -> None:
         """Apply scheduling results: dispatch tasks and handle timeouts."""
@@ -296,26 +315,65 @@ class Controller:
         except Exception as e:
             # FAILURE: Revert attempt and mark worker failed
             task.revert_attempt()
-            self._state.handle_event(
+            txn = self._state.handle_event(
                 WorkerFailedEvent(
                     worker_id=worker.worker_id,
                     error=f"Dispatch RPC failed: {e}",
                 )
             )
             logger.exception("Failed to dispatch task %s to worker %s", task.task_id, worker.address)
+            if txn.tasks_to_kill:
+                self._kill_tasks_on_workers(txn.tasks_to_kill)
 
     def _mark_task_unschedulable(self, task: ControllerTask) -> None:
         """Mark a task as unschedulable due to timeout."""
         job = self._state.get_job(task.job_id)
         timeout_seconds = job.request.scheduling_timeout_seconds if job else 0
         logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout_seconds}s), marking as UNSCHEDULABLE")
-        self._state.handle_event(
+        txn = self._state.handle_event(
             TaskStateChangedEvent(
                 task_id=task.task_id,
                 new_state=cluster_pb2.TASK_STATE_UNSCHEDULABLE,
                 error=f"Scheduling timeout exceeded ({timeout_seconds}s)",
             )
         )
+        if txn.tasks_to_kill:
+            self._kill_tasks_on_workers(txn.tasks_to_kill)
+
+    def _kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
+        """Send KILL RPCs to workers for tasks that were running.
+
+        Called after state has marked tasks as killed. For each task that had
+        a worker assigned, sends a kill RPC to that worker to terminate the
+        task process.
+
+        Kill RPCs are fire-and-forget: we log failures but don't retry since
+        the task is already marked as killed in our state.
+        """
+        for task_id in task_ids:
+            task = self._state.get_task(task_id)
+            if not task:
+                continue
+
+            worker_id = task.worker_id
+            if not worker_id:
+                continue
+
+            worker = self._state.get_worker(worker_id)
+            if not worker:
+                continue
+
+            try:
+                stub = self._stub_factory.get_stub(worker.address)
+                request = cluster_pb2.Worker.KillTaskRequest(
+                    task_id=str(task_id),
+                    term_timeout_ms=5000,
+                )
+                logger.info(f"Sending kill RPC for task {task_id} to worker {worker_id}")
+                stub.kill_task(request)
+                logger.info(f"Successfully sent kill RPC for task {task_id}")
+            except Exception as e:
+                logger.warning(f"Failed to send kill RPC for task {task_id} to worker {worker_id}: {e}")
 
     def _check_worker_timeouts(self) -> None:
         """Mark workers as unhealthy if they haven't sent heartbeat within worker_timeout_seconds."""
@@ -328,12 +386,15 @@ class Controller:
                     f"Worker {worker.worker_id} timed out (no heartbeat for {self._config.worker_timeout_seconds}s)"
                 )
                 # Use WORKER_FAILED event which will cascade to running tasks
-                self._state.handle_event(
+                txn = self._state.handle_event(
                     WorkerFailedEvent(
                         worker_id=worker.worker_id,
                         error=f"Worker {worker.worker_id} timed out",
                     )
                 )
+                # Send kill RPCs for any other tasks that were killed as a result
+                if txn.tasks_to_kill:
+                    self._kill_tasks_on_workers(txn.tasks_to_kill)
 
     def _run_server(self) -> None:
         try:

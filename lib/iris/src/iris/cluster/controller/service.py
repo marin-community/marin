@@ -47,6 +47,10 @@ class SchedulerProtocol(Protocol):
 
     def wake(self) -> None: ...
 
+    def kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
+        """Send KILL RPCs to workers for tasks that were running."""
+        ...
+
 
 class ControllerServiceImpl:
     """ControllerService RPC implementation.
@@ -222,12 +226,16 @@ class ControllerServiceImpl:
             return
 
         # Cancel the job via event API (this will kill all tasks)
-        self._state.handle_event(
+        txn = self._state.handle_event(
             JobCancelledEvent(
                 job_id=job_id,
                 reason="Terminated by user",
             )
         )
+
+        # Send kill RPCs to workers for any tasks that were killed
+        if txn.tasks_to_kill:
+            self._scheduler.kill_tasks_on_workers(txn.tasks_to_kill)
 
     def list_jobs(
         self,
@@ -361,7 +369,7 @@ class ControllerServiceImpl:
 
         new_state = request.state
 
-        self._state.handle_event(
+        txn = self._state.handle_event(
             TaskStateChangedEvent(
                 task_id=task_id,
                 new_state=new_state,
@@ -371,6 +379,10 @@ class ControllerServiceImpl:
         )
 
         logger.debug(f"Task {task_id} reported state {new_state}")
+
+        # Send kill RPCs to workers for any tasks that were killed as a result
+        if txn.tasks_to_kill:
+            self._scheduler.kill_tasks_on_workers(txn.tasks_to_kill)
 
         # Wake scheduler if task finished (may free capacity)
         if task.is_finished():

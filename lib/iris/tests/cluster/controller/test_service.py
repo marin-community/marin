@@ -117,10 +117,11 @@ def state():
 
 
 class MockSchedulerWake:
-    """Mock object that just tracks wake() calls."""
+    """Mock object that tracks scheduler protocol calls."""
 
     def __init__(self):
         self.wake = Mock()
+        self.kill_tasks_on_workers = Mock()
 
 
 @pytest.fixture
@@ -759,3 +760,161 @@ def test_full_lifecycle_submit_fail_retry_succeed(service, state, job_request, w
     assert len(task_status.attempts) == 2
     assert task_status.attempts[0].state == cluster_pb2.TASK_STATE_WORKER_FAILED
     assert task_status.attempts[1].state == cluster_pb2.TASK_STATE_SUCCEEDED
+
+
+# =============================================================================
+# Kill RPC Tests
+# =============================================================================
+
+
+def test_task_failure_causing_job_failure_sends_kill_rpcs(service, state, mock_scheduler, job_request, worker_metadata):
+    """Verify that when a task failure causes job failure, kill RPCs are sent for remaining running tasks.
+
+    When a task fails and causes the job to exceed max_task_failures, the remaining tasks should
+    be killed. The service should call kill_tasks_on_workers for tasks that had workers assigned.
+    """
+    # Launch job with 3 replicas and max_task_failures=0 (first failure kills job)
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="kill-rpc-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        max_task_failures=0,
+    )
+    service.launch_job(request, None)
+
+    # Register worker
+    service.register_worker(
+        cluster_pb2.Controller.RegisterWorkerRequest(
+            worker_id="w1",
+            address="host:8080",
+            metadata=worker_metadata(),
+        ),
+        None,
+    )
+
+    # Get tasks
+    tasks = state.get_job_tasks(JobId("kill-rpc-job"))
+    assert len(tasks) == 3
+
+    # Dispatch all 3 tasks to worker (simulating scheduler behavior)
+    for task in tasks:
+        dispatch_task(state, task, WorkerId("w1"))
+
+    # Get task info via RPC
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="kill-rpc-job"), None)
+    task_statuses = {t.task_id: t for t in status.job.tasks}
+    task0_id = str(tasks[0].task_id)
+
+    # Report first task as FAILED
+    fail_request = cluster_pb2.Controller.ReportTaskStateRequest(
+        task_id=task0_id,
+        attempt_id=task_statuses[task0_id].current_attempt_id,
+        state=cluster_pb2.TASK_STATE_FAILED,
+        error="Task execution failed",
+    )
+    service.report_task_state(fail_request, None)
+
+    # Verify job is now FAILED
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="kill-rpc-job"), None)
+    assert status.job.state == cluster_pb2.JOB_STATE_FAILED
+
+    # Verify kill_tasks_on_workers was called with the remaining running tasks
+    mock_scheduler.kill_tasks_on_workers.assert_called_once()
+    killed_task_ids = mock_scheduler.kill_tasks_on_workers.call_args[0][0]
+
+    # The killed tasks should be tasks[1] and tasks[2] (the ones that were running)
+    expected_killed = {tasks[1].task_id, tasks[2].task_id}
+    assert killed_task_ids == expected_killed
+
+
+def test_job_termination_sends_kill_rpcs(service, state, mock_scheduler, job_request, worker_metadata):
+    """Verify that terminating a job sends kill RPCs for running tasks."""
+    # Launch job with 2 replicas
+    service.launch_job(job_request("terminate-job", replicas=2), None)
+
+    # Register worker
+    service.register_worker(
+        cluster_pb2.Controller.RegisterWorkerRequest(
+            worker_id="w1",
+            address="host:8080",
+            metadata=worker_metadata(),
+        ),
+        None,
+    )
+
+    # Get tasks and dispatch them
+    tasks = state.get_job_tasks(JobId("terminate-job"))
+    for task in tasks:
+        dispatch_task(state, task, WorkerId("w1"))
+
+    # Terminate the job
+    service.terminate_job(cluster_pb2.Controller.TerminateJobRequest(job_id="terminate-job"), None)
+
+    # Verify job is killed
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="terminate-job"), None)
+    assert status.job.state == cluster_pb2.JOB_STATE_KILLED
+
+    # Verify kill_tasks_on_workers was called
+    mock_scheduler.kill_tasks_on_workers.assert_called_once()
+    killed_task_ids = mock_scheduler.kill_tasks_on_workers.call_args[0][0]
+
+    # Both tasks should be in the killed set
+    expected_killed = {task.task_id for task in tasks}
+    assert killed_task_ids == expected_killed
+
+
+def test_no_kill_rpcs_for_pending_tasks(service, state, mock_scheduler, job_request, worker_metadata):
+    """Verify that kill RPCs are NOT sent for tasks that were never dispatched (no worker assigned)."""
+    # Launch job with 3 replicas
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="partial-dispatch-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        max_task_failures=0,
+    )
+    service.launch_job(request, None)
+
+    # Register worker
+    service.register_worker(
+        cluster_pb2.Controller.RegisterWorkerRequest(
+            worker_id="w1",
+            address="host:8080",
+            metadata=worker_metadata(),
+        ),
+        None,
+    )
+
+    # Get tasks
+    tasks = state.get_job_tasks(JobId("partial-dispatch-job"))
+
+    # Only dispatch first 2 tasks, leave task[2] pending
+    dispatch_task(state, tasks[0], WorkerId("w1"))
+    dispatch_task(state, tasks[1], WorkerId("w1"))
+
+    # Get task info via RPC
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="partial-dispatch-job"), None)
+    task_statuses = {t.task_id: t for t in status.job.tasks}
+    task0_id = str(tasks[0].task_id)
+
+    # Report first task as FAILED - this should kill the job
+    fail_request = cluster_pb2.Controller.ReportTaskStateRequest(
+        task_id=task0_id,
+        attempt_id=task_statuses[task0_id].current_attempt_id,
+        state=cluster_pb2.TASK_STATE_FAILED,
+        error="Task execution failed",
+    )
+    service.report_task_state(fail_request, None)
+
+    # Verify job is FAILED
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="partial-dispatch-job"), None)
+    assert status.job.state == cluster_pb2.JOB_STATE_FAILED
+
+    # Verify kill_tasks_on_workers was called only for task[1] (the running one)
+    # task[2] never had a worker assigned, so it should NOT be in the kill set
+    mock_scheduler.kill_tasks_on_workers.assert_called_once()
+    killed_task_ids = mock_scheduler.kill_tasks_on_workers.call_args[0][0]
+
+    # Only task[1] should be killed (task[2] was never dispatched)
+    assert killed_task_ids == {tasks[1].task_id}

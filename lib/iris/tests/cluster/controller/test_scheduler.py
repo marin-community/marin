@@ -297,6 +297,31 @@ def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
     assert len(result.timed_out_tasks) == 0
 
 
+def test_task_does_not_timeout_when_scheduled_quickly(scheduler, state, worker_metadata):
+    """Verify task with timeout gets assigned before timeout expires."""
+    register_worker(state, "w1", "addr", worker_metadata(cpu=4))
+
+    # Job with 10 second timeout, submitted recently (well within timeout)
+    request = cluster_pb2.Controller.LaunchJobRequest(
+        name="quick-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        scheduling_timeout_seconds=10,
+    )
+    tasks = submit_job(state, "j1", request, timestamp_ms=now_ms() - 100)  # 100ms ago
+
+    pending_tasks = state.peek_pending_tasks()
+    workers = state.get_available_workers()
+
+    result = scheduler.find_assignments(pending_tasks, workers)
+
+    # Task should be assigned, not timed out
+    assert len(result.assignments) == 1
+    assert result.assignments[0][0] == tasks[0]
+    assert len(result.timed_out_tasks) == 0
+
+
 def test_scheduler_respects_worker_capacity_across_assignments(scheduler, state, job_request, worker_metadata):
     """Verify scheduler tracks capacity used by earlier assignments in same cycle."""
     # Worker with 4 CPUs
