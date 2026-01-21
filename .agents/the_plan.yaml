@@ -531,7 +531,6 @@ automated_ingestion_datasets_environments:
     - dataset_ingestion_validation_gates
     - environment_ingestion_contract
     - environment_ingestion_ci_gates
-    - dataset_processing
     - data_validation
 
 
@@ -540,7 +539,7 @@ automate_add_dataset_recipe:
   type: epic
   status: planned
   issue: null
-  labels: [infra, data_pipeline, agent_friendly, newbie_friendly]
+  labels: [infra, data_pipeline, agent_friendly, help-wanted]
   description: |
     The purpose of `docs/recipes/add_dataset.md` is not “fully automated dataset addition” — datasets are special
     snowflakes and require intelligence/iteration.
@@ -569,7 +568,7 @@ dataset_ingestion_artifact_manifest:
   type: task
   status: planned
   issue: null
-  labels: [infra, data_pipeline, agent_friendly, newbie_friendly]
+  labels: [infra, data_pipeline, agent_friendly, help-wanted]
   description: |
     Standardize the metadata we emit for every ingested dataset so downstream pipelines can trust and reason about it.
 
@@ -714,7 +713,7 @@ architecture_algorithm_intake_scaffold:
   type: epic
   status: planned
   issue: null
-  labels: [infra, developer_experience, agent_friendly, newbie_friendly]
+  labels: [infra, developer_experience, grug]
   description: |
     Provide a clear, repeatable “how to add X” scaffold for:
     - new model architecture variants (attention, MoE variants, Mamba-like, etc.)
@@ -959,7 +958,7 @@ rl_max_token_management:
   type: epic
   status: planned
   issue: 1707
-  labels: [rl, infra, agent_friendly, newbie_friendly]
+  labels: [rl, infra, agent_friendly, help-wanted]
 
 
 rl_rollout_system:
@@ -1107,7 +1106,7 @@ rl_storage_and_serialization:
   title: "Stable rollout storage and datatypes"
   type: epic
   status: planned
-  labels: [rl, infra, agent_friendly, newbie_friendly]
+  labels: [rl, infra, agent_friendly, help-wanted]
   description: |
     Current state: rollout storage exists in `lib/marin/src/marin/rl/rollout_storage.py` with file and
     in-memory backends, and core rollout types live in `lib/marin/src/marin/rl/types.py`.
@@ -1431,7 +1430,7 @@ long_code_data:
     title: "Long code data"
     type: epic
     status: planned
-    labels: [data, long_context, code, newbie_friendly, agent_friendly]
+    labels: [data, long_context, code, help-wanted, agent_friendly]
     description: |
         We need to stitch together some long code bases to get long context code data.
         We can look at bigcodebench repos, github repos, etc.
@@ -1601,7 +1600,7 @@ natural_long_context_ppl_data:
   title: "natural long context ppl eval data"
   type: task
   status: planned
-  labels: [evals, long_context, newbie_friendly]
+  labels: [evals, long_context, help-wanted]
   description: |
     We need to find a good collection of natural long context ppl eval data.
     Obvious sources include books, scientific articles, stitched together code bases, wikipedia articles, etc.
@@ -1630,7 +1629,7 @@ reasoning_ppl_data:
   title: "reasoning ppl eval data"
   type: task
   status: planned
-  labels: [evals, reasoning, newbie_friendly]
+  labels: [evals, reasoning, help-wanted]
   description: |
     We need to find a good collection of reasoning ppl eval data. Ideally this would be natural data that correlates reasonably with ANLI, MUSR, etc.
 
@@ -2311,19 +2310,72 @@ inference_workers:
   description: |
     Set up Fray inference workers to handle data processing tasks such as rephrasing web data.
   dependencies:
-    - vllm_in_docker
+    - vllm_inference_service_rewrite
 
 
-vllm_in_docker:
-    title: "vLLM tpu in Docker for inference workers"
-    type: task
-    status: in_progress
-    owners: [dlwh]
-    labels: [data, infra, agent_friendly]
+vllm_inference_service:
+  title: "vLLM inference service (non-RL) for eval + data rewriting"
+  type: epic
+  status: in_progress
+  owners: [dlwh]
+  labels: [infra, infra2026, inference, data, agent_friendly]
+  description: |
+    RL rollout workers are working; focus on vLLM as a standalone inference service for:
+    - evaluation (VllmTpuEvaluator / BaseVllmEvaluator)
+    - large-scale data rewriting
 
-    description: |
-      Set up vLLM inside Docker containers to be used by inference workers for data processing tasks.
-      These should be set up as "sidecars" that can be spun up next to the ray docker container.
+    Finish the in-flight PRs, then factor out a clean service boundary between evaluator logic and the
+    inference server logic. Track compilation caching fixes for vLLM sidecar as part of this stream.
+
+    PR context:
+    - PR 2336 refactors VllmTpuEvaluator into BaseVllmEvaluator and adds GPU/TPU docker sidecar options.
+    - PR 2320 runs vLLM as a docker sidecar via docker-along-docker to avoid tight version pins and improve
+      reliability.
+
+    References:
+    ```
+    https://github.com/marin-community/marin/pull/2336
+    https://github.com/marin-community/marin/pull/2320
+    https://github.com/marin-community/marin/issues/2318
+    ```
+  dependencies:
+    - rl_vllm_rollout_worker
+
+
+vllm_inference_service_eval:
+  title: "vLLM inference service: evaluation path (BaseVllmEvaluator)"
+  type: task
+  status: planned
+  labels: [infra, infra2026, inference]
+  description: |
+    Land PRs 2320/2336 and split evaluator logic from the vLLM server lifecycle into a clean service boundary.
+    This builds on the BaseVllmEvaluator refactor and TPU/GPU sidecar support from PR 2336.
+  dependencies:
+    - vllm_inference_service
+
+
+vllm_inference_service_rewrite:
+  title: "vLLM inference service: bulk data rewriting"
+  type: task
+  status: planned
+  labels: [infra, infra2026, inference, data]
+  description: |
+    Define and implement a reusable vLLM inference service interface for large-scale data rewriting jobs.
+  dependencies:
+    - vllm_inference_service
+
+
+vllm_container_selection:
+  title: "Auto-select vLLM docker image by resource (GPU vs TPU)"
+  type: task
+  status: in_progress
+  labels: [infra, infra2026, inference]
+  description: |
+    Automatically select the appropriate vLLM docker container based on requested resources
+    (e.g., NVIDIA GPU vs TPU) when launching the inference service.
+    Likely addressed by PR 2336.
+  dependencies:
+    - vllm_inference_service
 
 
 ferry_framework:
@@ -2332,7 +2384,7 @@ ferry_framework:
   status: planned
   labels: [process, infra, infra2026, agent_friendly]
   description: |
-    In [#ferries], we propose training models on a regular cadence of increasing scale and quality.
+    In #ferries, we propose training models on a regular cadence of increasing scale and quality.
     The ferry framework is the process + tooling that makes those launches repeatable, observable, and easy
     to run across daily/weekly/monthly cadences.
 
@@ -2364,7 +2416,7 @@ automated_daily_ferry_launch:
   title: "Automated daily ferry launch (daily regression run)"
   type: task
   status: planned
-  labels: [process, infra, infra2026, testing, agent_friendly, newbie_friendly]
+  labels: [process, infra, infra2026, testing, agent_friendly]
   description: |
     Daily scheduled ferry run (this is our “daily regression”).
 
@@ -2385,6 +2437,17 @@ automated_weekly_ferry_launch:
   type: task
   status: planned
   labels: [process, infra, agent_friendly]
+  description: |
+    Weekly scheduled ferry run with a larger model and more tokens than the daily regression.
+
+    This should validate that the pipeline is healthy at a medium scale and that longer token runs
+    do not regress throughput or stability.
+  definition_of_done: |
+    - A weekly scheduled run launches a medium-scale job (larger params + more tokens than daily).
+    - The run creates/updates a GitHub issue with links, metrics, and pass/fail signals.
+    - Failures trigger alerts and include a short diagnosis summary.
+  dependencies:
+    - automated_daily_ferry_launch
 
 
 automated_monthly_ferry_launch:
@@ -2392,6 +2455,17 @@ automated_monthly_ferry_launch:
   type: task
   status: planned
   labels: [process, infra, agent_friendly]
+  description: |
+    Monthly scheduled ferry run with the largest routine model and token budget we can support.
+
+    This should be the closest thing to “real” training cadence and is expected to surface
+    long-horizon stability issues.
+  definition_of_done: |
+    - A monthly scheduled run launches a large-scale job (bigger params + more tokens than weekly).
+    - The run creates/updates a GitHub issue with links, metrics, and pass/fail signals.
+    - Failures trigger alerts and include a clear root-cause link or follow-up issue.
+  dependencies:
+    - automated_weekly_ferry_launch
 
 
 # -----------------------------------------------------------------------------
@@ -2526,7 +2600,6 @@ cluster_manager_v0:
     Include basic log collection so failures are visible without SSH.
   dependencies:
     - devops_automation
-    - dataset_processing
     - fluster_design_doc
     - fluster_scheduler_mvp
 
@@ -2632,7 +2705,7 @@ dataset_storage_backend:
     - checkpoints (training + RL)
 
     Candidates include: GCS, S3-compatible stores, Cloudflare R2, and/or per-region caches coordinated by
-    `region_caching_fs`.
+    #region_caching_fs.
   definition_of_done: |
     - We write down a recommended “default storage” for each artifact type (datasets, checkpoints, caches) with cost
       and reliability tradeoffs.
@@ -2640,22 +2713,6 @@ dataset_storage_backend:
     - We have basic monitoring/alerting for storage failures and egress regressions.
   dependencies:
     - region_caching_fs
-
-
-dataset_processing:
-  title: "Dataset processing: scalable preprocessing beyond Ray"
-  type: epic
-  status: planned
-  labels: [infra, infra2026, data_pipeline]
-  description: |
-    Make large dataset preprocessing and transformation robust and scalable even as we migrate off Ray.
-
-    Likely work:
-    - evaluate Beam/Dataflow tradeoffs (cost, capability, shuffles)
-    - preserve good current properties (incremental processing, preemptible usage)
-    - ensure cleanup and retries are reliable
-  dependencies:
-    - fray
 
 
 data_validation:
@@ -2673,7 +2730,6 @@ data_validation:
     - dedupe verification and token count statistics
     - generate human/agent-readable reports and fail fast when needed
   dependencies:
-    - dataset_processing
 
 model_loading_without_hf:
   title: "Model loading without HuggingFace dependency"
@@ -2693,7 +2749,7 @@ dependency_manager:
   title: "Dependency manager: experiment dependency graphs + status queries"
   type: epic
   status: planned
-  labels: [infra, infra2026, developer_experience, executor]
+  labels: [infra, infra2026, developer_experience, executor, agent_friendly, help-wanted]
   description: |
     Improve experiment dependency management (building on Executor) so we can:
     - visualize the dependency graph
@@ -2701,6 +2757,7 @@ dependency_manager:
     - support agent tooling to query and repair experiment state
   dependencies:
     - visualize_executor_graph
+    - dynamic_executor_graphs
     - cli_tools
 
 
@@ -2712,6 +2769,19 @@ visualize_executor_graph:
   description: |
     Provide a visualization of the Executor dependency graph for a given experiment,
     showing step status, failures, and dependencies.
+
+
+dynamic_executor_graphs:
+  title: "Dynamic Executor graphs via artifacts"
+  type: task
+  status: planned
+  labels: [infra, infra2026, developer_experience, executor]
+  description: |
+    Add `use_artifact` / `save_artifact` helpers that emit artifacts directly and include the
+    necessary Executor metadata so the dependency graph can be reconstructed on the fly.
+  definition_of_done: |
+    - `use_artifact` / `save_artifact` capture executor_info metadata when writing artifacts.
+    - The dependency graph can be rebuilt from stored artifacts without rerunning steps.
 
 
 experiments_outside_marin:
@@ -2733,10 +2803,10 @@ aot_compilation:
   status: planned
   labels: [infra, infra2026, performance, agent_friendly]
   description: |
-    Make compilation a first-class pipeline step so expensive accelerators aren’t stranded waiting for XLA.
+    Make compilation a first-class pipeline step so accelerators aren’t stranded waiting for XLA.
 
     Goals:
-    - fail fast on OOM/HBM problems via AOT compile using an “abstract mesh”
+    - fail fast on OOM/HBM problems via AOT compile+export using an “abstract mesh”?
     - cache compile artifacts and reuse them in the subsequent training job
     - integrate into Executor / standard training recipes
     - support an “extended dry run” that actually compiles critical steps (train step, eval step, rollout step)
@@ -2757,7 +2827,7 @@ aot_compilation:
     - executor_step_preflight
     - levanter_compile_preflight
     - compile_artifact_cache
-    - compile_cache_keys
+    - compile_cache_retention
     - pipeline_compile_gate
 
 
@@ -2797,6 +2867,9 @@ levanter_compile_preflight:
     Implement a Levanter utility that compiles the train step (and optionally eval step) for a given config, without
     running a full training job.
 
+    See [JAX's export API](https://docs.jax.dev/en/latest/export/export.html) for one approach to producing reusable
+    compiled artifacts.
+
     Key idea: extend “dry run” into something that *actually compiles*:
     - run enough of the model forward/backward once to force compilation
     - use an “abstract mesh” / representative shapes to surface HBM/OOM and sharding errors early
@@ -2818,36 +2891,41 @@ compile_artifact_cache:
   description: |
     Persist compilation outputs (and associated metadata) so they can be reused by subsequent jobs.
 
+    Current state: we already enable JAX's compilation cache in training when possible by setting
+    `JAX_COMPILATION_CACHE_DIR` to `${MARIN_PREFIX}/compilation-cache` (see `lib/marin/src/marin/training/training.py`).
+    This is useful, but it’s mostly a local/per-run cache and not yet a first-class pipeline artifact.
+
     Requirements:
     - artifact storage works with our filesystem story (fsspec paths; integrates with `region_caching_fs`)
     - artifacts are immutable and content-addressed (or keyed by a stable cache key)
     - supports inspection/debugging (what config produced this artifact; when; on what hardware)
+
+    Design goal:
+    - make compilation caches and/or exported executables a durable artifact that can be staged to/from an object store
+      (GCS/S3-compatible/etc.) and hydrated onto local disk at job start (since JAX compilation cache expects a local
+      directory)
   definition_of_done: |
-    - Compiled artifacts and a manifest can be written to a configured artifact store path.
-    - Subsequent runs can discover and reuse an existing artifact when the cache key matches.
+    - A “compile cache artifact” (directory + manifest) can be produced from a successful compile preflight and/or a
+      training run and stored in an artifact store path.
+    - A subsequent run can hydrate that cache onto local disk and set `JAX_COMPILATION_CACHE_DIR` appropriately so we
+      observe faster time-to-first-step when the cache key matches.
     - Basic retention/cleanup policy exists (avoid unbounded growth).
   dependencies:
     - region_caching_fs
 
 
-compile_cache_keys:
-  title: "Compile cache keys: stable hashing for compile reuse"
+compile_cache_retention:
+  title: "Compilation cache retention policy"
   type: task
   status: planned
   issue: null
   labels: [infra, infra2026, performance, agent_friendly]
   description: |
-    Define what inputs must go into the “compile cache key” so reuse is correct and predictable.
-
-    Likely components:
-    - model architecture/config and relevant hyperparameters
-    - mesh/topology and sharding rules
-    - JAX/XLA versions and key env flags
-    - (maybe) a git SHA or a compatibility version for the compiled code path
+    JAX compilation cache keys are already correct. We need to set up a retention policy for compilation cache
+    directories so they do not grow without bound.
   definition_of_done: |
-    - A cache key function exists and is documented.
-    - We have at least one test that demonstrates key stability when irrelevant fields change and key changes when
-      relevant fields change.
+    - A retention policy is defined and documented (time-based, size-based, or both).
+    - Cache directories are cleaned up automatically (periodic cleanup or at job start).
 
 
 pipeline_compile_gate:
@@ -2914,7 +2992,7 @@ agent_driven_profiling:
   type: epic
   status: planned
   issue: null
-  labels: [infra, infra2026, performance, agent_friendly, newbie_friendly]
+  labels: [infra, infra2026, performance, agent_friendly, help-wanted]
   description: |
     Make profiling data *machine-usable* so agents can automatically improve utilization of specific kernels and the
     full training/inference pipeline.
@@ -2938,22 +3016,21 @@ agent_driven_profiling:
 
 
 agent_profiling_research:
-  title: "Research: what profile tooling exists (xprof/JAX/TensorBoard/Perfetto) and how to parse it"
+  title: "Decide xprof as the profiling source and parse it"
   type: task
   status: planned
   issue: null
-  labels: [infra, infra2026, performance, agent_friendly, newbie_friendly]
+  labels: [infra, infra2026, performance, agent_friendly, help-wanted]
   description: |
-    Survey what’s available and pick an initial “source of truth” profile format for Marin on TPUs and GPUs.
+    We will use xprof as the source of truth. Focus on parsing xprof artifacts into a structured summary.
 
     Deliverable should include:
-    - how to generate profiles for our common workloads (TPU via xprof; GPU via Nsight/Perfetto/TB, etc.)
-    - what artifacts are produced (protobufs, JSON traces, sqlite, etc.)
-    - whether there are stable parsers/APIs we can depend on, and licensing/maintenance considerations
-    - a recommended MVP scope (e.g. xprof trace -> structured summary)
+    - how to generate xprof profiles for our common TPU workloads
+    - what artifacts are produced and how to access them
+    - a concrete parsing plan (xprof trace -> structured summary)
   definition_of_done: |
     - A short plan document is written (in an issue or in-repo doc) naming:
-      1) the initial target formats, 2) the ingestion approach, 3) the first workload(s), and 4) success metrics.
+      1) the xprof artifacts we will parse, 2) the ingestion approach, 3) the first workload(s), and 4) success metrics.
 
 
 xprof_profile_ingestion:
@@ -3046,23 +3123,11 @@ test_cluster:
     - cluster_manager_v0
 
 
-test_sharding:
-  title: "Test sharding: run only relevant accelerator tests per PR"
-  type: epic
-  status: planned
-  labels: [infra, infra2026, testing]
-  description: |
-    Avoid running every expensive test for every PR by:
-    - sharding test suites by component (or file change)
-    - optionally using an LLM to suggest relevant tests
-  dependencies:
-
-
 levanter_inference:
   title: "Levanter inference (service + evaluation hooks)"
   type: epic
   status: planned
-  labels: [infra, infra2026, inference]
+  labels: [infra, infra2026, inference, p3]
   description: |
     Dependency anchor for inference serving and evaluation integration used by continuous eval and pipelines.
 
@@ -3073,10 +3138,16 @@ continuous_eval:
   status: planned
   labels: [infra, infra2026, evals]
   description: |
-    Periodically evaluate models during training (both qualitative samples and benchmark evals) and alert on:
-    - regressions
-    - garbage output / stuck behavior
-    - unexpected performance drops
+    Focus on stabilizing lm_eval loading and adding alerting. Perplexity evals are already solid.
+
+    Key needs:
+    - Fix lm_eval task loading: HF downloads are flaky and we lack a stable cache of tasks.
+    - Establish a durable cache/mirror for lm_eval task assets so evals are reproducible.
+    - Add alerting on regressions, garbage output/stuck behavior, and unexpected performance drops.
+  definition_of_done: |
+    - lm_eval tasks load reliably without depending on flaky HF downloads.
+    - A stable cache/mirror is in place for lm_eval task assets.
+    - Alerts fire for eval regressions or stalled/garbage outputs.
   dependencies:
     - levanter_inference
 
@@ -3100,7 +3171,7 @@ robust_alerting:
   labels: [infra, infra2026, observability]
   description: |
     Improve alerting reliability and richness (crash detection, soft alerts, and instrumentation checks),
-    avoiding "alerts silently stopped" failure modes.
+    avoiding "alerts silently stopped" failure modes. Alerts should ping Discord.
   dependencies:
     - monitoring
     - alerting
@@ -3131,31 +3202,6 @@ cli_logging:
     Standardize logging/events so failures are easy for tools (including agents) to detect and diagnose.
   dependencies:
     - monitoring
-
-
-sft:
-  title: "SFT pipeline"
-  type: epic
-  status: planned
-  labels: [posttraining, sft, infra2026]
-  description: |
-    End-to-end supervised fine-tuning pipeline (data, training, evaluation, and reproducible recipes).
-  dependencies:
-    - sft_existing_datasets_models
-    - sft_synthetic_datasets
-
-
-auto_sft_augmentation:
-  title: "Auto SFT augmentation (bootstrap from frontier traces)"
-  type: epic
-  status: planned
-  labels: [posttraining, sft, synthetic_data, infra2026]
-  description: |
-    Automatically build stronger SFT data by acquiring traces from strong models and using them as
-    bootstrapping baselines (especially for RL problem sets).
-  dependencies:
-    - sft
-
 
 rl:
   title: "RL pipeline"
@@ -3345,23 +3391,12 @@ cost_tracking:
     - global_cluster_v0
 
 
-vllm_inference:
-  title: "vLLM inference: TPU support + compatibility tests"
-  type: epic
-  status: planned
-  labels: [infra, infra2026, inference]
-  description: |
-    Make vLLM inference seamless for Marin models and add tests (including multi-host where needed).
-  dependencies:
-    - rl_vllm_rollout_worker
-
-
 experiment_updates_bot:
   title: "Experiment updates bot: GitHub → Discord (and optional Discord → GitHub summaries)"
   type: epic
   status: planned
   issue: null
-  labels: [infra, infra2026, developer_experience, process, automation, newbie_friendly, agent_friendly]
+  labels: [infra, infra2026, developer_experience, process, automation, help-wanted, agent_friendly]
   description: |
     We want GitHub issues to be the single source of truth for experiment results and discussion, but in
     practice people often post updates only in Discord.
@@ -3387,7 +3422,7 @@ experiment_updates_github_to_discord:
   type: task
   status: planned
   issue: null
-  labels: [infra, infra2026, developer_experience, process, automation, newbie_friendly, agent_friendly]
+  labels: [infra, infra2026, developer_experience, process, automation, help-wanted, agent_friendly]
   description: |
     Implement the minimal, high-value integration: when an issue changes in GitHub, post a message to Discord.
 
@@ -3436,7 +3471,7 @@ experiment_structure_overhaul:
   status: planned
   owners: [rjpower]
   issue: null
-  labels: [process, infra, infra2026, developer_experience, agent_friendly, newbie_friendly]
+  labels: [process, infra, infra2026, developer_experience]
   description: |
     Establish a new, simpler, more legible structure for how we organize “experiments” vs “dependencies”
     vs “recipes/templates/ferries” vs “artifacts” in Marin.
