@@ -330,6 +330,7 @@ def default_train(
             tracker=WandbConfig(
                 project="marin",
                 tags=[*tags],
+                replicate_path=this_output_path(),
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,

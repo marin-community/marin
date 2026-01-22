@@ -22,11 +22,14 @@ The entire pipeline is one training run with time-varying mixture weights:
   3. SFT (steps 25k-26k): SmolTalk instruction data
 """
 
+import dataclasses
+
 from levanter.data.text import ChatLmDatasetFormat
 from levanter.models.llama import LlamaConfig
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer
+from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino
@@ -43,6 +46,7 @@ model = LlamaConfig(
     num_heads=16,
     num_kv_heads=8,
     num_layers=24,
+    cross_entropy_block_size=32000,  # blockwise CE to reduce memory spike
 )
 
 # --- Schedule ---
@@ -58,12 +62,14 @@ dolmino = tokenize_dolmino()
 midtrain = {"dolmino_math": dolmino["dolmino/math/metamath-owmfilter"]}
 
 smoltalk = get_instruction_dataset("HuggingFaceTB/smoltalk", splits=["train"])
-sft = {"smoltalk": default_tokenize(
-    name="smoltalk_llama3",
-    dataset=smoltalk / "**/*.jsonl.gz",
-    tokenizer=llama3_tokenizer,
-    format=ChatLmDatasetFormat(),
-)}
+sft = {
+    "smoltalk": default_tokenize(
+        name="smoltalk_marin",
+        dataset=smoltalk / "**/*.jsonl.gz",
+        tokenizer=marin_tokenizer,
+        format=ChatLmDatasetFormat(),
+    )
+}
 
 # --- Time-varying mixture weights ---
 data = lm_varying_mixture_data_config(
@@ -74,10 +80,12 @@ data = lm_varying_mixture_data_config(
         (PRETRAIN_STEPS + MIDTRAIN_STEPS, {"dclm": 0.0, "dolmino_math": 0.0, "smoltalk": 1.0}),
     ],
 )
+# Override tokenizer to use marin_tokenizer (same vocab as llama3 but with chat template for SFT)
+data = dataclasses.replace(data, tokenizer=marin_tokenizer)
 
 # --- Training ---
 train_config = SimpleTrainConfig(
-    resources=ResourceConfig.with_tpu("v5p-8"),
+    resources=ResourceConfig.with_tpu("v5p-16"),
     train_batch_size=512,
     num_train_steps=TOTAL_STEPS,
     learning_rate=3e-3,
