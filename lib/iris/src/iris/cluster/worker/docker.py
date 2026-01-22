@@ -17,6 +17,7 @@
 # TODO - set things up some memray/pyspy/etc work as expected
 # these need to be installed at least, and then need maybe some permissions
 
+import base64
 import json
 import os
 import re
@@ -24,16 +25,26 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
+from collections.abc import Callable
+
+import cloudpickle
 
 from iris.rpc import cluster_pb2
-from iris.cluster.worker.worker_types import JobLogs, LogLine
+from iris.cluster.worker.worker_types import TaskLogs, LogLine
 
 
 @dataclass
 class ContainerConfig:
+    """Configuration for running a container.
+
+    The entrypoint is the primary data - it specifies what to run.
+    Each ContainerRuntime implementation decides how to execute it
+    (Docker builds a command, local runtime calls it directly).
+    """
+
     image: str
-    command: list[str]
+    entrypoint: tuple[Callable[..., Any], tuple[Any, ...], dict[str, Any]]
     env: dict[str, str]
     workdir: str = "/app"
     resources: cluster_pb2.ResourceSpecProto | None = None
@@ -130,7 +141,7 @@ class ImageBuilder(Protocol):
         context: Path,
         dockerfile_content: str,
         tag: str,
-        job_logs: JobLogs | None = None,
+        task_logs: TaskLogs | None = None,
     ) -> None: ...
 
     def exists(self, tag: str) -> bool: ...
@@ -146,6 +157,30 @@ class DockerRuntime:
     Security hardening: no-new-privileges, cap-drop ALL.
     Uses subprocess for lifecycle, Docker Python SDK for stats/logs.
     """
+
+    def _build_command(self, entrypoint: tuple[Callable[..., Any], tuple[Any, ...], dict[str, Any]]) -> list[str]:
+        """Build the Python command that executes the entrypoint in a container."""
+        fn, args, kwargs = entrypoint
+        serialized = cloudpickle.dumps((fn, args, kwargs))
+        encoded = base64.b64encode(serialized).decode()
+
+        thunk = f"""
+import cloudpickle
+import base64
+import sys
+import traceback
+
+try:
+    fn, args, kwargs = cloudpickle.loads(base64.b64decode('{encoded}'))
+    result = fn(*args, **kwargs)
+
+    with open('/tmp/_result.pkl', 'wb') as f:
+        f.write(cloudpickle.dumps(result))
+except Exception:
+    traceback.print_exc()
+    sys.exit(1)
+"""
+        return ["python", "-u", "-c", thunk]
 
     def create_container(self, config: ContainerConfig) -> str:
         cmd = [
@@ -182,7 +217,7 @@ class DockerRuntime:
             cmd.extend(["-p", f"{host_port}:{host_port}"])
 
         cmd.append(config.image)
-        cmd.extend(config.command)
+        cmd.extend(self._build_command(config.entrypoint))
 
         result = subprocess.run(
             cmd,
@@ -236,6 +271,10 @@ class DockerRuntime:
             return ContainerStatus(running=False, error=f"Failed to parse inspect output: {e}")
 
     def kill(self, container_id: str, force: bool = False) -> None:
+        status = self.inspect(container_id)
+        if not status.running:
+            return
+
         signal = "SIGKILL" if force else "SIGTERM"
         result = subprocess.run(
             ["docker", "kill", f"--signal={signal}", container_id],
@@ -399,14 +438,14 @@ class DockerImageBuilder:
         context: Path,
         dockerfile_content: str,
         tag: str,
-        job_logs: JobLogs | None = None,
+        task_logs: TaskLogs | None = None,
     ) -> None:
         dockerfile_path = context / "Dockerfile.iris"
         dockerfile_path.write_text(dockerfile_content)
 
         try:
-            if job_logs:
-                job_logs.add("build", f"Starting build for image: {tag}")
+            if task_logs:
+                task_logs.add("build", f"Starting build for image: {tag}")
 
             cmd = [
                 "docker",
@@ -428,19 +467,19 @@ class DockerImageBuilder:
                 text=True,
             )
 
-            # Stream output to job_logs
+            # Stream output to task_logs
             if proc.stdout:
                 for line in proc.stdout:
-                    if job_logs:
-                        job_logs.add("build", line.rstrip())
+                    if task_logs:
+                        task_logs.add("build", line.rstrip())
 
             returncode = proc.wait()
 
-            if job_logs:
+            if task_logs:
                 if returncode == 0:
-                    job_logs.add("build", "Build completed successfully")
+                    task_logs.add("build", "Build completed successfully")
                 else:
-                    job_logs.add("build", f"Build failed with exit code {returncode}")
+                    task_logs.add("build", f"Build failed with exit code {returncode}")
 
             if returncode != 0:
                 raise RuntimeError(f"Docker build failed with exit code {returncode}")
