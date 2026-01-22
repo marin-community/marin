@@ -77,7 +77,7 @@ class HttpQueueServer:
 
         config = uvicorn.Config(self.app, host=host, port=port, log_level="error", access_log=False)
         self.server = uvicorn.Server(config)
-        self.server_thread = None
+        self.server_thread: ServerThread | None = None
 
     def _create_app(self) -> FastAPI:
         """Create FastAPI app with namespaced queue endpoints."""

@@ -81,7 +81,14 @@ exclude = ["marin/", "scripts/"]
 
 # Pyrefly type checker configuration
 [tool.pyrefly]
-project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"]
+project-includes = [
+    "lib/marin/src/**/*.py",
+    "lib/levanter/src/**/*.py",
+    "lib/haliax/src/**/*.py",
+    "lib/fray/src/**/*.py",
+    "lib/iris/src/**/*.py",
+    "lib/zephyr/src/**/*.py",
+]
 
 # Explicitly tell Pyrefly where our editable packages live so it resolves imports
 # against the library sources instead of the top-level `src` directory, which only
@@ -92,6 +99,7 @@ search-path = [
     "lib/haliax/src",
     "lib/zephyr/src",
     "lib/fray/src",
+    "lib/iris/src",
 ]
 disable-search-path-heuristics = true
 
@@ -107,6 +115,7 @@ project-excludes = [
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
     "lib/marin/src/marin/processing/classification/deduplication/vendor", # Exclude vendor stuff in dedupe
+    "lib/iris/src/iris/rpc/*_pb2*",  # Generated protobuf files
 ]
 
 # Disable specific error codes that are primarily noise from missing type stubs

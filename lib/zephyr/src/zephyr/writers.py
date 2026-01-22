@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, is_dataclass
 import itertools
 import os
 from collections.abc import Iterable
@@ -129,7 +129,7 @@ def infer_parquet_type(value):
         return pa.string()
 
 
-def infer_parquet_schema(record: dict | dataclass):
+def infer_parquet_schema(record: dict[str, Any] | Any):
     """Infer PyArrow schema from a dictionary record."""
     import pyarrow as pa
 

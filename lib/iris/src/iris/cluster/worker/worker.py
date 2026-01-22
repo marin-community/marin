@@ -124,12 +124,11 @@ class Worker:
         self._config = config
 
         # Setup cache directory
+        self._temp_dir: tempfile.TemporaryDirectory[str] | None = None
         if cache_dir:
             self._cache_dir = cache_dir
-            self._temp_dir = None
         elif config.cache_dir:
             self._cache_dir = config.cache_dir
-            self._temp_dir = None
         else:
             # Create temporary cache
             self._temp_dir = tempfile.TemporaryDirectory(prefix="worker_cache_")

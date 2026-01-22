@@ -20,7 +20,7 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar, cast
 
 import fsspec
 from braceexpand import braceexpand
@@ -830,7 +830,7 @@ class Dataset(Generic[T]):
             4950
         """
         if global_reducer is None:
-            global_reducer = local_reducer
+            global_reducer = cast(Callable[[Iterator[R]], R], local_reducer)
 
         return Dataset(self.source, [*self.operations, ReduceOp(local_reducer, global_reducer)])
 
