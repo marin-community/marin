@@ -26,8 +26,7 @@ from fray.cluster.ray.deps import build_runtime_env_for_packages
 import fsspec
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.evaluators.ray_helpers import launch_evaluate_with_ray
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
 from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
 
@@ -56,7 +55,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
     @classmethod
     @contextmanager
     def _stage_remote_tokenizer_dir(cls, remote_dir: str) -> Iterator[str | None]:
-        "context manager so this deletes even with process pooling"
+        # context manager so this deletes even with ray's process pooling
         with tempfile.TemporaryDirectory(prefix="marin-tokenizer-") as local_dir:
             copied_any = False
             for filename in cls.TOKENIZER_FILENAMES:
@@ -258,6 +257,5 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                 except Exception as upload_error:
                     logger.info(f"Failed to upload results to GCS: {upload_error}")
 
-            resolved_model.cleanup()
             if os.path.exists(self.RESULTS_PATH):
                 shutil.rmtree(self.RESULTS_PATH)

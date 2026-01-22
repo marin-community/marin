@@ -22,8 +22,9 @@ import subprocess
 import tempfile
 import time
 import uuid
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import requests
@@ -55,87 +56,190 @@ class VllmServerHandle:
 
     server_url: str
     port: int
-    mode: Literal["native", "docker"]
     process: subprocess.Popen[str] | None = None
     log_dir: str | None = None
     docker_container_name: str | None = None
     docker_image: str | None = None
     docker_run_cmd: str | None = None
 
-    def _require_docker_container(self) -> str:
-        if not self.docker_container_name:
-            raise RuntimeError("vLLM Docker container name is not set on this handle.")
-        return self.docker_container_name
+    @property
+    def mode(self) -> Literal["native", "docker"]:
+        if self.docker_container_name:
+            return "docker"
+        if self.process is not None or self.log_dir is not None:
+            return "native"
+        raise RuntimeError("Unable to infer vLLM server mode from handle state.")
 
-    def _container_running(self) -> bool:
-        container_name = self._require_docker_container()
-        result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
-            check=False,
-            capture_output=True,
-            text=True,
+
+def resolve_model_name_or_path(model: ModelConfig) -> tuple[str, ModelConfig]:
+    """Resolve the `model` argument to pass to vLLM."""
+    model = _maybe_enable_streaming(model)
+    model_name_or_path = model.path if model.path is not None else model.name
+    return model_name_or_path, model
+
+
+def _tail_file(path: str, max_lines: int) -> str:
+    try:
+        with open(path, "r") as f:
+            lines = f.readlines()
+        return "".join(lines[-max_lines:])
+    except Exception as exc:
+        return f"<failed to read {path}: {exc}>"
+
+
+def _native_logs_tail(log_dir: str | None, *, max_lines: int = 200) -> str:
+    if not log_dir:
+        return "<no log directory available for native vLLM server>"
+    stdout_path = os.path.join(log_dir, "stdout.log")
+    stderr_path = os.path.join(log_dir, "stderr.log")
+    return (
+        "--- stdout (tail) ---\n"
+        f"{_tail_file(stdout_path, max_lines)}\n"
+        "--- stderr (tail) ---\n"
+        f"{_tail_file(stderr_path, max_lines)}"
+    )
+
+
+def _docker_container_running(container_name: str) -> bool:
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return False
+    output = result.stdout.strip().lower()
+    if output == "true":
+        return True
+    if output == "false":
+        return False
+    raise RuntimeError(f"Unexpected output from docker inspect: {output!r}")
+
+
+def _docker_logs_tail(container_name: str, *, max_lines: int = 200) -> str:
+    result = subprocess.run(
+        ["docker", "logs", "--tail", str(max_lines), container_name],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        return f"<failed to read docker logs for {container_name}: {stderr}>"
+    return result.stdout
+
+
+def _docker_inspect(container_name: str) -> str:
+    result = subprocess.run(
+        ["docker", "inspect", container_name],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        return f"failed to inspect container {container_name}: {stderr}"
+    return result.stdout
+
+
+class VllmServerBackend(ABC):
+    @abstractmethod
+    def start(
+        self,
+        *,
+        model_name_or_path: str,
+        host: str,
+        port: int | None,
+        timeout_seconds: int,
+        extra_cli_args: list[str] | None,
+    ) -> VllmServerHandle:
+        raise NotImplementedError
+
+    @abstractmethod
+    def logs_tail(self, handle: VllmServerHandle, *, max_lines: int = 200) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
+    def diagnostics(self, handle: VllmServerHandle, *, max_lines: int = 200) -> dict[str, str]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def stop(self, handle: VllmServerHandle) -> None:
+        raise NotImplementedError
+
+
+class DockerVllmServerBackend(VllmServerBackend):
+    def __init__(self, docker_image: str | None, docker_run_args: list[str] | None) -> None:
+        self._docker_image = docker_image
+        self._docker_run_args = docker_run_args
+
+    def start(
+        self,
+        *,
+        model_name_or_path: str,
+        host: str,
+        port: int | None,
+        timeout_seconds: int,
+        extra_cli_args: list[str] | None,
+    ) -> VllmServerHandle:
+        return _start_vllm_docker_server(
+            model_name_or_path=model_name_or_path,
+            host=host,
+            port=port,
+            timeout_seconds=timeout_seconds,
+            extra_cli_args=extra_cli_args,
+            docker_image=self._docker_image,
+            docker_run_args=self._docker_run_args,
         )
-        if result.returncode != 0:
-            return False
-        output = result.stdout.strip().lower()
-        if output == "true":
-            return True
-        if output == "false":
-            return False
-        raise RuntimeError(f"Unexpected output from docker inspect: {output!r}")
 
-    def logs_tail(self, *, max_lines: int = 200) -> str:
-        if self.mode == "docker":
-            container_name = self._require_docker_container()
-            result = subprocess.run(
-                ["docker", "logs", "--tail", str(max_lines), container_name],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                stderr = (result.stderr or "").strip()
-                return f"<failed to read docker logs for {container_name}: {stderr}>"
-            return result.stdout
-        elif self.mode == "native":
-            if not self.log_dir:
-                return "<no log directory available for native vLLM server>"
+    def logs_tail(self, handle: VllmServerHandle, *, max_lines: int = 200) -> str:
+        return _docker_logs_tail(handle.docker_container_name, max_lines=max_lines)
 
-            stdout_path = os.path.join(self.log_dir, "stdout.log")
-            stderr_path = os.path.join(self.log_dir, "stderr.log")
+    def diagnostics(self, handle: VllmServerHandle, *, max_lines: int = 200) -> dict[str, str]:
+        diagnostics: dict[str, str] = {}
+        if handle.docker_run_cmd:
+            diagnostics["vLLM Docker run command (redacted)"] = handle.docker_run_cmd
+        diagnostics["vLLM Docker logs (tail)"] = self.logs_tail(handle, max_lines=max_lines)
+        diagnostics["vLLM Docker inspect"] = _docker_inspect(handle.docker_container_name)
+        return diagnostics
 
-            def _tail(path: str) -> str:
-                try:
-                    with open(path, "r") as f:
-                        lines = f.readlines()
-                    return "".join(lines[-max_lines:])
-                except Exception as exc:
-                    return f"<failed to read {path}: {exc}>"
+    def stop(self, handle: VllmServerHandle) -> None:
+        container_name = handle.docker_container_name
+        subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True, text=True)
 
-            return "--- stdout (tail) ---\n" f"{_tail(stdout_path)}\n" "--- stderr (tail) ---\n" f"{_tail(stderr_path)}"
-        else:
-            raise RuntimeError(f"Unknown vLLM server mode {self.mode!r} for logs_tail().")
 
-    def inspect(self) -> str:
-        container_name = self._require_docker_container()
-        result = subprocess.run(
-            ["docker", "inspect", container_name],
-            check=False,
-            capture_output=True,
-            text=True,
+class NativeVllmServerBackend(VllmServerBackend):
+    def start(
+        self,
+        *,
+        model_name_or_path: str,
+        host: str,
+        port: int | None,
+        timeout_seconds: int,
+        extra_cli_args: list[str] | None,
+    ) -> VllmServerHandle:
+        return _start_vllm_native_server(
+            model_name_or_path=model_name_or_path,
+            host=host,
+            port=port,
+            timeout_seconds=timeout_seconds,
+            extra_cli_args=extra_cli_args,
         )
-        if result.returncode != 0:
-            stderr = (result.stderr or "").strip()
-            return f"<failed to inspect container {container_name}: {stderr}>"
-        return result.stdout
 
-    def stop(self) -> None:
-        if self.mode == "docker":
-            container_name = self._require_docker_container()
-            subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True, text=True)
-            return
-        if self.process is not None:
-            self.process.kill()
+    def logs_tail(self, handle: VllmServerHandle, *, max_lines: int = 200) -> str:
+        return _native_logs_tail(handle.log_dir, max_lines=max_lines)
+
+    def diagnostics(self, handle: VllmServerHandle, *, max_lines: int = 200) -> dict[str, str]:
+        diagnostics: dict[str, str] = {}
+        if handle.log_dir:
+            diagnostics["vLLM native log dir"] = handle.log_dir
+        diagnostics["vLLM native logs (tail)"] = self.logs_tail(handle, max_lines=max_lines)
+        return diagnostics
+
+    def stop(self, handle: VllmServerHandle) -> None:
+        if handle.process is not None:
+            handle.process.kill()
 
 
 def resolve_vllm_mode(mode: Literal["native", "docker"] | None) -> Literal["native", "docker"]:
@@ -143,6 +247,19 @@ def resolve_vllm_mode(mode: Literal["native", "docker"] | None) -> Literal["nati
     if mode_str not in ("native", "docker"):
         raise ValueError(f"Unknown MARIN_VLLM_MODE={mode_str!r}; expected 'native' or 'docker'.")
     return mode_str  # type: ignore[return-value]
+
+
+def _resolve_vllm_backend(
+    mode: Literal["native", "docker"],
+    *,
+    docker_image: str | None,
+    docker_run_args: list[str] | None,
+) -> VllmServerBackend:
+    if mode == "docker":
+        return DockerVllmServerBackend(docker_image, docker_run_args)
+    if mode == "native":
+        return NativeVllmServerBackend()
+    raise ValueError(f"Unknown vLLM mode {mode!r}; expected 'native' or 'docker'.")
 
 
 def _is_object_store_path(path: str) -> bool:
@@ -164,13 +281,6 @@ def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
     # into `model-rank-*-part-*.safetensors`.
     engine_kwargs["load_format"] = "runai_streamer"
     return dataclasses.replace(model, engine_kwargs=engine_kwargs)
-
-
-def resolve_model_name_or_path(model: ModelConfig) -> tuple[str, ModelConfig]:
-    """Resolve the `model` argument to pass to vLLM."""
-    model = _maybe_enable_streaming(model)
-    model_name_or_path = model.path if model.path is not None else model.name
-    return model_name_or_path, model
 
 
 def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
@@ -220,10 +330,14 @@ class VllmEnvironment:
         self.docker_image = docker_image
         self.docker_run_args = docker_run_args
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
+        self._backend = _resolve_vllm_backend(
+            self.mode,
+            docker_image=self.docker_image,
+            docker_run_args=self.docker_run_args,
+        )
 
         self.vllm_server: VllmServerHandle | None = None
         self.model_id: str | None = None
-        self._started = False
 
     def __enter__(self) -> "VllmEnvironment":
         if self.vllm_server is None:
@@ -239,15 +353,12 @@ class VllmEnvironment:
                 },
             )
             try:
-                self.vllm_server = start_vllm_server_in_background(
+                self.vllm_server = self._backend.start(
                     model_name_or_path=self.model_name_or_path,
                     host=self.host,
                     port=self.port,
                     timeout_seconds=self.timeout_seconds,
                     extra_cli_args=self.extra_cli_args,
-                    mode=self.mode,
-                    docker_image=self.docker_image,
-                    docker_run_args=self.docker_run_args,
                 )
                 self.model_id = _get_first_model_id(self.vllm_server.server_url)
                 logger.info(
@@ -262,21 +373,12 @@ class VllmEnvironment:
                 logger.exception("Failed to start vLLM environment", extra=self.debug_snapshot())
                 if self.vllm_server is not None:
                     try:
-                        if self.vllm_server.mode == "docker":
-                            if self.vllm_server.docker_run_cmd:
-                                logger.error("vLLM Docker run command (redacted): %s", self.vllm_server.docker_run_cmd)
-                            logs = self.vllm_server.logs_tail()
-                            inspect = self.vllm_server.inspect()
-                            logger.error("vLLM Docker logs (tail):\n%s", logs)
-                            logger.error("vLLM Docker inspect:\n%s", inspect)
-                        else:
-                            logger.error("vLLM native log dir: %s", self.vllm_server.log_dir)
-                            logs = self.vllm_server.logs_tail()
-                            logger.error("vLLM native logs (tail):\n%s", logs)
+                        diagnostics = self._backend.diagnostics(self.vllm_server)
+                        for label, value in diagnostics.items():
+                            logger.error("%s:\n%s", label, value)
                     except Exception:
                         logger.exception("Failed to collect vLLM diagnostics")
                 raise
-        self._started = True
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -284,7 +386,7 @@ class VllmEnvironment:
 
     def close(self) -> None:
         if self.vllm_server is not None:
-            self.vllm_server.stop()
+            self._backend.stop(self.vllm_server)
             self.vllm_server = None
 
     @property
@@ -304,6 +406,16 @@ class VllmEnvironment:
             "docker_image": self.vllm_server.docker_image if self.vllm_server else self.docker_image,
             "docker_run_cmd": self.vllm_server.docker_run_cmd if self.vllm_server else None,
         }
+
+    def logs_tail(self, *, max_lines: int = 200) -> str:
+        if self.vllm_server is None:
+            raise RuntimeError("vLLM server is not running in this environment.")
+        return self._backend.logs_tail(self.vllm_server, max_lines=max_lines)
+
+    def diagnostics(self, *, max_lines: int = 200) -> dict[str, str]:
+        if self.vllm_server is None:
+            return {}
+        return self._backend.diagnostics(self.vllm_server, max_lines=max_lines)
 
 
 def _pick_free_port(host: str) -> int:
@@ -409,22 +521,7 @@ def _start_vllm_docker_server(
     if "MARIN_VLLM_DOCKER_IMAGE" not in os.environ and docker_image is None:
         print(f"MARIN_VLLM_DOCKER_IMAGE not set; defaulting to {resolved_image}")
 
-    env: dict[str, str] = {
-        "TOKENIZERS_PARALLELISM": "false",
-        # See `_vllm_env`.
-        "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "vllm"),
-        "JAX_ENABLE_COMPILATION_CACHE": os.environ.get("JAX_ENABLE_COMPILATION_CACHE", "1"),
-        "JAX_COMPILATION_CACHE_DIR": os.environ.get(
-            "JAX_COMPILATION_CACHE_DIR",
-            _default_jax_compilation_cache_dir(),
-        ),
-        "VLLM_XLA_CACHE_PATH": os.environ.get(
-            "VLLM_XLA_CACHE_PATH",
-            os.environ.get("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir()),
-        ),
-        "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": os.environ.get("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1"),
-        "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": os.environ.get("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2"),
-    }
+    env: dict[str, str] = _vllm_jax_env()
     explain_cache_misses = os.environ.get("JAX_EXPLAIN_CACHE_MISSES")
     if explain_cache_misses is not None:
         env["JAX_EXPLAIN_CACHE_MISSES"] = explain_cache_misses
@@ -467,7 +564,6 @@ def _start_vllm_docker_server(
     handle = VllmServerHandle(
         server_url=server_url,
         port=resolved_port,
-        mode="docker",
         docker_container_name=resolved_name,
         docker_image=resolved_image,
         docker_run_cmd=_redact_docker_run_command(cmd),
@@ -478,10 +574,10 @@ def _start_vllm_docker_server(
 
     try:
         while True:
-            running = handle._container_running()
+            running = _docker_container_running(resolved_name)
             if not running:
-                logs = handle.logs_tail()
-                inspect = handle.inspect()
+                logs = _docker_logs_tail(resolved_name)
+                inspect = _docker_inspect(resolved_name)
                 raise RuntimeError(
                     "vLLM Docker sidecar exited before becoming ready.\n"
                     f"Container: {resolved_name}\n"
@@ -504,8 +600,8 @@ def _start_vllm_docker_server(
 
             elapsed_time = time.time() - start_time
             if elapsed_time > timeout_seconds:
-                logs = handle.logs_tail()
-                handle.stop()
+                logs = _docker_logs_tail(resolved_name)
+                subprocess.run(["docker", "rm", "-f", resolved_name], check=False, capture_output=True, text=True)
                 raise TimeoutError(
                     "Failed to start vLLM Docker sidecar within timeout period.\n"
                     f"Container: {resolved_name}\n"
@@ -517,8 +613,27 @@ def _start_vllm_docker_server(
 
             time.sleep(poll_interval_seconds)
     except Exception:
-        handle.stop()
+        subprocess.run(["docker", "rm", "-f", resolved_name], check=False, capture_output=True, text=True)
         raise
+
+
+def _vllm_jax_env() -> dict[str, str | Any]:
+    return {
+        "TOKENIZERS_PARALLELISM": "false",
+        # See `_vllm_env`.
+        "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "vllm"),
+        "JAX_ENABLE_COMPILATION_CACHE": os.environ.get("JAX_ENABLE_COMPILATION_CACHE", "1"),
+        "JAX_COMPILATION_CACHE_DIR": os.environ.get(
+            "JAX_COMPILATION_CACHE_DIR",
+            _default_jax_compilation_cache_dir(),
+        ),
+        "VLLM_XLA_CACHE_PATH": os.environ.get(
+            "VLLM_XLA_CACHE_PATH",
+            os.environ.get("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir()),
+        ),
+        "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": os.environ.get("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1"),
+        "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": os.environ.get("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2"),
+    }
 
 
 def _default_jax_compilation_cache_dir() -> str:
@@ -547,32 +662,15 @@ def _vllm_env() -> dict[str, str]:
     return env
 
 
-def start_vllm_server_in_background(
+def _start_vllm_native_server(
     *,
     model_name_or_path: str,
     host: str = "127.0.0.1",
     port: int | None = None,
     timeout_seconds: int = 3600,
     extra_cli_args: list[str] | None = None,
-    mode: Literal["native", "docker"] = "docker",
-    docker_image: str | None = None,
-    docker_run_args: list[str] | None = None,
 ) -> VllmServerHandle:
-    """Start `vllm serve` and wait until `/v1/models` responds."""
-
-    if mode == "docker":
-        return _start_vllm_docker_server(
-            model_name_or_path=model_name_or_path,
-            host=host,
-            port=port,
-            timeout_seconds=timeout_seconds,
-            extra_cli_args=extra_cli_args,
-            docker_image=docker_image,
-            docker_run_args=docker_run_args,
-        )
-
-    if mode != "native":
-        raise ValueError(f"Unknown vLLM mode {mode!r}; expected 'native' or 'docker'.")
+    """Start `vllm serve` in-process and wait until `/v1/models` responds."""
 
     resolved_port = port if port is not None else 8000
 
@@ -605,25 +703,17 @@ def start_vllm_server_in_background(
     server_url: str = f"http://{host}:{resolved_port}/v1"
     start_time: float = time.time()
 
-    def tail(path: str, max_lines: int = 200) -> str:
-        try:
-            with open(path, "r") as f:
-                lines = f.readlines()
-            return "".join(lines[-max_lines:])
-        except Exception as e:
-            return f"<failed to read {path}: {e}>"
-
     while True:
         if process.poll() is not None:
             stdout_f.close()
             stderr_f.close()
+            logs = _native_logs_tail(log_dir)
             raise RuntimeError(
                 "vLLM server process exited before becoming ready.\n"
                 f"Command: {cmd}\n"
                 f"Exit code: {process.returncode}\n"
                 f"Logs: {log_dir}\n"
-                f"--- stdout (tail) ---\n{tail(stdout_path)}\n"
-                f"--- stderr (tail) ---\n{tail(stderr_path)}"
+                f"{logs}"
             )
 
         try:
@@ -642,7 +732,8 @@ def start_vllm_server_in_background(
             process.kill()
             stdout_f.close()
             stderr_f.close()
-            raise TimeoutError("Failed to start vLLM server within timeout period.")
+            logs = _native_logs_tail(log_dir)
+            raise TimeoutError("Failed to start vLLM server within timeout period.\n" f"Logs: {log_dir}\n" f"{logs}")
 
         time.sleep(5)
 
@@ -651,7 +742,6 @@ def start_vllm_server_in_background(
     return VllmServerHandle(
         server_url=server_url,
         port=resolved_port,
-        mode="native",
         process=process,
         log_dir=log_dir,
     )

@@ -82,20 +82,16 @@ def run_one_query(
     except Exception as exc:
         print("Smoke test failed with exception:", exc)
         print("Environment snapshot:", env.debug_snapshot())
-        if env.vllm_server is not None and env.vllm_server.mode == "docker":
+        if env.vllm_server is not None:
             try:
-                if env.vllm_server.docker_run_cmd:
-                    print("vLLM Docker run command (redacted):", env.vllm_server.docker_run_cmd)
-                print("vLLM Docker logs (tail):")
-                print(env.vllm_server.logs_tail())
-                print("vLLM Docker inspect:")
-                print(env.vllm_server.inspect())
+                diagnostics = env.diagnostics()
+                for label, value in diagnostics.items():
+                    print(f"{label}:")
+                    print(value)
             except Exception as diag_exc:
-                print("Failed to collect Docker diagnostics:", diag_exc)
+                print("Failed to collect vLLM diagnostics:", diag_exc)
         traceback.print_exc()
         raise
-    finally:
-        model.cleanup()
 
 
 def main(argv: list[str] | None = None) -> int:

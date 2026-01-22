@@ -20,8 +20,7 @@ from typing import ClassVar
 from fray.cluster import ResourceConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.evaluators.ray_helpers import launch_evaluate_with_ray
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
 from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, resolve_model_name_or_path, resolve_vllm_mode
 
 
@@ -183,8 +182,6 @@ class SimpleEvaluator(Evaluator):
         except Exception as e:
             traceback.print_exc()
             raise RuntimeError("SimpleEvaluator failed. Please check the logs for more information.") from e
-        finally:
-            model.cleanup()
 
     def launch_evaluate_with_ray(
         self,

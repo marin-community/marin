@@ -12,16 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
 from abc import ABC
 
 from fray.cluster import ResourceConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.evaluators.ray_helpers import launch_evaluate_with_ray
-
-logger = logging.getLogger(__name__)
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
 
 
 class LevanterTpuEvaluator(Evaluator, ABC):
@@ -33,16 +29,6 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         if model.path is None:
             return model.name
         return model.path
-
-    @staticmethod
-    def cleanup(model: ModelConfig) -> None:
-        """
-        Clean up resources.
-        """
-        logger.info("Cleaning up resources.")
-
-        # Delete the checkpoint
-        model.cleanup()
 
     def launch_evaluate_with_ray(
         self,
