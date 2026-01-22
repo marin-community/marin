@@ -797,12 +797,17 @@ class LmDataConfig(LMTaskConfig):
                 )
                 continue
 
+            cache_path = os.path.join(cache_root, split)
             if not self.auto_build_caches:
-                cache_path = os.path.join(cache_root, split)
-                raise FileNotFoundError(f"Cache not found at {cache_path} and auto_build_caches is disabled")
+                if not fsspec_utils.exists(cache_path):
+                    raise FileNotFoundError(f"Cache not found at {cache_path} and auto_build_caches is disabled")
+                caches[name] = load_lm_dataset_cache(
+                    cache_path, component.format, self.the_tokenizer, self.enforce_eos
+                )
+                continue
 
             caches[name] = build_lm_dataset_cache(
-                os.path.join(cache_root, split),
+                cache_path,
                 shard_source,
                 component.format,
                 self.the_tokenizer,
