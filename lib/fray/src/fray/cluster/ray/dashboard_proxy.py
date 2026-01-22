@@ -24,6 +24,7 @@ import traceback
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
+from html import escape as html_escape
 
 from flask import Flask, Response, request
 import requests
@@ -291,12 +292,15 @@ class DashboardProxy:
             if not logs:
                 return '<div class="log-empty">No logs yet</div>'
 
-            html = ""
+            html_parts = []
             for entry in reversed(logs):
                 timestamp = entry.timestamp.strftime("%H:%M:%S")
-                details = f": {entry.details}" if entry.details else ""
-                html += f'<div class="log-line">{timestamp} [{entry.cluster}] {entry.message}{details}</div>'
-            return html
+                escaped_cluster = html_escape(entry.cluster)
+                escaped_message = html_escape(entry.message)
+                escaped_details = html_escape(entry.details) if entry.details else ""
+                details_str = f": {escaped_details}" if entry.details else ""
+                html_parts.append(f'<div class="log-line">{timestamp} [{escaped_cluster}] {escaped_message}{details_str}</div>')
+            return "".join(html_parts)
 
         @app.route("/")
         def index():
