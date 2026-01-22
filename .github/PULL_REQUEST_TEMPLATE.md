@@ -1,8 +1,4 @@
-<!-- If this PR addresses an existing issue, include "Fixes #XXXX" below. -->
-<!-- For ongoing work, PRs should reference an existing issue. Delete this comment when done. -->
-Fixes #
-
-Please include a summary of the changes and the related issue if any.
+Include a summary of the changes and the related issue if any.
 
 A good description is a paragraph or so describing the changes you made and the
 motivation. You may follow this with a few bullets for specific changes, but
@@ -10,7 +6,7 @@ try to keep it concise.
 
 e.g.
 
-Title: [RL] Fix loss: use global token normalization instead of per-example (#2376)
+Title: [RL] Fix loss: use global token normalization instead of per-example
 
 """
 This fixes a regression in the DAPO loss computation by switching
@@ -21,3 +17,7 @@ tasks where correct answers often require detailed, longer derivations.
 Global normalization weights all examples equally regardless of response
 length.
 """
+
+<!-- If this PR addresses an existing issue, include "Fixes #XXXX" below. -->
+<!-- For ongoing work, PRs should reference an existing issue. Delete this comment when done. -->
+Fixes #
