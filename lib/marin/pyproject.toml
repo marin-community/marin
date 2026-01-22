@@ -137,10 +137,8 @@ name = "marin-resiliparse"
 url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 
 [tool.uv.sources]
-# Default to CPU index for torch/torchvision (for TPU/CPU builds)
+# torch/torchvision use PyPI for compatibility (pytorch-cpu lacks x86_64 wheels)
 # For GPU builds, use: uv sync --extra gpu
-torch = { index = "pytorch-cpu" }
-torchvision = { index = "pytorch-cpu" }
 resiliparse = { index = "marin-resiliparse" }
 
 
