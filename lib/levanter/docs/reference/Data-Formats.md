@@ -131,6 +131,11 @@ for predicting. Jinja's handling of white space is confusing to me, so you'll wa
 ## `prebuilt` Format
 
 Used when your dataset already contains tokenized sequences and optional loss weights.
+The primary use case is when you have some custom logic for creating a dataset consisting of token IDs
+and optionally loss weights, and you want to skip tokenization in Levanter.
+
+`prebuilt` supports being created froom jsonl/parquet, similarly to other formats, though
+it is primarily intended to be used with [Direct Cache Construction](../guides/Direct-Cache-Construction.md).
 
 **Expected Input:**
 ```jsonl
@@ -147,10 +152,13 @@ format:
   loss_weights_key: loss_weights  # optional
 ```
 
+Note that when being used programmatically, `prebuilt` also supports a `loss_weight_transform` `Callable` that
+can be used to modify the loss weights on-the-fly. Primarily this is intended for thresholding or scaling loss weights
+without needing to rebuild the cache.
+
 #### Processing:
 - Reads `input_ids` directly (no tokenization).
 - Optional `loss_weights` are applied and multiplied by the causal mask.
-- `block_cross_document_attention` still applies in the model config.
 
 ---
 
