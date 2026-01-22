@@ -43,7 +43,7 @@ from iris.cluster.controller.events import (
     WorkerHeartbeatEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.types import JobId, TaskId, WorkerId
+from iris.cluster.types import AttributeValue, JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import now_ms
 
@@ -84,6 +84,13 @@ def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
     """Extract GPU count from config."""
     if device.HasField("gpu"):
         return device.gpu.count or 1
+    return 0
+
+
+def get_tpu_chip_count(device: cluster_pb2.DeviceConfig) -> int:
+    """Extract TPU chip count from config."""
+    if device.HasField("tpu"):
+        return device.tpu.count or 0
     return 0
 
 
@@ -516,9 +523,6 @@ class ControllerJob:
     max_retries_failure: int = 0
     max_retries_preemption: int = DEFAULT_MAX_RETRIES_PREEMPTION
 
-    # Gang scheduling
-    gang_id: str | None = None
-
     # Hierarchical job tracking
     parent_job_id: JobId | None = None
 
@@ -704,58 +708,22 @@ class ControllerJob:
         """Total number of retries (failure + preemption retries)."""
         return self.failure_count + self.preemption_count
 
+    @property
+    def is_coscheduled(self) -> bool:
+        """Whether this job uses coscheduling (all tasks assigned atomically)."""
+        return self.request.HasField("coscheduling")
+
+    @property
+    def coscheduling_group_by(self) -> str | None:
+        """The attribute key used to group workers for coscheduling, or None."""
+        if self.is_coscheduled:
+            return self.request.coscheduling.group_by
+        return None
+
 
 # =============================================================================
 # Job Helper Functions
 # =============================================================================
-
-
-def handle_gang_failure(
-    jobs: list[ControllerJob],
-    is_worker_failure: bool,
-    error: str,
-) -> list[ControllerJob]:
-    """Handle gang failure with all-or-nothing retry.
-
-    All jobs in gang must have retries remaining for any to be retried.
-    This function coordinates multiple jobs, so it lives outside the ControllerJob class.
-
-    Args:
-        jobs: All jobs in the gang
-        is_worker_failure: Type of failure
-        error: Error message
-
-    Returns:
-        List of jobs to re-queue (empty if no retry)
-    """
-    if not jobs:
-        return []
-
-    # Check ALL jobs can retry (all-or-nothing)
-    if is_worker_failure:
-        can_retry = all(j.can_retry_preemption() for j in jobs)
-    else:
-        can_retry = all(j.can_retry_failure() for j in jobs)
-
-    if not can_retry:
-        # Mark all running jobs as killed
-        for job in jobs:
-            if job.state == cluster_pb2.JOB_STATE_RUNNING:
-                job.transition(cluster_pb2.JOB_STATE_KILLED, error=error)
-        return []
-
-    # Retry all jobs
-    to_requeue = []
-    for job in jobs:
-        result = job.transition(
-            cluster_pb2.JOB_STATE_FAILED,
-            is_worker_failure=is_worker_failure,
-            error=error,
-        )
-        if result == JobTransitionResult.SHOULD_RETRY:
-            to_requeue.append(job)
-
-    return to_requeue
 
 
 def expand_job_to_tasks(job: ControllerJob) -> list[ControllerTask]:
@@ -832,6 +800,7 @@ class ControllerWorker:
         committed_cpu: Total CPU cores committed to running tasks
         committed_mem: Total memory bytes committed to running tasks
         committed_gpu: Total GPUs committed to running tasks
+        attributes: Typed attributes for constraint-based scheduling (e.g., tpu-name, tpu-worker-id)
     """
 
     worker_id: WorkerId
@@ -850,6 +819,10 @@ class ControllerWorker:
     committed_cpu: int = 0
     committed_mem: int = 0
     committed_gpu: int = 0
+    committed_tpu: int = 0
+
+    # Worker attributes for constraint-based scheduling
+    attributes: dict[str, AttributeValue] = field(default_factory=dict)
 
     def get_committed_resources(self) -> tuple[int, int, int]:
         """Return committed (cpu, memory_bytes, gpu_count) for this worker."""
@@ -861,6 +834,7 @@ class ControllerWorker:
         self.committed_cpu += resources.cpu
         self.committed_mem += resources.memory_bytes
         self.committed_gpu += get_gpu_count(resources.device)
+        self.committed_tpu += get_tpu_chip_count(resources.device)
 
     def unassign_task(self, task_id: TaskId, resources: cluster_pb2.ResourceSpecProto) -> None:
         """Unassign a task from this worker, updating committed resources."""
@@ -868,6 +842,7 @@ class ControllerWorker:
         self.committed_cpu -= resources.cpu
         self.committed_mem -= resources.memory_bytes
         self.committed_gpu -= get_gpu_count(resources.device)
+        self.committed_tpu -= get_tpu_chip_count(resources.device)
 
     @property
     def available_cpu(self) -> int:
@@ -883,6 +858,11 @@ class ControllerWorker:
     def available_gpus(self) -> int:
         """Available GPU count after subtracting committed resources."""
         return get_gpu_count(self.metadata.device) - self.committed_gpu
+
+    @property
+    def available_tpus(self) -> int:
+        """Available TPU chip count after subtracting committed resources."""
+        return get_tpu_chip_count(self.metadata.device) - self.committed_tpu
 
     @property
     def device_type(self) -> str:
@@ -954,7 +934,6 @@ class ControllerState:
         self._tasks_by_job: dict[JobId, list[TaskId]] = {}
         self._workers: dict[WorkerId, ControllerWorker] = {}
         self._task_queue: deque[TaskId] = deque()  # FIFO queue of task IDs
-        self._gangs: dict[str, set[JobId]] = {}  # gang_id -> job_ids
         self._endpoints: dict[str, ControllerEndpoint] = {}  # endpoint_id -> endpoint
         self._endpoints_by_task: dict[TaskId, set[str]] = {}  # task_id -> endpoint_ids
         self._transactions: deque[TransactionLog] = deque(maxlen=1000)  # Event transaction log
@@ -1006,6 +985,41 @@ class ControllerState:
 
             return txn
 
+    def check_worker_timeouts(self, timeout_ms: int) -> set[TaskId]:
+        """Check for timed-out workers and mark them as failed.
+
+        Atomically identifies all workers that have exceeded the heartbeat timeout,
+        marks them as failed, and cascades to their running tasks. Returns the set
+        of task IDs that need kill RPCs sent.
+
+        This method acquires the state lock for the entire operation to prevent races
+        with incoming heartbeats.
+
+        Args:
+            timeout_ms: Maximum time since last heartbeat before declaring timeout
+
+        Returns:
+            Set of task IDs that need kill RPCs sent to workers
+        """
+        with self._lock:
+            current_time_ms = now_ms()
+            tasks_to_kill: set[TaskId] = set()
+
+            for worker in self._workers.values():
+                if worker.healthy and (current_time_ms - worker.last_heartbeat_ms) > timeout_ms:
+                    logger.warning(f"Worker {worker.worker_id} timed out (no heartbeat for {timeout_ms}ms)")
+                    txn = TransactionLog(
+                        event=WorkerFailedEvent(
+                            worker_id=worker.worker_id,
+                            error=f"Worker {worker.worker_id} timed out",
+                        )
+                    )
+                    self._on_worker_failed(txn, txn.event)  # type: ignore[arg-type]
+                    self._transactions.append(txn)
+                    tasks_to_kill.update(txn.tasks_to_kill)
+
+            return tasks_to_kill
+
     # -------------------------------------------------------------------------
     # Worker Event Handlers
     # -------------------------------------------------------------------------
@@ -1013,12 +1027,16 @@ class ControllerState:
     def _on_worker_registered(self, txn: TransactionLog, event: WorkerRegisteredEvent) -> None:
         worker = self._workers.get(event.worker_id)
 
+        # Extract attributes from metadata proto
+        attributes = {k: AttributeValue.from_proto(v) for k, v in event.metadata.attributes.items()}
+
         if worker:
             # Existing worker - heartbeat update
             worker.last_heartbeat_ms = event.timestamp_ms
             worker.healthy = True
             worker.consecutive_failures = 0
             worker.metadata = event.metadata
+            worker.attributes = attributes
             txn.log("worker_heartbeat", event.worker_id)
         else:
             # New worker - full registration
@@ -1027,6 +1045,7 @@ class ControllerState:
                 address=event.address,
                 metadata=event.metadata,
                 last_heartbeat_ms=event.timestamp_ms,
+                attributes=attributes,
             )
             self._workers[event.worker_id] = worker
             txn.log("worker_registered", event.worker_id, address=event.address)
@@ -1097,9 +1116,6 @@ class ControllerState:
             self._task_queue.append(task.task_id)
             job.task_state_counts[task.state] += 1
             txn.log("task_created", task.task_id, job_id=str(event.job_id))
-
-        if job.gang_id:
-            self._gangs.setdefault(job.gang_id, set()).add(event.job_id)
 
         txn.log("job_submitted", event.job_id, num_tasks=job.num_tasks)
 
@@ -1176,7 +1192,25 @@ class ControllerState:
         )
 
         # Handle side effects based on result
-        self._handle_task_side_effects(task, job, result, txn)
+        if result == TaskTransitionResult.SHOULD_RETRY:
+            self._requeue_task(task, txn)
+            self._cleanup_task_resources(task, job, txn)
+        elif task.is_finished():
+            self._cleanup_task_resources(task, job, txn)
+
+        # Coscheduled group failure: if one task fails terminally, kill all running siblings.
+        # For multi-host TPU jobs, if one host fails the other hosts cannot continue
+        # (collective ops will timeout), so we immediately kill all running siblings.
+        if (
+            job.is_coscheduled
+            and task.is_finished()
+            and task.state
+            in (
+                cluster_pb2.TASK_STATE_FAILED,
+                cluster_pb2.TASK_STATE_WORKER_FAILED,
+            )
+        ):
+            self._cascade_coscheduled_failure(task, job, txn)
 
         # Update job state counters and finalize if needed
         new_job_state = job.on_task_transition(old_state, task.state)
@@ -1195,23 +1229,8 @@ class ControllerState:
     # -------------------------------------------------------------------------
     # Shared Helpers for Event Handlers
     # -------------------------------------------------------------------------
-
-    def _handle_task_side_effects(
-        self,
-        task: ControllerTask,
-        job: ControllerJob,
-        result: TaskTransitionResult,
-        txn: TransactionLog,
-    ) -> None:
-        """Handle side effects after a task state transition."""
-        if result == TaskTransitionResult.SHOULD_RETRY:
-            self._requeue_task(task, txn)
-            self._finalize_task(task, job, txn)
-        elif task.is_finished():
-            self._finalize_task(task, job, txn)
-
-    def _finalize_task(self, task: ControllerTask, job: ControllerJob, txn: TransactionLog) -> None:
-        """Unassign from worker and clean up endpoints."""
+    def _cleanup_task_resources(self, task: ControllerTask, job: ControllerJob, txn: TransactionLog) -> None:
+        """Release worker resources and remove task endpoints."""
         worker_id = task.worker_id
         if worker_id:
             worker = self._workers.get(worker_id)
@@ -1227,13 +1246,51 @@ class ControllerState:
             self._task_queue.append(task.task_id)
         txn.log("task_requeued", task.task_id)
 
+    def _cascade_coscheduled_failure(
+        self,
+        trigger_task: ControllerTask,
+        job: ControllerJob,
+        txn: TransactionLog,
+    ) -> None:
+        """Kill all running siblings when a coscheduled task fails terminally.
+
+        For multi-host TPU jobs, if one host fails the other hosts cannot continue
+        because collective operations will timeout. We immediately mark all running
+        siblings as WORKER_FAILED (terminal, with no retries) so they can be cleaned up.
+        """
+        for sibling_id in self._tasks_by_job.get(job.job_id, []):
+            if sibling_id == trigger_task.task_id:
+                continue
+
+            sibling = self._tasks[sibling_id]
+            if sibling.state != cluster_pb2.TASK_STATE_RUNNING:
+                continue
+
+            sibling_old = sibling.state
+
+            # Set preemption count so that after handle_attempt_result increments it,
+            # the sibling becomes terminal (is_finished() returns True). This prevents
+            # _mark_remaining_tasks_killed from overwriting the state (it skips finished tasks).
+            sibling.preemption_count = sibling.max_retries_preemption
+
+            sibling.handle_attempt_result(
+                cluster_pb2.TASK_STATE_WORKER_FAILED,
+                error=f"Coscheduled sibling {trigger_task.task_id} failed",
+            )
+            job.on_task_transition(sibling_old, sibling.state)
+            txn.tasks_to_kill.add(sibling_id)
+            txn.log(
+                "coscheduled_sibling_killed",
+                sibling_id,
+                trigger_task=str(trigger_task.task_id),
+            )
+
     def get_transactions(self, limit: int = 100) -> list[TransactionLog]:
         """Return recent transactions for debugging."""
         with self._lock:
             return list(self._transactions)[-limit:]
 
     # --- Job Management ---
-
     def add_job(self, job: ControllerJob, tasks: list[ControllerTask] | None = None) -> list[ControllerTask]:
         """Add job directly to state (test utility).
 
@@ -1266,9 +1323,6 @@ class ControllerState:
                 self._task_queue.append(task.task_id)
                 job.task_state_counts[task.state] += 1
 
-            if job.gang_id:
-                self._gangs.setdefault(job.gang_id, set()).add(job.job_id)
-
             return tasks
 
     def get_job(self, job_id: JobId) -> ControllerJob | None:
@@ -1278,11 +1332,6 @@ class ControllerState:
     def list_all_jobs(self) -> list[ControllerJob]:
         with self._lock:
             return list(self._jobs.values())
-
-    def get_gang_jobs(self, gang_id: str) -> list[ControllerJob]:
-        with self._lock:
-            job_ids = self._gangs.get(gang_id, set())
-            return [self._jobs[jid] for jid in job_ids if jid in self._jobs]
 
     def get_children(self, job_id: JobId) -> list[ControllerJob]:
         with self._lock:

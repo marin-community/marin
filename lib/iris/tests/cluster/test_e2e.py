@@ -36,7 +36,7 @@ from iris.cluster.client.local_client import (
     _LocalContainerRuntime,
     _LocalImageProvider,
 )
-from iris.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
+from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import EnvironmentSpec, Entrypoint, ResourceSpec
 from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
@@ -99,7 +99,7 @@ class E2ECluster:
         )
         self._controller = Controller(
             config=controller_config,
-            worker_stub_factory=DefaultWorkerStubFactory(),
+            worker_stub_factory=RpcWorkerStubFactory(),
         )
         self._controller.start()
 

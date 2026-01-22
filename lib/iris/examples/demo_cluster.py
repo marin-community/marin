@@ -18,6 +18,10 @@ This script boots an iris cluster (in-process by default, no Docker required),
 seeds it with quick demo jobs, and optionally launches a Jupyter notebook for
 interactive exploration.
 
+By default, the cluster simulates multi-host TPU workers: 8 workers split
+across two TPU slices ("tpu-a" and "tpu-b", 4 workers each). This enables
+demonstrating coscheduled jobs that land all tasks on the same TPU slice.
+
 Usage:
     # Validate that the cluster works (for CI)
     cd lib/iris
@@ -25,9 +29,6 @@ Usage:
 
     # Launch interactive demo with Jupyter
     uv run python examples/demo_cluster.py
-
-    # Use Docker instead of in-process execution
-    uv run python examples/demo_cluster.py --docker
 """
 
 import logging
@@ -49,8 +50,8 @@ from iris.cluster.client.local_client import (
     _LocalContainerRuntime,
     _LocalImageProvider,
 )
-from iris.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
-from iris.cluster.types import EnvironmentSpec, Entrypoint, ResourceSpec
+from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import DockerRuntime
@@ -94,10 +95,12 @@ class DemoCluster:
     def __init__(
         self,
         use_docker: bool = False,
-        num_workers: int = 1,
+        tpu_slices: list[tuple[str, int]] | None = None,
     ):
         self._use_docker = use_docker
-        self._num_workers = num_workers
+        if tpu_slices is None:
+            tpu_slices = [("tpu-a", 4), ("tpu-b", 4)]
+        self._tpu_slices = tpu_slices
         self._controller_port = find_free_port()
 
         # Will be initialized in __enter__
@@ -136,7 +139,7 @@ class DemoCluster:
         )
         self._controller = Controller(
             config=controller_config,
-            worker_stub_factory=DefaultWorkerStubFactory(),
+            worker_stub_factory=RpcWorkerStubFactory(),
         )
         self._controller.start()
 
@@ -151,37 +154,47 @@ class DemoCluster:
             bundle_provider = BundleCache(cache_path, max_bundles=100)
             image_provider = ImageCache(cache_path, registry="", max_images=100)
             container_runtime = DockerRuntime()
-            environment_provider = None  # Use default (probe real system)
         else:
             bundle_provider = _LocalBundleProvider(fake_bundle)
             image_provider = _LocalImageProvider()
             container_runtime = _LocalContainerRuntime()
-            environment_provider = LocalEnvironmentProvider(cpu=1000, memory_gb=1000)
 
-        # Start Workers
-        for i in range(self._num_workers):
-            worker_id = f"worker-{i}-{uuid.uuid4().hex[:8]}"
-            worker_port = find_free_port()
-            worker_config = WorkerConfig(
-                host="127.0.0.1",
-                port=worker_port,
-                cache_dir=cache_path,
-                controller_address=f"http://127.0.0.1:{self._controller_port}",
-                worker_id=worker_id,
-                poll_interval_seconds=0.1,  # Fast polling for demos
-            )
-            worker = Worker(
-                worker_config,
-                cache_dir=cache_path,
-                bundle_provider=bundle_provider,
-                image_provider=image_provider,
-                container_runtime=container_runtime,
-                environment_provider=environment_provider,
-            )
-            worker.start()
-            self._workers.append(worker)
-            self._worker_ids.append(worker_id)
-            self._worker_ports.append(worker_port)
+        # Start Workers - create workers for each TPU slice with appropriate attributes
+        worker_idx = 0
+        for tpu_name, slice_size in self._tpu_slices:
+            for tpu_worker_id in range(slice_size):
+                attributes = {
+                    "tpu-name": tpu_name,
+                    "tpu-worker-id": tpu_worker_id,
+                }
+                if self._use_docker:
+                    environment_provider = None  # Use default (probe real system)
+                else:
+                    environment_provider = LocalEnvironmentProvider(cpu=1000, memory_gb=1000, attributes=attributes)
+
+                worker_id = f"worker-{worker_idx}-{uuid.uuid4().hex[:8]}"
+                worker_port = find_free_port()
+                worker_config = WorkerConfig(
+                    host="127.0.0.1",
+                    port=worker_port,
+                    cache_dir=cache_path,
+                    controller_address=f"http://127.0.0.1:{self._controller_port}",
+                    worker_id=worker_id,
+                    poll_interval_seconds=0.1,  # Fast polling for demos
+                )
+                worker = Worker(
+                    worker_config,
+                    cache_dir=cache_path,
+                    bundle_provider=bundle_provider,
+                    image_provider=image_provider,
+                    container_runtime=container_runtime,
+                    environment_provider=environment_provider,
+                )
+                worker.start()
+                self._workers.append(worker)
+                self._worker_ids.append(worker_id)
+                self._worker_ports.append(worker_port)
+                worker_idx += 1
 
         # Wait for workers to register with controller. Workers send heartbeats
         # every 0.1s (poll_interval_seconds), and registration happens on first
@@ -277,6 +290,15 @@ class DemoCluster:
             print("Liftoff!")
             return "Done!"
 
+        def distributed_work():
+            from iris.cluster.client import get_job_info
+
+            info = get_job_info()
+            if info is None:
+                raise RuntimeError("Not running in an Iris job context")
+            print(f"Task {info.task_index} of {info.num_tasks} on worker {info.worker_id}")
+            return f"Task {info.task_index} done"
+
         jobs = [
             (hello, [], {}, "demo-hello"),
             (compute, [10, 32], {}, "demo-compute"),
@@ -288,6 +310,21 @@ class DemoCluster:
             status = job.wait()
             results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
             print(f"  {name}: {cluster_pb2.JobState.Name(status.state)}")
+
+        # Coscheduled jobs require TPU workers which aren't available in docker mode
+        if not self._use_docker:
+            job = self.client.submit(
+                entrypoint=Entrypoint.from_callable(distributed_work),
+                name="demo-coscheduled",
+                resources=ResourceSpec(cpu=1, memory="512m", replicas=4),
+                environment=EnvironmentSpec(workspace="/app"),
+                coscheduling=CoschedulingConfig(group_by="tpu-name"),
+            )
+            status = job.wait()
+            results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
+            print(f"  demo-coscheduled: {cluster_pb2.JobState.Name(status.state)}")
+        else:
+            print("  demo-coscheduled: SKIPPED (not available in docker mode)")
 
         return results
 
@@ -409,16 +446,15 @@ class DemoCluster:
 
 
 @click.command()
-@click.option("--docker", is_flag=True, help="Use Docker instead of in-process execution")
 @click.option("--no-browser", is_flag=True, help="Don't auto-open browser for Jupyter")
 @click.option("--validate-only", is_flag=True, help="Run seed jobs and exit (for CI)")
 @click.option("--test-notebook", is_flag=True, help="Run notebook programmatically and validate (for CI)")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
-def main(docker: bool, no_browser: bool, validate_only: bool, test_notebook: bool, verbose: bool):
+def main(no_browser: bool, validate_only: bool, test_notebook: bool, verbose: bool):
     """Launch demo cluster with Jupyter notebook.
 
-    By default, runs jobs in-process (no Docker required). Use --docker for
-    real container execution.
+    Runs in TPU simulation mode with 8 workers (4 on tpu-a, 4 on tpu-b).
+    Jobs execute in-process (no Docker required).
     """
     if verbose:
         logging.basicConfig(
@@ -431,10 +467,9 @@ def main(docker: bool, no_browser: bool, validate_only: bool, test_notebook: boo
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
 
-    mode = "Docker" if docker else "in-process"
-    print(f"Starting demo cluster ({mode} mode)...")
+    print("Starting demo cluster (TPU simulation mode)...")
 
-    with DemoCluster(use_docker=docker) as demo:
+    with DemoCluster() as demo:
         print(f"Controller: {demo.controller_url}")
         print()
         print("Seeding cluster with demo jobs...")

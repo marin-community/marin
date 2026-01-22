@@ -162,6 +162,7 @@ message GpuDevice {
 message TpuDevice {
   string variant = 1;       // e.g., "v5litepod-16", "v4-8"
   string topology = 2;      // topology spec (e.g., "2x2x1")
+  int32 count = 3;          // Number of TPU chips on this worker
 }
 
 // Unified resource specification for jobs
@@ -202,6 +203,48 @@ message EnvironmentConfig {
 }
 
 // ============================================================================
+// WORKER ATTRIBUTES
+// ============================================================================
+
+// Typed attribute value for worker attributes and constraint matching.
+// Workers report attributes (e.g., tpu-name, tpu-worker-id) at registration.
+// Jobs can filter workers using constraints on these attributes.
+message AttributeValue {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double float_value = 3;
+  }
+}
+
+// Constraint operators for filtering workers by attributes.
+enum ConstraintOp {
+  CONSTRAINT_OP_EQ = 0;         // Attribute equals value
+  CONSTRAINT_OP_NE = 1;         // Attribute not equals value
+  CONSTRAINT_OP_EXISTS = 2;     // Attribute exists (value ignored)
+  CONSTRAINT_OP_NOT_EXISTS = 3; // Attribute does not exist (value ignored)
+  CONSTRAINT_OP_GT = 4;         // Attribute greater than value (numeric)
+  CONSTRAINT_OP_GE = 5;         // Attribute greater than or equal to value (numeric)
+  CONSTRAINT_OP_LT = 6;         // Attribute less than value (numeric)
+  CONSTRAINT_OP_LE = 7;         // Attribute less than or equal to value (numeric)
+}
+
+// Constraint for filtering workers by attribute.
+// Used in LaunchJobRequest to specify which workers can run a job.
+message Constraint {
+  string key = 1;           // Attribute key to match (e.g., "tpu-name")
+  ConstraintOp op = 2;      // Comparison operator
+  AttributeValue value = 3; // Value to compare against (ignored for EXISTS/NOT_EXISTS)
+}
+
+// Coscheduling configuration for multi-host jobs.
+// When set, all tasks in the job must be scheduled atomically onto workers
+// that share the same value for the specified group_by attribute.
+message CoschedulingConfig {
+  string group_by = 1;  // Attribute key to group workers by (e.g., "tpu-name")
+}
+
+// ============================================================================
 // WORKER METADATA
 // ============================================================================
 
@@ -229,6 +272,16 @@ message WorkerMetadata {
   // GCE instance metadata
   string gce_instance_name = 30;
   string gce_zone = 31;
+
+  // Worker attributes for constraint-based scheduling.
+  // Standard attributes include:
+  //   tpu-name: TPU slice name (string)
+  //   tpu-worker-id: Worker ID within slice (int)
+  //   tpu-topology: TPU topology variant, e.g. "v5litepod-16" (string)
+  //   tpu-vm-count: Number of VMs in the TPU slice (int)
+  // Additional attributes can be set via IRIS_WORKER_ATTRIBUTES env var
+  // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
+  map<string, AttributeValue> attributes = 40;
 }
 
 // ============================================================================
@@ -271,6 +324,16 @@ message Controller {
 
     // When a task is preempted (worker dies), retry up to this many times
     int32 max_retries_preemption = 13;  // Default: 100 (generous preemption tolerance)
+
+    // Constraints for filtering workers by attribute.
+    // All constraints must match for a worker to be eligible (AND semantics).
+    repeated Constraint constraints = 14;
+
+    // Coscheduling configuration for multi-host jobs (e.g., multi-host TPU).
+    // When set, all tasks are scheduled atomically to workers sharing the same
+    // group_by attribute value. If not enough workers are available in any group,
+    // the job stays pending.
+    CoschedulingConfig coscheduling = 15;
   }
 
   message LaunchJobResponse {
