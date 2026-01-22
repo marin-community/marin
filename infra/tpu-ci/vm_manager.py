@@ -227,7 +227,7 @@ udevadm control --reload-rules
 udevadm trigger --subsystem-match=pci
 
 echo "Installing GitHub Actions runner..."
-RUNNER_VERSION="2.311.0"
+RUNNER_VERSION="2.331.0"
 RUNNER_USER="github-runner"
 
 if ! id -u $RUNNER_USER > /dev/null 2>&1; then
