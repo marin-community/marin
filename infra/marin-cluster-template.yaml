@@ -30,7 +30,7 @@ docker:
       - --privileged
       - --ulimit memlock=-1:-1  #
       - --ulimit nofile=1048576:1048576
-      - --shm-size=100gb
+      - --shm-size={{ SHM_SIZE | default('100gb') }}
       - -v
       - "/tmp:/tmp"
       - -e MARIN_PREFIX=gs://{{BUCKET}}

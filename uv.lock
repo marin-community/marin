@@ -4186,6 +4186,13 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+api = [
+    { name = "aiohttp" },
+    { name = "requests" },
+    { name = "tenacity" },
+    { name = "tiktoken" },
+    { name = "tqdm" },
+]
 math = [
     { name = "antlr4-python3-runtime" },
     { name = "math-verify", extra = ["antlr4-11-0"] },
@@ -4375,7 +4382,7 @@ cpu = [
     { name = "torchvision", version = "0.24.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-5-marin-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-5-marin-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform == 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'linux' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform == 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'win32' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform == 'win32' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'win32' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
 ]
 eval = [
-    { name = "lm-eval", extra = ["math"] },
+    { name = "lm-eval", extra = ["api", "math"] },
 ]
 gpu = [
     { name = "jax", extra = ["cuda12"], marker = "extra == 'extra-5-marin-gpu' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
@@ -4504,7 +4511,7 @@ requires-dist = [
     { name = "jaxopt", specifier = ">=0.8.3" },
     { name = "levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "lm-eval", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
-    { name = "lm-eval", extras = ["math"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
+    { name = "lm-eval", extras = ["math", "api"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lxml", extras = ["html-clean"] },
     { name = "lz4" },
     { name = "markdownify", specifier = "==0.12.1" },
