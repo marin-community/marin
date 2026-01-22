@@ -27,6 +27,7 @@ override-dependencies = [
     "antlr4-python3-runtime==4.11",
     "python-multipart>=0.0.22",
     "wheel>=0.46.2",
+    "equinox>=0.11.10",  # Override vizier's pin for JAX 0.8 compatibility
 ]
 
 [tool.uv.workspace]
