@@ -130,11 +130,11 @@ for predicting. Jinja's handling of white space is confusing to me, so you'll wa
 
 ## `prebuilt` Format
 
-Used when your dataset already contains tokenized sequences and optional loss weights.
+Used when your dataset already contains tokenized (pretokenized) sequences and optional loss weights.
 The primary use case is when you have some custom logic for creating a dataset consisting of token IDs
 and optionally loss weights, and you want to skip tokenization in Levanter.
 
-`prebuilt` supports being created froom jsonl/parquet, similarly to other formats, though
+`prebuilt` supports being created from jsonl/parquet, similarly to other formats, though
 it is primarily intended to be used with [Direct Cache Construction](../guides/Direct-Cache-Construction.md).
 
 **Expected Input:**
