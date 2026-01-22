@@ -149,7 +149,9 @@ def scale_with_muonh(
             if params is None:
                 raise ValueError("Parameters are required for projection to tangent space.")
             updates = jax.tree.map(
-                lambda p, g: g - (jnp.vdot(p, g) / jnp.maximum(jnp.linalg.norm(p) ** 2, 1e-10)) * p,
+                lambda p, g: None
+                if g is None or p is None
+                else g - (jnp.vdot(p, g) / jnp.maximum(jnp.linalg.norm(p) ** 2, 1e-10)) * p,
                 params,
                 updates,
                 is_leaf=lambda x: x is None,
