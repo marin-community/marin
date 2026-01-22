@@ -10,7 +10,6 @@ import os
 from dataclasses import dataclass
 from functools import cached_property
 from typing import (
-    Any,
     Callable,
     Dict,
     List,
@@ -65,20 +64,11 @@ from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.utils.logging import silence_transformer_nag
 
 
-# Metrics monitoring removed; keep alias for type hints.
-MetricsMonitor = Any
-
 silence_transformer_nag()  # noqa
 
 T_co = TypeVar("T_co", covariant=True)
 
 logger = logging.getLogger("levanter.data.text")
-
-# TASKS:
-# TODO: consider adding indexing a la Map-style datasets
-# TODO: support seeking/serialization/restore in the dataset
-
-LEDGER_FILE = "ledger.json"
 
 
 class TokenSeqDataset(AsyncDataset[np.ndarray]):
