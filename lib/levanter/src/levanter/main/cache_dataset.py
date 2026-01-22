@@ -25,7 +25,6 @@ def main(args: RayCachedLMDatasetConfig):
     init_logging(".", "cache_dataset.log")
     args.initialize()
 
-    tokenizer = args.the_tokenizer
     for split in ["train", "validation"]:
         print(f"Caching {split} for all components.")
         # build_caches will build or load as needed
