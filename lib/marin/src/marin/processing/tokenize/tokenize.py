@@ -374,12 +374,9 @@ def tokenize(config: TokenizeConfigBase):
         total_tokens = 0
         for shard_path in shard_paths:
             stats_path = f"{shard_path}/.stats.json"
-            try:
-                with fsspec.open(stats_path) as f:
-                    stats = json.load(f)
-                    total_tokens += stats.get("token_count", 0)
-            except FileNotFoundError:
-                logger.warning(f"Stats file not found: {stats_path}")
+            with fsspec.open(stats_path) as f:
+                stats = json.load(f)
+                total_tokens += stats.get("token_count", 0)
 
         stats_path = os.path.join(prefix, "stats.json")
         logger.info(f"Writing total token count ({total_tokens}) to {stats_path}")
