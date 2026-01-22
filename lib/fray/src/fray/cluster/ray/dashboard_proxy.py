@@ -294,24 +294,8 @@ class DashboardProxy:
             html = ""
             for entry in reversed(logs):
                 timestamp = entry.timestamp.strftime("%H:%M:%S")
-                level_class = f"log-{entry.level}"
-                level_icon = {"error": "❌", "warning": "⚠️", "info": "ℹ️"}.get(entry.level, "")
-
-                html += f'<div class="log-entry {level_class}">'
-                html += f'<span class="log-time">{timestamp}</span>'
-                html += f'<span class="log-cluster">[{entry.cluster}]</span>'
-                html += f'<span class="log-icon">{level_icon}</span>'
-                html += f'<span class="log-message">{entry.message}</span>'
-                if entry.details:
-                    escaped_details = (
-                        entry.details.replace("&", "&amp;")
-                        .replace("<", "&lt;")
-                        .replace(">", "&gt;")
-                        .replace('"', "&quot;")
-                    )
-                    html += f'<details class="log-details"><summary>Details</summary>'
-                    html += f'<pre>{escaped_details}</pre></details>'
-                html += "</div>"
+                details = f": {entry.details}" if entry.details else ""
+                html += f'<div class="log-line">{timestamp} [{entry.cluster}] {entry.message}{details}</div>'
             return html
 
         @app.route("/")
@@ -429,96 +413,28 @@ class DashboardProxy:
             margin-top: 30px;
             background: white;
             border-radius: 8px;
+            padding: 12px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            overflow: hidden;
         }
-        .log-header {
-            background: #2c3e50;
-            color: white;
-            padding: 12px 16px;
-            font-weight: 600;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .log-header-title {
-            font-size: 14px;
-        }
-        .log-refresh-info {
-            font-size: 11px;
-            opacity: 0.7;
+        .log-panel h2 {
+            font-size: 18px;
+            color: #2c3e50;
+            margin-bottom: 10px;
         }
         .log-content {
             max-height: 300px;
             overflow-y: auto;
-            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-family: monospace;
             font-size: 12px;
-            background: #1a1a2e;
-            color: #eee;
         }
         .log-empty {
-            padding: 20px;
-            text-align: center;
-            color: #666;
-        }
-        .log-entry {
-            padding: 8px 12px;
-            border-bottom: 1px solid #2a2a3e;
-            display: flex;
-            flex-wrap: wrap;
-            align-items: flex-start;
-            gap: 8px;
-        }
-        .log-entry:hover {
-            background: #2a2a3e;
-        }
-        .log-time {
-            color: #7f8c8d;
-            flex-shrink: 0;
-        }
-        .log-cluster {
-            color: #3498db;
-            font-weight: 500;
-            flex-shrink: 0;
-        }
-        .log-icon {
-            flex-shrink: 0;
-        }
-        .log-message {
-            color: #ecf0f1;
-            flex: 1;
-            word-break: break-word;
-        }
-        .log-error .log-message {
-            color: #e74c3c;
-        }
-        .log-warning .log-message {
-            color: #f39c12;
-        }
-        .log-details {
-            width: 100%;
-            margin-top: 4px;
-        }
-        .log-details summary {
-            cursor: pointer;
             color: #95a5a6;
-            font-size: 11px;
         }
-        .log-details summary:hover {
-            color: #bdc3c7;
-        }
-        .log-details pre {
-            margin-top: 8px;
-            padding: 10px;
-            background: #0d0d1a;
-            border-radius: 4px;
-            overflow-x: auto;
-            white-space: pre-wrap;
-            word-break: break-all;
-            color: #bdc3c7;
-            font-size: 11px;
-            max-height: 200px;
-            overflow-y: auto;
+        .log-line {
+            padding: 4px 0;
+            border-bottom: 1px solid #eee;
+            color: #e74c3c;
+            word-break: break-word;
         }
     </style>
 </head>
@@ -550,15 +466,11 @@ class DashboardProxy:
             html += """
     </div>
     <div class="log-panel">
-        <div class="log-header">
-            <span class="log-header-title">Proxy Logs</span>
-            <span class="log-refresh-info">Auto-refreshes every 5s</span>
-        </div>
+        <h2>Logs</h2>
         <div class="log-content"
              hx-get="/api/logs-html"
              hx-trigger="load, every 5s"
              hx-swap="innerHTML">
-            <div class="log-empty">Loading logs...</div>
         </div>
     </div>
 </body>
