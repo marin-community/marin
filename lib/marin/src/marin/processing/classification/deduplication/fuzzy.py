@@ -133,7 +133,6 @@ def dedup_fuzzy_document(config: DedupConfig):
     doc_minhash_lsh = (
         Dataset.from_list(input_files)
         .flat_map(lambda f: _load_batches(f, columns=[config.text_field, "id"]))
-        .reshard(num_shards=config.processes if len(input_files) < 42 else None)
         .flat_map(compute_minhash_lsh_batches)
     )
     converged, cc_files = connected_components(doc_minhash_lsh, ctx=ctx, output_dir=f"{config.output_path}/metadata/cc")

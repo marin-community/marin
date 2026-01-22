@@ -59,11 +59,8 @@ def dedup_exact_paragraph(config: DedupConfig):
     # first compute the full set of duplicate keys.
     duplicate_key_shards = list(
         Backend.execute(
-            Dataset.from_list(input_files).flat_map(_load_batches)
-            # NOTE: when do we want to trigger reshard. Keep in mind that reshard will materialize the
-            #   text field!
-            # TODO: the resharding logic should be improved, based on size and/or max_parallelism
-            .reshard(num_shards=config.processes if len(input_files) > 3 and len(input_files) < 42 else None)
+            Dataset.from_list(input_files)
+            .flat_map(_load_batches)
             .map(compute_paragraph_hashes)
             .flat_map(lambda batch: batch.to_pylist())
             .group_by(
@@ -144,11 +141,8 @@ def dedup_exact_document(config: DedupConfig):
     # first compute the full set of duplicate keys.
     duplicate_key_shards = list(
         Backend.execute(
-            Dataset.from_list(input_files).flat_map(_load_batches)
-            # NOTE: when do we want to trigger reshard. Keep in mind that reshard will materialize the
-            #   text field!
-            # TODO: the resharding logic should be improved, based on size and/or max_parallelism
-            .reshard(num_shards=config.processes if len(input_files) > 3 and len(input_files) < 42 else None)
+            Dataset.from_list(input_files)
+            .flat_map(_load_batches)
             .map(compute_document_hashes)
             .flat_map(lambda batch: batch.to_pylist())
             .group_by(
