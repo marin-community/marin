@@ -153,6 +153,7 @@ def default_tokenize(
     *,
     sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
+    window_size_bytes: int = 10_000_000_000,
 ) -> ExecutorStep:
     """
     Tokenizes a dataset using the specified tokenizer and Levanter's tokenization infrastructure.
@@ -171,6 +172,8 @@ def default_tokenize(
             for more details.
         sample_count: Optional limit on the number of samples to tokenize per shard. If ``None``, tokenize everything.
         is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
+        window_size_bytes: Maximum size in bytes for bundling files into processing groups. Smaller values
+            increase parallelism (more workers), larger values reduce overhead. Default is 10GB.
     Returns:
         An ExecutorStep that represents the tokenized dataset.
     """
@@ -184,6 +187,7 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            window_size_bytes=window_size_bytes,
         )
     elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
         config = HfTokenizeConfig(
@@ -192,6 +196,7 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            window_size_bytes=window_size_bytes,
         )
     else:
         config = TokenizeConfig(
@@ -201,6 +206,7 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
             sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
+            window_size_bytes=window_size_bytes,
         )
 
     return ExecutorStep(
