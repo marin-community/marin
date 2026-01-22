@@ -37,11 +37,13 @@ from huggingface_hub import login
 login(token="YOUR_HF_TOKEN_HERE")
 
 from fray.cluster import ResourceConfig
+from haliax.partitioning import ResourceAxis
 from levanter.data.image import ConversationDatasetSourceConfig, ImageMixtureDatasetConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llava_onevision import LlavaOnevisionConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.models.siglip import SiglipVisionConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import executor_main
 
 from experiments.defaults import default_train_vlm
@@ -67,7 +69,7 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - per_device_parallelism: samples processed per device at a time (limited by memory)
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
-PER_DEVICE_PARALLELISM = 2  # 1 sample per device (memory-safe for VLM with large images)
+PER_DEVICE_PARALLELISM = 1  # 1 sample per device (memory-safe for VLM with large images)
 GRADIENT_ACCUMULATION_STEPS = 1  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
@@ -215,6 +217,17 @@ train_config = SimpleVlmTrainConfig(
 
     # Disable evaluation to save memory
     no_eval=True,
+
+    # Custom mesh configuration for v5litepod-256
+    # data=128 allows FSDP sharding since 1152 (vision hidden_size) % 128 = 0
+    mesh_config=MeshConfig(
+        axes={"data": 128, "replica": 2, "model": 1},  # 128 × 2 × 1 = 256 devices
+        compute_mapping={
+            "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+            "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+        },
+        param_mapping={"embed": "data"},  # Enable FSDP: 1152 % 128 = 0 ✓
+    ),
 )
 
 # ============================================================================

@@ -506,7 +506,7 @@ def default_train_vlm(
                 save_interval=timedelta(minutes=10),
                 keep=[dict(every=steps_per_export)],
             ),
-            mesh=MeshConfig(
+            mesh=train_config.mesh_config if train_config.mesh_config is not None else MeshConfig(
                 # Special axes for MoEs
                 # TODO: this is actually bad and we should remove, but keeping for now
                 compute_mapping={

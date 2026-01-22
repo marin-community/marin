@@ -19,6 +19,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.optim import OptimizerConfig
 from levanter.schedule import IntSchedule
+from levanter.utils.mesh import MeshConfig
 
 
 @dataclass(frozen=True)
@@ -153,3 +154,6 @@ class SimpleVlmTrainConfig:
 
     explicit_mesh_axes: bool = False
     """If True, build device mesh with AxisType.Explicit axes."""
+
+    mesh_config: MeshConfig | None = None
+    """Custom mesh configuration. If None, uses default from default_train_vlm."""
