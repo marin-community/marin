@@ -102,10 +102,9 @@ text_config = Qwen3Config(
     flash_attention_block_size=FLASH_ATTENTION_BLOCK_SIZE,
 )
 
-# Get image token ID from Qwen3 tokenizer (different from default which is for Qwen2)
-from transformers import AutoTokenizer
-_qwen3_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-1.7B")
-IMAGE_TOKEN_INDEX = _qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
+# Qwen3-1.7B <|image_pad|> token ID (hardcoded to avoid HF API call during import)
+# This prevents 429 rate limit errors when 64 workers import this module simultaneously
+IMAGE_TOKEN_INDEX = 151655
 
 # Combined VLM config
 vlm_config = LlavaOnevisionConfig(

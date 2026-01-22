@@ -10,6 +10,8 @@ import logging
 import os
 import shutil
 import tempfile
+import random
+import time
 import urllib.parse
 import warnings
 from dataclasses import dataclass
@@ -1092,20 +1094,109 @@ def save_hf_checkpoint_callback(
     return cb
 
 
+_hf_load_sync_count = 0
+
+
+def _is_jax_distributed_initialized():
+    """Check if JAX distributed has been initialized without triggering initialization."""
+    try:
+        # Check internal JAX state - this doesn't initialize JAX
+        import jax._src.distributed as jax_distributed
+        return jax_distributed.global_state.client is not None
+    except Exception:
+        return False
+
+
+def _hf_load_with_retry(load_fn, *args, max_retries: int = 5, base_delay: float = 2.0, **kwargs):
+    """Load with retry logic for rate limit errors (no JAX synchronization)."""
+    for attempt in range(max_retries):
+        try:
+            with _patch_hf_hub_download():
+                return load_fn(*args, **kwargs)
+        except Exception as e:
+            if "429" in str(e) or "Too Many Requests" in str(e):
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2**attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        f"Rate limited by HuggingFace Hub, retrying in {delay:.1f}s "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(delay)
+                else:
+                    raise
+            else:
+                raise
+
+
+def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 5, base_delay: float = 2.0, **kwargs):
+    """
+    Wrapper that ensures only rank 0 downloads from HF Hub while other ranks wait.
+    All ranks then use the cached result. Includes retry logic for rate limit errors.
+
+    IMPORTANT: This function only uses JAX synchronization if JAX distributed has already
+    been initialized. If called before jax.distributed.initialize(), it falls back to
+    direct loading with retry logic to avoid initializing JAX prematurely.
+
+    Args:
+        load_fn: The HuggingFace loading function (e.g., AutoTokenizer.from_pretrained)
+        *args: Positional arguments to pass to load_fn
+        max_retries: Maximum number of retries for rate limit errors
+        base_delay: Base delay in seconds for exponential backoff
+        **kwargs: Keyword arguments to pass to load_fn
+    """
+    global _hf_load_sync_count
+
+    # Check if JAX distributed is initialized - if not, fall back to direct loading
+    # to avoid initializing JAX before jax.distributed.initialize() is called
+    if not _is_jax_distributed_initialized():
+        return _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, **kwargs)
+
+    # JAX distributed is initialized, safe to use process_index/process_count
+    is_leader = jax.process_index() == 0
+    num_processes = jax.process_count()
+
+    if num_processes > 1:
+        # Distributed mode: only leader downloads, others wait
+        if is_leader:
+            result = _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, **kwargs)
+
+        # Synchronize all ranks - non-leaders wait here for leader to finish downloading
+        sync_global_devices(f"hf_load_{_hf_load_sync_count}")
+        _hf_load_sync_count += 1
+
+        if not is_leader:
+            # Non-leader ranks: Load from cache (should be cached now after leader downloaded)
+            with _patch_hf_hub_download():
+                result = load_fn(*args, **kwargs)
+    else:
+        # Single process mode: Direct load with retry
+        result = _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, **kwargs)
+
+    return result
+
+
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:
-    """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec"""
-    with _patch_hf_hub_download():
-        return AutoTokenizer.from_pretrained(
-            model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
-        )
+    """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec.
+    In distributed mode, only rank 0 downloads while others wait and use the cached result."""
+    return _hf_load_with_rank_sync(
+        AutoTokenizer.from_pretrained,
+        model_name_or_path,
+        revision=revision,
+        cache_dir=local_cache_dir,
+        trust_remote_code=trust_remote_code,
+    )
 
 
 def load_processor(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> ProcessorMixin:
-    """Like AutoProcessor.from_pretrained, but works with gs:// paths or anything on fsspec"""
-    with _patch_hf_hub_download():
-        return AutoProcessor.from_pretrained(
-            model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
-        )
+    """Like AutoProcessor.from_pretrained, but works with gs:// paths or anything on fsspec.
+    In distributed mode, only rank 0 downloads while others wait and use the cached result."""
+    return _hf_load_with_rank_sync(
+        AutoProcessor.from_pretrained,
+        model_name_or_path,
+        revision=revision,
+        cache_dir=local_cache_dir,
+        trust_remote_code=trust_remote_code,
+    )
 
 
 _sync_count = 0
