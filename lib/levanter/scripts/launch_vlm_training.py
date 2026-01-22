@@ -134,6 +134,14 @@ def parse_args():
         help="Use model config from HuggingFace checkpoint (set to True to load full llava-onevision model)",
     )
     parser.add_argument(
+        "--load_checkpoint",
+        type=str,
+        default=None,
+        help="Path to a complete VLM checkpoint (HF format) to load weights from. "
+        "Can be a GCS path (gs://...) or local path. When specified, loads all weights "
+        "(vision encoder + projector + LLM) from this checkpoint.",
+    )
+    parser.add_argument(
         "--use_small_model",
         action="store_true",
         help="Use small model config for testing (overrides --use_hf_model_config)",
@@ -425,6 +433,8 @@ def main():
     logger.info(f"Model: {args.model_name}")
     logger.info(f"Tokenizer: {args.tokenizer}")
     logger.info(f"Initialize from HF: {args.initialize_from_hf}")
+    if args.load_checkpoint:
+        logger.info(f"Load checkpoint: {args.load_checkpoint}")
     logger.info(f"Num train steps: {args.num_train_steps}")
     logger.info(f"Batch size: {args.train_batch_size}")
 
@@ -601,9 +611,15 @@ def main():
         hf_save_path=args.hf_save_path,
         hf_save_steps=args.hf_save_steps,
         # Custom weight loading paths for hybrid model
-        # Though it's SigLIP2, the architecture is the same as SigLIP, so we use the siglip config.
-        vision_checkpoint="google/siglip2-so400m-patch16-384" if use_custom_config else None,
-        llm_checkpoint="Qwen/Qwen3-1.7B" if use_custom_config else None,
+        # If --load_checkpoint is specified, use it (complete VLM checkpoint)
+        # Otherwise, use separate HF Hub paths for vision and LLM
+        vision_checkpoint=(
+            args.load_checkpoint
+            if args.load_checkpoint
+            else ("google/siglip2-so400m-patch16-384" if use_custom_config else None)
+        ),
+        # Don't need llm_checkpoint if loading from complete VLM checkpoint
+        llm_checkpoint=None if args.load_checkpoint else ("Qwen/Qwen3-1.7B" if use_custom_config else None),
         # Evaluation control
         no_eval=args.no_eval,
         # Epoch control
