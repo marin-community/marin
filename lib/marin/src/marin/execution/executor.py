@@ -720,6 +720,8 @@ class Executor:
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
             max_concurrent: Maximum number of steps to run concurrently. If None, run all ready steps in parallel.
         """
+        if max_concurrent is not None and max_concurrent < 1:
+            raise ValueError(f"max_concurrent must be a positive integer, got {max_concurrent}")
 
         # Gather all the steps, compute versions and output paths for all of them.
         logger.info(f"### Inspecting the {len(steps)} provided steps ###")
