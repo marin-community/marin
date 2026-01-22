@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import (
     Any,
+    Callable,
     Dict,
     List,
     Literal,
@@ -48,6 +49,7 @@ from levanter.data.text.cache import build_lm_dataset_cache, load_lm_dataset_cac
 from levanter.data.text.formats import (
     ChatLmDatasetFormat,
     LmDatasetFormatBase,
+    PrebuiltLmDatasetFormat,
     ProcessedChatDict,
     TextLmDatasetFormat,
 )
@@ -172,6 +174,75 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
 
     async def async_len(self) -> int:
         return await self.dataset.async_len()
+
+
+def _identity_loss_weight(loss_weight: np.ndarray) -> np.ndarray:
+    return loss_weight
+
+
+class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
+    """
+    A dataset that maps prebuilt cache entries to LmExample instances.
+    """
+
+    def __init__(
+        self,
+        dataset: AsyncDataset[dict],
+        Pos: Axis,
+        *,
+        input_ids_key: str,
+        loss_weights_key: str | None,
+        loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None,
+        eos_id: Optional[int] = None,
+        block_cross_document_attention: bool = True,
+    ):
+        self.dataset = dataset
+        self.Pos = Pos
+        self.eos_id = eos_id
+        self.block_cross_document_attention = block_cross_document_attention
+        self.input_ids_key = input_ids_key
+        self.loss_weights_key = loss_weights_key
+        self.loss_weight_transform = loss_weight_transform or _identity_loss_weight
+
+        sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
+
+        if loss_weights_key is None:
+
+            @functools.partial(eqx.filter_jit)
+            def _create_lm_example(tokens):
+                tokens = hax.named(tokens, self.Pos)
+                example = LmExample.causal(
+                    tokens=tokens,
+                    eos_id=eos_id,
+                    block_cross_document_attention=block_cross_document_attention,
+                )
+                example = jax.lax.with_sharding_constraint(example, sharding)
+                return example
+
+            def _map(example: dict) -> LmExample:
+                return _create_lm_example(example[input_ids_key])
+
+        else:
+
+            @functools.partial(eqx.filter_jit)
+            def _create_lm_example(tokens, loss_weight):
+                tokens = hax.named(tokens, self.Pos)
+                loss_weight = hax.named(loss_weight, self.Pos)
+                example = LmExample.causal(
+                    tokens=tokens,
+                    loss_weight=loss_weight,
+                    eos_id=eos_id,
+                    block_cross_document_attention=block_cross_document_attention,
+                )
+                example = jax.lax.with_sharding_constraint(example, sharding)
+                return example
+
+            def _map(example: dict) -> LmExample:
+                loss_weight = example[loss_weights_key]
+                loss_weight = self.loss_weight_transform(loss_weight)
+                return _create_lm_example(example[input_ids_key], loss_weight)
+
+        super().__init__(self.dataset, _map)
 
 
 @dataclass(frozen=True)
@@ -509,6 +580,16 @@ def dataset_for_component(
             mask_user_turns=mask_user_turns,
             block_cross_document_attention=block_cross_document_attention,
         )  # type: ignore
+    elif isinstance(fmt, PrebuiltLmDatasetFormat):
+        return PrebuiltLmDataset(
+            cache,
+            Pos,
+            input_ids_key=fmt.input_ids_key,
+            loss_weights_key=fmt.loss_weights_key,
+            loss_weight_transform=fmt.loss_weight_transform,
+            eos_id=eos_id,
+            block_cross_document_attention=block_cross_document_attention,
+        )
     else:
         raise ValueError(f"Unknown format {fmt}")
 

@@ -44,22 +44,26 @@ class LMDatasetSourceConfig:
 
 Note that we do not include `cache_dir` here, as data cache is dependent on the tokenizer used.
 
-#### LMMixtureDatasetConfig
-Next, we introduce a new `LMMixtureDatasetConfig`, which takes in datasets configurations and their weights in dictionaries.
+#### LmDataConfig
+Next, we introduce `LmDataConfig`, which takes in dataset components and their weights in dictionaries.
 All datasets should use the same tokenizer for a consistent vocabulary at training.
 We separate the configuration of datasets and their weights to make it more flexible for users to tune the weights.
 
 ```yaml
 data:
-  configs:
+  components:
     owt:
-      train_urls:
-        - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz"
-      validation_urls:
-        - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz"
+      source:
+        type: url
+        train_urls:
+          - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz"
+        validation_urls:
+          - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz"
     wikitext:
-      id: dlwh/wikitext_103_detokenized
-  weights:
+      source:
+        type: hf
+        id: dlwh/wikitext_103_detokenized
+  train_weights:
     owt: 0.6
     wikitext: 0.4
   tokenizer: gpt2

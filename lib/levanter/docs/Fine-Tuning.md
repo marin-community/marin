@@ -3,8 +3,8 @@
 
 !!! warning
 
-    This tutorial has been superseded by Levanter now supporting chat and supervised datasets directly in the main
-    entry points. See the [Training Data Guide](./guides/Training-Data-Guide.md) for more information.
+    This tutorial has been superseded by Levanter now supporting chat datasets directly in the main entry points.
+    See the [Training Data Guide](./guides/Training-Data-Guide.md) for more information.
 
 While Levanter's main focus is pretraining, we can also use it for fine-tuning.
 As an example, we'll show how to reproduce [Stanford Alpaca](https://crfm.stanford.edu/2023/03/13/alpaca.html),
@@ -450,12 +450,12 @@ def mk_dataset(config: TrainArgs, tokenizer: transformers.PreTrainedTokenizerBas
     dataset = dataset.map_batches(preprocess, batch_size=128, num_cpus=num_cpus_used_by_tokenizer(tokenizer))
     dataset = dataset.build_or_load_cache(config.data_cache_dir)
 
-    dataset = SupervisedDataset(dataset, tokenizer, mask_inputs=config.mask_inputs)
+    dataset = InstructionDataset(dataset, tokenizer, mask_inputs=config.mask_inputs)
 
     return dataset
 ```
 
-`SupervisedDataset` is a class that we'll define later that does the final transformation from the cache to the
+`InstructionDataset` is a class that we'll define later that does the final transformation from the cache to the
 `LmExample` objects that the model expects. `LmExample`s look like this:
 
 ```python
@@ -470,7 +470,7 @@ that tells the model how much (often 0 or 1) to weigh each prediction in the los
 everything before the start of the output.
 
 ```python
-class SupervisedDataset(Dataset[LmExample]):
+class InstructionDataset(Dataset[LmExample]):
     def __init__(self, preproc_dataset, tokenizer):
         self.preproc_dataset = preproc_dataset
         self.tokenizer = tokenizer

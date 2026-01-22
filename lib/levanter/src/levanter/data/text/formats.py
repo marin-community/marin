@@ -3,13 +3,13 @@
 
 import re
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping, Optional, Sequence, TypedDict
+from typing import Any, Callable, Literal, Mapping, Optional, Sequence, TypedDict
 
 import numpy as np
 from draccus import ChoiceRegistry
 
 from levanter.data._preprocessor import BatchProcessor
-from levanter.data.text import BatchTokenizer
+from ._batch_tokenizer import BatchTokenizer
 from levanter.utils.hf_utils import HfTokenizer, num_cpus_used_by_tokenizer
 
 
@@ -38,6 +38,65 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
     chat_template_kwargs: str | None = "chat_template_kwargs"
     pack: bool | int | Literal["pad"] | None = None  # None => default pack behavior (currently pack)
     mask_user_turns: bool = True
+
+
+@LmDatasetFormatBase.register_subclass("prebuilt")
+@dataclass(frozen=True)
+class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
+    """Dataset configuration for caches that already contain tokenized sequences.
+
+    Attributes:
+        input_ids_key: Field name containing token ids.
+        loss_weights_key: Optional field name containing loss weights.
+        loss_weight_transform: Optional callable to transform loss weights before training.
+    """
+
+    input_ids_key: str = "input_ids"
+    loss_weights_key: str | None = None
+    loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None = None
+
+
+class PrebuiltCacheProcessor(BatchProcessor[dict, dict]):
+    """
+    Processor that normalizes prebuilt cache records to consistent dtypes.
+    """
+
+    def __init__(self, input_ids_key: str, loss_weights_key: str | None):
+        self.input_ids_key = input_ids_key
+        self.loss_weights_key = loss_weights_key
+        self._exemplar = {input_ids_key: np.zeros((0,), dtype=np.int32)}
+        if loss_weights_key is not None:
+            self._exemplar[loss_weights_key] = np.zeros((0,), dtype=np.float32)
+
+    def __call__(self, batch: Sequence[dict]) -> Sequence[dict]:
+        out = []
+        for example in batch:
+            if self.input_ids_key not in example:
+                raise ValueError(f"Missing required field '{self.input_ids_key}' in prebuilt example.")
+            item = {
+                self.input_ids_key: np.asarray(example[self.input_ids_key], dtype=np.int32),
+            }
+            if self.loss_weights_key is not None:
+                if self.loss_weights_key not in example:
+                    raise ValueError(f"Missing required field '{self.loss_weights_key}' in prebuilt example.")
+                item[self.loss_weights_key] = np.asarray(example[self.loss_weights_key], dtype=np.float32)
+            out.append(item)
+        return out
+
+    @property
+    def output_exemplar(self) -> dict:
+        return self._exemplar
+
+    @property
+    def num_cpus(self) -> int:
+        return 1
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "input_ids_key": self.input_ids_key,
+            "loss_weights_key": self.loss_weights_key,
+        }
 
 
 class ProcessedChatDict(TypedDict):
@@ -189,6 +248,8 @@ def preprocessor_for_format(
     match format:
         case TextLmDatasetFormat(text_key=key):
             return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=key)
+        case PrebuiltLmDatasetFormat(input_ids_key=input_ids_key, loss_weights_key=loss_weights_key):
+            return PrebuiltCacheProcessor(input_ids_key, loss_weights_key)
         case ChatLmDatasetFormat(
             messages_field=m,
             chat_template=ct,

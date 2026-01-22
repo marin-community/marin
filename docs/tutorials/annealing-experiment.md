@@ -11,7 +11,7 @@ For example, we could do a cooldown on FineMath, and expect improvements on task
 
 ## Overview
 
-1. **Configure the Dataset Mixture**: Use `LMMixtureDatasetConfig` to set up your dataset mixture.
+1. **Configure the Dataset Mixture**: Use `LmDataConfig` to set up your dataset mixture.
 2. **Set Up a Control Model** (optional): Create a control model for baseline comparison.
 3. **Run the Annealing Experiment**: Use the `default_anneal` function to execute your experiment.
 
@@ -23,7 +23,7 @@ This tutorial is based on the [FineMath annealing experiment](https://github.com
 ### 1. Configure the Dataset Mixture
 
 First, create an [`AnnealConfig`][experiments.anneal_config.AnnealConfig] with your desired dataset mixture
-using [`LMMixtureDatasetConfig`][levanter.data.text.LMMixtureDatasetConfig].
+using [`LmDataConfig`][levanter.data.text.LmDataConfig].
 For example, to evaluate the impact of Finemath:
 
 ```python

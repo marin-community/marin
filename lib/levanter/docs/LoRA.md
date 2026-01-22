@@ -2,8 +2,8 @@
 
 !!! warning
 
-    This tutorial has been superseded by Levanter now supporting chat and supervised datasets directly in the main
-    entry points. See the [Training Data Guide](./guides/Training-Data-Guide.md) for more information.
+    This tutorial has been superseded by Levanter now supporting chat datasets directly in the main entry points.
+    See the [Training Data Guide](./guides/Training-Data-Guide.md) for more information.
 
 In the [Fine-Tuning tutorial](./Fine-Tuning.md), we demonstrated how to replicate Alpaca using Levanter with either the Llama 1 or Llama 2 models.
 The Alpaca methodology is a good way to make a pretty good general-purpose instruction-tuned model, but what
