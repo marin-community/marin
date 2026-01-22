@@ -21,7 +21,7 @@ import inspect
 import logging
 import os
 import threading
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -126,7 +126,7 @@ class ActorHandle:
     Provides a unified interface for calling actor methods with .remote() and .call().
     """
 
-    def __getattr__(self, method_name: str):
+    def __getattr__(self, method_name: str) -> "ActorMethod":
         """Get a callable method wrapper for the actor."""
         raise NotImplementedError
 
@@ -150,7 +150,7 @@ class ThreadActorHandle(ActorHandle):
         self._lock = lock  # Serializes all method calls
         self._context = context
 
-    def __getattr__(self, method_name: str):
+    def __getattr__(self, method_name: str) -> "ThreadActorMethod":
         method = getattr(self._instance, method_name)
         return ThreadActorMethod(method, self._lock, self._context)
 
@@ -183,7 +183,7 @@ class _ImmediateFuture:
 
     def __init__(self, result: Any):
         self._result = result
-        self._iterator = None
+        self._iterator: Iterator[Any] | None = None
 
     def result(self) -> Any:
         return self._result
@@ -206,7 +206,7 @@ class GeneratorFuture:
 
     def __init__(self, future: Future):
         self._future = future
-        self._iterator = None
+        self._iterator: Iterator[Any] | None = None
 
     def result(self) -> Any:
         """Get the underlying result from the future."""
@@ -422,7 +422,7 @@ class RayContext:
         num_cpus: float | None = None,
         **kwargs,
     ) -> ActorHandle:
-        options = {}
+        options: dict[str, Any] = {}
         if name is not None:
             options["name"] = name
         options["get_if_exists"] = get_if_exists

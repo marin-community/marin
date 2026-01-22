@@ -15,11 +15,10 @@
 """Test whether vLLM can generate simple completions"""
 
 
-import shutil
-
 import pytest
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.vllm_server import resolve_model_name_or_path
 
 try:
     from vllm import LLM, SamplingParams
@@ -51,6 +50,5 @@ def test_local_llm_inference():
         engine_kwargs={"enforce_eager": True, "max_model_len": 1024},
         generation_params={"max_tokens": 16},
     )
-    model_path = config.ensure_downloaded("/tmp/test-llama-eval")
-    run_vllm_inference(model_path, **config.engine_kwargs)
-    shutil.rmtree("/tmp/test-llama-eval")
+    model_name_or_path, config = resolve_model_name_or_path(config)
+    run_vllm_inference(model_name_or_path, **config.engine_kwargs)

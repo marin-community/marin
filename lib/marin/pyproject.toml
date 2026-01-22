@@ -37,7 +37,7 @@ dependencies = [
     "multiprocess==0.70.16",
     "numpy",
     "openai",
-    "pandas",
+    "pandas>=2.0",
     "plotly",
     "pyarrow>=22",
     "ray==2.53.0",
@@ -150,7 +150,7 @@ rl = [
 ]
 
 eval = [
-    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    "lm-eval[math,api]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
 ]
 
 vllm =[
