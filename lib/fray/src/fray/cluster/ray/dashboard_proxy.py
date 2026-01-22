@@ -20,13 +20,27 @@ import logging
 import re
 import subprocess
 import threading
+import traceback
+from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from flask import Flask, Response, request
 import requests
 from werkzeug.serving import make_server
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LogEntry:
+    """A single log entry for the dashboard."""
+
+    timestamp: datetime
+    cluster: str
+    level: str  # "error", "warning", "info"
+    message: str
+    details: str | None = None  # Full stack trace or additional details
 
 
 @dataclass
@@ -167,6 +181,25 @@ class DashboardProxy:
     proxy_port: int
     server: make_server | None = None
     thread: threading.Thread | None = None
+    _logs: deque[LogEntry] = field(default_factory=lambda: deque(maxlen=100))
+    _logs_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def _add_log(self, cluster: str, level: str, message: str, details: str | None = None) -> None:
+        """Add a log entry thread-safely."""
+        entry = LogEntry(
+            timestamp=datetime.now(),
+            cluster=cluster,
+            level=level,
+            message=message,
+            details=details,
+        )
+        with self._logs_lock:
+            self._logs.append(entry)
+
+    def _get_logs(self, limit: int = 50) -> list[LogEntry]:
+        """Get recent logs thread-safely."""
+        with self._logs_lock:
+            return list(self._logs)[-limit:]
 
     def _build_status(self, cluster: str, ports: RayPortMapping) -> ClusterStatus:
         """Fetch status for a cluster using the forwarded port."""
@@ -219,14 +252,31 @@ class DashboardProxy:
             html += self._render_resources(status)
             html += "</div>"
             return html
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
+            self._add_log(
+                cluster,
+                "error",
+                "Timeout fetching status",
+                f"Command timed out after {e.timeout}s: {' '.join(e.cmd) if e.cmd else 'unknown command'}",
+            )
             return '<div class="error">⏱ Timeout fetching status</div>'
         except subprocess.CalledProcessError as e:
             output = (e.stderr or e.stdout or "").strip()
-            snippet = (output[:300] + "...") if len(output) > 300 else output
-            return f'<div class="error">❌ ray status failed: {snippet or "no output"}</div>'
+            self._add_log(
+                cluster,
+                "error",
+                f"ray status failed (exit {e.returncode})",
+                output or "no output",
+            )
+            return '<div class="error">❌ Failed to fetch status</div>'
         except Exception as e:
-            return f'<div class="error">❌ Error: {str(e)[:100]}</div>'
+            self._add_log(
+                cluster,
+                "error",
+                f"Error: {str(e)}",
+                traceback.format_exc(),
+            )
+            return '<div class="error">❌ Failed to fetch status</div>'
 
     def _create_app(self) -> Flask:
         app = Flask(__name__)
@@ -239,6 +289,37 @@ class DashboardProxy:
 
             ports = self.port_mappings[cluster]
             return self._build_status_html(cluster, ports)
+
+        @app.route("/api/logs-html")
+        def logs_html():
+            """Get recent logs as HTML for HTMX."""
+            logs = self._get_logs(50)
+            if not logs:
+                return '<div class="log-empty">No logs yet</div>'
+
+            html = ""
+            for entry in reversed(logs):  # Most recent first
+                timestamp = entry.timestamp.strftime("%H:%M:%S")
+                level_class = f"log-{entry.level}"
+                level_icon = {"error": "❌", "warning": "⚠️", "info": "ℹ️"}.get(entry.level, "")
+
+                html += f'<div class="log-entry {level_class}">'
+                html += f'<span class="log-time">{timestamp}</span>'
+                html += f'<span class="log-cluster">[{entry.cluster}]</span>'
+                html += f'<span class="log-icon">{level_icon}</span>'
+                html += f'<span class="log-message">{entry.message}</span>'
+                if entry.details:
+                    # Escape HTML in details to prevent XSS
+                    escaped_details = (
+                        entry.details.replace("&", "&amp;")
+                        .replace("<", "&lt;")
+                        .replace(">", "&gt;")
+                        .replace('"', "&quot;")
+                    )
+                    html += f'<details class="log-details"><summary>Details</summary>'
+                    html += f'<pre>{escaped_details}</pre></details>'
+                html += "</div>"
+            return html
 
         @app.route("/")
         def index():
@@ -351,6 +432,102 @@ class DashboardProxy:
             border-radius: 4px;
             font-size: 13px;
         }
+        /* Log panel styles */
+        .log-panel {
+            margin-top: 30px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .log-header {
+            background: #2c3e50;
+            color: white;
+            padding: 12px 16px;
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .log-header-title {
+            font-size: 14px;
+        }
+        .log-refresh-info {
+            font-size: 11px;
+            opacity: 0.7;
+        }
+        .log-content {
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 12px;
+            background: #1a1a2e;
+            color: #eee;
+        }
+        .log-empty {
+            padding: 20px;
+            text-align: center;
+            color: #666;
+        }
+        .log-entry {
+            padding: 8px 12px;
+            border-bottom: 1px solid #2a2a3e;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-start;
+            gap: 8px;
+        }
+        .log-entry:hover {
+            background: #2a2a3e;
+        }
+        .log-time {
+            color: #7f8c8d;
+            flex-shrink: 0;
+        }
+        .log-cluster {
+            color: #3498db;
+            font-weight: 500;
+            flex-shrink: 0;
+        }
+        .log-icon {
+            flex-shrink: 0;
+        }
+        .log-message {
+            color: #ecf0f1;
+            flex: 1;
+            word-break: break-word;
+        }
+        .log-error .log-message {
+            color: #e74c3c;
+        }
+        .log-warning .log-message {
+            color: #f39c12;
+        }
+        .log-details {
+            width: 100%;
+            margin-top: 4px;
+        }
+        .log-details summary {
+            cursor: pointer;
+            color: #95a5a6;
+            font-size: 11px;
+        }
+        .log-details summary:hover {
+            color: #bdc3c7;
+        }
+        .log-details pre {
+            margin-top: 8px;
+            padding: 10px;
+            background: #0d0d1a;
+            border-radius: 4px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            color: #bdc3c7;
+            font-size: 11px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
     </style>
 </head>
 <body>
@@ -379,6 +556,18 @@ class DashboardProxy:
         </div>
 """
             html += """
+    </div>
+    <div class="log-panel">
+        <div class="log-header">
+            <span class="log-header-title">Proxy Logs</span>
+            <span class="log-refresh-info">Auto-refreshes every 5s</span>
+        </div>
+        <div class="log-content"
+             hx-get="/api/logs-html"
+             hx-trigger="load, every 5s"
+             hx-swap="innerHTML">
+            <div class="log-empty">Loading logs...</div>
+        </div>
     </div>
 </body>
 </html>
