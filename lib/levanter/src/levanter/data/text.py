@@ -13,7 +13,9 @@ from functools import cached_property
 from itertools import chain
 from typing import (
     Any,
+    Callable,
     Dict,
+    Generic,
     List,
     Literal,
     Mapping,
@@ -89,9 +91,9 @@ LEDGER_FILE = "ledger.json"
 DEFAULT_IGNORE_INDEX = -100  # Mirrors pytorch's default ignore index
 
 
-class TokenSeqDataset(AsyncDataset[np.ndarray]):
+class GenericTokenSeqDataset(AsyncDataset[T_co], Generic[T_co]):
     """
-    A dataset that yields sequences of tokens of fixed length from an underlying TreeCache.
+    A dataset that yields fixed-length sequences from an underlying TreeCache.
 
     :param doc_cache: the TreeCache to read from
     :param seq_len: The max length of sequences to emit
@@ -105,13 +107,13 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         self._cached_len: Optional[int] = None
 
     async def async_len(self) -> int:
-        token_arrays = await self._await_token_cache()
+        token_arrays = await self._await_cache()
         return token_arrays.data_size // self.seq_len
 
-    async def _await_token_cache(self) -> JaggedArrayStore:
+    async def _await_cache(self, key: str = "input_ids") -> JaggedArrayStore:
         if self._store is None:
             self._store = self.doc_cache.store
-        return self._store.tree["input_ids"]
+        return self._store.tree[key]
 
     async def final_length_is_known(self) -> bool:
         return await self.doc_cache.final_length_is_known()
@@ -120,23 +122,8 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         return True
 
     async def current_len(self) -> Optional[int]:
-        store = await self._await_token_cache()
+        store = await self._await_cache()
         return store.data_size // self.seq_len
-
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
-        token_arrays = await self._await_token_cache()
-        # logger.info(f"Time to get token cache: {time.time() - time_in}")
-        ds_len = await self.wait_until_len_at_least(max(indices) + 1)
-        if ds_len is not None and ds_len < max(indices) + 1:
-            raise ValueError("Requested indices beyond the end of the dataset")
-        offsets = np.array(indices, dtype=np.int64) * self.seq_len
-        with ts.Batch():
-            out = []
-            for offset in offsets:
-                out.append(token_arrays.data[offset : offset + self.seq_len].read())
-
-        out = await asyncio.gather(*out)
-        return out
 
     async def wait_until_len_at_least(self, length: int) -> int:
         # length is brutally slow to compute, so we cache it
@@ -149,12 +136,69 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         return length
 
 
-class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
+class TokenSeqDataset(GenericTokenSeqDataset[np.ndarray]):
+    """A dataset that yields sequences of tokens from a cache."""
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
+        token_arrays = await self._await_cache()
+        ds_len = await self.wait_until_len_at_least(max(indices) + 1)
+        if ds_len is not None and ds_len < max(indices) + 1:
+            raise ValueError("Requested indices beyond the end of the dataset")
+        offsets = np.array(indices, dtype=np.int64) * self.seq_len
+        with ts.Batch():
+            out = []
+            for offset in offsets:
+                out.append(token_arrays.data[offset : offset + self.seq_len].read())
+
+        return await asyncio.gather(*out)
+
+
+class WeightedTokenSeqDataset(GenericTokenSeqDataset[dict[str, np.ndarray]]):
+    """A dataset that yields sequences of tokens and loss weights from a cache."""
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[dict[str, np.ndarray]]:
+        token_arrays = await self._await_cache("input_ids")
+        weight_arrays = await self._await_cache("loss_weight")
+
+        ds_len = await self.wait_until_len_at_least(max(indices) + 1)
+        if ds_len is not None and ds_len < max(indices) + 1:
+            raise ValueError("Requested indices beyond the end of the dataset")
+
+        offsets = np.array(indices, dtype=np.int64) * self.seq_len
+
+        with ts.Batch():
+            token_reads = []
+            weight_reads = []
+            for offset in offsets:
+                token_reads.append(token_arrays.data[offset : offset + self.seq_len].read())
+                weight_reads.append(weight_arrays.data[offset : offset + self.seq_len].read())
+
+        tokens = await asyncio.gather(*token_reads)
+        weights = await asyncio.gather(*weight_reads)
+
+        return [{"input_ids": t, "loss_weight": w} for t, w in zip(tokens, weights)]
+
+
+def standard_extractor(data: np.ndarray, Pos: Axis) -> dict[str, hax.NamedArray]:
+    """Extract tokens from a numpy array."""
+    return {"tokens": hax.named(data, Pos)}
+
+
+def weighted_extractor(data: dict[str, np.ndarray], Pos: Axis) -> dict[str, hax.NamedArray]:
+    """Extract tokens and loss weights from a dict."""
+    return {
+        "tokens": hax.named(data["input_ids"], Pos),
+        "loss_weight": hax.named(data["loss_weight"], Pos),
+    }
+
+
+class CausalLmDataset(MappedAsyncDataset[Any, LmExample]):
     def __init__(
         self,
-        dataset: AsyncDataset[np.ndarray],
+        dataset: AsyncDataset,
         Pos: Axis,
         *,
+        extractor: Callable[[Any, Axis], dict[str, hax.NamedArray]] = standard_extractor,
         ignore_index: Optional[int] = None,
         eos_id: Optional[int] = None,
         block_cross_document_attention: bool = True,
@@ -168,23 +212,43 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
 
         @functools.partial(eqx.filter_jit)
-        def _create_lm_example(tokens):
-            tokens = hax.named(tokens, self.Pos)
+        def _create_lm_example(data):
+            extracted = extractor(data, self.Pos)
             example = LmExample.causal(
-                tokens=tokens,
+                **extracted,
                 ignore_id=self.ignore_id,
                 eos_id=eos_id,
                 block_cross_document_attention=block_cross_document_attention,
             )
-
             example = jax.lax.with_sharding_constraint(example, sharding)
-
             return example
 
         super().__init__(self.dataset, _create_lm_example)
 
     async def async_len(self) -> int:
         return await self.dataset.async_len()
+
+
+class WeightedCausalLmDataset(CausalLmDataset):
+    """A dataset that creates LmExamples with per-token loss weights."""
+
+    def __init__(
+        self,
+        dataset: AsyncDataset[dict[str, np.ndarray]],
+        Pos: Axis,
+        *,
+        ignore_index: Optional[int] = None,
+        eos_id: Optional[int] = None,
+        block_cross_document_attention: bool = True,
+    ):
+        super().__init__(
+            dataset,
+            Pos,
+            extractor=weighted_extractor,
+            ignore_index=ignore_index,
+            eos_id=eos_id,
+            block_cross_document_attention=block_cross_document_attention,
+        )
 
 
 def _maybe_force_tokenizer_parallelism(tokenizer: PreTrainedTokenizerBase):
@@ -199,7 +263,37 @@ LONG_STRING_WORKAROUND = 10_000
 ws = regex.compile(r"\s")
 
 
-class BatchTokenizer(BatchProcessor[dict, dict]):
+class BaseBatchTokenizer(BatchProcessor[dict, dict]):
+    """Base class for tokenizer-based batch processors."""
+
+    def __init__(
+        self,
+        tokenizer: HfTokenizer,
+        text_field: str = "text",
+        *,
+        override_resources=None,
+    ):
+        _maybe_force_tokenizer_parallelism(tokenizer)
+        self.tokenizer = tokenizer
+        self.text_field = text_field
+        self.override_resources = override_resources
+
+    @property
+    def num_cpus(self) -> int:
+        if self.override_resources is not None:
+            cpus = self.override_resources.get("num_cpus", None)
+            if cpus is not None:
+                return cpus
+        return num_cpus_used_by_tokenizer(self.tokenizer)
+
+    @property
+    def num_gpus(self) -> int:
+        if self.override_resources is not None:
+            return self.override_resources.get("num_gpus", 0)
+        return 0
+
+
+class BatchTokenizer(BaseBatchTokenizer):
     """
     A batch processor that tokenizes a batch of strings using a tokenizer.
     By default, this will append eos to the end of the string, even if the tokenizer doesn't.
@@ -218,10 +312,7 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         padding=False,
         max_length=None,
     ):
-        _maybe_force_tokenizer_parallelism(tokenizer)
-        self.tokenizer = tokenizer
-        self.text_field = text_field
-        self.override_resources = override_resources
+        super().__init__(tokenizer, text_field, override_resources=override_resources)
         self.return_attention_mask = return_attention_mask
         self.padding = padding
         if max_length is not None:
@@ -391,19 +482,79 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         else:
             return False
 
-    @property
-    def num_cpus(self) -> int:
-        if self.override_resources is not None:
-            cpus = self.override_resources.get("num_cpus", None)
-            if cpus is not None:
-                return cpus
-        return num_cpus_used_by_tokenizer(self.tokenizer)
+
+class DNABatchTokenizer(BaseBatchTokenizer):
+    """
+    A batch processor that tokenizes DNA sequences with soft-masking support.
+
+    Assigns loss weights based on character case:
+    - Uppercase (ACGT): weight = 1.0
+    - Lowercase (acgt): weight = soft_mask_weight
+
+    No special tokens are added to the sequences.
+
+    Assumptions:
+    - Character-level tokenizer (1:1 character-to-token mapping)
+    - All sequences have the same length (no padding/truncation)
+    - Model context size matches sequence length (see experiment configs).
+      This is important to avoid concatenation of sequences which does not make sense
+      without special tokens.
+    """
+
+    def __init__(
+        self,
+        tokenizer: HfTokenizer,
+        text_field: str = "seq",
+        soft_mask_weight: float = 1.0,
+        *,
+        override_resources=None,
+    ):
+        super().__init__(tokenizer, text_field, override_resources=override_resources)
+        self.soft_mask_weight = soft_mask_weight
+
+    def __call__(self, batch: Sequence[dict]) -> list[dict]:
+        texts = [example[self.text_field] for example in batch]
+
+        assert len(set(len(t) for t in texts)) == 1, "All sequences must have the same length"
+
+        encodings = self.tokenizer(
+            texts,
+            # important so input ids are aligned with loss weights
+            add_special_tokens=False,
+            return_attention_mask=False,
+            return_token_type_ids=False,
+            return_special_tokens_mask=False,
+            return_tensors="np",
+            verbose=False,
+        )
+
+        char_arrays = np.array([list(t) for t in texts], dtype="U1")
+        is_upper = np.char.isupper(char_arrays)
+        loss_weights = np.where(is_upper, 1.0, self.soft_mask_weight).astype(np.float32)
+
+        input_ids = encodings["input_ids"].astype(np.int32)
+
+        assert input_ids.shape == loss_weights.shape, (
+            f"Token count ({input_ids.shape[1]}) != char count ({loss_weights.shape[1]}). "
+            "Tokenizer must be character-level."
+        )
+
+        return [{"input_ids": ids, "loss_weight": weights} for ids, weights in zip(input_ids, loss_weights)]
 
     @property
-    def num_gpus(self) -> int:
-        if self.override_resources is not None:
-            return self.override_resources.get("num_gpus", 0)
-        return 0
+    def output_exemplar(self) -> dict:
+        return {
+            "input_ids": np.zeros((0,), dtype=np.int32),
+            "loss_weight": np.zeros((0,), dtype=np.float32),
+        }
+
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "tokenizer": self.tokenizer.name_or_path,
+            "vocab_size": len(self.tokenizer),
+            "soft_mask_weight": self.soft_mask_weight,
+        }
 
 
 class LmDatasetFormatBase(abc.ABC, ChoiceRegistry):
@@ -444,6 +595,27 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
     chat_template_kwargs: str | None = "chat_template_kwargs"
     pack: bool = True
     mask_user_turns: bool = True
+
+
+@LmDatasetFormatBase.register_subclass("dna")
+@dataclass(frozen=True)
+class DNALmDatasetFormat(LmDatasetFormatBase):
+    """Dataset configuration for DNA sequences with soft-masking support.
+
+    Supports position-wise loss weighting based on character case:
+    - Uppercase nucleotides (ACGT): full loss weight (1.0)
+    - Lowercase nucleotides (acgt): reduced loss weight (soft_mask_weight)
+
+    This is useful for down-weighting repetitive elements in genomic data,
+    as pioneered by GPN and adopted by PlantCaduceus and Evo 2.
+
+    Attributes:
+        text_key: Field name containing the DNA sequence.
+        soft_mask_weight: Loss weight for lowercase (soft-masked) positions.
+    """
+
+    text_key: str = "seq"
+    soft_mask_weight: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -639,6 +811,12 @@ def preprocessor_for_format(
                 chat_template_kwargs_field=ct_kwargs,
                 mask_user_turns=mt,
             )  # type: ignore
+        case DNALmDatasetFormat(text_key=key, soft_mask_weight=weight):
+            return DNABatchTokenizer(
+                tokenizer,
+                text_field=key,
+                soft_mask_weight=weight,
+            )
         case _:
             raise ValueError(f"Unknown format {format}")
 
@@ -663,6 +841,14 @@ def dataset_for_format(
             )
         case ChatLmDatasetFormat(pack=pack, mask_user_turns=mask_user_turns):
             return MultiturnChatDataset(cache, Pos, max_segments_per_example=64 if pack else 1, mask_user_turns=mask_user_turns)  # type: ignore
+        case DNALmDatasetFormat():
+            return WeightedCausalLmDataset(
+                WeightedTokenSeqDataset(cache, Pos.size),
+                Pos,
+                eos_id=eos_id,
+                ignore_index=ignore_index,
+                block_cross_document_attention=block_cross_document_attention,
+            )
         case _:
             raise ValueError(f"Unknown format {format}")
 
