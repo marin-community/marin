@@ -1,10 +1,14 @@
 data:
-  train_urls:
-  - gs://marin-us-central2/documents/instruct/tulu_v2_mix/text/tulu-v2-sft-mixture-000.jsonl.gz
-  - gs://marin-us-central2/documents/instruct/tulu_v2_mix/text/tulu-v2-sft-mixture-001.jsonl.gz
-  - gs://marin-us-central2/documents/instruct/tulu_v2_mix/text/tulu-v2-sft-mixture-002.jsonl.gz
   cache_dir: gs://marin-us-central2/tokenized/OLMo-1B/tuluv2_sft/
   tokenizer: allenai/OLMo-1B
+  components:
+    main:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-us-central2/documents/instruct/tulu_v2_mix/text/tulu-v2-sft-mixture-000.jsonl.gz
+        - gs://marin-us-central2/documents/instruct/tulu_v2_mix/text/tulu-v2-sft-mixture-001.jsonl.gz
+        - gs://marin-us-central2/documents/instruct/tulu_v2_mix/text/tulu-v2-sft-mixture-002.jsonl.gz
 model:
   type: llama
   max_seq_len: 2048

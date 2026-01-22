@@ -336,8 +336,8 @@ class UrlDatasetSourceConfig(LmDatasetSourceConfigBase):
         return urls
 
 
-LmDatasetSourceConfig: TypeAlias = UrlDatasetSourceConfig | HfDatasetSourceConfig
-LMDatasetSourceConfig: TypeAlias = LmDatasetSourceConfig
+LmDatasetSourceConfig: TypeAlias = LmDatasetSourceConfigBase
+LMDatasetSourceConfig: TypeAlias = LmDatasetSourceConfigBase
 
 
 @dataclass(frozen=True)
