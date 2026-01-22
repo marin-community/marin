@@ -714,7 +714,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     lev_model = lev_model.resize_vocab(tokenizer_Vocab.size)
                 else:
                     logger.warning(
-                        f"Model vocab size ({Vocab.size}) does not match tokenizer vocab size ({tokenizer_Vocab.size})"
+                        f"Model vocab size ({Vocab.size}) does not match tokenizer vocab size ({tokenizer_Vocab.size}). "
+                        f"Using model vocab size ({Vocab.size})."
                     )
 
             lev_model = haliax.shard_with_axis_mapping(lev_model, axis_mapping)
