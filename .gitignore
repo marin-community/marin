@@ -227,3 +227,5 @@ scr/*
 
 # Local host Marin config
 .marin.yaml
+
+/scratch
