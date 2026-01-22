@@ -142,7 +142,7 @@ def scale_by_adamh(
             if params is None:
                 raise ValueError("Parameters are required for projection to tangent space.")
             updates = jax.tree.map(
-                lambda p, g: g - (jnp.vdot(p, g) / jnp.vdot(p, p)) * p,
+                lambda p, g: g - (jnp.vdot(p, g) / jnp.maximum(jnp.linalg.norm(p)**2, 1e-10)) * p,
                 params,
                 updates,
                 is_leaf=lambda x: x is None,
