@@ -122,7 +122,7 @@ def dedup_fuzzy_document(config: DedupConfig):
         ids = result_batch["resolved_id"]
         buckets = result_batch["buckets"]
 
-        for doc_id, doc_buckets in zip(ids, buckets, strict=False):
+        for doc_id, doc_buckets in zip(ids, buckets, strict=True):
             if not doc_buckets.is_valid:
                 continue
 
