@@ -2,7 +2,7 @@ import subprocess
 import os
 from ray.job_submission import JobSubmissionClient
 
-RAY_ADDRESS = "http://10.130.0.4:8265" # http://10.130.0.38:8265
+RAY_ADDRESS = "http://10.164.0.4:8265" # http://10.130.0.38:8265
 client = JobSubmissionClient(RAY_ADDRESS)
 
 jobs = client.list_jobs()

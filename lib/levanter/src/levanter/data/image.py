@@ -2072,12 +2072,14 @@ class ImageTaskConfig(abc.ABC):
                     from transformers.models.llava_onevision.image_processing_llava_onevision import (
                         LlavaOnevisionImageProcessor,
                     )
+                    from levanter.compat.hf_checkpoints import hf_load_with_retry
 
                     logger.info(
                         f"Replacing {image_processor_class} with LlavaOnevisionImageProcessor "
                         f"for anyres support (loading from {self.processor})"
                     )
-                    new_image_processor = LlavaOnevisionImageProcessor.from_pretrained(
+                    new_image_processor = hf_load_with_retry(
+                        LlavaOnevisionImageProcessor.from_pretrained,
                         self.processor, trust_remote_code=True
                     )
                     # Copy over any overridden attributes
@@ -2104,9 +2106,9 @@ class ImageTaskConfig(abc.ABC):
 
         # If custom tokenizer is specified, wrap with CustomVLMProcessor
         if self.tokenizer is not None:
-            from transformers import AutoTokenizer
+            from levanter.compat.hf_checkpoints import load_tokenizer
 
-            custom_tokenizer = AutoTokenizer.from_pretrained(self.tokenizer, trust_remote_code=True)
+            custom_tokenizer = load_tokenizer(self.tokenizer, trust_remote_code=True)
             proc = CustomVLMProcessor.from_processor_and_tokenizer(
                 proc, custom_tokenizer,
                 use_full_padded_tokens=self.use_full_padded_tokens,
@@ -3826,23 +3828,24 @@ def create_custom_processor(
         vision_aspect_ratio: Optional aspect ratio mode. Use "single" to disable anyres
                              and only output base patch. If None, uses model config default.
     """
-    from transformers import AutoTokenizer, AutoConfig, AutoImageProcessor, AutoProcessor
+    from transformers import AutoConfig, AutoImageProcessor
+    from levanter.compat.hf_checkpoints import load_tokenizer, load_processor, hf_load_with_retry
 
     if image_grid_pinpoints is None:
         image_grid_pinpoints = DEFAULT_IMAGE_GRID_PINPOINTS
 
-    # Load config
-    config = AutoConfig.from_pretrained(model_name)
+    # Load config with retry logic for rate limits
+    config = hf_load_with_retry(AutoConfig.from_pretrained, model_name)
 
-    # Load the HF processor to get the chat template
-    hf_processor = AutoProcessor.from_pretrained(model_name)
+    # Load the HF processor to get the chat template (with sync/retry)
+    hf_processor = load_processor(model_name)
     chat_template = hf_processor.chat_template
 
-    # Load tokenizer from HF
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # Load tokenizer from HF (with sync/retry)
+    tokenizer = load_tokenizer(model_name)
 
-    # Load image processor from HF and configure do_pad
-    image_processor = AutoImageProcessor.from_pretrained(model_name)
+    # Load image processor from HF and configure do_pad (with retry)
+    image_processor = hf_load_with_retry(AutoImageProcessor.from_pretrained, model_name)
     image_processor.do_pad = do_pad
     image_processor.image_grid_pinpoints = image_grid_pinpoints
 

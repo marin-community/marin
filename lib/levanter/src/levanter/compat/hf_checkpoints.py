@@ -1108,11 +1108,43 @@ def _is_jax_distributed_initialized():
 
 
 def _hf_load_with_retry(load_fn, *args, max_retries: int = 5, base_delay: float = 2.0, **kwargs):
-    """Load with retry logic for rate limit errors (no JAX synchronization)."""
+    """Load with retry logic for rate limit errors (no JAX synchronization). Internal use with _patch_hf_hub_download."""
     for attempt in range(max_retries):
         try:
             with _patch_hf_hub_download():
                 return load_fn(*args, **kwargs)
+        except Exception as e:
+            if "429" in str(e) or "Too Many Requests" in str(e):
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2**attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        f"Rate limited by HuggingFace Hub, retrying in {delay:.1f}s "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(delay)
+                else:
+                    raise
+            else:
+                raise
+
+
+def hf_load_with_retry(load_fn, *args, max_retries: int = 5, base_delay: float = 2.0, **kwargs):
+    """
+    Public wrapper with retry logic for HuggingFace rate limit errors.
+
+    Use this for any HuggingFace from_pretrained calls that might hit rate limits.
+    Example: hf_load_with_retry(AutoConfig.from_pretrained, "model_name")
+
+    Args:
+        load_fn: The HuggingFace loading function (e.g., AutoConfig.from_pretrained)
+        *args: Positional arguments to pass to load_fn
+        max_retries: Maximum number of retries for rate limit errors
+        base_delay: Base delay in seconds for exponential backoff
+        **kwargs: Keyword arguments to pass to load_fn
+    """
+    for attempt in range(max_retries):
+        try:
+            return load_fn(*args, **kwargs)
         except Exception as e:
             if "429" in str(e) or "Too Many Requests" in str(e):
                 if attempt < max_retries - 1:
