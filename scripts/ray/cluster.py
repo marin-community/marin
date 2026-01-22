@@ -739,6 +739,20 @@ def stop_job(ctx, job_id):
         print(f"Job {job_id} stop requested")
 
 
+@cli.command("job-logs")
+@click.argument("job_id")
+@click.option("--follow", "-f", is_flag=True, help="Follow the logs (stream in real-time)")
+@click.pass_context
+def job_logs(ctx, job_id, follow):
+    """View logs for a Ray job."""
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
+        cmd = ["ray", "job", "logs"]
+        if follow:
+            cmd.append("--follow")
+        cmd.append(job_id)
+        subprocess.run(cmd)
+
+
 # Top-level commands
 @cli.command("add-worker")
 @click.argument("tpu_type")
