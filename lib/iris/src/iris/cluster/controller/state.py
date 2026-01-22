@@ -985,6 +985,41 @@ class ControllerState:
 
             return txn
 
+    def check_worker_timeouts(self, timeout_ms: int) -> set[TaskId]:
+        """Check for timed-out workers and mark them as failed.
+
+        Atomically identifies all workers that have exceeded the heartbeat timeout,
+        marks them as failed, and cascades to their running tasks. Returns the set
+        of task IDs that need kill RPCs sent.
+
+        This method acquires the state lock for the entire operation to prevent races
+        with incoming heartbeats.
+
+        Args:
+            timeout_ms: Maximum time since last heartbeat before declaring timeout
+
+        Returns:
+            Set of task IDs that need kill RPCs sent to workers
+        """
+        with self._lock:
+            current_time_ms = now_ms()
+            tasks_to_kill: set[TaskId] = set()
+
+            for worker in self._workers.values():
+                if worker.healthy and (current_time_ms - worker.last_heartbeat_ms) > timeout_ms:
+                    logger.warning(f"Worker {worker.worker_id} timed out (no heartbeat for {timeout_ms}ms)")
+                    txn = TransactionLog(
+                        event=WorkerFailedEvent(
+                            worker_id=worker.worker_id,
+                            error=f"Worker {worker.worker_id} timed out",
+                        )
+                    )
+                    self._on_worker_failed(txn, txn.event)  # type: ignore[arg-type]
+                    self._transactions.append(txn)
+                    tasks_to_kill.update(txn.tasks_to_kill)
+
+            return tasks_to_kill
+
     # -------------------------------------------------------------------------
     # Worker Event Handlers
     # -------------------------------------------------------------------------
@@ -1157,7 +1192,11 @@ class ControllerState:
         )
 
         # Handle side effects based on result
-        self._handle_task_side_effects(task, job, result, txn)
+        if result == TaskTransitionResult.SHOULD_RETRY:
+            self._requeue_task(task, txn)
+            self._cleanup_task_resources(task, job, txn)
+        elif task.is_finished():
+            self._cleanup_task_resources(task, job, txn)
 
         # Coscheduled group failure: if one task fails terminally, kill all running siblings.
         # For multi-host TPU jobs, if one host fails the other hosts cannot continue
@@ -1190,23 +1229,8 @@ class ControllerState:
     # -------------------------------------------------------------------------
     # Shared Helpers for Event Handlers
     # -------------------------------------------------------------------------
-
-    def _handle_task_side_effects(
-        self,
-        task: ControllerTask,
-        job: ControllerJob,
-        result: TaskTransitionResult,
-        txn: TransactionLog,
-    ) -> None:
-        """Handle side effects after a task state transition."""
-        if result == TaskTransitionResult.SHOULD_RETRY:
-            self._requeue_task(task, txn)
-            self._finalize_task(task, job, txn)
-        elif task.is_finished():
-            self._finalize_task(task, job, txn)
-
-    def _finalize_task(self, task: ControllerTask, job: ControllerJob, txn: TransactionLog) -> None:
-        """Unassign from worker and clean up endpoints."""
+    def _cleanup_task_resources(self, task: ControllerTask, job: ControllerJob, txn: TransactionLog) -> None:
+        """Release worker resources and remove task endpoints."""
         worker_id = task.worker_id
         if worker_id:
             worker = self._workers.get(worker_id)
@@ -1267,7 +1291,6 @@ class ControllerState:
             return list(self._transactions)[-limit:]
 
     # --- Job Management ---
-
     def add_job(self, job: ControllerJob, tasks: list[ControllerTask] | None = None) -> list[ControllerTask]:
         """Add job directly to state (test utility).
 

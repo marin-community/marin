@@ -47,6 +47,39 @@ def device_compatible(job_device_type: str, worker_device_type: str) -> bool:
     return job_device_type == worker_device_type
 
 
+def _compare_ordered(
+    attr_value: str | int | float,
+    target_value: str | int | float,
+    op: str,
+) -> bool:
+    """Compare two attribute values with an ordering operator.
+
+    Only numeric types (int, float) support ordered comparisons.
+    Strings are not orderable (comparing "v4-8" > "v5" is not meaningful).
+
+    Raises:
+        ValueError: If either value is a string (ordered comparison not supported).
+    """
+    if isinstance(attr_value, str) or isinstance(target_value, str):
+        raise ValueError(
+            f"Ordered comparison ({op}) not supported for string attributes: "
+            f"{attr_value!r} vs {target_value!r}. Use EQ or NE operators instead."
+        )
+
+    attr_num: int | float = attr_value
+    target_num: int | float = target_value
+
+    if op == "gt":
+        return attr_num > target_num
+    elif op == "ge":
+        return attr_num >= target_num
+    elif op == "lt":
+        return attr_num < target_num
+    elif op == "le":
+        return attr_num <= target_num
+    return False
+
+
 def _evaluate_constraint(
     attr: AttributeValue | None,
     constraint: cluster_pb2.Constraint,
@@ -80,179 +113,15 @@ def _evaluate_constraint(
         case cluster_pb2.CONSTRAINT_OP_NE:
             return attr.value != target.value
         case cluster_pb2.CONSTRAINT_OP_GT:
-            return attr.value > target.value
+            return _compare_ordered(attr.value, target.value, "gt")
         case cluster_pb2.CONSTRAINT_OP_GE:
-            return attr.value >= target.value
+            return _compare_ordered(attr.value, target.value, "ge")
         case cluster_pb2.CONSTRAINT_OP_LT:
-            return attr.value < target.value
+            return _compare_ordered(attr.value, target.value, "lt")
         case cluster_pb2.CONSTRAINT_OP_LE:
-            return attr.value <= target.value
+            return _compare_ordered(attr.value, target.value, "le")
         case _:
             return False
-
-
-def _worker_matches_constraints(
-    capacity: "WorkerCapacity",
-    constraints: Sequence[cluster_pb2.Constraint],
-) -> bool:
-    """Check if a worker matches all constraints.
-
-    Args:
-        capacity: Worker capacity with attributes
-        constraints: Sequence of constraints (all must match)
-
-    Returns:
-        True if worker matches all constraints, False otherwise
-    """
-    for constraint in constraints:
-        attr = capacity.attributes.get(constraint.key)
-        if not _evaluate_constraint(attr, constraint):
-            return False
-    return True
-
-
-@dataclass
-class SchedulingContext:
-    """Transient index for a single scheduling cycle.
-
-    Built from worker capacities at cycle start. Provides O(1) constraint
-    matching for common cases (EQ on string attributes, EXISTS/NOT_EXISTS)
-    via posting lists. Falls back to linear scan for numeric comparisons.
-
-    The posting lists are read-only after construction. As workers are
-    tentatively assigned, we track capacity changes in the capacities dict,
-    but do not update the posting lists. This is safe because posting lists
-    are only used for attribute matching, not capacity checks.
-
-    Workers are tracked in scheduled_workers to ensure each worker receives
-    at most one task per cycle, providing round-robin distribution.
-    """
-
-    all_worker_ids: set[WorkerId]
-
-    # Posting lists for fast constraint matching
-    # Maps: attribute_key -> attribute_value -> set of worker IDs
-    discrete_lists: dict[str, dict[str | int | float, set[WorkerId]]]
-
-    # Worker capacities indexed by worker ID
-    capacities: dict[WorkerId, "WorkerCapacity"]
-
-    # Workers already assigned a task this cycle (for round-robin)
-    scheduled_workers: set[WorkerId] = field(default_factory=set)
-
-    @classmethod
-    def from_capacities(cls, capacities: dict[WorkerId, "WorkerCapacity"]) -> "SchedulingContext":
-        """Build context from capacity map.
-
-        Constructs posting lists for all worker attributes. String, int, and float
-        values are all indexed for fast EQ lookups.
-        """
-        discrete_lists: dict[str, dict[str | int | float, set[WorkerId]]] = {}
-
-        for worker_id, cap in capacities.items():
-            for key, attr_value in cap.attributes.items():
-                if key not in discrete_lists:
-                    discrete_lists[key] = {}
-                value = attr_value.value
-                if value not in discrete_lists[key]:
-                    discrete_lists[key][value] = set()
-                discrete_lists[key][value].add(worker_id)
-
-        return cls(
-            all_worker_ids=set(capacities.keys()),
-            discrete_lists=discrete_lists,
-            capacities=capacities,
-        )
-
-    def get_matching_workers(self, constraints: Sequence[cluster_pb2.Constraint]) -> set[WorkerId]:
-        """Get workers matching ALL constraints.
-
-        Uses posting lists for fast EQ/EXISTS/NOT_EXISTS lookups.
-        Falls back to linear scan for NE, GT, GE, LT, LE operators.
-        """
-        if not constraints:
-            return self.all_worker_ids.copy()
-
-        result: set[WorkerId] | None = None
-
-        for constraint in constraints:
-            matches = self._evaluate_constraint_set(constraint)
-
-            if result is None:
-                result = matches
-            else:
-                result &= matches
-
-            # Short-circuit if no workers match
-            if not result:
-                return set()
-
-        return result or set()
-
-    def _evaluate_constraint_set(self, constraint: cluster_pb2.Constraint) -> set[WorkerId]:
-        """Evaluate a single constraint, returning matching worker IDs."""
-        key = constraint.key
-        op = constraint.op
-
-        # Fast path: EQ on discrete attribute with posting list
-        if op == cluster_pb2.CONSTRAINT_OP_EQ and key in self.discrete_lists:
-            target = AttributeValue.from_proto(constraint.value).value
-            return self.discrete_lists[key].get(target, set()).copy()
-
-        # Fast path: EXISTS check - union all workers that have this attribute
-        if op == cluster_pb2.CONSTRAINT_OP_EXISTS:
-            if key in self.discrete_lists:
-                result: set[WorkerId] = set()
-                for workers in self.discrete_lists[key].values():
-                    result.update(workers)
-                return result
-            # Attribute doesn't exist for any worker
-            return set()
-
-        # Fast path: NOT_EXISTS - all workers minus those with the attribute
-        if op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS:
-            if key in self.discrete_lists:
-                has_attr: set[WorkerId] = set()
-                for workers in self.discrete_lists[key].values():
-                    has_attr.update(workers)
-                return self.all_worker_ids - has_attr
-            # Attribute doesn't exist for any worker, so all workers match
-            return self.all_worker_ids.copy()
-
-        # Slow path: linear scan for NE, GT, GE, LT, LE, or non-indexed attributes
-        result_set: set[WorkerId] = set()
-        for worker_id, cap in self.capacities.items():
-            attr = cap.attributes.get(key)
-            if _evaluate_constraint(attr, constraint):
-                result_set.add(worker_id)
-        return result_set
-
-    def get_workers_by_group(
-        self,
-        group_by: str,
-        matching_worker_ids: set[WorkerId],
-    ) -> dict[str, list[WorkerId]]:
-        """Group workers by the specified attribute value.
-
-        Args:
-            group_by: Attribute key to group by
-            matching_worker_ids: Set of worker IDs to consider
-
-        Returns:
-            Dict mapping group key (str representation) to list of worker IDs
-        """
-        groups: dict[str, list[WorkerId]] = defaultdict(list)
-
-        if group_by not in self.discrete_lists:
-            return groups
-
-        # Use posting list to efficiently find workers in each group
-        for value, workers in self.discrete_lists[group_by].items():
-            for worker_id in workers:
-                if worker_id in matching_worker_ids:
-                    groups[str(value)].append(worker_id)
-
-        return groups
 
 
 @dataclass
@@ -320,6 +189,161 @@ class WorkerCapacity:
         self.available_gpus -= get_gpu_count(res.device)
         self.available_tpus -= get_tpu_chip_count(res.device)
 
+    def matches_constraints(self, constraints: Sequence[cluster_pb2.Constraint]) -> bool:
+        """Check if this worker matches all given constraints."""
+        for constraint in constraints:
+            attr = self.attributes.get(constraint.key)
+            if not _evaluate_constraint(attr, constraint):
+                return False
+        return True
+
+
+@dataclass
+class SchedulingContext:
+    """Transient index for a single scheduling cycle.
+
+    Built from worker capacities at cycle start. Provides O(1) constraint
+    matching for common cases (EQ on string attributes, EXISTS/NOT_EXISTS)
+    via posting lists. Falls back to linear scan for numeric comparisons.
+
+    The posting lists are read-only after construction. As workers are
+    tentatively assigned, we track capacity changes in the capacities dict,
+    but do not update the posting lists. This is safe because posting lists
+    are only used for attribute matching, not capacity checks.
+
+    Workers are tracked in scheduled_workers to ensure each worker receives
+    at most one task per cycle, providing round-robin distribution.
+    """
+
+    all_worker_ids: set[WorkerId]
+
+    # Posting lists for fast constraint matching
+    # Maps: attribute_key -> attribute_value -> set of worker IDs
+    discrete_lists: dict[str, dict[str | int | float, set[WorkerId]]]
+
+    # Worker capacities indexed by worker ID
+    capacities: dict[WorkerId, WorkerCapacity]
+
+    # Workers already assigned a task this cycle (for round-robin)
+    scheduled_workers: set[WorkerId] = field(default_factory=set)
+
+    @classmethod
+    def from_workers(cls, workers: list[ControllerWorker]) -> "SchedulingContext":
+        """Build scheduling context from worker list.
+
+        Creates capacity snapshots for healthy workers and constructs posting
+        lists for all worker attributes. String, int, and float values are
+        indexed for fast EQ lookups.
+        """
+        # Build capacity map for healthy workers
+        capacities = {w.worker_id: WorkerCapacity.from_worker(w) for w in workers if w.healthy}
+        discrete_lists: dict[str, dict[str | int | float, set[WorkerId]]] = {}
+
+        for worker_id, cap in capacities.items():
+            for key, attr_value in cap.attributes.items():
+                if key not in discrete_lists:
+                    discrete_lists[key] = {}
+                value = attr_value.value
+                if value not in discrete_lists[key]:
+                    discrete_lists[key][value] = set()
+                discrete_lists[key][value].add(worker_id)
+
+        return cls(
+            all_worker_ids=set(capacities.keys()),
+            discrete_lists=discrete_lists,
+            capacities=capacities,
+        )
+
+    def matching_workers(self, constraints: Sequence[cluster_pb2.Constraint]) -> set[WorkerId]:
+        """Get workers matching ALL constraints.
+
+        Uses posting lists for fast EQ/EXISTS/NOT_EXISTS lookups.
+        Falls back to linear scan for NE, GT, GE, LT, LE operators.
+        """
+        if not constraints:
+            return self.all_worker_ids.copy()
+
+        result: set[WorkerId] | None = None
+
+        for constraint in constraints:
+            matches = self._evaluate_constraint_set(constraint)
+
+            if result is None:
+                result = matches
+            else:
+                result &= matches
+
+            # Short-circuit if no workers match
+            if not result:
+                return set()
+
+        return result or set()
+
+    def _evaluate_constraint_set(self, constraint: cluster_pb2.Constraint) -> set[WorkerId]:
+        """Evaluate a single constraint, returning matching worker IDs."""
+        key = constraint.key
+        op = constraint.op
+
+        # Fast path: EQ on discrete attribute with posting list
+        if op == cluster_pb2.CONSTRAINT_OP_EQ and key in self.discrete_lists:
+            target = AttributeValue.from_proto(constraint.value).value
+            return self.discrete_lists[key].get(target, set()).copy()
+
+        # Fast path: EXISTS check - union all workers that have this attribute
+        if op == cluster_pb2.CONSTRAINT_OP_EXISTS:
+            if key in self.discrete_lists:
+                result: set[WorkerId] = set()
+                for workers in self.discrete_lists[key].values():
+                    result.update(workers)
+                return result
+            # Attribute doesn't exist for any worker
+            return set()
+
+        # Fast path: NOT_EXISTS - all workers minus those with the attribute
+        if op == cluster_pb2.CONSTRAINT_OP_NOT_EXISTS:
+            if key in self.discrete_lists:
+                has_attr: set[WorkerId] = set()
+                for workers in self.discrete_lists[key].values():
+                    has_attr.update(workers)
+                return self.all_worker_ids - has_attr
+            # Attribute doesn't exist for any worker, so all workers match
+            return self.all_worker_ids.copy()
+
+        # Slow path: linear scan for NE, GT, GE, LT, LE, or non-indexed attributes
+        result_set: set[WorkerId] = set()
+        for worker_id, cap in self.capacities.items():
+            attr = cap.attributes.get(key)
+            if _evaluate_constraint(attr, constraint):
+                result_set.add(worker_id)
+        return result_set
+
+    def workers_by_group(
+        self,
+        group_by: str,
+        matching_worker_ids: set[WorkerId],
+    ) -> dict[str, list[WorkerId]]:
+        """Group workers by the specified attribute value.
+
+        Args:
+            group_by: Attribute key to group by
+            matching_worker_ids: Set of worker IDs to consider
+
+        Returns:
+            Dict mapping group key (str representation) to list of worker IDs
+        """
+        groups: dict[str, list[WorkerId]] = defaultdict(list)
+
+        if group_by not in self.discrete_lists:
+            return groups
+
+        # Use posting list to efficiently find workers in each group
+        for value, workers in self.discrete_lists[group_by].items():
+            for worker_id in workers:
+                if worker_id in matching_worker_ids:
+                    groups[str(value)].append(worker_id)
+
+        return groups
+
 
 @dataclass
 class TaskScheduleResult:
@@ -344,20 +368,19 @@ class SchedulingResult:
     """Result of a scheduling cycle - pure data, no state mutation.
 
     Only contains successful assignments and timed-out tasks.
-    Failure details are available via get_task_schedule_status() for dashboard use.
+    Failure details are available via task_schedule_status() for dashboard use.
     """
 
     assignments: list[tuple[ControllerTask, ControllerWorker]] = field(default_factory=list)
     timed_out_tasks: list[ControllerTask] = field(default_factory=list)
 
 
-def build_capacity_map(workers: list[ControllerWorker]) -> dict[WorkerId, WorkerCapacity]:
-    """Build capacity map for all healthy workers."""
-    return {w.worker_id: WorkerCapacity.from_worker(w) for w in workers if w.healthy}
-
-
 class Scheduler:
-    """Pure task-to-worker matching logic. Does not dispatch tasks, modify state, or run threads."""
+    """Computes optimal task-to-worker assignments based on constraints and capacity.
+
+    Pure functional scheduler that does not dispatch tasks, modify state, or run threads.
+    Each call to find_assignments() returns assignments for a single scheduling cycle.
+    """
 
     def __init__(self, state: ControllerState):
         self._state = state
@@ -398,7 +421,7 @@ class Scheduler:
         constraints = list(job.request.constraints)
 
         # Use posting lists for fast constraint matching
-        matching_worker_ids = context.get_matching_workers(constraints)
+        matching_worker_ids = context.matching_workers(constraints)
 
         # Try to find a worker that can fit this task among matching workers
         for worker_id in matching_worker_ids:
@@ -453,8 +476,7 @@ class Scheduler:
             SchedulingResult with successful assignments and timed-out tasks only
         """
         result = SchedulingResult()
-        capacities = build_capacity_map(workers)
-        context = SchedulingContext.from_capacities(capacities)
+        context = SchedulingContext.from_workers(workers)
         scheduled_task_ids: set[str] = set()
 
         # Group tasks by job for coscheduled handling
@@ -532,17 +554,13 @@ class Scheduler:
         num_tasks = len(schedulable_tasks)
         constraints = list(job.request.constraints)
 
-        # Use posting lists for fast constraint matching
-        matching_worker_ids = context.get_matching_workers(constraints)
-
-        # Use posting lists to group workers by the coscheduling key
-        groups = context.get_workers_by_group(group_by, matching_worker_ids)
+        matching_worker_ids = context.matching_workers(constraints)
+        groups = context.workers_by_group(group_by, matching_worker_ids)
 
         # Find first group with enough workers that have capacity.
         # Note: matching_worker_ids passed attribute constraints (e.g., tpu-name=my-tpu),
         # but we still need to check resource capacity (CPU, memory, GPU). These are
         # orthogonal: a worker can match constraints but lack available resources.
-        # Coscheduled jobs bypass round-robin since they need atomic multi-worker assignment.
         for group_key, group_worker_ids in groups.items():
             available = [worker_id for worker_id in group_worker_ids if context.capacities[worker_id].can_fit_job(job)]
 
@@ -588,13 +606,12 @@ class Scheduler:
         timeout_ms = timeout_seconds * 1000
         return pending_duration_ms > timeout_ms
 
-    def get_task_schedule_status(self, task: ControllerTask) -> TaskScheduleResult:
+    def task_schedule_status(self, task: ControllerTask) -> TaskScheduleResult:
         """Get the current scheduling status of a task.
 
         Used by the dashboard to show why a task is pending.
         Builds fresh scheduling context to reflect current state.
         """
         workers = self._state.get_available_workers()
-        capacities = build_capacity_map(workers)
-        context = SchedulingContext.from_capacities(capacities)
+        context = SchedulingContext.from_workers(workers)
         return self.try_schedule_task(task, context)

@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Self
 
 from iris.cluster.client.remote_client import RemoteClusterClient
-from iris.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
+from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
@@ -303,7 +303,7 @@ class LocalClusterClient:
         )
         controller = Controller(
             config=controller_config,
-            worker_stub_factory=DefaultWorkerStubFactory(),
+            worker_stub_factory=RpcWorkerStubFactory(),
         )
         controller.start()
 

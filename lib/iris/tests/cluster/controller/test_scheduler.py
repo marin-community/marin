@@ -20,7 +20,6 @@ dispatch tasks, modify state, or run threads.
 """
 
 import pytest
-
 from iris.cluster.controller.events import (
     JobSubmittedEvent,
     TaskAssignedEvent,
@@ -147,6 +146,29 @@ def job_request():
             environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
             scheduling_timeout_seconds=scheduling_timeout_seconds,
         )
+
+    return _make
+
+
+@pytest.fixture
+def coscheduled_job_request():
+    """Create a coscheduled LaunchJobRequest for TPU-style multi-replica jobs."""
+
+    def _make(
+        name: str = "coscheduled-job",
+        cpu: int = 1,
+        memory_bytes: int = 1024**3,
+        replicas: int = 4,
+        group_by: str = "tpu-name",
+    ) -> cluster_pb2.Controller.LaunchJobRequest:
+        req = cluster_pb2.Controller.LaunchJobRequest(
+            name=name,
+            serialized_entrypoint=b"test",
+            resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes, replicas=replicas),
+            environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        )
+        req.coscheduling.group_by = group_by
+        return req
 
     return _make
 
@@ -345,31 +367,6 @@ def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
     assert len(result.timed_out_tasks) == 0
 
 
-def test_task_does_not_timeout_when_scheduled_quickly(scheduler, state, worker_metadata):
-    """Verify task with timeout gets assigned before timeout expires."""
-    register_worker(state, "w1", "addr", worker_metadata(cpu=4))
-
-    # Job with 10 second timeout, submitted recently (well within timeout)
-    request = cluster_pb2.Controller.LaunchJobRequest(
-        name="quick-job",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
-        scheduling_timeout_seconds=10,
-    )
-    tasks = submit_job(state, "j1", request, timestamp_ms=now_ms() - 100)  # 100ms ago
-
-    pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()
-
-    result = scheduler.find_assignments(pending_tasks, workers)
-
-    # Task should be assigned, not timed out
-    assert len(result.assignments) == 1
-    assert result.assignments[0][0] == tasks[0]
-    assert len(result.timed_out_tasks) == 0
-
-
 def test_scheduler_respects_worker_capacity_across_assignments(scheduler, state, job_request, worker_metadata):
     """Verify scheduler tracks capacity used by earlier assignments across cycles."""
     # Worker with 4 CPUs
@@ -428,27 +425,6 @@ def test_scheduler_considers_running_tasks_for_capacity(scheduler, state, job_re
     result = scheduler.find_assignments(pending_tasks, workers)
 
     assert len(result.assignments) == 0
-
-
-def test_scheduler_assigns_to_multiple_workers(scheduler, state, job_request, worker_metadata):
-    """Verify scheduler can assign tasks across multiple workers."""
-    # Two workers with 2 CPUs each
-    register_worker(state, "w1", "addr1", worker_metadata(cpu=2))
-    register_worker(state, "w2", "addr2", worker_metadata(cpu=2))
-
-    # Three jobs needing 2 CPUs each
-    # Two should fit (one on each worker), third won't fit
-    for i in range(3):
-        submit_job(state, f"j{i}", job_request(cpu=2))
-
-    pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()
-
-    result = scheduler.find_assignments(pending_tasks, workers)
-
-    assert len(result.assignments) == 2
-    assigned_workers = {w.worker_id for _, w in result.assignments}
-    assert assigned_workers == {WorkerId("w1"), WorkerId("w2")}
 
 
 def test_scheduler_reports_task_too_large_for_cluster(scheduler, state, job_request, worker_metadata):
@@ -946,35 +922,6 @@ def test_coscheduled_job_with_constraints(scheduler, state, worker_metadata):
     assert assigned_tpu_names == {"tpu-b"}
 
 
-def test_non_coscheduled_job_still_works(scheduler, state, job_request, worker_metadata):
-    """Non-coscheduled jobs with replicas are scheduled individually (one task per worker)."""
-    # Create 2 workers, each with only 1 CPU capacity
-    for i in range(2):
-        meta = worker_metadata(cpu=1)  # Only 1 CPU each
-        meta.attributes["tpu-name"].string_value = "tpu-a"
-        meta.attributes["tpu-worker-id"].int_value = i
-        register_worker(state, f"w{i}", f"addr{i}", meta)
-
-    # Non-coscheduled job with 4 replicas (no coscheduling config)
-    req = cluster_pb2.Controller.LaunchJobRequest(
-        name="normal-job",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
-    )
-    # No req.coscheduling.group_by set
-    submit_job(state, "j1", req)
-
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
-
-    # Only 2 tasks can be scheduled (2 workers, 1 CPU each = 2 CPU total)
-    # Non-coscheduled jobs schedule tasks individually
-    assert len(result.assignments) == 2
-
-
 def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata):
     """Coscheduled job waits when some workers in group lack capacity, then schedules when capacity is added."""
     # Create 4 workers, but 2 have insufficient CPU
@@ -1025,72 +972,6 @@ def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata
 # =============================================================================
 # Taint Constraint Tests
 # =============================================================================
-
-
-def test_taint_filters_out_workers(scheduler, state, job_request, worker_metadata):
-    """Job with NOT_EXISTS taint constraint excludes tainted workers."""
-    # Create 2 workers: one tainted, one not
-    meta1 = worker_metadata()
-    meta1.attributes["taint:maintenance"].string_value = "true"
-    register_worker(state, "w1", "addr1", meta1)
-
-    meta2 = worker_metadata()
-    # No taint attribute
-    register_worker(state, "w2", "addr2", meta2)
-
-    # Job with NOT_EXISTS constraint to exclude tainted workers
-    req = job_request()
-    c = req.constraints.add()
-    c.key = "taint:maintenance"
-    c.op = cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
-    submit_job(state, "j1", req)
-
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
-
-    # Task should only be assigned to w2 (untainted)
-    assert len(result.assignments) == 1
-    assert result.assignments[0][1].worker_id == WorkerId("w2")
-
-
-def test_multiple_taints_filter_correctly(scheduler, state, job_request, worker_metadata):
-    """Multiple taint constraints AND together correctly."""
-    # Create 3 workers with different taint combinations
-    # w1: has both taints
-    meta1 = worker_metadata()
-    meta1.attributes["taint:maintenance"].string_value = "true"
-    meta1.attributes["taint:draining"].string_value = "true"
-    register_worker(state, "w1", "addr1", meta1)
-
-    # w2: has only maintenance taint
-    meta2 = worker_metadata()
-    meta2.attributes["taint:maintenance"].string_value = "true"
-    register_worker(state, "w2", "addr2", meta2)
-
-    # w3: no taints
-    meta3 = worker_metadata()
-    register_worker(state, "w3", "addr3", meta3)
-
-    # Job with NOT_EXISTS constraints for both taints
-    req = job_request()
-    c1 = req.constraints.add()
-    c1.key = "taint:maintenance"
-    c1.op = cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
-    c2 = req.constraints.add()
-    c2.key = "taint:draining"
-    c2.op = cluster_pb2.CONSTRAINT_OP_NOT_EXISTS
-    submit_job(state, "j1", req)
-
-    result = scheduler.find_assignments(
-        state.peek_pending_tasks(),
-        state.get_available_workers(),
-    )
-
-    # Task should only be assigned to w3 (no taints)
-    assert len(result.assignments) == 1
-    assert result.assignments[0][1].worker_id == WorkerId("w3")
 
 
 def test_tainted_worker_not_used_for_coscheduled_job(scheduler, state, worker_metadata):

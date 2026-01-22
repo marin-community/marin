@@ -50,8 +50,8 @@ from iris.cluster.client.local_client import (
     _LocalContainerRuntime,
     _LocalImageProvider,
 )
-from iris.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
-from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, Entrypoint, ResourceSpec
+from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import DockerRuntime
@@ -139,7 +139,7 @@ class DemoCluster:
         )
         self._controller = Controller(
             config=controller_config,
-            worker_stub_factory=DefaultWorkerStubFactory(),
+            worker_stub_factory=RpcWorkerStubFactory(),
         )
         self._controller.start()
 
@@ -311,17 +311,20 @@ class DemoCluster:
             results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
             print(f"  {name}: {cluster_pb2.JobState.Name(status.state)}")
 
-        # Submit a coscheduled job that demonstrates TPU slice affinity
-        job = self.client.submit(
-            entrypoint=Entrypoint.from_callable(distributed_work),
-            name="demo-coscheduled",
-            resources=ResourceSpec(cpu=1, memory="512m", replicas=4),
-            environment=EnvironmentSpec(workspace="/app"),
-            coscheduling=CoschedulingConfig(group_by="tpu-name"),
-        )
-        status = job.wait()
-        results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
-        print(f"  demo-coscheduled: {cluster_pb2.JobState.Name(status.state)}")
+        # Coscheduled jobs require TPU workers which aren't available in docker mode
+        if not self._use_docker:
+            job = self.client.submit(
+                entrypoint=Entrypoint.from_callable(distributed_work),
+                name="demo-coscheduled",
+                resources=ResourceSpec(cpu=1, memory="512m", replicas=4),
+                environment=EnvironmentSpec(workspace="/app"),
+                coscheduling=CoschedulingConfig(group_by="tpu-name"),
+            )
+            status = job.wait()
+            results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
+            print(f"  demo-coscheduled: {cluster_pb2.JobState.Name(status.state)}")
+        else:
+            print("  demo-coscheduled: SKIPPED (not available in docker mode)")
 
         return results
 

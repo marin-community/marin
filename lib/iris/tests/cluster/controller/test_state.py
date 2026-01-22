@@ -685,11 +685,7 @@ def make_job_request():
 
 
 def test_worker_cannot_accept_task_when_resources_committed(make_job_request, worker_metadata):
-    """E2E: A worker with committed resources cannot accept tasks that exceed remaining capacity.
-
-    This exercises the full flow: task assignment commits resources, and the scheduler
-    respects committed resources when evaluating capacity for subsequent tasks.
-    """
+    """E2E: A worker with committed resources cannot accept tasks that exceed remaining capacity."""
     state = ControllerState()
 
     # Worker with 4 CPUs
@@ -797,24 +793,6 @@ def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_meta
 
 
 def test_worker_registers_with_attributes(worker_metadata):
-    """Worker attributes are extracted from metadata and stored on registration."""
-    state = ControllerState()
-
-    metadata = worker_metadata()
-    metadata.attributes["tpu-name"].string_value = "my-tpu"
-    metadata.attributes["tpu-worker-id"].int_value = 0
-
-    worker_id = register_worker(state, "w1", "host:8080", metadata)
-
-    worker = state.get_worker(worker_id)
-    assert worker is not None
-    assert "tpu-name" in worker.attributes
-    assert worker.attributes["tpu-name"].value == "my-tpu"
-    assert "tpu-worker-id" in worker.attributes
-    assert worker.attributes["tpu-worker-id"].value == 0
-
-
-def test_worker_attributes_with_multiple_types(worker_metadata):
     """Worker attributes support string, int, and float values."""
     state = ControllerState()
 

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unified controller managing background scheduling and worker health checks."""
+"""Iris Controller logic for connecting state, scheduler and managing workers."""
 
 import logging
 import threading
@@ -38,7 +38,7 @@ from iris.cluster.controller.state import ControllerState, ControllerTask, Contr
 from iris.cluster.types import JobId, TaskId
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import ExponentialBackoff, now_ms
+from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class WorkerClient(Protocol):
 
 
 class WorkerStubFactory(Protocol):
-    """Factory for getting worker RPC stubs. Allows injecting mock stubs for testing."""
+    """Factory for getting worker RPC stubs."""
 
     def get_stub(self, address: str) -> WorkerClient:
         """Get a worker stub for the given address.
@@ -93,8 +93,8 @@ class WorkerStubFactory(Protocol):
         ...
 
 
-class DefaultWorkerStubFactory:
-    """Default factory that creates real RPC client stubs."""
+class RpcWorkerStubFactory:
+    """Factory that creates real gRPC client stubs for worker communication."""
 
     def get_stub(self, address: str) -> WorkerClient:
         return WorkerServiceClientSync(
@@ -105,35 +105,36 @@ class DefaultWorkerStubFactory:
 
 @dataclass
 class ControllerConfig:
-    """Controller configuration.
-
-    Args:
-        host: Host to bind the HTTP server to (default: "127.0.0.1")
-        port: Port to bind the HTTP server to (default: 0 for auto-assign)
-        bundle_dir: Directory for storing uploaded job bundles (optional)
-        scheduler_interval_seconds: How often the scheduler checks for pending tasks (default: 0.5)
-        worker_timeout_seconds: Time after which a worker without heartbeat is marked unhealthy (default: 60.0)
-        max_dispatch_parallelism: Maximum concurrent dispatch RPCs (default: 32)
-    """
+    """Controller configuration."""
 
     host: str = "127.0.0.1"
+    """Host to bind the HTTP server to."""
+
     port: int = 0
+    """Port to bind the HTTP server to. Use 0 for auto-assign."""
+
     bundle_dir: Path | None = None
+    """Directory for storing uploaded job bundles."""
+
     scheduler_interval_seconds: float = 0.5
+    """How often to run the scheduling loop (in seconds)."""
+
     worker_timeout_seconds: float = 60.0
+    """How long without worker heartbeats before declaring a worker unavailable."""
+
     max_dispatch_parallelism: int = 32
+    """Maximum number of concurrent RPC dispatch operations."""
 
 
 @dataclass
 class DispatchBatch:
-    """A batch of tasks ready for RPC dispatch.
+    """Batch of scheduled tasks ready for RPC dispatch to workers.
 
     Contains tasks that have already had their resources committed (via TaskAssignedEvent).
     The RPC requests are pre-built so the dispatch phase can run without holding locks.
     """
 
     tasks: list[tuple[ControllerTask, ControllerWorker, cluster_pb2.Worker.RunTaskRequest]] = field(default_factory=list)
-    is_coscheduled: bool = False
 
 
 class Controller:
@@ -150,7 +151,7 @@ class Controller:
         config = ControllerConfig(port=8080)
         controller = Controller(
             config=config,
-            worker_stub_factory=DefaultWorkerStubFactory(),
+            worker_stub_factory=RpcWorkerStubFactory(),
         )
         controller.start()
         try:
@@ -181,9 +182,6 @@ class Controller:
         # Background loop state
         self._stop = False
         self._wake_event = threading.Event()
-        # Prevents concurrent scheduling cycles from double-assigning the same task.
-        # The entire peek → assign → dispatch sequence runs under this lock.
-        self._scheduler_lock = threading.Lock()
         self._scheduling_loop_thread: threading.Thread | None = None
         self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
@@ -203,15 +201,6 @@ class Controller:
         - Task finished (freeing capacity)
         """
         self._wake_event.set()
-
-    def kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
-        """Send KILL RPCs to workers for killed tasks.
-
-        Called by the service after state transitions that kill tasks.
-        Delegates to _kill_tasks_on_workers which has access to the stub factory.
-        """
-        if task_ids:
-            self._kill_tasks_on_workers(task_ids)
 
     def start(self) -> None:
         """Start main controller loop and dashboard server in background daemon threads."""
@@ -268,35 +257,35 @@ class Controller:
     def _run_scheduling(self) -> None:
         """Run one scheduling cycle.
 
-        Split into two phases:
-        1. Under lock: compute assignments, commit resources, build RPC requests
-        2. Without lock: send RPCs to workers
+        Split into phases:
+        1. Compute assignments and commit resources
+        2. Send dispatch RPCs
+        3. Handle timed-out tasks (send kill RPCs)
 
-        This prevents the scheduler lock from being held during potentially slow
-        network operations (RPCs can take seconds on transient failures with retry).
+        No lock is needed since only one scheduling thread exists. All state
+        reads and writes go through ControllerState which has its own lock.
         """
-        # Phase 1: Compute assignments and commit resources (under lock)
-        with self._scheduler_lock:
-            pending_tasks = self._state.peek_pending_tasks()
-            workers = self._state.get_available_workers()
+        # Phase 1: Compute assignments and commit resources
+        pending_tasks = self._state.peek_pending_tasks()
+        workers = self._state.get_available_workers()
 
-            if not pending_tasks:
-                return
+        if not pending_tasks:
+            return
 
-            result = self._scheduler.find_assignments(pending_tasks, workers)
+        result = self._scheduler.find_assignments(pending_tasks, workers)
 
-            # Handle timeouts under lock
-            for task in result.timed_out_tasks:
-                self._mark_task_unschedulable(task)
-
-            if not result.assignments:
-                return
-
-            # Commit resources and prepare dispatch batches
+        # Prepare dispatch batches (commits resources via TaskAssignedEvent)
+        dispatch_batches: list[DispatchBatch] = []
+        if result.assignments:
             dispatch_batches = self._prepare_dispatch_batches(result.assignments)
 
-        # Phase 2: Send RPCs (no lock held)
-        self._execute_dispatch_batches(dispatch_batches)
+        # Phase 2: Send dispatch RPCs
+        if dispatch_batches:
+            self._execute_dispatch_batches(dispatch_batches)
+
+        # Phase 3: Handle timed-out tasks (sends kill RPCs)
+        for task in result.timed_out_tasks:
+            self._mark_task_unschedulable(task)
 
     def _prepare_dispatch_batches(
         self,
@@ -304,8 +293,8 @@ class Controller:
     ) -> list[DispatchBatch]:
         """Commit resources and prepare RPC requests for dispatch.
 
-        Must be called under _scheduler_lock. Groups assignments by job and
-        creates DispatchBatch objects with pre-built RPC requests.
+        Groups assignments by job and creates DispatchBatch objects with
+        pre-built RPC requests. Resource commitment happens via TaskAssignedEvent.
         """
         # Group assignments by job for coscheduled handling
         by_job: dict[JobId, list[tuple[ControllerTask, ControllerWorker]]] = defaultdict(list)
@@ -318,7 +307,7 @@ class Controller:
             if job is None:
                 continue
 
-            batch = DispatchBatch(is_coscheduled=job.is_coscheduled)
+            batch = DispatchBatch()
 
             for task, worker in job_assignments:
                 # Create attempt BEFORE RPC so worker state reports have a valid attempt_id
@@ -357,14 +346,12 @@ class Controller:
     def _execute_dispatch_batches(self, batches: list[DispatchBatch]) -> None:
         """Send RPCs for all dispatch batches.
 
-        Called without holding _scheduler_lock. Handles failures by marking
-        workers as failed (which cascades to tasks).
+        Handles failures by marking workers as failed (which cascades to tasks).
+        Coscheduled and non-coscheduled jobs are dispatched identically since
+        the all-or-nothing scheduling semantics are already handled during assignment.
         """
         for batch in batches:
-            if batch.is_coscheduled:
-                self._dispatch_coscheduled_batch(batch)
-            else:
-                self._dispatch_batch(batch)
+            self._dispatch_batch(batch)
 
     def _dispatch_batch(self, batch: DispatchBatch) -> None:
         """Dispatch independent tasks in parallel.
@@ -411,57 +398,7 @@ class Controller:
             all_tasks_to_kill.update(txn.tasks_to_kill)
 
         if all_tasks_to_kill:
-            self._kill_tasks_on_workers(all_tasks_to_kill)
-
-    def _dispatch_coscheduled_batch(self, batch: DispatchBatch) -> None:
-        """Dispatch coscheduled tasks in parallel.
-
-        Resources have already been committed. Sends RPCs and handles failures.
-        For coscheduled jobs, if any task fails to dispatch, WorkerFailedEvent
-        cascades to mark tasks as WORKER_FAILED. Running tasks will eventually
-        fail due to missing peers.
-        """
-        if not batch.tasks:
-            return
-
-        # Send all RPCs in parallel
-        futures = {
-            self._dispatch_executor.submit(self._send_run_task_rpc, task, worker, request): (task, worker)
-            for task, worker, request in batch.tasks
-        }
-
-        # Collect results
-        failed: list[tuple[ControllerTask, ControllerWorker, str]] = []
-        try:
-            for future in as_completed(futures, timeout=DISPATCH_RPC_TIMEOUT_SECONDS + 1):
-                task, worker = futures[future]
-                try:
-                    future.result(timeout=0)
-                except Exception as e:
-                    failed.append((task, worker, str(e)))
-        except TimeoutError:
-            for future, (task, worker) in futures.items():
-                if not future.done():
-                    failed.append((task, worker, "Dispatch RPC timed out"))
-                else:
-                    exc = future.exception()
-                    if exc is not None:
-                        failed.append((task, worker, str(exc)))
-
-        # Handle failures
-        all_tasks_to_kill: set[TaskId] = set()
-        for task, worker, error in failed:
-            logger.warning(f"Coscheduled dispatch failed for {task.task_id}: {error}")
-            txn = self._state.handle_event(
-                WorkerFailedEvent(
-                    worker_id=worker.worker_id,
-                    error=f"Dispatch RPC failed: {error}",
-                )
-            )
-            all_tasks_to_kill.update(txn.tasks_to_kill)
-
-        if all_tasks_to_kill:
-            self._kill_tasks_on_workers(all_tasks_to_kill)
+            self.kill_tasks_on_workers(all_tasks_to_kill)
 
     def _send_run_task_rpc(
         self,
@@ -517,9 +454,9 @@ class Controller:
             )
         )
         if txn.tasks_to_kill:
-            self._kill_tasks_on_workers(txn.tasks_to_kill)
+            self.kill_tasks_on_workers(txn.tasks_to_kill)
 
-    def _kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
+    def kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
         """Send KILL RPCs to workers for tasks that were running.
 
         Called after state has marked tasks as killed. For each task that had
@@ -555,25 +492,15 @@ class Controller:
                 logger.warning(f"Failed to send kill RPC for task {task_id} to worker {worker_id}: {e}")
 
     def _check_worker_timeouts(self) -> None:
-        """Mark workers as unhealthy if they haven't sent heartbeat within worker_timeout_seconds."""
-        current_time_ms = now_ms()
+        """Check for worker timeouts and send kill RPCs for affected tasks."""
         timeout_ms = int(self._config.worker_timeout_seconds * 1000)
 
-        for worker in self._state.list_all_workers():
-            if worker.healthy and (current_time_ms - worker.last_heartbeat_ms) > timeout_ms:
-                logger.warning(
-                    f"Worker {worker.worker_id} timed out (no heartbeat for {self._config.worker_timeout_seconds}s)"
-                )
-                # Use WORKER_FAILED event which will cascade to running tasks
-                txn = self._state.handle_event(
-                    WorkerFailedEvent(
-                        worker_id=worker.worker_id,
-                        error=f"Worker {worker.worker_id} timed out",
-                    )
-                )
-                # Send kill RPCs for any other tasks that were killed as a result
-                if txn.tasks_to_kill:
-                    self._kill_tasks_on_workers(txn.tasks_to_kill)
+        # State computes failed workers and marks them atomically under lock
+        tasks_to_kill = self._state.check_worker_timeouts(timeout_ms)
+
+        # Send kill RPCs outside lock
+        if tasks_to_kill:
+            self.kill_tasks_on_workers(tasks_to_kill)
 
     def _run_server(self) -> None:
         try:
