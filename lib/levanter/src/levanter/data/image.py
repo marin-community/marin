@@ -3001,6 +3001,18 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
 
     Set this to 24 (= image_size / patch_size) to match your model's actual output."""
 
+    # Packing configuration
+    enable_packing: bool = False
+    """Enable sequence packing for VLM training. Multiple samples are combined into
+    a single training example with attention masks preventing cross-sample attention.
+    IMPORTANT: Packing requires disable_anyres=True in model config and use_cache=True."""
+
+    max_segments_per_pack: int = 64
+    """Maximum number of samples that can be packed into a single training example."""
+
+    packing_cache_dir: Optional[str] = None
+    """Directory to cache pack assignments. If None, uses cache_dir/packing/."""
+
     def __post_init__(self):
         if len(self.configs) == 0:
             raise ValueError("At least one dataset must be provided")
@@ -3057,6 +3069,45 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
             key=mix_key,
             block_size=self.mixture_block_size,
         )
+
+        # Apply packing if enabled
+        if self.enable_packing:
+            if not self.use_cache:
+                raise ValueError("VLM Packing requires use_cache=True. Streaming mode is not supported for packing.")
+
+            from levanter.data.vlm_packing import VLMPackerConfig, VLMPrepackedDataset
+
+            # Compute features_per_patch from vision_feature_height
+            if self.vision_feature_height is not None:
+                features_per_patch = self.vision_feature_height ** 2
+            else:
+                features_per_patch = 576  # Default for 384x384 images with patch_size=16
+
+            # Compute max_patches (disable_anyres mode means 1 patch per image typically)
+            # For packing, we'll use a reasonable default
+            max_patches = max_num_patches if max_num_patches is not None else 10
+
+            # Packing cache directory
+            packing_cache_dir = self.packing_cache_dir
+            if packing_cache_dir is None and self.cache_dir is not None:
+                packing_cache_dir = os.path.join(self.cache_dir, "packing")
+
+            packer_config = VLMPackerConfig(
+                max_length=self.max_length,
+                max_patches=max_patches,
+                max_segments=self.max_segments_per_pack,
+                features_per_patch=features_per_patch,
+                pad_token_id=self.pad_token_id,
+            )
+
+            logger.info(f"Enabling VLM packing with max_length={self.max_length}, max_patches={max_patches}, "
+                        f"max_segments={self.max_segments_per_pack}, features_per_patch={features_per_patch}")
+
+            mixture = VLMPrepackedDataset(
+                base_dataset=mixture,
+                config=packer_config,
+                cache_dir=packing_cache_dir,
+            )
 
         return mixture
 

@@ -483,6 +483,189 @@ class LlavaOnevisionModel(eqx.Module):
         indices_expanded = jnp.broadcast_to(indices_expanded, (*indices.shape, *arrays.shape[2:]))
         return jnp.take_along_axis(arrays, indices_expanded, axis=1)
 
+    @staticmethod
+    def _compute_per_segment_image_indices(
+        special_image_mask: jnp.ndarray,
+        segment_ids: jnp.ndarray,
+        image_segment_ids: jnp.ndarray,
+        features_per_patch: int,
+        total_image_tokens: int,
+    ) -> jnp.ndarray:
+        """Compute image feature indices using per-segment cumsum for packing support.
+
+        For packed sequences, each segment has its own set of image features.
+        This function computes indices that correctly map each image placeholder
+        to its corresponding image feature within the same segment.
+
+        Example:
+            segment_ids:       [0, 0, 0, 1, 1, 1, -1]  # 2 samples packed
+            special_image_mask:[1, 1, 0, 1, 0, 0,  0]  # 2 images in seg0, 1 in seg1
+            image_segment_ids: [0, 0, 1, -1]           # 2 patches for seg0, 1 for seg1
+
+            For placeholder at position 0 (seg 0, 1st placeholder): index = 0
+            For placeholder at position 1 (seg 0, 2nd placeholder): index = features_per_patch
+            For placeholder at position 3 (seg 1, 1st placeholder): index = 2*features_per_patch
+
+        Args:
+            special_image_mask: Boolean mask for image placeholders (batch, seq_len)
+            segment_ids: Segment ID per token (batch, seq_len), -1 for padding
+            image_segment_ids: Segment ID per patch (batch, max_patches), -1 for padding
+            features_per_patch: Number of features per image patch
+            total_image_tokens: Total number of image tokens in the flattened features
+
+        Returns:
+            Indices array (batch, seq_len) mapping each position to an image feature index.
+            For non-placeholder positions, returns 0 (will be masked out anyway).
+        """
+        batch_size, seq_len = special_image_mask.shape
+        _, max_patches = image_segment_ids.shape
+
+        # Compute starting feature index for each segment
+        # image_segment_ids: (batch, max_patches) with segment IDs or -1
+        # For each patch, compute its cumulative index in the flattened features
+        # patch_feature_starts[b, p] = starting index of features for patch p
+
+        # First, create a mask for valid patches (segment_id >= 0)
+        valid_patch_mask = (image_segment_ids >= 0).astype(jnp.int32)
+
+        # Compute cumulative feature count up to each patch
+        # Each valid patch contributes features_per_patch features
+        cumulative_features = jnp.cumsum(valid_patch_mask * features_per_patch, axis=-1)
+        # patch_feature_starts[p] = cumulative_features[p-1] or 0 for p=0
+        patch_feature_starts = jnp.concatenate([
+            jnp.zeros((batch_size, 1), dtype=jnp.int32),
+            cumulative_features[:, :-1]
+        ], axis=-1)
+
+        # For each segment, find the starting feature index
+        # We need to map: segment_id -> first patch index for that segment
+        # Then: first patch index -> feature start index
+
+        # Create segment to first feature index mapping
+        # For each unique segment, find the minimum patch index with that segment ID
+        max_segments = jnp.max(segment_ids) + 1
+        max_segments = jnp.maximum(max_segments, 1)  # Ensure at least 1
+
+        def compute_segment_starts_for_batch(img_seg_ids, patch_starts):
+            """Compute starting feature index for each segment in one batch element."""
+            # For each segment s, find the first patch with segment_id == s
+            # segment_feature_starts[s] = patch_starts[first_patch_with_segment_s]
+
+            # Initialize with large values (will take min)
+            segment_starts = jnp.full((64,), total_image_tokens, dtype=jnp.int32)  # Max 64 segments
+
+            # For each patch, if it's the first patch for its segment, record the start
+            for p in range(max_patches):
+                seg_id = img_seg_ids[p]
+                # Only process valid patches (segment_id >= 0)
+                valid = seg_id >= 0
+                # Update segment_starts[seg_id] if this is earlier than current value
+                current = segment_starts[seg_id]
+                new_value = jnp.where(valid & (patch_starts[p] < current), patch_starts[p], current)
+                segment_starts = segment_starts.at[seg_id].set(new_value)
+
+            return segment_starts
+
+        # Use lax.scan or vmap for efficiency across batch
+        def compute_for_batch(img_seg_ids, patch_starts):
+            # Create segment -> first feature index mapping
+            segment_starts = jnp.full((64,), 0, dtype=jnp.int32)  # Default to 0 for invalid
+
+            # Vectorized approach: find first occurrence of each segment
+            # For segment s: find min patch index p where img_seg_ids[p] == s
+            def update_segment_start(segment_starts, patch_idx):
+                seg_id = img_seg_ids[patch_idx]
+                valid = seg_id >= 0
+                # If this segment hasn't been seen yet (current value is 0 and we're not at start)
+                # or if this patch comes earlier, update
+                current = segment_starts[seg_id]
+                feature_start = patch_starts[patch_idx]
+                # Only update if valid and this is the first occurrence
+                # We detect first occurrence by checking if all previous patches have different seg_id
+                is_first = jnp.sum((img_seg_ids[:patch_idx] == seg_id).astype(jnp.int32)) == 0
+                should_update = valid & is_first
+                new_value = jnp.where(should_update, feature_start, current)
+                return segment_starts.at[seg_id].set(new_value), None
+
+            segment_starts, _ = jax.lax.scan(update_segment_start, segment_starts, jnp.arange(max_patches))
+            return segment_starts
+
+        # Compute segment starts for each batch element
+        segment_feature_starts = jax.vmap(compute_for_batch)(image_segment_ids, patch_feature_starts)
+        # segment_feature_starts: (batch, 64) - starting feature index for each segment
+
+        # Now compute indices for each position in the sequence
+        def compute_indices_for_batch(mask, seg_ids, img_seg_ids, seg_starts):
+            """Compute image indices for one batch element using per-segment cumsum."""
+            # For each position, if it's a placeholder:
+            # 1. Get its segment ID
+            # 2. Count how many placeholders with same segment ID came before (per-segment cumsum)
+            # 3. Add to segment's starting feature index
+
+            # Per-segment cumsum: for each segment, count placeholders
+            # indices[i] = seg_starts[seg_ids[i]] + cumsum_within_segment[i] * features_per_patch
+
+            # Compute per-segment cumsum
+            # For each position, count previous placeholders with same segment
+            def per_segment_cumsum(carry, x):
+                """Accumulate count per segment."""
+                seg_counts, prev_seg = carry
+                pos_idx, is_placeholder, seg_id = x
+
+                # Get current count for this segment
+                current_count = seg_counts[seg_id]
+
+                # Update count if this is a placeholder with valid segment
+                valid = is_placeholder & (seg_id >= 0)
+                new_count = jnp.where(valid, current_count + 1, current_count)
+                seg_counts = seg_counts.at[seg_id].set(new_count)
+
+                # The index for this position is current_count (before increment)
+                local_idx = jnp.where(valid, current_count, 0)
+
+                return (seg_counts, seg_id), local_idx
+
+            # Initialize per-segment counts
+            init_counts = jnp.zeros((64,), dtype=jnp.int32)
+
+            # Pack inputs
+            inputs = (jnp.arange(seq_len), mask.astype(jnp.bool_), seg_ids)
+
+            # Run scan
+            (final_counts, _), local_indices = jax.lax.scan(
+                per_segment_cumsum,
+                (init_counts, -1),
+                inputs,
+            )
+
+            # Compute global indices: seg_start + local_idx * features_per_patch
+            # But we need to handle the case where each placeholder expands to features_per_patch
+            # Actually, local_indices counts placeholders, each gets features_per_patch tokens
+            # The i-th placeholder in a segment gets features [i*features_per_patch : (i+1)*features_per_patch]
+            # We gather the first feature of each patch, so index = i * features_per_patch
+
+            # Get segment start for each position
+            seg_start_per_pos = seg_starts[jnp.clip(seg_ids, 0, 63)]
+
+            # Compute final index: segment_start + local_index * features_per_patch
+            # local_indices is the count of placeholders before this one in the same segment
+            global_indices = seg_start_per_pos + local_indices * features_per_patch
+
+            # Ensure indices are within bounds
+            global_indices = jnp.clip(global_indices, 0, total_image_tokens - 1)
+
+            return global_indices
+
+        # Apply to each batch element
+        all_indices = jax.vmap(compute_indices_for_batch)(
+            special_image_mask,
+            segment_ids,
+            image_segment_ids,
+            segment_feature_starts,
+        )
+
+        return all_indices
+
     @property
     def Vocab(self) -> Axis:
         """Get the vocabulary axis from the language model."""
@@ -638,6 +821,8 @@ class LlavaOnevisionModel(eqx.Module):
         inputs_embeds: Optional[NamedArray] = None,
         combined_mask: Optional[NamedArray] = None,
         position_ids: Optional[NamedArray] = None,
+        segment_ids: Optional[NamedArray] = None,
+        image_segment_ids: Optional[NamedArray] = None,
         *,
         key=None,
     ) -> Tuple[NamedArray, NamedArray]:
@@ -661,6 +846,12 @@ class LlavaOnevisionModel(eqx.Module):
                           (batch, seq_len) int32 - if provided, skips GPU computation
             position_ids: Optional precomputed position IDs from CPU data pipeline
                           (batch, seq_len) int32 - if provided, skips GPU computation
+            segment_ids: Optional segment IDs for packing support (batch, seq_len)
+                        Each sample in a pack gets a unique segment ID (0, 1, 2, ...)
+                        Padding positions get segment_id = -1
+                        When provided, enables per-segment attention masking
+            image_segment_ids: Optional segment IDs for image patches (batch, max_patches)
+                              Maps each patch to its segment ID for per-segment cumsum
             key: Optional PRNGKey
 
         Returns:
@@ -678,17 +869,24 @@ class LlavaOnevisionModel(eqx.Module):
             num_unpadded_features=num_unpadded_features,
             precomputed_combined_mask=combined_mask,
             precomputed_position_ids=position_ids,
+            segment_ids=segment_ids,
+            image_segment_ids=image_segment_ids,
             key=k_vision,
         )
 
         # Forward through language model with merged embeddings
         # Create attention mask: causal + segment-based padding mask
-        # validity_mask is (batch, seq) with True for valid, False for invalid
-        # Use segment_ids instead of explicit_mask for splash attention compatibility
-        # Valid tokens get segment_id=1, padding tokens get segment_id=0
-        # Splash attention prevents attention between different segments
-        segment_ids = validity_mask.astype(jnp.int32)
-        attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
+        if segment_ids is not None:
+            # Packing mode: use provided segment_ids directly for attention mask
+            # segment_ids contains 0, 1, 2, ... for different samples, -1 for padding
+            # Splash attention prevents attention between different segments
+            attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
+        else:
+            # Non-packing mode: validity_mask is (batch, seq) with True for valid, False for invalid
+            # Use segment_ids instead of explicit_mask for splash attention compatibility
+            # Valid tokens get segment_id=1, padding tokens get segment_id=0
+            segment_ids_from_validity = validity_mask.astype(jnp.int32)
+            attn_mask = AttentionMask.causal().with_segment_ids(segment_ids_from_validity)
 
         activations = self.language_model.transformer(
             inputs_embeds, attn_mask=attn_mask, pos_ids=position_ids, key=k_lm
@@ -709,6 +907,8 @@ class LlavaOnevisionModel(eqx.Module):
         inputs_embeds: Optional[NamedArray] = None,
         combined_mask: Optional[NamedArray] = None,
         position_ids: Optional[NamedArray] = None,
+        segment_ids: Optional[NamedArray] = None,
+        image_segment_ids: Optional[NamedArray] = None,
         *,
         key=None,
     ) -> NamedArray:
@@ -729,6 +929,11 @@ class LlavaOnevisionModel(eqx.Module):
                           (batch, seq_len) int32 - if provided, skips GPU computation
             position_ids: Optional precomputed position IDs from CPU data pipeline
                           (batch, seq_len) int32 - if provided, skips GPU computation
+            segment_ids: Optional segment IDs for packing support (batch, seq_len)
+                        Each sample in a pack gets a unique segment ID (0, 1, 2, ...)
+                        Padding positions get segment_id = -1
+            image_segment_ids: Optional segment IDs for image patches (batch, max_patches)
+                              Maps each patch to its segment ID for per-segment cumsum
             key: Optional PRNGKey
 
         Returns:
@@ -743,6 +948,8 @@ class LlavaOnevisionModel(eqx.Module):
             inputs_embeds=inputs_embeds,
             combined_mask=combined_mask,
             position_ids=position_ids,
+            segment_ids=segment_ids,
+            image_segment_ids=image_segment_ids,
             key=key,
         )
         return hax.dot(activations, lm_head, axis=self.config.TextEmbed)
@@ -758,6 +965,8 @@ class LlavaOnevisionModel(eqx.Module):
         *,
         precomputed_combined_mask: Optional[NamedArray] = None,
         precomputed_position_ids: Optional[NamedArray] = None,
+        segment_ids: Optional[NamedArray] = None,
+        image_segment_ids: Optional[NamedArray] = None,
         key=None,
     ) -> Tuple[NamedArray, NamedArray, NamedArray]:
         """
@@ -770,6 +979,12 @@ class LlavaOnevisionModel(eqx.Module):
         4. Merges image features into text embeddings at placeholder positions
         5. Computes compact position IDs that skip padding using cumsum (or uses precomputed values)
 
+        Packing Support:
+        When segment_ids and image_segment_ids are provided, this function uses per-segment
+        cumsum to correctly map image placeholders to their corresponding image features
+        within each segment. This is essential for VLM packing where multiple samples
+        are combined into a single training example.
+
         Args:
             input_ids: Text token IDs (batch, seq_len) - used to derive text validity mask
             inputs_embeds: Optional pre-computed text embeddings
@@ -781,6 +996,10 @@ class LlavaOnevisionModel(eqx.Module):
                           (batch, seq_len) int32 - if provided, skips GPU computation
             precomputed_position_ids: Optional precomputed position IDs from CPU data pipeline
                           (batch, seq_len) int32 - if provided, skips GPU computation
+            segment_ids: Optional segment IDs for packing (batch, seq_len)
+                        Each token gets segment_id 0, 1, 2, ... or -1 for padding
+            image_segment_ids: Optional segment IDs for patches (batch, max_patches)
+                              Maps each patch to its segment for per-segment cumsum
             key: Optional PRNGKey
 
         Returns:
@@ -899,10 +1118,22 @@ class LlavaOnevisionModel(eqx.Module):
             jax.debug.callback(_validate_token_feature_match, special_image_mask.array, total_image_tokens, grid_mask_array, features_per_patch)
 
         # Compute gather indices: for each placeholder, which image token to gather
-        def compute_indices(mask):
-            return (jnp.cumsum(mask.astype(jnp.int32)) - 1) % total_image_tokens
+        if segment_ids is not None and image_segment_ids is not None:
+            # Packing mode: use per-segment cumsum
+            # Each placeholder should map to the next image feature within its segment
+            all_indices = self._compute_per_segment_image_indices(
+                special_image_mask.array,
+                segment_ids.array if isinstance(segment_ids, NamedArray) else segment_ids,
+                image_segment_ids.array if isinstance(image_segment_ids, NamedArray) else image_segment_ids,
+                features_per_patch,
+                total_image_tokens,
+            )
+        else:
+            # Non-packing mode: global cumsum
+            def compute_indices(mask):
+                return (jnp.cumsum(mask.astype(jnp.int32)) - 1) % total_image_tokens
 
-        all_indices = jax.vmap(compute_indices)(special_image_mask.array)
+            all_indices = jax.vmap(compute_indices)(special_image_mask.array)
 
         # Gather image features and merge with text embeddings
         gathered = self._batch_gather(image_features_flat.array, all_indices)

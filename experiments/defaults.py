@@ -512,7 +512,10 @@ def default_train_vlm(
                 compute_mapping={
                     "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
                     "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
-                }
+                },
+                # Don't shard embed dimension on data axis - vision tower hidden_size (1152)
+                # is not divisible by large data axis sizes (e.g., 256 on v5litepod-256)
+                param_mapping={},
             ),
             allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             max_eval_batches=train_config.max_eval_batches,
