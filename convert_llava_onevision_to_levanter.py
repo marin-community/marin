@@ -689,6 +689,8 @@ def get_download_first_checkpoint_path(output_path: str, local_checkpoint_dir: O
     """
     Get the checkpoint file path for download-first mode.
 
+    Tries hash-based filename first, falls back to non-hash version for backward compatibility.
+
     Args:
         output_path: The output path (GCS or local)
         local_checkpoint_dir: If specified, save checkpoint locally instead of with output.
@@ -703,7 +705,21 @@ def get_download_first_checkpoint_path(output_path: str, local_checkpoint_dir: O
         # Create a unique checkpoint name based on output path hash to avoid conflicts
         import hashlib
         path_hash = hashlib.md5(output_path.encode()).hexdigest()[:8]
-        return str(Path(local_checkpoint_dir) / f"checkpoint_download_first_{path_hash}.json.gz")
+
+        # 优先使用带 hash 的文件名
+        hash_path = Path(local_checkpoint_dir) / f"checkpoint_download_first_{path_hash}.json.gz"
+        # 回退到无 hash 的文件名（向后兼容）
+        legacy_path = Path(local_checkpoint_dir) / "checkpoint_download_first.json.gz"
+
+        # 如果带 hash 的存在，用它；否则如果旧版本存在，用旧版本；否则返回新格式路径
+        if hash_path.exists():
+            return str(hash_path)
+        elif legacy_path.exists():
+            print(f"Note: Using legacy checkpoint file (no hash): {legacy_path}")
+            return str(legacy_path)
+        else:
+            # 新 checkpoint 用带 hash 的格式
+            return str(hash_path)
     else:
         # Save with output (original behavior for local output)
         return f"{output_path.rstrip('/')}/checkpoint_download_first.json.gz"
