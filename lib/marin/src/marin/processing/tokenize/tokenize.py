@@ -21,11 +21,14 @@ them first then tokenizes the downloaded files.
 
 import abc
 import dataclasses
+import json
 import logging
 import os
 import re
 from collections.abc import Iterator, Sequence
 from typing import Any
+
+import fsspec
 
 import draccus
 from fray.job.context import JobContext
@@ -366,6 +369,22 @@ def tokenize(config: TokenizeConfigBase):
         consolidate_shard_caches(
             shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar, context=cluster_ctx
         )
+
+        # Aggregate token counts from shard stats
+        total_tokens = 0
+        for shard_path in shard_paths:
+            stats_path = f"{shard_path}/.stats.json"
+            try:
+                with fsspec.open(stats_path) as f:
+                    stats = json.load(f)
+                    total_tokens += stats.get("token_count", 0)
+            except FileNotFoundError:
+                logger.warning(f"Stats file not found: {stats_path}")
+
+        stats_path = os.path.join(prefix, "stats.json")
+        logger.info(f"Writing total token count ({total_tokens}) to {stats_path}")
+        with fsspec.open(stats_path, "w") as f:
+            json.dump({"total_tokens": total_tokens}, f)
 
     if train_paths:
         run_pipeline(train_paths, "train")
