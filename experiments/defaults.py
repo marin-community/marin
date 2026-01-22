@@ -551,6 +551,7 @@ def default_train_vlm(
         # VLM-specific options
         initialize_from_hf=train_config.initialize_from_hf or False,
         use_hf_model_config=train_config.use_hf_model_config,
+        vlm_checkpoint=train_config.vlm_checkpoint,
         vision_checkpoint=train_config.vision_checkpoint,
         llm_checkpoint=train_config.llm_checkpoint,
         freeze_vision_encoder=train_config.freeze_vision_encoder,

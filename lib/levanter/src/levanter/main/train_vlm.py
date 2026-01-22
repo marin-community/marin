@@ -234,6 +234,15 @@ def _determine_vocab_size(config, converter, tokenizer):
         if hf_vocab_size is not None and hf_vocab_size > tokenizer_vocab_size:
             return hf_vocab_size, f"HF checkpoint vocab size {hf_vocab_size} (tokenizer has {tokenizer_vocab_size})"
 
+    # Check vlm_checkpoint first (complete VLM checkpoint)
+    elif config.vlm_checkpoint:
+        from transformers import AutoConfig
+
+        hf_config = AutoConfig.from_pretrained(config.vlm_checkpoint, trust_remote_code=True)
+        hf_vocab_size = _get_vocab_size_from_hf_config(hf_config)
+        if hf_vocab_size is not None:
+            return hf_vocab_size, f"VLM checkpoint vocab size {hf_vocab_size} (tokenizer has {tokenizer_vocab_size})"
+
     elif config.llm_checkpoint:
         from transformers import AutoConfig
 
@@ -380,8 +389,12 @@ class TrainVLMConfig:
     """If True, freeze LLM weights during training (only train projector + vision encoder)."""
 
     # Custom weight loading for hybrid models (e.g., SigLIP + Qwen3)
+    vlm_checkpoint: Optional[str] = None
+    """Complete VLM HuggingFace checkpoint path (loads vision encoder + projector + LLM).
+    Use this for loading from a previously trained VLM, e.g., for stage 2 training."""
     vision_checkpoint: Optional[str] = None
-    """HuggingFace checkpoint for vision encoder (e.g., 'google/siglip-so400m-patch14-384')"""
+    """HuggingFace checkpoint for vision encoder only (e.g., 'google/siglip-so400m-patch14-384').
+    Use this with llm_checkpoint for loading separate vision and LLM weights."""
     llm_checkpoint: Optional[str] = None
     """HuggingFace checkpoint for language model (e.g., 'Qwen/Qwen3-1.7B')"""
 
@@ -618,59 +631,47 @@ def main(config: TrainVLMConfig):
                 )
                 model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
                 state = dataclasses.replace(state, model=model)
+            elif config.vlm_checkpoint:
+                # Load complete VLM from a single checkpoint
+                logger.info(f"Loading complete VLM from: {config.vlm_checkpoint}")
+
+                from levanter.compat.hf_checkpoints import HFCheckpointConverter
+
+                hf_converter = HFCheckpointConverter(
+                    LlavaOnevisionConfig,
+                    reference_checkpoint=config.vlm_checkpoint,
+                    trust_remote_code=True,
+                    tokenizer=tokenizer,
+                )
+
+                model = hf_converter.load_pretrained(
+                    LlavaOnevisionModel,
+                    ref=config.vlm_checkpoint,
+                    config=config.model,
+                    axis_mapping=parameter_axis_mapping,
+                    dtype=jnp.bfloat16,
+                    resize_vocab_to_match_tokenizer=False,
+                )
+                model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
+                state = dataclasses.replace(state, model=model)
+                logger.info("Loaded complete VLM weights (vision encoder + projector + LLM)")
+
             elif config.vision_checkpoint or config.llm_checkpoint:
-                # Custom weight loading for hybrid models (e.g., SigLIP + Qwen3)
+                # Load separate vision and LLM checkpoints
                 logger.info("Loading weights from separate checkpoints...")
                 model = state.model
 
-                # Check if vision_checkpoint is a GCS HF checkpoint (contains full VLM weights)
-                gcs_hf_checkpoint_loaded = False
-                if config.vision_checkpoint and "://" in config.vision_checkpoint:
-                    import fsspec
+                if config.vision_checkpoint:
+                    logger.info(f"Loading vision encoder from: {config.vision_checkpoint}")
+                    model = _load_vision_weights(
+                        model, config.vision_checkpoint, parameter_axis_mapping, trainer.mp
+                    )
 
-                    fs, _ = fsspec.core.url_to_fs(config.vision_checkpoint)
-                    config_json = os.path.join(config.vision_checkpoint, "config.json")
-
-                    if fs.exists(config_json):
-                        # This is a complete HF VLM checkpoint, load all weights
-                        logger.info(f"Detected GCS HF VLM checkpoint: {config.vision_checkpoint}")
-
-                        from levanter.compat.hf_checkpoints import HFCheckpointConverter
-
-                        hf_converter = HFCheckpointConverter(
-                            LlavaOnevisionConfig,
-                            reference_checkpoint=config.vision_checkpoint,
-                            trust_remote_code=True,
-                            tokenizer=tokenizer,  # Use tokenizer from training script
-                        )
-
-                        # load_pretrained loads complete VLM: vision encoder + projector + LLM
-                        model = hf_converter.load_pretrained(
-                            LlavaOnevisionModel,
-                            ref=config.vision_checkpoint,
-                            config=config.model,  # Use model config from training script
-                            axis_mapping=parameter_axis_mapping,
-                            dtype=jnp.bfloat16,
-                            resize_vocab_to_match_tokenizer=False,
-                        )
-                        gcs_hf_checkpoint_loaded = True
-                        logger.info(
-                            "Loaded complete VLM weights (vision encoder + projector + LLM) from GCS HF checkpoint"
-                        )
-
-                if not gcs_hf_checkpoint_loaded:
-                    # Original logic for separate checkpoints
-                    if config.vision_checkpoint:
-                        logger.info(f"Loading vision encoder from: {config.vision_checkpoint}")
-                        model = _load_vision_weights(
-                            model, config.vision_checkpoint, parameter_axis_mapping, trainer.mp
-                        )
-
-                    if config.llm_checkpoint:
-                        logger.info(f"Loading LLM from: {config.llm_checkpoint}")
-                        model = _load_llm_weights(
-                            model, config.llm_checkpoint, parameter_axis_mapping, trainer.mp, Vocab
-                        )
+                if config.llm_checkpoint:
+                    logger.info(f"Loading LLM from: {config.llm_checkpoint}")
+                    model = _load_llm_weights(
+                        model, config.llm_checkpoint, parameter_axis_mapping, trainer.mp, Vocab
+                    )
 
                 model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
                 state = dataclasses.replace(state, model=model)

@@ -64,8 +64,12 @@ class SimpleVlmTrainConfig:
     # VLM-specific parameters
     processor: str | None = None
     """HuggingFace processor path for image preprocessing (e.g., 'llava-hf/llava-onevision-qwen2-0.5b-ov-hf')."""
+    vlm_checkpoint: str | None = None
+    """Complete VLM HuggingFace checkpoint path (loads vision encoder + projector + LLM).
+    Use this for loading from a previously trained VLM, e.g., for stage 2 training."""
     vision_checkpoint: str | None = None
-    """HuggingFace checkpoint for vision encoder (e.g., 'google/siglip-so400m-patch14-384')."""
+    """HuggingFace checkpoint for vision encoder only (e.g., 'google/siglip-so400m-patch14-384').
+    Use this with llm_checkpoint for loading separate vision and LLM weights."""
     llm_checkpoint: str | None = None
     """HuggingFace checkpoint for language model (e.g., 'Qwen/Qwen3-1.7B')."""
     freeze_vision_encoder: bool = False
