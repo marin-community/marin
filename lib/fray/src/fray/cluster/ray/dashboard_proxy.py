@@ -299,7 +299,11 @@ class DashboardProxy:
                 escaped_message = html_escape(entry.message)
                 escaped_details = html_escape(entry.details) if entry.details else ""
                 details_str = f": {escaped_details}" if entry.details else ""
-                html_parts.append(f'<div class="log-line">{timestamp} [{escaped_cluster}] {escaped_message}{details_str}</div>')
+                log_line = (
+                    f'<div class="log-line">{timestamp} [{escaped_cluster}] '
+                    f"{escaped_message}{details_str}</div>"
+                )
+                html_parts.append(log_line)
             return "".join(html_parts)
 
         @app.route("/")
