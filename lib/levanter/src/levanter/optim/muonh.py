@@ -62,7 +62,12 @@ class MuonHConfig(OptimizerConfig):
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 components.append(
                     scale_with_muonh(
-                        self.momentum, self.nesterov, self.backend_steps, self.muon_epsilon, learning_rate, self.tangent_projection
+                        self.momentum,
+                        self.nesterov,
+                        self.backend_steps,
+                        self.muon_epsilon,
+                        learning_rate,
+                        self.tangent_projection,
                     )
                 )
                 optimizer = optax.chain(*components)
@@ -72,7 +77,11 @@ class MuonHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate, tangent_projection=self.tangent_projection))
+                components.append(
+                    scale_by_adamh(
+                        self.beta1, self.beta2, self.epsilon, learning_rate, tangent_projection=self.tangent_projection
+                    )
+                )
                 optimizer = optax.chain(*components)
                 return optimizer
 
@@ -125,7 +134,9 @@ class ScaleByMuonHState(NamedTuple):
     momentum_buffer: optax.Updates
 
 
-def scale_with_muonh(momentum=0.95, nesterov=True, steps=5, muon_eps=1e-8, learning_rate=0.02, tangent_projection=False):
+def scale_with_muonh(
+    momentum=0.95, nesterov=True, steps=5, muon_eps=1e-8, learning_rate=0.02, tangent_projection=False
+):
     # Convert steps to concrete int at function definition time
     steps = int(steps)
 
@@ -138,7 +149,7 @@ def scale_with_muonh(momentum=0.95, nesterov=True, steps=5, muon_eps=1e-8, learn
             if params is None:
                 raise ValueError("Parameters are required for projection to tangent space.")
             updates = jax.tree.map(
-                lambda p, g: g - (jnp.vdot(p, g) / jnp.maximum(jnp.linalg.norm(p)**2, 1e-10)) * p,
+                lambda p, g: g - (jnp.vdot(p, g) / jnp.maximum(jnp.linalg.norm(p) ** 2, 1e-10)) * p,
                 params,
                 updates,
                 is_leaf=lambda x: x is None,

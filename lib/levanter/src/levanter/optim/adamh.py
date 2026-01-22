@@ -56,7 +56,11 @@ class AdamHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate, tangent_projection=self.tangent_projection))
+                components.append(
+                    scale_by_adamh(
+                        self.beta1, self.beta2, self.epsilon, learning_rate, tangent_projection=self.tangent_projection
+                    )
+                )
                 optimizer = optax.chain(*components)
                 return optimizer
 
@@ -142,7 +146,7 @@ def scale_by_adamh(
             if params is None:
                 raise ValueError("Parameters are required for projection to tangent space.")
             updates = jax.tree.map(
-                lambda p, g: g - (jnp.vdot(p, g) / jnp.maximum(jnp.linalg.norm(p)**2, 1e-10)) * p,
+                lambda p, g: g - (jnp.vdot(p, g) / jnp.maximum(jnp.linalg.norm(p) ** 2, 1e-10)) * p,
                 params,
                 updates,
                 is_leaf=lambda x: x is None,
