@@ -339,6 +339,7 @@ def default_train(
                 name=wandb_name,
                 tags=[*tags],
                 group=wandb_group,
+                replicate_path=this_output_path(),
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,
