@@ -74,11 +74,19 @@ def _load_vision_weights(model, checkpoint_path, axis_mapping, mp):
     # Load state dict from HF checkpoint
     state_dict = converter.load_state_dict()
 
-    # The HF SigLIP model has weights under "vision_model." prefix
-    # Our SiglipVisionModel also uses "vision_model." prefix, so they should match
-    # Use the existing vision_tower as template and load weights into it
+    # Detect checkpoint type by checking key prefixes:
+    # - Standalone vision model (e.g., HuggingFace SigLIP): keys start with "vision_model."
+    # - Full VLM checkpoint (our saved checkpoints): keys start with "vision_tower.vision_model."
+    sample_key = next(iter(state_dict.keys()), "")
+    if sample_key.startswith("vision_tower."):
+        prefix = "vision_tower"
+        logger.info(f"Detected full VLM checkpoint format, using prefix='vision_tower'")
+    else:
+        prefix = None
+        logger.info(f"Detected standalone vision model checkpoint format, using prefix=None")
+
     vision_tower = model.vision_tower
-    vision_tower = from_torch_compatible_state_dict(vision_tower, state_dict, prefix=None)
+    vision_tower = from_torch_compatible_state_dict(vision_tower, state_dict, prefix=prefix)
 
     # Replace vision tower in the model
     model = dataclasses.replace(model, vision_tower=vision_tower)
@@ -113,11 +121,19 @@ def _load_llm_weights(model, checkpoint_path, axis_mapping, mp, Vocab):
     # Load state dict from HF checkpoint
     state_dict = converter.load_state_dict()
 
-    # The HF Qwen3 model has weights under "model." prefix for the transformer
-    # and "lm_head." for the output layer
-    # Use the existing language_model as template and load weights into it
+    # Detect checkpoint type by checking key prefixes:
+    # - Standalone LLM (e.g., HuggingFace Qwen3): keys start with "model." or "lm_head."
+    # - Full VLM checkpoint (our saved checkpoints): keys start with "language_model."
+    sample_key = next(iter(state_dict.keys()), "")
+    if sample_key.startswith("language_model."):
+        prefix = "language_model"
+        logger.info(f"Detected full VLM checkpoint format, using prefix='language_model'")
+    else:
+        prefix = None
+        logger.info(f"Detected standalone LLM checkpoint format, using prefix=None")
+
     language_model = model.language_model
-    language_model = from_torch_compatible_state_dict(language_model, state_dict, prefix=None)
+    language_model = from_torch_compatible_state_dict(language_model, state_dict, prefix=prefix)
 
     # Replace language model in the model
     model = dataclasses.replace(model, language_model=language_model)
@@ -236,10 +252,27 @@ def _determine_vocab_size(config, converter, tokenizer):
 
     # Check vlm_checkpoint first (complete VLM checkpoint)
     elif config.vlm_checkpoint:
-        from transformers import AutoConfig
+        # Handle both local paths and GCS paths (gs://...)
+        if config.vlm_checkpoint.startswith("gs://"):
+            # Use fsspec to read config.json from GCS
+            import json
+            import fsspec
+            fs, _ = fsspec.core.url_to_fs(config.vlm_checkpoint)
+            config_path = os.path.join(config.vlm_checkpoint, "config.json")
+            with fs.open(config_path, "r") as f:
+                config_dict = json.load(f)
+            # Get vocab_size from text_config (for VLM models like LLaVA)
+            if "text_config" in config_dict and "vocab_size" in config_dict["text_config"]:
+                hf_vocab_size = config_dict["text_config"]["vocab_size"]
+            elif "vocab_size" in config_dict:
+                hf_vocab_size = config_dict["vocab_size"]
+            else:
+                hf_vocab_size = None
+        else:
+            from transformers import AutoConfig
+            hf_config = AutoConfig.from_pretrained(config.vlm_checkpoint, trust_remote_code=True)
+            hf_vocab_size = _get_vocab_size_from_hf_config(hf_config)
 
-        hf_config = AutoConfig.from_pretrained(config.vlm_checkpoint, trust_remote_code=True)
-        hf_vocab_size = _get_vocab_size_from_hf_config(hf_config)
         if hf_vocab_size is not None:
             return hf_vocab_size, f"VLM checkpoint vocab size {hf_vocab_size} (tokenizer has {tokenizer_vocab_size})"
 
@@ -636,12 +669,18 @@ def main(config: TrainVLMConfig):
                 logger.info(f"Loading complete VLM from: {config.vlm_checkpoint}")
 
                 from levanter.compat.hf_checkpoints import HFCheckpointConverter
+                from transformers import LlavaOnevisionConfig as HfLlavaOnevisionConfig
+
+                # For GCS paths, we need to explicitly pass HfConfigClass since
+                # AutoConfig.from_pretrained() doesn't support gs:// paths
+                hf_config_class = HfLlavaOnevisionConfig if config.vlm_checkpoint.startswith("gs://") else None
 
                 hf_converter = HFCheckpointConverter(
                     LlavaOnevisionConfig,
                     reference_checkpoint=config.vlm_checkpoint,
                     trust_remote_code=True,
                     tokenizer=tokenizer,
+                    HfConfigClass=hf_config_class,
                 )
 
                 model = hf_converter.load_pretrained(

@@ -164,7 +164,7 @@ def parse_args():
     parser.add_argument(
         "--train_batch_size",
         type=int,
-        default=16,
+        default=4,
         help="Training batch size",
     )
     parser.add_argument(
@@ -611,15 +611,18 @@ def main():
         hf_save_path=args.hf_save_path,
         hf_save_steps=args.hf_save_steps,
         # Custom weight loading paths for hybrid model
-        # If --load_checkpoint is specified, use it (complete VLM checkpoint)
-        # Otherwise, use separate HF Hub paths for vision and LLM
+        # If --load_checkpoint is specified, use vlm_checkpoint (complete VLM checkpoint)
+        # which loads vision encoder + projector + LLM together
+        vlm_checkpoint=args.load_checkpoint if args.load_checkpoint else None,
+        # Otherwise (no --load_checkpoint), use separate HF Hub paths for vision and LLM
         vision_checkpoint=(
-            args.load_checkpoint
-            if args.load_checkpoint
+            None if args.load_checkpoint
             else ("google/siglip2-so400m-patch16-384" if use_custom_config else None)
         ),
-        # Don't need llm_checkpoint if loading from complete VLM checkpoint
-        llm_checkpoint=None if args.load_checkpoint else ("Qwen/Qwen3-1.7B" if use_custom_config else None),
+        llm_checkpoint=(
+            None if args.load_checkpoint
+            else ("Qwen/Qwen3-1.7B" if use_custom_config else None)
+        ),
         # Evaluation control
         no_eval=args.no_eval,
         # Epoch control
