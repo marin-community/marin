@@ -162,6 +162,7 @@ message GpuDevice {
 message TpuDevice {
   string variant = 1;       // e.g., "v5litepod-16", "v4-8"
   string topology = 2;      // topology spec (e.g., "2x2x1")
+  int32 count = 3;          // Number of TPU chips on this worker
 }
 
 // Unified resource specification for jobs

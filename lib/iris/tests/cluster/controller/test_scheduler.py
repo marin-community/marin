@@ -27,8 +27,8 @@ from iris.cluster.controller.events import (
     TaskStateChangedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.scheduler import Scheduler
-from iris.cluster.controller.state import ControllerState, ControllerTask
+from iris.cluster.controller.scheduler import Scheduler, SchedulingResult
+from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
 from iris.cluster.types import JobId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import now_ms
@@ -93,6 +93,36 @@ def transition_task_to_running(state: ControllerState, task: ControllerTask) -> 
             new_state=cluster_pb2.TASK_STATE_RUNNING,
         )
     )
+
+
+def schedule_until_done(
+    scheduler: Scheduler,
+    state: ControllerState,
+    max_cycles: int = 100,
+) -> SchedulingResult:
+    """Drive the scheduler until no more tasks can be assigned.
+
+    Runs scheduling cycles, applying assignments to state between cycles,
+    until no progress is made. Returns aggregated results.
+    """
+    all_assignments: list[tuple[ControllerTask, ControllerWorker]] = []
+    all_timed_out: list[ControllerTask] = []
+
+    for _ in range(max_cycles):
+        pending = state.peek_pending_tasks()
+        workers = state.get_available_workers()
+        result = scheduler.find_assignments(pending, workers)
+
+        if not result.assignments and not result.timed_out_tasks:
+            break
+
+        all_assignments.extend(result.assignments)
+        all_timed_out.extend(result.timed_out_tasks)
+
+        for task, worker in result.assignments:
+            assign_task_to_worker(state, task, worker.worker_id)
+
+    return SchedulingResult(assignments=all_assignments, timed_out_tasks=all_timed_out)
 
 
 # =============================================================================
@@ -209,22 +239,40 @@ def test_scheduler_returns_empty_when_no_workers(scheduler, state, job_request):
     assert len(result.timed_out_tasks) == 0
 
 
-def test_scheduler_assigns_multiple_tasks_to_worker(scheduler, state, job_request, worker_metadata):
-    """Verify scheduler can assign multiple tasks to one worker."""
+def test_scheduler_round_robins_tasks_across_workers(scheduler, state, job_request, worker_metadata):
+    """Verify scheduler distributes tasks across workers instead of packing one worker."""
+    register_worker(state, "w1", "addr1", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
+    register_worker(state, "w2", "addr2", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
+    register_worker(state, "w3", "addr3", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
+
+    submit_job(state, "j1", job_request(cpu=2))
+    submit_job(state, "j2", job_request(cpu=2))
+    submit_job(state, "j3", job_request(cpu=2))
+
+    result = schedule_until_done(scheduler, state)
+
+    # All 3 tasks assigned, each to a different worker (round-robin)
+    assert len(result.assignments) == 3
+    assigned_worker_ids = {worker.worker_id for _, worker in result.assignments}
+    assert len(assigned_worker_ids) == 3
+
+
+def test_scheduler_assigns_multiple_tasks_to_single_worker(scheduler, state, job_request, worker_metadata):
+    """Verify scheduler assigns multiple tasks to one worker when it's the only option."""
     register_worker(state, "w1", "addr", worker_metadata(cpu=10, memory_bytes=10 * 1024**3))
 
     tasks1 = submit_job(state, "j1", job_request(cpu=2))
     tasks2 = submit_job(state, "j2", job_request(cpu=2))
     tasks3 = submit_job(state, "j3", job_request(cpu=2))
 
-    pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()
+    result = schedule_until_done(scheduler, state)
 
-    result = scheduler.find_assignments(pending_tasks, workers)
-
+    # All 3 tasks eventually assigned to the single worker
     assert len(result.assignments) == 3
     assigned_task_ids = {task.task_id for task, _ in result.assignments}
     assert assigned_task_ids == {tasks1[0].task_id, tasks2[0].task_id, tasks3[0].task_id}
+    # All assigned to the same worker
+    assert all(worker.worker_id == WorkerId("w1") for _, worker in result.assignments)
 
 
 def test_scheduler_skips_tasks_that_dont_fit(scheduler, state, job_request, worker_metadata):
@@ -323,22 +371,22 @@ def test_task_does_not_timeout_when_scheduled_quickly(scheduler, state, worker_m
 
 
 def test_scheduler_respects_worker_capacity_across_assignments(scheduler, state, job_request, worker_metadata):
-    """Verify scheduler tracks capacity used by earlier assignments in same cycle."""
+    """Verify scheduler tracks capacity used by earlier assignments across cycles."""
     # Worker with 4 CPUs
     register_worker(state, "w1", "addr", worker_metadata(cpu=4))
 
-    # Submit 4 jobs, each requiring 2 CPUs
-    # Only 2 should fit at a time
-    for i in range(4):
+    # Submit 3 jobs, each requiring 2 CPUs (only 2 will fit)
+    for i in range(3):
         submit_job(state, f"j{i}", job_request(cpu=2))
 
-    pending_tasks = state.peek_pending_tasks()
-    workers = state.get_available_workers()
+    result = schedule_until_done(scheduler, state)
 
-    result = scheduler.find_assignments(pending_tasks, workers)
-
-    # Only first 2 tasks should be assigned (using all 4 CPUs)
+    # Only 2 tasks assigned (4 CPUs / 2 CPUs each = 2 tasks max)
     assert len(result.assignments) == 2
+
+    # Third task still pending
+    pending = state.peek_pending_tasks()
+    assert len(pending) == 1
 
 
 def test_scheduler_skips_unhealthy_workers(scheduler, state, job_request, worker_metadata):
@@ -1085,3 +1133,176 @@ def test_tainted_worker_not_used_for_coscheduled_job(scheduler, state, worker_me
     assert len(result.assignments) == 4
     assigned_tpu_names = {w.attributes["tpu-name"].value for _, w in result.assignments}
     assert assigned_tpu_names == {"tpu-b"}
+
+
+# =============================================================================
+# TPU Chip Count Tracking Tests
+# =============================================================================
+
+
+def test_tpu_chip_count_deducted_from_capacity(scheduler, state):
+    """TPU chip count is deducted when task is scheduled."""
+    # Worker with 4 TPU chips (simulating v5litepod-16 per-VM)
+    meta = cluster_pb2.WorkerMetadata(
+        hostname="tpu-worker",
+        ip_address="127.0.0.1",
+        cpu_count=10,
+        memory_bytes=10 * 1024**3,
+        disk_bytes=10 * 1024**3,
+        tpu_name="v5litepod-16",
+    )
+    device = cluster_pb2.DeviceConfig()
+    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
+    meta.device.CopyFrom(device)
+    register_worker(state, "w1", "addr1", meta)
+
+    # First job requires 4 TPU chips
+    req1 = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job-1",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    tasks1 = submit_job(state, "j1", req1)
+
+    # First scheduling cycle - task should be assigned
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+    assert len(result.assignments) == 1
+    assert result.assignments[0][0] == tasks1[0]
+
+    # Commit the assignment
+    assign_task_to_worker(state, tasks1[0], WorkerId("w1"))
+    transition_task_to_running(state, tasks1[0])
+
+    # Submit second job that also requires 4 TPU chips
+    req2 = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job-2",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    submit_job(state, "j2", req2)
+
+    # Second scheduling cycle - no TPU chips available
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+    assert len(result.assignments) == 0
+
+
+def test_tpu_job_rejected_when_insufficient_chips(scheduler, state):
+    """TPU job is not scheduled when worker has fewer chips than required."""
+    # Worker with 4 TPU chips
+    meta = cluster_pb2.WorkerMetadata(
+        hostname="tpu-worker",
+        ip_address="127.0.0.1",
+        cpu_count=10,
+        memory_bytes=10 * 1024**3,
+        disk_bytes=10 * 1024**3,
+        tpu_name="v5litepod-16",
+    )
+    device = cluster_pb2.DeviceConfig()
+    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
+    meta.device.CopyFrom(device)
+    register_worker(state, "w1", "addr1", meta)
+
+    # Job requires 8 TPU chips - more than worker has
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=8)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    submit_job(state, "j1", req)
+
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+
+    # Task should not be scheduled - not enough TPU chips
+    assert len(result.assignments) == 0
+
+
+def test_tpu_chips_released_after_task_completion(scheduler, state):
+    """TPU chips are released when task completes, allowing new tasks to schedule."""
+    # Worker with 4 TPU chips
+    meta = cluster_pb2.WorkerMetadata(
+        hostname="tpu-worker",
+        ip_address="127.0.0.1",
+        cpu_count=10,
+        memory_bytes=10 * 1024**3,
+        disk_bytes=10 * 1024**3,
+        tpu_name="v5litepod-16",
+    )
+    device = cluster_pb2.DeviceConfig()
+    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
+    meta.device.CopyFrom(device)
+    register_worker(state, "w1", "addr1", meta)
+
+    # First job uses all 4 TPU chips
+    req1 = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job-1",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    tasks1 = submit_job(state, "j1", req1)
+    assign_task_to_worker(state, tasks1[0], WorkerId("w1"))
+    transition_task_to_running(state, tasks1[0])
+
+    # Submit second job
+    req2 = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job-2",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    submit_job(state, "j2", req2)
+
+    # Second job can't be scheduled yet
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+    assert len(result.assignments) == 0
+
+    # Complete first task
+    state.handle_event(
+        TaskStateChangedEvent(
+            task_id=tasks1[0].task_id,
+            new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+        )
+    )
+
+    # Now second job can be scheduled
+    result = scheduler.find_assignments(
+        state.peek_pending_tasks(),
+        state.get_available_workers(),
+    )
+    assert len(result.assignments) == 1
+    assert result.assignments[0][0].job_id == JobId("j2")

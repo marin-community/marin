@@ -87,6 +87,13 @@ def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
     return 0
 
 
+def get_tpu_chip_count(device: cluster_pb2.DeviceConfig) -> int:
+    """Extract TPU chip count from config."""
+    if device.HasField("tpu"):
+        return device.tpu.count or 0
+    return 0
+
+
 # =============================================================================
 # Task State Definitions
 # =============================================================================
@@ -812,6 +819,7 @@ class ControllerWorker:
     committed_cpu: int = 0
     committed_mem: int = 0
     committed_gpu: int = 0
+    committed_tpu: int = 0
 
     # Worker attributes for constraint-based scheduling
     attributes: dict[str, AttributeValue] = field(default_factory=dict)
@@ -826,6 +834,7 @@ class ControllerWorker:
         self.committed_cpu += resources.cpu
         self.committed_mem += resources.memory_bytes
         self.committed_gpu += get_gpu_count(resources.device)
+        self.committed_tpu += get_tpu_chip_count(resources.device)
 
     def unassign_task(self, task_id: TaskId, resources: cluster_pb2.ResourceSpecProto) -> None:
         """Unassign a task from this worker, updating committed resources."""
@@ -833,6 +842,7 @@ class ControllerWorker:
         self.committed_cpu -= resources.cpu
         self.committed_mem -= resources.memory_bytes
         self.committed_gpu -= get_gpu_count(resources.device)
+        self.committed_tpu -= get_tpu_chip_count(resources.device)
 
     @property
     def available_cpu(self) -> int:
@@ -848,6 +858,11 @@ class ControllerWorker:
     def available_gpus(self) -> int:
         """Available GPU count after subtracting committed resources."""
         return get_gpu_count(self.metadata.device) - self.committed_gpu
+
+    @property
+    def available_tpus(self) -> int:
+        """Available TPU chip count after subtracting committed resources."""
+        return get_tpu_chip_count(self.metadata.device) - self.committed_tpu
 
     @property
     def device_type(self) -> str:

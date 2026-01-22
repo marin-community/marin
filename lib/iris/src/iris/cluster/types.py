@@ -162,21 +162,36 @@ class CoschedulingConfig:
         return cluster_pb2.CoschedulingConfig(group_by=self.group_by)
 
 
-def tpu_device(variant: str) -> cluster_pb2.DeviceConfig:
+def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConfig:
     """Create a DeviceConfig for a TPU device.
 
     Args:
         variant: TPU variant string (e.g., "v5litepod-16", "v4-8", "v6e-256").
+        count: Number of TPU chips. If None, inferred from topology.
 
     Returns:
-        DeviceConfig with the tpu field set to the specified variant.
+        DeviceConfig with the tpu field set to the specified variant and chip count.
 
     Example:
         >>> config = tpu_device("v5litepod-16")
         >>> config.tpu.variant
         'v5litepod-16'
+        >>> config.tpu.count
+        4
     """
-    return cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant=variant))
+    chip_count = count
+    if chip_count is None:
+        try:
+            topo = get_tpu_topology(variant)
+            chip_count = topo.chips_per_vm
+        except ValueError:
+            chip_count = 0
+    return cluster_pb2.DeviceConfig(
+        tpu=cluster_pb2.TpuDevice(
+            variant=variant,
+            count=chip_count,
+        )
+    )
 
 
 def parse_memory_string(memory_str: str) -> int:

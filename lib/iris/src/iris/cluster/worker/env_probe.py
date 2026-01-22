@@ -234,7 +234,19 @@ class DefaultEnvironmentProvider:
         # Build device config
         device = cluster_pb2.DeviceConfig()
         if tpu_name:
-            device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=tpu_name))
+            tpu_chip_count = 0
+            try:
+                topo = get_tpu_topology(tpu_name)
+                tpu_chip_count = topo.chips_per_vm
+            except ValueError:
+                logger.warning("Unknown TPU topology: %s", tpu_name)
+
+            device.tpu.CopyFrom(
+                cluster_pb2.TpuDevice(
+                    variant=tpu_name,
+                    count=tpu_chip_count,
+                )
+            )
         elif gpu_count > 0:
             device.gpu.CopyFrom(
                 cluster_pb2.GpuDevice(

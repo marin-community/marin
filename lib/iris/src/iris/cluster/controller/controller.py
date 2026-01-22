@@ -24,17 +24,16 @@ from pathlib import Path
 from typing import Protocol
 
 import grpc
-
 import uvicorn
 
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.scheduler import Scheduler
-from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.events import (
     TaskAssignedEvent,
     TaskStateChangedEvent,
     WorkerFailedEvent,
 )
+from iris.cluster.controller.scheduler import Scheduler
+from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
 from iris.cluster.types import JobId, TaskId
 from iris.rpc import cluster_pb2
@@ -257,17 +256,13 @@ class Controller:
     def _run_scheduling_loop(self) -> None:
         """Main controller loop running scheduling and worker timeout checks."""
         while not self._stop:
-            # Wait for wake signal or timeout (use scheduler interval)
             self._wake_event.wait(timeout=self._config.scheduler_interval_seconds)
             self._wake_event.clear()
 
             if self._stop:
                 break
 
-            # Run scheduling
             self._run_scheduling()
-
-            # Check for timed-out workers
             self._check_worker_timeouts()
 
     def _run_scheduling(self) -> None:

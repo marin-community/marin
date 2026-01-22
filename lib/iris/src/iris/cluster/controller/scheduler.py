@@ -27,6 +27,7 @@ from iris.cluster.controller.state import (
     get_device_type,
     get_device_variant,
     get_gpu_count,
+    get_tpu_chip_count,
 )
 from iris.cluster.types import AttributeValue, JobId, WorkerId
 from iris.rpc import cluster_pb2
@@ -122,17 +123,22 @@ class SchedulingContext:
     tentatively assigned, we track capacity changes in the capacities dict,
     but do not update the posting lists. This is safe because posting lists
     are only used for attribute matching, not capacity checks.
+
+    Workers are tracked in scheduled_workers to ensure each worker receives
+    at most one task per cycle, providing round-robin distribution.
     """
 
-    # All worker IDs (for NOT_EXISTS queries)
     all_worker_ids: set[WorkerId]
 
-    # Posting lists for fast constraint matching (read-only after construction)
+    # Posting lists for fast constraint matching
     # Maps: attribute_key -> attribute_value -> set of worker IDs
     discrete_lists: dict[str, dict[str | int | float, set[WorkerId]]]
 
     # Worker capacities indexed by worker ID
     capacities: dict[WorkerId, "WorkerCapacity"]
+
+    # Workers already assigned a task this cycle (for round-robin)
+    scheduled_workers: set[WorkerId] = field(default_factory=set)
 
     @classmethod
     def from_capacities(cls, capacities: dict[WorkerId, "WorkerCapacity"]) -> "SchedulingContext":
@@ -261,6 +267,7 @@ class WorkerCapacity:
     available_cpu: int
     available_memory: int
     available_gpus: int
+    available_tpus: int
     device_type: str
     device_variant: str | None
     attributes: dict[str, AttributeValue] = field(default_factory=dict)
@@ -273,6 +280,7 @@ class WorkerCapacity:
             available_cpu=worker.available_cpu,
             available_memory=worker.available_memory,
             available_gpus=worker.available_gpus,
+            available_tpus=worker.available_tpus,
             device_type=worker.device_type,
             device_variant=worker.device_variant,
             attributes=dict(worker.attributes),
@@ -299,6 +307,9 @@ class WorkerCapacity:
         if job_device_type == "gpu" and get_gpu_count(res.device) > self.available_gpus:
             return False
 
+        if job_device_type == "tpu" and get_tpu_chip_count(res.device) > self.available_tpus:
+            return False
+
         return True
 
     def deduct(self, job: ControllerJob) -> None:
@@ -307,6 +318,7 @@ class WorkerCapacity:
         self.available_cpu -= res.cpu
         self.available_memory -= res.memory_bytes
         self.available_gpus -= get_gpu_count(res.device)
+        self.available_tpus -= get_tpu_chip_count(res.device)
 
 
 @dataclass
@@ -390,9 +402,12 @@ class Scheduler:
 
         # Try to find a worker that can fit this task among matching workers
         for worker_id in matching_worker_ids:
+            if worker_id in context.scheduled_workers:
+                continue
             capacity = context.capacities[worker_id]
             if capacity.can_fit_job(job):
                 capacity.deduct(job)
+                context.scheduled_workers.add(worker_id)
                 return TaskScheduleResult(task=task, worker=capacity.worker)
 
         # No worker could fit the task - build detailed reason
@@ -527,6 +542,7 @@ class Scheduler:
         # Note: matching_worker_ids passed attribute constraints (e.g., tpu-name=my-tpu),
         # but we still need to check resource capacity (CPU, memory, GPU). These are
         # orthogonal: a worker can match constraints but lack available resources.
+        # Coscheduled jobs bypass round-robin since they need atomic multi-worker assignment.
         for group_key, group_worker_ids in groups.items():
             available = [worker_id for worker_id in group_worker_ids if context.capacities[worker_id].can_fit_job(job)]
 
@@ -542,7 +558,6 @@ class Scheduler:
             # Assign tasks to workers in order
             assignments: list[tuple[ControllerTask, ControllerWorker]] = []
             for task, worker_id in zip(sorted_tasks, available[:num_tasks], strict=False):
-                # Deduct capacity tentatively
                 context.capacities[worker_id].deduct(job)
                 assignments.append((task, context.capacities[worker_id].worker))
 

@@ -753,7 +753,8 @@ def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_meta
     """E2E: Multiple small tasks can fill a worker's capacity, blocking further assignments.
 
     This verifies that the scheduler correctly tracks cumulative resource usage across
-    multiple running tasks.
+    multiple running tasks. With round-robin scheduling, each worker gets at most one
+    task per cycle, so we run multiple cycles to fill capacity.
     """
     state = ControllerState()
 
@@ -766,12 +767,17 @@ def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_meta
 
     scheduler = Scheduler(state)
 
-    # First scheduling cycle: 2 tasks should fit (4 CPUs / 2 CPUs each = 2 tasks)
+    # First scheduling cycle: 1 task assigned (round-robin: 1 per worker per cycle)
     pending = state.peek_pending_tasks()
     result = scheduler.find_assignments(pending, state.get_available_workers())
-    assert len(result.assignments) == 2
+    assert len(result.assignments) == 1
+    for task, worker in result.assignments:
+        dispatch_task(state, task, worker.worker_id)
 
-    # Apply the assignments to state
+    # Second scheduling cycle: 1 more task assigned (worker still has 2 CPUs)
+    pending = state.peek_pending_tasks()
+    result = scheduler.find_assignments(pending, state.get_available_workers())
+    assert len(result.assignments) == 1
     for task, worker in result.assignments:
         dispatch_task(state, task, worker.worker_id)
 
@@ -780,7 +786,7 @@ def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_meta
     assert len(pending) == 1
     assert pending[0].job_id == JobId("j2")
 
-    # Scheduler should not assign the third task (no capacity)
+    # Scheduler should not assign the third task (no capacity - 4 CPUs used)
     result = scheduler.find_assignments(pending, state.get_available_workers())
     assert len(result.assignments) == 0
 
@@ -1078,3 +1084,141 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
 
     # No tasks marked for kill
     assert len(txn.tasks_to_kill) == 0
+
+
+# =============================================================================
+# TPU Resource Commitment Tests
+# =============================================================================
+
+
+def test_worker_tpu_resources_committed_on_task_assignment():
+    """TPU chips are committed when task is assigned to worker."""
+    state = ControllerState()
+
+    # Worker with 4 TPU chips
+    meta = cluster_pb2.WorkerMetadata(
+        hostname="tpu-worker",
+        ip_address="127.0.0.1",
+        cpu_count=10,
+        memory_bytes=10 * 1024**3,
+        disk_bytes=10 * 1024**3,
+        tpu_name="v5litepod-16",
+    )
+    device = cluster_pb2.DeviceConfig()
+    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
+    meta.device.CopyFrom(device)
+    worker_id = register_worker(state, "w1", "addr1", meta)
+
+    worker = state.get_worker(worker_id)
+    assert worker.available_tpus == 4
+    assert worker.committed_tpu == 0
+
+    # Submit job requiring 4 TPU chips
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    tasks = submit_job(state, "j1", req)
+
+    # Assign task to worker
+    dispatch_task(state, tasks[0], worker_id)
+
+    # TPU chips should now be committed
+    assert worker.committed_tpu == 4
+    assert worker.available_tpus == 0
+
+
+def test_worker_tpu_resources_released_on_task_completion():
+    """TPU chips are released when task completes."""
+    state = ControllerState()
+
+    # Worker with 4 TPU chips
+    meta = cluster_pb2.WorkerMetadata(
+        hostname="tpu-worker",
+        ip_address="127.0.0.1",
+        cpu_count=10,
+        memory_bytes=10 * 1024**3,
+        disk_bytes=10 * 1024**3,
+        tpu_name="v5litepod-16",
+    )
+    device = cluster_pb2.DeviceConfig()
+    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
+    meta.device.CopyFrom(device)
+    worker_id = register_worker(state, "w1", "addr1", meta)
+
+    worker = state.get_worker(worker_id)
+
+    # Submit and dispatch TPU job
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    tasks = submit_job(state, "j1", req)
+    dispatch_task(state, tasks[0], worker_id)
+
+    assert worker.committed_tpu == 4
+    assert worker.available_tpus == 0
+
+    # Complete task
+    transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
+
+    # TPU chips should be released
+    assert worker.committed_tpu == 0
+    assert worker.available_tpus == 4
+
+
+def test_worker_tpu_resources_released_on_task_failure():
+    """TPU chips are released when task fails (exhausted retries)."""
+    state = ControllerState()
+
+    # Worker with 4 TPU chips
+    meta = cluster_pb2.WorkerMetadata(
+        hostname="tpu-worker",
+        ip_address="127.0.0.1",
+        cpu_count=10,
+        memory_bytes=10 * 1024**3,
+        disk_bytes=10 * 1024**3,
+        tpu_name="v5litepod-16",
+    )
+    device = cluster_pb2.DeviceConfig()
+    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
+    meta.device.CopyFrom(device)
+    worker_id = register_worker(state, "w1", "addr1", meta)
+
+    worker = state.get_worker(worker_id)
+
+    # Submit TPU job with no retries
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="tpu-job",
+        serialized_entrypoint=b"test",
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        max_retries_failure=0,
+    )
+    tasks = submit_job(state, "j1", req)
+    dispatch_task(state, tasks[0], worker_id)
+
+    assert worker.committed_tpu == 4
+
+    # Fail task
+    transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_FAILED, error="OOM")
+
+    # TPU chips should be released
+    assert worker.committed_tpu == 0
+    assert worker.available_tpus == 4
