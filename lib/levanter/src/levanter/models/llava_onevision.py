@@ -4,6 +4,8 @@
 from dataclasses import dataclass, replace
 from typing import Callable, Dict, List, Optional, Tuple, Type, Union
 
+from jaxtyping import PRNGKeyArray
+
 import jax
 import equinox as eqx
 import jax.numpy as jnp
@@ -169,6 +171,13 @@ class LlavaOnevisionConfig:
         """Return the model class type."""
         return LlavaOnevisionModel
 
+    def build(self, Vocab: hax.Axis, *, key: PRNGKeyArray) -> "LlavaOnevisionModel":
+        """Build the model from this config.
+
+        This method matches the LmConfig.build() interface for consistency.
+        """
+        return self.model_type.init(Vocab, self, key=key)
+
     def hf_checkpoint_converter(
         self, ref_checkpoint: Optional[str] = None
     ) -> HFCheckpointConverter["LlavaOnevisionConfig"]:  # type: ignore
@@ -195,11 +204,15 @@ class LlavaOnevisionConfig:
         else:
             vision_config = SiglipVisionConfig.from_hf_config(hf_config.vision_config)
 
-        # Ensure no_bias attribute exists (Qwen2 default is True, meaning use_bias=False)
-        if not hasattr(hf_config.text_config, "no_bias"):
-            hf_config.text_config.no_bias = True
-
-        text_config = QwenConfig.from_hf_config(hf_config.text_config)
+        # Detect text model type (Qwen2 vs Qwen3) and use appropriate config class
+        text_model_type = getattr(hf_config.text_config, "model_type", "qwen2")
+        if text_model_type == "qwen3":
+            text_config = Qwen3Config.from_hf_config(hf_config.text_config)
+        else:
+            # Ensure no_bias attribute exists (Qwen2 default is True, meaning use_bias=False)
+            if not hasattr(hf_config.text_config, "no_bias"):
+                hf_config.text_config.no_bias = True
+            text_config = QwenConfig.from_hf_config(hf_config.text_config)
 
         # Parse activation function
         act_map = {

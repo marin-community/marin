@@ -39,7 +39,7 @@ Usage:
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Tuple
 
 import equinox as eqx
@@ -52,11 +52,11 @@ import numpy as np
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from PIL import Image
-from transformers import AutoProcessor, AutoTokenizer
+from transformers import AutoTokenizer
 
 import levanter
 from levanter.checkpoint import load_checkpoint
-from levanter.data.image import CustomVLMProcessor
+from levanter.data.image import BatchImageProcessor, create_custom_processor, CustomVLMProcessor
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
@@ -101,7 +101,7 @@ class VLMCaptionConfig:
 
     # Generation parameters
     max_tokens: int = 256
-    temperature: float = 0.7
+    temperature: float = 0.0  # Use greedy decoding (like test)
     seed: int = 42
 
     # Trainer config for mesh/precision
@@ -163,11 +163,24 @@ def build_vlm_config(tokenizer_name: str) -> LlavaOnevisionConfig:
 # ============================================================================
 
 
+def _is_hf_checkpoint(checkpoint_path: str) -> bool:
+    """Check if checkpoint is HuggingFace format (has config.json) vs Levanter format."""
+    import fsspec
+    fs, _ = fsspec.core.url_to_fs(checkpoint_path)
+    # HF checkpoints have config.json, Levanter checkpoints have metadata.json
+    config_json = os.path.join(checkpoint_path, "config.json")
+    return fs.exists(config_json)
+
+
 def load_model(
     config: VLMCaptionConfig,
     vlm_config: LlavaOnevisionConfig,
 ) -> Tuple[LlavaOnevisionModel, any, Axis]:
     """Load VLM model from checkpoint.
+
+    Supports both Levanter and HuggingFace checkpoint formats.
+    - Levanter format: Uses load_checkpoint() with metadata.json
+    - HuggingFace format: Uses HFCheckpointConverter.load_pretrained() with config.json
 
     Args:
         config: Caption configuration
@@ -178,11 +191,70 @@ def load_model(
     """
     logger.info(f"Loading model from checkpoint: {config.checkpoint}")
 
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer)
-    vocab_size = len(tokenizer)
-
     key = jrandom.PRNGKey(config.seed)
+
+    # Check if this is a HuggingFace format checkpoint
+    is_hf = _is_hf_checkpoint(config.checkpoint)
+
+    import json
+    import tempfile
+    import fsspec
+    from levanter.compat.hf_checkpoints import HFCheckpointConverter
+    from transformers import LlavaOnevisionConfig as HfLlavaOnevisionConfig
+
+    if is_hf:
+        logger.info("Detected HuggingFace format checkpoint, using HFCheckpointConverter")
+
+        # Download tokenizer files from GCS to temp directory
+        fs, _ = fsspec.core.url_to_fs(config.checkpoint)
+        tokenizer_files = [
+            "tokenizer.json", "tokenizer_config.json",
+            "special_tokens_map.json", "vocab.json", "merges.txt",
+            "added_tokens.json", "chat_template.jinja"
+        ]
+
+        # Create a persistent temp directory for the tokenizer
+        tokenizer_tmpdir = tempfile.mkdtemp(prefix="vlm_tokenizer_")
+        logger.info(f"Downloading tokenizer to {tokenizer_tmpdir}")
+
+        for fname in tokenizer_files:
+            src = os.path.join(config.checkpoint, fname)
+            dst = os.path.join(tokenizer_tmpdir, fname)
+            if fs.exists(src):
+                fs.get(src, dst)
+                logger.info(f"  Downloaded {fname}")
+
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_tmpdir, trust_remote_code=True)
+        logger.info(f"Loaded tokenizer with vocab_size={len(tokenizer)}")
+
+        # Load HF config from GCS checkpoint
+        config_path = os.path.join(config.checkpoint, "config.json")
+        with fs.open(config_path, "r") as f:
+            config_dict = json.load(f)
+        hf_config = HfLlavaOnevisionConfig.from_dict(config_dict)
+
+        # Use vocab_size from HF config (model's actual vocab size)
+        # Note: Qwen3 model vocab_size (151936) is larger than tokenizer vocab_size (151669)
+        # This is by design - the model's embedding table is larger to accommodate potential token additions
+        vocab_size = hf_config.text_config.vocab_size
+        logger.info(f"Using model vocab_size={vocab_size} (tokenizer has {len(tokenizer)} tokens)")
+
+        # Convert HF config to Levanter config
+        lev_config = LlavaOnevisionConfig.from_hf_config(hf_config)
+
+        # Switch to dot-product attention to avoid VMEM OOM with ragged_paged_attention
+        # The paged attention kernel requires >16MB VMEM which exceeds TPU limits
+        text_config_updated = replace(
+            lev_config.text_config,
+            attn_backend="dot",
+            flash_attention_block_size=None
+        )
+        lev_config = replace(lev_config, text_config=text_config_updated)
+    else:
+        # For Levanter checkpoints, use the configured tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(config.tokenizer)
+        vocab_size = len(tokenizer)
+        tokenizer_tmpdir = None
 
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         Vocab = round_axis_for_partitioning(
@@ -190,15 +262,37 @@ def load_model(
             config.trainer.compute_axis_mapping,
         )
 
-        # Create model shape template (without allocating memory)
-        with use_cpu_device():
-            model = eqx.filter_eval_shape(vlm_config.build, Vocab, key=key)
+        if is_hf:
+            # Create converter - use the downloaded tokenizer
+            converter = HFCheckpointConverter(
+                LlavaOnevisionConfig,
+                reference_checkpoint=config.checkpoint,
+                trust_remote_code=True,
+                tokenizer=tokenizer,  # Use downloaded tokenizer
+                HfConfigClass=HfLlavaOnevisionConfig,
+            )
 
-        # Load checkpoint
-        model = load_checkpoint(model, config.checkpoint, subpath="model")
+            # Load pretrained model with the converted config
+            # Use bfloat16 to match model weights
+            model = converter.load_pretrained(
+                LlavaOnevisionModel,
+                ref=config.checkpoint,
+                config=lev_config,  # Pass the converted config
+                axis_mapping=config.trainer.parameter_axis_mapping,
+                dtype=jnp.bfloat16,
+                resize_vocab_to_match_tokenizer=False,
+            )
+        else:
+            # Load Levanter checkpoint
+            # Create model shape template (without allocating memory)
+            with use_cpu_device():
+                model = eqx.filter_eval_shape(vlm_config.build, Vocab, key=key)
 
-        # Cast to compute precision
-        model = config.trainer.mp.cast_to_compute(model)
+            # Load checkpoint
+            model = load_checkpoint(model, config.checkpoint, subpath="model")
+
+            # Cast to compute precision
+            model = config.trainer.mp.cast_to_compute(model)
 
     logger.info("Model loaded successfully")
     return model, tokenizer, Vocab
@@ -216,6 +310,9 @@ def process_image(
 ) -> Tuple[VLMRequest, list]:
     """Process image and create VLMRequest.
 
+    Uses Levanter's BatchImageProcessor for consistent processing with training.
+    This ensures proper single-resolution mode (1 patch per image, no anyres).
+
     Args:
         config: Caption configuration
         vlm_config: VLM model configuration
@@ -226,12 +323,39 @@ def process_image(
     """
     logger.info(f"Processing image: {config.image_path}")
 
-    # Load original processor and create custom processor
-    original_processor = AutoProcessor.from_pretrained(config.processor)
-    processor = CustomVLMProcessor.from_processor_and_tokenizer(
-        original_processor,
-        tokenizer,
-        use_full_padded_tokens=True,
+    # Configuration matching training
+    # SigLIP: image_size=384, patch_size=16 -> vision_feature_height = 384/16 = 24
+    PATCH_SIZE = 384
+    VISION_FEATURE_HEIGHT = 24  # 384 // 16 for SigLIP
+    GRID_PINPOINTS = [[384, 384]]  # Single resolution only
+    MAX_NUM_PATCHES = 0  # For disable_anyres with 1 image: max_images_per_sample - 1 = 0
+    MAX_LENGTH = 2048
+
+    # Create base processor using Levanter's create_custom_processor
+    base_processor = create_custom_processor(
+        config.processor,
+        do_pad=True,
+        image_grid_pinpoints=GRID_PINPOINTS,
+        max_image_tiles=1,  # One tile per image (disable_anyres)
+        vision_aspect_ratio="single",  # Disable anyres
+    )
+
+    # Wrap with custom tokenizer for consistent tokenization
+    lev_processor = CustomVLMProcessor.from_processor_and_tokenizer(
+        base_processor, tokenizer, use_full_padded_tokens=False
+    )
+
+    # Create BatchImageProcessor for proper grid_mask handling
+    batch_processor = BatchImageProcessor(
+        processor=lev_processor,
+        max_length=MAX_LENGTH,
+        padding=True,
+        max_num_patches=MAX_NUM_PATCHES,
+        grid_pinpoints=GRID_PINPOINTS,
+        patch_size=PATCH_SIZE,
+        vision_feature_height=VISION_FEATURE_HEIGHT,
+        add_generation_prompt=True,  # For inference
+        disable_anyres=True,
     )
 
     # Load image
@@ -248,61 +372,85 @@ def process_image(
         }
     ]
 
-    # Apply chat template to get text with image placeholders
-    text = processor.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-    )
+    # Process using BatchImageProcessor
+    # It expects a list of examples with "messages" and "images" keys
+    example = {"messages": messages, "images": [image]}
+    results = batch_processor([example])
+    result = results[0]  # ImageTextDict
 
-    logger.info(f"Formatted text: {text[:200]}...")
+    # Extract outputs from ImageTextDict
+    input_ids_full = result["input_ids"].astype(np.int32)
+    pixel_values = result["pixel_values"]
+    grid_mask = result["grid_mask"]
+    attention_mask = result["attention_mask"]
 
-    # Process image and text
-    processed = processor(
-        images=image,
-        text=text,
-        return_tensors="np",
-        padding=False,
-    )
+    # Get actual content length (non-padded tokens)
+    actual_content_len = int(attention_mask.sum())
+    input_ids = input_ids_full[:actual_content_len]
 
-    # Extract outputs
-    input_ids = processed["input_ids"][0].astype(np.int32)
-    pixel_values = processed["pixel_values"]
+    # Get unpad_indices and num_unpadded_features for spatial unpadding
+    unpad_indices = result.get("unpad_indices")
+    num_unpadded_features = result.get("num_unpadded_features")
 
-    # Handle pixel_values shape
-    if len(pixel_values.shape) == 5:
-        # (batch, num_patches, C, H, W) -> (num_patches, C, H, W)
-        pixel_values = pixel_values[0]
-    elif len(pixel_values.shape) == 4:
-        # Already (num_patches, C, H, W)
-        pass
-
-    # Create grid_mask (all True for single image without anyres)
     total_patches = pixel_values.shape[0]
-    grid_mask = np.ones(total_patches, dtype=bool)
+    actual_patches = int(grid_mask.sum())
+
+    logger.info(f"Input tokens: {len(input_ids)} (actual), Total patches: {total_patches}, Actual patches: {actual_patches}")
 
     # Create NamedArrays for VLMRequest
+    # All tensors need batch dimension
+    Batch = Axis("batch", 1)
+    Position = Axis("position", len(input_ids))
     NumPatches = Axis("num_patches", total_patches)
     Channels = Axis("channels", pixel_values.shape[1])
     Height = Axis("height", pixel_values.shape[2])
     Width = Axis("width", pixel_values.shape[3])
-    Position = Axis("position", len(input_ids))
 
+    # Add batch dimension to input_ids: (batch, position)
+    input_ids_array = jnp.array(input_ids, dtype=jnp.int32).reshape(1, -1)
+    input_ids_named = hax.named(input_ids_array, (Batch, Position))
+
+    # Add batch dimension to pixel_values: (batch, num_patches, C, H, W)
+    # Use bfloat16 to match model weights
+    pixel_values_batched = pixel_values[np.newaxis, ...]  # (1, num_patches, C, H, W)
+    pixel_values_bf16 = jnp.array(pixel_values_batched, dtype=jnp.bfloat16)
     pixel_values_named = hax.named(
-        pixel_values,
-        (NumPatches, Channels, Height, Width),
+        pixel_values_bf16,
+        (Batch, NumPatches, Channels, Height, Width),
     )
-    grid_mask_named = hax.named(grid_mask, (NumPatches,))
-    input_ids_named = hax.named(input_ids, (Position,))
 
-    # Create decode params
+    # Add batch dimension to grid_mask: (batch, num_patches)
+    grid_mask_batched = grid_mask[np.newaxis, ...]  # (1, num_patches)
+    grid_mask_named = hax.named(grid_mask_batched, (Batch, NumPatches))
+
+    # Create unpad_indices NamedArray if present
+    unpad_indices_named = None
+    if unpad_indices is not None:
+        NumImageTokens = Axis("num_image_tokens", len(unpad_indices))
+        unpad_indices_batched = unpad_indices[np.newaxis, ...]
+        unpad_indices_named = hax.named(
+            jnp.array(unpad_indices_batched, dtype=jnp.int32),
+            (Batch, NumImageTokens)
+        )
+
+    # Configure stop tokens
+    eos_token_id = tokenizer.eos_token_id
+    if eos_token_id is not None:
+        stop_tokens = hax.named(jnp.array([[eos_token_id]], dtype=jnp.int32), ("stop_seq", "position"))
+    else:
+        stop_tokens = None
+
+    # Create decode params - use plain int/float (not jnp.array)
+    # max_num_tokens is TOTAL sequence length (prompt + new tokens), not just new tokens
+    estimated_max_seq_len = len(input_ids) + config.max_tokens + 64
     decode_params = SeqDecodingParams(
-        max_num_tokens=jnp.array(config.max_tokens, dtype=jnp.int32),
-        stop_tokens=None,
-        temperature=jnp.array(config.temperature, dtype=jnp.float32),
+        max_num_tokens=estimated_max_seq_len,
+        stop_tokens=stop_tokens,
+        temperature=config.temperature,
         key=jrandom.PRNGKey(config.seed),
     )
 
-    # Create VLMRequest
+    # Create VLMRequest with unpad_indices and num_unpadded_features
     vlm_request = VLMRequest(
         prompt_tokens=input_ids.tolist(),
         request_id=0,
@@ -311,9 +459,10 @@ def process_image(
         pixel_values=pixel_values_named,
         grid_mask=grid_mask_named,
         input_ids=input_ids_named,
+        unpad_indices=unpad_indices_named,
+        num_unpadded_features=num_unpadded_features,
     )
 
-    logger.info(f"Input tokens: {len(input_ids)}, Patches: {total_patches}")
     return vlm_request, input_ids.tolist()
 
 
@@ -344,34 +493,48 @@ def generate_caption(
     logger.info("Starting caption generation...")
 
     # Create engine config
+    # Use bfloat16 to match model weights
+    # Use smaller page_size and max_pages to reduce KV cache HBM usage
     engine_config = InferenceEngineConfig(
         max_seq_len=2048,
-        page_size=128,
-        max_pages=256,
+        page_size=16,   # Smaller pages (test uses 16)
+        max_pages=256,  # Fewer pages to fit in HBM
         max_seqs=1,
         max_queued_tokens=512,
         max_seqs_in_prefill=1,
         max_prefill_size=2048,
         max_rounds=64,
+        compute_dtype=jnp.bfloat16,
     )
 
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
-        # Create inference engine
+        # Get mesh from trainer config (required for proper sharding)
+        mesh = config.trainer.device_mesh
+
+        # Create inference engine with explicit mesh
         engine = LlavaInferenceEngine.from_model_with_config(
             model=model,
             tokenizer=tokenizer,
             config=engine_config,
             Vocab=Vocab,
-            mesh=None,
+            mesh=mesh,
         )
 
         # Generate
         result = engine.generate([vlm_request])
 
     # Decode output tokens
-    output_tokens = result.tokens[0]  # First request
+    raw_tokens = result.tokens[0]  # First request
+    logger.info(f"Raw output tokens: {raw_tokens[:20]}...")  # Debug: show first 20 raw tokens
+
     # Filter out invalid tokens
-    output_tokens = [t for t in output_tokens if t >= 0]
+    output_tokens = [t for t in raw_tokens if t >= 0]
+    logger.info(f"Filtered tokens: {output_tokens[:20]}...")  # Debug: show first 20 filtered tokens
+
+    # Decode without skip_special_tokens first for debugging
+    raw_caption = tokenizer.decode(output_tokens, skip_special_tokens=False)
+    logger.info(f"Raw decoded (first 100 chars): {raw_caption[:100]}")
+
     caption = tokenizer.decode(output_tokens, skip_special_tokens=True)
 
     logger.info(f"Generated {len(output_tokens)} tokens")
