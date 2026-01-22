@@ -42,6 +42,7 @@ class AdamHConfig(OptimizerConfig):
     max_grad_norm: Optional[float] = 1.0
     nesterov: bool = False
     adam_lr: float = 6e-4  # learning rate used for weight without weight decay
+    tangent_projection: bool = False
 
     def build(self, num_train_steps):
         """Creates the optimizer"""
@@ -55,7 +56,7 @@ class AdamHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate, tangent_projection=self.tangent_projection))
                 optimizer = optax.chain(*components)
                 return optimizer
 
@@ -110,6 +111,7 @@ def scale_by_adamh(
     eps: float = 1e-8,
     learning_rate: float = 0.02,
     mu_dtype: Optional[Any] = None,
+    tangent_projection=False,
 ) -> optax.GradientTransformation:
     r"""Rescale updates according to the AdamH algorithm.
 
@@ -136,6 +138,15 @@ def scale_by_adamh(
         return ScaleByAdamHState(count=jnp.zeros([], jnp.int32), mu=mu, nu=nu)
 
     def update_fn(updates, state, params):
+        if tangent_projection:
+            if params is None:
+                raise ValueError("Parameters are required for projection to tangent space.")
+            updates = jax.tree.map(
+                lambda p, g: g - (jnp.vdot(p, g) / jnp.vdot(p, p)) * p,
+                params,
+                updates,
+                is_leaf=lambda x: x is None,
+            )
         mu = otu.tree_update_moment(updates, state.mu, b1, 1)
         nu = otu.tree_update_moment_per_elem_norm(updates, state.nu, b2, 2)
         count_inc = optax.safe_increment(state.count)
