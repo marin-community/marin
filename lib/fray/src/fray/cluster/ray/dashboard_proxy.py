@@ -185,7 +185,6 @@ class DashboardProxy:
     _logs_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def _add_log(self, cluster: str, level: str, message: str, details: str | None = None) -> None:
-        """Add a log entry thread-safely."""
         entry = LogEntry(
             timestamp=datetime.now(),
             cluster=cluster,
@@ -197,12 +196,10 @@ class DashboardProxy:
             self._logs.append(entry)
 
     def _get_logs(self, limit: int = 50) -> list[LogEntry]:
-        """Get recent logs thread-safely."""
         with self._logs_lock:
             return list(self._logs)[-limit:]
 
     def _build_status(self, cluster: str, ports: RayPortMapping) -> ClusterStatus:
-        """Fetch status for a cluster using the forwarded port."""
         try:
             gcs_address = f"localhost:{ports.gcs_port}"
             result = subprocess.run(
@@ -240,7 +237,6 @@ class DashboardProxy:
         return html
 
     def _build_status_html(self, cluster: str, ports: RayPortMapping) -> str:
-        """Render a status card body for HTMX."""
         try:
             status = self._build_status(cluster, ports)
 
@@ -283,7 +279,6 @@ class DashboardProxy:
 
         @app.route("/api/cluster/<cluster>/status-html")
         def cluster_status_html(cluster: str):
-            """Get cluster status as HTML for HTMX."""
             if cluster not in self.clusters:
                 return '<div class="error">Unknown cluster</div>'
 
@@ -292,13 +287,12 @@ class DashboardProxy:
 
         @app.route("/api/logs-html")
         def logs_html():
-            """Get recent logs as HTML for HTMX."""
             logs = self._get_logs(50)
             if not logs:
                 return '<div class="log-empty">No logs yet</div>'
 
             html = ""
-            for entry in reversed(logs):  # Most recent first
+            for entry in reversed(logs):
                 timestamp = entry.timestamp.strftime("%H:%M:%S")
                 level_class = f"log-{entry.level}"
                 level_icon = {"error": "❌", "warning": "⚠️", "info": "ℹ️"}.get(entry.level, "")
@@ -309,7 +303,6 @@ class DashboardProxy:
                 html += f'<span class="log-icon">{level_icon}</span>'
                 html += f'<span class="log-message">{entry.message}</span>'
                 if entry.details:
-                    # Escape HTML in details to prevent XSS
                     escaped_details = (
                         entry.details.replace("&", "&amp;")
                         .replace("<", "&lt;")
@@ -432,7 +425,6 @@ class DashboardProxy:
             border-radius: 4px;
             font-size: 13px;
         }
-        /* Log panel styles */
         .log-panel {
             margin-top: 30px;
             background: white;
@@ -604,7 +596,6 @@ class DashboardProxy:
         return app
 
     def start(self) -> None:
-        """Start proxy server in background thread."""
         app = self._create_app()
         self.server = make_server("localhost", self.proxy_port, app, threaded=True)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -612,7 +603,6 @@ class DashboardProxy:
         logger.info("Started Ray dashboard proxy on http://localhost:%d", self.proxy_port)
 
     def stop(self) -> None:
-        """Stop proxy server."""
         if self.server:
             self.server.shutdown()
         if self.thread:
