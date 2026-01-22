@@ -1,3 +1,7 @@
+<!-- If this PR addresses an existing issue, include "Fixes #XXXX" below. -->
+<!-- For ongoing work, PRs should reference an existing issue. Delete this comment when done. -->
+Fixes #
+
 Please include a summary of the changes and the related issue if any.
 
 A good description is a paragraph or so describing the changes you made and the
