@@ -24,6 +24,7 @@ from typing import (
     TypedDict,
     TypeVar,
     Union,
+    cast,
 )
 
 import equinox as eqx
@@ -446,6 +447,32 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
     mask_user_turns: bool = True
 
 
+@LmDatasetFormatBase.register_subclass("preference_chat")
+@dataclass(frozen=True)
+class PreferenceChatLmDatasetFormat(LmDatasetFormatBase):
+    """Dataset configuration for preference chat transcripts.
+
+    Attributes:
+        chosen_field: Field name containing the preferred chat transcript.
+        rejected_field: Field name containing the rejected chat transcript.
+        chat_template: Overrides the tokenizer's chat template when provided.
+        system_prompt: Field name carrying an optional system instruction to prepend.
+        chat_template_kwargs: Field name containing optional keyword arguments passed to the chat template.
+        pack: Whether to allow example packing for efficient batching.
+        mask_user_turns: Mask user tokens from the training loss when True.
+        slice_strategy: How to handle sequences longer than the max length.
+    """
+
+    chosen_field: str = "chosen"
+    rejected_field: str = "rejected"
+    chat_template: str | None = None
+    system_prompt: str | None = None
+    chat_template_kwargs: str | None = "chat_template_kwargs"
+    pack: bool = False
+    mask_user_turns: bool = True
+    slice_strategy: Literal["left", "right", "raise"] = "raise"
+
+
 @dataclass(frozen=True)
 class LmDatasetSourceConfigBase(abc.ABC):
     """This class represents a dataset source with URLs or hf name/id."""
@@ -639,6 +666,26 @@ def preprocessor_for_format(
                 chat_template_kwargs_field=ct_kwargs,
                 mask_user_turns=mt,
             )  # type: ignore
+        case PreferenceChatLmDatasetFormat(
+            chosen_field=chosen_field,
+            rejected_field=rejected_field,
+            chat_template=ct,
+            system_prompt=sp,
+            chat_template_kwargs=ct_kwargs,
+            mask_user_turns=mt,
+        ):
+            return cast(
+                BatchProcessor[dict, dict],
+                PreferenceChatProcessor(
+                    tokenizer,
+                    chosen_field=chosen_field,
+                    rejected_field=rejected_field,
+                    chat_template=ct,
+                    system_prompt_field=sp,
+                    chat_template_kwargs_field=ct_kwargs,
+                    mask_user_turns=mt,
+                ),
+            )
         case _:
             raise ValueError(f"Unknown format {format}")
 
@@ -663,6 +710,17 @@ def dataset_for_format(
             )
         case ChatLmDatasetFormat(pack=pack, mask_user_turns=mask_user_turns):
             return MultiturnChatDataset(cache, Pos, max_segments_per_example=64 if pack else 1, mask_user_turns=mask_user_turns)  # type: ignore
+        case PreferenceChatLmDatasetFormat(pack=pack, mask_user_turns=mask_user_turns, slice_strategy=slice_strategy):
+            return cast(
+                AsyncDataset[LmExample],
+                PreferencePairDataset(
+                    cache,
+                    Pos,
+                    max_segments_per_example=64 if pack else 1,
+                    mask_user_turns=mask_user_turns,
+                    slice_strategy=slice_strategy,
+                ),
+            )
         case _:
             raise ValueError(f"Unknown format {format}")
 
@@ -1156,6 +1214,16 @@ ProcessedChatDict = TypedDict(
     },
 )
 
+ProcessedPreferenceChatDict = TypedDict(
+    "ProcessedPreferenceChatDict",
+    {
+        "chosen_input_ids": np.ndarray,
+        "chosen_assistant_masks": np.ndarray,
+        "rejected_input_ids": np.ndarray,
+        "rejected_assistant_masks": np.ndarray,
+    },
+)
+
 
 class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
     """
@@ -1311,6 +1379,81 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
         }
 
 
+class PreferenceChatProcessor(BatchProcessor[dict, ProcessedPreferenceChatDict]):
+    """
+    A batch processor that converts preference chat data into chosen/rejected chat template outputs.
+    """
+
+    def __init__(
+        self,
+        tokenizer: HfTokenizer,
+        *,
+        chosen_field: str = "chosen",
+        rejected_field: str = "rejected",
+        chat_template: str | None = None,
+        system_prompt_field: str | None = "system",
+        chat_template_kwargs_field: str | None = "chat_template_kwargs",
+        mask_user_turns: bool = True,
+    ):
+        self._chosen = ChatProcessor(
+            tokenizer,
+            chat_template=chat_template,
+            messages_field=chosen_field,
+            system_prompt_field=system_prompt_field,
+            chat_template_kwargs_field=chat_template_kwargs_field,
+            mask_user_turns=mask_user_turns,
+        )
+        self._rejected = ChatProcessor(
+            tokenizer,
+            chat_template=chat_template,
+            messages_field=rejected_field,
+            system_prompt_field=system_prompt_field,
+            chat_template_kwargs_field=chat_template_kwargs_field,
+            mask_user_turns=mask_user_turns,
+        )
+        self.chosen_field = chosen_field
+        self.rejected_field = rejected_field
+
+    def __call__(self, batch: Sequence[dict]) -> Sequence[ProcessedPreferenceChatDict]:
+        chosen_rows = self._chosen(batch)
+        rejected_rows = self._rejected(batch)
+
+        out: list[ProcessedPreferenceChatDict] = []
+        for chosen, rejected in zip(chosen_rows, rejected_rows, strict=True):
+            out.append(
+                {
+                    "chosen_input_ids": chosen["input_ids"],
+                    "chosen_assistant_masks": chosen["assistant_masks"],
+                    "rejected_input_ids": rejected["input_ids"],
+                    "rejected_assistant_masks": rejected["assistant_masks"],
+                }
+            )
+
+        return out
+
+    @property
+    def output_exemplar(self):
+        return {
+            "chosen_input_ids": np.zeros((0,), dtype=np.int32),
+            "chosen_assistant_masks": np.zeros((0,), dtype=np.int32),
+            "rejected_input_ids": np.zeros((0,), dtype=np.int32),
+            "rejected_assistant_masks": np.zeros((0,), dtype=np.int32),
+        }
+
+    @property
+    def num_cpus(self) -> int:
+        return self._chosen.num_cpus
+
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "chosen": self._chosen.metadata,
+            "rejected": self._rejected.metadata,
+            "chosen_field": self.chosen_field,
+            "rejected_field": self.rejected_field,
+        }
+
+
 class MultiturnChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict], LmExample]):
     """
     A dataset that yields multiturn chat examples from a cache of processed chat data.
@@ -1367,6 +1510,76 @@ class MultiturnChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, Processed
         super().__init__(self.packed, _create_lm_example)
 
 
+class DpoExample(eqx.Module):
+    chosen: LmExample
+    rejected: LmExample
+
+
+class PreferencePairDataset(
+    MappedAsyncDataset[tuple[ProcessedPreferenceChatDict, ProcessedPreferenceChatDict], DpoExample]
+):
+    """
+    A dataset that yields preference pairs as DpoExample objects.
+
+    Args:
+        cache: The cache of processed preference chat data.
+        Pos: The position axis.
+        max_segments_per_example: The maximum number of segments to pack into a single example. Set to 1 to disable packing.
+        slice_strategy: The strategy to use when an example is too long.
+        mask_user_turns: Whether to mask user tokens from the loss.
+    """
+
+    def __init__(
+        self,
+        cache: TreeCache[ProcessedPreferenceChatDict],
+        Pos: Axis,
+        *,
+        max_segments_per_example: int = 1,
+        slice_strategy: Literal["left", "right", "raise"] = "raise",
+        mask_user_turns: bool = True,
+    ):
+        self.packed: GreedyPrepackedDataset[ProcessedPreferenceChatDict] = GreedyPrepackedDataset(
+            cache.store.tree,
+            Pos.size,
+            max_segments_per_example=max_segments_per_example,
+            slice_strategy=slice_strategy,
+        )
+        self.Pos = Pos
+        self.mask_user_turns = mask_user_turns
+
+        sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
+
+        @functools.partial(eqx.filter_jit)
+        def _create_dpo_example(
+            e: tuple[ProcessedPreferenceChatDict, ProcessedPreferenceChatDict],
+        ) -> DpoExample:
+            example, seg_ids = e
+
+            def build_one(prefix: Literal["chosen", "rejected"]) -> LmExample:
+                if prefix == "chosen":
+                    tokens = hax.named(example["chosen_input_ids"], self.Pos)
+                    seg = hax.named(seg_ids["chosen_input_ids"], self.Pos)
+                    mask = example["chosen_assistant_masks"]
+                else:
+                    tokens = hax.named(example["rejected_input_ids"], self.Pos)
+                    seg = hax.named(seg_ids["rejected_input_ids"], self.Pos)
+                    mask = example["rejected_assistant_masks"]
+
+                if self.mask_user_turns:
+                    mask = jnp.roll(mask, -1, axis=-1)
+                    loss_weight = hax.named(mask, self.Pos)
+                else:
+                    loss_weight = None
+
+                return LmExample.causal(tokens=tokens, loss_weight=loss_weight, segment_ids=seg)
+
+            out = DpoExample(chosen=build_one("chosen"), rejected=build_one("rejected"))
+            out = jax.lax.with_sharding_constraint(out, sharding)
+            return out
+
+        super().__init__(self.packed, _create_dpo_example)
+
+
 def count_corpus_sizes(
     config: LMMixtureDatasetConfig | SingleDatasetLMConfig,
     prefix: str = "data/stats/",
@@ -1413,15 +1626,16 @@ def count_corpus_sizes(
     for name, cache in train_caches.items():
         source = sources[name]
         metric_prefix = f"{prefix}train/{name}/"
+        token_key = "chosen_input_ids" if isinstance(source.format, PreferenceChatLmDatasetFormat) else "input_ids"
 
-        stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size
-        stats[f"{metric_prefix}total_docs"] = cache.store.tree["input_ids"].num_rows
+        stats[f"{metric_prefix}total_tokens"] = cache.store.tree[token_key].data_size
+        stats[f"{metric_prefix}total_docs"] = cache.store.tree[token_key].num_rows
 
         train_set = dataset_for_format(source.format, Pos, cache, eos_id=None, ignore_index=None)
         train_seqs = len(train_set.as_sync_dataset())
         stats[f"{metric_prefix}total_seqs"] = train_seqs
 
-        padding_fraction = 1 - (cache.store.tree["input_ids"].data_size / (train_seqs * seq_len))
+        padding_fraction = 1 - (cache.store.tree[token_key].data_size / (train_seqs * seq_len))
         if padding_fraction < 0:
             stats[f"{metric_prefix}truncation_fraction"] = -padding_fraction
         else:
@@ -1437,9 +1651,10 @@ def count_corpus_sizes(
     for name, cache in validation_caches.items():
         source = sources[name]
         metric_prefix = f"{prefix}validation/{name}/"
+        token_key = "chosen_input_ids" if isinstance(source.format, PreferenceChatLmDatasetFormat) else "input_ids"
 
-        stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size
-        stats[f"{metric_prefix}total_docs"] = cache.store.tree["input_ids"].num_rows
+        stats[f"{metric_prefix}total_tokens"] = cache.store.tree[token_key].data_size
+        stats[f"{metric_prefix}total_docs"] = cache.store.tree[token_key].num_rows
 
         validation_set = dataset_for_format(source.format, Pos, cache, eos_id=None, ignore_index=None)
         stats[f"{metric_prefix}total_seqs"] = len(validation_set.as_sync_dataset())

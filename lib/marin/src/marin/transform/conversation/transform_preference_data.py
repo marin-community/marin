@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 
 import datasets
 import draccus
+import fsspec
 from datasets import get_dataset_config_info
 from zephyr import Backend, Dataset, write_jsonl_file
 
@@ -62,18 +63,82 @@ class SplitTask:
     """Task for processing a single subset/split combination."""
 
     input_path: str  # GCS or local path
-    subset: str
+    subset: str | None
     split: str
     output_path: str
     adapter_name: str
     source: str
     metadata_columns: list[str]
     shard_size: int
+    filetype: str
 
 
 def generate_hash_from_pair(chosen, rejected) -> str:
     """Generate a hash from chosen and rejected message lists."""
     return hashlib.sha256((str(chosen) + str(rejected)).encode()).hexdigest()
+
+
+def _is_fsspec_path(path: str) -> bool:
+    """Return True if the input path is an fsspec URL or an existing local path."""
+    protocol, _ = fsspec.core.split_protocol(path)
+    if protocol is not None:
+        return True
+    return os.path.exists(path)
+
+
+def _get_fsspec_protocol(fs: fsspec.AbstractFileSystem) -> str | None:
+    protocol = fs.protocol
+    if isinstance(protocol, (list, tuple)):
+        protocol = protocol[0]
+    if protocol == "file":
+        return None
+    return protocol
+
+
+def _to_fsspec_url(fs: fsspec.AbstractFileSystem, path: str) -> str:
+    protocol = _get_fsspec_protocol(fs)
+    if protocol:
+        return f"{protocol}://{path}"
+    return path
+
+
+def _find_split_files(input_path: str, subset: str | None, split: str, filetype: str) -> list[str]:
+    """Find split shard files under an fsspec path."""
+    fs, base_path = fsspec.core.url_to_fs(input_path)
+    roots = [base_path]
+    if subset and subset != "default":
+        roots.append(os.path.join(base_path, subset))
+    patterns = []
+    for root in roots:
+        patterns.append(os.path.join(root, f"{split}-*.{filetype}"))
+        patterns.append(os.path.join(root, "data", f"{split}-*.{filetype}"))
+    matches = []
+    for pattern in patterns:
+        matches.extend(fs.glob(pattern))
+    if not matches:
+        raise FileNotFoundError(
+            f"No {filetype} files found for split '{split}' under {input_path}. " f"Tried patterns: {patterns}"
+        )
+    return [_to_fsspec_url(fs, path) for path in sorted(set(matches))]
+
+
+def _infer_splits_from_files(input_path: str, subsets: list[str | None], filetype: str) -> list[str]:
+    """Infer split names from filenames in an fsspec path."""
+    fs, base_path = fsspec.core.url_to_fs(input_path)
+    roots = [base_path]
+    roots.extend(os.path.join(base_path, subset) for subset in subsets if subset)
+    candidates = []
+    for root in roots:
+        candidates.extend(fs.glob(os.path.join(root, f"*.{filetype}")))
+        candidates.extend(fs.glob(os.path.join(root, "data", f"*.{filetype}")))
+    splits = set()
+    for path in candidates:
+        filename = os.path.basename(path)
+        if "-" in filename:
+            split = filename.split("-", 1)[0]
+            if split:
+                splits.add(split)
+    return sorted(splits)
 
 
 def transform_row(row: dict, task: SplitTask, adapter: PreferenceTransformAdapter):
@@ -108,6 +173,26 @@ def get_dataset_tasks(cfg: TransformPreferenceDatasetConfig):
     Yields SplitTask objects for each subset/split combination.
     """
     input_path = cfg.input_path
+    if _is_fsspec_path(input_path):
+        subsets = cfg.subsets or [None]
+        splits = cfg.splits or _infer_splits_from_files(input_path, subsets, cfg.filetype)
+        if not splits:
+            raise ValueError(f"Unable to infer splits for {input_path}; specify splits explicitly in the config.")
+        for subset in subsets:
+            for split in splits:
+                subset_output_path = get_shard_dir(cfg.output_path, subset, split)
+                yield SplitTask(
+                    input_path=input_path,
+                    subset=subset,
+                    split=split,
+                    output_path=subset_output_path,
+                    adapter_name=cfg.adapter_name,
+                    source=cfg.source,
+                    metadata_columns=cfg.metadata_columns,
+                    shard_size=cfg.shard_size,
+                    filetype=cfg.filetype,
+                )
+        return
 
     # 1. Identify subsets
     if cfg.subsets:
@@ -141,6 +226,7 @@ def get_dataset_tasks(cfg: TransformPreferenceDatasetConfig):
                 source=cfg.source,
                 metadata_columns=cfg.metadata_columns,
                 shard_size=cfg.shard_size,
+                filetype=cfg.filetype,
             )
 
 
@@ -166,7 +252,16 @@ def process_split_task(task: SplitTask) -> dict:
         raise ValueError(f"No preference adapter found for source: {task.adapter_name or task.source}")
 
     logger.info(f"Processing subset: {subset}, split: {split}")
-    dataset = datasets.load_dataset(path=task.input_path, name=subset, split=split, streaming=True)
+    if _is_fsspec_path(task.input_path):
+        data_files = _find_split_files(task.input_path, subset, split, task.filetype)
+        dataset = datasets.load_dataset(
+            task.filetype,
+            data_files={split: data_files},
+            split=split,
+            streaming=True,
+        )
+    else:
+        dataset = datasets.load_dataset(path=task.input_path, name=subset, split=split, streaming=True)
 
     # Batch records and write to multiple shard files
     shard_files = []
