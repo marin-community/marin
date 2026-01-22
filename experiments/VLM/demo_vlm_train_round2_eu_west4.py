@@ -219,14 +219,15 @@ train_config = SimpleVlmTrainConfig(
     no_eval=True,
 
     # Custom mesh configuration for v5litepod-256
-    # data=128 allows FSDP sharding since 1152 (vision hidden_size) % 128 = 0
+    # Vision uses "vision_embed" axis (1152), LLM uses "embed" axis (2048)
+    # Only shard LLM embed: 2048 % 256 = 0 ✓
     mesh_config=MeshConfig(
-        axes={"data": 128, "replica": 2, "model": 1},  # 128 × 2 × 1 = 256 devices
+        axes={"data": -1, "replica": 1, "model": 1},  # data absorbs all 256 devices
         compute_mapping={
             "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
             "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
         },
-        param_mapping={"embed": "data"},  # Enable FSDP: 1152 % 128 = 0 ✓
+        param_mapping={"embed": "data"},  # Only shards LLM embed (vision uses vision_embed)
     ),
 )
 

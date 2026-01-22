@@ -216,8 +216,8 @@ class Siglip2VisionConfig(VisionEncoderConfig["Siglip2VisionModel"]):
     # Axis definitions following marin/Levanter patterns
     @property
     def Embed(self) -> Axis:
-        """Embedding dimension axis."""
-        return Axis(name="embed", size=self.hidden_size)
+        """Embedding dimension axis (named vision_embed to avoid collision with LLM embed)."""
+        return Axis(name="vision_embed", size=self.hidden_size)
 
     @property
     def Mlp(self) -> Axis:

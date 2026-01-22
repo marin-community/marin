@@ -393,10 +393,8 @@ class LlavaOnevisionMultimodalProjector(eqx.Module):
         """
         k1, k2 = maybe_rng_split(key, 2)
 
-        # Rename vision embed axis to avoid collision with text embed axis
-        # Vision features come with "embed" axis from Siglip2, but we need to map it to text "embed" axis
-        # First, rename to a temporary unique name to avoid axis collision during projection
-        image_features = image_features.rename({"embed": "vision_embed"})
+        # Vision features come with "vision_embed" axis from Siglip/Siglip2
+        # (renamed at source to avoid collision with LLM's "embed" axis for FSDP sharding)
 
         # First linear: vision_embed -> projector_hidden + activation
         hidden = self.linear_1(image_features, key=k1)
