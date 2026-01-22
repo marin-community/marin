@@ -269,7 +269,7 @@ class DashboardProxy:
             self._add_log(
                 cluster,
                 "error",
-                f"Error: {str(e)}",
+                f"Error: {e!s}",
                 traceback.format_exc(),
             )
             return '<div class="error">❌ Failed to fetch status</div>'
