@@ -51,6 +51,7 @@ from zephyr.dataset import (
     WindowOp,
     WriteOp,
 )
+from zephyr.expr import Expr
 from zephyr.readers import InputFileSpec
 
 if TYPE_CHECKING:
@@ -512,7 +513,7 @@ def _compute_file_pushdown(
     Returns:
         Tuple of (source_items, remaining_operations), where filter/select have been pushed down.
     """
-    filter_expr = None
+    filter_expr: Expr | None = None
     select_columns = load_op.columns
     ops_to_skip: set[int] = set()
 
@@ -882,7 +883,7 @@ class StageContext:
     total_shards: int
     chunk_size: int
     aux_shards: dict[int, list[Any]] = field(default_factory=dict)
-    execution_context: JobContext = None
+    execution_context: JobContext | None = None
 
     def get_right_shard(self, op_index: int) -> Any:
         """Get right shard for join at given op index.

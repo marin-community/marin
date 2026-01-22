@@ -1,114 +1,6 @@
 {
   "errors": [
     {
-      "line": 323,
-      "column": 46,
-      "stop_line": 326,
-      "stop_column": 14,
-      "path": "lib/fray/src/fray/cluster/ray/cluster.py",
-      "code": -2,
-      "name": "unsupported-operation",
-      "description": "Cannot set item in `dict[str, float]`\n  Argument `dict[str, float]` is not assignable to parameter `value` with type `float` in function `dict.__setitem__`",
-      "concise_description": "Cannot set item in `dict[str, float]`",
-      "severity": "error"
-    },
-    {
-      "line": 336,
-      "column": 20,
-      "stop_line": 336,
-      "stop_column": 37,
-      "path": "lib/fray/src/fray/cluster/ray/cluster.py",
-      "code": -2,
-      "name": "bad-return",
-      "description": "Returned type `JobInfo | list[JobInfo]` is not assignable to declared return type `JobInfo`",
-      "concise_description": "Returned type `JobInfo | list[JobInfo]` is not assignable to declared return type `JobInfo`",
-      "severity": "error"
-    },
-    {
-      "line": 153,
-      "column": 9,
-      "stop_line": 153,
-      "stop_column": 20,
-      "path": "lib/fray/src/fray/job/context.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `ThreadActorHandle.__getattr__` overrides parent class `ActorHandle` in an inconsistent manner\n  `ThreadActorHandle.__getattr__` has type `BoundMethod[ThreadActorHandle, (self: ThreadActorHandle, method_name: str) -> ThreadActorMethod]`, which is not assignable to `BoundMethod[ThreadActorHandle, (self: ThreadActorHandle, method_name: str) -> Never]`, the type of `ActorHandle.__getattr__`",
-      "concise_description": "Class member `ThreadActorHandle.__getattr__` overrides parent class `ActorHandle` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
-      "line": 195,
-      "column": 30,
-      "stop_line": 195,
-      "stop_column": 48,
-      "path": "lib/fray/src/fray/job/context.py",
-      "code": -2,
-      "name": "bad-assignment",
-      "description": "`GeneratorType[Any, Any, Any]` is not assignable to attribute `_iterator` with type `None`",
-      "concise_description": "`GeneratorType[Any, Any, Any]` is not assignable to attribute `_iterator` with type `None`",
-      "severity": "error"
-    },
-    {
-      "line": 218,
-      "column": 30,
-      "stop_line": 218,
-      "stop_column": 49,
-      "path": "lib/fray/src/fray/job/context.py",
-      "code": -2,
-      "name": "bad-assignment",
-      "description": "`Iterator[@_]` is not assignable to attribute `_iterator` with type `None`",
-      "concise_description": "`Iterator[@_]` is not assignable to attribute `_iterator` with type `None`",
-      "severity": "error"
-    },
-    {
-      "line": 428,
-      "column": 36,
-      "stop_line": 428,
-      "stop_column": 49,
-      "path": "lib/fray/src/fray/job/context.py",
-      "code": -2,
-      "name": "unsupported-operation",
-      "description": "Cannot set item in `dict[str, str]`\n  Argument `bool` is not assignable to parameter `value` with type `str` in function `dict.__setitem__`",
-      "concise_description": "Cannot set item in `dict[str, str]`",
-      "severity": "error"
-    },
-    {
-      "line": 433,
-      "column": 36,
-      "stop_line": 433,
-      "stop_column": 57,
-      "path": "lib/fray/src/fray/job/context.py",
-      "code": -2,
-      "name": "unsupported-operation",
-      "description": "Cannot set item in `dict[str, str]`\n  Argument `dict[str, float]` is not assignable to parameter `value` with type `str` in function `dict.__setitem__`",
-      "concise_description": "Cannot set item in `dict[str, str]`",
-      "severity": "error"
-    },
-    {
-      "line": 436,
-      "column": 35,
-      "stop_line": 436,
-      "stop_column": 43,
-      "path": "lib/fray/src/fray/job/context.py",
-      "code": -2,
-      "name": "unsupported-operation",
-      "description": "Cannot set item in `dict[str, str]`\n  Argument `float` is not assignable to parameter `value` with type `str` in function `dict.__setitem__`",
-      "concise_description": "Cannot set item in `dict[str, str]`",
-      "severity": "error"
-    },
-    {
-      "line": 152,
-      "column": 30,
-      "stop_line": 152,
-      "stop_column": 77,
-      "path": "lib/fray/src/fray/queue/http.py",
-      "code": -2,
-      "name": "bad-assignment",
-      "description": "`ServerThread` is not assignable to attribute `server_thread` with type `None`",
-      "concise_description": "`ServerThread` is not assignable to attribute `server_thread` with type `None`",
-      "severity": "error"
-    },
-    {
       "line": 328,
       "column": 12,
       "stop_line": 328,
@@ -1105,18 +997,6 @@
       "severity": "error"
     },
     {
-      "line": 135,
-      "column": 30,
-      "stop_line": 135,
-      "stop_column": 81,
-      "path": "lib/iris/src/iris/cluster/worker/worker.py",
-      "code": -2,
-      "name": "bad-assignment",
-      "description": "`TemporaryDirectory[str]` is not assignable to attribute `_temp_dir` with type `None`",
-      "concise_description": "`TemporaryDirectory[str]` is not assignable to attribute `_temp_dir` with type `None`",
-      "severity": "error"
-    },
-    {
       "line": 26,
       "column": 50,
       "stop_line": 26,
@@ -1777,9 +1657,9 @@
       "severity": "error"
     },
     {
-      "line": 724,
+      "line": 728,
       "column": 9,
-      "stop_line": 728,
+      "stop_line": 732,
       "stop_column": 64,
       "path": "lib/marin/src/marin/execution/executor.py",
       "code": -2,
@@ -1957,9 +1837,9 @@
       "severity": "error"
     },
     {
-      "line": 181,
+      "line": 182,
       "column": 5,
-      "stop_line": 187,
+      "stop_line": 188,
       "stop_column": 53,
       "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
       "code": -2,
@@ -1969,9 +1849,9 @@
       "severity": "error"
     },
     {
-      "line": 235,
+      "line": 236,
       "column": 16,
-      "stop_line": 235,
+      "stop_line": 236,
       "stop_column": 19,
       "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
       "code": -2,
@@ -1981,9 +1861,9 @@
       "severity": "error"
     },
     {
-      "line": 238,
+      "line": 239,
       "column": 16,
-      "stop_line": 238,
+      "stop_line": 239,
       "stop_column": 33,
       "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
       "code": -2,
@@ -1993,9 +1873,9 @@
       "severity": "error"
     },
     {
-      "line": 454,
+      "line": 480,
       "column": 9,
-      "stop_line": 454,
+      "stop_line": 480,
       "stop_column": 20,
       "path": "lib/marin/src/marin/rl/weight_transfer/arrow_flight.py",
       "code": -2,
@@ -2158,54 +2038,6 @@
       "name": "bad-return",
       "description": "Returned type `dict[str, str | Unknown | None]` is not assignable to declared return type `dict[str, str]`",
       "concise_description": "Returned type `dict[str, str | Unknown | None]` is not assignable to declared return type `dict[str, str]`",
-      "severity": "error"
-    },
-    {
-      "line": 833,
-      "column": 30,
-      "stop_line": 833,
-      "stop_column": 43,
-      "path": "lib/zephyr/src/zephyr/dataset.py",
-      "code": -2,
-      "name": "bad-assignment",
-      "description": "`(Iterator[T]) -> R` is not assignable to variable `global_reducer` with type `((Iterator[R]) -> R) | None`",
-      "concise_description": "`(Iterator[T]) -> R` is not assignable to variable `global_reducer` with type `((Iterator[R]) -> R) | None`",
-      "severity": "error"
-    },
-    {
-      "line": 522,
-      "column": 5,
-      "stop_line": 534,
-      "stop_column": 18,
-      "path": "lib/zephyr/src/zephyr/plan.py",
-      "code": -2,
-      "name": "bad-assignment",
-      "description": "`Expr | None` is not assignable to `None` (caused by inconsistent types when breaking cycles)",
-      "concise_description": "`Expr | None` is not assignable to `None` (caused by inconsistent types when breaking cycles)",
-      "severity": "error"
-    },
-    {
-      "line": 885,
-      "column": 37,
-      "stop_line": 885,
-      "stop_column": 41,
-      "path": "lib/zephyr/src/zephyr/plan.py",
-      "code": -2,
-      "name": "bad-assignment",
-      "description": "`None` is not assignable to `JobContext`\n  Protocol `JobContext` requires attribute `put`",
-      "concise_description": "`None` is not assignable to `JobContext`",
-      "severity": "error"
-    },
-    {
-      "line": 132,
-      "column": 34,
-      "stop_line": 132,
-      "stop_column": 50,
-      "path": "lib/zephyr/src/zephyr/writers.py",
-      "code": -2,
-      "name": "not-a-type",
-      "description": "Expected a type form, got instance of `type[dict] | UnionType`",
-      "concise_description": "Expected a type form, got instance of `type[dict] | UnionType`",
       "severity": "error"
     }
   ]
