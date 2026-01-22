@@ -41,6 +41,7 @@ qwen3_130m = Qwen3Config(
     num_layers=12,
     rope=Llama3RotaryEmbeddingsConfig(),
     tie_word_embeddings=True,
+    cross_entropy_block_size=32000,  # blockwise CE to reduce memory spike
 )
 
 LEARNING_RATES = [0.005, 0.01, 0.02]
@@ -141,7 +142,7 @@ for lr, batch_size in itertools.product(LEARNING_RATES, BATCH_SIZES):
     )
 
     step = default_train(
-        name=f"sweep-qwen3-130m-lr{lr}-bs{batch_size}",
+        name=f"ref-sweep-qwen3-130m-lr{lr}-bs{batch_size}",
         tokenized=nemotron_mix,
         model_config=qwen3_130m,
         train_config=train_config,
@@ -154,7 +155,7 @@ for lr, batch_size in itertools.product(LEARNING_RATES, BATCH_SIZES):
 
 
 analysis_step = ExecutorStep(
-    name="sweep-qwen3-130m-analysis",
+    name="ref-sweep-qwen3-130m-analysis",
     fn=run_sweep_analysis,
     config=SweepAnalysisConfig(
         run_paths=[s.as_input_name() for s in training_steps],
