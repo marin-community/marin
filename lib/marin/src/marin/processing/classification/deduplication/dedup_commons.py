@@ -185,7 +185,19 @@ def _get_extension(file_path: str) -> str:
 
 
 def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kwargs) -> Iterator[pa.RecordBatch]:
-    # Private function for now to isolate the `pa.RecordBatch` experiment
+    """
+    Load file contents as PyArrow RecordBatches.
+
+    This is useful to feed the pyarrow into rust using zero-copy batches.
+
+    Args:
+        file_path: Path to the input file (parquet, jsonl, jsonl.gz, or jsonl.zst)
+        columns: Optional list of columns to read (parquet only)
+        **parquet_kwargs: Additional kwargs passed to ParquetFile.iter_batches()
+
+    Yields:
+        pa.RecordBatch objects containing the file data
+    """
     if not file_path.endswith(SUPPORTED_EXTENSIONS):
         raise ValueError(f"Unsupported extension: {file_path}.")
     with open_file(file_path, "rb") as f:
