@@ -620,45 +620,53 @@ def write_shard(
 # Download-First Mode: Parallel batch downloading and processing
 # ============================================================================
 
-def list_dataset_parquet_files_with_sizes(repo_id: str = "mvp-lab/LLaVA-OneVision-1.5-Mid-Training-85M") -> List[Tuple[str, int]]:
+def list_dataset_parquet_files_with_sizes(repo_ids: List[str]) -> List[Tuple[str, str, int]]:
     """
-    List all parquet files in the dataset repository with their sizes.
+    List all parquet files from multiple dataset repositories with their sizes.
+
+    Args:
+        repo_ids: List of HuggingFace repo IDs to fetch files from
 
     Returns:
-        List of (filename, size_in_bytes) tuples
+        List of (repo_id, filename, size_in_bytes) tuples
     """
     if not HF_HUB_AVAILABLE:
         raise RuntimeError("huggingface_hub not installed. Install with: pip install huggingface_hub")
 
     api = HfApi()
-    print(f"Fetching file list and sizes from {repo_id}...")
+    all_files_with_sizes = []
 
-    # Use list_repo_tree to get file info including sizes
-    files_with_sizes = []
-    for item in api.list_repo_tree(repo_id, repo_type="dataset", recursive=True):
-        if item.path.endswith('.parquet'):
-            # item.size is in bytes
-            files_with_sizes.append((item.path, item.size or 0))
+    for repo_id in repo_ids:
+        print(f"Fetching file list and sizes from {repo_id}...")
+        repo_files = []
+        for item in api.list_repo_tree(repo_id, repo_type="dataset", recursive=True):
+            if item.path.endswith('.parquet'):
+                # item.size is in bytes
+                repo_files.append((repo_id, item.path, item.size or 0))
 
-    total_size_gb = sum(size for _, size in files_with_sizes) / (1024**3)
-    print(f"Found {len(files_with_sizes)} parquet files, total size: {total_size_gb:.1f} GB")
-    return files_with_sizes
+        repo_size_gb = sum(size for _, _, size in repo_files) / (1024**3)
+        print(f"  Found {len(repo_files)} parquet files from {repo_id}, size: {repo_size_gb:.1f} GB")
+        all_files_with_sizes.extend(repo_files)
+
+    total_size_gb = sum(size for _, _, size in all_files_with_sizes) / (1024**3)
+    print(f"Total: {len(all_files_with_sizes)} parquet files from {len(repo_ids)} repo(s), total size: {total_size_gb:.1f} GB")
+    return all_files_with_sizes
 
 
 def create_size_limited_batches(
-    files_with_sizes: List[Tuple[str, int]],
+    files_with_sizes: List[Tuple[str, str, int]],
     max_batch_bytes: int
-) -> Tuple[List[List[str]], List[int]]:
+) -> Tuple[List[List[Tuple[str, str]]], List[int]]:
     """
     Create batches of files where each batch doesn't exceed max_batch_bytes.
 
     Args:
-        files_with_sizes: List of (filename, size_in_bytes) tuples
+        files_with_sizes: List of (repo_id, filename, size_in_bytes) tuples
         max_batch_bytes: Maximum total size per batch in bytes
 
     Returns:
         Tuple of (batches, batch_sizes) where:
-        - batches: List of batches, each batch is a list of filenames
+        - batches: List of batches, each batch is a list of (repo_id, filename) tuples
         - batch_sizes: List of total sizes in bytes for each batch
     """
     batches = []
@@ -666,7 +674,7 @@ def create_size_limited_batches(
     current_batch = []
     current_size = 0
 
-    for filename, size in files_with_sizes:
+    for repo_id, filename, size in files_with_sizes:
         # If adding this file would exceed limit, start new batch
         if current_size + size > max_batch_bytes and current_batch:
             batches.append(current_batch)
@@ -674,7 +682,7 @@ def create_size_limited_batches(
             current_batch = []
             current_size = 0
 
-        current_batch.append(filename)
+        current_batch.append((repo_id, filename))
         current_size += size
 
     # Don't forget the last batch
@@ -727,12 +735,12 @@ def get_download_first_checkpoint_path(output_path: str, local_checkpoint_dir: O
 
 def load_download_first_checkpoint(
     checkpoint_path: str
-) -> Tuple[List[List[str]], List[int], int, int, Counter, int, int]:
+) -> Tuple[List[List[Tuple[str, str]]], List[int], int, int, Counter, int, int]:
     """
     Load checkpoint for download-first mode from LOCAL filesystem.
 
     Returns:
-        batches: Pre-computed batches (list of file lists) to maintain same batching on resume
+        batches: Pre-computed batches (list of (repo_id, filename) tuple lists) to maintain same batching on resume
         batch_sizes: Size in bytes for each batch
         batch_idx: Current batch index to resume from
         shard_idx: Current shard index to continue from
@@ -740,7 +748,7 @@ def load_download_first_checkpoint(
         total_processed: Total rows processed so far
         total_written: Total rows written so far
     """
-    batches: List[List[str]] = []
+    batches: List[List[Tuple[str, str]]] = []
     batch_sizes: List[int] = []
     batch_idx = 0
     shard_idx = 0
@@ -756,7 +764,9 @@ def load_download_first_checkpoint(
 
             # Support both old format (shuffled_files) and new format (batches)
             if 'batches' in data:
-                batches = data.get('batches', [])
+                # Convert lists back to tuples (JSON doesn't preserve tuple type)
+                raw_batches = data.get('batches', [])
+                batches = [[tuple(item) for item in batch] for batch in raw_batches]
                 batch_sizes = data.get('batch_sizes', [0] * len(batches))  # Default to 0 if not present
             elif 'shuffled_files' in data:
                 # Old format - convert to single batch (will need re-batching)
@@ -783,7 +793,7 @@ def load_download_first_checkpoint(
 
 def save_download_first_checkpoint(
     checkpoint_path: str,
-    batches: List[List[str]],
+    batches: List[List[Tuple[str, str]]],
     batch_sizes: List[int],
     batch_idx: int,
     shard_idx: int,
@@ -824,13 +834,17 @@ def save_download_first_checkpoint(
 
 
 def download_parquet_batch(
-    files: List[str],
+    files: List[Tuple[str, str]],
     download_dir: str,
-    repo_id: str = "mvp-lab/LLaVA-OneVision-1.5-Mid-Training-85M",
     max_workers: int = 16
 ) -> List[str]:
     """
     Download a batch of parquet files in parallel.
+
+    Args:
+        files: List of (repo_id, filename) tuples
+        download_dir: Directory to download files to
+        max_workers: Number of parallel download workers
 
     Returns list of local file paths.
     """
@@ -843,25 +857,27 @@ def download_parquet_batch(
     local_paths = []
     download_errors = []
 
-    def download_file(filename: str) -> Optional[str]:
+    def download_file(repo_id: str, filename: str) -> Optional[str]:
         try:
+            # Create a repo-specific subdirectory to avoid filename conflicts
+            repo_download_dir = os.path.join(download_dir, repo_id.replace("/", "_"))
             local_path = hf_hub_download(
                 repo_id=repo_id,
                 filename=filename,
                 repo_type="dataset",
-                local_dir=download_dir,
+                local_dir=repo_download_dir,
                 local_dir_use_symlinks=False
             )
             return local_path
         except Exception as e:
-            print(f"Error downloading {filename}: {e}", file=sys.stderr)
+            print(f"Error downloading {repo_id}/{filename}: {e}", file=sys.stderr)
             return None
 
     print(f"Downloading {len(files)} files with {max_workers} workers...")
     start_time = time.time()
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(download_file, f): f for f in files}
+        futures = {executor.submit(download_file, repo_id, filename): (repo_id, filename) for repo_id, filename in files}
 
         # Use tqdm for progress bar
         pbar = tqdm(
@@ -895,6 +911,7 @@ def download_parquet_batch(
 def process_dataset_download_first(
     output_path: str,
     download_dir: str,
+    repo_ids: List[str],
     buffer_size: int = 100000,
     rows_per_shard: int = 10000,
     max_batch_gb: float = 150.0,
@@ -1004,9 +1021,9 @@ def process_dataset_download_first(
         # Set random seed
         random.seed(seed)
 
-        # List all parquet files with sizes
-        print("Listing parquet files from HuggingFace...")
-        files_with_sizes = list_dataset_parquet_files_with_sizes()
+        # List all parquet files with sizes from all repos
+        print(f"Listing parquet files from {len(repo_ids)} repo(s)...")
+        files_with_sizes = list_dataset_parquet_files_with_sizes(repo_ids)
 
         # LAYER 1: File-level shuffle
         print(f"Shuffling {len(files_with_sizes)} files (seed={seed})...")
@@ -1560,6 +1577,7 @@ def process_dataset_download_first(
 
 def process_dataset(
     output_path: str,
+    repo_ids: List[str],
     buffer_size: int = 100000,
     rows_per_shard: int = 10000,
     shuffle_buffer_size: int = 500000,
@@ -1577,6 +1595,7 @@ def process_dataset(
 
     Args:
         output_path: GCS path (gs://...) or local directory path
+        repo_ids: List of HuggingFace repo IDs to process
         buffer_size: Number of rows to keep in memory buffer for write-time shuffling
         rows_per_shard: Number of rows per output shard
         shuffle_buffer_size: Buffer size for HF's built-in streaming shuffle (cross-subset mixing)
@@ -1585,6 +1604,8 @@ def process_dataset(
         use_gcs: Whether to write to GCS or local filesystem
         resume: Whether to resume from checkpoint (lossless resume)
     """
+    from datasets import interleave_datasets
+
     # Set random seed
     random.seed(seed)
 
@@ -1617,13 +1638,20 @@ def process_dataset(
         enable_progress_bar()
         print("HF verbose logging enabled - you'll see download progress from HF library")
 
-    # Load dataset in streaming mode
-    print("Loading LLaVA-OneVision dataset in streaming mode...")
-    dataset = load_dataset(
-        "mvp-lab/LLaVA-OneVision-1.5-Mid-Training-85M",
-        streaming=True,
-        split="train"
-    )
+    # Load datasets in streaming mode from all repos
+    print(f"Loading datasets from {len(repo_ids)} repo(s) in streaming mode...")
+    datasets_list = []
+    for repo_id in repo_ids:
+        print(f"  Loading {repo_id}...")
+        ds = load_dataset(repo_id, streaming=True, split="train")
+        datasets_list.append(ds)
+
+    # Interleave datasets if multiple repos
+    if len(datasets_list) == 1:
+        dataset = datasets_list[0]
+    else:
+        print(f"Interleaving {len(datasets_list)} datasets...")
+        dataset = interleave_datasets(datasets_list)
 
     # Apply HF's built-in shuffle for cross-subset mixing (unless disabled)
     if no_hf_shuffle:
@@ -2058,6 +2086,13 @@ def main():
         default=8,
         help="Number of parallel workers for writing shards to local disk (default: 8). Higher values speed up writing but use more memory."
     )
+    parser.add_argument(
+        "--repos",
+        type=str,
+        nargs="+",
+        default=["mvp-lab/LLaVA-OneVision-1.5-Mid-Training-85M"],
+        help="HuggingFace repo IDs to process (space-separated). Data from all repos will be merged and shuffled."
+    )
 
     args = parser.parse_args()
 
@@ -2083,9 +2118,12 @@ def main():
     os.environ['HF_HUB_DOWNLOAD_TIMEOUT'] = str(args.hf_timeout)
 
     print("=" * 60)
-    print("LLaVA-OneVision to Levanter Converter")
+    print("HuggingFace Dataset to Levanter Converter")
     print("=" * 60)
     print(f"Mode: {'DOWNLOAD-FIRST (parallel)' if args.download_first else 'STREAMING'}")
+    print(f"Repos: {len(args.repos)} repo(s)")
+    for repo in args.repos:
+        print(f"  - {repo}")
     print(f"Output: {output_path}")
     print(f"Use GCS: {use_gcs}")
     print(f"Buffer size (write-time): {args.buffer_size}")
@@ -2119,6 +2157,7 @@ def main():
         process_dataset_download_first(
             output_path=output_path,
             download_dir=args.download_dir,
+            repo_ids=args.repos,
             buffer_size=args.buffer_size,
             rows_per_shard=args.rows_per_shard,
             max_batch_gb=args.max_batch_gb,
@@ -2138,6 +2177,7 @@ def main():
         # Use streaming mode (original)
         process_dataset(
             output_path=output_path,
+            repo_ids=args.repos,
             buffer_size=args.buffer_size,
             rows_per_shard=args.rows_per_shard,
             shuffle_buffer_size=args.shuffle_buffer_size,

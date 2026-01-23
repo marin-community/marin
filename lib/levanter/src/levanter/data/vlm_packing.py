@@ -1082,8 +1082,12 @@ def compute_pack_assignments(
 
 
 def load_pack_assignment_result(path: str) -> PackAssignmentResult:
-    """Load pack assignments from JSON file."""
-    with open(path, "r") as f:
+    """Load pack assignments from JSON file.
+
+    Supports local paths and cloud storage paths (gs://, s3://).
+    """
+    fs, fs_path = fsspec.core.url_to_fs(path)
+    with fs.open(fs_path, "r") as f:
         data = json.load(f)
     return PackAssignmentResult.from_dict(data)
 
