@@ -24,10 +24,16 @@ import asyncio
 import json
 import logging
 import os
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, TypedDict
+import sys
+import threading
+import time
+from collections import OrderedDict
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, TypedDict
 
+import fsspec
 import numpy as np
+import pyarrow.parquet as pq
 
 from levanter.data import AsyncDataset
 from levanter.data.packing import pack_documents
@@ -92,13 +98,12 @@ def compute_vlm_sample_lengths(
     This extracts token counts and patch counts from each sample in the dataset,
     returning them in a PyTree format suitable for pack_documents().
 
-    The effective token count accounts for image token expansion:
-    - Each <image> placeholder is replaced by features_per_patch tokens
-    - effective_tokens = token_count + patch_count * (features_per_patch - 1)
+    Note: The token count from attention_mask already includes expanded image tokens
+    (each <image> placeholder was expanded to features_per_patch tokens by the HF processor).
 
     Args:
         dataset: AsyncDataset containing ImageTextDict samples
-        features_per_patch: Number of features per image patch
+        features_per_patch: Number of features per image patch (deprecated, no longer used)
         batch_size: Batch size for reading samples
 
     Returns:
@@ -136,11 +141,10 @@ def compute_vlm_sample_lengths(
             else:
                 patch_count = 0
 
-            # Effective token count accounts for image token expansion
-            # Each <image> placeholder is replaced by features_per_patch tokens
-            effective_tokens = token_count + patch_count * (features_per_patch - 1)
-
-            token_lengths.append(effective_tokens)
+            # attention_mask already includes expanded image tokens from HF processor
+            # (each <image> placeholder was expanded to patch_count * features_per_patch tokens)
+            # So token_count is already the effective token count
+            token_lengths.append(token_count)
             patch_counts.append(patch_count)
 
         if batch_end % 10000 == 0:
@@ -564,3 +568,694 @@ def build_vlm_prepacked_dataset(
         config=config,
         cache_dir=cache_dir,
     )
+
+
+# =============================================================================
+# Offline VLM Pack Assignment (Phase 1: Preprocessing)
+# =============================================================================
+
+
+@dataclass
+class PackAssignmentConfig:
+    """Configuration for pack assignment preprocessing."""
+
+    max_length: int = 2048
+    """Maximum sequence length (tokens) for packed examples."""
+
+    max_patches: int = 10
+    """Maximum number of image patches for packed examples."""
+
+    max_segments: int = 64
+    """Maximum number of samples that can be packed together."""
+
+    features_per_patch: int = 576
+    """Number of features per image patch (e.g., 24*24=576 for LLaVA)."""
+
+    image_column: str = "image"
+    """Column name for image data in parquet."""
+
+    text_column: str = "text"
+    """Column name for text data in parquet."""
+
+
+@dataclass
+class ShardInfo:
+    """Information about a parquet shard."""
+
+    path: str
+    start_idx: int
+    num_samples: int
+
+
+@dataclass
+class PackAssignmentResult:
+    """Result of pack assignment computation."""
+
+    assignments: List[Tuple[int, int]]
+    """List of (start, end) tuples for each pack."""
+
+    shard_info: List[ShardInfo]
+    """Information about each shard."""
+
+    config: PackAssignmentConfig
+    """Config used for assignment."""
+
+    num_packs: int
+    """Total number of packs."""
+
+    num_samples: int
+    """Total number of samples."""
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to JSON-serializable dict."""
+        return {
+            "assignments": self.assignments,
+            "shard_info": [asdict(s) for s in self.shard_info],
+            "config": asdict(self.config),
+            "num_packs": self.num_packs,
+            "num_samples": self.num_samples,
+            "version": "2.0",
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PackAssignmentResult":
+        """Load from dict."""
+        return cls(
+            assignments=[(s, e) for s, e in data["assignments"]],
+            shard_info=[ShardInfo(**s) for s in data["shard_info"]],
+            config=PackAssignmentConfig(**data["config"]),
+            num_packs=data["num_packs"],
+            num_samples=data["num_samples"],
+        )
+
+
+def compute_sample_lengths_lightweight(
+    parquet_paths: List[str],
+    tokenizer,
+    config: PackAssignmentConfig,
+) -> Tuple[Dict[str, np.ndarray], List[ShardInfo]]:
+    """
+    Compute sample lengths from raw parquet files without full image preprocessing.
+
+    This is a lightweight operation that:
+    - Tokenizes text to get text token count
+    - Counts images to estimate patch count
+    - Does NOT load/decode images
+
+    For each sample, the effective token count is:
+        text_tokens + num_images * features_per_patch
+
+    Args:
+        parquet_paths: List of paths to parquet files
+        tokenizer: HuggingFace tokenizer for text tokenization
+        config: Pack assignment configuration
+
+    Returns:
+        Tuple of:
+        - Dict with "tokens" and "patches" arrays suitable for pack_documents()
+        - List of ShardInfo for tracking shard boundaries
+    """
+    token_lengths = []
+    patch_counts = []
+    shard_info = []
+    current_idx = 0
+
+    logger.info(f"Computing sample lengths from {len(parquet_paths)} parquet files...")
+
+    for path in parquet_paths:
+        logger.info(f"Processing {path}...")
+
+        # Read parquet file (supports GCS, S3, local paths via fsspec)
+        fs, fs_path = fsspec.core.url_to_fs(path)
+        with fs.open(fs_path, 'rb') as f:
+            table = pq.read_table(f)
+        df = table.to_pandas()
+        num_samples = len(df)
+
+        shard_info.append(ShardInfo(
+            path=path,
+            start_idx=current_idx,
+            num_samples=num_samples,
+        ))
+
+        for i, row in df.iterrows():
+            # Get text
+            text = row.get(config.text_column, "")
+            if text is None:
+                text = ""
+
+            # Tokenize text (without image tokens)
+            # Note: We don't expand <image> placeholders here, just count base tokens
+            text_tokens = tokenizer(text, add_special_tokens=False)["input_ids"]
+            text_token_count = len(text_tokens)
+
+            # Count images
+            image_data = row.get(config.image_column)
+            if image_data is None:
+                num_images = 0
+            elif isinstance(image_data, list):
+                num_images = len(image_data)
+            elif isinstance(image_data, (bytes, str)):
+                num_images = 1
+            else:
+                # Assume single image for other types
+                num_images = 1
+
+            # For disable_anyres=True, each image = 1 patch
+            patch_count = num_images
+
+            # Effective tokens = text tokens + image token expansion
+            # Each image expands to features_per_patch tokens
+            effective_tokens = text_token_count + num_images * (config.features_per_patch+1)
+
+            token_lengths.append(effective_tokens)
+            patch_counts.append(patch_count)
+
+        current_idx += num_samples
+        logger.info(f"  Processed {num_samples} samples, total: {current_idx}")
+
+    total_samples = len(token_lengths)
+    logger.info(f"Sample length computation complete. Total samples: {total_samples}")
+    logger.info(f"  Token lengths: mean={np.mean(token_lengths):.1f}, max={np.max(token_lengths)}")
+    logger.info(f"  Patch counts: mean={np.mean(patch_counts):.1f}, max={np.max(patch_counts)}")
+
+    return {
+        "tokens": np.array(token_lengths, dtype=np.int32),
+        "patches": np.array(patch_counts, dtype=np.int32),
+    }, shard_info
+
+
+def compute_pack_assignments(
+    parquet_paths: List[str],
+    output_file: str,
+    tokenizer,
+    config: Optional[PackAssignmentConfig] = None,
+) -> PackAssignmentResult:
+    """
+    Compute pack assignments from raw parquet files and save to JSON.
+
+    This is the offline preprocessing step that determines which samples
+    should be packed together based on their lengths.
+
+    Args:
+        parquet_paths: List of paths to raw parquet files
+        output_file: Path to save pack_assignments.json
+        tokenizer: HuggingFace tokenizer for text tokenization
+        config: Pack assignment configuration (uses defaults if None)
+
+    Returns:
+        PackAssignmentResult with assignments and metadata
+    """
+    if config is None:
+        config = PackAssignmentConfig()
+
+    # 1. Compute lightweight sample lengths
+    lengths, shard_info = compute_sample_lengths_lightweight(
+        parquet_paths, tokenizer, config
+    )
+
+    num_samples = len(lengths["tokens"])
+    logger.info(f"Total samples: {num_samples}")
+
+    # 2. Run greedy packing
+    pack_ranges = pack_vlm_samples(
+        lengths=lengths,
+        max_tokens=config.max_length,
+        max_patches=config.max_patches,
+        max_segments=config.max_segments,
+    )
+
+    # Convert ranges to tuples
+    assignments = [(r.start, r.stop) for r in pack_ranges]
+    num_packs = len(assignments)
+
+    logger.info(f"Created {num_packs} packs from {num_samples} samples")
+    logger.info(f"  Compression ratio: {num_samples / num_packs:.2f}x")
+
+    # 3. Create result
+    result = PackAssignmentResult(
+        assignments=assignments,
+        shard_info=shard_info,
+        config=config,
+        num_packs=num_packs,
+        num_samples=num_samples,
+    )
+
+    # 4. Save to file
+    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+    with open(output_file, "w") as f:
+        json.dump(result.to_dict(), f, indent=2)
+
+    logger.info(f"Saved pack assignments to {output_file}")
+
+    return result
+
+
+def load_pack_assignment_result(path: str) -> PackAssignmentResult:
+    """Load pack assignments from JSON file."""
+    with open(path, "r") as f:
+        data = json.load(f)
+    return PackAssignmentResult.from_dict(data)
+
+
+# =============================================================================
+# Streaming Training Dataset (Phase 2: Training)
+# =============================================================================
+
+
+@dataclass
+class PackedVLMDatasetState:
+    """Checkpoint state for PackedVLMDataset."""
+
+    pack_idx: int = 0
+    """Current pack index."""
+
+    step: int = 0
+    """Training step number."""
+
+
+class SequentialShardLoader:
+    """
+    Sequential parquet shard loader with prefetching.
+
+    Since training iterates through packs sequentially, and samples within
+    packs are also ordered, we use a simple strategy:
+    1. Keep current shard in memory
+    2. Prefetch next shard in background when approaching shard boundary
+    3. Release old shard when switching
+
+    This is more efficient than LRU for sequential access patterns.
+    """
+
+    def __init__(self, shard_info: List[ShardInfo], prefetch_threshold: float = 0.8):
+        """
+        Args:
+            shard_info: List of shard metadata
+            prefetch_threshold: Start prefetching when progress exceeds this (0.0-1.0)
+        """
+        self._shard_info = shard_info
+        self._prefetch_threshold = prefetch_threshold
+
+        # Current shard state
+        self._current_shard_idx: int = -1
+        self._current_df: Optional[Any] = None
+
+        # Prefetch state
+        self._next_df: Optional[Any] = None
+        self._prefetch_thread: Optional[threading.Thread] = None
+        self._prefetch_lock = threading.Lock()
+        self._prefetch_shard_idx: int = -1
+
+    def get_sample(self, global_idx: int) -> Dict[str, Any]:
+        """Get a sample by global index, with automatic shard management."""
+        shard_idx, local_idx = self._find_shard(global_idx)
+
+        # Switch shard if needed
+        if shard_idx != self._current_shard_idx:
+            self._switch_to_shard(shard_idx)
+
+        # Maybe start prefetching next shard
+        self._maybe_start_prefetch(shard_idx, local_idx)
+
+        return self._current_df.iloc[local_idx].to_dict()
+
+    def _find_shard(self, global_idx: int) -> Tuple[int, int]:
+        """Find which shard contains the global index."""
+        for shard_idx, shard in enumerate(self._shard_info):
+            if shard.start_idx <= global_idx < shard.start_idx + shard.num_samples:
+                local_idx = global_idx - shard.start_idx
+                return shard_idx, local_idx
+        raise IndexError(f"Global index {global_idx} not found in any shard")
+
+    def _switch_to_shard(self, shard_idx: int):
+        """Switch to a new shard, using prefetched data if available."""
+        with self._prefetch_lock:
+            # Check if we have this shard prefetched
+            if shard_idx == self._prefetch_shard_idx and self._next_df is not None:
+                logger.debug(f"Using prefetched shard {shard_idx}")
+                self._current_df = self._next_df
+                self._next_df = None
+                self._prefetch_shard_idx = -1
+            else:
+                # Load synchronously
+                logger.debug(f"Loading shard {shard_idx} synchronously")
+                self._current_df = self._load_shard_sync(shard_idx)
+
+            self._current_shard_idx = shard_idx
+
+    def _load_shard_sync(self, shard_idx: int) -> Any:
+        """Load a shard synchronously (supports GCS, S3, local paths via fsspec)."""
+        shard = self._shard_info[shard_idx]
+        logger.info(f"Loading shard: {shard.path}")
+        fs, fs_path = fsspec.core.url_to_fs(shard.path)
+        with fs.open(fs_path, 'rb') as f:
+            table = pq.read_table(f)
+        return table.to_pandas()
+
+    def _maybe_start_prefetch(self, shard_idx: int, local_idx: int):
+        """Start prefetching next shard if we're near the end of current."""
+        shard = self._shard_info[shard_idx]
+        progress = local_idx / shard.num_samples if shard.num_samples > 0 else 1.0
+
+        # Check if we should prefetch
+        if progress >= self._prefetch_threshold:
+            next_shard_idx = shard_idx + 1
+            if next_shard_idx < len(self._shard_info):
+                self._start_prefetch(next_shard_idx)
+
+    def _start_prefetch(self, shard_idx: int):
+        """Start prefetching a shard in background thread."""
+        with self._prefetch_lock:
+            # Don't prefetch if already prefetching or already have this shard
+            if self._prefetch_thread is not None and self._prefetch_thread.is_alive():
+                return
+            if self._prefetch_shard_idx == shard_idx:
+                return
+
+            logger.debug(f"Starting prefetch for shard {shard_idx}")
+            self._prefetch_thread = threading.Thread(
+                target=self._prefetch_worker,
+                args=(shard_idx,),
+                daemon=True,
+            )
+            self._prefetch_thread.start()
+
+    def _prefetch_worker(self, shard_idx: int):
+        """Background worker to prefetch a shard."""
+        try:
+            df = self._load_shard_sync(shard_idx)
+            with self._prefetch_lock:
+                self._next_df = df
+                self._prefetch_shard_idx = shard_idx
+            logger.debug(f"Prefetch complete for shard {shard_idx}")
+        except Exception as e:
+            logger.warning(f"Prefetch failed for shard {shard_idx}: {e}")
+
+
+class PackedVLMDataset(AsyncDataset):
+    """
+    Streaming VLM dataset that reads raw parquet + pack assignments.
+
+    This class:
+    - Reads pack assignments computed offline
+    - Loads raw samples from parquet on demand
+    - Applies BatchImageProcessor during training
+    - Supports checkpoint save/restore
+
+    The images are kept in original format (URL or bytes) in parquet,
+    and only processed to pixel_values during training.
+
+    Usage:
+        # Load pre-computed pack assignments
+        dataset = PackedVLMDataset(
+            pack_assignments_file="pack_assignments.json",
+            processor=hf_processor,  # For BatchImageProcessor
+            state_file="vlm_data_state.json",  # Optional checkpoint
+        )
+
+        # Get a pack
+        pack = await dataset.get_batch([0])
+
+        # Save checkpoint
+        dataset.save_state(step=1000)
+    """
+
+    def __init__(
+        self,
+        pack_assignments_file: str,
+        processor,
+        max_length: int = 2048,
+        prefetch_threshold: float = 0.8,
+        state_file: Optional[str] = None,
+    ):
+        """
+        Initialize the packed VLM dataset.
+
+        Args:
+            pack_assignments_file: Path to pack_assignments.json
+            processor: HuggingFace processor (for BatchImageProcessor)
+            max_length: Maximum sequence length
+            prefetch_threshold: Start prefetching next shard when progress exceeds this
+            state_file: Optional path to checkpoint state file
+        """
+        super().__init__()
+
+        # Load pack assignments
+        self._assignments = load_pack_assignment_result(pack_assignments_file)
+        self._pack_ranges = [range(s, e) for s, e in self._assignments.assignments]
+
+        # Sequential shard loader with prefetching (not LRU - we read sequentially)
+        self._shard_loader = SequentialShardLoader(
+            shard_info=self._assignments.shard_info,
+            prefetch_threshold=prefetch_threshold,
+        )
+
+        # Image processor (delayed import to avoid circular dependencies)
+        from levanter.data.image import BatchImageProcessor
+        self._batch_processor = BatchImageProcessor(processor, max_length=max_length)
+
+        # Config from assignments
+        self._config = self._assignments.config
+        self._max_length = max_length
+
+        # Checkpoint state
+        self._state = PackedVLMDatasetState()
+        self._state_file = state_file
+        if state_file and os.path.exists(state_file):
+            self._restore_state()
+
+        logger.info(f"PackedVLMDataset initialized: {self._assignments.num_packs} packs, "
+                    f"{self._assignments.num_samples} samples, "
+                    f"{len(self._assignments.shard_info)} shards")
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def async_len(self) -> int:
+        """Return number of packs."""
+        return self._assignments.num_packs
+
+    async def final_length_is_known(self) -> bool:
+        return True
+
+    async def current_len(self) -> Optional[int]:
+        return self._assignments.num_packs
+
+    def _get_sample(self, global_idx: int) -> Dict[str, Any]:
+        """Get a single raw sample by global index."""
+        return self._shard_loader.get_sample(global_idx)
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[PackedImageTextDict]:
+        """
+        Load and assemble packed samples for the given pack indices.
+
+        This method:
+        1. Looks up which samples belong to each pack
+        2. Loads raw samples from parquet
+        3. Processes images with BatchImageProcessor
+        4. Assembles into PackedImageTextDict format
+
+        Args:
+            indices: Pack indices to load
+
+        Returns:
+            List of PackedImageTextDict, one per requested pack
+        """
+        results = []
+
+        for pack_idx in indices:
+            pack_range = self._pack_ranges[pack_idx]
+
+            # 1. Load raw samples
+            raw_samples = [self._get_sample(i) for i in pack_range]
+
+            # 2. Process with BatchImageProcessor
+            # Convert to format expected by processor
+            processed_samples = []
+            for raw in raw_samples:
+                processed = self._batch_processor.process_single(raw)
+                if processed is not None:
+                    processed_samples.append(processed)
+
+            # 3. Assemble into packed format
+            if processed_samples:
+                packed = self._assemble_pack(processed_samples)
+            else:
+                # Empty pack - create placeholder
+                packed = self._create_empty_pack()
+
+            results.append(packed)
+
+            # Update state
+            self._state.pack_idx = pack_idx + 1
+
+        return results
+
+    def _assemble_pack(self, samples: List[Dict]) -> PackedImageTextDict:
+        """
+        Assemble multiple processed samples into a single packed sample.
+
+        Similar to VLMPrepackedDataset._assemble_pack but works with
+        freshly processed samples.
+        """
+        config = self._config
+
+        all_input_ids = []
+        all_loss_masks = []
+        all_pixel_values = []
+        segment_ids = []
+        image_segment_ids = []
+
+        for seg_id, sample in enumerate(samples):
+            # Token processing
+            ids = np.array(sample["input_ids"])
+            if "attention_mask" in sample and sample["attention_mask"] is not None:
+                valid_len = int(np.sum(sample["attention_mask"]))
+                ids = ids[:valid_len]
+
+            all_input_ids.append(ids)
+            segment_ids.extend([seg_id] * len(ids))
+
+            # Loss mask
+            if "loss_mask" in sample and sample["loss_mask"] is not None:
+                loss_mask = np.array(sample["loss_mask"])[:len(ids)]
+                all_loss_masks.append(loss_mask)
+            else:
+                all_loss_masks.append(np.ones(len(ids), dtype=np.float32))
+
+            # Pixel values
+            pv = sample.get("pixel_values")
+            if pv is not None and len(pv) > 0:
+                pv = np.array(pv)
+                all_pixel_values.append(pv)
+                num_patches = len(pv)
+                image_segment_ids.extend([seg_id] * num_patches)
+
+        # Concatenate and pad
+        if all_input_ids:
+            input_ids = np.concatenate(all_input_ids)
+        else:
+            input_ids = np.array([], dtype=np.int32)
+
+        # Pad to max_length
+        pad_length = self._max_length - len(input_ids)
+        if pad_length > 0:
+            input_ids = np.pad(input_ids, (0, pad_length), constant_values=0)
+            segment_ids = segment_ids + [-1] * pad_length
+        elif pad_length < 0:
+            input_ids = input_ids[:self._max_length]
+            segment_ids = segment_ids[:self._max_length]
+
+        segment_ids = np.array(segment_ids, dtype=np.int32)
+
+        # Loss mask
+        if all_loss_masks:
+            loss_mask = np.concatenate(all_loss_masks)
+            loss_mask = np.pad(loss_mask, (0, max(0, self._max_length - len(loss_mask))))[:self._max_length]
+        else:
+            loss_mask = np.zeros(self._max_length, dtype=np.float32)
+
+        # Pixel values
+        max_patches = config.max_patches
+        if all_pixel_values:
+            pixel_values = np.concatenate(all_pixel_values, axis=0)
+            pad_patches = max_patches - len(pixel_values)
+            if pad_patches > 0:
+                pad_shape = (pad_patches,) + pixel_values.shape[1:]
+                pixel_values = np.concatenate([pixel_values, np.zeros(pad_shape, dtype=pixel_values.dtype)], axis=0)
+                image_segment_ids = image_segment_ids + [-1] * pad_patches
+            elif pad_patches < 0:
+                pixel_values = pixel_values[:max_patches]
+                image_segment_ids = image_segment_ids[:max_patches]
+        else:
+            pixel_values = np.zeros((max_patches, 3, 384, 384), dtype=np.float32)
+            image_segment_ids = [-1] * max_patches
+
+        image_segment_ids = np.array(image_segment_ids, dtype=np.int32)
+
+        # Position IDs (reset per segment)
+        position_ids = self._compute_per_segment_positions(segment_ids)
+
+        # Attention mask
+        attention_mask = (segment_ids >= 0).astype(np.int32)
+
+        return PackedImageTextDict(
+            input_ids=input_ids,
+            pixel_values=pixel_values,
+            loss_mask=loss_mask,
+            segment_ids=segment_ids,
+            image_segment_ids=image_segment_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            num_segments=len(samples),
+        )
+
+    def _compute_per_segment_positions(self, segment_ids: np.ndarray) -> np.ndarray:
+        """Compute position IDs that reset for each segment."""
+        position_ids = np.zeros_like(segment_ids)
+        current_seg = -2
+        pos_counter = 0
+
+        for i, seg_id in enumerate(segment_ids):
+            if seg_id < 0:
+                position_ids[i] = 0
+            elif seg_id != current_seg:
+                current_seg = seg_id
+                pos_counter = 0
+                position_ids[i] = pos_counter
+                pos_counter += 1
+            else:
+                position_ids[i] = pos_counter
+                pos_counter += 1
+
+        return position_ids
+
+    def _create_empty_pack(self) -> PackedImageTextDict:
+        """Create an empty pack (placeholder for failed processing)."""
+        max_patches = self._config.max_patches
+        return PackedImageTextDict(
+            input_ids=np.zeros(self._max_length, dtype=np.int32),
+            pixel_values=np.zeros((max_patches, 3, 384, 384), dtype=np.float32),
+            loss_mask=np.zeros(self._max_length, dtype=np.float32),
+            segment_ids=np.full(self._max_length, -1, dtype=np.int32),
+            image_segment_ids=np.full(max_patches, -1, dtype=np.int32),
+            position_ids=np.zeros(self._max_length, dtype=np.int32),
+            attention_mask=np.zeros(self._max_length, dtype=np.int32),
+            num_segments=0,
+        )
+
+    def save_state(self, step: int):
+        """Save checkpoint state."""
+        if self._state_file is None:
+            logger.warning("No state_file configured, cannot save state")
+            return
+
+        self._state.step = step
+        state_dict = asdict(self._state)
+
+        os.makedirs(os.path.dirname(self._state_file) or ".", exist_ok=True)
+        with open(self._state_file, "w") as f:
+            json.dump(state_dict, f)
+
+        logger.debug(f"Saved state: pack_idx={self._state.pack_idx}, step={step}")
+
+    def _restore_state(self):
+        """Restore checkpoint state from file."""
+        try:
+            with open(self._state_file, "r") as f:
+                state_dict = json.load(f)
+            self._state = PackedVLMDatasetState(**state_dict)
+            logger.info(f"Restored state: pack_idx={self._state.pack_idx}, step={self._state.step}")
+        except Exception as e:
+            logger.warning(f"Failed to restore state: {e}")
+            self._state = PackedVLMDatasetState()
+
+    @property
+    def current_pack_idx(self) -> int:
+        """Current pack index for checkpoint."""
+        return self._state.pack_idx
+
+    @current_pack_idx.setter
+    def current_pack_idx(self, value: int):
+        """Set current pack index (for resuming from checkpoint)."""
+        self._state.pack_idx = value

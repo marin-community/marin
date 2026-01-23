@@ -70,7 +70,7 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
 PER_DEVICE_PARALLELISM = 2  # 1 sample per device (memory-safe for VLM with large images)
-GRADIENT_ACCUMULATION_STEPS = 1  # Accumulate 4 micro-batches
+GRADIENT_ACCUMULATION_STEPS = 4  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
 # ============================================================================
@@ -89,6 +89,7 @@ vision_config = SiglipVisionConfig(
     image_size=384,
     patch_size=16,  # Must match vision_checkpoint (siglip2-so400m-patch16-384)
     flash_attention_block_size=FLASH_ATTENTION_BLOCK_SIZE,
+    gradient_checkpointing=True,
 )
 
 # Language model: Qwen3-1.7B
@@ -102,6 +103,7 @@ text_config = Qwen3Config(
     rope=Llama3RotaryEmbeddingsConfig(),
     tie_word_embeddings=True,
     flash_attention_block_size=FLASH_ATTENTION_BLOCK_SIZE,
+    gradient_checkpointing=True,
 )
 
 # Qwen3-1.7B <|image_pad|> token ID (hardcoded to avoid HF API call during import)
@@ -120,6 +122,7 @@ vlm_config = LlavaOnevisionConfig(
     disable_anyres=True,
     # Use Qwen3's <|image_pad|> token ID (default 151646 is for Qwen2)
     image_token_index=IMAGE_TOKEN_INDEX,
+    gradient_checkpointing=True,
 )
 
 # ============================================================================

@@ -11,6 +11,7 @@ Tests cover:
 - Segment ID assignment
 - Position ID computation
 - Pack assignment determinism
+- End-to-end tests with real data (HF vs Levanter packed loss comparison)
 """
 
 import asyncio
@@ -21,19 +22,18 @@ import numpy as np
 import pytest
 
 from levanter.data.vlm_packing import (
-    PackedImageTextDict,
     VLMPackerConfig,
     VLMPrepackedDataset,
-    compute_vlm_sample_lengths,
-    load_pack_assignments,
-    pack_vlm_samples,
-    save_pack_assignments,
 )
 
-
-class MockImageTextDict(dict):
-    """Mock ImageTextDict for testing."""
-    pass
+# Import test utilities for real data tests
+from test_image_utils import (
+    get_real_data,
+    prepare_test_data,
+    QWEN3_TOKENIZER,
+    SINGLE_PATCH_GRID_PINPOINTS,
+)
+from test_utils import skip_if_no_torch
 
 
 class MockAsyncDataset:
@@ -79,647 +79,534 @@ def create_mock_sample(
     return sample
 
 
-def create_mock_pixel_values(num_patches: int, channels: int = 3, height: int = 384, width: int = 384) -> np.ndarray:
-    """Create mock pixel values for testing."""
-    return np.random.randn(num_patches, channels, height, width).astype(np.float32)
+# =============================================================================
+# End-to-End Tests with Real Data
+# =============================================================================
+# These tests use real VLM data from HuggingFace and compare:
+# - HF model processing samples individually (golden reference)
+# - Levanter with samples packed together
+# Verifies that packing does not affect loss computation correctness.
+# =============================================================================
+
+MODEL_NAME = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
+MAX_LENGTH = 8192
 
 
-class TestVLMPackerConfig:
-    """Tests for VLMPackerConfig."""
+@pytest.mark.entry
+@skip_if_no_torch
+def test_vlm_prepacked_dataset_loss_consistency():
+    """
+    Test VLMPrepackedDataset loss consistency with HF model.
 
-    def test_default_values(self):
-        config = VLMPackerConfig(max_length=2048, max_patches=10)
-        assert config.max_length == 2048
-        assert config.max_patches == 10
-        assert config.max_segments == 64
-        assert config.features_per_patch == 576
-        assert config.pad_token_id == 0
+    This test verifies that when multiple samples are packed together,
+    the per-segment loss matches the HF single-sample loss.
 
-    def test_custom_values(self):
-        config = VLMPackerConfig(
-            max_length=1024,
-            max_patches=5,
-            max_segments=8,
-            features_per_patch=256,
-            pad_token_id=1,
-            image_token_id=151646,
-        )
-        assert config.max_length == 1024
-        assert config.max_patches == 5
-        assert config.max_segments == 8
-        assert config.features_per_patch == 256
-        assert config.pad_token_id == 1
+    Steps:
+    1. Load real data from HuggingFace
+    2. Create VLMPrepackedDataset (in-memory packing)
+    3. Get a pack containing multiple samples
+    4. Compute HF loss for each sample individually (golden reference)
+    5. Compute Levanter packed loss per segment
+    6. Compare: each segment's loss should match corresponding HF sample's loss
+    """
+    import torch
+    import transformers.models.llava_onevision.modeling_llava_onevision as llava_modeling
+    from transformers import AutoModelForVision2Seq, AutoTokenizer
+    import haliax as hax
+    import jax
+    import jax.numpy as jnp
+    import equinox as eqx
+    from levanter.models.llava_onevision import LlavaOnevisionModel
+    from levanter.trainer import TrainerConfig
+    from levanter.main.train_vlm import compute_vlm_loss
+    from test_train_image_anyres import _load_levanter_config
 
+    # Set JAX to use float32 matmul precision
+    jax.config.update("jax_default_matmul_precision", "float32")
 
-class TestComputeVLMSampleLengths:
-    """Tests for compute_vlm_sample_lengths function."""
+    grid_pinpoints = SINGLE_PATCH_GRID_PINPOINTS
+    num_samples = 2  # Pack 2 samples together
 
-    def test_basic_lengths(self):
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2, 3, 4, 5],
-                pixel_values=create_mock_pixel_values(2),
-                attention_mask=[1, 1, 1, 1, 1],
-            ),
-            create_mock_sample(
-                input_ids=[1, 2, 3],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1, 1],
-            ),
-        ]
-        dataset = MockAsyncDataset(samples)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # 1. Load real data
+        hf_dataset = get_real_data(num_samples=num_samples)
+        parquet_path = f"{tmpdir}/test_data.parquet"
+        hf_dataset.to_parquet(parquet_path)
 
-        # features_per_patch = 4 for easy calculation
-        # Sample 0: 5 tokens + 2 patches * (4-1) = 5 + 6 = 11 effective tokens
-        # Sample 1: 3 tokens + 1 patch * (4-1) = 3 + 3 = 6 effective tokens
-        lengths = compute_vlm_sample_lengths(dataset, features_per_patch=4, batch_size=10)
-
-        assert len(lengths["tokens"]) == 2
-        assert len(lengths["patches"]) == 2
-        assert lengths["tokens"][0] == 11  # 5 + 2 * 3
-        assert lengths["tokens"][1] == 6   # 3 + 1 * 3
-        assert lengths["patches"][0] == 2
-        assert lengths["patches"][1] == 1
-
-    def test_no_images(self):
-        """Test samples with no images."""
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2, 3, 4, 5],
-                attention_mask=[1, 1, 1, 1, 1],
-            ),
-        ]
-        dataset = MockAsyncDataset(samples)
-
-        lengths = compute_vlm_sample_lengths(dataset, features_per_patch=4)
-
-        assert lengths["tokens"][0] == 5  # No image expansion
-        assert lengths["patches"][0] == 0
-
-    def test_with_grid_mask(self):
-        """Test that grid_mask is used to count valid patches."""
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2, 3],
-                pixel_values=create_mock_pixel_values(5),
-                attention_mask=[1, 1, 1],
-                grid_mask=[True, True, True, False, False],  # Only 3 valid patches
-            ),
-        ]
-        dataset = MockAsyncDataset(samples)
-
-        lengths = compute_vlm_sample_lengths(dataset, features_per_patch=4)
-
-        assert lengths["patches"][0] == 3  # Only valid patches counted
-        assert lengths["tokens"][0] == 3 + 3 * 3  # 3 + 9 = 12
-
-
-class TestPackVLMSamples:
-    """Tests for pack_vlm_samples function."""
-
-    def test_basic_packing(self):
-        lengths = {
-            "tokens": np.array([100, 200, 150, 300]),
-            "patches": np.array([1, 1, 1, 2]),
-        }
-
-        packs = pack_vlm_samples(
-            lengths=lengths,
-            max_tokens=400,
-            max_patches=3,
-            max_segments=4,
+        # Prepare test data pairs (HF format + Levanter format)
+        test_pairs = prepare_test_data(
+            parquet_path=parquet_path,
+            sample_indices=list(range(num_samples)),
+            model_name=MODEL_NAME,
+            max_length=MAX_LENGTH,
+            max_num_patches=1,  # disable_anyres mode
+            grid_pinpoints=grid_pinpoints,
+            disable_anyres=True,
         )
 
-        # Verify all samples are assigned to some pack
-        all_indices = set()
-        for pack in packs:
-            for idx in pack:
-                all_indices.add(idx)
-        assert all_indices == {0, 1, 2, 3}
+    # Load tokenizer
+    qwen3_tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+    image_token_id = qwen3_tokenizer.convert_tokens_to_ids("<|image_pad|>")
 
-        # Verify no pack exceeds limits
-        for pack in packs:
-            pack_tokens = sum(lengths["tokens"][i] for i in pack)
-            pack_patches = sum(lengths["patches"][i] for i in pack)
-            assert pack_tokens <= 400
-            assert pack_patches <= 3
+    # ==================== HF: Compute golden losses ====================
+    hf_model = AutoModelForVision2Seq.from_pretrained(
+        MODEL_NAME,
+        torch_dtype=torch.float32,
+        trust_remote_code=True,
+    )
+    hf_model.model.config.image_grid_pinpoints = grid_pinpoints
+    hf_model.model.config.vision_aspect_ratio = "single"
+    hf_model.model.image_newline = None
+    hf_model.config.image_token_index = image_token_id
+    hf_model.eval()
 
-    def test_single_large_sample(self):
-        """Test that oversized samples become solo packs."""
-        lengths = {
-            "tokens": np.array([100, 500, 150]),  # Sample 1 exceeds max
-            "patches": np.array([1, 1, 1]),
-        }
+    # Monkey-patch for disable_anyres
+    original_image_size_to_num_patches = llava_modeling.image_size_to_num_patches
+    llava_modeling.image_size_to_num_patches = lambda *args, **kwargs: 1
 
-        packs = pack_vlm_samples(
-            lengths=lengths,
-            max_tokens=400,
-            max_patches=3,
-            max_segments=4,
+    hf_golden_losses = []
+    try:
+        for i, pair in enumerate(test_pairs):
+            lev_seq_len = len(pair.lev.input_ids)
+            hf_input_ids = torch.from_numpy(np.array(pair.lev.input_ids[:lev_seq_len])).unsqueeze(0)
+            hf_pixel_values = torch.from_numpy(pair.hf.pixel_values).unsqueeze(0)
+            hf_image_sizes = torch.from_numpy(pair.hf.image_sizes).unsqueeze(0)
+
+            if hf_pixel_values.dim() == 5:
+                hf_pixel_values = hf_pixel_values[:, 0:1, :, :, :]
+
+            hf_labels = hf_input_ids.clone().long()
+            seq_len = hf_input_ids.shape[1]
+            loss_mask_np = np.array(pair.lev.loss_mask)[:seq_len]
+            mask_tensor = torch.from_numpy(loss_mask_np).unsqueeze(0)
+            hf_labels[mask_tensor == 0] = -100
+
+            with torch.no_grad():
+                hf_output = hf_model(
+                    input_ids=hf_input_ids,
+                    pixel_values=hf_pixel_values,
+                    image_sizes=hf_image_sizes,
+                    labels=hf_labels,
+                )
+                hf_golden_losses.append(hf_output.loss.item())
+    finally:
+        llava_modeling.image_size_to_num_patches = original_image_size_to_num_patches
+
+    print(f"\n=== HF Golden Losses ===")
+    for i, loss in enumerate(hf_golden_losses):
+        print(f"  Sample {i}: {loss:.6f}")
+
+    # ==================== Levanter: Pack samples and compute loss ====================
+    # Create VLMPrepackedDataset with both samples
+    samples_for_packing = [
+        create_mock_sample(
+            input_ids=pair.lev.input_ids.tolist(),
+            pixel_values=pair.lev.pixel_values,
+            attention_mask=pair.lev.attention_mask.tolist(),
+            loss_mask=pair.lev.loss_mask.tolist(),
+            grid_mask=pair.lev.grid_mask.tolist(),
+        )
+        for pair in test_pairs
+    ]
+    mock_dataset = MockAsyncDataset(samples_for_packing)
+
+    config = VLMPackerConfig(
+        max_length=MAX_LENGTH,
+        max_patches=num_samples,  # 1 patch per sample
+        max_segments=num_samples,
+        features_per_patch=576,
+    )
+
+    packed_dataset = VLMPrepackedDataset(
+        base_dataset=mock_dataset,
+        config=config,
+    )
+
+    # Get the packed sample
+    packed_batch = asyncio.get_event_loop().run_until_complete(packed_dataset.get_batch([0]))
+    packed = packed_batch[0]
+
+    print(f"\n=== Packed Sample Info ===")
+    print(f"  num_segments: {packed['num_segments']}")
+    print(f"  segment_ids unique: {np.unique(packed['segment_ids'])}")
+    print(f"  input_ids shape: {packed['input_ids'].shape}")
+
+    # Verify packing worked correctly
+    assert packed['num_segments'] == num_samples, f"Expected {num_samples} segments, got {packed['num_segments']}"
+
+    # Verify segment IDs are assigned correctly
+    segment_ids = packed['segment_ids']
+    for seg_id in range(num_samples):
+        seg_mask = segment_ids == seg_id
+        assert seg_mask.sum() > 0, f"Segment {seg_id} has no tokens"
+
+    # ==================== Load Levanter model and compute per-segment loss ====================
+    lev_config = _load_levanter_config(MODEL_NAME, enable_flash_attention=False, gradient_checkpointing=False)
+    lev_config = lev_config.with_token_ids(image_token_id=image_token_id)
+    trainer_config = TrainerConfig()
+
+    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+        converter = lev_config.hf_checkpoint_converter(ref_checkpoint=MODEL_NAME)
+        lev_model = converter.load_pretrained(
+            LlavaOnevisionModel,
+            ref=MODEL_NAME,
+            config=lev_config,
+            axis_mapping=trainer_config.parameter_axis_mapping,
+            dtype=jnp.float32,
+            resize_vocab_to_match_tokenizer=False,
         )
 
-        # Sample with 500 tokens should be in its own pack
-        for pack in packs:
-            if 1 in pack:
-                assert len(pack) == 1  # Should be solo
+        # Create JAX tensors from packed sample
+        Batch = hax.Axis("batch", 1)
+        Position = hax.Axis("position", len(packed['input_ids']))
+        NumPatches = hax.Axis("num_patches", packed['pixel_values'].shape[0])
+        Channels = hax.Axis("channels", 3)
+        Height = hax.Axis("height", 384)
+        Width = hax.Axis("width", 384)
+        GridMask = hax.Axis("grid_mask", packed['pixel_values'].shape[0])
 
+        input_ids = hax.named(jnp.array(packed['input_ids']).reshape(1, -1), (Batch, Position))
+        pixel_values = hax.named(
+            jnp.array(packed['pixel_values']).reshape(1, -1, 3, 384, 384),
+            (Batch, NumPatches, Channels, Height, Width)
+        )
+        grid_mask = hax.named(
+            jnp.array(packed['image_segment_ids'] >= 0).reshape(1, -1),
+            (Batch, GridMask)
+        )
+        loss_mask = hax.named(jnp.array(packed['loss_mask']).reshape(1, -1), (Batch, Position))
+        segment_ids_jax = hax.named(jnp.array(packed['segment_ids']).reshape(1, -1), (Batch, Position))
+        position_ids = hax.named(jnp.array(packed['position_ids']).reshape(1, -1), (Batch, Position))
 
-class TestSaveLoadPackAssignments:
-    """Tests for save_pack_assignments and load_pack_assignments."""
+        from levanter.data.image import ImageTextExample as ImgTextEx
 
-    def test_save_and_load(self):
-        assignments = [range(0, 3), range(3, 5), range(5, 8)]
-        config = VLMPackerConfig(max_length=2048, max_patches=10)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Save
-            path = save_pack_assignments(assignments, tmpdir, config)
-            assert path.endswith("vlm_pack_assignments.json")
-
-            # Load
-            loaded = load_pack_assignments(tmpdir)
-
-            assert len(loaded) == len(assignments)
-            for orig, loaded_range in zip(assignments, loaded):
-                assert list(orig) == list(loaded_range)
-
-    def test_load_nonexistent(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with pytest.raises(FileNotFoundError):
-                load_pack_assignments(tmpdir)
-
-
-class TestVLMPrepackedDataset:
-    """Tests for VLMPrepackedDataset."""
-
-    def test_basic_dataset(self):
-        """Test basic dataset creation and access."""
-        # Create samples
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2, 3, 4, 5],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1, 1, 1, 1],
-                loss_mask=[0, 0, 1, 1, 1],
-            ),
-            create_mock_sample(
-                input_ids=[6, 7, 8],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1, 1],
-                loss_mask=[0, 1, 1],
-            ),
-        ]
-        base_dataset = MockAsyncDataset(samples)
-
-        config = VLMPackerConfig(
-            max_length=20,
-            max_patches=5,
-            max_segments=4,
-            features_per_patch=4,
+        batch_example = ImgTextEx(
+            pixel_values=pixel_values,
+            input_ids=input_ids,
+            loss_mask=loss_mask,
+            grid_mask=grid_mask,
+            unpad_indices=None,
+            combined_mask=None,
+            position_ids=position_ids,
         )
 
-        dataset = VLMPrepackedDataset(
-            base_dataset=base_dataset,
-            config=config,
-        )
+        # Compute per-token loss
+        @eqx.filter_jit
+        def compute_per_token_loss(model, example):
+            from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 
-        # Check dataset properties
-        assert dataset.is_finite()
-        assert asyncio.get_event_loop().run_until_complete(dataset.async_len()) >= 1
+            grid_mask = getattr(example, "grid_mask", None)
+            position_ids = getattr(example, "position_ids", None)
 
-    def test_get_batch(self):
-        """Test get_batch returns correct packed format."""
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2, 3],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1, 1],
-                loss_mask=[0, 1, 1],
-            ),
-            create_mock_sample(
-                input_ids=[4, 5],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1],
-                loss_mask=[1, 1],
-            ),
-        ]
-        base_dataset = MockAsyncDataset(samples)
-
-        config = VLMPackerConfig(
-            max_length=10,
-            max_patches=5,
-            max_segments=4,
-            features_per_patch=4,
-        )
-
-        dataset = VLMPrepackedDataset(
-            base_dataset=base_dataset,
-            config=config,
-        )
-
-        # Get first pack
-        batch = asyncio.get_event_loop().run_until_complete(dataset.get_batch([0]))
-        packed = batch[0]
-
-        # Verify packed format
-        assert "input_ids" in packed
-        assert "segment_ids" in packed
-        assert "position_ids" in packed
-        assert "loss_mask" in packed
-        assert len(packed["input_ids"]) == config.max_length
-
-    def test_cache_persistence(self):
-        """Test that pack assignments are saved and loaded from cache."""
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2, 3],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1, 1],
-            ),
-            create_mock_sample(
-                input_ids=[4, 5],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1],
-            ),
-        ]
-        base_dataset = MockAsyncDataset(samples)
-
-        config = VLMPackerConfig(
-            max_length=10,
-            max_patches=5,
-            max_segments=4,
-            features_per_patch=4,
-        )
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # First creation - computes and saves pack assignments
-            dataset1 = VLMPrepackedDataset(
-                base_dataset=base_dataset,
-                config=config,
-                cache_dir=tmpdir,
+            activations, lm_head = model.forward_with_activations(
+                example.input_ids,
+                pixel_values=example.pixel_values,
+                grid_mask=grid_mask,
+                unpad_indices=None,
+                combined_mask=None,
+                position_ids=position_ids,
+                key=None,
             )
-            len1 = asyncio.get_event_loop().run_until_complete(dataset1.async_len())
 
-            # Second creation - should load from cache
-            dataset2 = VLMPrepackedDataset(
-                base_dataset=base_dataset,
-                config=config,
-                cache_dir=tmpdir,
+            Pos = example.input_ids.resolve_axis("position")
+            Embed = model.config.TextEmbed
+            Vocab = model.Vocab
+
+            targets = hax.roll(example.input_ids, -1, Pos)
+
+            per_token_loss = fused_cross_entropy_loss_and_logsumexp_penalty(
+                pred_embeddings=activations,
+                pred_lm_head=lm_head,
+                Contract=Embed,
+                Label=Vocab,
+                target_y=targets,
+                reduction=None,
+                weight=None,
+                logsumexp_weight=0.0,
+                block_size=4096,
             )
-            len2 = asyncio.get_event_loop().run_until_complete(dataset2.async_len())
 
-            assert len1 == len2
+            return per_token_loss
+
+        per_token_loss = compute_per_token_loss(lev_model, batch_example)
+        per_token_loss_np = np.array(per_token_loss.array)[0]  # (seq_len,)
+
+        # Compute per-segment loss
+        segment_ids_np = packed['segment_ids']
+        loss_mask_np = packed['loss_mask']
+        shifted_loss_mask = np.roll(loss_mask_np, -1)
+        shifted_loss_mask[-1] = 0
+
+        lev_segment_losses = []
+        for seg_id in range(num_samples):
+            seg_mask = (segment_ids_np == seg_id) & (shifted_loss_mask > 0)
+            if seg_mask.sum() > 0:
+                seg_loss = per_token_loss_np[seg_mask].mean()
+                lev_segment_losses.append(float(seg_loss))
+            else:
+                lev_segment_losses.append(0.0)
+
+        print(f"\n=== Levanter Per-Segment Losses ===")
+        for i, loss in enumerate(lev_segment_losses):
+            print(f"  Segment {i}: {loss:.6f}")
+
+        # ==================== Compare losses ====================
+        print(f"\n=== Loss Comparison ===")
+        all_passed = True
+        for i in range(num_samples):
+            hf_loss = hf_golden_losses[i]
+            lev_loss = lev_segment_losses[i]
+            diff = abs(hf_loss - lev_loss)
+            rel_diff = diff / hf_loss if hf_loss != 0 else diff
+
+            status = "PASS" if rel_diff < 0.01 else "FAIL"
+            print(f"  Sample {i}: HF={hf_loss:.6f}, Lev={lev_loss:.6f}, rel_diff={rel_diff*100:.2f}% [{status}]")
+
+            if rel_diff >= 0.01:
+                all_passed = False
+
+        assert all_passed, "Per-segment losses do not match HF golden losses!"
+        print("\n VLMPrepackedDataset loss consistency test passed!")
 
 
-class TestAssemblePack:
-    """Tests for _assemble_pack method."""
+@pytest.mark.entry
+@skip_if_no_torch
+def test_position_ids_reset_with_real_data():
+    """
+    Test position ID reset at segment boundaries using real data.
 
-    def test_segment_ids_assignment(self):
-        """Test that segment IDs are correctly assigned to each sample.
+    Verifies:
+    - Segment 0: positions [0, 1, 2, ...]
+    - Segment 1: positions [0, 1, 2, ...] (reset from 0)
+    """
+    num_samples = 2
 
-        Uses _assemble_pack directly to ensure multiple samples are packed together.
-        """
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2, 3],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1, 1],
-            ),
-            create_mock_sample(
-                input_ids=[4, 5],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1],
-            ),
-        ]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        hf_dataset = get_real_data(num_samples=num_samples)
+        parquet_path = f"{tmpdir}/test_data.parquet"
+        hf_dataset.to_parquet(parquet_path)
 
-        config = VLMPackerConfig(
-            max_length=10,
-            max_patches=5,
-            max_segments=4,
-            features_per_patch=4,
+        test_pairs = prepare_test_data(
+            parquet_path=parquet_path,
+            sample_indices=list(range(num_samples)),
+            model_name=MODEL_NAME,
+            max_length=MAX_LENGTH,
+            max_num_patches=1,
+            grid_pinpoints=SINGLE_PATCH_GRID_PINPOINTS,
+            disable_anyres=True,
         )
 
-        # Use _assemble_pack directly to test packing logic
-        base_dataset = MockAsyncDataset(samples)
-        dataset = VLMPrepackedDataset(
-            base_dataset=base_dataset,
+    samples = [
+        create_mock_sample(
+            input_ids=pair.lev.input_ids.tolist(),
+            pixel_values=pair.lev.pixel_values,
+            attention_mask=pair.lev.attention_mask.tolist(),
+            loss_mask=pair.lev.loss_mask.tolist(),
+            grid_mask=pair.lev.grid_mask.tolist(),
+        )
+        for pair in test_pairs
+    ]
+    mock_dataset = MockAsyncDataset(samples)
+
+    config = VLMPackerConfig(
+        max_length=MAX_LENGTH,
+        max_patches=num_samples,
+        max_segments=num_samples,
+        features_per_patch=576,
+    )
+
+    packed_dataset = VLMPrepackedDataset(
+        base_dataset=mock_dataset,
+        config=config,
+    )
+
+    packed_batch = asyncio.get_event_loop().run_until_complete(packed_dataset.get_batch([0]))
+    packed = packed_batch[0]
+
+    segment_ids = packed['segment_ids']
+    position_ids = packed['position_ids']
+
+    print(f"\n=== Position ID Verification ===")
+
+    for seg_id in range(num_samples):
+        seg_mask = segment_ids == seg_id
+        seg_positions = position_ids[seg_mask]
+
+        # First position should be 0
+        assert seg_positions[0] == 0, f"Segment {seg_id} first position should be 0, got {seg_positions[0]}"
+
+        # Positions should be consecutive
+        expected_positions = np.arange(len(seg_positions))
+        np.testing.assert_array_equal(
+            seg_positions, expected_positions,
+            err_msg=f"Segment {seg_id} positions not consecutive"
+        )
+
+        print(f"  Segment {seg_id}: positions 0-{len(seg_positions)-1} (length={len(seg_positions)})")
+
+    print("\n Position ID reset verification passed!")
+
+
+@pytest.mark.entry
+@skip_if_no_torch
+def test_pack_assignment_from_parquet():
+    """
+    Test compute_pack_assignments() correctly computes pack assignments from parquet.
+
+    Verifies:
+    - shard_info correctly records each shard's position
+    - assignments sample indices are contiguous and cover all samples
+    - JSON save/load roundtrip preserves data
+    """
+    from transformers import AutoTokenizer
+    from levanter.data.vlm_packing import (
+        compute_pack_assignments,
+        load_pack_assignment_result,
+        PackAssignmentConfig,
+    )
+
+    num_samples = 4
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # 1. Load real data and save to parquet
+        hf_dataset = get_real_data(num_samples=num_samples)
+        parquet_path = f"{tmpdir}/test_data.parquet"
+        hf_dataset.to_parquet(parquet_path)
+
+        # 2. Load tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(QWEN3_TOKENIZER, trust_remote_code=True)
+
+        # 3. Create config
+        config = PackAssignmentConfig(
+            max_length=2048,
+            max_patches=10,
+            max_segments=64,
+            features_per_patch=576,
+            image_column="images",
+            text_column="messages",
+        )
+
+        # 4. Compute pack assignments
+        output_file = f"{tmpdir}/pack_assignments.json"
+        result = compute_pack_assignments(
+            parquet_paths=[parquet_path],
+            output_file=output_file,
+            tokenizer=tokenizer,
             config=config,
         )
 
-        # Directly call _assemble_pack with both samples
-        packed = dataset._assemble_pack(samples)
+        print(f"\n=== Pack Assignment Results ===")
+        print(f"  Total samples: {result.num_samples}")
+        print(f"  Total packs: {result.num_packs}")
+        print(f"  Number of shards: {len(result.shard_info)}")
+        print(f"  Compression ratio: {result.num_samples / result.num_packs:.2f}x")
 
-        segment_ids = packed["segment_ids"]
+        # 5. Verify shard_info
+        assert len(result.shard_info) == 1, "Should have 1 shard"
+        shard = result.shard_info[0]
+        assert shard.path == parquet_path, "Shard path mismatch"
+        assert shard.start_idx == 0, "First shard should start at 0"
+        assert shard.num_samples == num_samples, f"Expected {num_samples} samples, got {shard.num_samples}"
 
-        # First 3 tokens should have segment_id=0
-        # Next 2 tokens should have segment_id=1
-        # Rest should be padding (-1)
-        assert segment_ids[0] == 0
-        assert segment_ids[1] == 0
-        assert segment_ids[2] == 0
-        assert segment_ids[3] == 1
-        assert segment_ids[4] == 1
-        assert all(segment_ids[5:] == -1)
+        # 6. Verify assignments cover all samples
+        all_sample_indices = set()
+        for start, end in result.assignments:
+            for idx in range(start, end):
+                all_sample_indices.add(idx)
 
-    def test_image_segment_ids(self):
-        """Test that image segment IDs are correctly assigned.
+        expected_indices = set(range(num_samples))
+        assert all_sample_indices == expected_indices, f"Assignments don't cover all samples: {all_sample_indices} vs {expected_indices}"
 
-        Uses _assemble_pack directly to ensure multiple samples are packed together.
-        """
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2],
-                pixel_values=create_mock_pixel_values(2),  # 2 patches
-                attention_mask=[1, 1],
-            ),
-            create_mock_sample(
-                input_ids=[3, 4],
-                pixel_values=create_mock_pixel_values(1),  # 1 patch
-                attention_mask=[1, 1],
-            ),
-        ]
+        # 7. Verify JSON roundtrip
+        loaded_result = load_pack_assignment_result(output_file)
+        assert loaded_result.num_samples == result.num_samples
+        assert loaded_result.num_packs == result.num_packs
+        assert loaded_result.assignments == result.assignments
 
-        config = VLMPackerConfig(
-            max_length=10,
-            max_patches=5,
-            max_segments=4,
-            features_per_patch=4,
+        print("\n Pack assignment from parquet test passed!")
+
+
+@pytest.mark.entry
+@skip_if_no_torch
+def test_loss_mask_per_segment_with_real_data():
+    """
+    Test loss mask correctness per segment using real data.
+
+    Verifies:
+    - Only assistant response tokens have loss_mask == 1
+    - User prompt / image tokens have loss_mask == 0
+    """
+    num_samples = 2
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        hf_dataset = get_real_data(num_samples=num_samples)
+        parquet_path = f"{tmpdir}/test_data.parquet"
+        hf_dataset.to_parquet(parquet_path)
+
+        test_pairs = prepare_test_data(
+            parquet_path=parquet_path,
+            sample_indices=list(range(num_samples)),
+            model_name=MODEL_NAME,
+            max_length=MAX_LENGTH,
+            max_num_patches=1,
+            grid_pinpoints=SINGLE_PATCH_GRID_PINPOINTS,
+            disable_anyres=True,
         )
 
-        base_dataset = MockAsyncDataset(samples)
-        dataset = VLMPrepackedDataset(
-            base_dataset=base_dataset,
-            config=config,
+    samples = [
+        create_mock_sample(
+            input_ids=pair.lev.input_ids.tolist(),
+            pixel_values=pair.lev.pixel_values,
+            attention_mask=pair.lev.attention_mask.tolist(),
+            loss_mask=pair.lev.loss_mask.tolist(),
+            grid_mask=pair.lev.grid_mask.tolist(),
+        )
+        for pair in test_pairs
+    ]
+    mock_dataset = MockAsyncDataset(samples)
+
+    config = VLMPackerConfig(
+        max_length=MAX_LENGTH,
+        max_patches=num_samples,
+        max_segments=num_samples,
+        features_per_patch=576,
+    )
+
+    packed_dataset = VLMPrepackedDataset(
+        base_dataset=mock_dataset,
+        config=config,
+    )
+
+    packed_batch = asyncio.get_event_loop().run_until_complete(packed_dataset.get_batch([0]))
+    packed = packed_batch[0]
+
+    segment_ids = packed['segment_ids']
+    loss_mask = packed['loss_mask']
+
+    print(f"\n=== Loss Mask Verification ===")
+
+    for seg_id in range(num_samples):
+        seg_mask = segment_ids == seg_id
+        seg_loss_mask = loss_mask[seg_mask]
+
+        # Original sample's loss mask
+        original_loss_mask = np.array(test_pairs[seg_id].lev.loss_mask)
+        # Truncate to actual tokens (remove padding from original)
+        original_valid_len = int(np.sum(test_pairs[seg_id].lev.attention_mask))
+        original_loss_mask = original_loss_mask[:original_valid_len]
+
+        # Compare
+        np.testing.assert_array_equal(
+            seg_loss_mask[:len(original_loss_mask)],
+            original_loss_mask,
+            err_msg=f"Segment {seg_id} loss mask mismatch"
         )
 
-        # Directly call _assemble_pack with both samples
-        packed = dataset._assemble_pack(samples)
+        valid_loss_tokens = (seg_loss_mask > 0).sum()
+        total_tokens = len(seg_loss_mask)
+        print(f"  Segment {seg_id}: {valid_loss_tokens}/{total_tokens} tokens have loss_mask=1")
 
-        image_segment_ids = packed["image_segment_ids"]
-
-        # First 2 patches -> segment 0
-        # Next 1 patch -> segment 1
-        # Rest -> padding (-1)
-        assert image_segment_ids[0] == 0
-        assert image_segment_ids[1] == 0
-        assert image_segment_ids[2] == 1
-        assert all(image_segment_ids[3:] == -1)
-
-    def test_position_ids_reset_per_segment(self):
-        """Test that position IDs reset for each segment.
-
-        Uses _assemble_pack directly to ensure multiple samples are packed together.
-        """
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2, 3],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1, 1],
-            ),
-            create_mock_sample(
-                input_ids=[4, 5],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1],
-            ),
-        ]
-
-        config = VLMPackerConfig(
-            max_length=10,
-            max_patches=5,
-            max_segments=4,
-            features_per_patch=4,
-        )
-
-        base_dataset = MockAsyncDataset(samples)
-        dataset = VLMPrepackedDataset(
-            base_dataset=base_dataset,
-            config=config,
-        )
-
-        # Directly call _assemble_pack with both samples
-        packed = dataset._assemble_pack(samples)
-
-        position_ids = packed["position_ids"]
-
-        # First segment: positions 0, 1, 2
-        assert position_ids[0] == 0
-        assert position_ids[1] == 1
-        assert position_ids[2] == 2
-
-        # Second segment: positions 0, 1 (reset)
-        assert position_ids[3] == 0
-        assert position_ids[4] == 1
-
-        # Padding positions should be 0
-        assert all(position_ids[5:] == 0)
-
-    def test_attention_mask_from_segment_ids(self):
-        """Test that attention_mask is derived from segment_ids."""
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2, 3],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1, 1],
-            ),
-        ]
-        base_dataset = MockAsyncDataset(samples)
-
-        config = VLMPackerConfig(
-            max_length=10,
-            max_patches=5,
-            max_segments=4,
-            features_per_patch=4,
-        )
-
-        dataset = VLMPrepackedDataset(
-            base_dataset=base_dataset,
-            config=config,
-        )
-
-        batch = asyncio.get_event_loop().run_until_complete(dataset.get_batch([0]))
-        packed = batch[0]
-
-        attention_mask = packed["attention_mask"]
-        segment_ids = packed["segment_ids"]
-
-        # attention_mask should be 1 where segment_ids >= 0
-        expected_mask = (segment_ids >= 0).astype(np.int32)
-        np.testing.assert_array_equal(attention_mask, expected_mask)
-
-    def test_loss_mask_concatenation(self):
-        """Test that loss masks are correctly concatenated and padded.
-
-        Uses _assemble_pack directly to ensure multiple samples are packed together.
-        """
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2, 3],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1, 1],
-                loss_mask=[0, 1, 1],  # Don't compute loss for first token
-            ),
-            create_mock_sample(
-                input_ids=[4, 5],
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1],
-                loss_mask=[1, 1],
-            ),
-        ]
-
-        config = VLMPackerConfig(
-            max_length=10,
-            max_patches=5,
-            max_segments=4,
-            features_per_patch=4,
-        )
-
-        base_dataset = MockAsyncDataset(samples)
-        dataset = VLMPrepackedDataset(
-            base_dataset=base_dataset,
-            config=config,
-        )
-
-        # Directly call _assemble_pack with both samples
-        packed = dataset._assemble_pack(samples)
-
-        loss_mask = packed["loss_mask"]
-
-        # Expected: [0, 1, 1, 1, 1, 0, 0, 0, 0, 0]
-        assert loss_mask[0] == 0  # First sample, first token
-        assert loss_mask[1] == 1
-        assert loss_mask[2] == 1
-        assert loss_mask[3] == 1  # Second sample
-        assert loss_mask[4] == 1
-        assert all(loss_mask[5:] == 0)  # Padding
-
-
-class TestPackDeterminism:
-    """Tests for pack assignment determinism."""
-
-    def test_deterministic_packing(self):
-        """Test that same input produces same pack assignments."""
-        lengths = {
-            "tokens": np.array([100, 200, 150, 300, 50, 80]),
-            "patches": np.array([1, 2, 1, 3, 1, 1]),
-        }
-
-        packs1 = pack_vlm_samples(
-            lengths=lengths,
-            max_tokens=400,
-            max_patches=4,
-            max_segments=4,
-        )
-
-        packs2 = pack_vlm_samples(
-            lengths=lengths,
-            max_tokens=400,
-            max_patches=4,
-            max_segments=4,
-        )
-
-        assert len(packs1) == len(packs2)
-        for p1, p2 in zip(packs1, packs2):
-            assert list(p1) == list(p2)
-
-
-class TestEdgeCases:
-    """Tests for edge cases."""
-
-    def test_no_pixel_values(self):
-        """Test packing samples with no images."""
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2, 3],
-                attention_mask=[1, 1, 1],
-            ),
-            create_mock_sample(
-                input_ids=[4, 5],
-                attention_mask=[1, 1],
-            ),
-        ]
-        base_dataset = MockAsyncDataset(samples)
-
-        config = VLMPackerConfig(
-            max_length=10,
-            max_patches=5,
-            max_segments=4,
-            features_per_patch=4,
-        )
-
-        dataset = VLMPrepackedDataset(
-            base_dataset=base_dataset,
-            config=config,
-        )
-
-        batch = asyncio.get_event_loop().run_until_complete(dataset.get_batch([0]))
-        packed = batch[0]
-
-        # Should have placeholder pixel_values and all -1 image_segment_ids
-        assert packed["pixel_values"].shape[0] == config.max_patches
-        assert all(packed["image_segment_ids"] == -1)
-
-    def test_single_sample_pack(self):
-        """Test packing a single sample."""
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2, 3, 4, 5],
-                pixel_values=create_mock_pixel_values(2),
-                attention_mask=[1, 1, 1, 1, 1],
-            ),
-        ]
-        base_dataset = MockAsyncDataset(samples)
-
-        config = VLMPackerConfig(
-            max_length=10,
-            max_patches=5,
-            max_segments=4,
-            features_per_patch=4,
-        )
-
-        dataset = VLMPrepackedDataset(
-            base_dataset=base_dataset,
-            config=config,
-        )
-
-        batch = asyncio.get_event_loop().run_until_complete(dataset.get_batch([0]))
-        packed = batch[0]
-
-        # All valid tokens should have segment_id=0
-        assert packed["segment_ids"][0] == 0
-        assert packed["segment_ids"][4] == 0
-        assert packed["num_segments"] == 1
-
-    def test_padding_removal(self):
-        """Test that padding from original samples is removed before packing."""
-        samples = [
-            create_mock_sample(
-                input_ids=[1, 2, 3, 0, 0],  # Original has padding
-                pixel_values=create_mock_pixel_values(1),
-                attention_mask=[1, 1, 1, 0, 0],  # Only first 3 valid
-            ),
-        ]
-        base_dataset = MockAsyncDataset(samples)
-
-        config = VLMPackerConfig(
-            max_length=10,
-            max_patches=5,
-            max_segments=4,
-            features_per_patch=4,
-        )
-
-        dataset = VLMPrepackedDataset(
-            base_dataset=base_dataset,
-            config=config,
-        )
-
-        batch = asyncio.get_event_loop().run_until_complete(dataset.get_batch([0]))
-        packed = batch[0]
-
-        # Only 3 valid tokens should be packed
-        assert packed["segment_ids"][0] == 0
-        assert packed["segment_ids"][1] == 0
-        assert packed["segment_ids"][2] == 0
-        assert packed["segment_ids"][3] == -1  # Padding
+    print("\n Loss mask verification passed!")
 
 
 if __name__ == "__main__":

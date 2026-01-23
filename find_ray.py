@@ -13,11 +13,17 @@ vlm_jobs = [job for job in jobs if
 # 只显示 RUNNING 的
 running_jobs = [job for job in vlm_jobs if job.status == "RUNNING"]
 print(f"Found {len(running_jobs)} RUNNING VLM jobs:\n")
-assert 1==2
+running_jobs=running_jobs[1:]
 for job in running_jobs:
     # 尝试获取 submission_id，这是停止 job 需要的
-    print(f"job_id: {job.job_id}, submission_id: {job.submission_id}, Status: {job.status}")
-
+    # 从 runtime_env 提取 EXP_NAME 环境变量
+    job_name = 'N/A'
+    if job.runtime_env and isinstance(job.runtime_env, dict):
+        env_vars = job.runtime_env.get('env_vars', {})
+        if isinstance(env_vars, dict):
+            job_name = env_vars.get('EXP_NAME', 'N/A')
+    print(f"job_id: {job.job_id}, name: {job_name}, submission_id: {job.submission_id}, Status: {job.status}")
+# assert 1==2
 # 停止所有 RUNNING jobs
 print("\n--- Stopping jobs ---")
 env = os.environ.copy()

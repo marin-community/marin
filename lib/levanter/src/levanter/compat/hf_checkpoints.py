@@ -1107,7 +1107,7 @@ def _is_jax_distributed_initialized():
         return False
 
 
-def _hf_load_with_retry(load_fn, *args, max_retries: int = 5, base_delay: float = 2.0, **kwargs):
+def _hf_load_with_retry(load_fn, *args, max_retries: int = 20, base_delay: float = 2.0, max_delay: float = 128.0, **kwargs):
     """Load with retry logic for rate limit errors (no JAX synchronization). Internal use with _patch_hf_hub_download."""
     for attempt in range(max_retries):
         try:
@@ -1116,7 +1116,7 @@ def _hf_load_with_retry(load_fn, *args, max_retries: int = 5, base_delay: float 
         except Exception as e:
             if "429" in str(e) or "Too Many Requests" in str(e):
                 if attempt < max_retries - 1:
-                    delay = base_delay * (2**attempt) + random.uniform(0, 1)
+                    delay = min(base_delay * (2**attempt) + random.uniform(0, 1), max_delay)
                     logger.warning(
                         f"Rate limited by HuggingFace Hub, retrying in {delay:.1f}s "
                         f"(attempt {attempt + 1}/{max_retries})"
@@ -1128,7 +1128,7 @@ def _hf_load_with_retry(load_fn, *args, max_retries: int = 5, base_delay: float 
                 raise
 
 
-def hf_load_with_retry(load_fn, *args, max_retries: int = 5, base_delay: float = 2.0, **kwargs):
+def hf_load_with_retry(load_fn, *args, max_retries: int = 20, base_delay: float = 2.0, max_delay: float = 128.0, **kwargs):
     """
     Public wrapper with retry logic for HuggingFace rate limit errors.
 
@@ -1140,6 +1140,7 @@ def hf_load_with_retry(load_fn, *args, max_retries: int = 5, base_delay: float =
         *args: Positional arguments to pass to load_fn
         max_retries: Maximum number of retries for rate limit errors
         base_delay: Base delay in seconds for exponential backoff
+        max_delay: Maximum delay in seconds (caps exponential backoff)
         **kwargs: Keyword arguments to pass to load_fn
     """
     for attempt in range(max_retries):
@@ -1148,7 +1149,7 @@ def hf_load_with_retry(load_fn, *args, max_retries: int = 5, base_delay: float =
         except Exception as e:
             if "429" in str(e) or "Too Many Requests" in str(e):
                 if attempt < max_retries - 1:
-                    delay = base_delay * (2**attempt) + random.uniform(0, 1)
+                    delay = min(base_delay * (2**attempt) + random.uniform(0, 1), max_delay)
                     logger.warning(
                         f"Rate limited by HuggingFace Hub, retrying in {delay:.1f}s "
                         f"(attempt {attempt + 1}/{max_retries})"
@@ -1160,7 +1161,7 @@ def hf_load_with_retry(load_fn, *args, max_retries: int = 5, base_delay: float =
                 raise
 
 
-def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 5, base_delay: float = 2.0, **kwargs):
+def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 20, base_delay: float = 2.0, max_delay: float = 128.0, **kwargs):
     """
     Wrapper that ensures only rank 0 downloads from HF Hub while other ranks wait.
     All ranks then use the cached result. Includes retry logic for rate limit errors.
@@ -1174,6 +1175,7 @@ def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 5, base_delay: fl
         *args: Positional arguments to pass to load_fn
         max_retries: Maximum number of retries for rate limit errors
         base_delay: Base delay in seconds for exponential backoff
+        max_delay: Maximum delay in seconds (caps exponential backoff)
         **kwargs: Keyword arguments to pass to load_fn
     """
     global _hf_load_sync_count
@@ -1181,7 +1183,7 @@ def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 5, base_delay: fl
     # Check if JAX distributed is initialized - if not, fall back to direct loading
     # to avoid initializing JAX before jax.distributed.initialize() is called
     if not _is_jax_distributed_initialized():
-        return _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, **kwargs)
+        return _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, **kwargs)
 
     # JAX distributed is initialized, safe to use process_index/process_count
     is_leader = jax.process_index() == 0
@@ -1190,7 +1192,7 @@ def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 5, base_delay: fl
     if num_processes > 1:
         # Distributed mode: only leader downloads, others wait
         if is_leader:
-            result = _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, **kwargs)
+            result = _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, **kwargs)
 
         # Synchronize all ranks - non-leaders wait here for leader to finish downloading
         sync_global_devices(f"hf_load_{_hf_load_sync_count}")
@@ -1202,7 +1204,7 @@ def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 5, base_delay: fl
                 result = load_fn(*args, **kwargs)
     else:
         # Single process mode: Direct load with retry
-        result = _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, **kwargs)
+        result = _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, **kwargs)
 
     return result
 
