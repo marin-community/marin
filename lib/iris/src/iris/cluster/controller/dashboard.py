@@ -884,7 +884,7 @@ class ControllerDashboard:
             # Add diagnostic information for pending tasks
             pending_reason = None
             if t.state == cluster_pb2.TASK_STATE_PENDING:
-                schedule_status = self._scheduler.get_task_schedule_status(t)
+                schedule_status = self._scheduler.task_schedule_status(t)
                 pending_reason = schedule_status.failure_reason
 
             task_data.append(

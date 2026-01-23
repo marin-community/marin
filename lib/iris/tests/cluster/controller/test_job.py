@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for Job state transitions, retries, and gang scheduling."""
+"""Tests for Job state transitions and retries."""
 
 import pytest
 
-from iris.cluster.controller.state import ControllerJob, JobTransitionResult, expand_job_to_tasks, handle_gang_failure
+from iris.cluster.controller.state import ControllerJob, JobTransitionResult, expand_job_to_tasks
 from iris.cluster.types import JobId
 from iris.rpc import cluster_pb2
 
@@ -224,159 +224,6 @@ def test_retry_count_limits(make_job_request, failure_type, max_retries, expecte
         assert job.preemption_count == expected_attempts
 
 
-# --- Gang Scheduling ---
-
-
-def test_gang_all_or_nothing_retry(make_job_request):
-    """Gang retry fails if any job has no retries left."""
-    job1 = ControllerJob(
-        job_id=JobId("j1"),
-        request=make_job_request("job1"),
-        gang_id="g1",
-        max_retries_failure=1,
-    )
-    job2 = ControllerJob(
-        job_id=JobId("j2"),
-        request=make_job_request("job2"),
-        gang_id="g1",
-        max_retries_failure=0,  # No retries
-    )
-
-    # Mark both as running
-    job1.state = cluster_pb2.JOB_STATE_RUNNING
-    job2.state = cluster_pb2.JOB_STATE_RUNNING
-
-    # Gang fails - j2 has 0 retries, so entire gang cannot retry
-    retried = handle_gang_failure([job1, job2], is_worker_failure=False, error="Gang g1 failed")
-    assert retried == []
-
-    # Both jobs should be marked KILLED
-    assert job1.state == cluster_pb2.JOB_STATE_KILLED
-    assert job2.state == cluster_pb2.JOB_STATE_KILLED
-
-    # Failure counts should not be incremented since gang couldn't retry
-    assert job1.failure_count == 0
-    assert job2.failure_count == 0
-
-
-def test_gang_retry_success(make_job_request):
-    """All jobs in gang are retried together when all have retries available."""
-    job1 = ControllerJob(
-        job_id=JobId("j1"),
-        request=make_job_request("job1"),
-        gang_id="g1",
-        max_retries_preemption=2,
-    )
-    job2 = ControllerJob(
-        job_id=JobId("j2"),
-        request=make_job_request("job2"),
-        gang_id="g1",
-        max_retries_preemption=2,
-    )
-
-    # Mark both as running
-    job1.state = cluster_pb2.JOB_STATE_RUNNING
-    job2.state = cluster_pb2.JOB_STATE_RUNNING
-
-    # Gang fails due to worker failure - both have retries left
-    retried = handle_gang_failure([job1, job2], is_worker_failure=True, error="Worker died")
-
-    assert len(retried) == 2
-    assert job1 in retried
-    assert job2 in retried
-
-    # Both jobs should be reset to PENDING
-    assert job1.state == cluster_pb2.JOB_STATE_PENDING
-    assert job2.state == cluster_pb2.JOB_STATE_PENDING
-
-    # Both jobs should have preemption_count incremented
-    assert job1.preemption_count == 1
-    assert job2.preemption_count == 1
-
-    # State should be cleared
-    assert job1.error is None
-    assert job2.error is None
-
-
-def test_gang_only_running_jobs_killed(make_job_request):
-    """Only RUNNING jobs in gang are marked KILLED when gang fails without retry."""
-    job1 = ControllerJob(
-        job_id=JobId("j1"),
-        request=make_job_request("job1"),
-        gang_id="g1",
-        max_retries_failure=0,
-    )
-    job2 = ControllerJob(
-        job_id=JobId("j2"),
-        request=make_job_request("job2"),
-        gang_id="g1",
-        max_retries_failure=0,
-    )
-    job3 = ControllerJob(
-        job_id=JobId("j3"),
-        request=make_job_request("job3"),
-        gang_id="g1",
-        max_retries_failure=0,
-    )
-
-    # Mix of states
-    job1.state = cluster_pb2.JOB_STATE_RUNNING
-    job2.state = cluster_pb2.JOB_STATE_PENDING  # Not started yet
-    job3.state = cluster_pb2.JOB_STATE_RUNNING
-
-    # Gang fails - no retries available
-    retried = handle_gang_failure([job1, job2, job3], is_worker_failure=False, error="Gang failed")
-    assert retried == []
-
-    # Only running jobs should be marked KILLED
-    assert job1.state == cluster_pb2.JOB_STATE_KILLED
-    assert job2.state == cluster_pb2.JOB_STATE_PENDING  # Not running, so not killed
-    assert job3.state == cluster_pb2.JOB_STATE_KILLED
-
-
-def test_gang_tracks_correct_failure_type(make_job_request):
-    """Gang retry uses correct retry budget based on failure type."""
-    job1 = ControllerJob(
-        job_id=JobId("j1"),
-        request=make_job_request("job1"),
-        gang_id="g1",
-        max_retries_failure=2,
-        max_retries_preemption=2,
-    )
-    job2 = ControllerJob(
-        job_id=JobId("j2"),
-        request=make_job_request("job2"),
-        gang_id="g1",
-        max_retries_failure=2,
-        max_retries_preemption=2,
-    )
-
-    job1.state = cluster_pb2.JOB_STATE_RUNNING
-    job2.state = cluster_pb2.JOB_STATE_RUNNING
-
-    # After a worker failure, preemption retry budget should be consumed
-    assert job1.can_retry_preemption()
-    assert job2.can_retry_preemption()
-    retried = handle_gang_failure([job1, job2], is_worker_failure=True, error="Worker died")
-    assert len(retried) == 2
-
-    # Failure retry budget should be untouched
-    assert job1.can_retry_failure()
-    assert job2.can_retry_failure()
-
-    # Reset for next test
-    job1.state = cluster_pb2.JOB_STATE_RUNNING
-    job2.state = cluster_pb2.JOB_STATE_RUNNING
-
-    # After a job failure, failure retry budget should be consumed
-    retried = handle_gang_failure([job1, job2], is_worker_failure=False, error="Job crashed")
-    assert len(retried) == 2
-
-    # Still have one more retry in each budget
-    assert job1.can_retry_failure()
-    assert job1.can_retry_preemption()
-
-
 # --- Task State Tracking ---
 
 
@@ -526,38 +373,6 @@ def test_job_becomes_killed_when_task_killed(make_job_request):
     new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_KILLED)
 
     assert new_state == cluster_pb2.JOB_STATE_KILLED
-
-
-def test_gang_failure_respects_minimum_retry_budget(make_job_request):
-    """Gang fails when any member has no retries, even if others have budget."""
-    job1 = ControllerJob(
-        job_id=JobId("j1"),
-        request=make_job_request("job1"),
-        gang_id="g1",
-        max_retries_failure=5,  # Plenty of retries
-    )
-    job2 = ControllerJob(
-        job_id=JobId("j2"),
-        request=make_job_request("job2"),
-        gang_id="g1",
-        max_retries_failure=0,  # No retries
-    )
-
-    job1.state = cluster_pb2.JOB_STATE_RUNNING
-    job2.state = cluster_pb2.JOB_STATE_RUNNING
-
-    # Job2 cannot retry, so entire gang fails
-    assert job1.can_retry_failure()
-    assert not job2.can_retry_failure()
-
-    retried = handle_gang_failure([job1, job2], is_worker_failure=False, error="Gang failed")
-
-    # No jobs should be retried
-    assert retried == []
-
-    # Both should be killed
-    assert job1.state == cluster_pb2.JOB_STATE_KILLED
-    assert job2.state == cluster_pb2.JOB_STATE_KILLED
 
 
 def test_job_total_attempts_reflects_retry_history(make_job_request):
