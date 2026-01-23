@@ -6,11 +6,11 @@ This document analyzes the changes made to Haliax and Levanter for DPO support, 
 
 ## Executive Summary
 
-**Verdict**: 3 of the 4 Haliax changes are **necessary**. 1 change is **redundant** and can be reverted. The Levanter trainer_state.py changes are **overly complex** and can be significantly simplified.
+**Verdict**: All 4 Haliax changes are **necessary**. The Levanter trainer_state.py changes were **overly complex** and have been simplified.
 
 | File | Change | Verdict | Action |
 |------|--------|---------|--------|
-| `haliax/nn/scan.py` | Add `auto_sharded` after vmap | **REDUNDANT** | Revert |
+| `haliax/nn/scan.py` | Add `auto_sharded` after vmap | **NECESSARY** | Keep |
 | `haliax/partitioning.py` | Skip sharding for batch_dim | **NECESSARY** | Keep |
 | `haliax/partitioning.py` | Handle array=None in pspec_for | **NECESSARY** | Keep |
 | `haliax/quantization.py` | NamedArray as leaf + update=None | **NECESSARY** | Keep |
@@ -39,15 +39,18 @@ def fn(*args, **kwargs):
     return Stacked(stacked, Block, gradient_checkpointing)
 ```
 
-**Why it was added**: The original error occurred when `auto_sharded` was called *inside* the vmap body (e.g., in `hax.random.truncated_normal`). At that point, the array had a batch dimension from vmap that wasn't represented in NamedArray axes, causing a shape/pspec mismatch.
+**Why it's NECESSARY**: This change ensures stacked transformer layers are sharded across devices immediately after creation. Without it:
 
-**Why it's REDUNDANT**: The fix in `partitioning.py` (checking for `batch_dim`) already handles this case. When `auto_sharded` is called inside vmap, it now safely returns the array unchanged. Sharding happens later when the model is actually used. Adding an explicit `auto_sharded` after vmap is unnecessary because:
+1. After vmap, the Block axis IS properly added to NamedArray axes
+2. But the underlying arrays are not yet sharded - they're replicated on every device
+3. For large models (e.g., Llama 8B with 32 layers), this causes OOM errors
+4. The `auto_sharded` call distributes the stacked parameters according to the axis mapping
 
-1. The stacked result will be sharded when needed (during training, at the `Trainer` level)
-2. Model parameters are typically sharded via `hax.shard(model, parameter_axis_mapping)` in training scripts
-3. This call adds overhead without benefit
+**Key distinction**: The `batch_dim` check in `partitioning.py` makes `auto_sharded` safe to call *inside* vmap (where it becomes a no-op). But *after* vmap completes, `auto_sharded` is essential for memory efficiency.
 
-**Recommendation**: **REVERT** this change. The batch_dim check in partitioning.py is the correct fix.
+**Verified by testing**: Removing this line causes OOM on v5p-32 (43.84G needed, 37.13G available) because all transformer layers are replicated instead of sharded.
+
+**Recommendation**: **KEEP** this change.
 
 ---
 
@@ -183,19 +186,6 @@ The new code does work correctly, but it's ~50 lines of manual tree walking that
 
 ## Proposed Changes
 
-### Revert (1 change to Haliax)
-
-**`lib/haliax/src/haliax/nn/scan.py`**:
-```diff
-         @functools.wraps(module)
-         def fn(*args, **kwargs):
-             stacked = haliax.vmap(module.init, Block)(*args, **kwargs)
--            stacked = haliax.auto_sharded(stacked)
-             return Stacked(stacked, Block, gradient_checkpointing)
-
-         return fn
-```
-
 ### Simplify (1 change to Levanter)
 
 **`lib/levanter/src/levanter/trainer_state.py`** - Replace manual tree_map with is_leaf:
@@ -232,11 +222,11 @@ After proposed changes:
 
 | File | Lines Changed from Main | Reason |
 |------|------------------------|--------|
-| `nn/scan.py` | **0** | Reverted |
+| `nn/scan.py` | **+1** | auto_sharded after vmap for memory efficiency |
 | `partitioning.py` | **+7** | batch_dim check + array=None check |
 | `quantization.py` | **+6** | NamedArray as leaf + update=None handling |
 
-**Total: 13 lines added to Haliax** (down from ~20 lines)
+**Total: 14 lines added to Haliax**
 
 These changes are minimal, well-targeted fixes for real JAX/Equinox interaction issues with NamedArray, not workarounds or hacks.
 
