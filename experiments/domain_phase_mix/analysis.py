@@ -210,9 +210,11 @@ def match_runs_to_configs(runs: list[dict], configs: list[dict], experiment_name
     """Match W&B runs to weight configurations by run_id pattern.
 
     Extracts run_id from W&B run names and matches to the corresponding config.
-    Tries multiple patterns to handle different W&B naming conventions:
-    1. Full path: "pinlin_calvin_xu/data_mixture/3_partitions_3_phases/run_00042"
-    2. Short name: "run_00042-abc123" (W&B may truncate long names)
+    Handles different naming conventions:
+    1. Swarm runs: "pinlin_calvin_xu/data_mixture/.../run_00042" -> run_id 42
+    2. Baseline runs: "pinlin_calvin_xu/data_mixture/.../base_00042" -> run_id 90042
+       (baseline run_ids are offset by 90000 to avoid conflicts with swarm runs)
+       TODO: maybe fix this
 
     Args:
         runs: List of W&B run dictionaries.
@@ -226,16 +228,45 @@ def match_runs_to_configs(runs: list[dict], configs: list[dict], experiment_name
     run_by_id: dict[int, dict] = {}
 
     escaped_name = re.escape(experiment_name)
-    run_id_pattern = re.compile(rf"{escaped_name}/run_(\d+)")
+    # Separate patterns for swarm and baseline runs
+    swarm_pattern = re.compile(rf"{escaped_name}/run_(\d+)")
+    baseline_pattern = re.compile(rf"{escaped_name}/base_(\d+)")
+
+    # Baseline run_ids are offset by 90000 to avoid conflicts with swarm run_ids
+    BASELINE_RUN_ID_OFFSET = 90000
+
+    swarm_count = 0
+    baseline_count = 0
+    unmatched_names = []
 
     for run in runs:
         name = run.get("wandb_run_name", "")
-        match = run_id_pattern.search(name)
+
+        # Try swarm pattern first
+        match = swarm_pattern.search(name)
         if match:
             run_id = int(match.group(1))
-            # Keep the most recent run if there are duplicates
             if run_id not in run_by_id or run["status"] == "finished":
                 run_by_id[run_id] = run
+            swarm_count += 1
+            continue
+
+        # Try baseline pattern (offset by 90000)
+        match = baseline_pattern.search(name)
+        if match:
+            # Map base_00000 -> run_id 90000, base_00001 -> run_id 90001, etc.
+            run_id = BASELINE_RUN_ID_OFFSET + int(match.group(1))
+            if run_id not in run_by_id or run["status"] == "finished":
+                run_by_id[run_id] = run
+            baseline_count += 1
+            continue
+
+        # Track unmatched run names for debugging
+        unmatched_names.append(name)
+
+    logger.info(f"Pattern matching: {swarm_count} swarm runs, {baseline_count} baseline runs, {len(unmatched_names)} unmatched")
+    if unmatched_names:
+        logger.info(f"Unmatched run names (first 5): {unmatched_names[:5]}")
 
     # Match configs to runs
     matched = []

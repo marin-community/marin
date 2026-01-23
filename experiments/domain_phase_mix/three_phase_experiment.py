@@ -165,6 +165,8 @@ def create_baseline_weight_configs(
     phase_names = phase_names or ["phase_0", "phase_1", "phase_2"]
     domain_names = domain_names or DOMAIN_NAMES
 
+    # Start baseline run_ids at 90000 to avoid conflicts with swarm run_ids (0-99)
+    BASELINE_RUN_ID_START = 90000
     configs = []
     for i, (phase0, phase1, phase2) in enumerate(baselines):
         phase_weights = {
@@ -172,7 +174,7 @@ def create_baseline_weight_configs(
             phase_names[1]: dict(zip(domain_names, phase1, strict=True)),
             phase_names[2]: dict(zip(domain_names, phase2, strict=True)),
         }
-        configs.append(WeightConfig(run_id=i, phase_weights=phase_weights))
+        configs.append(WeightConfig(run_id=BASELINE_RUN_ID_START + i, phase_weights=phase_weights))
 
     return configs
 
@@ -260,7 +262,21 @@ def main(
     if analyze:
         # Only run analysis
         logger.info("Running analysis only (collecting results from W&B)")
-        all_steps = [weight_configs_step, analysis_step]
+        # Include baseline configs in the weight_configs step by re-creating it
+        # with baseline configs appended. Use a different name suffix to ensure
+        # the step is re-run even if the original weight_configs step exists.
+        baseline_weight_configs = create_baseline_weight_configs(BASELINES)
+        weight_configs_step_with_baselines, _ = experiment.create_swarm_steps(
+            n_runs=n_runs,
+            seed=seed,
+            name_prefix=f"{name_prefix}_with_baselines",
+            additional_configs=baseline_weight_configs,
+        )
+        analysis_step_with_baselines = create_analysis_step(
+            weight_configs_step=weight_configs_step_with_baselines,
+            name_prefix=name_prefix,  # Keep original name for W&B tag matching
+        )
+        all_steps = [weight_configs_step_with_baselines, analysis_step_with_baselines]
         executor_main(
             steps=all_steps,
             description=f"Analysis for {name_prefix}",
