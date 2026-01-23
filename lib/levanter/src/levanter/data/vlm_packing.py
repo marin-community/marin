@@ -41,6 +41,33 @@ from levanter.data.packing import pack_documents
 logger = logging.getLogger(__name__)
 
 
+def _convert_numpy_to_python(obj):
+    """
+    Recursively convert numpy arrays and scalars to Python native types.
+
+    This is needed because parquet stores lists as numpy arrays, but Jinja2
+    templates (used by HuggingFace chat templates) expect Python lists.
+
+    Args:
+        obj: Any object that might contain numpy arrays
+
+    Returns:
+        Object with numpy types converted to Python native types
+    """
+    if isinstance(obj, np.ndarray):
+        return [_convert_numpy_to_python(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, dict):
+        return {k: _convert_numpy_to_python(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_convert_numpy_to_python(item) for item in obj]
+    else:
+        return obj
+
+
 class PackedImageTextDict(TypedDict, total=False):
     """
     Data structure for packed VLM samples.
@@ -656,10 +683,194 @@ class PackAssignmentResult:
         )
 
 
+# =============================================================================
+# Parallel Processing for Pack Assignments
+# =============================================================================
+
+
+def _process_single_parquet_thread(
+    path: str,
+    config: PackAssignmentConfig,
+    tokenizer,
+) -> Tuple[str, List[int], List[int], int]:
+    """
+    Process a single parquet file - for use with ThreadPoolExecutor.
+
+    This worker function accepts the tokenizer directly (threads share memory).
+
+    Args:
+        path: Path to parquet file (supports GCS, S3, local)
+        config: Pack assignment configuration
+        tokenizer: Pre-loaded tokenizer object
+
+    Returns:
+        Tuple of (path, token_lengths, patch_counts, num_samples)
+    """
+    # Read parquet file (supports GCS, S3, local paths via fsspec)
+    fs, fs_path = fsspec.core.url_to_fs(path)
+    with fs.open(fs_path, 'rb') as f:
+        table = pq.read_table(f)
+    df = table.to_pandas()
+
+    token_lengths = []
+    patch_counts = []
+
+    for i, row in df.iterrows():
+        # Get text
+        text = row.get(config.text_column, "")
+        if text is None:
+            text = ""
+
+        # Tokenize text (without image tokens)
+        text_tokens = tokenizer(text, add_special_tokens=False)["input_ids"]
+        text_token_count = len(text_tokens)
+
+        # Count images
+        image_data = row.get(config.image_column)
+        if image_data is None:
+            num_images = 0
+        elif isinstance(image_data, list):
+            num_images = len(image_data)
+        elif isinstance(image_data, (bytes, str)):
+            num_images = 1
+        else:
+            # Assume single image for other types
+            num_images = 1
+
+        # For disable_anyres=True, each image = 1 patch
+        patch_count = num_images
+
+        # Effective tokens = text tokens + image token expansion
+        # Each image expands to features_per_patch tokens
+        effective_tokens = text_token_count + num_images * (config.features_per_patch + 1)
+
+        token_lengths.append(effective_tokens)
+        patch_counts.append(patch_count)
+
+    return path, token_lengths, patch_counts, len(df)
+
+
+def compute_sample_lengths_parallel(
+    parquet_paths: List[str],
+    tokenizer_name: str,
+    config: PackAssignmentConfig,
+    num_workers: Optional[int] = None,
+) -> Tuple[Dict[str, np.ndarray], List[ShardInfo]]:
+    """
+    Parallel version of compute_sample_lengths_lightweight.
+
+    Uses multiprocessing to process parquet files in parallel, providing
+    significant speedup for large datasets (100M+ samples).
+
+    Args:
+        parquet_paths: List of paths to parquet files
+        tokenizer_name: HuggingFace model name for tokenizer (e.g., "Qwen/Qwen3-1.7B")
+        config: Pack assignment configuration
+        num_workers: Number of parallel workers. If None, uses min(cpu_count, num_files, 32)
+
+    Returns:
+        Tuple of:
+        - Dict with "tokens" and "patches" arrays suitable for pack_documents()
+        - List of ShardInfo for tracking shard boundaries
+    """
+    import multiprocessing as mp
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    try:
+        from tqdm import tqdm
+        use_tqdm = True
+    except ImportError:
+        use_tqdm = False
+
+    if num_workers is None:
+        num_workers = min(mp.cpu_count(), len(parquet_paths), 32)
+
+    logger.info(f"Processing {len(parquet_paths)} parquet files with {num_workers} parallel workers...")
+
+    # Load tokenizer in main thread - threads share memory so no need for per-worker loading
+    logger.info(f"Loading tokenizer: {tokenizer_name}")
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+    logger.info("Tokenizer loaded. Starting parallel processing...")
+
+    # Use ThreadPoolExecutor for I/O-bound tasks
+    # - Threads share memory: GCS auth, fsspec state, tokenizer all shared
+    # - Python GIL is released during I/O operations (file reads)
+    # - No serialization/pickle overhead
+    results = []
+    total_samples = 0
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {
+            executor.submit(_process_single_parquet_thread, path, config, tokenizer): path
+            for path in parquet_paths
+        }
+
+        if use_tqdm:
+            # Use tqdm progress bar
+            pbar = tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Processing parquet files",
+                unit="file",
+            )
+            for future in pbar:
+                path = futures[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                    total_samples += result[3]
+                    pbar.set_postfix({"samples": f"{total_samples:,}"})
+                except Exception as e:
+                    logger.error(f"Failed: {path} - {e}")
+                    raise
+            pbar.close()
+        else:
+            # Fallback to logger-based progress
+            completed = 0
+            for future in as_completed(futures):
+                path = futures[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                    completed += 1
+                    total_samples += result[3]
+                    if completed % 10 == 0 or completed == len(parquet_paths):
+                        logger.info(f"  Progress: {completed}/{len(parquet_paths)} files, {total_samples:,} samples")
+                except Exception as e:
+                    logger.error(f"Failed: {path} - {e}")
+                    raise
+
+    # Sort results by original order and merge
+    path_to_result = {r[0]: r for r in results}
+
+    all_tokens = []
+    all_patches = []
+    shard_info = []
+    current_idx = 0
+
+    for path in parquet_paths:
+        _, tokens, patches, num_samples = path_to_result[path]
+        all_tokens.extend(tokens)
+        all_patches.extend(patches)
+        shard_info.append(ShardInfo(path=path, start_idx=current_idx, num_samples=num_samples))
+        current_idx += num_samples
+
+    total_samples = len(all_tokens)
+    logger.info(f"Parallel processing complete. Total: {total_samples} samples from {len(parquet_paths)} files")
+    logger.info(f"  Token lengths: mean={np.mean(all_tokens):.1f}, max={np.max(all_tokens)}")
+    logger.info(f"  Patch counts: mean={np.mean(all_patches):.1f}, max={np.max(all_patches)}")
+
+    return {
+        "tokens": np.array(all_tokens, dtype=np.int32),
+        "patches": np.array(all_patches, dtype=np.int32),
+    }, shard_info
+
+
 def compute_sample_lengths_lightweight(
     parquet_paths: List[str],
     tokenizer,
     config: PackAssignmentConfig,
+    processor=None,
 ) -> Tuple[Dict[str, np.ndarray], List[ShardInfo]]:
     """
     Compute sample lengths from raw parquet files without full image preprocessing.
@@ -676,6 +887,9 @@ def compute_sample_lengths_lightweight(
         parquet_paths: List of paths to parquet files
         tokenizer: HuggingFace tokenizer for text tokenization
         config: Pack assignment configuration
+        processor: Optional HuggingFace processor for applying chat template to
+                   conversation-format text. Required if text_column contains
+                   message dicts instead of plain strings.
 
     Returns:
         Tuple of:
@@ -706,10 +920,38 @@ def compute_sample_lengths_lightweight(
         ))
 
         for i, row in df.iterrows():
-            # Get text
-            text = row.get(config.text_column, "")
-            if text is None:
-                text = ""
+            # Get text data (may be plain string or conversation format)
+            text_data = row.get(config.text_column, "")
+            if text_data is None:
+                text_data = ""
+
+            # Check if text_data is conversation format (list of message dicts)
+            # If so, apply chat template to convert to string
+            if isinstance(text_data, (list, np.ndarray)) and len(text_data) > 0:
+                # Conversation format: apply chat template
+                if processor is not None:
+                    try:
+                        # Convert numpy array to list if needed
+                        messages = list(text_data) if isinstance(text_data, np.ndarray) else text_data
+                        # Convert numpy arrays inside messages to native Python types
+                        def convert_message(msg):
+                            if isinstance(msg, np.ndarray):
+                                return list(msg)
+                            if isinstance(msg, dict):
+                                return {k: convert_message(v) for k, v in msg.items()}
+                            if isinstance(msg, list):
+                                return [convert_message(item) for item in msg]
+                            return msg
+                        messages = [convert_message(m) for m in messages]
+                        text = processor.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
+                    except Exception as e:
+                        logger.warning(f"Failed to apply chat template: {e}. Using empty string.")
+                        text = ""
+                else:
+                    logger.warning("Conversation format detected but no processor provided. Using empty string.")
+                    text = ""
+            else:
+                text = str(text_data) if text_data else ""
 
             # Tokenize text (without image tokens)
             # Note: We don't expand <image> placeholders here, just count base tokens
@@ -757,6 +999,8 @@ def compute_pack_assignments(
     output_file: str,
     tokenizer,
     config: Optional[PackAssignmentConfig] = None,
+    num_workers: int = 1,
+    processor=None,
 ) -> PackAssignmentResult:
     """
     Compute pack assignments from raw parquet files and save to JSON.
@@ -767,8 +1011,14 @@ def compute_pack_assignments(
     Args:
         parquet_paths: List of paths to raw parquet files
         output_file: Path to save pack_assignments.json
-        tokenizer: HuggingFace tokenizer for text tokenization
+        tokenizer: HuggingFace tokenizer (object) or tokenizer name (str) for text tokenization
         config: Pack assignment configuration (uses defaults if None)
+        num_workers: Number of parallel workers for processing parquet files.
+                     Default 1 (sequential). Set > 1 for parallel processing.
+                     Parallel mode provides significant speedup for large datasets.
+        processor: Optional HuggingFace processor for applying chat template to
+                   conversation-format text. Required if text_column contains
+                   message dicts instead of plain strings.
 
     Returns:
         PackAssignmentResult with assignments and metadata
@@ -776,10 +1026,23 @@ def compute_pack_assignments(
     if config is None:
         config = PackAssignmentConfig()
 
-    # 1. Compute lightweight sample lengths
-    lengths, shard_info = compute_sample_lengths_lightweight(
-        parquet_paths, tokenizer, config
-    )
+    # 1. Compute sample lengths (parallel or sequential)
+    if num_workers > 1:
+        # Parallel processing - need tokenizer name (string)
+        if isinstance(tokenizer, str):
+            tokenizer_name = tokenizer
+        else:
+            tokenizer_name = tokenizer.name_or_path
+        logger.info(f"Using parallel processing with {num_workers} workers")
+        lengths, shard_info = compute_sample_lengths_parallel(
+            parquet_paths, tokenizer_name, config, num_workers
+        )
+    else:
+        # Sequential processing - can use tokenizer object directly
+        logger.info("Using sequential processing (set num_workers > 1 for parallel)")
+        lengths, shard_info = compute_sample_lengths_lightweight(
+            parquet_paths, tokenizer, config, processor=processor
+        )
 
     num_samples = len(lengths["tokens"])
     logger.info(f"Total samples: {num_samples}")
@@ -884,7 +1147,9 @@ class SequentialShardLoader:
         # Maybe start prefetching next shard
         self._maybe_start_prefetch(shard_idx, local_idx)
 
-        return self._current_df.iloc[local_idx].to_dict()
+        raw_dict = self._current_df.iloc[local_idx].to_dict()
+        # Convert numpy arrays to Python lists for compatibility with Jinja2 templates
+        return _convert_numpy_to_python(raw_dict)
 
     def _find_shard(self, global_idx: int) -> Tuple[int, int]:
         """Find which shard contains the global index."""
@@ -994,6 +1259,13 @@ class PackedVLMDataset(AsyncDataset):
         max_length: int = 2048,
         prefetch_threshold: float = 0.8,
         state_file: Optional[str] = None,
+        # BatchImageProcessor configuration
+        tokenizer=None,
+        disable_anyres: bool = False,
+        grid_pinpoints: Optional[List[List[int]]] = None,
+        vision_feature_height: Optional[int] = None,
+        max_num_patches: int = 9,
+        patch_size: int = 384,
     ):
         """
         Initialize the packed VLM dataset.
@@ -1004,6 +1276,12 @@ class PackedVLMDataset(AsyncDataset):
             max_length: Maximum sequence length
             prefetch_threshold: Start prefetching next shard when progress exceeds this
             state_file: Optional path to checkpoint state file
+            tokenizer: Custom tokenizer (e.g., Qwen3) to replace processor's tokenizer
+            disable_anyres: If True, disable anyres processing
+            grid_pinpoints: Grid resolutions for anyres processing
+            vision_feature_height: Vision encoder output tokens per spatial dim
+            max_num_patches: Maximum number of patches for anyres
+            patch_size: Size of each image patch
         """
         super().__init__()
 
@@ -1017,9 +1295,18 @@ class PackedVLMDataset(AsyncDataset):
             prefetch_threshold=prefetch_threshold,
         )
 
-        # Image processor (delayed import to avoid circular dependencies)
+        # Image processor with full configuration (delayed import to avoid circular dependencies)
         from levanter.data.image import BatchImageProcessor
-        self._batch_processor = BatchImageProcessor(processor, max_length=max_length)
+        self._batch_processor = BatchImageProcessor(
+            processor,
+            tokenizer=tokenizer,
+            max_length=max_length,
+            disable_anyres=disable_anyres,
+            grid_pinpoints=grid_pinpoints,
+            vision_feature_height=vision_feature_height,
+            max_num_patches=max_num_patches,
+            patch_size=patch_size,
+        )
 
         # Config from assignments
         self._config = self._assignments.config
@@ -1077,12 +1364,8 @@ class PackedVLMDataset(AsyncDataset):
             raw_samples = [self._get_sample(i) for i in pack_range]
 
             # 2. Process with BatchImageProcessor
-            # Convert to format expected by processor
-            processed_samples = []
-            for raw in raw_samples:
-                processed = self._batch_processor.process_single(raw)
-                if processed is not None:
-                    processed_samples.append(processed)
+            # BatchImageProcessor.__call__ takes a batch and returns a batch
+            processed_samples = list(self._batch_processor(raw_samples))
 
             # 3. Assemble into packed format
             if processed_samples:

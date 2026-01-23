@@ -242,6 +242,27 @@ def parse_args():
         "Reduces memory usage and speeds up training but may lose image details.",
     )
 
+    # === Packing Arguments ===
+    parser.add_argument(
+        "--enable_packing",
+        action="store_true",
+        help="Enable VLM sequence packing. Multiple samples are combined into a single training example "
+        "with attention masks preventing cross-sample attention. IMPORTANT: Requires --disable_anyres "
+        "and uses cached mode (not streaming).",
+    )
+    parser.add_argument(
+        "--max_segments_per_pack",
+        type=int,
+        default=64,
+        help="Maximum number of samples per packed example (default: 64)",
+    )
+    parser.add_argument(
+        "--packing_cache_dir",
+        type=str,
+        default=None,
+        help="Directory to cache pack assignments. If None, uses cache_dir/packing/",
+    )
+
     # Checkpoint arguments
     parser.add_argument(
         "--output_dir",
@@ -450,6 +471,14 @@ def main():
     logger.info(f"  Disable anyres: {args.disable_anyres}")
     logger.info("-" * 60)
 
+    # Log packing settings
+    if args.enable_packing:
+        logger.info("Packing Configuration:")
+        logger.info(f"  Packing enabled: True")
+        logger.info(f"  Max segments per pack: {args.max_segments_per_pack}")
+        logger.info(f"  Packing cache dir: {args.packing_cache_dir or f'{args.cache_dir}/packing'}")
+        logger.info("-" * 60)
+
     # Helper to format data URLs - don't add file:// if already has a scheme
     def format_data_url(path: str) -> str:
         if path.startswith(("gs://", "s3://", "http://", "https://", "file://")):
@@ -467,6 +496,12 @@ def main():
         vision_feature_height = 384 // 16  # = 24
     logger.info(f"Using vision_feature_height={vision_feature_height} (features_per_patch={vision_feature_height**2})")
 
+    # Validate packing requirements
+    if args.enable_packing:
+        if not args.disable_anyres:
+            logger.warning("WARNING: Packing requires --disable_anyres. Enabling it automatically.")
+            args.disable_anyres = True
+
     # Create data config
     data_config = ImageMixtureDatasetConfig(
         cache_dir=args.cache_dir,
@@ -481,12 +516,17 @@ def main():
         processor=args.model_name,
         tokenizer=args.tokenizer,  # Use CustomVLMProcessor with custom tokenizer (e.g., Qwen3)
         max_length=args.max_length,
-        use_cache=not args.no_cache,  # Use streaming mode if --no_cache is set
+        # Packing requires cached mode; streaming mode requires no packing
+        use_cache=args.enable_packing or not args.no_cache,
         vision_feature_height=vision_feature_height,  # Must match model's vision encoder output
         # Pass anyres settings to data config to sync with model config
         # Without this, HF processor uses anyres_max_9 which calculates extra tokens for grid patches
         vision_aspect_ratio="single" if args.disable_anyres else None,
         image_grid_pinpoints=[[384, 384]] if args.disable_anyres else None,
+        # === Packing configuration ===
+        enable_packing=args.enable_packing,
+        max_segments_per_pack=args.max_segments_per_pack,
+        packing_cache_dir=args.packing_cache_dir,
     )
 
     if args.no_cache:

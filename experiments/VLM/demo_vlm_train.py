@@ -67,7 +67,7 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - per_device_parallelism: samples processed per device at a time (limited by memory)
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
-PER_DEVICE_PARALLELISM = 8  # 1 sample per device (memory-safe for VLM with large images)
+PER_DEVICE_PARALLELISM = 2  # 1 sample per device (memory-safe for VLM with large images)
 GRADIENT_ACCUMULATION_STEPS = 1  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
@@ -87,6 +87,7 @@ vision_config = SiglipVisionConfig(
     image_size=384,
     patch_size=16,  # Must match vision_checkpoint (siglip2-so400m-patch16-384)
     flash_attention_block_size=FLASH_ATTENTION_BLOCK_SIZE,
+    gradient_checkpointing=True,
 )
 
 # Language model: Qwen3-1.7B
@@ -100,6 +101,7 @@ text_config = Qwen3Config(
     rope=Llama3RotaryEmbeddingsConfig(),
     tie_word_embeddings=True,
     flash_attention_block_size=FLASH_ATTENTION_BLOCK_SIZE,
+    gradient_checkpointing=True,
 )
 
 # Qwen3-1.7B <|image_pad|> token ID (hardcoded to avoid HF API call during import)
@@ -112,12 +114,14 @@ vlm_config = LlavaOnevisionConfig(
     text_config=text_config,
     vision_encoder_type="siglip",
     vision_feature_select_strategy="full",
-    vision_aspect_ratio="anyres_max_9",
+    vision_aspect_ratio="single",
     # Set disable_anyres=True to use single resolution (base patch only).
     # This reduces memory usage and speeds up training but may lose image details.
+    # IMPORTANT: Packing requires disable_anyres=True.
     disable_anyres=True,
     # Use Qwen3's <|image_pad|> token ID (default 151646 is for Qwen2)
     image_token_index=IMAGE_TOKEN_INDEX,
+    gradient_checkpointing=True,
 )
 
 # ============================================================================
@@ -157,13 +161,22 @@ data_config = ImageMixtureDatasetConfig(
     tokenizer="Qwen/Qwen3-1.7B",
     configs={"train": data_source},
     train_weights={"train": 1.0},
-    use_cache=False,  # Streaming mode (no disk caching)
+    use_cache=False,  # Streaming mode with pre-computed pack assignments
     max_length=2048,  # Match model's max_seq_len to avoid truncation issues
     vision_feature_height=VISION_FEATURE_HEIGHT,  # Override: use model's actual feature size
     # Disable anyres to match model config (disable_anyres=True sets vision_aspect_ratio="single")
     # Without this, the HF processor uses anyres_max_9 which calculates extra tokens for grid patches
     vision_aspect_ratio="single",
     image_grid_pinpoints=[[384, 384]],  # Single resolution only
+    # === Streaming Packing Configuration ===
+    # Enable sequence packing: multiple samples are combined into a single training example
+    # with attention masks preventing cross-sample attention. This improves GPU/TPU utilization.
+    # IMPORTANT: Packing requires disable_anyres=True (set above).
+    # For streaming mode, provide pack_assignments_path (pre-computed offline).
+    enable_packing=True,
+    max_segments_per_pack=64,  # Maximum samples per packed example
+    # Pre-computed pack assignments from: python scripts/compute_vlm_pack_assignments.py
+    pack_assignments_path="gs://marin-vlm/stage1_sharded/pack_assignments.json",
 )
 
 # ============================================================================
@@ -233,6 +246,7 @@ vlm_training = default_train_vlm(
     model_config=vlm_config,
     train_config=train_config,
     tags=["vlm", "demo", "qwen3-1.7b", "siglip"],
+    allow_out_of_region=("data.pack_assignments_path",),
 )
 
 # ============================================================================

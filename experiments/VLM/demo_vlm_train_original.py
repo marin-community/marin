@@ -67,7 +67,7 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - per_device_parallelism: samples processed per device at a time (limited by memory)
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
-PER_DEVICE_PARALLELISM = 1  # 1 sample per device (memory-safe for VLM with large images)
+PER_DEVICE_PARALLELISM = 8  # 1 sample per device (memory-safe for VLM with large images)
 GRADIENT_ACCUMULATION_STEPS = 1  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
@@ -112,7 +112,7 @@ vlm_config = LlavaOnevisionConfig(
     text_config=text_config,
     vision_encoder_type="siglip",
     vision_feature_select_strategy="full",
-    vision_aspect_ratio="single",
+    vision_aspect_ratio="anyres_max_9",
     # Set disable_anyres=True to use single resolution (base patch only).
     # This reduces memory usage and speeds up training but may lose image details.
     disable_anyres=True,
@@ -138,7 +138,7 @@ vlm_config = LlavaOnevisionConfig(
 
 data_source = ConversationDatasetSourceConfig(
     # >>> EDIT THIS PATH to point to your training data <<<
-    train_urls=["gs://marin-vlm/stage2_sharded/*.parquet"],
+    train_urls=["gs://marin-vlm/stage1_sharded/*.parquet"],
     messages_key="messages",
     images_key="images",
 )
@@ -170,7 +170,7 @@ data_config = ImageMixtureDatasetConfig(
 # 4. TRAINING CONFIGURATION
 # ============================================================================
 # Dataset size: 558K samples
-DATASET_SIZE = 10*1000*1000
+DATASET_SIZE = 558128
 NUM_EPOCHS = 1
 NUM_TRAIN_STEPS = (DATASET_SIZE // BATCH_SIZE) * NUM_EPOCHS
 
@@ -180,10 +180,10 @@ train_config = SimpleVlmTrainConfig(
     per_device_parallelism=PER_DEVICE_PARALLELISM,
     num_train_steps=NUM_TRAIN_STEPS,
     epoch=0,  # Disable epoch mode (use num_train_steps instead)
-    learning_rate=1e-5,
+    learning_rate=1e-4,
     warmup=0.002,  # 3% warmup
     weight_decay=0.0,
-    min_lr_ratio=0.1,  # Final LR = 1% of peak LR
+    min_lr_ratio=0.01,  # Final LR = 1% of peak LR
 
     # Full bfloat16: params and compute both in bfloat16 (saves memory)
     mp="bfloat16",
@@ -196,17 +196,18 @@ train_config = SimpleVlmTrainConfig(
     steps_per_export=1000,
     steps_per_eval=500,
 
-    # Load complete VLM weights from GCS HF checkpoint (vision encoder + projector + LLM)
-    # This checkpoint contains trained weights from stage 1
-    vlm_checkpoint="gs://marin-us-central2/checkpoints/vlm-official-qwen3-1.7b-8-c3e151/hf/vlm-official-qwen3-1.7b-8-c3e151/step-544",
-    # vision_checkpoint and llm_checkpoint not needed when using vlm_checkpoint
+    # Resume from checkpoint: set path and enable data position restoration
+    # >>> EDIT THIS PATH to resume from a specific checkpoint <<<
+    # initialize_from_checkpoint_path="gs://your-bucket/path/to/checkpoint",
+    reset_data_loader_on_init=False,  # Continue data from correct position (not from beginning)
 
-    # New training stage - data starts from beginning
-    reset_data_loader_on_init=True,
+    # Load pretrained weights from HuggingFace
+    vision_checkpoint="google/siglip2-so400m-patch16-384",
+    llm_checkpoint="Qwen/Qwen3-1.7B",
 
     # Freeze components during training (only train projector)
-    freeze_vision_encoder=False,
-    freeze_llm=False,
+    freeze_vision_encoder=True,
+    freeze_llm=True,
 
     # Profiler configuration
     profiler=True,

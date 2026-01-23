@@ -249,6 +249,7 @@ vlm_training = default_train_vlm(
     model_config=vlm_config,
     train_config=train_config,
     tags=["vlm", "demo", "qwen3-1.7b", "siglip"],
+    allow_out_of_region=("data.pack_assignments_path",),
 )
 
 # ============================================================================

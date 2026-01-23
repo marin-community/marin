@@ -445,6 +445,7 @@ def default_train_vlm(
     train_config: SimpleVlmTrainConfig,
     tags: Sequence[str] = (),
     override_output_path: str | None = None,
+    allow_out_of_region: tuple[str, ...] = (),
 ) -> ExecutorStep:
     """
     Train a Vision-Language Model using the default configuration.
@@ -456,6 +457,7 @@ def default_train_vlm(
         train_config: SimpleVlmTrainConfig for training hyperparameters.
         tags: Additional tags for WandB logging.
         override_output_path: Optional explicit output path.
+        allow_out_of_region: Tuple of JSON paths that are allowed to be in different regions.
 
     Returns:
         An ExecutorStep configured for VLM training.
@@ -573,6 +575,7 @@ def default_train_vlm(
         train_config=inner_config,
         resources=pod_resource_config,
         output_path=this_output_path(),
+        allow_out_of_region=allow_out_of_region,
     )
 
     return ExecutorStep(

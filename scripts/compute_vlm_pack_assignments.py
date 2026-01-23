@@ -8,9 +8,9 @@ PackedVLMDataset for efficient streaming training.
 
 Usage:
     python scripts/compute_vlm_pack_assignments.py \
-        --input-pattern "gs://bucket/data/*.parquet" \
-        --output "gs://bucket/pack_assignments.json" \
-        --model "Qwen/Qwen2-VL-2B-Instruct" \
+        --input-pattern "gs://marin-vlm/stage1_sharded/*.parquet" \
+        --output "gs://marin-vlm/stage1_sharded/pack_assignments.json" \
+        --model "Qwen/Qwen3-1.7B" \
         --max-length 2048 \
         --max-patches 10
 
@@ -150,6 +150,13 @@ def main():
         default="text",
         help="Column name for text data in parquet (default: 'text')",
     )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=10,
+        help="Number of parallel workers for processing parquet files (default: 1, sequential). "
+             "Set > 1 for parallel processing, e.g., --num-workers 8 for 8x speedup on large datasets.",
+    )
 
     args = parser.parse_args()
 
@@ -183,12 +190,13 @@ def main():
         local_output = tmp.name
 
     try:
-        logger.info("Computing pack assignments...")
+        logger.info(f"Computing pack assignments (num_workers={args.num_workers})...")
         result = compute_pack_assignments(
             parquet_paths=parquet_paths,
             output_file=local_output,
-            tokenizer=tokenizer,
+            tokenizer=args.model if args.num_workers > 1 else tokenizer,  # Pass name for parallel, object for sequential
             config=config,
+            num_workers=args.num_workers,
         )
 
         # 5. Upload to remote if needed
@@ -208,6 +216,7 @@ def main():
         print("=" * 60)
         print(f"Input pattern:     {args.input_pattern}")
         print(f"Output file:       {args.output}")
+        print(f"Parallel workers:  {args.num_workers}")
         print(f"Number of shards:  {len(result.shard_info)}")
         print(f"Total samples:     {result.num_samples}")
         print(f"Total packs:       {result.num_packs}")

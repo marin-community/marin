@@ -23,7 +23,7 @@ for job in running_jobs:
         if isinstance(env_vars, dict):
             job_name = env_vars.get('EXP_NAME', 'N/A')
     print(f"job_id: {job.job_id}, name: {job_name}, submission_id: {job.submission_id}, Status: {job.status}")
-# assert 1==2
+assert 1==2
 # 停止所有 RUNNING jobs
 print("\n--- Stopping jobs ---")
 env = os.environ.copy()

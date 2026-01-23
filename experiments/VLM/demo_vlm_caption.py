@@ -47,7 +47,7 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-import jmp
+import jax.tree_util as jtu
 import numpy as np
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
@@ -70,6 +70,7 @@ from levanter.models.qwen import Qwen3Config
 from levanter.models.siglip import SiglipVisionConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
+from levanter.utils.mesh import DEFAULT_DP_AXES, MeshConfig
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +106,22 @@ class VLMCaptionConfig:
     seed: int = 42
 
     # Trainer config for mesh/precision
+    # Use MeshConfig with proper sharding to avoid VMEM OOM during paged attention
+    # Training uses bfloat16 directly without mixed precision
+    # Head sharding reduces per-core VMEM usage for ragged_paged_attention kernel
+    # IMPORTANT: Must define explicit axes for head sharding to work!
+    # Default axes={"model": 1} means no actual sharding
+    # CRITICAL: The axis name in ragged_paged_attention is "kv_head" (singular, no "s")!
+    # See attention.py:1926: q_flat = q_padded.flatten_axes(("kv_head", "q_heads_per_group"), "kv_head")
     trainer: TrainerConfig = field(
         default_factory=lambda: TrainerConfig(
-            mp=jmp.get_policy("p=f32,c=bfloat16"),
+            mesh=MeshConfig(
+                axes={"model": 8, "data": 1},  # 8-way model parallelism for head sharding
+                compute_mapping={
+                    "vision_batch": DEFAULT_DP_AXES,
+                    "kv_head": "model",    # CORRECT axis name for paged attention sharding (16 heads / 8 = 2 per core)
+                },
+            ),
         )
     )
 
@@ -170,6 +184,40 @@ def _is_hf_checkpoint(checkpoint_path: str) -> bool:
     # HF checkpoints have config.json, Levanter checkpoints have metadata.json
     config_json = os.path.join(checkpoint_path, "config.json")
     return fs.exists(config_json)
+
+
+def _get_vocab_size_from_checkpoint(checkpoint_path: str, subpath: str = "model") -> int | None:
+    """Get vocab size from checkpoint by inspecting embedding tensor shape.
+
+    For Levanter VLM checkpoints, the embedding path is:
+    {subpath}/language_model/embeddings/token_embeddings/weight
+
+    Returns:
+        The vocab size (first dimension of embedding weight), or None if not found.
+    """
+    import asyncio
+    import tensorstore as ts
+    from levanter.tensorstore_serialization import _create_ocdbt_spec
+
+    # Build the embedding weight path
+    embedding_path = f"{subpath}/language_model/embeddings/token_embeddings/weight"
+
+    try:
+        # Create tensorstore spec for the embedding
+        spec = _create_ocdbt_spec(checkpoint_path, embedding_path)
+
+        # Open tensorstore and get shape (async operation)
+        async def get_shape():
+            store = await ts.open(spec, read=True)
+            return store.shape
+
+        shape = asyncio.run(get_shape())
+        if shape and len(shape) >= 1:
+            return shape[0]  # vocab_size is the first dimension
+    except Exception as e:
+        logger.warning(f"Could not auto-detect vocab size from checkpoint: {e}")
+
+    return None
 
 
 def load_model(
@@ -253,8 +301,33 @@ def load_model(
     else:
         # For Levanter checkpoints, use the configured tokenizer
         tokenizer = AutoTokenizer.from_pretrained(config.tokenizer)
-        vocab_size = len(tokenizer)
+        tokenizer_vocab_size = len(tokenizer)
+
+        # Try to auto-detect vocab size from checkpoint
+        checkpoint_vocab_size = _get_vocab_size_from_checkpoint(config.checkpoint, subpath="model")
+
+        if checkpoint_vocab_size is not None:
+            vocab_size = checkpoint_vocab_size
+            if vocab_size != tokenizer_vocab_size:
+                logger.warning(
+                    f"Model vocab size ({vocab_size}) does not match tokenizer vocab size ({tokenizer_vocab_size}). "
+                    f"Using model vocab size ({vocab_size})."
+                )
+        else:
+            # Fall back to tokenizer vocab size if auto-detection fails
+            vocab_size = tokenizer_vocab_size
+            logger.info(f"Using tokenizer vocab size: {vocab_size}")
+
         tokenizer_tmpdir = None
+
+        # Switch to dot-product attention to avoid VMEM OOM with ragged_paged_attention
+        # The paged attention kernel requires >16MB VMEM which exceeds TPU limits
+        text_config_updated = replace(
+            vlm_config.text_config,
+            attn_backend="dot",
+            flash_attention_block_size=None
+        )
+        vlm_config = replace(vlm_config, text_config=text_config_updated)
 
     with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
         Vocab = round_axis_for_partitioning(
@@ -291,8 +364,13 @@ def load_model(
             # Load checkpoint
             model = load_checkpoint(model, config.checkpoint, subpath="model")
 
-            # Cast to compute precision
-            model = config.trainer.mp.cast_to_compute(model)
+            # Cast to bfloat16 to ensure query/key/value match KV cache dtype
+            # (paged_decode doesn't cast internally, unlike dot_product_attention)
+            def _to_bf16(x):
+                if hasattr(x, 'dtype') and x.dtype == jnp.float32:
+                    return x.astype(jnp.bfloat16)
+                return x
+            model = jtu.tree_map(_to_bf16, model)
 
     logger.info("Model loaded successfully")
     return model, tokenizer, Vocab

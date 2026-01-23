@@ -1199,6 +1199,16 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             # Always set num_image_tokens - don't check hasattr, just set it
             processor.num_image_tokens = num_image_tokens
 
+        # Configure processor for disable_anyres mode
+        # This controls how many image tokens the processor expands <image> placeholders to
+        # Without this, the processor uses its default anyres config and produces more tokens
+        if disable_anyres:
+            # Set single resolution mode in processor
+            if hasattr(processor, 'image_grid_pinpoints'):
+                processor.image_grid_pinpoints = grid_pinpoints if grid_pinpoints else [[patch_size, patch_size]]
+            if hasattr(processor, 'vision_aspect_ratio'):
+                processor.vision_aspect_ratio = "single"
+
         # Pre-compute grid_pinpoints arrays for vectorized _compute_grid_shape
         # Note: empty list [] is treated as no grid pinpoints (disable_anyres case)
         if grid_pinpoints is not None and len(grid_pinpoints) > 0:
@@ -1390,6 +1400,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         # Determine total_patches based on mode:
         # - Multi-image mode: batch_max_patches > 1 AND actual_patches == batch_max_patches
         #   (each image contributes exactly 1 base patch)
+        # - Single-image disable_anyres mode: only 1 patch (base patch)
         # - Single-image anyres mode: actual_patches > 1 (single image with multiple patches)
         #   Should use upper_limit to preserve all anyres patches
         if batch_max_patches is not None:
@@ -1397,6 +1408,9 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             if is_multi_image:
                 # Multi-image case: pad to batch_max_patches (one patch per image)
                 total_patches = batch_max_patches
+            elif self.disable_anyres:
+                # Single-image disable_anyres: only 1 patch needed (base patch)
+                total_patches = batch_max_patches  # which is 1
             else:
                 # Single-image anyres: preserve all patches up to upper_limit
                 total_patches = upper_limit
@@ -3007,13 +3021,19 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
     enable_packing: bool = False
     """Enable sequence packing for VLM training. Multiple samples are combined into
     a single training example with attention masks preventing cross-sample attention.
-    IMPORTANT: Packing requires disable_anyres=True in model config and use_cache=True."""
+    IMPORTANT: Packing requires disable_anyres=True in model config.
+    For streaming mode, provide pack_assignments_path. Otherwise, use_cache=True is required."""
 
     max_segments_per_pack: int = 64
     """Maximum number of samples that can be packed into a single training example."""
 
     packing_cache_dir: Optional[str] = None
     """Directory to cache pack assignments. If None, uses cache_dir/packing/."""
+
+    pack_assignments_path: Optional[str] = None
+    """Path to pre-computed pack assignments JSON file. When provided, enables streaming
+    packing mode using PackedVLMDataset. This allows use_cache=False with packing.
+    Generate this file using: scripts/compute_vlm_pack_assignments.py"""
 
     def __post_init__(self):
         if len(self.configs) == 0:
@@ -3074,42 +3094,61 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
 
         # Apply packing if enabled
         if self.enable_packing:
-            if not self.use_cache:
-                raise ValueError("VLM Packing requires use_cache=True. Streaming mode is not supported for packing.")
+            # Streaming packing requires pre-computed pack assignments
+            if not self.use_cache and self.pack_assignments_path is None:
+                raise ValueError(
+                    "VLM Packing requires either use_cache=True or pack_assignments_path. "
+                    "For streaming mode, provide pack_assignments_path from compute_vlm_pack_assignments.py"
+                )
 
-            from levanter.data.vlm_packing import VLMPackerConfig, VLMPrepackedDataset
+            if self.pack_assignments_path is not None:
+                # Streaming packing: use pre-computed pack assignments
+                from levanter.data.vlm_packing import PackedVLMDataset
 
-            # Compute features_per_patch from vision_feature_height
-            if self.vision_feature_height is not None:
-                features_per_patch = self.vision_feature_height ** 2
+                logger.info(f"Using streaming packing with pack_assignments: {self.pack_assignments_path}")
+
+                # PackedVLMDataset wraps the raw data source, not the processed mixture
+                # It reads parquet directly and applies packing based on pre-computed assignments
+                mixture = PackedVLMDataset(
+                    pack_assignments_file=self.pack_assignments_path,
+                    processor=self.the_processor,
+                    max_length=self.max_length,
+                )
             else:
-                features_per_patch = 576  # Default for 384x384 images with patch_size=16
+                # Cached packing: compute pack assignments on-the-fly
+                from levanter.data.vlm_packing import VLMPackerConfig, VLMPrepackedDataset
 
-            # Compute max_patches (disable_anyres mode means 1 patch per image typically)
-            # For packing, we'll use a reasonable default
-            max_patches = max_num_patches if max_num_patches is not None else 10
+                # Compute features_per_patch from vision_feature_height
+                if self.vision_feature_height is not None:
+                    features_per_patch = self.vision_feature_height ** 2
+                else:
+                    features_per_patch = 576  # Default for 384x384 images with patch_size=16
 
-            # Packing cache directory
-            packing_cache_dir = self.packing_cache_dir
-            if packing_cache_dir is None and self.cache_dir is not None:
-                packing_cache_dir = os.path.join(self.cache_dir, "packing")
+                # Compute max_patches (disable_anyres mode means 1 patch per image typically)
+                # For packing, we'll use a reasonable default
+                max_patches = max_num_patches if max_num_patches is not None else 10
 
-            packer_config = VLMPackerConfig(
-                max_length=self.max_length,
-                max_patches=max_patches,
-                max_segments=self.max_segments_per_pack,
-                features_per_patch=features_per_patch,
-                pad_token_id=self.pad_token_id,
-            )
+                # Packing cache directory
+                packing_cache_dir = self.packing_cache_dir
+                if packing_cache_dir is None and self.cache_dir is not None:
+                    packing_cache_dir = os.path.join(self.cache_dir, "packing")
 
-            logger.info(f"Enabling VLM packing with max_length={self.max_length}, max_patches={max_patches}, "
-                        f"max_segments={self.max_segments_per_pack}, features_per_patch={features_per_patch}")
+                packer_config = VLMPackerConfig(
+                    max_length=self.max_length,
+                    max_patches=max_patches,
+                    max_segments=self.max_segments_per_pack,
+                    features_per_patch=features_per_patch,
+                    pad_token_id=self.pad_token_id,
+                )
 
-            mixture = VLMPrepackedDataset(
-                base_dataset=mixture,
-                config=packer_config,
-                cache_dir=packing_cache_dir,
-            )
+                logger.info(f"Enabling VLM packing with max_length={self.max_length}, max_patches={max_patches}, "
+                            f"max_segments={self.max_segments_per_pack}, features_per_patch={features_per_patch}")
+
+                mixture = VLMPrepackedDataset(
+                    base_dataset=mixture,
+                    config=packer_config,
+                    cache_dir=packing_cache_dir,
+                )
 
         return mixture
 
