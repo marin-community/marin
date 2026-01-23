@@ -253,6 +253,8 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    wandb_name: str | None = None,
+    wandb_group: str | None = None,
     override_output_path: str | None = None,
 ) -> ExecutorStep:
     """
@@ -266,6 +268,8 @@ def default_train(
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
+        wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
+        wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -273,6 +277,9 @@ def default_train(
     vocab_size = _get_vocab_size(pretraining_data)
 
     steps_per_export = train_config.steps_per_export
+
+    if wandb_group is None:
+        wandb_group = os.environ.get("WANDB_GROUP")
 
     # Max length of 64 characters for WANDB run is 64 characters
     # we don't want to use the first 64 because the UID bit goes at the end. instead, grab the trailing -XXX
@@ -333,7 +340,9 @@ def default_train(
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project="marin",
+                name=wandb_name,
                 tags=[*tags],
+                group=wandb_group,
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,
