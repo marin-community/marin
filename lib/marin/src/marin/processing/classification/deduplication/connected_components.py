@@ -21,7 +21,6 @@ from collections.abc import Sequence
 
 from dupekit import hash_xxh3_128
 from fray.job import JobContext
-from marin.processing.classification.deduplication.minhash_lsh import MinHashLshOutputRecord
 from zephyr import Backend, Dataset
 from zephyr.expr import col
 
@@ -56,9 +55,9 @@ class CompMessage(CCMessage):
     component_id: str
 
 
-# TODO: what's the best way to model the input type? Probably don't need this if
-# we move stuff to rust anyway.
-CCInput = MinHashLshOutputRecord
+class CCInput(TypedDict):
+    bucket: str
+    id: Any
 
 
 def _internal_orderable_id(record_id: Any) -> str:
@@ -165,9 +164,7 @@ def _reduce_buckets(bucket: str, items: Iterator[CCInput]) -> BucketWithIds:
     }
 
 
-def _gen_links_within_buckets(
-    record: MinHashLshOutputRecord, *, preserve_singletons: bool
-) -> Iterator[tuple[RecordId, RecordId]]:
+def _gen_links_within_buckets(record: CCInput, *, preserve_singletons: bool) -> Iterator[tuple[RecordId, RecordId]]:
     ids = record.get("ids", [])
 
     norm_ids = [i["record_id_norm"] for i in ids]

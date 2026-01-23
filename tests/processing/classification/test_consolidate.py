@@ -14,8 +14,10 @@
 
 import gzip
 import json
+import os
 from pathlib import Path
 
+from marin.processing.classification.deduplication.dedup_commons import DedupMode, DedupConfig, deduplicate
 import pytest
 from ddsketch import DDSketch
 from marin.processing.classification.consolidate import (
@@ -25,6 +27,7 @@ from marin.processing.classification.consolidate import (
     calculate_percentile_thresholds,
     consolidate,
 )
+from zephyr.readers import load_parquet
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -132,13 +135,86 @@ def test_consolidate_filters_and_writes_output(tmp_path):
 
     consolidate(config)
 
-    output_file = output_root / "part-0000.jsonl.gz"
+    output_file = output_root / "part-0000.parquet"
     assert (
         output_file.exists()
     ), f"Expected consolidated output file to be written. Files in {output_root}: {list(output_root.iterdir())}"
 
-    with gzip.open(output_file, "rt", encoding="utf-8") as handle:
-        output_rows = [json.loads(line) for line in handle if line.strip()]
+    output_rows = load_parquet(output_file)
 
     kept_ids = {row["id"] for row in output_rows}
     assert kept_ids == {"doc-1", "doc-2"}, f"Expected to keep doc-1 and doc-2, but got {kept_ids}"
+
+
+def test_dedupe_consolidate_integration(fox_corpus):
+    """Integration test: dedupe generates attributes, consolidate filters based on them.
+
+    This test verifies that:
+    1. Dedupe outputs files with names matching input files (using rebase_file_path)
+    2. Consolidate can find and use those attribute files
+    3. The end-to-end workflow removes duplicate content
+    """
+    dedupe_output_dir = fox_corpus["output_dir"]
+    consolidated_dir = os.path.join(fox_corpus["output_dir"], "consolidation")
+
+    # Run deduplication to generate attributes using fixture's test data
+    dedupe_config = DedupConfig(
+        input_paths=fox_corpus["test_dir"],
+        output_path=dedupe_output_dir,
+        mode=DedupMode.EXACT_PARAGRAPH,
+        processes=1,
+    )
+
+    result = deduplicate(dedupe_config)
+    assert result["success"]
+    assert result["mode"] == DedupMode.EXACT_PARAGRAPH
+
+    # Verify dedupe output exists and has same structure as input
+    dedupe_output_files = list(Path(dedupe_output_dir).glob("data/*.jsonl.gz"))
+    assert len(dedupe_output_files) > 0
+
+    # Now run consolidate using the dedupe attributes
+    from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, FilterType, consolidate
+
+    consolidate_config = ConsolidateConfig(
+        input_path=fox_corpus["test_dir"],
+        output_path=consolidated_dir,
+        filters=[
+            FilterConfig(
+                type=FilterType.REMOVE_SPANS,
+                attribute_path=f"{dedupe_output_dir}/data",
+                name=DedupMode.EXACT_PARAGRAPH,
+            )
+        ],
+    )
+
+    consolidate(consolidate_config)
+
+    # Read consolidated output
+    consolidated_by_id = {row["id"]: row for row in load_parquet(consolidated_dir)}
+    assert len(consolidated_by_id) > 0
+
+    # Verify that duplicate spans have been removed
+    test_docs = fox_corpus["test"]
+    assert len(consolidated_by_id) == len(test_docs)
+
+    # test_gray_dup_1 is canonical (first occurrence), should be unchanged
+    original_dup_1 = next(d["text"] for d in test_docs if d["id"] == "test_gray_dup_1")
+    assert consolidated_by_id["test_gray_dup_1"]["text"] == original_dup_1
+
+    # test_gray_dup_2 and test_gray_dup_3 had all content marked as duplicate
+    # text should be empty or nearly empty
+    dup_2_text = consolidated_by_id["test_gray_dup_2"]["text"].strip()
+    dup_3_text = consolidated_by_id["test_gray_dup_3"]["text"].strip()
+    original_text = next(d["text"] for d in test_docs if d["id"] == "test_gray_dup_2")
+    assert (
+        len(dup_2_text) < len(original_text) / 2
+    ), f"Expected test_gray_dup_2 to have most content removed, but got: {dup_2_text}"
+    assert (
+        len(dup_3_text) < len(original_text) / 2
+    ), f"Expected test_gray_dup_3 to have most content removed, but got: {dup_3_text}"
+
+    # Unique documents should be unchanged
+    for doc_id in ["test_unique_1", "test_unique_2", "test_unique_3"]:
+        original = next(d["text"] for d in test_docs if d["id"] == doc_id)
+        assert consolidated_by_id[doc_id]["text"] == original
