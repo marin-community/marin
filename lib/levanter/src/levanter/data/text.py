@@ -470,7 +470,7 @@ class PreferenceChatLmDatasetFormat(LmDatasetFormatBase):
     chat_template_kwargs: str | None = "chat_template_kwargs"
     pack: bool = False
     mask_user_turns: bool = True
-    slice_strategy: Literal["left", "right", "raise"] = "raise"
+    slice_strategy: Literal["left", "right", "raise", "drop"] = "raise"
 
 
 @dataclass(frozen=True)
@@ -1555,7 +1555,7 @@ class PreferencePairDataset(
         Pos: Axis,
         *,
         max_segments_per_example: int = 1,
-        slice_strategy: Literal["left", "right", "raise"] = "raise",
+        slice_strategy: Literal["left", "right", "raise", "drop"] = "raise",
         mask_user_turns: bool = True,
     ):
         self.packed: GreedyPrepackedDataset[ProcessedPreferenceChatDict] = GreedyPrepackedDataset(

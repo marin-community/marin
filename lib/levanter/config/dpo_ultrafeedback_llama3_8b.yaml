@@ -2,14 +2,29 @@
 # Update the GCS paths to match your transformed preference dataset and desired cache location.
 # python infra/launch.py --zone us-central1-a --tpu_name debug --tpu_type v5p-8 -- python src/levanter/main/train_dpo.py --config_path config/dpo_ultrafeedback_llama3_8b.yaml
 data:
-  train_urls:
-    # Replace with the output path from transform_preference_dataset_step (train_prefs split).
-    - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/train_prefs/*.jsonl.gz
-  format:
-    type: preference_chat
-  tokenizer: stanford-crfm/marin-tokenizer
-  cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_marin_tokenizer-651338
+  tokenizer: marin-community/marin-tokenizer
   shuffle: true
+  permutation_type: feistel
+  configs:
+    ultrafeedback_train_prefs:
+      train_urls:
+        # Replace with the output path from transform_preference_dataset_step (train_prefs split).
+        - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/train_prefs/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_train_prefs_marin_tokenizer-7040eb
+    ultrafeedback_test_prefs:
+      validation_urls:
+        # Replace with the output path from transform_preference_dataset_step (test_prefs split).
+        - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/test_prefs/*.jsonl.gz
+      format:
+        type: preference_chat
+        slice_strategy: raise
+      cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_test_prefs_marin_tokenizer-29ecfb
+  train_weights:
+    ultrafeedback_train_prefs: 1.0
+    ultrafeedback_test_prefs: 0.0
 
 model:
   type: llama
@@ -34,31 +49,31 @@ trainer:
   per_device_eval_parallelism: 8
   tracker:
     type: wandb
-    project: "marin"
-    tags: ["dpo", "ultrafeedback", "llama3"]
+    project: "dpo"
+    tags: ["dpo", "ultrafeedback", "llama3", "simpo"]
   mp: p=f32,c=bfloat16
-  train_batch_size: 64
-  num_train_steps: 5000
-  steps_per_eval: 100
+  train_batch_size: 128
+  num_train_steps: 2150
+  steps_per_eval: 200
   model_averaging: null
   checkpointer:
-    save_interval: 1m
+    save_interval: 60m
     base_path: gs://marin-us-central1/checkpoints/dpo/ultrafeedback_llama3_8b
 
 optimizer:
-  learning_rate: 4e-5
+  learning_rate: 5e-7
   weight_decay: 0.0
   min_lr_ratio: 0.0
-  lr_schedule: "linear"
-  warmup: 0.03
+  lr_schedule: "cosine"
+  warmup: 0.1
 
-reference_model_path: meta-llama/Llama-3.1-8B
+reference_model_path: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
 reference_is_hf: true
-beta: 0.1
-validation_split_fraction: 0.0
+beta: 0.01
+validation_split_fraction: null
 
-initialize_from_hf: meta-llama/Llama-3.1-8B
+initialize_from_hf: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
 use_hf_model_config: false
 
-hf_save_steps: 2
+hf_save_steps: 1000
 hf_save_path: gs://marin-us-central1/checkpoints/dpo/ultrafeedback_llama3_8b/hf

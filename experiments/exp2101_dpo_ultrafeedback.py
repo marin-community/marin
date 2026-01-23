@@ -25,40 +25,70 @@ from experiments.posttrain.preference_datasets import get_preference_dataset
 from experiments.simple_dpo_config import SimpleDPOConfig
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
+from marin.processing.tokenize import lm_data_config
 
 DATASET_NAME = "HuggingFaceH4/ultrafeedback_binarized"
+LLAMA3_8B_HF_PATH = "gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main"
 
-preference_dataset = get_preference_dataset(DATASET_NAME, splits=["train_prefs"])
+preference_dataset = get_preference_dataset(DATASET_NAME, splits=["train_prefs", "test_prefs"])
 
-tokenized_preferences = default_tokenize(
-    name="ultrafeedback_binarized_marin_tokenizer",
-    dataset=preference_dataset / "**/*.jsonl.gz",
+tokenized_train_preferences = default_tokenize(
+    name="ultrafeedback_binarized_train_prefs_marin_tokenizer",
+    dataset=preference_dataset / "train_prefs/*.jsonl.gz",
     tokenizer=marin_tokenizer,
     format=PreferenceChatLmDatasetFormat(),
 )
 
+tokenized_test_preferences = default_tokenize(
+    name="ultrafeedback_binarized_test_prefs_marin_tokenizer",
+    dataset=preference_dataset / "test_prefs/*.jsonl.gz",
+    tokenizer=marin_tokenizer,
+    format=PreferenceChatLmDatasetFormat(),
+    is_validation=True,
+)
+
+tokenized_preferences = lm_data_config(
+    training_set=tokenized_train_preferences,
+    validation_sets={"ultrafeedback_test_prefs": tokenized_test_preferences},
+)
+
 dpo_config = SimpleDPOConfig(
     resources=ResourceConfig.with_tpu("v5p-8"),
-    train_batch_size=64,
-    num_train_steps=5000,
+    train_batch_size=128,
+    num_train_steps=2150,
     learning_rate=5e-7,
+    lr_schedule="cosine",
+    warmup=0.1,
+    wandb_project="dpo",
     tokenizer=marin_tokenizer,
-    model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
-    reference_model_path="meta-llama/Llama-3.1-8B-Instruct",
+    model_name_or_path=LLAMA3_8B_HF_PATH,
+    reference_model_path=LLAMA3_8B_HF_PATH,
+    reference_is_hf=True,
+    train_seq_len=4096,
     max_seq_len=4096,
-    beta=0.1,
-    validation_split_fraction=0.1,
+    beta=0.01,
+    validation_split_fraction=None,
+    steps_per_eval=200,
+    steps_per_checkpoint=1000,
+    steps_per_hf_export=1000,
     seed=0,
 )
 
 training_step = default_dpo(
-    name="llama3.1_8b_ultrafeedback_dpo",
+    name="dpo/ultrafeedback_llama3_8b",
     tokenized=tokenized_preferences,
     model_config=llama_8b,
     dpo_config=dpo_config,
-    tags=["llama", "dpo", "ultrafeedback"],
+    tags=["ultrafeedback", "llama3", "simpo"],
 )
 
 
 if __name__ == "__main__":
-    executor_main(steps=[preference_dataset, tokenized_preferences, training_step])
+    executor_main(
+        steps=[
+            preference_dataset,
+            tokenized_train_preferences,
+            tokenized_test_preferences,
+            training_step,
+        ]
+    )

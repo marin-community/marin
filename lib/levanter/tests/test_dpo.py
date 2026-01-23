@@ -14,6 +14,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import jmp
+import numpy as np
 import pytest
 from transformers import AutoTokenizer
 
@@ -73,6 +74,30 @@ def _namedarray_leaves(tree):
         for leaf in jax.tree_util.tree_leaves(tree, is_leaf=lambda x: isinstance(x, hax.NamedArray))
         if isinstance(leaf, hax.NamedArray)
     ]
+
+
+def _preference_exemplar() -> dict[str, np.ndarray]:
+    return {
+        "chosen_input_ids": np.zeros((0,), dtype=np.int32),
+        "chosen_assistant_masks": np.zeros((0,), dtype=np.int32),
+        "rejected_input_ids": np.zeros((0,), dtype=np.int32),
+        "rejected_assistant_masks": np.zeros((0,), dtype=np.int32),
+    }
+
+
+def _make_preference_row(chosen_ids: list[int], rejected_ids: list[int]) -> dict[str, np.ndarray]:
+    return {
+        "chosen_input_ids": np.array(chosen_ids, dtype=np.int32),
+        "chosen_assistant_masks": np.ones((len(chosen_ids),), dtype=np.int32),
+        "rejected_input_ids": np.array(rejected_ids, dtype=np.int32),
+        "rejected_assistant_masks": np.ones((len(rejected_ids),), dtype=np.int32),
+    }
+
+
+def _write_preference_cache(tmpdir: str, rows: list[dict[str, np.ndarray]]):
+    with SerialCacheWriter(tmpdir, _preference_exemplar()) as writer:
+        writer.write_batch(rows)
+    return writer.result()
 
 
 def _build_policy_reference(config: Gpt2Config):
@@ -264,6 +289,60 @@ def test_preference_pair_dataset_builds_example(tokenizer_path: Path):
         assert example.rejected.tokens.axes == (Pos,)
         assert example.chosen.loss_weight.array.sum() > 0
         assert example.rejected.loss_weight.array.sum() > 0
+
+
+def _preference_rows_for_slicing():
+    return [
+        _make_preference_row([1, 2], [6]),
+        _make_preference_row([10, 11, 12, 13, 14], [20, 21, 22, 23, 24]),
+        _make_preference_row([3, 4, 5], [7, 8, 9]),
+    ]
+
+
+def test_preference_pair_dataset_slice_strategy_raise():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cache = _write_preference_cache(tmpdir, _preference_rows_for_slicing())
+        Pos = hax.Axis("position", 4)
+        with pytest.raises(ValueError, match="exceeds"):
+            PreferencePairDataset(cache, Pos, max_segments_per_example=1, slice_strategy="raise")
+
+
+def test_preference_pair_dataset_slice_strategy_drop():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cache = _write_preference_cache(tmpdir, _preference_rows_for_slicing())
+        Pos = hax.Axis("position", 4)
+        dataset = PreferencePairDataset(cache, Pos, max_segments_per_example=1, slice_strategy="drop")
+        examples = dataset.as_sync_dataset()
+
+        assert len(examples) == 2
+        first = np.array(examples[0].chosen.tokens.array).tolist()
+        second = np.array(examples[1].chosen.tokens.array).tolist()
+        assert first == [1, 2, 0, 0]
+        assert second == [3, 4, 5, 0]
+
+
+@pytest.mark.parametrize(
+    ("slice_strategy", "expected_middle"),
+    [
+        ("left", [10, 11, 12, 13]),
+        ("right", [11, 12, 13, 14]),
+    ],
+)
+def test_preference_pair_dataset_slice_strategy_truncation(slice_strategy: str, expected_middle: list[int]):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cache = _write_preference_cache(tmpdir, _preference_rows_for_slicing())
+        Pos = hax.Axis("position", 4)
+        dataset = PreferencePairDataset(cache, Pos, max_segments_per_example=1, slice_strategy=slice_strategy)
+        examples = dataset.as_sync_dataset()
+
+        assert len(examples) == 3
+        first = np.array(examples[0].chosen.tokens.array).tolist()
+        middle = np.array(examples[1].chosen.tokens.array).tolist()
+        last = np.array(examples[2].chosen.tokens.array).tolist()
+
+        assert first == [1, 2, 0, 0]
+        assert middle == expected_middle
+        assert last == [3, 4, 5, 0]
 
 
 def test_apply_updates_handles_none_updates_for_namedarrays():

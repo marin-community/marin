@@ -29,6 +29,7 @@ class SimpleDPOConfig:
     train_batch_size: int | IntSchedule = 128
     num_train_steps: int = 10000
     learning_rate: float = 1e-6
+    wandb_project: str | None = None
 
     tokenizer: str | None = None
     model_name_or_path: str | None = None

@@ -551,6 +551,7 @@ def default_dpo(
         raise ValueError("initialize_from_hf is False but initialize_from_checkpoint_path is not set")
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation=False)
+    pretraining_data = dataclasses.replace(pretraining_data, permutation_type="feistel")
     vocab_size = _get_vocab_size(pretraining_data)
 
     if len(name) > 64:
@@ -590,7 +591,7 @@ def default_dpo(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                project="marin",
+                project=dpo_config.wandb_project or "marin",
                 tags=[*tags],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
