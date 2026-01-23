@@ -158,8 +158,7 @@ def _build_validation_split_single(
 
     perm_type = config.permutation_type
     if perm_type is None:
-        logger.warning("Defaulting to linear permutation for shuffling. This will change to Feistel in the future.")
-        perm_type = "linear"
+        perm_type = "feistel"
 
     train_dataset = train_base
     if config.shuffle is True:
