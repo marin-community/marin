@@ -300,8 +300,7 @@ class DashboardProxy:
                 escaped_details = html_escape(entry.details) if entry.details else ""
                 details_str = f": {escaped_details}" if entry.details else ""
                 log_line = (
-                    f'<div class="log-line">{timestamp} [{escaped_cluster}] '
-                    f"{escaped_message}{details_str}</div>"
+                    f'<div class="log-line">{timestamp} [{escaped_cluster}] ' f"{escaped_message}{details_str}</div>"
                 )
                 html_parts.append(log_line)
             return "".join(html_parts)
