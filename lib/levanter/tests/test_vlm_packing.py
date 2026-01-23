@@ -210,11 +210,15 @@ def test_vlm_prepacked_dataset_loss_consistency():
     ]
     mock_dataset = MockAsyncDataset(samples_for_packing)
 
+    # Compute max_patches from actual data: need enough space for all pixel_values (including padding)
+    # because _assemble_pack concatenates ALL patches before truncating
+    total_patches = sum(pair.lev.pixel_values.shape[0] for pair in test_pairs)
+
     config = VLMPackerConfig(
         max_length=MAX_LENGTH,
-        max_patches=num_samples,  # 1 patch per sample
+        max_patches=total_patches,  # Total patches from all samples (including padding)
         max_segments=num_samples,
-        features_per_patch=576,
+        features_per_patch=729,  # 27*27 for llava-onevision (384/14 ≈ 27)
     )
 
     packed_dataset = VLMPrepackedDataset(
@@ -277,6 +281,11 @@ def test_vlm_prepacked_dataset_loss_consistency():
         loss_mask = hax.named(jnp.array(packed['loss_mask']).reshape(1, -1), (Batch, Position))
         segment_ids_jax = hax.named(jnp.array(packed['segment_ids']).reshape(1, -1), (Batch, Position))
         position_ids = hax.named(jnp.array(packed['position_ids']).reshape(1, -1), (Batch, Position))
+        image_segment_ids_jax = hax.named(jnp.array(packed['image_segment_ids']).reshape(1, -1), (Batch, GridMask))
+
+        # Use combined_mask from packed data (computed by data pipeline)
+        # This is required for the model to use precomputed position_ids
+        combined_mask = hax.named(jnp.array(packed['combined_mask']).reshape(1, -1), (Batch, Position))
 
         from levanter.data.image import ImageTextExample as ImgTextEx
 
@@ -286,25 +295,32 @@ def test_vlm_prepacked_dataset_loss_consistency():
             loss_mask=loss_mask,
             grid_mask=grid_mask,
             unpad_indices=None,
-            combined_mask=None,
+            combined_mask=combined_mask,  # Pass combined_mask to enable precomputed position_ids
             position_ids=position_ids,
         )
 
         # Compute per-token loss
+        # NOTE: segment_ids and image_segment_ids are needed for packing mode
+        # to correctly map image tokens to per-segment image features
         @eqx.filter_jit
-        def compute_per_token_loss(model, example):
+        def compute_per_token_loss(model, example, segment_ids, image_segment_ids):
             from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 
             grid_mask = getattr(example, "grid_mask", None)
             position_ids = getattr(example, "position_ids", None)
+            combined_mask = getattr(example, "combined_mask", None)
 
+            # Packing mode: pass segment_ids for attention masking and image_segment_ids for image indexing
+            # IMPORTANT: combined_mask must be provided along with position_ids to use precomputed values
             activations, lm_head = model.forward_with_activations(
                 example.input_ids,
                 pixel_values=example.pixel_values,
                 grid_mask=grid_mask,
                 unpad_indices=None,
-                combined_mask=None,
+                combined_mask=combined_mask,  # Pass combined_mask to use precomputed position_ids
                 position_ids=position_ids,
+                segment_ids=segment_ids,
+                image_segment_ids=image_segment_ids,
                 key=None,
             )
 
@@ -328,17 +344,21 @@ def test_vlm_prepacked_dataset_loss_consistency():
 
             return per_token_loss
 
-        per_token_loss = compute_per_token_loss(lev_model, batch_example)
+        per_token_loss = compute_per_token_loss(lev_model, batch_example, segment_ids_jax, image_segment_ids_jax)
         per_token_loss_np = np.array(per_token_loss.array)[0]  # (seq_len,)
 
         # Compute per-segment loss
+        # HF convention: labels[i+1] controls whether loss at position i is included
+        # (shift_labels[i] = labels[i+1], ignore if == -100)
+        # So we use shifted_loss_mask: include position i if loss_mask[i+1] > 0
         segment_ids_np = packed['segment_ids']
         loss_mask_np = packed['loss_mask']
         shifted_loss_mask = np.roll(loss_mask_np, -1)
-        shifted_loss_mask[-1] = 0
+        shifted_loss_mask[-1] = 0  # Last position has no valid target
 
         lev_segment_losses = []
         for seg_id in range(num_samples):
+            # Include position i if: in this segment AND loss_mask[i+1] > 0
             seg_mask = (segment_ids_np == seg_id) & (shifted_loss_mask > 0)
             if seg_mask.sum() > 0:
                 seg_loss = per_token_loss_np[seg_mask].mean()
@@ -359,10 +379,11 @@ def test_vlm_prepacked_dataset_loss_consistency():
             diff = abs(hf_loss - lev_loss)
             rel_diff = diff / hf_loss if hf_loss != 0 else diff
 
-            status = "PASS" if rel_diff < 0.01 else "FAIL"
-            print(f"  Sample {i}: HF={hf_loss:.6f}, Lev={lev_loss:.6f}, rel_diff={rel_diff*100:.2f}% [{status}]")
+            # Strict threshold: 0.02% to ensure numerical consistency
+            status = "PASS" if rel_diff < 0.0002 else "FAIL"
+            print(f"  Sample {i}: HF={hf_loss:.6f}, Lev={lev_loss:.6f}, rel_diff={rel_diff*100:.4f}% [{status}]")
 
-            if rel_diff >= 0.01:
+            if rel_diff >= 0.0002:
                 all_passed = False
 
         assert all_passed, "Per-segment losses do not match HF golden losses!"
@@ -408,11 +429,14 @@ def test_position_ids_reset_with_real_data():
     ]
     mock_dataset = MockAsyncDataset(samples)
 
+    # Compute max_patches from actual data
+    total_patches = sum(pair.lev.pixel_values.shape[0] for pair in test_pairs)
+
     config = VLMPackerConfig(
         max_length=MAX_LENGTH,
-        max_patches=num_samples,
+        max_patches=total_patches,
         max_segments=num_samples,
-        features_per_patch=576,
+        features_per_patch=729,  # 27*27 for llava-onevision (384/14 ≈ 27)
     )
 
     packed_dataset = VLMPrepackedDataset(
@@ -481,7 +505,7 @@ def test_pack_assignment_from_parquet():
             max_length=2048,
             max_patches=10,
             max_segments=64,
-            features_per_patch=576,
+            features_per_patch=729,  # 27*27 for llava-onevision (384/14 ≈ 27)
             image_column="images",
             text_column="messages",
         )
@@ -565,11 +589,14 @@ def test_loss_mask_per_segment_with_real_data():
     ]
     mock_dataset = MockAsyncDataset(samples)
 
+    # Compute max_patches from actual data
+    total_patches = sum(pair.lev.pixel_values.shape[0] for pair in test_pairs)
+
     config = VLMPackerConfig(
         max_length=MAX_LENGTH,
-        max_patches=num_samples,
+        max_patches=total_patches,
         max_segments=num_samples,
-        features_per_patch=576,
+        features_per_patch=729,  # 27*27 for llava-onevision (384/14 ≈ 27)
     )
 
     packed_dataset = VLMPrepackedDataset(

@@ -726,10 +726,13 @@ def get_download_first_checkpoint_path(output_path: str, local_checkpoint_dir: O
 
 
 def load_download_first_checkpoint(
-    checkpoint_path: str
+    checkpoint_path: str,
+    gcs_checkpoint_path: Optional[str] = None,
+    fs=None
 ) -> Tuple[List[List[str]], List[int], int, int, Counter, int, int]:
     """
     Load checkpoint for download-first mode from LOCAL filesystem.
+    Falls back to GCS if local checkpoint doesn't exist.
 
     Returns:
         batches: Pre-computed batches (list of file lists) to maintain same batching on resume
@@ -750,6 +753,18 @@ def load_download_first_checkpoint(
 
     try:
         path = Path(checkpoint_path)
+
+        # If local checkpoint doesn't exist, try to download from GCS
+        if not path.exists() and gcs_checkpoint_path and fs is not None:
+            try:
+                if fs.exists(gcs_checkpoint_path):
+                    print(f"Local checkpoint not found, downloading from GCS: {gcs_checkpoint_path}")
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    fs.get(gcs_checkpoint_path, str(path))
+                    print(f"  Downloaded checkpoint to: {checkpoint_path}")
+            except Exception as e:
+                print(f"Warning: Could not download checkpoint from GCS: {e}")
+
         if path.exists():
             with gzip.open(path, 'rt', encoding='utf-8') as gz:
                 data = json.load(gz)
@@ -962,9 +977,11 @@ def process_dataset_download_first(
     total_processed = 0
     total_written = 0
 
-    # Load checkpoint if resuming (always from local filesystem)
+    # Load checkpoint if resuming (try local first, then GCS)
     if resume:
         print(f"Checking for checkpoint at: {checkpoint_path}")
+        if gcs_checkpoint_path:
+            print(f"  Will also check GCS at: {gcs_checkpoint_path}")
         (
             checkpoint_batches,
             checkpoint_batch_sizes,
@@ -973,7 +990,11 @@ def process_dataset_download_first(
             source_counts,
             total_processed,
             total_written
-        ) = load_download_first_checkpoint(checkpoint_path)
+        ) = load_download_first_checkpoint(
+            checkpoint_path,
+            gcs_checkpoint_path=gcs_checkpoint_path,
+            fs=fs
+        )
 
         if checkpoint_batches:
             batches = checkpoint_batches

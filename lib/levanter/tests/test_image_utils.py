@@ -355,6 +355,7 @@ def prepare_test_data(
     vision_feature_height: int = 27,
     add_generation_prompt: bool = False,
     disable_anyres: bool = False,
+    max_images_per_sample: int = 5,
 ) -> list[TestDataPair]:
     """
     Prepare test data pairs for HF vs Levanter comparison.
@@ -378,6 +379,9 @@ def prepare_test_data(
         add_generation_prompt: Whether to add generation prompt (default False)
         disable_anyres: If True, disable anyres processing and use single resolution only.
                         This uses only the base patch (1 patch total) instead of tiling.
+        max_images_per_sample: Maximum number of images per sample (used in disable_anyres mode).
+                               Default 5 to support interleaved multi-image data.
+                               Set to 1 for single-image samples to minimize padding.
 
     Returns:
         List of TestDataPair, one per sample index
@@ -413,6 +417,7 @@ def prepare_test_data(
         vision_feature_height=vision_feature_height,
         add_generation_prompt=add_generation_prompt,
         disable_anyres=disable_anyres,
+        max_images_per_sample=max_images_per_sample,
     )
 
     results = []
@@ -504,6 +509,7 @@ def prepare_test_data_single(
     vision_feature_height: int = 27,
     add_generation_prompt: bool = False,
     disable_anyres: bool = False,
+    max_images_per_sample: int = 5,
 ) -> TestDataPair:
     """
     Prepare a single test data pair from messages and images directly.
@@ -522,6 +528,9 @@ def prepare_test_data_single(
         add_generation_prompt: Whether to add generation prompt (default False)
         disable_anyres: If True, disable anyres processing and use single resolution only.
                         This uses only the base patch (1 patch total) instead of tiling.
+        max_images_per_sample: Maximum number of images per sample (used in disable_anyres mode).
+                               Default 5 to support interleaved multi-image data.
+                               Set to 1 for single-image samples to minimize padding.
 
     Returns:
         TestDataPair with both HF and Levanter formats
@@ -549,6 +558,7 @@ def prepare_test_data_single(
         vision_feature_height=vision_feature_height,
         add_generation_prompt=add_generation_prompt,
         disable_anyres=disable_anyres,
+        max_images_per_sample=max_images_per_sample,
     )
 
     # --- HF Processing (NO padding - HF model uses dynamic shapes) ---
@@ -1048,6 +1058,7 @@ def prepare_batched_test_data(
     vision_feature_height: int = 27,
     add_generation_prompt: bool = False,
     disable_anyres: bool = False,
+    max_images_per_sample: int = 5,
     mesh: Optional[Any] = None,
     axis_resources: Optional[dict] = None,
 ) -> tuple[list[TestDataPair], "ImageTextExample"]:
@@ -1067,6 +1078,8 @@ def prepare_batched_test_data(
         vision_feature_height: Vision encoder output tokens per spatial dim
         add_generation_prompt: Whether to add generation prompt
         disable_anyres: If True, disable anyres processing
+        max_images_per_sample: Maximum number of images per sample (used in disable_anyres mode).
+                               Default 5 to support interleaved multi-image data.
         mesh: JAX mesh for sharding. If None, creates a simple CPU mesh.
         axis_resources: Axis resource mapping. If None, uses {"batch": "data"}.
 
@@ -1093,6 +1106,7 @@ def prepare_batched_test_data(
         vision_feature_height=vision_feature_height,
         add_generation_prompt=add_generation_prompt,
         disable_anyres=disable_anyres,
+        max_images_per_sample=max_images_per_sample,
     )
 
     # Determine max sequence length for Pos axis

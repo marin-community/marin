@@ -17,7 +17,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-tpu = ["marin[tpu]", "levanter[tpu]"]
 gpu = ["marin[gpu]", "levanter[gpu]"]
 cpu = ["marin[cpu]"]
 

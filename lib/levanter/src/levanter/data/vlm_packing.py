@@ -62,6 +62,7 @@ class PackedImageTextDict(TypedDict, total=False):
 
     # Optional fields from original ImageTextDict (carried through for compatibility)
     attention_mask: np.ndarray  # (max_length,) - 1 for valid, 0 for pad
+    combined_mask: np.ndarray  # (max_length,) int32 - validity mask for position ID computation
 
 
 @dataclass
@@ -483,6 +484,11 @@ class VLMPrepackedDataset(AsyncDataset):
         # 5. Attention mask (1 for valid tokens, 0 for padding)
         attention_mask = (segment_ids >= 0).astype(np.int32)
 
+        # 6. Combined mask for position ID computation
+        # For packed data, combined_mask is the same as attention_mask (valid tokens vs padding)
+        # This is required for the model to use precomputed position_ids
+        combined_mask = attention_mask.copy()
+
         return PackedImageTextDict(
             input_ids=input_ids,
             pixel_values=pixel_values,
@@ -491,6 +497,7 @@ class VLMPrepackedDataset(AsyncDataset):
             image_segment_ids=image_segment_ids,
             position_ids=position_ids,
             attention_mask=attention_mask,
+            combined_mask=combined_mask,
             num_segments=len(samples),
         )
 
@@ -1179,6 +1186,11 @@ class PackedVLMDataset(AsyncDataset):
         # Attention mask
         attention_mask = (segment_ids >= 0).astype(np.int32)
 
+        # Combined mask for position ID computation
+        # For packed data, combined_mask is the same as attention_mask (valid tokens vs padding)
+        # This is required for the model to use precomputed position_ids
+        combined_mask = attention_mask.copy()
+
         return PackedImageTextDict(
             input_ids=input_ids,
             pixel_values=pixel_values,
@@ -1187,6 +1199,7 @@ class PackedVLMDataset(AsyncDataset):
             image_segment_ids=image_segment_ids,
             position_ids=position_ids,
             attention_mask=attention_mask,
+            combined_mask=combined_mask,
             num_segments=len(samples),
         )
 

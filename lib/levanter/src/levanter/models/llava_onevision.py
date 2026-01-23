@@ -523,17 +523,15 @@ class LlavaOnevisionModel(eqx.Module):
         # For each patch, compute its cumulative index in the flattened features
         # patch_feature_starts[b, p] = starting index of features for patch p
 
-        # First, create a mask for valid patches (segment_id >= 0)
-        valid_patch_mask = (image_segment_ids >= 0).astype(jnp.int32)
-
-        # Compute cumulative feature count up to each patch
-        # Each valid patch contributes features_per_patch features
-        cumulative_features = jnp.cumsum(valid_patch_mask * features_per_patch, axis=-1)
-        # patch_feature_starts[p] = cumulative_features[p-1] or 0 for p=0
-        patch_feature_starts = jnp.concatenate([
-            jnp.zeros((batch_size, 1), dtype=jnp.int32),
-            cumulative_features[:, :-1]
-        ], axis=-1)
+        # Compute starting feature index for each patch
+        # IMPORTANT: The feature array includes ALL patches (including padding),
+        # so patch p's features start at p * features_per_patch, regardless of validity
+        # patch_feature_starts[p] = p * features_per_patch
+        patch_indices = jnp.arange(max_patches)
+        patch_feature_starts = jnp.broadcast_to(
+            patch_indices * features_per_patch,
+            (batch_size, max_patches)
+        )
 
         # For each segment, find the starting feature index
         # We need to map: segment_id -> first patch index for that segment
@@ -571,21 +569,41 @@ class LlavaOnevisionModel(eqx.Module):
 
             # Vectorized approach: find first occurrence of each segment
             # For segment s: find min patch index p where img_seg_ids[p] == s
-            def update_segment_start(segment_starts, patch_idx):
-                seg_id = img_seg_ids[patch_idx]
-                valid = seg_id >= 0
-                # If this segment hasn't been seen yet (current value is 0 and we're not at start)
-                # or if this patch comes earlier, update
-                current = segment_starts[seg_id]
-                feature_start = patch_starts[patch_idx]
-                # Only update if valid and this is the first occurrence
-                # We detect first occurrence by checking if all previous patches have different seg_id
-                is_first = jnp.sum((img_seg_ids[:patch_idx] == seg_id).astype(jnp.int32)) == 0
-                should_update = valid & is_first
-                new_value = jnp.where(should_update, feature_start, current)
-                return segment_starts.at[seg_id].set(new_value), None
+            # Simpler approach: for each segment, find its first patch and get the feature start
+            # We can do this by computing the minimum patch index for each segment
+            # Then look up the feature start for that patch index
 
-            segment_starts, _ = jax.lax.scan(update_segment_start, segment_starts, jnp.arange(max_patches))
+            # For each segment s (0 to max_seg), find first patch p where img_seg_ids[p] == s
+            # patch_starts[p] gives the starting feature index for that segment
+
+            # Approach: scatter-reduce to find minimum patch index per segment
+            # Initialize with a large value, then take min for each segment
+            large_val = max_patches + 1
+            first_patch_per_seg = jnp.full((64,), large_val, dtype=jnp.int32)
+
+            def update_first_patch(first_patches, patch_data):
+                patch_idx, seg_id = patch_data
+                valid = seg_id >= 0
+                safe_seg_id = jnp.where(valid, seg_id, 0)
+                # Update if this patch index is smaller than current (first occurrence wins)
+                current = first_patches[safe_seg_id]
+                should_update = valid & (patch_idx < current)
+                new_val = jnp.where(should_update, patch_idx, current)
+                # Use scatter to update (works with JIT)
+                first_patches = first_patches.at[safe_seg_id].min(jnp.where(valid, patch_idx, large_val))
+                return first_patches, None
+
+            scan_inputs = (jnp.arange(max_patches), img_seg_ids)
+            first_patch_per_seg, _ = jax.lax.scan(update_first_patch, first_patch_per_seg, scan_inputs)
+
+            # Now look up feature starts for each segment's first patch
+            # Clamp to valid range for lookup
+            first_patch_clamped = jnp.clip(first_patch_per_seg, 0, max_patches - 1)
+            segment_starts = jnp.where(
+                first_patch_per_seg < large_val,
+                patch_starts[first_patch_clamped],
+                0  # Default for segments with no patches
+            )
             return segment_starts
 
         # Compute segment starts for each batch element
@@ -610,13 +628,17 @@ class LlavaOnevisionModel(eqx.Module):
                 seg_counts, prev_seg = carry
                 pos_idx, is_placeholder, seg_id = x
 
+                # Use safe indexing to avoid negative index issues (seg_id=-1 for padding)
+                safe_seg_id = jnp.clip(seg_id, 0, 63)
+
                 # Get current count for this segment
-                current_count = seg_counts[seg_id]
+                current_count = seg_counts[safe_seg_id]
 
                 # Update count if this is a placeholder with valid segment
                 valid = is_placeholder & (seg_id >= 0)
                 new_count = jnp.where(valid, current_count + 1, current_count)
-                seg_counts = seg_counts.at[seg_id].set(new_count)
+                # Only update if valid to avoid corrupting other segments
+                seg_counts = jnp.where(valid, seg_counts.at[safe_seg_id].set(new_count), seg_counts)
 
                 # The index for this position is current_count (before increment)
                 local_idx = jnp.where(valid, current_count, 0)
@@ -636,18 +658,17 @@ class LlavaOnevisionModel(eqx.Module):
                 inputs,
             )
 
-            # Compute global indices: seg_start + local_idx * features_per_patch
-            # But we need to handle the case where each placeholder expands to features_per_patch
-            # Actually, local_indices counts placeholders, each gets features_per_patch tokens
-            # The i-th placeholder in a segment gets features [i*features_per_patch : (i+1)*features_per_patch]
-            # We gather the first feature of each patch, so index = i * features_per_patch
+            # Compute global indices: seg_start + local_idx
+            # local_indices counts placeholder tokens (not patches) before this position in the same segment
+            # seg_start_per_pos is already in feature/token units (patch_idx * features_per_patch)
+            # So the formula is simply: seg_start + local_idx
 
             # Get segment start for each position
             seg_start_per_pos = seg_starts[jnp.clip(seg_ids, 0, 63)]
 
-            # Compute final index: segment_start + local_index * features_per_patch
-            # local_indices is the count of placeholders before this one in the same segment
-            global_indices = seg_start_per_pos + local_indices * features_per_patch
+            # Compute final index: segment_start + local_index
+            # Each placeholder token maps to exactly one image feature
+            global_indices = seg_start_per_pos + local_indices
 
             # Ensure indices are within bounds
             global_indices = jnp.clip(global_indices, 0, total_image_tokens - 1)

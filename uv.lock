@@ -2277,7 +2277,7 @@ dependencies = [
     { name = "gcsfs" },
     { name = "haliax" },
     { name = "humanfriendly" },
-    { name = "jax" },
+    { name = "jax", extra = ["tpu"] },
     { name = "jaxtyping" },
     { name = "jinja2" },
     { name = "jmp" },
@@ -2382,8 +2382,8 @@ requires-dist = [
     { name = "google-cloud-storage-transfer", marker = "extra == 'gcp'" },
     { name = "haliax", editable = "lib/haliax" },
     { name = "humanfriendly", specifier = "==10.0" },
-    { name = "jax", specifier = ">=0.8.0" },
     { name = "jax", extras = ["cuda12"], marker = "extra == 'gpu'", specifier = ">=0.8.0" },
+    { name = "jax", extras = ["tpu"], specifier = ">=0.8.0" },
     { name = "jax", extras = ["tpu"], marker = "extra == 'tpu'", specifier = ">=0.8.0" },
     { name = "jaxtyping", specifier = ">=0.2.34" },
     { name = "jinja2" },
@@ -2680,7 +2680,7 @@ dependencies = [
     { name = "google-cloud-storage" },
     { name = "google-cloud-storage-transfer" },
     { name = "haliax" },
-    { name = "jax" },
+    { name = "jax", extra = ["tpu"] },
     { name = "levanter", extra = ["serve"] },
     { name = "lm-eval" },
     { name = "lxml", extra = ["html-clean"] },
@@ -2821,9 +2821,9 @@ requires-dist = [
     { name = "google-cloud-storage" },
     { name = "google-cloud-storage-transfer" },
     { name = "haliax", editable = "lib/haliax" },
-    { name = "jax", specifier = "==0.8.0" },
     { name = "jax", marker = "extra == 'cpu'", specifier = "==0.8.0" },
     { name = "jax", extras = ["cuda12"], marker = "extra == 'gpu'", specifier = "==0.8.0" },
+    { name = "jax", extras = ["tpu"], specifier = "==0.8.0" },
     { name = "jax", extras = ["tpu"], marker = "extra == 'tpu'", specifier = "==0.8.0" },
     { name = "levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "lm-eval", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
@@ -2950,10 +2950,6 @@ gpu = [
     { name = "levanter", extra = ["gpu"], marker = "(extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu') or (extra != 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu')" },
     { name = "marin", extra = ["gpu"], marker = "extra == 'extra-5-marin-gpu' or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
 ]
-tpu = [
-    { name = "levanter", extra = ["tpu"], marker = "(extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-gpu' and extra == 'extra-8-levanter-tpu')" },
-    { name = "marin", extra = ["tpu"], marker = "(extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
-]
 
 [package.metadata]
 requires-dist = [
@@ -2961,14 +2957,12 @@ requires-dist = [
     { name = "haliax", editable = "lib/haliax" },
     { name = "levanter", editable = "lib/levanter" },
     { name = "levanter", extras = ["gpu"], marker = "extra == 'gpu'", editable = "lib/levanter" },
-    { name = "levanter", extras = ["tpu"], marker = "extra == 'tpu'", editable = "lib/levanter" },
     { name = "marin", editable = "lib/marin" },
     { name = "marin", extras = ["cpu"], marker = "extra == 'cpu'", editable = "lib/marin" },
     { name = "marin", extras = ["gpu"], marker = "extra == 'gpu'", editable = "lib/marin" },
-    { name = "marin", extras = ["tpu"], marker = "extra == 'tpu'", editable = "lib/marin" },
     { name = "zephyr", editable = "lib/zephyr" },
 ]
-provides-extras = ["tpu", "gpu", "cpu"]
+provides-extras = ["gpu", "cpu"]
 
 [[package]]
 name = "markdown"
