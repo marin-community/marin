@@ -273,7 +273,7 @@ class Marin2025Recipe:
 
     def _compute_beta2(self, batch_size: int) -> float:
         """Compute beta2 from batch size."""
-        return self.beta2_base ** (batch_size / self.beta2_batch_divisor)
+        return max(0.95, self.beta2_base ** (batch_size / self.beta2_batch_divisor))
 
     def compute_num_layers(self, hidden_size: int) -> int:
         """Compute number of layers from hidden size using the depth-width formula."""
