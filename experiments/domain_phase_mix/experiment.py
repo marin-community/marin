@@ -268,6 +268,7 @@ class MixtureExperiment:
         self,
         weight_config: WeightConfig,
         name_prefix: str | None = None,
+        run_name: str | None = None,
         **train_kwargs,
     ) -> ExecutorStep:
         """Create a training step for a single weight configuration.
@@ -275,23 +276,27 @@ class MixtureExperiment:
         Args:
             weight_config: Weight configuration for all phases.
             name_prefix: Prefix for the run name. Defaults to experiment name.
+            run_name: Custom run name (without prefix). Defaults to "run_{run_id:05d}".
             **train_kwargs: Additional training configuration overrides.
 
         Returns:
             ExecutorStep for the training run.
         """
         prefix = name_prefix or self.name
+        run_name = run_name or f"run_{weight_config.run_id:05d}"
+        full_name = f"{prefix}/{run_name}"
+
         mixture_config = self.create_mixture_config(weight_config)
         train_config = self.create_train_config(weight_config.run_id, **train_kwargs)
 
         if self.target_budget is not None:
             return simulated_epoching_train(
-                name=f"{prefix}/run_{weight_config.run_id:05d}",
+                name=full_name,
                 tokenized=mixture_config,
                 model_config=self.model_config,
                 train_config=train_config,
                 target_budget=self.target_budget,
-                tags=[self.name, f"run_{weight_config.run_id:05d}"],
+                tags=[self.name, run_name],
                 use_default_validation=True,
                 eval_harness_tasks=self.eval_harness_tasks,
             )
@@ -299,11 +304,11 @@ class MixtureExperiment:
             from experiments.defaults import default_train
 
             return default_train(
-                name=f"{prefix}/run_{weight_config.run_id:05d}",
+                name=full_name,
                 tokenized=mixture_config,
                 model_config=self.model_config,
                 train_config=train_config,
-                tags=[self.name, f"run_{weight_config.run_id:05d}"],
+                tags=[self.name, run_name],
                 use_default_validation=True,
                 eval_harness_tasks=self.eval_harness_tasks,
             )

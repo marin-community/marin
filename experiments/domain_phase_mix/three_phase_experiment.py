@@ -21,8 +21,11 @@ This experiment creates ~100 proxy model training runs with:
 - Three data domains: pretrain (Nemotron), midtrain (full Dolmino), SFT
 
 Usage:
-    # Run training
+    # Run training with random weight sampling
     python -m experiments.domain_phase_mix.three_phase_experiment [--n_runs N] [--seed SEED]
+
+    # Run predefined baseline runs
+    python -m experiments.domain_phase_mix.three_phase_experiment --baseline_runs
 
     # Run analysis (after training completes)
     python -m experiments.domain_phase_mix.three_phase_experiment --analyze
@@ -36,7 +39,7 @@ from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.domain_phase_mix.analysis import create_analysis_step
 from marin.execution.executor import executor_main
 
-from experiments.domain_phase_mix.config import PhaseSchedule
+from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig
 from experiments.domain_phase_mix.domains import get_three_partition_domains
 from experiments.domain_phase_mix.experiment import MixtureExperiment
 
@@ -62,6 +65,25 @@ SEQ_LEN = 2048
 
 # Phase boundaries (fractions of total training)
 PHASE_BOUNDARIES = [0.33, 0.67]  # Creates 3 phases: [0, 0.33), [0.33, 0.67), [0.67, 1.0]
+
+# Domain names (must match names from get_three_partition_domains())
+DOMAIN_NAMES = ["nemotron_full", "dolmino", "openthoughts_sft"]
+
+# ============================================================================
+# BASELINE CONFIGURATIONS
+# ============================================================================
+
+# Predefined baseline configurations for baseline runs
+# Each entry is a tuple of phase weights: [[phase_0_weights], [phase_1_weights], [phase_2_weights]]
+# Weights correspond to domains in order: [nemotron_full, dolmino, openthoughts_sft]
+BASELINES: list[tuple[list[float], list[float], list[float]]] = [
+    # Pure domain transitions: nemotron -> dolmino -> openthoughts_sft
+    ([1, 0, 0], [0, 1, 0], [0, 0, 1]),
+    # Nemotron -> dolmino -> half nemotron + half sft
+    ([1, 0, 0], [0, 1, 0], [0.5, 0, 0.5]),
+    # Nemotron -> dolmino -> balanced final phase
+    ([1, 0, 0], [0, 1, 0], [0.25, 0.25, 0.5]),
+]
 
 
 # ============================================================================
@@ -121,11 +143,83 @@ def create_three_phase_experiment(
 # ============================================================================
 
 
+def create_baseline_weight_configs(
+    baselines: list[tuple[list[float], list[float], list[float]]] = BASELINES,
+    phase_names: list[str] | None = None,
+    domain_names: list[str] | None = None,
+) -> list[WeightConfig]:
+    """Create WeightConfig objects from predefined baseline weights.
+
+    Args:
+        baselines: List of baseline configurations. Each is a tuple of 3 lists,
+            one per phase, with weights for each domain.
+        phase_names: Names of phases. Defaults to ["phase_0", "phase_1", "phase_2"].
+        domain_names: Names of domains. Defaults to DOMAIN_NAMES.
+
+    Returns:
+        List of WeightConfig objects with unique run_ids starting from 90000.
+    """
+    phase_names = phase_names or ["phase_0", "phase_1", "phase_2"]
+    domain_names = domain_names or DOMAIN_NAMES
+
+    configs = []
+    for i, (phase0, phase1, phase2) in enumerate(baselines):
+        phase_weights = {
+            phase_names[0]: dict(zip(domain_names, phase0, strict=True)),
+            phase_names[1]: dict(zip(domain_names, phase1, strict=True)),
+            phase_names[2]: dict(zip(domain_names, phase2, strict=True)),
+        }
+        configs.append(WeightConfig(run_id=i, phase_weights=phase_weights))
+
+    return configs
+
+
+def run_baselines(
+    name_prefix: str = NAME,
+    baselines: list[tuple[list[float], list[float], list[float]]] | None = None,
+):
+    """Run predefined baseline trial runs.
+
+    Args:
+        name_prefix: Prefix for run names.
+        baselines: List of baseline configurations. If None, uses BASELINES.
+    """
+    if os.getenv("CI", None) is not None:
+        logger.info("Skipping experiment execution on CI environment.")
+        return
+
+    baselines = baselines or BASELINES
+    experiment = create_three_phase_experiment(name=name_prefix)
+
+    # Create weight configs from baselines
+    weight_configs = create_baseline_weight_configs(baselines)
+
+    logger.info(f"Running {len(weight_configs)} baseline configurations:")
+    for config in weight_configs:
+        logger.info(f"  baseline_run_{config.run_id}: {config.phase_weights}")
+
+    # Create training steps with baseline_run naming
+    training_steps = []
+    for config in weight_configs:
+        step = experiment.create_training_step(
+            config,
+            name_prefix=name_prefix,
+            run_name=f"baseline_run_{config.run_id:05d}",
+        )
+        training_steps.append(step)
+
+    executor_main(
+        steps=training_steps,
+        description=f"Baseline runs for {name_prefix}",
+    )
+
+
 def main(
     n_runs: int = 100,
     seed: int = 42,
     name_prefix: str = NAME,
     analyze: bool = False,
+    baseline_runs: bool = False,
 ):
     """Main entry point for running the swarm experiment.
 
@@ -134,6 +228,7 @@ def main(
         seed: Random seed for weight sampling.
         name_prefix: Prefix for run names.
         analyze: If True, only run analysis step (collect results from W&B).
+        baseline_runs: If True, run predefined baseline trial runs instead of random sampling.
 
     Note:
         Additional executor options like --max_concurrent and --force_run_failed
@@ -141,6 +236,11 @@ def main(
     """
     if os.getenv("CI", None) is not None:
         logger.info("Skipping experiment execution on CI environment.")
+        return
+
+    # Handle trial runs mode
+    if baseline_runs:
+        run_baselines(name_prefix=name_prefix)
         return
 
     experiment = create_three_phase_experiment(name=name_prefix)
@@ -211,6 +311,11 @@ def _parse_args():
         action="store_true",
         help="Run analysis only (collect results from W&B and export CSV).",
     )
+    parser.add_argument(
+        "--baseline_runs",
+        action="store_true",
+        help="Run predefined baseline trial runs instead of random sampling.",
+    )
     # Note: --max_concurrent and --force_run_failed are handled by executor_main
     # via draccus CLI parsing, so they don't need to be defined here.
     return parser.parse_known_args()
@@ -227,4 +332,5 @@ if __name__ == "__main__":
         seed=args.seed,
         name_prefix=args.name_prefix,
         analyze=args.analyze,
+        baseline_runs=args.baseline_runs,
     )
