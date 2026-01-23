@@ -14,7 +14,6 @@
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import StrEnum, auto
 from functools import partial
 import logging
@@ -26,10 +25,9 @@ from marin.utilities.time_logger import log_time
 import pyarrow as pa
 import pyarrow.json as pa_json
 
-from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
+from marin.utilities.wandb_utils import init_wandb
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utils import fsspec_glob
-import wandb
 from zephyr.backends import Backend
 from zephyr.dataset import Dataset
 from zephyr.expr import col
@@ -167,24 +165,9 @@ def _collect_input_files(*, input_paths: str | list[str], filetypes: list[str]) 
 
 
 def _init_wandb(config: DedupConfig):
-    """
-    Initialize wandb if configured.
-
-    Args:
-        config: DedupeConfig containing wandb settings
-    """
-    if "WANDB_API_KEY" not in os.environ:
-        return
-
-    run_name = os.environ.get("WANDB_RUN_NAME")
-    if not run_name:
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        run_name = f"{config.mode}-{timestamp}"
-
-    wandb.init(
-        entity=WANDB_ENTITY,
-        project=WANDB_PROJECT,
-        name=run_name,
+    """Initialize wandb for deduplication tracking."""
+    init_wandb(
+        run_name=f"{config.mode}",
         tags=[str(config.mode)],
         config={
             "mode": str(config.mode),
