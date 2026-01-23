@@ -13,7 +13,7 @@ vlm_jobs = [job for job in jobs if
 # 只显示 RUNNING 的
 running_jobs = [job for job in vlm_jobs if job.status == "RUNNING"]
 print(f"Found {len(running_jobs)} RUNNING VLM jobs:\n")
-
+assert 1==2
 for job in running_jobs:
     # 尝试获取 submission_id，这是停止 job 需要的
     print(f"job_id: {job.job_id}, submission_id: {job.submission_id}, Status: {job.status}")
