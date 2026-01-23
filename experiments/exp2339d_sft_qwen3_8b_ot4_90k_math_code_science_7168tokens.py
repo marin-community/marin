@@ -80,10 +80,10 @@ assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 total_examples = sum(mixture_weights.values())
 TARGET_EPOCHS = 10
 TRAIN_BATCH_SIZE = 128
-MICROBATCH_SIZE = 64  # Local batch size that fits in memory
+MICROBATCH_SIZE = 128  # 64 fits on v5p-8 w/ 7K tokens seq len
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
-RESOURCES = ResourceConfig.with_tpu("v5p-8")
+RESOURCES = ResourceConfig.with_tpu("v5p-64")
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,

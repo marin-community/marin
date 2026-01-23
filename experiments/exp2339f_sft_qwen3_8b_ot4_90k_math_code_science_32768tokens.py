@@ -80,7 +80,7 @@ assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 total_examples = sum(mixture_weights.values())
 TARGET_EPOCHS = 10
 TRAIN_BATCH_SIZE = 128
-MICROBATCH_SIZE = 128  # Local batch size that fits in memory
+MICROBATCH_SIZE = 128  # 16 fits on v5p-8 w/ 32K tokens seq len
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 RESOURCES = ResourceConfig.with_tpu("v5p-64")
