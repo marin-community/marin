@@ -80,9 +80,7 @@ def run_sweep_analysis(config):
                     continue
                 data = json.loads(lines[-1])
 
-            value = data
-            for part in config.metric_key.replace("/", ".").split("."):
-                value = value[part]
+            value = data["summary"][config.metric_key]
 
             results.append({"metric": float(value), "hparams": hparams, "run_path": run_path})
             print(f"Run {hparams}: {config.metric_key} = {value}")
