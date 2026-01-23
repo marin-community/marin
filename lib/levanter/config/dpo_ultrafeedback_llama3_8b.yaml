@@ -42,7 +42,7 @@ trainer:
   steps_per_eval: 100
   model_averaging: null
   checkpointer:
-    save_interval: 30m
+    save_interval: 1m
     base_path: gs://marin-us-central1/checkpoints/dpo/ultrafeedback_llama3_8b
 
 optimizer:
@@ -55,10 +55,10 @@ optimizer:
 reference_model_path: meta-llama/Llama-3.1-8B
 reference_is_hf: true
 beta: 0.1
-validation_split_fraction: 0.1
+validation_split_fraction: 0.0
 
 initialize_from_hf: meta-llama/Llama-3.1-8B
 use_hf_model_config: false
 
-hf_save_steps: 1000
+hf_save_steps: 2
 hf_save_path: gs://marin-us-central1/checkpoints/dpo/ultrafeedback_llama3_8b/hf

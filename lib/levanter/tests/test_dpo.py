@@ -23,7 +23,13 @@ from haliax.partitioning import pspec_for
 from haliax.jax_utils import is_jax_array_like
 
 from levanter.data.text import DpoExample, PreferenceChatProcessor, PreferencePairDataset
-from levanter.main.train_dpo import DpoModel, _bool_tree_like, _logp_sum, dpo_loss_from_logps
+from levanter.main.train_dpo import (
+    DpoModel,
+    _bool_tree_like,
+    _logp_sum,
+    _policy_model_for_hf_save,
+    dpo_loss_from_logps,
+)
 from levanter.metrics import Metric
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.lm_model import LmExample
@@ -103,6 +109,15 @@ def test_dpo_trainable_filter_has_no_namedarray_nones():
 
     for leaf in _namedarray_leaves(trainable):
         assert leaf.array is not None
+
+
+def test_policy_model_for_hf_save_unwraps_dpo_model():
+    config = _tiny_gpt2_config()
+    _, policy, reference = _build_policy_reference(config)
+    model = DpoModel(policy=policy, reference=reference)
+
+    assert _policy_model_for_hf_save(model) is policy
+    assert _policy_model_for_hf_save(policy) is policy
 
 
 def test_trainer_state_init_with_dpo_model():

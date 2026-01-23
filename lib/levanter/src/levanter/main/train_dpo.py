@@ -20,7 +20,7 @@ import levanter
 import levanter.callbacks
 from levanter import callbacks
 from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
+from levanter.compat.hf_checkpoints import HFCompatConfig
 from levanter.data.mixture import MixtureDataset
 from levanter.data.dataset import AsyncDataset, EpochDataset
 from levanter.data.text import (
@@ -48,6 +48,10 @@ logger = logging.getLogger(__name__)
 class DpoModel(eqx.Module):
     policy: LmHeadModel
     reference: LmHeadModel
+
+
+def _policy_model_for_hf_save(model: DpoModel | LmHeadModel) -> LmHeadModel:
+    return model.policy if isinstance(model, DpoModel) else model
 
 
 def _bool_tree_like(tree, value: bool):
@@ -461,12 +465,24 @@ def main(config: TrainDpoConfig):
                 except TypeError:
                     logger.warning(f"Invalid hf_save_dtype: {config.hf_save_dtype}. Defaulting to None.")
 
-            trainer.add_hook(
-                save_hf_checkpoint_callback(
-                    full_save_path, converter, upload_to_hf=config.hf_upload or False, save_dtype=save_dtype
-                ),
-                every=config.hf_save_steps,
-            )
+            def save_policy_hf_checkpoint(step):
+                if step.step == 0:
+                    return
+                upload_to_hf = config.hf_upload or False
+                hf_upload_kwargs = {}
+                if upload_to_hf is not None:
+                    hf_upload_kwargs["commit_message"] = f"Upload for step {step.step} from Levanter"
+
+                policy_model = _policy_model_for_hf_save(step.eval_model)
+                converter.save_pretrained(
+                    policy_model,
+                    os.path.join(full_save_path, f"step-{step.step}"),
+                    upload_to_hf=upload_to_hf,
+                    dtype=save_dtype,
+                    **hf_upload_kwargs,
+                )
+
+            trainer.add_hook(save_policy_hf_checkpoint, every=config.hf_save_steps)
 
         train_loader = trainer.data_loader(train_dataset)
         if state.step > 0:
