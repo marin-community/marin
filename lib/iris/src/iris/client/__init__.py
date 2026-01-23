@@ -25,14 +25,16 @@ from iris.client.client import (
     EndpointRegistry,
     IrisClient,
     IrisContext,
+    Job,
+    JobFailedError,
     LocalClientConfig,
     LogEntry,
+    Task,
     create_context_from_env,
     get_iris_ctx,
     iris_ctx,
     iris_ctx_scope,
 )
-from iris.client.log_poller import LogPoller
 from iris.client.resolver import ClusterResolver
 from iris.client.worker_pool import WorkerPool, WorkerPoolConfig
 
@@ -43,12 +45,14 @@ __all__ = [
     "GcsResolver",
     "IrisClient",
     "IrisContext",
+    "Job",
+    "JobFailedError",
     "LocalClientConfig",
     "LogEntry",
-    "LogPoller",
     "ResolveResult",
     "ResolvedEndpoint",
     "Resolver",
+    "Task",
     "WorkerPool",
     "WorkerPoolConfig",
     "create_context_from_env",

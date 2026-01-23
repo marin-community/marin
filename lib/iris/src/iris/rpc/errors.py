@@ -14,13 +14,14 @@
 
 """RPC error handling utilities with full traceback support."""
 
-import time
 import traceback
 from contextlib import contextmanager
 from collections.abc import Generator
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+
+from iris.time_utils import now_ms
 
 
 @contextmanager
@@ -65,7 +66,7 @@ def connect_error_with_traceback(
 
     details = errors_pb2.ErrorDetails(
         message=message,
-        timestamp_ms=int(time.time() * 1000),
+        timestamp_ms=now_ms(),
     )
 
     if exc is not None:
