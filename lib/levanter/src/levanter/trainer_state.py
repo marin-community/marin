@@ -199,23 +199,8 @@ def _partition_trainable_params(model, filter):
     Returns:
         trainable, non-trainable
     """
-
     filter = make_floating_point_trainable_filter(filter)
-
-    def resolve_mask(mask, x):
-        if isinstance(mask, bool):
-            return mask
-        if callable(mask):
-            return mask(x)
-        raise ValueError("`filter_spec` must consist of booleans and callables only.")
-
-    def is_leaf(x):
-        return isinstance(x, hax.NamedArray)
-
-    mask_tree = jax.tree_util.tree_map(resolve_mask, filter, model, is_leaf=is_leaf)
-    trainable = jax.tree_util.tree_map(lambda m, x: x if m else None, mask_tree, model, is_leaf=is_leaf)
-    non_trainable = jax.tree_util.tree_map(lambda m, x: None if m else x, mask_tree, model, is_leaf=is_leaf)
-    return trainable, non_trainable
+    return eqx.partition(model, filter, is_leaf=lambda x: isinstance(x, hax.NamedArray))
 
 
 def trainables_only(model, filter):
@@ -232,26 +217,10 @@ def cast_params_by_trainability(model, mp, is_trainable):
     Casts the parameters of a model to the appropriate precision based on the is_trainable filter spec.
     Trainable parameters are cast to param precision, non-trainable parameters are cast to compute precision.
     """
-    filter = make_floating_point_trainable_filter(is_trainable)
-
-    def resolve_mask(mask, x):
-        if isinstance(mask, bool):
-            return mask
-        if callable(mask):
-            return mask(x)
-        raise ValueError("`filter_spec` must consist of booleans and callables only.")
-
-    def is_leaf(x):
-        return isinstance(x, hax.NamedArray)
-
-    def cast_leaf(mask, x):
-        if not is_inexact_arrayish(x):
-            return x
-        if resolve_mask(mask, x):
-            return mp.cast_to_param(x)
-        return mp.cast_to_compute(x)
-
-    return jax.tree_util.tree_map(cast_leaf, filter, model, is_leaf=is_leaf)
+    trainable, non_trainable = _partition_trainable_params(model, is_trainable)
+    trainable = mp.cast_to_param(trainable)
+    non_trainable = mp.cast_to_compute(non_trainable)
+    return eqx.combine(trainable, non_trainable, is_leaf=lambda x: isinstance(x, hax.NamedArray))
 
 
 def _fill_missing_namedarrays(model: M, fallback: M) -> M:
