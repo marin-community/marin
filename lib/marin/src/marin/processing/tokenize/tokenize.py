@@ -372,16 +372,20 @@ def tokenize(config: TokenizeConfigBase):
 
         # Aggregate token counts from shard stats
         total_tokens = 0
+        total_elements = 0
         for shard_path in shard_paths:
             stats_path = f"{shard_path}/.stats.json"
             with fsspec.open(stats_path) as f:
                 stats = json.load(f)
                 total_tokens += stats.get("token_count", 0)
+                total_elements += stats.get("num_rows", 0)
 
-        stats_path = os.path.join(prefix, "stats.json")
-        logger.info(f"Writing total token count ({total_tokens}) to {stats_path}")
+        stats_path = os.path.join(prefix, ".stats.json")
+        logger.info(
+            f"Writing total token count ({total_tokens:,}) and element count ({total_elements:,}) to {stats_path}"
+        )
         with fsspec.open(stats_path, "w") as f:
-            json.dump({"total_tokens": total_tokens}, f)
+            json.dump({"total_tokens": total_tokens, "total_elements": total_elements}, f)
 
     if train_paths:
         run_pipeline(train_paths, "train")
