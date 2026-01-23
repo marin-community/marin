@@ -83,6 +83,9 @@ BASELINES: list[tuple[list[float], list[float], list[float]]] = [
     ([1, 0, 0], [0, 1, 0], [0.5, 0, 0.5]),
     # Nemotron -> dolmino -> balanced final phase
     ([1, 0, 0], [0, 1, 0], [0.25, 0.25, 0.5]),
+    ([1, 0, 0], [0, 1, 0], [0.5, 0.5, 0]),
+    ([1, 0, 0], [1, 0, 0], [1, 0, 0]),
+    ([1, 0, 0], [1, 0, 0], [0, 1, 0]),
 ]
 
 
@@ -204,7 +207,7 @@ def run_baselines(
         step = experiment.create_training_step(
             config,
             name_prefix=name_prefix,
-            run_name=f"baseline_run_{config.run_id:05d}",
+            run_name=f"base_{config.run_id:05d}",
         )
         training_steps.append(step)
 
