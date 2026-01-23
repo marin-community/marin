@@ -625,6 +625,35 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-disagreed-answers",
         max_parallelism=32,
     ),
+    # Samples where neither Qwen3-32B nor Qwen3-235B-A22B produced a boxed answer
+    "marin-community/open-thoughts-4-6k-math-qwen3-32b-neither-has-boxed": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-6k-math-qwen3-32b-neither-has-boxed",
+        revision="db0ca08",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            content_key="value",
+        ),
+        metadata_columns=["ms_id", "answer_extracted", "other_model_answer", "answers_match", "source_model"],
+        name="marin-community/open-thoughts-4-6k-math-qwen3-32b-neither-has-boxed",
+        max_parallelism=32,
+    ),
+    "marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-neither-has-boxed": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-neither-has-boxed",
+        revision="3fad3b1",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            content_key="value",
+        ),
+        metadata_columns=["ms_id", "answer_extracted", "other_model_answer", "answers_match", "source_model"],
+        name="marin-community/open-thoughts-4-6k-math-qwen3-235b-a22b-neither-has-boxed",
+        max_parallelism=32,
+    ),
 }
 
 for split_name in SMOLTALK2_SPLITS:
