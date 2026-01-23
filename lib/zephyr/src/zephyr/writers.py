@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 import itertools
+import json
 import os
 from collections.abc import Iterable
 from contextlib import contextmanager
@@ -252,21 +253,28 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
     try:
         exemplar = next(iter(records))
     except StopIteration:
-        return {"path": output_path, "count": 0}
+        return {"path": output_path, "count": 0, "token_count": 0}
 
     count = 1
+    token_count = len(exemplar.get("input_ids", []))
     with atomic_rename(output_path) as tmp_path:
         with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
             writer.write_batch([exemplar])
             for batch in batchify(records):
                 writer.write_batch(batch)
                 count += len(batch)
+                for record in batch:
+                    token_count += len(record.get("input_ids", []))
 
     # write success sentinel
     with fsspec.open(f"{output_path}/.success", "w") as f:
         f.write("")
 
-    return {"path": output_path, "count": count}
+    # write stats for aggregation
+    with fsspec.open(f"{output_path}/.stats.json", "w") as f:
+        json.dump({"count": count, "token_count": token_count}, f)
+
+    return {"path": output_path, "count": count, "token_count": token_count}
 
 
 def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
