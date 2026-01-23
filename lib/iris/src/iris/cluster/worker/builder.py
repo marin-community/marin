@@ -15,6 +15,7 @@
 """Virtual environment and Docker image caching with UV support."""
 
 import hashlib
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,12 @@ from typing import Protocol
 
 from iris.cluster.worker.docker import DockerImageBuilder
 from iris.cluster.worker.worker_types import TaskLogs
+
+logger = logging.getLogger(__name__)
+
+
+def _find_all_recursive(bundle_path: Path, pattern: str) -> list[Path]:
+    return list(bundle_path.rglob(pattern))
 
 
 class VenvCache:
@@ -39,9 +46,13 @@ class VenvCache:
     def compute_deps_hash(self, bundle_path: Path) -> str:
         h = hashlib.sha256()
         for fname in ["pyproject.toml", "uv.lock"]:
-            fpath = bundle_path / fname
-            if fpath.exists():
-                h.update(fpath.read_bytes())
+            at_least_one_found = False
+            for fpath in _find_all_recursive(bundle_path, fname):
+                if fpath.exists():
+                    h.update(fpath.read_bytes())
+                    at_least_one_found = True
+            if not at_least_one_found:
+                logger.warning(f"File {fname} not found inside {bundle_path}")
         return h.hexdigest()
 
 
@@ -86,22 +97,19 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # We could pre-build something similar or at least fetch Rust deps to cache?
 
 # Configure UV
-# TODO, is this wasting disk space maybe we don't care
 ENV UV_CACHE_DIR=/opt/uv-cache
 ENV UV_LINK_MODE=copy
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv
 WORKDIR /app
 
-# TODO cache dependencies once across jobs just for usefulness
+RUN --mount=type=cache,id=iris-uv-global,sharing=shared,target=/opt/uv-cache \\
+    {pyproject_mounts} \\
+    uv sync {extras_flags}
 
 # Copy workspace contents
 # Path dependencies referenced in [tool.uv.sources] must be present before uv sync.
 # We copy everything upfront to support workspaces with local path dependencies.
 COPY . .
-
-# Install all dependencies and project
-RUN --mount=type=cache,id=iris-uv-global,sharing=locked,target=/opt/uv-cache \\
-    uv sync {extras_flags}
 
 # Use the venv python
 ENV PATH="/app/.venv/bin:$PATH"
@@ -120,7 +128,6 @@ class ImageCache:
 
     Cache behavior:
     - All builds use id=iris-uv-global for the UV cache mount
-    - sharing=locked prevents concurrent access issues during UV operations
     - Different workspaces reuse cached dependencies automatically
     - BuildKit manages cache storage in /var/lib/buildkit/
 
@@ -181,9 +188,18 @@ class ImageCache:
         # Build image
         start = time.time()
         extras_flags = " ".join(f"--extra {e}" for e in extras) if extras else ""
+
+        uv_locks_files = _find_all_recursive(bundle_path, "pyproject.toml") + _find_all_recursive(bundle_path, "uv.lock")
+        if not uv_locks_files:
+            logger.warning("No pyproject.toml or uv.lock files found in the bundle path")
+
+        pyproject_mounts = " \\\n".join(
+            f"--mount=type=bind,source={f.relative_to(bundle_path)},target={f.relative_to(bundle_path)}"
+            for f in uv_locks_files
+        )
+
         dockerfile = DOCKERFILE_TEMPLATE.format(
-            base_image=base_image,
-            extras_flags=extras_flags,
+            base_image=base_image, extras_flags=extras_flags, pyproject_mounts=pyproject_mounts
         )
         self._docker.build(bundle_path, dockerfile, image_tag, task_logs)
         build_time_ms = int((time.time() - start) * 1000)
