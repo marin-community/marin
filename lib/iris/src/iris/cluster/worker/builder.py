@@ -107,8 +107,6 @@ RUN --mount=type=cache,id=iris-uv-global,sharing=shared,target=/opt/uv-cache \\
     uv sync {extras_flags}
 
 # Copy workspace contents
-# Path dependencies referenced in [tool.uv.sources] must be present before uv sync.
-# We copy everything upfront to support workspaces with local path dependencies.
 COPY . .
 
 # Use the venv python

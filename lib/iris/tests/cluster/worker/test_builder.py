@@ -374,6 +374,136 @@ packages = ["src/test_app"]
 
 
 @pytest.mark.slow
+def test_image_build_with_workspace_and_path_deps(tmp_path):
+    """Test building image with mixed workspace members and path dependencies."""
+    if not check_docker_available():
+        pytest.skip("Docker not available")
+
+    bundle_dir = tmp_path / "workspace_bundle"
+    bundle_dir.mkdir()
+
+    # Create root package directory
+    src_dir = bundle_dir / "src" / "my_app"
+    src_dir.mkdir(parents=True)
+    (src_dir / "__init__.py").write_text('"""My app."""\n')
+
+    # Root pyproject.toml with workspace member and path dependency
+    root_pyproject = """[project]
+name = "my-app"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "core",
+    "api",
+]
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+core = { workspace = true }
+api = { path = "lib/api", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/my_app"]
+"""
+    (bundle_dir / "pyproject.toml").write_text(root_pyproject)
+
+    # Create packages directory for workspace members
+    packages_dir = bundle_dir / "packages"
+    packages_dir.mkdir()
+
+    # Core package - workspace member
+    core_dir = packages_dir / "core"
+    core_dir.mkdir()
+    (core_dir / "src").mkdir()
+    (core_dir / "src" / "core").mkdir()
+    (core_dir / "src" / "core" / "__init__.py").write_text('"""Core package."""\n')
+
+    core_pyproject = """[project]
+name = "core"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/core"]
+"""
+    (core_dir / "pyproject.toml").write_text(core_pyproject)
+
+    # Create lib directory for path dependencies
+    lib_dir = bundle_dir / "lib"
+    lib_dir.mkdir()
+
+    # API package - path dependency
+    api_dir = lib_dir / "api"
+    api_dir.mkdir()
+    (api_dir / "src").mkdir()
+    (api_dir / "src" / "api").mkdir()
+    (api_dir / "src" / "api" / "__init__.py").write_text('"""API package."""\n')
+
+    api_pyproject = """[project]
+name = "api"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "core",
+]
+
+[tool.uv.sources]
+core = { path = "../../packages/core", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/api"]
+"""
+    (api_dir / "pyproject.toml").write_text(api_pyproject)
+
+    # Generate lock file with uv
+    try:
+        subprocess.run(
+            ["uv", "lock"],
+            cwd=bundle_dir,
+            check=True,
+            capture_output=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        pytest.skip(f"uv not available or failed to create lock file: {e}")
+
+    cache_dir = tmp_path / "cache"
+    builder = ImageCache(cache_dir, registry="localhost:5000")
+
+    # Build image
+    result = builder.build(
+        bundle_path=bundle_dir,
+        base_image="python:3.11-slim",
+        extras=[],
+        job_id="workspace-path-deps-test",
+        deps_hash="workspacepath123",
+    )
+
+    assert result.from_cache is False
+    assert result.build_time_ms > 0
+
+    # Verify image exists
+    assert builder._docker.exists(result.image_tag)
+
+    # Cleanup
+    subprocess.run(["docker", "rmi", result.image_tag], stdout=subprocess.DEVNULL, check=False)
+
+
+@pytest.mark.slow
 def test_lru_eviction_of_images(tmp_path, docker_bundle):
     """Test LRU eviction removes old images when over limit."""
     import uuid
