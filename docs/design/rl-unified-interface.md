@@ -297,7 +297,7 @@ trained_model = job.run()
   - `RLJob` class with `to_worker_configs()` stub
 
 ### Step 1.2: Write Validation Tests
-- Create `tests/rl/test_rl_job_config.py`:
+- Update [`tests/rl/integration/config.py`](https://github.com/marin-community/marin/blob/main/tests/rl/integration/config.py):
   - Test `RLJobConfig` construction with various configs
   - Test `to_worker_configs()` produces valid worker configs
   - Test config validation catches errors (circular deps, invalid batch sizes)

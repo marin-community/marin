@@ -24,7 +24,7 @@ provider:
 
 
 docker:
-    image: "europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20260104"
+    image: "europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20260118"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -37,6 +37,13 @@ docker:
       - --shm-size=100gb
       - -v
       - "/tmp:/tmp"
+      - -e MARIN_PREFIX=gs://marin-eu-west4
+      - -e BUCKET=marin-eu-west4
+      - -e MARIN_LOCAL_CACHE_DIR=/tmp/marin-cache
+      - -e AUTOSCALER_HEARTBEAT_TIMEOUT_S=600
+      - -e TPU_MIN_LOG_LEVEL=3
+      - -e TPU_STDERR_LOG_LEVEL=3
+      - -e TPU_LOG_DIR=disabled
       # this lets the worker run docker commands and have them run as sibling containers
       - -v "/var/run/docker.sock:/var/run/docker.sock"
 
@@ -48,6 +55,13 @@ docker:
       - -v "/tmp:/tmp"
       - --ulimit nofile=1048576:1048576
       - -e RAY_TPU_MAX_CONCURRENT_ACTIVE_CONNECTIONS=64
+      - -e MARIN_PREFIX=gs://marin-eu-west4
+      - -e BUCKET=marin-eu-west4
+      - -e MARIN_LOCAL_CACHE_DIR=/tmp/marin-cache
+      - -e AUTOSCALER_HEARTBEAT_TIMEOUT_S=600
+      - -e TPU_MIN_LOG_LEVEL=3
+      - -e TPU_STDERR_LOG_LEVEL=3
+      - -e TPU_LOG_DIR=disabled
 
       - -e RAY_AUTH_MODE=token
       - -e RAY_AUTH_TOKEN_PATH=/home/ray/.ray/auth_token
@@ -79,15 +93,9 @@ setup_commands:
   - gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN > $HOME/.ray/auth_token
   - chmod 600 $HOME/.ray/auth_token
 
-  - echo 'export MARIN_PREFIX="gs://marin-eu-west4"' >> $HOME/.bashrc
-  - echo 'export BUCKET="marin-eu-west4"' >> $HOME/.bashrc
+  - mkdir -p /tmp/marin-cache
   # cf https://github.com/ray-project/ray/blob/0bc6ec86ffd0fc0d4e43fb339ffe0ac03ee5531b/python/ray/autoscaler/_private/constants.py#L66
   # this is set to 30s by default, which is much too short for our use case
-  - echo 'export AUTOSCALER_HEARTBEAT_TIMEOUT_S=600' >> $HOME/.bashrc
-  - echo 'export TPU_MIN_LOG_LEVEL=3' >> $HOME/.bashrc
-  - echo 'export TPU_STDERR_LOG_LEVEL=3' >> $HOME/.bashrc
-  - echo 'export TPU_LOG_DIR=disabled' >> $HOME/.bashrc
-  - gcsfuse --implicit-dirs --client-protocol grpc --cache-dir /dev/shm --file-cache-max-size-mb 160000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
 
 worker_setup_commands:
   # delete any old ray session data

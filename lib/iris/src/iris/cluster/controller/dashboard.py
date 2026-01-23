@@ -1,0 +1,954 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""HTTP dashboard with Connect RPC, web UI at /, and REST API at /api/*."""
+
+# TODO: observability, aggregate stats over jobs, log to stable storage
+
+import uvicorn
+from starlette.applications import Starlette
+from starlette.middleware.wsgi import WSGIMiddleware
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse
+from starlette.routing import Mount, Route
+
+from iris.cluster.controller.scheduler import Scheduler
+from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.types import JobId
+from iris.rpc import cluster_pb2
+from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
+
+
+class FakeRequestContext:
+    """Minimal stub RequestContext for internal REST-to-RPC bridging.
+
+    RPC methods never actually access the context, so this satisfies the type signature.
+    """
+
+    pass
+
+
+def _job_state_name(state: int) -> str:
+    state_map: dict[int, str] = {
+        cluster_pb2.JOB_STATE_PENDING: "pending",
+        cluster_pb2.JOB_STATE_BUILDING: "building",
+        cluster_pb2.JOB_STATE_RUNNING: "running",
+        cluster_pb2.JOB_STATE_SUCCEEDED: "succeeded",
+        cluster_pb2.JOB_STATE_FAILED: "failed",
+        cluster_pb2.JOB_STATE_KILLED: "killed",
+        cluster_pb2.JOB_STATE_WORKER_FAILED: "worker_failed",
+    }
+    return state_map.get(state, f"unknown({state})")
+
+
+def _task_state_name(state: int) -> str:
+    state_map: dict[int, str] = {
+        cluster_pb2.TASK_STATE_PENDING: "pending",
+        cluster_pb2.TASK_STATE_BUILDING: "building",
+        cluster_pb2.TASK_STATE_RUNNING: "running",
+        cluster_pb2.TASK_STATE_SUCCEEDED: "succeeded",
+        cluster_pb2.TASK_STATE_FAILED: "failed",
+        cluster_pb2.TASK_STATE_KILLED: "killed",
+        cluster_pb2.TASK_STATE_WORKER_FAILED: "worker_failed",
+        cluster_pb2.TASK_STATE_UNSCHEDULABLE: "unschedulable",
+    }
+    return state_map.get(state, f"unknown({state})")
+
+
+DASHBOARD_HTML = """<!DOCTYPE html>
+<html>
+<head>
+  <title>Iris Controller</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      max-width: 1400px;
+      margin: 40px auto;
+      padding: 0 20px;
+      color: #333;
+      background: #f5f5f5;
+    }
+    h1 {
+      color: #2c3e50;
+      border-bottom: 3px solid #3498db;
+      padding-bottom: 10px;
+    }
+    h2 {
+      color: #34495e;
+      margin-top: 30px;
+    }
+    .stats {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    .stat-card {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      min-width: 150px;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 32px;
+      font-weight: bold;
+      color: #3498db;
+    }
+    .stat-label {
+      font-size: 14px;
+      color: #7f8c8d;
+      margin-top: 5px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th {
+      background-color: #3498db;
+      color: white;
+      padding: 12px;
+      text-align: left;
+      font-weight: 600;
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #ecf0f1;
+    }
+    tr:hover {
+      background-color: #f8f9fa;
+    }
+    .status-pending { color: #f39c12; }
+    .status-running { color: #3498db; }
+    .status-succeeded { color: #27ae60; }
+    .status-failed { color: #e74c3c; }
+    .status-killed { color: #95a5a6; }
+    .status-worker_failed { color: #9b59b6; }
+    .healthy { color: #27ae60; }
+    .unhealthy { color: #e74c3c; }
+    .worker-link, .job-link { color: #2196F3; text-decoration: none; }
+    .worker-link:hover, .job-link:hover { text-decoration: underline; }
+    .status-building { color: #9b59b6; }
+    .actions-log {
+      background: white;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      max-height: 300px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 13px;
+    }
+    .action-entry {
+      padding: 5px 0;
+      border-bottom: 1px solid #ecf0f1;
+    }
+    .action-time {
+      color: #7f8c8d;
+      margin-right: 10px;
+    }
+    .future-feature {
+      color: #95a5a6;
+      font-style: italic;
+      padding: 20px;
+      background: white;
+      border-radius: 8px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h1>Iris Controller Dashboard</h1>
+
+  <div class="stats" id="stats">
+    <div class="stat-card">
+      <div class="stat-value" id="jobs-pending">-</div>
+      <div class="stat-label">Jobs Pending</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="jobs-running">-</div>
+      <div class="stat-label">Jobs Running</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="jobs-completed">-</div>
+      <div class="stat-label">Jobs Completed</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="jobs-building">-</div>
+      <div class="stat-label">Jobs Building</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="workers-healthy">-</div>
+      <div class="stat-label">Workers Healthy</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="workers-total">-</div>
+      <div class="stat-label">Workers Total</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="endpoints-count">-</div>
+      <div class="stat-label">Endpoints</div>
+    </div>
+  </div>
+
+  <h2>Recent Actions</h2>
+  <div class="actions-log" id="actions"></div>
+
+  <h2>Workers</h2>
+  <table id="workers-table">
+    <tr><th>ID</th><th>Healthy</th><th>CPU</th><th>Memory</th><th>Running Jobs</th><th>Last Heartbeat</th></tr>
+  </table>
+
+  <h2>Job Queue</h2>
+  <table id="jobs-table">
+    <tr><th>ID</th><th>Name</th><th>State</th><th>Resources</th><th>Worker</th><th>Error</th></tr>
+  </table>
+
+  <h2>Endpoints</h2>
+  <table id="endpoints-table">
+    <tr><th>Name</th><th>Address</th><th>Job</th></tr>
+  </table>
+
+  <h2>Users</h2>
+  <div class="future-feature">Coming in future release</div>
+
+  <h2>Reservations</h2>
+  <div class="future-feature">Coming in future release</div>
+
+  <script>
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text || '';
+      return div.innerHTML;
+    }
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    async function refresh() {
+      try {
+        const [stats, actions, workers, jobs, endpoints] = await Promise.all([
+          fetch('/api/stats').then(r => r.json()),
+          fetch('/api/actions').then(r => r.json()),
+          fetch('/api/workers').then(r => r.json()),
+          fetch('/api/jobs').then(r => r.json()),
+          fetch('/api/endpoints').then(r => r.json())
+        ]);
+
+        // Update stats
+        document.getElementById('jobs-pending').textContent = stats.jobs_pending;
+        document.getElementById('jobs-running').textContent = stats.jobs_running;
+        document.getElementById('jobs-completed').textContent = stats.jobs_completed;
+        document.getElementById('jobs-building').textContent = stats.jobs_building;
+        document.getElementById('workers-healthy').textContent = stats.workers_healthy;
+        document.getElementById('workers-total').textContent = stats.workers_total;
+        document.getElementById('endpoints-count').textContent = stats.endpoints_count;
+
+        // Update actions log
+        const actionsHtml = actions.map(a => {
+          const time = new Date(a.timestamp_ms).toLocaleTimeString();
+          const jobInfo = a.job_id ? ` [job: ${a.job_id.slice(0,8)}...]` : '';
+          const workerInfo = a.worker_id ? ` [worker: ${escapeHtml(a.worker_id)}]` : '';
+          const details = a.details ? ` - ${escapeHtml(a.details)}` : '';
+          return `<div class="action-entry"><span class="action-time">${time}</span>` +
+            `${escapeHtml(a.action)}${jobInfo}${workerInfo}${details}</div>`;
+        }).reverse().join('');
+        document.getElementById('actions').innerHTML = actionsHtml || '<div class="action-entry">No actions yet</div>';
+
+        // Update workers table
+        const workersHtml = workers.map(w => {
+          const lastHb = w.last_heartbeat_ms
+            ? new Date(w.last_heartbeat_ms).toLocaleString() : '-';
+          const healthClass = w.healthy ? 'healthy' : 'unhealthy';
+          const wid = escapeHtml(w.worker_id);
+          const workerLink = w.address
+            ? `<a href="http://${escapeHtml(w.address)}/" class="worker-link" target="_blank">${wid}</a>`
+            : wid;
+          const cpu = w.resources ? w.resources.cpu : '-';
+          const memBytes = w.resources ? (w.resources.memory_bytes || 0) : 0;
+          const memory = memBytes ? formatBytes(memBytes) : '-';
+          return `<tr>
+            <td>${workerLink}</td>
+            <td class="${healthClass}">${w.healthy ? 'Yes' : 'No'}</td>
+            <td>${cpu}</td>
+            <td>${memory}</td>
+            <td>${w.running_tasks}</td>
+            <td>${lastHb}</td>
+          </tr>`;
+        }).join('');
+        const workersHeader = '<tr><th>ID</th><th>Healthy</th><th>CPU</th><th>Memory</th>' +
+          '<th>Running Tasks</th><th>Last Heartbeat</th></tr>';
+        document.getElementById('workers-table').innerHTML = workersHeader + workersHtml;
+
+        // Update jobs table
+        const jobsHtml = jobs.map(j => {
+          const jid = escapeHtml(j.job_id);
+          const jobLink = `<a href="/job/${jid}" class="job-link">${jid.slice(0,8)}...</a>`;
+          const jobMemBytes = j.resources ? (j.resources.memory_bytes || 0) : 0;
+          const resources = j.resources
+            ? `${j.resources.cpu} CPU, ${jobMemBytes ? formatBytes(jobMemBytes) : '-'}` : '-';
+          return `<tr>
+            <td>${jobLink}</td>
+            <td>${escapeHtml(j.name)}</td>
+            <td class="status-${j.state}">${escapeHtml(j.state)}</td>
+            <td>${resources}</td>
+            <td>${escapeHtml(j.worker_id) || '-'}</td>
+            <td>${escapeHtml(j.error) || '-'}</td>
+          </tr>`;
+        }).join('');
+        const jobsHeader = '<tr><th>ID</th><th>Name</th><th>State</th><th>Resources</th>' +
+          '<th>Worker</th><th>Error</th></tr>';
+        document.getElementById('jobs-table').innerHTML = jobsHeader + jobsHtml;
+
+        // Update endpoints table
+        const endpointsHtml = endpoints.map(e => {
+          const eid = escapeHtml(e.job_id);
+          const jobLink = `<a href="/job/${eid}" class="job-link">${eid.slice(0,8)}...</a>`;
+          return `<tr>
+            <td>${escapeHtml(e.name)}</td>
+            <td>${escapeHtml(e.address)}</td>
+            <td>${jobLink}</td>
+          </tr>`;
+        }).join('');
+        document.getElementById('endpoints-table').innerHTML =
+          '<tr><th>Name</th><th>Address</th><th>Job</th></tr>' + endpointsHtml;
+      } catch (e) {
+        console.error('Failed to refresh:', e);
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
+"""
+
+
+JOB_DETAIL_HTML = """<!DOCTYPE html>
+<html>
+<head>
+  <title>Job Detail - {{job_id}}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      max-width: 1400px;
+      margin: 40px auto;
+      padding: 0 20px;
+      color: #333;
+      background: #f5f5f5;
+    }
+    h1 {
+      color: #2c3e50;
+      border-bottom: 3px solid #3498db;
+      padding-bottom: 10px;
+    }
+    h2 {
+      color: #34495e;
+      margin-top: 30px;
+    }
+    .back-link {
+      color: #2196F3;
+      text-decoration: none;
+      margin-bottom: 20px;
+      display: inline-block;
+    }
+    .back-link:hover { text-decoration: underline; }
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    .info-card {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .info-card h3 {
+      margin-top: 0;
+      color: #34495e;
+      border-bottom: 1px solid #ecf0f1;
+      padding-bottom: 10px;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #ecf0f1;
+    }
+    .info-row:last-child { border-bottom: none; }
+    .info-label { color: #7f8c8d; }
+    .info-value { font-weight: 500; }
+    .status-pending { color: #f39c12; }
+    .status-building { color: #9b59b6; }
+    .status-running { color: #3498db; }
+    .status-succeeded { color: #27ae60; }
+    .status-failed { color: #e74c3c; }
+    .status-killed { color: #95a5a6; }
+    .status-worker_failed { color: #9b59b6; }
+    .status-unschedulable { color: #e74c3c; }
+    .error-message {
+      background: #fee;
+      border: 1px solid #e74c3c;
+      color: #c0392b;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-top: 20px;
+    }
+    th {
+      background-color: #3498db;
+      color: white;
+      padding: 12px;
+      text-align: left;
+      font-weight: 600;
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #ecf0f1;
+    }
+    tr:hover {
+      background-color: #f8f9fa;
+    }
+    .pending-reason {
+      font-size: 12px;
+      color: #7f8c8d;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <a href="/" class="back-link">&larr; Back to Dashboard</a>
+  <h1>Job: {{job_id}}</h1>
+
+  <div id="error-container"></div>
+
+  <div class="info-grid">
+    <div class="info-card">
+      <h3>Job Status</h3>
+      <div class="info-row">
+        <span class="info-label">State</span>
+        <span class="info-value" id="job-state">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Exit Code</span>
+        <span class="info-value" id="job-exit-code">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Started</span>
+        <span class="info-value" id="job-started">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Finished</span>
+        <span class="info-value" id="job-finished">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Duration</span>
+        <span class="info-value" id="job-duration">-</span>
+      </div>
+    </div>
+
+    <div class="info-card">
+      <h3>Task Summary</h3>
+      <div class="info-row">
+        <span class="info-label">Total Tasks</span>
+        <span class="info-value" id="total-tasks">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Completed</span>
+        <span class="info-value" id="completed-tasks">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Running</span>
+        <span class="info-value" id="running-tasks">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Pending</span>
+        <span class="info-value" id="pending-tasks">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Failed</span>
+        <span class="info-value" id="failed-tasks">-</span>
+      </div>
+    </div>
+
+    <div class="info-card">
+      <h3>Resource Request</h3>
+      <div class="info-row">
+        <span class="info-label">CPU</span>
+        <span class="info-value" id="resource-cpu">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Memory</span>
+        <span class="info-value" id="resource-memory">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Replicas</span>
+        <span class="info-value" id="resource-replicas">-</span>
+      </div>
+    </div>
+  </div>
+
+  <h2>Tasks</h2>
+  <table id="tasks-table">
+    <tr>
+      <th>Task ID</th>
+      <th>Index</th>
+      <th>State</th>
+      <th>Worker</th>
+      <th>Attempts</th>
+      <th>Started</th>
+      <th>Duration</th>
+      <th>Exit Code</th>
+      <th>Error</th>
+    </tr>
+  </table>
+
+  <script>
+    const jobId = '{{job_id}}';
+    const controllerAddress = window.location.origin;
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text || '';
+      return div.innerHTML;
+    }
+
+    function formatTimestamp(ms) {
+      if (!ms) return '-';
+      return new Date(ms).toLocaleString();
+    }
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    function formatDuration(startMs, endMs) {
+      if (!startMs) return '-';
+      const end = endMs || Date.now();
+      const seconds = Math.floor((end - startMs) / 1000);
+      if (seconds < 60) return `${seconds}s`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+      return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+    }
+
+    function getStateClass(state) {
+      const stateMap = {
+        'pending': 'status-pending',
+        'building': 'status-building',
+        'running': 'status-running',
+        'succeeded': 'status-succeeded',
+        'failed': 'status-failed',
+        'killed': 'status-killed',
+        'worker_failed': 'status-worker_failed',
+        'unschedulable': 'status-unschedulable'
+      };
+      return stateMap[state] || '';
+    }
+
+    async function refresh() {
+      try {
+        // Fetch job status from controller
+        const [jobResponse, tasksResponse] = await Promise.all([
+          fetch(`/api/jobs`).then(r => r.json()),
+          fetch(`/api/jobs/${encodeURIComponent(jobId)}/tasks`).then(r => r.json())
+        ]);
+
+        const job = jobResponse.find(j => j.job_id === jobId);
+        if (!job) {
+          document.getElementById('error-container').innerHTML =
+            '<div class="error-message">Job not found</div>';
+          return;
+        }
+
+        // Update job status
+        const stateEl = document.getElementById('job-state');
+        stateEl.textContent = job.state || '-';
+        stateEl.className = 'info-value ' + getStateClass(job.state);
+
+        document.getElementById('job-exit-code').textContent =
+          job.failure_count > 0 ? 'Failed' : (job.state === 'succeeded' ? '0' : '-');
+        document.getElementById('job-started').textContent =
+          formatTimestamp(job.started_at_ms);
+        document.getElementById('job-finished').textContent =
+          formatTimestamp(job.finished_at_ms);
+        document.getElementById('job-duration').textContent =
+          formatDuration(job.started_at_ms, job.finished_at_ms);
+
+        // Show error if present
+        if (job.error) {
+          document.getElementById('error-container').innerHTML =
+            `<div class="error-message"><strong>Error:</strong> ${escapeHtml(job.error)}</div>`;
+        } else {
+          document.getElementById('error-container').innerHTML = '';
+        }
+
+        // Update resource info
+        document.getElementById('resource-cpu').textContent = job.resources.cpu || '-';
+        document.getElementById('resource-memory').textContent =
+          job.resources.memory_bytes ? formatBytes(job.resources.memory_bytes) : '-';
+        document.getElementById('resource-replicas').textContent = tasksResponse.length || '-';
+
+        // Count task states
+        const stateCounts = {
+          total: tasksResponse.length,
+          completed: 0,
+          running: 0,
+          pending: 0,
+          failed: 0
+        };
+
+        tasksResponse.forEach(t => {
+          if (t.state === 'succeeded' || t.state === 'killed') stateCounts.completed++;
+          else if (t.state === 'running' || t.state === 'building') stateCounts.running++;
+          else if (t.state === 'pending') stateCounts.pending++;
+          else if (t.state === 'failed' || t.state === 'worker_failed') stateCounts.failed++;
+        });
+
+        document.getElementById('total-tasks').textContent = stateCounts.total;
+        document.getElementById('completed-tasks').textContent = stateCounts.completed;
+        document.getElementById('running-tasks').textContent = stateCounts.running;
+        document.getElementById('pending-tasks').textContent = stateCounts.pending;
+        document.getElementById('failed-tasks').textContent = stateCounts.failed;
+
+        // Update tasks table
+        const tasksHtml = tasksResponse.map(t => {
+          const errorText = t.error || '';
+          const pendingInfo = t.pending_reason
+            ? `<br><span class="pending-reason">${escapeHtml(t.pending_reason)}</span>`
+            : '';
+
+          return `<tr>
+            <td>${escapeHtml(t.task_id)}</td>
+            <td>${t.task_index}</td>
+            <td class="${getStateClass(t.state)}">${escapeHtml(t.state)}${pendingInfo}</td>
+            <td>${escapeHtml(t.worker_id || '-')}</td>
+            <td>${t.num_attempts}</td>
+            <td>${formatTimestamp(t.started_at_ms)}</td>
+            <td>${formatDuration(t.started_at_ms, t.finished_at_ms)}</td>
+            <td>${t.exit_code !== null && t.exit_code !== undefined ? t.exit_code : '-'}</td>
+            <td>${escapeHtml(errorText) || '-'}</td>
+          </tr>`;
+        }).join('');
+
+        const tableHeader = `<tr>
+          <th>Task ID</th>
+          <th>Index</th>
+          <th>State</th>
+          <th>Worker</th>
+          <th>Attempts</th>
+          <th>Started</th>
+          <th>Duration</th>
+          <th>Exit Code</th>
+          <th>Error</th>
+        </tr>`;
+
+        document.getElementById('tasks-table').innerHTML = tableHeader + tasksHtml;
+
+      } catch (e) {
+        console.error('Failed to refresh:', e);
+        document.getElementById('error-container').innerHTML =
+          `<div class="error-message">Failed to load job details: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
+"""
+
+
+class ControllerDashboard:
+    """HTTP dashboard with Connect RPC and web UI."""
+
+    def __init__(
+        self,
+        service: ControllerServiceImpl,
+        scheduler: Scheduler,
+        host: str = "0.0.0.0",
+        port: int = 8080,
+    ):
+        self._service = service
+        self._state = service._state
+        self._scheduler = scheduler
+        self._host = host
+        self._port = port
+        self._app = self._create_app()
+        self._server: uvicorn.Server | None = None
+
+    @property
+    def port(self) -> int:
+        return self._port
+
+    def _create_app(self) -> Starlette:
+        rpc_wsgi_app = ControllerServiceWSGIApplication(service=self._service)
+        rpc_app = WSGIMiddleware(rpc_wsgi_app)
+
+        routes = [
+            # Web dashboard
+            Route("/", self._dashboard),
+            Route("/job/{job_id}", self._job_detail_page),
+            # REST API (for dashboard)
+            Route("/api/stats", self._api_stats),
+            Route("/api/actions", self._api_actions),
+            Route("/api/workers", self._api_workers),
+            Route("/api/jobs", self._api_jobs),
+            Route("/api/jobs/{job_id}/attempts", self._api_job_attempts),
+            Route("/api/jobs/{job_id}/tasks", self._api_job_tasks),
+            Route("/api/endpoints", self._api_endpoints),
+            Route("/health", self._health),
+            # Connect RPC - mount WSGI app wrapped for ASGI
+            Mount(rpc_wsgi_app.path, app=rpc_app),
+        ]
+        return Starlette(routes=routes)
+
+    def _dashboard(self, _request: Request) -> HTMLResponse:
+        return HTMLResponse(DASHBOARD_HTML)
+
+    def _api_stats(self, _request: Request) -> JSONResponse:
+        ctx = FakeRequestContext()
+        jobs_response = self._service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), ctx)
+        workers = self._state.list_all_workers()
+
+        jobs_pending = sum(1 for j in jobs_response.jobs if j.state == cluster_pb2.JOB_STATE_PENDING)
+        jobs_running = sum(1 for j in jobs_response.jobs if j.state == cluster_pb2.JOB_STATE_RUNNING)
+        jobs_building = sum(1 for j in jobs_response.jobs if j.state == cluster_pb2.JOB_STATE_BUILDING)
+        jobs_completed = sum(
+            1
+            for j in jobs_response.jobs
+            if j.state
+            in (
+                cluster_pb2.JOB_STATE_SUCCEEDED,
+                cluster_pb2.JOB_STATE_FAILED,
+                cluster_pb2.JOB_STATE_KILLED,
+                cluster_pb2.JOB_STATE_WORKER_FAILED,
+            )
+        )
+        workers_healthy = sum(1 for w in workers if w.healthy)
+
+        # Count endpoints for running jobs
+        endpoints_count = sum(
+            1
+            for ep in self._state.list_all_endpoints()
+            if (job := self._state.get_job(ep.job_id)) and job.state == cluster_pb2.JOB_STATE_RUNNING
+        )
+
+        return JSONResponse(
+            {
+                "jobs_pending": jobs_pending,
+                "jobs_running": jobs_running,
+                "jobs_building": jobs_building,
+                "jobs_completed": jobs_completed,
+                "workers_healthy": workers_healthy,
+                "workers_total": len(workers),
+                "endpoints_count": endpoints_count,
+            }
+        )
+
+    def _api_actions(self, _request: Request) -> JSONResponse:
+        transactions = self._state.get_transactions(limit=50)
+        actions = []
+        for txn in transactions:
+            for action in txn.actions:
+                actions.append(
+                    {
+                        "timestamp_ms": action.timestamp_ms,
+                        "action": action.action,
+                        "entity_id": action.entity_id,
+                        "details": action.details,
+                    }
+                )
+        return JSONResponse(actions)
+
+    def _api_workers(self, _request: Request) -> JSONResponse:
+        workers = self._state.list_all_workers()
+        return JSONResponse(
+            [
+                {
+                    "worker_id": str(w.worker_id),
+                    "address": w.address,
+                    "healthy": w.healthy,
+                    "running_tasks": len(w.running_tasks),
+                    "consecutive_failures": w.consecutive_failures,
+                    "last_heartbeat_ms": w.last_heartbeat_ms,
+                    "resources": {
+                        "cpu": w.metadata.cpu_count,
+                        "memory_bytes": w.metadata.memory_bytes,
+                    },
+                }
+                for w in workers
+            ]
+        )
+
+    def _api_jobs(self, _request: Request) -> JSONResponse:
+        jobs = self._state.list_all_jobs()
+        return JSONResponse(
+            [
+                {
+                    "job_id": str(j.job_id),
+                    "name": j.request.name,
+                    "state": _job_state_name(j.state),
+                    "error": j.error,
+                    "submitted_at_ms": j.submitted_at_ms,
+                    "started_at_ms": j.started_at_ms,
+                    "finished_at_ms": j.finished_at_ms,
+                    "failure_count": j.failure_count,
+                    "preemption_count": j.preemption_count,
+                    "resources": {
+                        "cpu": j.request.resources.cpu if j.request.resources else 0,
+                        "memory_bytes": j.request.resources.memory_bytes if j.request.resources else 0,
+                    },
+                }
+                for j in jobs
+            ]
+        )
+
+    def _api_job_attempts(self, request: Request) -> JSONResponse:
+        """Get retry information for a job.
+
+        Jobs don't have attempts - tasks do. This endpoint returns retry counts
+        and the current job state. For detailed attempt history, query the
+        task attempts via /api/jobs/{job_id}/tasks.
+        """
+        job_id = request.path_params["job_id"]
+        job = self._state.get_job(JobId(job_id))
+        if not job:
+            return JSONResponse({"error": "Job not found"}, status_code=404)
+
+        return JSONResponse(
+            {
+                "failure_count": job.failure_count,
+                "preemption_count": job.preemption_count,
+                "current_state": _job_state_name(job.state),
+                "exit_code": job.exit_code,
+                "error": job.error,
+                "started_at_ms": job.started_at_ms,
+                "finished_at_ms": job.finished_at_ms,
+            }
+        )
+
+    def _api_job_tasks(self, request: Request) -> JSONResponse:
+        """Get all tasks for a specific job."""
+        job_id = request.path_params["job_id"]
+        job = self._state.get_job(JobId(job_id))
+        if not job:
+            return JSONResponse({"error": "Job not found"}, status_code=404)
+
+        tasks = self._state.get_job_tasks(job.job_id)
+        task_data = []
+        for t in tasks:
+            worker_id = t.worker_id  # Property reading from attempts
+            worker_address = ""
+            if worker_id:
+                worker = self._state.get_worker(worker_id)
+                if worker:
+                    worker_address = worker.address
+
+            # Add diagnostic information for pending tasks
+            pending_reason = None
+            if t.state == cluster_pb2.TASK_STATE_PENDING:
+                schedule_status = self._scheduler.task_schedule_status(t)
+                pending_reason = schedule_status.failure_reason
+
+            task_data.append(
+                {
+                    "task_id": str(t.task_id),
+                    "task_index": t.task_index,
+                    "state": _task_state_name(t.state),
+                    "worker_id": str(worker_id) if worker_id else None,
+                    "worker_address": worker_address,
+                    "started_at_ms": t.started_at_ms or 0,
+                    "finished_at_ms": t.finished_at_ms or 0,
+                    "exit_code": t.exit_code,
+                    "error": t.error or "",
+                    "current_attempt_id": t.current_attempt_id,
+                    "num_attempts": len(t.attempts),
+                    "pending_reason": pending_reason,
+                    "can_be_scheduled": t.can_be_scheduled(),
+                }
+            )
+
+        return JSONResponse(task_data)
+
+    def _api_endpoints(self, _request: Request) -> JSONResponse:
+        endpoints = []
+        for ep in self._state.list_all_endpoints():
+            job = self._state.get_job(ep.job_id)
+            if job and job.state == cluster_pb2.JOB_STATE_RUNNING:
+                endpoints.append(
+                    {
+                        "endpoint_id": ep.endpoint_id,
+                        "name": ep.name,
+                        "address": ep.address,
+                        "job_id": str(ep.job_id),
+                        "metadata": dict(ep.metadata),
+                    }
+                )
+        return JSONResponse(endpoints)
+
+    def _job_detail_page(self, request: Request) -> HTMLResponse:
+        job_id = request.path_params["job_id"]
+        return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", job_id))
+
+    def _health(self, _request: Request) -> JSONResponse:
+        workers = self._state.list_all_workers()
+        jobs = self._state.list_all_jobs()
+        healthy_count = sum(1 for w in workers if w.healthy)
+
+        return JSONResponse(
+            {
+                "status": "ok",
+                "workers": len(workers),
+                "healthy_workers": healthy_count,
+                "jobs": len(jobs),
+            }
+        )
+
+    def run(self) -> None:
+        uvicorn.run(self._app, host=self._host, port=self._port)
+
+    async def run_async(self) -> None:
+        config = uvicorn.Config(self._app, host=self._host, port=self._port)
+        self._server = uvicorn.Server(config)
+        await self._server.serve()
+
+    async def shutdown(self) -> None:
+        if self._server:
+            self._server.should_exit = True

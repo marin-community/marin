@@ -452,11 +452,24 @@ class Context:
     config_obj: RayClusterConfig | None = None
 
 
+def _maybe_add_ray_verbose(ctx: Context, cmd_args: list[str]) -> list[str]:
+    """Add `-v` to Ray CLI commands when cluster.py verbose mode is enabled.
+
+    Most Ray CLI invocations here are of the form `["ray", "<subcommand>", ...]`.
+    We insert `-v` after the subcommand (e.g. `ray up -v ...`) since Ray exposes per-subcommand verbose flags.
+    """
+    if ctx.verbose:
+        if len(cmd_args) < 2:
+            return cmd_args
+        return [*cmd_args[:2], "-v", *cmd_args[2:]]
+    return cmd_args
+
+
 # Context object to pass global options between commands
 @click.group()
 @click.option("--config", help="Path to Ray cluster config file (infra/marin-*.yaml)")
 @click.option("--cluster", help="Cluster name to connect to")
-@click.option("--verbose", is_flag=True, help="Enable verbose logging")
+@click.option("--verbose", is_flag=True, help="Enable verbose logging (also passes `-v` to Ray cluster commands).")
 @click.pass_context
 def cli(ctx, config, cluster, verbose):
     """Marin cluster management CLI."""
@@ -506,7 +519,7 @@ def start_cluster(ctx):
         print()
 
     print(f"Starting cluster {config_obj.cluster_name}...")
-    subprocess.run(["ray", "up", "-y", config_path], check=True)
+    subprocess.run(_maybe_add_ray_verbose(ctx.obj, ["ray", "up", "-y", config_path]), check=True)
 
 
 @cli.command("stop-cluster")
@@ -518,11 +531,11 @@ def stop_cluster(ctx):
         print("Error: --config required for cluster commands", file=sys.stderr)
         sys.exit(1)
 
-    _stop_cluster_internal(config_obj, config_path)
+    _stop_cluster_internal(ctx.obj, config_obj, config_path)
     print("Cluster stopped successfully!")
 
 
-def _stop_cluster_internal(config_obj: RayClusterConfig, config_path: str):
+def _stop_cluster_internal(ctx: Context, config_obj: RayClusterConfig, config_path: str):
     """Terminate a Ray cluster.
 
     N.B. We terminate the Ray coordinator node first to avoid restarting any new TPUs while
@@ -542,7 +555,10 @@ def _stop_cluster_internal(config_obj: RayClusterConfig, config_path: str):
         print(f"Terminated {len(terminated_tpus)} TPUs")
 
     print(f"Cleaning up Ray cluster state for {config_obj.cluster_name}...")
-    subprocess.run(["ray", "down", "-y", config_path], check=False)  # check=False since instances may already be gone
+    subprocess.run(
+        _maybe_add_ray_verbose(ctx, ["ray", "down", "-y", config_path]),
+        check=False,  # check=False since instances may already be gone
+    )
 
 
 @cli.command("restart-cluster")
@@ -579,10 +595,13 @@ def restart_cluster(ctx, preserve_jobs):
             print("Proceeding with cluster restart without job preservation.")
 
     print("Stopping cluster...")
-    _stop_cluster_internal(config_obj, config_path)
+    _stop_cluster_internal(ctx.obj, config_obj, config_path)
 
     print("Starting cluster...")
-    subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
+    subprocess.run(
+        _maybe_add_ray_verbose(ctx.obj, ["ray", "up", "-y", "--no-config-cache", config_path]),
+        check=True,
+    )
 
     if preserve_jobs:
         print("Restoring jobs...")
@@ -668,7 +687,7 @@ def ssh_connect(ctx, target, project, zone, extra_args):
 @click.pass_context
 def ssh_head(ctx, extra_args):
     """SSH to cluster head node using ray attach."""
-    cmd_args = ["ray", "attach", ctx.obj.config_file]
+    cmd_args = _maybe_add_ray_verbose(ctx.obj, ["ray", "attach", ctx.obj.config_file])
     if extra_args:
         cmd_args.extend(["--", *extra_args])
     subprocess.run(cmd_args, check=True)
@@ -718,6 +737,20 @@ def stop_job(ctx, job_id):
     with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
         _stop_job(job_id)
         print(f"Job {job_id} stop requested")
+
+
+@cli.command("job-logs")
+@click.argument("job_id")
+@click.option("--follow", "-f", is_flag=True, help="Follow the logs (stream in real-time)")
+@click.pass_context
+def job_logs(ctx, job_id, follow):
+    """View logs for a Ray job."""
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
+        cmd = ["ray", "job", "logs"]
+        if follow:
+            cmd.append("--follow")
+        cmd.append(job_id)
+        subprocess.run(cmd)
 
 
 # Top-level commands
@@ -887,7 +920,10 @@ def auth(ctx, secret: str | None, copy: bool, open_browser: bool):
 def show_logs(ctx, tail):
     """View cluster logs."""
     log_command = f"tail -n {tail} -f /tmp/ray/session_latest/logs/monitor*"
-    subprocess.run(["ray", "exec", ctx.obj.config_file, log_command], check=True)
+    subprocess.run(
+        _maybe_add_ray_verbose(ctx.obj, ["ray", "exec", ctx.obj.config_file, log_command]),
+        check=True,
+    )
 
 
 def main():

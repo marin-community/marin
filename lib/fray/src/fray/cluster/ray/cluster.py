@@ -14,6 +14,8 @@
 
 """Ray-based cluster implementation."""
 
+from typing import Any, cast
+
 import asyncio
 import logging
 import os
@@ -38,7 +40,7 @@ from fray.cluster.base import (
     TpuConfig,
 )
 from fray.cluster.ray.config import find_config_by_region
-from fray.cluster.ray.deps import build_runtime_env_for_packages
+from fray.cluster.ray.deps import build_python_path, build_runtime_env_for_packages
 from fray.cluster.ray.tpu import run_on_pod_ray
 from fray.job.context import RayContext, fray_default_job_ctx
 
@@ -256,7 +258,6 @@ class RayCluster(Cluster):
         environment = request.environment if request.environment else EnvironmentConfig.create()
 
         env_vars = dict(environment.env_vars)
-
         # disable access to the TPU if we're not a TPU job, otherwise
         # any import of JAX will claim the TPU and block other users.
         if isinstance(request.resources.device, CpuConfig):
@@ -293,13 +294,23 @@ class RayCluster(Cluster):
             runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
             runtime_env["config"] = {"setup_timeout_seconds": 1800}
         else:
+            # No runtime package installation: rely on the existing environment.
+            # This is primarily used for local clusters (including CI), where workers share
+            # the submitting machine's filesystem and already have dependencies installed.
+            python_path = build_python_path(submodules_dir=os.path.join(environment.workspace, "submodules"))
+            python_path = [
+                p if os.path.isabs(p) else os.path.join(environment.workspace, p) for p in python_path if p.strip()
+            ]
+            if "PYTHONPATH" in env_vars:
+                python_path.extend([p for p in env_vars["PYTHONPATH"].split(":") if p.strip()])
+            env_vars["PYTHONPATH"] = ":".join(python_path)
             runtime_env = {"env_vars": env_vars}
 
         logger.info("Ray runtime env: %s", runtime_env)
         return runtime_env
 
-    def _get_entrypoint_params(self, request: JobRequest) -> dict:
-        params = {}
+    def _get_entrypoint_params(self, request: JobRequest) -> dict[str, Any]:
+        params: dict[str, Any] = {}
 
         if request.resources.cpu > 0:
             params["entrypoint_num_cpus"] = float(request.resources.cpu)
@@ -324,7 +335,7 @@ class RayCluster(Cluster):
         job = self._jobs[job_id]
         if job.submission_id is None:
             logger.info("Job is a remote ref, monitoring is automatic, waiting.")
-            return self.wait(job_id)
+            return cast(JobInfo, self.wait(job_id))
 
         async def stream_logs():
             async for line in self._job_client().tail_job_logs(job_id):
