@@ -1415,8 +1415,28 @@ class PreferenceChatProcessor(BatchProcessor[dict, ProcessedPreferenceChatDict])
         self.rejected_field = rejected_field
 
     def __call__(self, batch: Sequence[dict]) -> Sequence[ProcessedPreferenceChatDict]:
-        chosen_rows = self._chosen(batch)
-        rejected_rows = self._rejected(batch)
+        valid_batch: list[dict] = []
+        skipped_indices: list[int] = []
+        for idx, example in enumerate(batch):
+            chosen = example.get(self.chosen_field)
+            rejected = example.get(self.rejected_field)
+            if not chosen or not rejected:
+                skipped_indices.append(idx)
+                continue
+            valid_batch.append(example)
+
+        if skipped_indices:
+            logger.warning(
+                "DPO preference batch had %d invalid rows with empty chosen/rejected; skipping. Indices: %s",
+                len(skipped_indices),
+                skipped_indices[:10],
+            )
+
+        if not valid_batch:
+            return []
+
+        chosen_rows = self._chosen(valid_batch)
+        rejected_rows = self._rejected(valid_batch)
 
         out: list[ProcessedPreferenceChatDict] = []
         for chosen, rejected in zip(chosen_rows, rejected_rows, strict=True):
@@ -1559,15 +1579,14 @@ class PreferencePairDataset(
                 if prefix == "chosen":
                     tokens = hax.named(example["chosen_input_ids"], self.Pos)
                     seg = hax.named(seg_ids["chosen_input_ids"], self.Pos)
-                    mask = example["chosen_assistant_masks"]
+                    mask = hax.named(example["chosen_assistant_masks"], self.Pos)
                 else:
                     tokens = hax.named(example["rejected_input_ids"], self.Pos)
                     seg = hax.named(seg_ids["rejected_input_ids"], self.Pos)
-                    mask = example["rejected_assistant_masks"]
+                    mask = hax.named(example["rejected_assistant_masks"], self.Pos)
 
                 if self.mask_user_turns:
-                    mask = jnp.roll(mask, -1, axis=-1)
-                    loss_weight = hax.named(mask, self.Pos)
+                    loss_weight = hax.roll(mask, shift=-1, axis=self.Pos)
                 else:
                     loss_weight = None
 

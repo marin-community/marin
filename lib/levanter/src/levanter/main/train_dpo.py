@@ -33,6 +33,7 @@ from levanter.data.text import (
 )
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.metrics import Metric, ReductionType
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import Trainer, TrainerConfig
@@ -44,22 +45,47 @@ from levanter.data.text import DpoExample
 logger = logging.getLogger(__name__)
 
 
+class DpoModel(eqx.Module):
+    policy: LmHeadModel
+    reference: LmHeadModel
+
+
+def _bool_tree_like(tree, value: bool):
+    return jax.tree_util.tree_map(lambda _: value, tree, is_leaf=lambda x: isinstance(x, hax.NamedArray))
+
+
 def dpo_loss_from_logps(
-    delta_pi: jnp.ndarray, delta_ref: jnp.ndarray, *, beta: float
-) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
+    delta_pi: hax.NamedArray | jnp.ndarray,
+    delta_ref: hax.NamedArray | jnp.ndarray,
+    *,
+    beta: float,
+) -> tuple[jnp.ndarray, dict[str, Metric]]:
+    if isinstance(delta_pi, hax.NamedArray) or isinstance(delta_ref, hax.NamedArray):
+        if not isinstance(delta_pi, hax.NamedArray) or not isinstance(delta_ref, hax.NamedArray):
+            raise TypeError("delta_pi and delta_ref must both be NamedArray when using named computations.")
+        logits = (delta_pi - delta_ref) * beta
+        loss = hax.mean(hax.nn.softplus(-logits)).scalar()
+        metrics = {
+            "dpo_loss": Metric.from_value(loss, ReductionType.MEAN),
+            "dpo_margin_policy": Metric.from_value(hax.mean(delta_pi).scalar(), ReductionType.MEAN),
+            "dpo_margin_ref": Metric.from_value(hax.mean(delta_ref).scalar(), ReductionType.MEAN),
+            "dpo_accuracy": Metric.from_value(hax.mean(logits > 0).scalar(), ReductionType.MEAN),
+        }
+        return loss, metrics
+
     logits = beta * (delta_pi - delta_ref)
-    loss = jnp.mean(jax.nn.softplus(-logits))
+    loss = jnp.mean(hax.nn.softplus(-logits))
     metrics = {
-        "dpo_loss": loss,
-        "dpo_margin_policy": jnp.mean(delta_pi),
-        "dpo_margin_ref": jnp.mean(delta_ref),
-        "dpo_accuracy": jnp.mean(logits > 0),
+        "dpo_loss": Metric.from_value(loss, ReductionType.MEAN),
+        "dpo_margin_policy": Metric.from_value(jnp.mean(delta_pi), ReductionType.MEAN),
+        "dpo_margin_ref": Metric.from_value(jnp.mean(delta_ref), ReductionType.MEAN),
+        "dpo_accuracy": Metric.from_value(jnp.mean(logits > 0), ReductionType.MEAN),
     }
     return loss, metrics
 
 
 def _logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
-    nll = model.compute_next_token_loss(example, reduction=None, reduction_axis=())
+    nll = model.compute_next_token_loss(example, reduction=None, reduction_axis=(), key=key)
     Pos = example.tokens.resolve_axis("position")
     return -hax.sum(nll, axis=Pos)
 
@@ -240,13 +266,8 @@ def main(config: TrainDpoConfig):
     levanter.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    reference_holder: dict[str, LmHeadModel] = {}
-
-    def loss_function(model: LmHeadModel, example: DpoExample, *, key=None):
-        if "model" not in reference_holder:
-            raise ValueError("Reference model is not loaded.")
-
-        reference_model = reference_holder["model"]
+    def loss_function(model: DpoModel, example: DpoExample, *, key=None):
+        reference_model = inference_mode(model.reference, True)
 
         if key is not None:
             key_chosen, key_rejected = jrandom.split(key)
@@ -254,14 +275,14 @@ def main(config: TrainDpoConfig):
             key_chosen = None
             key_rejected = None
 
-        logp_pi_chosen = _logp_sum(model, example.chosen, key=key_chosen)
-        logp_pi_rejected = _logp_sum(model, example.rejected, key=key_rejected)
+        logp_pi_chosen = _logp_sum(model.policy, example.chosen, key=key_chosen)
+        logp_pi_rejected = _logp_sum(model.policy, example.rejected, key=key_rejected)
 
         logp_ref_chosen = _logp_sum(reference_model, example.chosen, key=None)
         logp_ref_rejected = _logp_sum(reference_model, example.rejected, key=None)
 
-        delta_pi = (logp_pi_chosen - logp_pi_rejected).array
-        delta_ref = (logp_ref_chosen - logp_ref_rejected).array
+        delta_pi = logp_pi_chosen - logp_pi_rejected
+        delta_ref = logp_ref_chosen - logp_ref_rejected
 
         return dpo_loss_from_logps(delta_pi, delta_ref, beta=config.beta)
 
@@ -331,11 +352,20 @@ def main(config: TrainDpoConfig):
 
         train_dataset = cast(AsyncDataset[DpoExample], train_dataset)
 
-        state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
+        init_policy_key, init_reference_key = jrandom.split(model_key)
+        initial_model = DpoModel(
+            policy=config.model.build(Vocab, key=init_policy_key),
+            reference=config.model.build(Vocab, key=init_reference_key),
+        )
+        trainable_filter = DpoModel(
+            policy=_bool_tree_like(initial_model.policy, True),
+            reference=_bool_tree_like(initial_model.reference, False),
+        )
+        state = trainer.initial_state(training_key, model=initial_model, is_trainable=trainable_filter)
 
-        if int(state.step) == 0 and config.initialize_from_checkpoint_path is not None:
-            state = load_checkpoint(state, config.initialize_from_checkpoint_path)
-            state = dataclasses.replace(state, step=jnp.array(0))
+        policy_model = state.model.policy
+        state = dataclasses.replace(state, model=None)
+        gc.collect()
 
         if int(state.step) == 0:
             if config.initialize_from_hf:
@@ -344,16 +374,21 @@ def main(config: TrainDpoConfig):
                     "No training checkpoint found. Initializing model from HF checkpoint"
                     f" '{converter.reference_checkpoint}'"
                 )
-                state = dataclasses.replace(state, model=None)
-                gc.collect()
-                model = converter.load_pretrained(
+                policy_model = converter.load_pretrained(
                     config.model.model_type,
                     config=config.model if not config.use_hf_model_config else None,
                     axis_mapping=parameter_axis_mapping,
                     dtype=trainer.mp.compute_dtype,
                 )
-                model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
-                state = dataclasses.replace(state, model=model)
+                policy_model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(policy_model)
+            elif config.initialize_from_checkpoint_path is not None:
+                with use_cpu_device():
+                    policy_model = eqx.filter_eval_shape(config.model.build, Vocab, key=init_policy_key)
+                    policy_model = load_checkpoint(
+                        policy_model, config.initialize_from_checkpoint_path, subpath="model"
+                    )
+                policy_model = hax.shard(policy_model, parameter_axis_mapping)
+                policy_model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(policy_model)
             else:
                 logger.info("No checkpoint found. Starting from scratch.")
 
@@ -376,9 +411,12 @@ def main(config: TrainDpoConfig):
 
         reference_model = cast(LmHeadModel, inference_mode(reference_model, True))
         reference_model = named_jit(trainer.mp.cast_to_compute, parameter_axis_mapping)(reference_model)
-        reference_holder["model"] = reference_model
+        state = dataclasses.replace(
+            state,
+            model=DpoModel(policy=policy_model, reference=reference_model),
+        )
 
-        levanter.tracker.log_summary({"parameter_count": parameter_count(state.model)})
+        levanter.tracker.log_summary({"parameter_count": parameter_count(policy_model)})
 
         flops_per_token = config.model.flops_per_token(vocab_size, Pos.size)
         flops_per_example = 3 * flops_per_token * Pos.size if flops_per_token is not None else None

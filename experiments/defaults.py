@@ -592,6 +592,7 @@ def default_dpo(
                 save_interval=timedelta(minutes=10),
                 keep=[dict(every=steps_per_export)],
             ),
+            model_averaging=None,
             mesh=MeshConfig(
                 compute_mapping={
                     "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),

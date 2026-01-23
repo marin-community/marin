@@ -38,7 +38,7 @@ tokenized_preferences = default_tokenize(
 )
 
 dpo_config = SimpleDPOConfig(
-    resources=ResourceConfig.with_tpu("v4-8"),
+    resources=ResourceConfig.with_tpu("v5p-8"),
     train_batch_size=64,
     num_train_steps=5000,
     learning_rate=5e-7,
