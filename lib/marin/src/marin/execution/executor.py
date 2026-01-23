@@ -720,6 +720,8 @@ class Executor:
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
             max_concurrent: Maximum number of steps to run concurrently. If None, run all ready steps in parallel.
         """
+        if max_concurrent is not None and max_concurrent < 1:
+            raise ValueError(f"max_concurrent must be a positive integer, got {max_concurrent}")
 
         # Gather all the steps, compute versions and output paths for all of them.
         logger.info(f"### Inspecting the {len(steps)} provided steps ###")
@@ -778,8 +780,9 @@ class Executor:
 
         while ready or running:
             # Launch ready steps, respecting max_concurrent limit if set
+            # Use pop(0) for FIFO ordering
             while ready and (max_concurrent is None or len(running) < max_concurrent):
-                step = ready.pop()
+                step = ready.pop(0)
                 runner = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
                 if runner is not None:
                     self.step_runners[step] = runner
@@ -1231,43 +1234,29 @@ class ExecutorMainConfig:
     """Maximum number of steps to run concurrently. If None, run all ready steps in parallel (default)."""
 
 
-def run_executor(
-    steps: list[ExecutorStep],
-    description: str | None = None,
-    *,
-    prefix: str | None = None,
-    executor_info_base_path: str | None = None,
-    dry_run: bool = False,
-    run_only: list[str] | None = None,
-    force_run_failed: bool = False,
-    max_concurrent: int | None = None,
-):
-    """Run executor steps programmatically without CLI argument parsing.
-
-    This is a simpler alternative to executor_main() that allows passing all
-    configuration options directly as function arguments. Use this when you
-    need to control execution parameters programmatically (e.g., max_concurrent).
-
-    Args:
-        steps: The steps to run.
-        description: Optional description for the executor run.
-        prefix: GCS bucket prefix. If None, uses MARIN_PREFIX environment variable.
-        executor_info_base_path: Where to store executor info. If None, uses {prefix}/experiments.
-        dry_run: If True, only print what would be done.
-        run_only: If set, only run these steps (regex matched) and their dependencies.
-        force_run_failed: If True, re-run failed steps.
-        max_concurrent: Maximum concurrent steps. If None, run all ready steps in parallel.
-    """
+@draccus.wrap()
+def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
+    """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     time_in = time.time()
 
+    prefix = config.prefix
     if prefix is None:
+        # infer from the environment
         if "MARIN_PREFIX" in os.environ:
             prefix = os.environ["MARIN_PREFIX"]
         else:
             raise ValueError("Must specify a prefix or set the MARIN_PREFIX environment variable")
+    elif "MARIN_PREFIX" in os.environ:
+        if prefix != os.environ["MARIN_PREFIX"]:
+            logger.warning(
+                f"MARIN_PREFIX environment variable ({os.environ['MARIN_PREFIX']}) is different from the "
+                f"specified prefix ({prefix})"
+            )
 
+    executor_info_base_path = config.executor_info_base_path
     if executor_info_base_path is None:
+        # infer from prefix
         executor_info_base_path = os.path.join(prefix, "experiments")
 
     executor = Executor(
@@ -1278,32 +1267,18 @@ def run_executor(
 
     executor.run(
         steps=steps,
-        dry_run=dry_run,
-        run_only=run_only,
-        force_run_failed=force_run_failed,
-        max_concurrent=max_concurrent,
-    )
-    time_out = time.time()
-    logger.info(f"Executor run took {time_out - time_in:.2f}s")
-    logger.info(f"Executor info written to {executor.executor_info_path}")
-    if not prefix.startswith("gs://"):
-        logger.info("Start data browser: cd data_browser && uv run python run-dev.py --config conf/local.conf")
-    logger.info(f"View the experiment at {executor.get_experiment_url()}")
-
-
-@draccus.wrap()
-def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
-    """Main entry point for experiments (to standardize)"""
-    run_executor(
-        steps=steps,
-        description=description,
-        prefix=config.prefix,
-        executor_info_base_path=config.executor_info_base_path,
         dry_run=config.dry_run,
         run_only=config.run_only,
         force_run_failed=config.force_run_failed,
         max_concurrent=config.max_concurrent,
     )
+    time_out = time.time()
+    logger.info(f"Executor run took {time_out - time_in:.2f}s")
+    # print json path again so it's easy to copy
+    logger.info(f"Executor info written to {executor.executor_info_path}")
+    if not executor.prefix.startswith("gs://"):
+        logger.info("Start data browser: cd data_browser && uv run python run-dev.py --config conf/local.conf")
+    logger.info(f"View the experiment at {executor.get_experiment_url()}")
 
 
 def _is_relative_path(url_or_path):

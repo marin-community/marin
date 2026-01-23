@@ -71,6 +71,8 @@ class RemoteClusterClient:
         environment: cluster_pb2.EnvironmentConfig | None = None,
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,
+        constraints: list[cluster_pb2.Constraint] | None = None,
+        coscheduling: cluster_pb2.CoschedulingConfig | None = None,
     ) -> None:
         serialized = cloudpickle.dumps(entrypoint)
 
@@ -96,7 +98,10 @@ class RemoteClusterClient:
                 ports=ports or [],
                 parent_job_id=parent_job_id,
                 scheduling_timeout_seconds=scheduling_timeout_seconds,
+                constraints=constraints or [],
             )
+            if coscheduling is not None:
+                request.coscheduling.CopyFrom(coscheduling)
         else:
             request = cluster_pb2.Controller.LaunchJobRequest(
                 name=job_id,
@@ -107,7 +112,10 @@ class RemoteClusterClient:
                 ports=ports or [],
                 parent_job_id=parent_job_id,
                 scheduling_timeout_seconds=scheduling_timeout_seconds,
+                constraints=constraints or [],
             )
+            if coscheduling is not None:
+                request.coscheduling.CopyFrom(coscheduling)
         self._client.launch_job(request)
 
     def get_job_status(self, job_id: str) -> cluster_pb2.JobStatus:
