@@ -39,13 +39,7 @@ def is_hf_checkpoint(checkpoint: str) -> bool:
     Uses a simple heuristic: if the checkpoint looks like a path then
     assume it is a local Levanter checkpoint; otherwise assume it is a
     HuggingFace repository.
-
-    Note: hf:// URLs are treated as HuggingFace checkpoints since they use
-    the fsspec HuggingFace Hub protocol for streaming model loading.
     """
-    # hf:// URLs are HuggingFace checkpoints (fsspec streaming protocol)
-    if checkpoint.startswith("hf://"):
-        return True
     return not (
         "://" in checkpoint or checkpoint.startswith("/") or checkpoint.startswith("./") or checkpoint.startswith("../")
     )
