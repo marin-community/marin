@@ -20,13 +20,28 @@ import logging
 import re
 import subprocess
 import threading
+import traceback
+from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
+from html import escape as html_escape
 
 from flask import Flask, Response, request
 import requests
 from werkzeug.serving import make_server
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LogEntry:
+    """A single log entry for the dashboard."""
+
+    timestamp: datetime
+    cluster: str
+    level: str  # "error", "warning", "info"
+    message: str
+    details: str | None = None  # Full stack trace or additional details
 
 
 @dataclass
@@ -167,9 +182,25 @@ class DashboardProxy:
     proxy_port: int
     server: make_server | None = None
     thread: threading.Thread | None = None
+    _logs: deque[LogEntry] = field(default_factory=lambda: deque(maxlen=100))
+    _logs_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def _add_log(self, cluster: str, level: str, message: str, details: str | None = None) -> None:
+        entry = LogEntry(
+            timestamp=datetime.now(),
+            cluster=cluster,
+            level=level,
+            message=message,
+            details=details,
+        )
+        with self._logs_lock:
+            self._logs.append(entry)
+
+    def _get_logs(self, limit: int = 50) -> list[LogEntry]:
+        with self._logs_lock:
+            return list(self._logs)[-limit:]
 
     def _build_status(self, cluster: str, ports: RayPortMapping) -> ClusterStatus:
-        """Fetch status for a cluster using the forwarded port."""
         try:
             gcs_address = f"localhost:{ports.gcs_port}"
             result = subprocess.run(
@@ -207,7 +238,6 @@ class DashboardProxy:
         return html
 
     def _build_status_html(self, cluster: str, ports: RayPortMapping) -> str:
-        """Render a status card body for HTMX."""
         try:
             status = self._build_status(cluster, ports)
 
@@ -219,26 +249,61 @@ class DashboardProxy:
             html += self._render_resources(status)
             html += "</div>"
             return html
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
+            self._add_log(
+                cluster,
+                "error",
+                "Timeout fetching status",
+                f"Command timed out after {e.timeout}s: {' '.join(e.cmd) if e.cmd else 'unknown command'}",
+            )
             return '<div class="error">⏱ Timeout fetching status</div>'
         except subprocess.CalledProcessError as e:
             output = (e.stderr or e.stdout or "").strip()
-            snippet = (output[:300] + "...") if len(output) > 300 else output
-            return f'<div class="error">❌ ray status failed: {snippet or "no output"}</div>'
+            self._add_log(
+                cluster,
+                "error",
+                f"ray status failed (exit {e.returncode})",
+                output or "no output",
+            )
+            return '<div class="error">❌ Failed to fetch status</div>'
         except Exception as e:
-            return f'<div class="error">❌ Error: {str(e)[:100]}</div>'
+            self._add_log(
+                cluster,
+                "error",
+                f"Error: {e!s}",
+                traceback.format_exc(),
+            )
+            return '<div class="error">❌ Failed to fetch status</div>'
 
     def _create_app(self) -> Flask:
         app = Flask(__name__)
 
         @app.route("/api/cluster/<cluster>/status-html")
         def cluster_status_html(cluster: str):
-            """Get cluster status as HTML for HTMX."""
             if cluster not in self.clusters:
                 return '<div class="error">Unknown cluster</div>'
 
             ports = self.port_mappings[cluster]
             return self._build_status_html(cluster, ports)
+
+        @app.route("/api/logs-html")
+        def logs_html():
+            logs = self._get_logs(50)
+            if not logs:
+                return '<div class="log-empty">No logs yet</div>'
+
+            html_parts = []
+            for entry in reversed(logs):
+                timestamp = entry.timestamp.strftime("%H:%M:%S")
+                escaped_cluster = html_escape(entry.cluster)
+                escaped_message = html_escape(entry.message)
+                escaped_details = html_escape(entry.details) if entry.details else ""
+                details_str = f": {escaped_details}" if entry.details else ""
+                log_line = (
+                    f'<div class="log-line">{timestamp} [{escaped_cluster}] ' f"{escaped_message}{details_str}</div>"
+                )
+                html_parts.append(log_line)
+            return "".join(html_parts)
 
         @app.route("/")
         def index():
@@ -351,6 +416,33 @@ class DashboardProxy:
             border-radius: 4px;
             font-size: 13px;
         }
+        .log-panel {
+            margin-top: 30px;
+            background: white;
+            border-radius: 8px;
+            padding: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .log-panel h2 {
+            font-size: 18px;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        .log-content {
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .log-empty {
+            color: #95a5a6;
+        }
+        .log-line {
+            padding: 4px 0;
+            border-bottom: 1px solid #eee;
+            color: #e74c3c;
+            word-break: break-word;
+        }
     </style>
 </head>
 <body>
@@ -379,6 +471,14 @@ class DashboardProxy:
         </div>
 """
             html += """
+    </div>
+    <div class="log-panel">
+        <h2>Logs</h2>
+        <div class="log-content"
+             hx-get="/api/logs-html"
+             hx-trigger="load, every 5s"
+             hx-swap="innerHTML">
+        </div>
     </div>
 </body>
 </html>
@@ -415,7 +515,6 @@ class DashboardProxy:
         return app
 
     def start(self) -> None:
-        """Start proxy server in background thread."""
         app = self._create_app()
         self.server = make_server("localhost", self.proxy_port, app, threaded=True)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -423,7 +522,6 @@ class DashboardProxy:
         logger.info("Started Ray dashboard proxy on http://localhost:%d", self.proxy_port)
 
     def stop(self) -> None:
-        """Stop proxy server."""
         if self.server:
             self.server.shutdown()
         if self.thread:
