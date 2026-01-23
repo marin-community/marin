@@ -33,7 +33,7 @@ from marin.rl.curriculum import Curriculum, CurriculumConfig, LessonConfig
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 
-pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integration tests on CI environment")
+pytestmark = pytest.mark.skipif(os.environ.get("CI") is not None, reason="Skipping integration tests on CI environment")
 
 
 def _create_test_curriculum_config() -> CurriculumConfig:
@@ -96,6 +96,7 @@ def ray_cluster():
         yield
 
 
+@pytest.mark.slow("Integration test with Iris actors under Ray.")
 def test_curriculum_via_iris_under_ray(ray_cluster):
     """Multiple Ray tasks communicate with Iris-hosted Curriculum."""
     # Launch Iris actor host (Ray actor with gRPC server)
