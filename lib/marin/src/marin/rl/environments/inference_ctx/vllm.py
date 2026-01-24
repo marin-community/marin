@@ -51,9 +51,6 @@ except ImportError:
 
 # Disable multiprocessing to have direct access to the model weights
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
-# Init vLLM model with random weights to speed up bootstrap time, because
-# model weights are synced from trainer later on
-os.environ["JAX_RANDOM_WEIGHTS"] = "True"
 # Skip jax precompile to speed up bootstrap time
 os.environ["SKIP_JAX_PRECOMPILE"] = "1"
 
@@ -73,6 +70,7 @@ class vLLMInferenceContextConfig:
     gpu_memory_utilization: float
     sampling_params: SamplingParams
     mode: InferenceMode = InferenceMode.SYNC
+    load_format: str = "auto"
 
 
 class vLLMInferenceContext(BaseInferenceContext):
@@ -166,6 +164,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             max_model_len=inference_config.max_model_len,
             tensor_parallel_size=inference_config.tensor_parallel_size,
             gpu_memory_utilization=inference_config.gpu_memory_utilization,
+            load_format=inference_config.load_format,
         )
 
     def _convert_vllm_state_dict_to_trainer_keys(
