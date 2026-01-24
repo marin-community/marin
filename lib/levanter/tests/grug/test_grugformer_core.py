@@ -29,6 +29,7 @@ def _make_grug_mesh() -> Mesh:
 def test_forward_shapes_and_jit_compile():
     # On TPU, Grug uses Splash attention which requires KV sequence length to be a multiple of 128.
     seq = 128 if jax.default_backend() == "tpu" else 8
+    batch = len(jax.devices()) * 2
     cfg = GrugModelConfig(
         vocab_size=101,
         hidden_dim=32,
@@ -45,7 +46,7 @@ def test_forward_shapes_and_jit_compile():
         tokens = jax.random.randint(jax.random.key(1), (2, seq), 0, cfg.vocab_size)
 
         logits = forward(params, tokens, cfg, mask=AttentionMask.causal())
-        assert logits.shape == (2, seq, cfg.vocab_size)
+        assert logits.shape == (batch, seq, cfg.vocab_size)
 
         jit_forward = jax.jit(forward, static_argnames=("cfg",))
         logits_jit = jit_forward(params, tokens, cfg, mask=AttentionMask.causal())
