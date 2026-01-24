@@ -15,8 +15,7 @@
 """
 Model utilities for RL/post-training tasks.
 
-Contains helper functions for loading models from various checkpoint formats,
-including both local Levanter checkpoints and HuggingFace repositories.
+Contains helper functions for loading models from Levanter-format checkpoints on GCS.
 """
 
 import logging
@@ -45,7 +44,7 @@ def load_model_from_checkpoint(
     """Load a model from checkpoint, assuming it is in native Levanter format.
 
     Args:
-        checkpoint: Path to checkpoint. If None, builds a new model.
+        checkpoint: GCS path to a Levanter-format checkpoint. If None, builds a new model.
         model_config: Model configuration
         trainer_config: Trainer configuration
         vocab_axis: Vocabulary axis for the model

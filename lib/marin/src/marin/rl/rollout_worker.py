@@ -423,7 +423,6 @@ class RolloutWorker:
                 mesh=self._policy_ctx.mesh,
                 # use the compute axis mapping for inference
                 axis_mapping=self._policy_ctx.axis_mapping,
-                tokenizer=self._tokenizer,
                 key=key,
             )
 
