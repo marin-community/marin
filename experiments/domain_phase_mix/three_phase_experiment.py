@@ -86,6 +86,12 @@ BASELINES: list[tuple[list[float], list[float], list[float]]] = [
     ([1, 0, 0], [0, 1, 0], [0.5, 0.5, 0]),
     ([1, 0, 0], [1, 0, 0], [1, 0, 0]),
     ([1, 0, 0], [1, 0, 0], [0, 1, 0]),
+    # RegMix-optimized for eval/paloma/c4_en/bpb (from regmix_regression.py)
+    ([0.5608, 0.3962, 0.0430], [0.7221, 0.2168, 0.0611], [0.6633, 0.2397, 0.0969]),
+    # RegMix k-fold CV optimized for eval/paloma/c4_en/bpb (10M samples, from regmix_regression_kfold.py)
+    ([0.4977, 0.4568, 0.0455], [0.6575, 0.3140, 0.0285], [0.6756, 0.2445, 0.0799]),
+    # RegMix k-fold CV optimized for lm_eval/arc_challenge/choice_logprob (10M samples)
+    ([0.5203, 0.4339, 0.0458], [0.1468, 0.8256, 0.0277], [0.5405, 0.3860, 0.0735]),
 ]
 
 

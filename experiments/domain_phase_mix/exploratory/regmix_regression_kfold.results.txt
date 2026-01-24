@@ -1,0 +1,227 @@
+Total runs: 108
+Completed runs: 108
+
+Feature matrix shape: (108, 9)
+Features: ['phase_0_nemotron_full', 'phase_0_dolmino', 'phase_0_openthoughts_sft', 'phase_1_nemotron_full', 'phase_1_dolmino', 'phase_1_openthoughts_sft', 'phase_2_nemotron_full', 'phase_2_dolmino', 'phase_2_openthoughts_sft']
+
+Using 5-fold cross-validation
+
+============================================================
+FITTING REGRESSION MODELS WITH K-FOLD CV
+============================================================
+
+--- Fold 1/5 ---
+
+--- Fold 2/5 ---
+
+--- Fold 3/5 ---
+
+--- Fold 4/5 ---
+
+--- Fold 5/5 ---
+
+============================================================
+CROSS-VALIDATION RESULTS
+============================================================
+
+Metric                                        Spearman r           Pearson r           
+-------------------------------------------------------------------------------------
+eval/loss                                     0.8998 ± 0.0349    0.8735 ± 0.0211
+eval/paloma/c4_en/bpb                         0.8713 ± 0.0855    0.8593 ± 0.0866
+lm_eval/arc_challenge/acc                     0.4853 ± 0.1522    0.4566 ± 0.1382
+lm_eval/arc_challenge/choice_logprob          0.8239 ± 0.0861    0.8409 ± 0.0396
+lm_eval/hellaswag_0shot/acc_norm              0.8659 ± 0.0624    0.8389 ± 0.0484
+lm_eval/arc_challenge/acc_norm                0.5316 ± 0.3510    0.5486 ± 0.3291
+lm_eval/piqa/acc                              0.6429 ± 0.1600    0.6459 ± 0.1512
+lm_eval/boolq/acc                             0.0405 ± 0.1350    0.1249 ± 0.1519
+lm_eval/averages/macro_avg_acc                0.6843 ± 0.0880    0.7120 ± 0.0667
+
+============================================================
+OPTIMIZING MIXTURE WEIGHTS
+============================================================
+
+Generated 10,000,000 random mixture samples using mixed strategy
+
+Predicting on random samples (ensemble of k models)...
+
+============================================================
+OPTIMAL MIXTURES BY METRIC
+============================================================
+
+eval/loss:
+  Predicted value: 3.5605 ± 0.0002
+  phase_0: nemotron_full=0.787 dolmino=0.182 openthoughts_sft=0.031 
+  phase_1: nemotron_full=0.169 dolmino=0.786 openthoughts_sft=0.045 
+  phase_2: nemotron_full=0.496 dolmino=0.447 openthoughts_sft=0.057 
+
+eval/paloma/c4_en/bpb:
+  Predicted value: 1.1316 ± 0.0001
+  phase_0: nemotron_full=0.481 dolmino=0.480 openthoughts_sft=0.039 
+  phase_1: nemotron_full=0.763 dolmino=0.217 openthoughts_sft=0.021 
+  phase_2: nemotron_full=0.675 dolmino=0.267 openthoughts_sft=0.058 
+
+lm_eval/arc_challenge/acc:
+  Predicted value: 0.1858 ± 0.0000
+  phase_0: nemotron_full=0.491 dolmino=0.464 openthoughts_sft=0.046 
+  phase_1: nemotron_full=0.241 dolmino=0.684 openthoughts_sft=0.075 
+  phase_2: nemotron_full=0.171 dolmino=0.659 openthoughts_sft=0.170 
+
+lm_eval/arc_challenge/choice_logprob:
+  Predicted value: -5.6853 ± 0.0003
+  phase_0: nemotron_full=0.305 dolmino=0.653 openthoughts_sft=0.041 
+  phase_1: nemotron_full=0.488 dolmino=0.490 openthoughts_sft=0.022 
+  phase_2: nemotron_full=0.467 dolmino=0.455 openthoughts_sft=0.079 
+
+lm_eval/hellaswag_0shot/acc_norm:
+  Predicted value: 0.2934 ± 0.0000
+  phase_0: nemotron_full=0.527 dolmino=0.443 openthoughts_sft=0.030 
+  phase_1: nemotron_full=0.758 dolmino=0.219 openthoughts_sft=0.024 
+  phase_2: nemotron_full=0.180 dolmino=0.765 openthoughts_sft=0.055 
+
+lm_eval/arc_challenge/acc_norm:
+  Predicted value: 0.2324 ± 0.0000
+  phase_0: nemotron_full=0.470 dolmino=0.496 openthoughts_sft=0.034 
+  phase_1: nemotron_full=0.295 dolmino=0.658 openthoughts_sft=0.047 
+  phase_2: nemotron_full=0.120 dolmino=0.849 openthoughts_sft=0.031 
+
+lm_eval/piqa/acc:
+  Predicted value: 0.6135 ± 0.0000
+  phase_0: nemotron_full=0.793 dolmino=0.172 openthoughts_sft=0.034 
+  phase_1: nemotron_full=0.579 dolmino=0.358 openthoughts_sft=0.062 
+  phase_2: nemotron_full=0.880 dolmino=0.074 openthoughts_sft=0.046 
+
+lm_eval/boolq/acc:
+  Predicted value: 0.5454 ± 0.0000
+  phase_0: nemotron_full=0.934 dolmino=0.033 openthoughts_sft=0.033 
+  phase_1: nemotron_full=0.602 dolmino=0.369 openthoughts_sft=0.030 
+  phase_2: nemotron_full=0.196 dolmino=0.022 openthoughts_sft=0.782 
+
+lm_eval/averages/macro_avg_acc:
+  Predicted value: 0.3767 ± 0.0000
+  phase_0: nemotron_full=0.116 dolmino=0.849 openthoughts_sft=0.035 
+  phase_1: nemotron_full=0.611 dolmino=0.367 openthoughts_sft=0.023 
+  phase_2: nemotron_full=0.465 dolmino=0.452 openthoughts_sft=0.083 
+
+============================================================
+FINAL RECOMMENDATION: OPTIMIZED FOR eval/paloma/c4_en/bpb
+============================================================
+
+Optimal mixture weights (predicted bpb: 1.1316):
+
+phase_0:
+  nemotron_full       : 0.4814
+  dolmino             : 0.4796
+  openthoughts_sft    : 0.0390
+
+phase_1:
+  nemotron_full       : 0.7626
+  dolmino             : 0.2168
+  openthoughts_sft    : 0.0206
+
+phase_2:
+  nemotron_full       : 0.6753
+  dolmino             : 0.2666
+  openthoughts_sft    : 0.0581
+
+
+============================================================
+BASELINE FORMAT (for three_phase_experiment.py)
+============================================================
+
+# RegMix k-fold CV optimized for eval/paloma/c4_en/bpb
+([0.4814, 0.4796, 0.0390], [0.7626, 0.2168, 0.0206], [0.6753, 0.2666, 0.0581]),
+
+============================================================
+COMPARISON WITH BASELINE RUNS
+============================================================
+
+Baseline runs (excluding run 90000 which diverged):
+  run_id=90001: c4_bpb=1.1704, macro_avg_acc=0.3775
+  run_id=90002: c4_bpb=1.1618, macro_avg_acc=0.3811
+  run_id=90003: c4_bpb=1.1406, macro_avg_acc=0.3797
+  run_id=90004: c4_bpb=1.1765, macro_avg_acc=0.3716
+  run_id=90005: c4_bpb=1.1543, macro_avg_acc=0.3802
+  run_id=90006: c4_bpb=1.1264, macro_avg_acc=0.3751
+  run_id=90007: c4_bpb=1.1258, macro_avg_acc=0.3793
+  run_id=90008: c4_bpb=1.1391, macro_avg_acc=0.3836
+
+Best observed c4_bpb in training data: 1.1258
+Predicted optimal c4_bpb: 1.1316
+
+============================================================
+OPTIMIZED FOR lm_eval/arc_challenge/choice_logprob
+============================================================
+
+Optimal mixture weights (predicted choice_logprob: -5.6853):
+
+phase_0:
+  nemotron_full       : 0.3054
+  dolmino             : 0.6534
+  openthoughts_sft    : 0.0412
+
+phase_1:
+  nemotron_full       : 0.4876
+  dolmino             : 0.4900
+  openthoughts_sft    : 0.0224
+
+phase_2:
+  nemotron_full       : 0.4669
+  dolmino             : 0.4545
+  openthoughts_sft    : 0.0786
+
+BASELINE FORMAT (for three_phase_experiment.py):
+
+# RegMix k-fold CV optimized for lm_eval/arc_challenge/choice_logprob
+([0.3054, 0.6534, 0.0412], [0.4876, 0.4900, 0.0224], [0.4669, 0.4545, 0.0786]),
+
+Baseline runs choice_logprob values:
+  run_id=90001: choice_logprob=-5.7664
+  run_id=90002: choice_logprob=-5.6800
+  run_id=90003: choice_logprob=-5.6391
+  run_id=90004: choice_logprob=-5.8427
+  run_id=90005: choice_logprob=-5.6333
+  run_id=90006: choice_logprob=-5.6446
+  run_id=90007: choice_logprob=-5.6516
+  run_id=90008: choice_logprob=-5.7329
+
+Best observed choice_logprob in training data: -5.6077
+Predicted optimal choice_logprob: -5.6853
+
+============================================================
+OPTIMIZED FOR lm_eval/arc_challenge/acc
+============================================================
+
+Optimal mixture weights (predicted acc: 0.1858):
+
+phase_0:
+  nemotron_full       : 0.4905
+  dolmino             : 0.4637
+  openthoughts_sft    : 0.0458
+
+phase_1:
+  nemotron_full       : 0.2407
+  dolmino             : 0.6839
+  openthoughts_sft    : 0.0754
+
+phase_2:
+  nemotron_full       : 0.1710
+  dolmino             : 0.6587
+  openthoughts_sft    : 0.1703
+
+BASELINE FORMAT (for three_phase_experiment.py):
+
+# RegMix k-fold CV optimized for lm_eval/arc_challenge/acc
+([0.4905, 0.4637, 0.0458], [0.2407, 0.6839, 0.0754], [0.1710, 0.6587, 0.1703]),
+
+Baseline runs arc_challenge/acc values:
+  run_id=90001: acc=0.1886
+  run_id=90002: acc=0.1928
+  run_id=90003: acc=0.2159
+  run_id=90004: acc=0.1809
+  run_id=90005: acc=0.2073
+  run_id=90006: acc=0.1903
+  run_id=90007: acc=0.1911
+  run_id=90008: acc=0.1894
+
+Best observed arc_challenge/acc in training data: 0.2159
+Predicted optimal arc_challenge/acc: 0.1858

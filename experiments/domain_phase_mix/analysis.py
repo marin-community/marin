@@ -52,6 +52,7 @@ DEFAULT_METRICS = [
     "eval/paloma/m2d2_wikipedia_unsplit/bpb",
     "lm_eval/arc_challenge/acc",
     "lm_eval/arc_challenge/acc_norm",
+    "lm_eval/arc_challenge/choice_logprob",
     "lm_eval/hellaswag_0shot/acc",
     "lm_eval/hellaswag_0shot/acc_norm",
     "lm_eval/piqa/acc",
@@ -254,8 +255,14 @@ def match_runs_to_configs(runs: list[dict], configs: list[dict], experiment_name
         # Try baseline pattern (offset by 90000)
         match = baseline_pattern.search(name)
         if match:
-            # Map base_00000 -> run_id 90000, base_00001 -> run_id 90001, etc.
-            run_id = BASELINE_RUN_ID_OFFSET + int(match.group(1))
+            extracted_id = int(match.group(1))
+            # Handle both naming conventions:
+            # - base_00000 -> base_00005: add 90000 offset (legacy)
+            # - base_90006 -> base_90007: use extracted_id directly (new convention)
+            if extracted_id >= BASELINE_RUN_ID_OFFSET:
+                run_id = extracted_id
+            else:
+                run_id = BASELINE_RUN_ID_OFFSET + extracted_id
             if run_id not in run_by_id or run["status"] == "finished":
                 run_by_id[run_id] = run
             baseline_count += 1
