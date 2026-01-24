@@ -211,6 +211,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
                 logprobs=1,
                 top_k=config.inference_top_k,
             ),
+            load_format="dummy" if config.inflight_weight_updates else "auto",
         ),
         initial_checkpoint=config.model_config.checkpoint,
         rollout_storage=rollout_storage,
