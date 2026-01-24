@@ -17,11 +17,16 @@ import datetime
 import logging
 import os
 
-from levanter.models.llama import LlamaConfig
+from levanter.models.qwen import QwenConfig
 from marin.execution.executor import executor_main
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
 from marin.rl.rl_losses import RLOOLoss
+
+from experiments.models import (
+    ModelConfig as HFModelConfig,
+    levanter_model_step,
+)
 
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
@@ -32,12 +37,19 @@ from marin.rl.rl_experiment_utils import (
 logger = logging.getLogger(__name__)
 
 
-llama_3_1_8b = ModelConfig(
-    name="meta-llama/Llama-3.1-8B-Instruct",
-    type="llama",
-    tokenizer="meta-llama/Llama-3.1-8B-Instruct",
-    checkpoint="meta-llama/Llama-3.1-8B-Instruct",
-    config_class=LlamaConfig,
+qwen2_5_7b_config = HFModelConfig(
+    hf_repo_id="Qwen/Qwen2.5-7B",
+    hf_revision="d149729",
+    config_class=QwenConfig,
+)
+
+
+qwen25_7b = ModelConfig(
+    name="Qwen/Qwen2.5-7B",
+    type="qwen",
+    tokenizer="Qwen/Qwen2.5-7B",
+    checkpoint=levanter_model_step(qwen2_5_7b_config).as_input_name(),
+    config_class=QwenConfig,
 )
 
 
@@ -80,8 +92,8 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    llama_8b = RLExperimentConfig(
-        model_config=llama_3_1_8b,
+    qwen_7b = RLExperimentConfig(
+        model_config=qwen25_7b,
         rl_loss=RLOOLoss(
             kl_coef=0.0,
             clip_epsilon_low=0.2,
@@ -90,9 +102,9 @@ def main():
             do_trainer_inference_mismatch_importance_sampling=True,
             tis_importance_sampling_ratio_max=2.0,
             do_overlong_filtering=True,
-            vocab_tile_size=32064,
+            vocab_tile_size=38016,
         ),
-        experiment_name_suffix="math-lr=2e-6-bs=1024",
+        experiment_name_suffix="qwen25-7b-math-lr=2e-6-bs=1024",
         train_batch_size=1024,
         per_device_parallelism=16,
         learning_rate=2e-6,
@@ -104,7 +116,7 @@ def main():
         max_rollout_step_delay=1,
     )
 
-    experiment_configs = [llama_8b]
+    experiment_configs = [qwen_7b]
     experiments = []
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     for experiment_config in experiment_configs:
