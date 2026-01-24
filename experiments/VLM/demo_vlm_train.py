@@ -157,10 +157,10 @@ VISION_FEATURE_HEIGHT = vision_config.image_size // vision_config.patch_size  # 
 
 data_config = ImageMixtureDatasetConfig(
     cache_dir="cache/vlm_demo",
-    # Processor for image preprocessing
-    processor="llava-hf/llava-onevision-qwen2-0.5b-ov-hf",
+    # Processor for image preprocessing (loaded from GCS to avoid HuggingFace download race conditions)
+    processor="gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf",
     # Custom tokenizer for text processing (uses CustomVLMProcessor internally)
-    tokenizer="Qwen/Qwen3-1.7B",
+    tokenizer="gs://marin-vlm/tokenizers/Qwen3-1.7B",
     configs={"train": data_source},
     train_weights={"train": 1.0},
     use_cache=False,  # Streaming mode with pre-computed pack assignments
@@ -258,7 +258,7 @@ vlm_training = default_train_vlm(
     model_config=vlm_config,
     train_config=train_config,
     tags=["vlm", "demo", "qwen3-1.7b", "siglip"],
-    allow_out_of_region=("data.pack_assignments_path",),
+    allow_out_of_region=("data.pack_assignments_path", "data.processor"),
 )
 
 # ============================================================================

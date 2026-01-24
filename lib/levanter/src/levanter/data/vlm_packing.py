@@ -791,22 +791,18 @@ _process_processor_cache: Dict[str, Any] = {}
 
 
 def _get_cached_tokenizer(tokenizer_name: str):
-    """Get or load tokenizer for this process (cached)."""
+    """Get or load tokenizer for this process (cached). Supports GCS paths."""
     if tokenizer_name not in _process_tokenizer_cache:
-        from transformers import AutoTokenizer
-        _process_tokenizer_cache[tokenizer_name] = AutoTokenizer.from_pretrained(
-            tokenizer_name, trust_remote_code=True
-        )
+        from levanter.compat.hf_checkpoints import load_tokenizer
+        _process_tokenizer_cache[tokenizer_name] = load_tokenizer(tokenizer_name)
     return _process_tokenizer_cache[tokenizer_name]
 
 
 def _get_cached_processor(processor_name: str):
-    """Get or load processor for this process (cached)."""
+    """Get or load processor for this process (cached). Supports GCS paths."""
     if processor_name not in _process_processor_cache:
-        from transformers import AutoProcessor
-        _process_processor_cache[processor_name] = AutoProcessor.from_pretrained(
-            processor_name, trust_remote_code=True
-        )
+        from levanter.compat.hf_checkpoints import load_processor
+        _process_processor_cache[processor_name] = load_processor(processor_name)
     return _process_processor_cache[processor_name]
 
 

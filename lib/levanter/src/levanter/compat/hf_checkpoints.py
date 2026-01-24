@@ -5,6 +5,7 @@ import abc
 import contextlib
 import dataclasses
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -1107,20 +1108,59 @@ def _is_jax_distributed_initialized():
         return False
 
 
+def _clear_hf_cache_for_model(model_name: str):
+    """Clear HuggingFace cache for a specific model to remove corrupted files."""
+    try:
+        from huggingface_hub import scan_cache_dir
+        cache_info = scan_cache_dir()
+        for repo in cache_info.repos:
+            if model_name in repo.repo_id:
+                for revision in repo.revisions:
+                    # Delete all files in this revision
+                    for cached_file in revision.files:
+                        try:
+                            cached_file.file_path.unlink()
+                            logger.info(f"Deleted corrupted cache file: {cached_file.file_path}")
+                        except Exception:
+                            pass
+    except Exception as e:
+        logger.warning(f"Failed to clear HuggingFace cache: {e}")
+
+
 def _hf_load_with_retry(load_fn, *args, max_retries: int = 20, base_delay: float = 2.0, max_delay: float = 128.0, **kwargs):
-    """Load with retry logic for rate limit errors (no JAX synchronization). Internal use with _patch_hf_hub_download."""
+    """Load with retry logic for rate limit and file corruption errors (no JAX synchronization). Internal use with _patch_hf_hub_download."""
     for attempt in range(max_retries):
         try:
             with _patch_hf_hub_download():
                 return load_fn(*args, **kwargs)
         except Exception as e:
-            if "429" in str(e) or "Too Many Requests" in str(e):
+            error_str = str(e)
+            is_rate_limit = "429" in error_str or "Too Many Requests" in error_str
+            is_corrupted = (
+                "EOF while parsing" in error_str
+                or "Expecting value" in error_str
+                or "did not contain valid UTF-8" in error_str
+            )
+
+            if is_rate_limit or is_corrupted:
                 if attempt < max_retries - 1:
                     delay = min(base_delay * (2**attempt) + random.uniform(0, 1), max_delay)
-                    logger.warning(
-                        f"Rate limited by HuggingFace Hub, retrying in {delay:.1f}s "
-                        f"(attempt {attempt + 1}/{max_retries})"
-                    )
+
+                    if is_corrupted:
+                        # Clear corrupted cache before retrying
+                        logger.warning(
+                            f"Corrupted HuggingFace cache detected, clearing and retrying in {delay:.1f}s "
+                            f"(attempt {attempt + 1}/{max_retries}): {error_str[:100]}"
+                        )
+                        # Try to extract model name from args
+                        if args:
+                            _clear_hf_cache_for_model(str(args[0]))
+                    else:
+                        logger.warning(
+                            f"Rate limited by HuggingFace Hub, retrying in {delay:.1f}s "
+                            f"(attempt {attempt + 1}/{max_retries})"
+                        )
+
                     time.sleep(delay)
                 else:
                     raise
@@ -1130,9 +1170,10 @@ def _hf_load_with_retry(load_fn, *args, max_retries: int = 20, base_delay: float
 
 def hf_load_with_retry(load_fn, *args, max_retries: int = 20, base_delay: float = 2.0, max_delay: float = 128.0, **kwargs):
     """
-    Public wrapper with retry logic for HuggingFace rate limit errors.
+    Public wrapper with retry logic for HuggingFace rate limit and file corruption errors.
 
-    Use this for any HuggingFace from_pretrained calls that might hit rate limits.
+    Use this for any HuggingFace from_pretrained calls that might hit rate limits
+    or encounter corrupted cache files.
     Example: hf_load_with_retry(AutoConfig.from_pretrained, "model_name")
 
     Args:
@@ -1147,13 +1188,31 @@ def hf_load_with_retry(load_fn, *args, max_retries: int = 20, base_delay: float 
         try:
             return load_fn(*args, **kwargs)
         except Exception as e:
-            if "429" in str(e) or "Too Many Requests" in str(e):
+            error_str = str(e)
+            is_rate_limit = "429" in error_str or "Too Many Requests" in error_str
+            is_corrupted = (
+                "EOF while parsing" in error_str
+                or "Expecting value" in error_str
+                or "did not contain valid UTF-8" in error_str
+            )
+
+            if is_rate_limit or is_corrupted:
                 if attempt < max_retries - 1:
                     delay = min(base_delay * (2**attempt) + random.uniform(0, 1), max_delay)
-                    logger.warning(
-                        f"Rate limited by HuggingFace Hub, retrying in {delay:.1f}s "
-                        f"(attempt {attempt + 1}/{max_retries})"
-                    )
+
+                    if is_corrupted:
+                        logger.warning(
+                            f"Corrupted HuggingFace cache detected, clearing and retrying in {delay:.1f}s "
+                            f"(attempt {attempt + 1}/{max_retries}): {error_str[:100]}"
+                        )
+                        if args:
+                            _clear_hf_cache_for_model(str(args[0]))
+                    else:
+                        logger.warning(
+                            f"Rate limited by HuggingFace Hub, retrying in {delay:.1f}s "
+                            f"(attempt {attempt + 1}/{max_retries})"
+                        )
+
                     time.sleep(delay)
                 else:
                     raise
@@ -1211,9 +1270,62 @@ def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 20, base_delay: f
     return result
 
 
+def _download_from_fsspec_if_needed(path: str, local_cache_dir: Optional[str] = None) -> str:
+    """Download files from fsspec-compatible paths (gs://, s3://, etc.) to a local directory.
+
+    Args:
+        path: The path to the files (can be gs://, s3://, or local path)
+        local_cache_dir: Optional cache directory to use for downloads
+
+    Returns:
+        Local path to the downloaded files, or the original path if it's already local
+    """
+    if not _is_url_like(path):
+        return path
+
+    # Use a stable local cache path based on the URL to avoid re-downloading
+    if local_cache_dir is None:
+        local_cache_dir = os.path.join(tempfile.gettempdir(), "levanter_hf_cache")
+
+    # Create a unique subdirectory based on the path
+    path_hash = hashlib.md5(path.encode()).hexdigest()[:12]
+    path_name = path.rstrip("/").split("/")[-1]
+    local_path = os.path.join(local_cache_dir, f"{path_name}_{path_hash}")
+
+    # The actual path where files will be after download
+    # fs.get() creates a subdirectory matching the source directory name
+    actual_files_path = os.path.join(local_path, path_name)
+
+    # Check if already downloaded (check for the actual files location)
+    if os.path.exists(actual_files_path) and os.listdir(actual_files_path):
+        logger.info(f"Using cached download at {actual_files_path}")
+        return actual_files_path
+
+    # Download from cloud storage
+    logger.info(f"Downloading from {path} to {local_path}")
+    os.makedirs(local_path, exist_ok=True)
+
+    fs: AbstractFileSystem = fsspec.core.get_fs_token_paths(path, mode="rb")[0]
+    # Get the plain path without protocol
+    parsed = urllib.parse.urlparse(path)
+    plain_path = parsed.netloc + parsed.path if parsed.netloc else parsed.path
+
+    # Download all files recursively
+    fs.get(plain_path, local_path, recursive=True)
+    logger.info(f"Downloaded {path} to {actual_files_path}")
+
+    return actual_files_path
+
+
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:
     """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec.
     In distributed mode, only rank 0 downloads while others wait and use the cached result."""
+    # Handle fsspec paths (gs://, s3://, etc.) by downloading first
+    if _is_url_like(model_name_or_path):
+        model_name_or_path = _download_from_fsspec_if_needed(model_name_or_path, local_cache_dir)
+        # Don't pass revision for local paths
+        revision = None
+
     return _hf_load_with_rank_sync(
         AutoTokenizer.from_pretrained,
         model_name_or_path,
@@ -1226,6 +1338,12 @@ def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trus
 def load_processor(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> ProcessorMixin:
     """Like AutoProcessor.from_pretrained, but works with gs:// paths or anything on fsspec.
     In distributed mode, only rank 0 downloads while others wait and use the cached result."""
+    # Handle fsspec paths (gs://, s3://, etc.) by downloading first
+    if _is_url_like(model_name_or_path):
+        model_name_or_path = _download_from_fsspec_if_needed(model_name_or_path, local_cache_dir)
+        # Don't pass revision for local paths
+        revision = None
+
     return _hf_load_with_rank_sync(
         AutoProcessor.from_pretrained,
         model_name_or_path,
