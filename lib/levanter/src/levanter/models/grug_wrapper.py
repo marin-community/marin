@@ -159,6 +159,7 @@ class GrugWrapper(LmHeadModel[Any]):
     ) -> jnp.ndarray | NamedArray:
         """Override to use grug's blockwise loss (avoids materializing full logits)."""
         # NOTE: this wrapper is intentionally minimal; grug core currently doesn't use PRNGs.
+        assert logit_soft_cap is None, "logit_soft_cap is not supported by GrugWrapper.compute_next_token_loss"
         del key
 
         # LmExample-ish protocol: expects `.tokens`, `.loss_weight`, `.attn_mask`.
@@ -179,7 +180,6 @@ class GrugWrapper(LmHeadModel[Any]):
                 reduction="none",
                 logsumexp_weight=logsumexp_weight,
                 loss_dtype=dtype,
-                logit_soft_cap=logit_soft_cap,
             )
             return hax.named(per_pos, tokens.axes)
 
@@ -194,7 +194,6 @@ class GrugWrapper(LmHeadModel[Any]):
                 reduction="mean",
                 logsumexp_weight=logsumexp_weight,
                 loss_dtype=dtype,
-                logit_soft_cap=logit_soft_cap,
             )
         if reduction_axis is None and reduction is hax.sum:
             return grug_loss_fn(
@@ -206,7 +205,6 @@ class GrugWrapper(LmHeadModel[Any]):
                 reduction="sum",
                 logsumexp_weight=logsumexp_weight,
                 loss_dtype=dtype,
-                logit_soft_cap=logit_soft_cap,
             )
 
         per_pos = grug_loss_fn(
@@ -218,7 +216,6 @@ class GrugWrapper(LmHeadModel[Any]):
             reduction="none",
             logsumexp_weight=logsumexp_weight,
             loss_dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
         )
         loss = hax.named(per_pos, tokens.axes)
 
