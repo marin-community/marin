@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_NUM_PATCHES = 3 * 3 + 1  # 3x3 grid + base image for default anyres_max_9 config
 
 
-def _load_vision_weights(model, checkpoint_path, axis_mapping, mp):
+def _load_vision_weights(model, checkpoint_path, axis_mapping, mp, tokenizer):
     """Load vision encoder weights from a separate HuggingFace checkpoint.
 
     Args:
@@ -55,26 +55,23 @@ def _load_vision_weights(model, checkpoint_path, axis_mapping, mp):
         checkpoint_path: HuggingFace checkpoint path (e.g., 'google/siglip-so400m-patch14-384')
         axis_mapping: Axis mapping for sharding
         mp: Mixed precision policy
+        tokenizer: Already-loaded tokenizer to pass to HFCheckpointConverter
 
     Returns:
         Model with vision weights loaded
     """
     from transformers import SiglipConfig as HfSiglipConfig
-    from levanter.compat.hf_checkpoints import load_tokenizer
-
-    # Pre-load dummy tokenizer for vision-only model
-    # This ensures proper distributed sync - leader downloads, others use cache
-    # Passing a string directly to HFCheckpointConverter would fail on non-leader
-    # workers because they use local_files_only=True and GPT-2 isn't cached
-    dummy_tokenizer = load_tokenizer("gpt2")
 
     # Create converter to load state dict from HF checkpoint
+    # We pass the already-loaded tokenizer from main() to avoid network calls
+    # (Ray cluster workers have separate filesystems, so _hf_load_with_rank_sync
+    # doesn't work for cross-node caching)
     vision_config = model.config.vision_config
     converter = HFCheckpointConverter(
         vision_config.__class__,
         reference_checkpoint=checkpoint_path,
         trust_remote_code=True,
-        tokenizer=dummy_tokenizer,  # Pass loaded tokenizer object, not string
+        tokenizer=tokenizer,
         HfConfigClass=HfSiglipConfig,
     )
 
@@ -710,7 +707,7 @@ def main(config: TrainVLMConfig):
                 if config.vision_checkpoint:
                     logger.info(f"Loading vision encoder from: {config.vision_checkpoint}")
                     model = _load_vision_weights(
-                        model, config.vision_checkpoint, parameter_axis_mapping, trainer.mp
+                        model, config.vision_checkpoint, parameter_axis_mapping, trainer.mp, tokenizer
                     )
 
                 if config.llm_checkpoint:

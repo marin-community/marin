@@ -785,6 +785,121 @@ class PackAssignmentCheckpoint:
 # Parallel Processing for Pack Assignments
 # =============================================================================
 
+# Per-process cache for tokenizer (used by ProcessPoolExecutor workers)
+_process_tokenizer_cache: Dict[str, Any] = {}
+_process_processor_cache: Dict[str, Any] = {}
+
+
+def _get_cached_tokenizer(tokenizer_name: str):
+    """Get or load tokenizer for this process (cached)."""
+    if tokenizer_name not in _process_tokenizer_cache:
+        from transformers import AutoTokenizer
+        _process_tokenizer_cache[tokenizer_name] = AutoTokenizer.from_pretrained(
+            tokenizer_name, trust_remote_code=True
+        )
+    return _process_tokenizer_cache[tokenizer_name]
+
+
+def _get_cached_processor(processor_name: str):
+    """Get or load processor for this process (cached)."""
+    if processor_name not in _process_processor_cache:
+        from transformers import AutoProcessor
+        _process_processor_cache[processor_name] = AutoProcessor.from_pretrained(
+            processor_name, trust_remote_code=True
+        )
+    return _process_processor_cache[processor_name]
+
+
+def _process_single_parquet_process(
+    path: str,
+    config: PackAssignmentConfig,
+    tokenizer_name: str,
+    processor_name: Optional[str] = None,
+) -> Tuple[str, List[int], List[int], int, int]:
+    """
+    Process a single parquet file - for use with ProcessPoolExecutor.
+
+    This worker function loads the tokenizer lazily and caches it per-process.
+
+    Args:
+        path: Path to parquet file (supports GCS, S3, local)
+        config: Pack assignment configuration
+        tokenizer_name: HuggingFace tokenizer name (loaded lazily per-process)
+        processor_name: Optional HuggingFace processor name for applying chat template
+
+    Returns:
+        Tuple of (path, token_lengths, patch_counts, num_samples, exceeded_count)
+    """
+    # Get cached tokenizer and processor for this process
+    tokenizer = _get_cached_tokenizer(tokenizer_name)
+    processor = _get_cached_processor(processor_name) if processor_name else None
+
+    # Read parquet file (supports GCS, S3, local paths via fsspec)
+    fs, fs_path = fsspec.core.url_to_fs(path)
+    with fs.open(fs_path, 'rb') as f:
+        table = pq.read_table(f)
+    df = table.to_pandas()
+
+    token_lengths = []
+    patch_counts = []
+    exceeded_count = 0
+
+    for i, row in df.iterrows():
+        # Get text data (may be plain string or conversation format)
+        text_data = row.get(config.text_column, "")
+        if text_data is None:
+            text_data = ""
+
+        # Check if text_data is conversation format (list of message dicts)
+        # If so, apply chat template to convert to string
+        if isinstance(text_data, (list, np.ndarray)) and len(text_data) > 0:
+            # Conversation format: apply chat template
+            if processor is not None:
+                try:
+                    # Convert numpy array to list if needed
+                    messages = list(text_data) if isinstance(text_data, np.ndarray) else text_data
+                    # Convert numpy arrays inside messages to native Python types
+                    messages = [_convert_numpy_to_python(m) for m in messages]
+                    text = processor.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
+                except Exception:
+                    text = ""
+            else:
+                text = ""
+        else:
+            text = str(text_data) if text_data else ""
+
+        # Tokenize text (without image tokens)
+        text_tokens = tokenizer(text, add_special_tokens=False)["input_ids"]
+        text_token_count = len(text_tokens)
+
+        # Count images
+        image_data = row.get(config.image_column)
+        if image_data is None:
+            num_images = 0
+        elif isinstance(image_data, list):
+            num_images = len(image_data)
+        elif isinstance(image_data, (bytes, str)):
+            num_images = 1
+        else:
+            # Assume single image for other types
+            num_images = 1
+
+        # For disable_anyres=True, each image = 1 patch
+        patch_count = num_images
+
+        # Effective tokens = text tokens + image token expansion
+        # Each image expands to features_per_patch tokens
+        effective_tokens = text_token_count + num_images * (config.features_per_patch + 1)
+
+        # Track samples exceeding max_length
+        if effective_tokens > config.max_length:
+            exceeded_count += 1
+
+        token_lengths.append(effective_tokens)
+        patch_counts.append(patch_count)
+
+    return path, token_lengths, patch_counts, len(df), exceeded_count
+
 
 def _process_single_parquet_thread(
     path: str,
@@ -793,7 +908,7 @@ def _process_single_parquet_thread(
     processor=None,
 ) -> Tuple[str, List[int], List[int], int, int]:
     """
-    Process a single parquet file - for use with ThreadPoolExecutor.
+    Process a single parquet file - for use with ThreadPoolExecutor (legacy).
 
     This worker function accepts the tokenizer directly (threads share memory).
 
@@ -913,7 +1028,7 @@ def compute_sample_lengths_parallel(
         - List of ShardInfo for tracking shard boundaries
     """
     import multiprocessing as mp
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ProcessPoolExecutor, as_completed
 
     try:
         from tqdm import tqdm
@@ -923,6 +1038,16 @@ def compute_sample_lengths_parallel(
 
     if num_workers is None:
         num_workers = min(mp.cpu_count(), len(parquet_paths), 32)
+
+    # Get processor name if processor object is provided
+    processor_name = None
+    if processor is not None:
+        if isinstance(processor, str):
+            processor_name = processor
+        elif hasattr(processor, 'name_or_path'):
+            processor_name = processor.name_or_path
+        else:
+            logger.warning("Processor object has no name_or_path, chat template will not be applied")
 
     # Build path -> index mapping
     path_to_idx = {path: idx for idx, path in enumerate(parquet_paths)}
@@ -952,15 +1077,10 @@ def compute_sample_lengths_parallel(
     if not pending_paths:
         logger.info("All shards already processed from checkpoint, skipping parallel processing")
     else:
-        logger.info(f"Processing {len(pending_paths)} parquet files with {num_workers} parallel workers...")
+        logger.info(f"Processing {len(pending_paths)} parquet files with {num_workers} parallel workers (ProcessPoolExecutor)...")
+        logger.info(f"Tokenizer: {tokenizer_name} (will be loaded per-process)")
 
-        # Load tokenizer in main thread - threads share memory so no need for per-worker loading
-        logger.info(f"Loading tokenizer: {tokenizer_name}")
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
-        logger.info("Tokenizer loaded. Starting parallel processing...")
-
-        # Use ThreadPoolExecutor for I/O-bound tasks
+        # Use ProcessPoolExecutor for true parallelism (bypasses GIL)
         total_samples = sum(r[3] for r in completed_results.values())
         total_exceeded = sum(r[4] for r in completed_results.values())
         newly_completed = 0
@@ -994,9 +1114,12 @@ def compute_sample_lengths_parallel(
             ckpt.save(checkpoint_path)
             logger.info(f"  Checkpoint saved: {len(sorted_indices)}/{len(parquet_paths)} shards")
 
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        # Use 'spawn' context to avoid deadlocks with forked processes
+        # (fork copies parent's state including GCS client locks)
+        ctx = mp.get_context('spawn')
+        with ProcessPoolExecutor(max_workers=num_workers, mp_context=ctx) as executor:
             futures = {
-                executor.submit(_process_single_parquet_thread, path, config, tokenizer, processor): (idx, path)
+                executor.submit(_process_single_parquet_process, path, config, tokenizer_name, processor_name): (idx, path)
                 for idx, path in pending_paths
             }
 
@@ -1004,7 +1127,7 @@ def compute_sample_lengths_parallel(
                 # Use tqdm progress bar
                 pbar = tqdm(
                     as_completed(futures),
-                    total=len(futures),
+                    total=len(parquet_paths),  # Total files (not just pending)
                     desc="Processing parquet files",
                     unit="file",
                     initial=len(completed_results),
