@@ -78,7 +78,7 @@ BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  #
 # ============================================================================
 
 # Flash attention block size (set to None to disable flash attention)
-FLASH_ATTENTION_BLOCK_SIZE = 512
+FLASH_ATTENTION_BLOCK_SIZE = 256
 
 # Vision encoder: SigLIP-like (matches google/siglip-so400m-patch14-384)
 vision_config = SiglipVisionConfig(
