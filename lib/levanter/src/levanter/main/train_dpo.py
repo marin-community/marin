@@ -157,7 +157,9 @@ def _build_validation_split_single(
     val_base = base_dataset.slice_dataset(start_index=total_len - num_val, end_index=total_len)
 
     perm_type = config.permutation_type
-    if perm_type is None:
+    if perm_type == "linear":
+        logger.warning("Using linear shuffling, not recommended. Please use Feistel permutation instead.")
+    else:
         perm_type = "feistel"
 
     train_dataset = train_base
@@ -281,13 +283,22 @@ def main(config: TrainDpoConfig):
         logp_pi_chosen = _logp_sum(model.policy, example.chosen, key=key_chosen)
         logp_pi_rejected = _logp_sum(model.policy, example.rejected, key=key_rejected)
 
-        logp_ref_chosen = _logp_sum(reference_model, example.chosen, key=None)
-        logp_ref_rejected = _logp_sum(reference_model, example.rejected, key=None)
+        logp_ref_chosen = _logp_sum(reference_model, example.chosen, key=key_chosen)
+        logp_ref_rejected = _logp_sum(reference_model, example.rejected, key=key_rejected)
 
         delta_pi = logp_pi_chosen - logp_pi_rejected
         delta_ref = logp_ref_chosen - logp_ref_rejected
 
-        return dpo_loss_from_logps(delta_pi, delta_ref, beta=config.beta)
+        loss, metrics = dpo_loss_from_logps(delta_pi, delta_ref, beta=config.beta)
+        chosen_reward = (logp_pi_chosen - logp_ref_chosen) * config.beta
+        rejected_reward = (logp_pi_rejected - logp_ref_rejected) * config.beta
+        if isinstance(chosen_reward, hax.NamedArray):
+            metrics["dpo_chosen_reward"] = Metric.from_value(hax.mean(chosen_reward).scalar(), ReductionType.MEAN)
+            metrics["dpo_rejected_reward"] = Metric.from_value(hax.mean(rejected_reward).scalar(), ReductionType.MEAN)
+        else:
+            metrics["dpo_chosen_reward"] = Metric.from_value(jnp.mean(chosen_reward), ReductionType.MEAN)
+            metrics["dpo_rejected_reward"] = Metric.from_value(jnp.mean(rejected_reward), ReductionType.MEAN)
+        return loss, metrics
 
     with Trainer(config.trainer, optimizer, loss_function) as trainer:
         seed = config.trainer.seed

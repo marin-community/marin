@@ -29,6 +29,7 @@ class SimpleDPOConfig:
     train_batch_size: int | IntSchedule = 128
     num_train_steps: int = 10000
     learning_rate: float = 1e-6
+    wandb_project: str | None = None
 
     tokenizer: str | None = None
     model_name_or_path: str | None = None
@@ -44,7 +45,7 @@ class SimpleDPOConfig:
 
     weight_decay: float = 0.0
     warmup: float = 0.03
-    cooldown: float = 0.0
+    cooldown: float | None = None
     lr_schedule: str = "linear"
     min_lr_ratio: float = 0.0
     max_grad_norm: float | None = None

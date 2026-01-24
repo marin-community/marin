@@ -277,7 +277,7 @@ def greedy_pack_prompt_completions(
         lengths=np.array([len(token_ids) for token_ids in ids]),
         max_length=Pos.size,
         max_segments_per_example=max_segments_per_example,
-        slice_too_long_examples=True,
+        slice_strategy="right",
     )
 
     out = []
@@ -328,7 +328,7 @@ def pack_documents(
     lengths: PyTree[np.ndarray],
     max_length: PyTree[int],
     max_segments_per_example: int | None = None,
-    slice_too_long_examples: bool = False,
+    slice_strategy: Literal["left", "right", "raise", "drop"] = "raise",
 ) -> list[range]:
     """
     Greedily pack documents into contiguous groups without storing full token ranges.
@@ -339,7 +339,7 @@ def pack_documents(
             The i-th document has length lengths[i].
         max_length: A PyTree of integers, each specifying the maximum number of tokens allowed per pack for that leaf
         max_segments_per_example: Optional maximum number of documents per pack
-        slice_too_long_examples: If True, slice documents that exceed max_length instead of raising an error
+        slice_strategy: One of "left", "right", "raise", or "drop".
 
     Returns:
         A list of ranges, where each range represents the document indices in a pack
@@ -371,49 +371,71 @@ def pack_documents(
     if n_docs is None:
         raise ValueError("Could not determine the number of documents from lengths.")
 
+    if slice_strategy not in ["left", "right", "raise", "drop"]:
+        raise ValueError(f"slice_strategy must be one of 'left', 'right', 'raise', or 'drop', got {slice_strategy}")
+
     # Validate document lengths
+    drop_mask = np.ones(n_docs, dtype=bool) if slice_strategy == "drop" else None
     for lens, allowed, leaf_name in zip(lengths_leaves, max_length_leaves, leaf_names):
         for i in range(n_docs):
-            if lens[i] > allowed and not slice_too_long_examples:
-                raise ValueError(
-                    f"Document {i} in leaf '{leaf_name}' has length {lens[i]} which exceeds "
-                    f"maximum allowed length {allowed}. Consider setting slice_too_long_examples=True "
-                    "or increasing max_length."
-                )
+            if lens[i] > allowed:
+                if drop_mask is not None:
+                    drop_mask[i] = False
+                    continue
+                if slice_strategy == "raise":
+                    raise ValueError(
+                        f"Document {i} in leaf '{leaf_name}' has length {lens[i]} which exceeds "
+                        f"maximum allowed length {allowed}. Consider setting slice_strategy to 'left', 'right', "
+                        "'drop', or increasing max_length."
+                    )
 
     pack_doc_ranges = []
     i = 0
     while i < n_docs:
+        if drop_mask is not None and not drop_mask[i]:
+            i += 1
+            continue
         start = i
         total_segments = 0
         # Accumulate documents while for each leaf the token span remains within the allowed max.
         while i < n_docs:
+            if drop_mask is not None and not drop_mask[i]:
+                break
             # Check optional segment constraint: if adding one more document would exceed max_segments_per_example.
             if max_segments_per_example is not None and (total_segments + 1) > max_segments_per_example:
                 break
             # For each leaf, check if adding document i would keep the token count within allowed capacity.
             valid = True
+            end_pack_after_this = False
             for lens, allowed, leaf_name in zip(lengths_leaves, max_length_leaves, leaf_names, strict=True):
                 # Compute token count from document start to document i+1.
                 token_sum = sum(lens[start : i + 1])
                 if token_sum > allowed:
+                    if i == start:
+                        if slice_strategy == "raise":
+                            raise ValueError(
+                                f"Document {i} in leaf '{leaf_name}' has length {lens[i]} which exceeds "
+                                f"maximum allowed length {allowed}. Consider setting slice_strategy to 'left', "
+                                "'right', 'drop', or increasing max_length."
+                            )
+                        if slice_strategy == "drop":
+                            valid = False
+                            break
+                        valid = True
+                        end_pack_after_this = True
+                        break
                     valid = False
-                    if not slice_too_long_examples and i == start:
-                        # If this is the first document in a new pack and it's too long, raise an error
-                        raise ValueError(
-                            f"Document {i} in leaf '{leaf_name}' has length {lens[i]} which exceeds "
-                            f"maximum allowed length {allowed}. Consider setting slice_too_long_examples=True "
-                            "or increasing max_length."
-                        )
                     break
             if not valid:
                 break
             total_segments += 1
             i += 1
+            if end_pack_after_this:
+                break
 
         # If no document could be added (i.e. a single document exceeds capacity)
         if i == start:
-            if not slice_too_long_examples:
+            if slice_strategy != "left" and slice_strategy != "right":
                 raise ValueError(f"Document {start} exceeds allowed capacity.")
             else:
                 i = start + 1
@@ -433,10 +455,11 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         max_length: A PyTree of integers, each representing the maximum number of tokens allowed per leaf.
         max_segments_per_example: Maximum number of documents that can be packed into a single example.
         pad_with_zeros: If True, pad examples to max_length with zeros. If False, return examples as-is.
-        slice_strategy: One of "left", "right", or "raise". Determines how to handle examples that exceed max_length:
+        slice_strategy: One of "left", "right", "raise", or "drop". Determines how to handle examples that exceed max_length:
             - "left": Slice from the beginning of the example
             - "right": Slice from the end of the example
             - "raise": Raise an error when an example exceeds max_length
+            - "drop": Drop examples that exceed max_length
     """
 
     def __init__(
@@ -445,7 +468,7 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         max_length: int | T,  # PyTree[int],
         max_segments_per_example: int | None = None,
         pad_with_zeros: bool = True,
-        slice_strategy: Literal["left", "right", "raise"] = "raise",
+        slice_strategy: Literal["left", "right", "raise", "drop"] = "raise",
     ):
         """
         Args:
@@ -453,12 +476,14 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
             max_length: A PyTree of integers, each representing the maximum number of tokens allowed per leaf.
             max_segments_per_example: Maximum number of documents that can be packed into a single example.
             pad_with_zeros: If True, pad examples to max_length with zeros. If False, return examples as-is.
-            slice_strategy: One of "left", "right", or "raise". Determines how to handle examples that exceed max_length.
+            slice_strategy: One of "left", "right", "raise", or "drop". Determines how to handle examples that exceed max_length.
         """
         super().__init__()
 
-        if slice_strategy not in ["left", "right", "raise"]:
-            raise ValueError(f"slice_strategy must be one of 'left', 'right', or 'raise', got {slice_strategy}")
+        if slice_strategy not in ["left", "right", "raise", "drop"]:
+            raise ValueError(
+                f"slice_strategy must be one of 'left', 'right', 'raise', or 'drop', got {slice_strategy}"
+            )
 
         self.dataset = dataset
         self.max_length = max_length
@@ -479,8 +504,11 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         self._lengths = jax.tree.map(diff_offsets, self._offsets)
 
         # Build pack indices
-        self._pack_indices: list[range] = pack_documents(
-            self._lengths, max_length, max_segments_per_example, slice_strategy != "raise"
+        self._pack_indices = pack_documents(
+            self._lengths,
+            max_length,
+            max_segments_per_example,
+            slice_strategy=slice_strategy,
         )
 
     def is_finite(self) -> bool:
@@ -531,7 +559,8 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
                         else:
                             raise ValueError(
                                 f"Token count {token_count} exceeds allowed maximum {allowed} for documents "
-                                f"{list(dr)}. Consider using a different slice_strategy or increasing max_length."
+                                f"{list(dr)}. Consider using slice_strategy='left', 'right', or 'drop', or "
+                                "increasing max_length."
                             )
                     # Read the slice from the underlying data.
                     out_data.append(store.data[token_start:token_end].read())
