@@ -332,7 +332,7 @@ After proposed changes:
 
 **Total: 14 lines added to Haliax**
 
-These changes are minimal, well-targeted fixes for real JAX/Equinox interaction issues with NamedArray, not workarounds or hacks.
+These changes are minimal, well-targeted fixes that align with Haliax's design philosophy: **NamedArray should be treated as an atomic leaf in tree operations**. This is not a workaround - it's the intended usage pattern, as evidenced by Haliax's own `tree_util` module which does this by default.
 
 ---
 
@@ -350,13 +350,45 @@ These changes are minimal, well-targeted fixes for real JAX/Equinox interaction 
 
 ## Root Cause Summary
 
+### Is Treating NamedArray as a Leaf an Anti-Pattern?
+
+**No - it's the INTENDED design pattern in Haliax.**
+
+NamedArray is registered as a PyTree (`@jax.tree_util.register_pytree_node_class`) so it works with JAX transformations (jit, vmap, grad), but **Haliax's own tree utilities treat NamedArray as a leaf by default**:
+
+```python
+# From haliax/tree_util.py
+def tree_map(fn, tree, *rest, is_leaf=None):
+    """Version of jax.tree_util.tree_map that automatically treats NamedArrays as leaves."""
+    if is_leaf is None:
+        is_leaf = lambda x: isinstance(x, NamedArray)  # <-- DEFAULT BEHAVIOR
+    # ...
+```
+
+Haliax provides `haliax.tree_util.tree_map`, `tree_flatten`, `tree_leaves`, and `tree_structure` - all of which treat NamedArray as a leaf by default. The docstrings explicitly state this:
+
+> "Version of [jax.tree_util.tree_map][] that **automatically treats NamedArrays as leaves**."
+
+**The design philosophy:**
+1. NamedArray is a PyTree so JAX transformations work (jit, vmap, grad traverse into it)
+2. For tree operations (mapping, partitioning, combining), treat it as an **atomic unit**
+3. Haliax provides wrappers that do this automatically
+4. When using raw JAX/Equinox (`jax.tree_util.*`, `eqx.partition`, `eqx.combine`), you must pass `is_leaf` yourself
+
+**The issue in Levanter:** Code was using raw `eqx.partition`/`eqx.combine` without `is_leaf`, causing NamedArray to be decomposed into `(array, axis_names)` children. The fix aligns with Haliax's intended usage.
+
+---
+
 The core issue is that **NamedArray is a PyTree**, but many Equinox/JAX utilities assume they can safely recurse into PyTrees. When they do:
 
 1. `eqx.partition` creates `NamedArray(array=None)` placeholders
 2. `pspec_for` tries to read shape from None
 3. `auto_sharded` during vmap sees mismatched array/axes dimensions
 
-The fixes treat NamedArray as an **atomic leaf** in contexts where recursion is problematic. This is the correct approach - NamedArray should be treated as a unit, not decomposed into its array + axis_names components during model transformations.
+The fixes treat NamedArray as an **atomic leaf** - which is exactly what Haliax's own utilities do by default. This is the correct approach because:
+1. **Haliax design**: `haliax.tree_util.*` functions all default to `is_leaf=lambda x: isinstance(x, NamedArray)`
+2. **Semantic integrity**: A NamedArray's `array` and `axis_names` are inseparable - one without the other is meaningless
+3. **Consistency**: When you partition/filter a model, you want whole NamedArrays, not their internal components
 
 ### Why Standard LM Training Doesn't Expose These Bugs
 
