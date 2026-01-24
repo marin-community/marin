@@ -419,9 +419,7 @@ packages = ["src/my_app"]
 
     # Core package - workspace member
     core_dir = packages_dir / "core"
-    core_dir.mkdir()
-    (core_dir / "src").mkdir()
-    (core_dir / "src" / "core").mkdir()
+    (core_dir / "src" / "core").mkdir(parents=True)
     (core_dir / "src" / "core" / "__init__.py").write_text('"""Core package."""\n')
 
     core_pyproject = """[project]
@@ -445,9 +443,7 @@ packages = ["src/core"]
 
     # API package - path dependency
     api_dir = lib_dir / "api"
-    api_dir.mkdir()
-    (api_dir / "src").mkdir()
-    (api_dir / "src" / "api").mkdir()
+    (api_dir / "src" / "api").mkdir(parents=True)
     (api_dir / "src" / "api" / "__init__.py").write_text('"""API package."""\n')
 
     api_pyproject = """[project]
