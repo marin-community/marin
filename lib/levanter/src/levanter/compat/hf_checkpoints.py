@@ -1273,6 +1273,8 @@ def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 20, base_delay: f
 def _download_from_fsspec_if_needed(path: str, local_cache_dir: Optional[str] = None) -> str:
     """Download files from fsspec-compatible paths (gs://, s3://, etc.) to a local directory.
 
+    Uses file locking to prevent concurrent downloads from corrupting files.
+
     Args:
         path: The path to the files (can be gs://, s3://, or local path)
         local_cache_dir: Optional cache directory to use for downloads
@@ -1280,6 +1282,8 @@ def _download_from_fsspec_if_needed(path: str, local_cache_dir: Optional[str] = 
     Returns:
         Local path to the downloaded files, or the original path if it's already local
     """
+    import fcntl
+
     if not _is_url_like(path):
         return path
 
@@ -1296,25 +1300,41 @@ def _download_from_fsspec_if_needed(path: str, local_cache_dir: Optional[str] = 
     # fs.get() creates a subdirectory matching the source directory name
     actual_files_path = os.path.join(local_path, path_name)
 
-    # Check if already downloaded (check for the actual files location)
+    # Check if already downloaded (fast path, no lock needed)
     if os.path.exists(actual_files_path) and os.listdir(actual_files_path):
         logger.info(f"Using cached download at {actual_files_path}")
         return actual_files_path
 
-    # Download from cloud storage
-    logger.info(f"Downloading from {path} to {local_path}")
-    os.makedirs(local_path, exist_ok=True)
+    # Use file lock to prevent concurrent downloads
+    os.makedirs(local_cache_dir, exist_ok=True)
+    lock_path = os.path.join(local_cache_dir, f".{path_name}_{path_hash}.lock")
 
-    fs: AbstractFileSystem = fsspec.core.get_fs_token_paths(path, mode="rb")[0]
-    # Get the plain path without protocol
-    parsed = urllib.parse.urlparse(path)
-    plain_path = parsed.netloc + parsed.path if parsed.netloc else parsed.path
+    lock_fd = open(lock_path, 'w')
+    try:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)  # Blocking exclusive lock
 
-    # Download all files recursively
-    fs.get(plain_path, local_path, recursive=True)
-    logger.info(f"Downloaded {path} to {actual_files_path}")
+        # Double-check after acquiring lock (another process might have downloaded)
+        if os.path.exists(actual_files_path) and os.listdir(actual_files_path):
+            logger.info(f"Using cached download at {actual_files_path}")
+            return actual_files_path
 
-    return actual_files_path
+        # Download from cloud storage (we have the lock)
+        logger.info(f"Downloading from {path} to {local_path} (holding lock)")
+        os.makedirs(local_path, exist_ok=True)
+
+        fs: AbstractFileSystem = fsspec.core.get_fs_token_paths(path, mode="rb")[0]
+        # Get the plain path without protocol
+        parsed = urllib.parse.urlparse(path)
+        plain_path = parsed.netloc + parsed.path if parsed.netloc else parsed.path
+
+        # Download all files recursively
+        fs.get(plain_path, local_path, recursive=True)
+        logger.info(f"Downloaded {path} to {actual_files_path}")
+
+        return actual_files_path
+    finally:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+        lock_fd.close()
 
 
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:

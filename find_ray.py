@@ -13,7 +13,7 @@ vlm_jobs = [job for job in jobs if
 # 只显示 RUNNING 的
 running_jobs = [job for job in vlm_jobs if job.status == "RUNNING"]
 print(f"Found {len(running_jobs)} RUNNING VLM jobs:\n")
-running_jobs=running_jobs[1:]
+running_jobs=running_jobs
 for job in running_jobs:
     # 尝试获取 submission_id，这是停止 job 需要的
     # 从 runtime_env 提取 EXP_NAME 环境变量
@@ -23,7 +23,7 @@ for job in running_jobs:
         if isinstance(env_vars, dict):
             job_name = env_vars.get('EXP_NAME', 'N/A')
     print(f"job_id: {job.job_id}, name: {job_name}, submission_id: {job.submission_id}, Status: {job.status}")
-assert 1==2
+# assert 1==2
 # 停止所有 RUNNING jobs
 print("\n--- Stopping jobs ---")
 env = os.environ.copy()
@@ -32,8 +32,17 @@ env["RAY_ADDRESS"] = RAY_ADDRESS
 for job in running_jobs:
     # 优先使用 submission_id，否则用 job_id
     stop_id = job.submission_id or job.job_id
+    job_name = 'N/A'
+    if job.runtime_env and isinstance(job.runtime_env, dict):
+        env_vars = job.runtime_env.get('env_vars', {})
+        if isinstance(env_vars, dict):
+            job_name = env_vars.get('EXP_NAME', 'N/A')
     if stop_id:
-        print(f"Stopping {stop_id}...")
+        print(f"Stopping {stop_id} (name: {job_name})...")
+        confirm = input(f"  Are you sure you want to stop {stop_id} (name: {job_name})? (y/n): ")
+        if confirm.lower() != 'y':
+            print(f"  Skipped.")
+            continue
         try:
             result = subprocess.run(
                 ["ray", "job", "stop", stop_id],
