@@ -226,6 +226,9 @@ train_config = SimpleVlmTrainConfig(
         compute_mapping={
             "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
             "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+            # vision_batch is created by flattening (batch, num_patches) in get_image_features
+            # Must be sharded to avoid OOM in vision encoder's splash attention
+            "vision_batch": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
         },
         param_mapping={"embed": "data"},  # Only shards LLM embed (vision uses vision_embed)
     ),

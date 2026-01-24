@@ -69,7 +69,7 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - per_device_parallelism: samples processed per device at a time (limited by memory)
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
-PER_DEVICE_PARALLELISM = 1  # 1 sample per device (memory-safe for VLM with large images)
+PER_DEVICE_PARALLELISM = 4  # 1 sample per device (memory-safe for VLM with large images)
 GRADIENT_ACCUMULATION_STEPS = 1  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
@@ -78,7 +78,7 @@ BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  #
 # ============================================================================
 
 # Flash attention block size (set to None to disable flash attention)
-FLASH_ATTENTION_BLOCK_SIZE = 256
+FLASH_ATTENTION_BLOCK_SIZE = 1024
 
 # Vision encoder: SigLIP-like (matches google/siglip-so400m-patch14-384)
 vision_config = SiglipVisionConfig(
@@ -238,6 +238,9 @@ train_config = SimpleVlmTrainConfig(
         compute_mapping={
             "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
             "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+            # vision_batch is created by flattening (batch, num_patches) in get_image_features
+            # Must be sharded to avoid OOM in vision encoder's splash attention
+            "vision_batch": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
         },
         param_mapping={"embed": "data"},  # Only shards LLM embed (vision uses vision_embed)
     ),

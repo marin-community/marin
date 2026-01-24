@@ -207,50 +207,100 @@ def _get_vocab_size_from_hf_config(hf_config):
     return vocab_size
 
 
-def _get_first_example(dataset):
+def _get_image_shape_from_config(config) -> tuple:
+    """Compute image shape (Channels, Height, Width) from model config.
+
+    This provides a fallback when first example extraction fails (e.g., due to
+    "Already borrowed" errors from HuggingFace tokenizers in distributed settings).
+
+    For VLM models, pixel_values shape is (num_patches, C, H, W) where:
+    - C = 3 (RGB channels)
+    - H = W = image_size from vision config (typically 384)
+
+    Args:
+        config: VLM training config with model.vision_config
+
+    Returns:
+        Tuple of (channels, height, width)
+    """
+    channels = 3  # RGB
+    # Get image_size from vision config (this determines H and W of each patch)
+    image_size = getattr(config.model.vision_config, "image_size", 384)
+    return (channels, image_size, image_size)
+
+
+def _get_first_example(dataset, max_retries: int = 3):
     """Extract the first example from a dataset (cached or streaming).
 
     This is used to determine image axes (Channels, Height, Width) from actual data.
     For streaming datasets, this uses get_batch which processes data on-the-fly
     without affecting subsequent iteration.
 
+    Includes retry logic for "Already borrowed" errors from HuggingFace tokenizers,
+    which can occur in distributed settings when the tokenizer's Rust backend
+    state is not properly reset after unpickling.
+
     Args:
         dataset: An AsyncDataset or MixtureDataset
+        max_retries: Maximum number of retries for "Already borrowed" errors
 
     Returns:
         The first example dict, or None if extraction failed
     """
     import asyncio
 
-    try:
-        # MixtureDataset case - get from first underlying dataset
-        if hasattr(dataset, "datasets"):
-            first_ds = next(iter(dataset.datasets.values()))
-            return _get_first_example(first_ds)
+    def _force_recreate_processor(ds):
+        """Force recreation of BatchImageProcessor's internal processor."""
+        if hasattr(ds, "_batch_processor") and ds._batch_processor is not None:
+            bp = ds._batch_processor
+            if hasattr(bp, "_processor"):
+                bp._processor = None
+            if hasattr(bp, "_cached_token_ids"):
+                bp._cached_token_ids = None
+        if hasattr(ds, "datasets"):
+            for underlying_ds in ds.datasets.values():
+                _force_recreate_processor(underlying_ds)
+        if hasattr(ds, "dataset"):
+            _force_recreate_processor(ds.dataset)
 
-        # EpochDataset case - unwrap and get from underlying dataset
-        # EpochDataset.get_batch calls wait_until_len_at_least which fails for streaming datasets
-        if hasattr(dataset, "dataset") and hasattr(dataset, "max_epochs"):
-            return _get_first_example(dataset.dataset)
+    for attempt in range(max_retries):
+        try:
+            # MixtureDataset case - get from first underlying dataset
+            if hasattr(dataset, "datasets"):
+                first_ds = next(iter(dataset.datasets.values()))
+                return _get_first_example(first_ds, max_retries=1)
 
-        # ProcessedImageCache case - use cache directly
-        if hasattr(dataset, "cache"):
-            return dataset.cache.get_batch_sync([0])[0]
+            # EpochDataset case - unwrap and get from underlying dataset
+            if hasattr(dataset, "dataset") and hasattr(dataset, "max_epochs"):
+                return _get_first_example(dataset.dataset, max_retries=1)
 
-        # StreamingImageDataset or other AsyncDataset - use get_batch
-        if hasattr(dataset, "get_batch"):
-            # Run async get_batch synchronously
-            loop = asyncio.new_event_loop()
-            try:
-                result = loop.run_until_complete(dataset.get_batch([0]))
-                return result[0]
-            finally:
-                loop.close()
+            # ProcessedImageCache case - use cache directly
+            if hasattr(dataset, "cache"):
+                return dataset.cache.get_batch_sync([0])[0]
 
-        return None
-    except Exception as e:
-        logger.warning(f"Failed to extract first example: {e}")
-        return None
+            # StreamingImageDataset or other AsyncDataset - use get_batch
+            if hasattr(dataset, "get_batch"):
+                loop = asyncio.new_event_loop()
+                try:
+                    result = loop.run_until_complete(dataset.get_batch([0]))
+                    return result[0]
+                finally:
+                    loop.close()
+
+            return None
+        except Exception as e:
+            error_msg = str(e)
+            if "Already borrowed" in error_msg and attempt < max_retries - 1:
+                logger.warning(
+                    f"Got 'Already borrowed' error on attempt {attempt + 1}/{max_retries}, "
+                    f"forcing processor recreation and retrying..."
+                )
+                _force_recreate_processor(dataset)
+                continue
+            logger.warning(f"Failed to extract first example: {e}")
+            return None
+
+    return None
 
 
 def _determine_vocab_size(config, converter, tokenizer):
@@ -610,25 +660,35 @@ def main(config: TrainVLMConfig):
             key=data_key, epochs=config.epoch, max_num_patches=max_num_patches
         )
 
-        # Get shape info from first example (required for axes setup)
+        # Get shape info from first example (preferred) or config (fallback)
         first_ex = _get_first_example(train_dataset_mixture)
-        if first_ex is None:
-            raise RuntimeError(
-                "Could not extract first example from dataset. "
-                "This is required to determine image axes (Channels, Height, Width)."
-            )
 
         # Define axes from config (works for both cached and streaming modes)
         Pos = hax.Axis("position", config.data.max_length)
 
-        # Recompute max_num_patches with first_ex for fallback (if grid_pinpoints not configured)
-        max_num_patches = _compute_max_num_patches(config, first_ex)
+        if first_ex is not None:
+            # Use actual data shape (preferred)
+            max_num_patches = _compute_max_num_patches(config, first_ex)
+            channels = first_ex["pixel_values"].shape[1]
+            height = first_ex["pixel_values"].shape[2]
+            width = first_ex["pixel_values"].shape[3]
+            logger.info(f"Got image shape from first example: C={channels}, H={height}, W={width}")
+        else:
+            # Fallback: use config-based values when extraction fails
+            # This handles "Already borrowed" errors in distributed settings
+            logger.warning(
+                "Could not extract first example from dataset. "
+                "Using config-based image shape fallback."
+            )
+            max_num_patches = _compute_max_num_patches(config, first_ex=None)
+            channels, height, width = _get_image_shape_from_config(config)
+            logger.info(f"Using config-based image shape: C={channels}, H={height}, W={width}")
 
         # Total patches = max_num_patches (grid) + 1 (base)
         NumPatches = hax.Axis("num_patches", max_num_patches + 1)
-        Channels = hax.Axis("channels", first_ex["pixel_values"].shape[1])
-        Height = hax.Axis("height", first_ex["pixel_values"].shape[2])
-        Width = hax.Axis("width", first_ex["pixel_values"].shape[3])
+        Channels = hax.Axis("channels", channels)
+        Height = hax.Axis("height", height)
+        Width = hax.Axis("width", width)
 
         # Determine pixel dtype based on trainer's compute precision
         # This ensures data is transferred to TPU in the correct dtype to save memory
