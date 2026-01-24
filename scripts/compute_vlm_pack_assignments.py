@@ -142,13 +142,19 @@ def main():
     )
     parser.add_argument(
         "--image-column",
-        default="image",
-        help="Column name for image data in parquet (default: 'image')",
+        default="images",
+        help="Column name for image data in parquet (default: 'images')",
     )
     parser.add_argument(
         "--text-column",
-        default="text",
-        help="Column name for text data in parquet (default: 'text')",
+        default="messages",
+        help="Column name for text data in parquet (default: 'messages')",
+    )
+    parser.add_argument(
+        "--processor",
+        default=None,
+        help="HuggingFace processor name for conversation format data (e.g., 'llava-hf/llava-onevision-qwen2-0.5b-ov-hf'). "
+             "Required if text_column contains messages (conversation format) instead of plain strings.",
     )
     parser.add_argument(
         "--num-workers",
@@ -186,6 +192,13 @@ def main():
     logger.info(f"Loading tokenizer from: {args.model}")
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
 
+    # 2b. Load processor (if specified, for conversation format data)
+    processor = None
+    if args.processor:
+        from transformers import AutoProcessor
+        logger.info(f"Loading processor from: {args.processor}")
+        processor = AutoProcessor.from_pretrained(args.processor, trust_remote_code=True)
+
     # 3. Create config
     config = PackAssignmentConfig(
         max_length=args.max_length,
@@ -214,6 +227,7 @@ def main():
             num_workers=args.num_workers,
             checkpoint_dir=args.checkpoint_dir,
             checkpoint_interval=args.checkpoint_interval,
+            processor=processor,  # For conversation format data
         )
 
         # 5. Upload to remote if needed

@@ -1199,9 +1199,11 @@ def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 20, base_delay: f
         _hf_load_sync_count += 1
 
         if not is_leader:
-            # Non-leader ranks: Load from cache (should be cached now after leader downloaded)
+            # Non-leader ranks: Load from cache only (no network requests)
+            # Use local_files_only=True to prevent ALL API calls including model_info()
+            # which would otherwise cause rate limiting on large clusters
             with _patch_hf_hub_download():
-                result = load_fn(*args, **kwargs)
+                result = load_fn(*args, local_files_only=True, **kwargs)
     else:
         # Single process mode: Direct load with retry
         result = _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, **kwargs)

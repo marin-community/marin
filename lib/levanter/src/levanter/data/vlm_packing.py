@@ -790,7 +790,8 @@ def _process_single_parquet_thread(
     path: str,
     config: PackAssignmentConfig,
     tokenizer,
-) -> Tuple[str, List[int], List[int], int]:
+    processor=None,
+) -> Tuple[str, List[int], List[int], int, int]:
     """
     Process a single parquet file - for use with ThreadPoolExecutor.
 
@@ -800,9 +801,10 @@ def _process_single_parquet_thread(
         path: Path to parquet file (supports GCS, S3, local)
         config: Pack assignment configuration
         tokenizer: Pre-loaded tokenizer object
+        processor: Optional HuggingFace processor for applying chat template
 
     Returns:
-        Tuple of (path, token_lengths, patch_counts, num_samples)
+        Tuple of (path, token_lengths, patch_counts, num_samples, exceeded_count)
     """
     # Read parquet file (supports GCS, S3, local paths via fsspec)
     fs, fs_path = fsspec.core.url_to_fs(path)
@@ -812,12 +814,39 @@ def _process_single_parquet_thread(
 
     token_lengths = []
     patch_counts = []
+    exceeded_count = 0
 
     for i, row in df.iterrows():
-        # Get text
-        text = row.get(config.text_column, "")
-        if text is None:
-            text = ""
+        # Get text data (may be plain string or conversation format)
+        text_data = row.get(config.text_column, "")
+        if text_data is None:
+            text_data = ""
+
+        # Check if text_data is conversation format (list of message dicts)
+        # If so, apply chat template to convert to string
+        if isinstance(text_data, (list, np.ndarray)) and len(text_data) > 0:
+            # Conversation format: apply chat template
+            if processor is not None:
+                try:
+                    # Convert numpy array to list if needed
+                    messages = list(text_data) if isinstance(text_data, np.ndarray) else text_data
+                    # Convert numpy arrays inside messages to native Python types
+                    def convert_message(msg):
+                        if isinstance(msg, np.ndarray):
+                            return list(msg)
+                        if isinstance(msg, dict):
+                            return {k: convert_message(v) for k, v in msg.items()}
+                        if isinstance(msg, list):
+                            return [convert_message(item) for item in msg]
+                        return msg
+                    messages = [convert_message(m) for m in messages]
+                    text = processor.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
+                except Exception:
+                    text = ""
+            else:
+                text = ""
+        else:
+            text = str(text_data) if text_data else ""
 
         # Tokenize text (without image tokens)
         text_tokens = tokenizer(text, add_special_tokens=False)["input_ids"]
@@ -842,10 +871,14 @@ def _process_single_parquet_thread(
         # Each image expands to features_per_patch tokens
         effective_tokens = text_token_count + num_images * (config.features_per_patch + 1)
 
+        # Track samples exceeding max_length
+        if effective_tokens > config.max_length:
+            exceeded_count += 1
+
         token_lengths.append(effective_tokens)
         patch_counts.append(patch_count)
 
-    return path, token_lengths, patch_counts, len(df)
+    return path, token_lengths, patch_counts, len(df), exceeded_count
 
 
 def compute_sample_lengths_parallel(
@@ -853,6 +886,7 @@ def compute_sample_lengths_parallel(
     tokenizer_name: str,
     config: PackAssignmentConfig,
     num_workers: Optional[int] = None,
+    processor=None,
 ) -> Tuple[Dict[str, np.ndarray], List[ShardInfo]]:
     """
     Parallel version of compute_sample_lengths_lightweight.
@@ -865,6 +899,9 @@ def compute_sample_lengths_parallel(
         tokenizer_name: HuggingFace model name for tokenizer (e.g., "Qwen/Qwen3-1.7B")
         config: Pack assignment configuration
         num_workers: Number of parallel workers. If None, uses min(cpu_count, num_files, 32)
+        processor: Optional HuggingFace processor for applying chat template to
+                   conversation-format text. Required if text_column contains
+                   message dicts instead of plain strings.
 
     Returns:
         Tuple of:
@@ -897,9 +934,10 @@ def compute_sample_lengths_parallel(
     # - No serialization/pickle overhead
     results = []
     total_samples = 0
+    total_exceeded = 0
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = {
-            executor.submit(_process_single_parquet_thread, path, config, tokenizer): path
+            executor.submit(_process_single_parquet_thread, path, config, tokenizer, processor): path
             for path in parquet_paths
         }
 
@@ -911,13 +949,21 @@ def compute_sample_lengths_parallel(
                 desc="Processing parquet files",
                 unit="file",
             )
+            completed = 0
             for future in pbar:
                 path = futures[future]
                 try:
                     result = future.result()
                     results.append(result)
                     total_samples += result[3]
+                    total_exceeded += result[4]  # exceeded_count
+                    completed += 1
                     pbar.set_postfix({"samples": f"{total_samples:,}"})
+                    # Print summary every 100 files
+                    if completed % 100 == 0:
+                        pct = 100 * total_exceeded / total_samples if total_samples > 0 else 0
+                        logger.info(f"  [Progress] {completed}/{len(parquet_paths)} files: "
+                                   f"{total_exceeded:,} samples ({pct:.2f}%) exceed max_length={config.max_length}")
                 except Exception as e:
                     logger.error(f"Failed: {path} - {e}")
                     raise
@@ -932,8 +978,14 @@ def compute_sample_lengths_parallel(
                     results.append(result)
                     completed += 1
                     total_samples += result[3]
+                    total_exceeded += result[4]  # exceeded_count
                     if completed % 10 == 0 or completed == len(parquet_paths):
                         logger.info(f"  Progress: {completed}/{len(parquet_paths)} files, {total_samples:,} samples")
+                    # Print summary every 100 files
+                    if completed % 100 == 0:
+                        pct = 100 * total_exceeded / total_samples if total_samples > 0 else 0
+                        logger.info(f"  [Progress] {completed}/{len(parquet_paths)} files: "
+                                   f"{total_exceeded:,} samples ({pct:.2f}%) exceed max_length={config.max_length}")
                 except Exception as e:
                     logger.error(f"Failed: {path} - {e}")
                     raise
@@ -947,7 +999,7 @@ def compute_sample_lengths_parallel(
     current_idx = 0
 
     for path in parquet_paths:
-        _, tokens, patches, num_samples = path_to_result[path]
+        _, tokens, patches, num_samples, _ = path_to_result[path]
         all_tokens.extend(tokens)
         all_patches.extend(patches)
         shard_info.append(ShardInfo(path=path, start_idx=current_idx, num_samples=num_samples))
@@ -957,6 +1009,12 @@ def compute_sample_lengths_parallel(
     logger.info(f"Parallel processing complete. Total: {total_samples} samples from {len(parquet_paths)} files")
     logger.info(f"  Token lengths: mean={np.mean(all_tokens):.1f}, max={np.max(all_tokens)}")
     logger.info(f"  Patch counts: mean={np.mean(all_patches):.1f}, max={np.max(all_patches)}")
+
+    # Warn about samples exceeding max_length
+    if total_exceeded > 0:
+        pct = 100 * total_exceeded / total_samples
+        logger.warning(f"  WARNING: {total_exceeded:,} samples ({pct:.2f}%) exceed max_length={config.max_length}")
+        logger.warning(f"  These samples will be truncated during training.")
 
     return {
         "tokens": np.array(all_tokens, dtype=np.int32),
@@ -1135,6 +1193,12 @@ def compute_sample_lengths_lightweight(
             ckpt.save(checkpoint_path)
             logger.info(f"  Checkpoint saved at shard {shard_idx + 1}/{len(parquet_paths)}")
 
+        # Print summary every 100 shards
+        if (shard_idx + 1) % 100 == 0:
+            pct = 100 * exceeded_samples / current_idx if current_idx > 0 else 0
+            logger.info(f"  [Progress] Shard {shard_idx + 1}/{len(parquet_paths)}: "
+                       f"{exceeded_samples:,} samples ({pct:.2f}%) exceed max_length={config.max_length}")
+
     total_samples = len(token_lengths)
     logger.info(f"Sample length computation complete. Total samples: {total_samples}")
     logger.info(f"  Token lengths: mean={np.mean(token_lengths):.1f}, max={np.max(token_lengths)}")
@@ -1214,7 +1278,7 @@ def compute_pack_assignments(
             tokenizer_name = tokenizer.name_or_path
         logger.info(f"Using parallel processing with {num_workers} workers")
         lengths, shard_info = compute_sample_lengths_parallel(
-            parquet_paths, tokenizer_name, config, num_workers
+            parquet_paths, tokenizer_name, config, num_workers, processor=processor
         )
     else:
         # Sequential processing - can use tokenizer object directly
