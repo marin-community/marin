@@ -498,16 +498,17 @@ def save_checkpoint(
 def convert_to_levanter(item: Dict[str, Any], include_source: bool = True) -> Dict[str, Any]:
     """
     Convert a single item from LLaVA-OneVision format to Levanter format.
+    Supports both image+text and pure text data.
 
     Input format:
         {
             "id": str,
-            "image": PIL.Image or dict with bytes,
+            "image": PIL.Image or dict with bytes (optional, can be None for text-only),
             "caption": str,
             "split": str
         }
 
-    Output format:
+    Output format (with image):
         {
             "messages": [
                 {"role": "user", "content": [{"type": "image", "text": None}, {"type": "text", "text": prompt}]},
@@ -516,40 +517,67 @@ def convert_to_levanter(item: Dict[str, Any], include_source: bool = True) -> Di
             "images": [{"bytes": image_bytes}],
             "source": str  # Optional: source dataset name (coyo, datacomp1b, etc.)
         }
+
+    Output format (text-only):
+        {
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": prompt}]},
+                {"role": "assistant", "content": [{"type": "text", "text": caption}]}
+            ],
+            "images": [],
+            "source": str  # Optional: source dataset name (coyo, datacomp1b, etc.)
+        }
     """
     item_id = item.get('id', '')
     caption = item.get('caption', '')
     image = item.get('image')
 
-    # Get image bytes
-    if hasattr(image, 'tobytes'):
-        # PIL Image - convert to bytes
-        img_byte_arr = io.BytesIO()
-        # Save as PNG to preserve quality
-        image.save(img_byte_arr, format='PNG')
-        image_bytes = img_byte_arr.getvalue()
-        # Explicitly close and delete BytesIO to free memory
-        img_byte_arr.close()
-        del img_byte_arr
-    elif isinstance(image, dict) and 'bytes' in image:
-        image_bytes = image['bytes']
-    elif isinstance(image, bytes):
-        image_bytes = image
-    else:
-        raise ValueError(f"Unknown image format: {type(image)}")
+    # Check if this is a text-only item (no image)
+    has_image = image is not None
+
+    image_bytes = None
+    if has_image:
+        # Get image bytes
+        if hasattr(image, 'tobytes'):
+            # PIL Image - convert to bytes
+            img_byte_arr = io.BytesIO()
+            # Save as PNG to preserve quality
+            image.save(img_byte_arr, format='PNG')
+            image_bytes = img_byte_arr.getvalue()
+            # Explicitly close and delete BytesIO to free memory
+            img_byte_arr.close()
+            del img_byte_arr
+        elif isinstance(image, dict) and 'bytes' in image:
+            image_bytes = image['bytes']
+        elif isinstance(image, bytes):
+            image_bytes = image
+        else:
+            # Unknown image format, treat as text-only
+            has_image = False
 
     # Select prompt based on caption length
     prompt = select_prompt(caption, item_id)
 
     # Build Levanter format
+    if has_image and image_bytes is not None:
+        # Image + text format
+        user_content = [
+            {"type": "image"},
+            {"type": "text", "text": prompt}
+        ]
+        images_list = [{"bytes": image_bytes}]
+    else:
+        # Text-only format
+        user_content = [
+            {"type": "text", "text": prompt}
+        ]
+        images_list = []
+
     result = {
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": prompt}
-                ]
+                "content": user_content
             },
             {
                 "role": "assistant",
@@ -558,7 +586,7 @@ def convert_to_levanter(item: Dict[str, Any], include_source: bool = True) -> Di
                 ]
             }
         ],
-        "images": [{"bytes": image_bytes}]
+        "images": images_list
     }
 
     # Add source field for shuffle quality analysis

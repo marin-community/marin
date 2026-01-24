@@ -157,6 +157,19 @@ def main():
         help="Number of parallel workers for processing parquet files (default: 1, sequential). "
              "Set > 1 for parallel processing, e.g., --num-workers 8 for 8x speedup on large datasets.",
     )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default=None,
+        help="Directory for saving/loading checkpoints (supports GCS/S3). Enables resume on interrupt. "
+             "Example: gs://my-bucket/checkpoints or /tmp/checkpoints",
+    )
+    parser.add_argument(
+        "--checkpoint-interval",
+        type=int,
+        default=10,
+        help="Save checkpoint every N shards (default: 10). Lower = more frequent saves.",
+    )
 
     args = parser.parse_args()
 
@@ -191,12 +204,16 @@ def main():
 
     try:
         logger.info(f"Computing pack assignments (num_workers={args.num_workers})...")
+        if args.checkpoint_dir:
+            logger.info(f"Checkpointing enabled: {args.checkpoint_dir} (every {args.checkpoint_interval} shards)")
         result = compute_pack_assignments(
             parquet_paths=parquet_paths,
             output_file=local_output,
             tokenizer=args.model if args.num_workers > 1 else tokenizer,  # Pass name for parallel, object for sequential
             config=config,
             num_workers=args.num_workers,
+            checkpoint_dir=args.checkpoint_dir,
+            checkpoint_interval=args.checkpoint_interval,
         )
 
         # 5. Upload to remote if needed
@@ -217,6 +234,8 @@ def main():
         print(f"Input pattern:     {args.input_pattern}")
         print(f"Output file:       {args.output}")
         print(f"Parallel workers:  {args.num_workers}")
+        if args.checkpoint_dir:
+            print(f"Checkpoint dir:    {args.checkpoint_dir}")
         print(f"Number of shards:  {len(result.shard_info)}")
         print(f"Total samples:     {result.num_samples}")
         print(f"Total packs:       {result.num_packs}")

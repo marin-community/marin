@@ -1173,7 +1173,19 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             use_full_padded_tokens: If True, use full padded token count (num_tiles × base_tokens)
                                    for Levanter mode. If False, use HF-style unpadded count.
         """
-        self.processor = processor
+        # Store model names for process-local recreation (needed for Ray distributed workers)
+        # HuggingFace tokenizers cannot be safely pickled across process boundaries due to
+        # Rust backend state issues ("Already borrowed" error), so we store names and recreate
+        self._processor_name_or_path: Optional[str] = getattr(processor, 'name_or_path', None)
+        if self._processor_name_or_path is None:
+            # Try to get from tokenizer or image_processor
+            self._processor_name_or_path = getattr(getattr(processor, 'tokenizer', None), 'name_or_path', None)
+        self._tokenizer_name_or_path: Optional[str] = getattr(tokenizer, 'name_or_path', None) if tokenizer else None
+
+        # Store the actual processor (will be excluded from pickle in __getstate__)
+        self._processor = processor
+        self._custom_tokenizer = tokenizer
+
         self.max_length = max_length
         self.padding = padding
         self.messages_key = messages_key
@@ -1222,7 +1234,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         # Create a custom processor with the new tokenizer if specified
         if tokenizer is not None:
-            self.processor = CustomVLMProcessor.from_processor_and_tokenizer(
+            self._processor = CustomVLMProcessor.from_processor_and_tokenizer(
                 processor, tokenizer,
                 use_full_padded_tokens=True,
             )
@@ -1230,13 +1242,95 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         # Cache padding mode for __call__
         self._padding_mode = "max_length" if self.padding else False
 
-        # Eagerly cache token IDs for _create_loss_mask (after any tokenizer replacement)
-        final_tokenizer = self.processor.tokenizer
-        self._cached_im_start_id: int = final_tokenizer.convert_tokens_to_ids("<|im_start|>")
-        self._cached_im_end_id: int = final_tokenizer.convert_tokens_to_ids("<|im_end|>")
-        assistant_ids = final_tokenizer.encode("assistant", add_special_tokens=False)
-        self._cached_num_assistant_tokens: int = len(assistant_ids)
-        self._cached_assistant_token_ids_array: np.ndarray = np.array(assistant_ids, dtype=np.int32)
+        # Token IDs will be lazily computed on first access (see _get_cached_token_ids)
+        # This avoids tokenizer access during __init__ which fails after cross-process unpickling
+        self._cached_token_ids: Optional[Dict[str, Any]] = None
+
+    @property
+    def processor(self) -> ProcessorMixin:
+        """Lazily access the processor, recreating it if needed after unpickling."""
+        if self._processor is None:
+            self._recreate_processor()
+        return self._processor
+
+    def _recreate_processor(self) -> None:
+        """Recreate processor and tokenizer in current process after unpickling.
+
+        This is called automatically when accessing self.processor after the object
+        has been unpickled in a Ray worker process. The tokenizer cannot be pickled
+        due to Rust backend state issues, so we recreate it from the stored model name.
+        """
+        from levanter.compat.hf_checkpoints import load_processor, load_tokenizer
+
+        if self._processor_name_or_path is None:
+            raise RuntimeError(
+                "Cannot recreate processor: _processor_name_or_path is None. "
+                "This may happen if the original processor didn't have a name_or_path attribute."
+            )
+
+        # Recreate the base processor
+        self._processor = load_processor(self._processor_name_or_path, trust_remote_code=True)
+
+        # Apply vision_feature_height override if needed
+        if self.vision_feature_height is not None:
+            num_image_tokens = self.vision_feature_height * self.vision_feature_height
+            self._processor.num_image_tokens = num_image_tokens
+
+        # Apply disable_anyres configuration if needed
+        if self.disable_anyres:
+            if hasattr(self._processor, 'image_grid_pinpoints'):
+                self._processor.image_grid_pinpoints = (
+                    self.grid_pinpoints if self.grid_pinpoints else [[self.patch_size, self.patch_size]]
+                )
+            if hasattr(self._processor, 'vision_aspect_ratio'):
+                self._processor.vision_aspect_ratio = "single"
+
+        # Recreate custom tokenizer if it was originally provided
+        if self._tokenizer_name_or_path is not None:
+            custom_tokenizer = load_tokenizer(self._tokenizer_name_or_path, trust_remote_code=True)
+            self._processor = CustomVLMProcessor.from_processor_and_tokenizer(
+                self._processor, custom_tokenizer,
+                use_full_padded_tokens=True,
+            )
+
+    def __getstate__(self) -> Dict[str, Any]:
+        """Prepare state for pickling, excluding unpicklable tokenizer/processor objects.
+
+        HuggingFace tokenizers with Rust backends cannot be safely pickled across process
+        boundaries (causes "RuntimeError: Already borrowed"). We exclude them and recreate
+        them lazily in the worker process using the stored model names.
+        """
+        state = self.__dict__.copy()
+        # Remove unpicklable processor/tokenizer objects - they will be recreated lazily
+        state['_processor'] = None
+        state['_custom_tokenizer'] = None
+        # Clear cached token IDs - they will be recomputed after processor recreation
+        state['_cached_token_ids'] = None
+        return state
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Restore state after unpickling."""
+        self.__dict__.update(state)
+        # _processor is None, will be lazily recreated on first access via self.processor
+
+    def _get_cached_token_ids(self) -> Dict[str, Any]:
+        """Lazily compute and cache token IDs for loss mask creation.
+
+        This is called on first access rather than in __init__ to avoid
+        tokenizer access during initialization, which fails after unpickling.
+        """
+        if self._cached_token_ids is None:
+            final_tokenizer = self.processor.tokenizer
+            im_start_id = final_tokenizer.convert_tokens_to_ids("<|im_start|>")
+            im_end_id = final_tokenizer.convert_tokens_to_ids("<|im_end|>")
+            assistant_ids = final_tokenizer.encode("assistant", add_special_tokens=False)
+            self._cached_token_ids = {
+                "im_start_id": im_start_id,
+                "im_end_id": im_end_id,
+                "num_assistant_tokens": len(assistant_ids),
+                "assistant_token_ids_array": np.array(assistant_ids, dtype=np.int32),
+            }
+        return self._cached_token_ids
 
     def get_token_ids(self) -> Dict[str, Optional[int]]:
         """Get current token IDs from the processor.
@@ -1458,14 +1552,20 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             return np.ones(len(input_ids), dtype=np.float32)
 
         n = len(input_ids)
-        num_ast = self._cached_num_assistant_tokens
+        # Get lazily cached token IDs (computed on first access)
+        token_ids = self._get_cached_token_ids()
+        num_ast = token_ids["num_assistant_tokens"]
+        im_start_id = token_ids["im_start_id"]
+        im_end_id = token_ids["im_end_id"]
+        assistant_token_ids_array = token_ids["assistant_token_ids_array"]
+
         empty_mask = np.zeros(n, dtype=np.float32)
 
         if n < 3:
             return empty_mask
 
         # Find all <|im_start|> positions and filter to valid ones
-        im_start_positions = np.where(input_ids == self._cached_im_start_id)[0]
+        im_start_positions = np.where(input_ids == im_start_id)[0]
         valid_positions = im_start_positions[im_start_positions + 1 + num_ast <= n]
         if len(valid_positions) == 0:
             return empty_mask
@@ -1474,13 +1574,13 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         offsets = np.arange(1, num_ast + 1)
         check_indices = valid_positions[:, None] + offsets
         check_tokens = input_ids[check_indices]
-        matches = np.all(check_tokens == self._cached_assistant_token_ids_array, axis=1)
+        matches = np.all(check_tokens == assistant_token_ids_array, axis=1)
         pattern_starts = valid_positions[matches]
         if len(pattern_starts) == 0:
             return empty_mask
 
         # Find all <|im_end|> positions
-        im_end_positions = np.where(input_ids == self._cached_im_end_id)[0]
+        im_end_positions = np.where(input_ids == im_end_id)[0]
         if len(im_end_positions) == 0:
             return empty_mask
 

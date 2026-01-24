@@ -42,6 +42,8 @@ from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llava_onevision import LlavaOnevisionConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.models.siglip import SiglipVisionConfig
+from levanter.utils.mesh import MeshConfig
+from haliax.partitioning import ResourceAxis
 from marin.execution.executor import executor_main
 
 from experiments.defaults import default_train_vlm
@@ -229,6 +231,16 @@ train_config = SimpleVlmTrainConfig(
 
     # Disable evaluation to save memory
     no_eval=True,
+
+    # Custom mesh configuration for better memory distribution
+    mesh_config=MeshConfig(
+        axes={"data": -1, "replica": 1, "model": 1},
+        compute_mapping={
+            "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+            "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+        },
+        param_mapping={"embed": "data"},  # Only shards LLM embed (vision uses vision_embed)
+    ),
 )
 
 # ============================================================================

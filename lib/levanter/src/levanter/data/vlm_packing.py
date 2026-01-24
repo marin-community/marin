@@ -683,6 +683,104 @@ class PackAssignmentResult:
         )
 
 
+@dataclass
+class PackAssignmentCheckpoint:
+    """Checkpoint for resumable pack assignment computation.
+
+    This allows resuming from an interrupted pack assignment computation
+    without reprocessing already-completed shards.
+    """
+
+    config: PackAssignmentConfig
+    """Config used for assignment."""
+
+    parquet_paths: List[str]
+    """List of parquet paths (for validation on resume)."""
+
+    timestamp: float
+    """Timestamp when checkpoint was created."""
+
+    processed_shard_indices: List[int]
+    """Indices of shards that have been processed."""
+
+    shard_info: List[ShardInfo]
+    """Information about processed shards."""
+
+    token_lengths: np.ndarray
+    """Token lengths for processed samples (int32)."""
+
+    patch_counts: np.ndarray
+    """Patch counts for processed samples (int32)."""
+
+    def save(self, path: str):
+        """Save checkpoint to file (supports GCS/S3 via fsspec)."""
+        import pickle
+        import time
+
+        data = {
+            "config": asdict(self.config),
+            "parquet_paths": self.parquet_paths,
+            "timestamp": self.timestamp,
+            "processed_shard_indices": self.processed_shard_indices,
+            "shard_info": [asdict(s) for s in self.shard_info],
+            "token_lengths": self.token_lengths,
+            "patch_counts": self.patch_counts,
+            "version": "1.0",
+        }
+
+        fs, fs_path = fsspec.core.url_to_fs(path)
+        # Create parent directory if needed
+        parent_dir = "/".join(fs_path.split("/")[:-1])
+        if parent_dir:
+            fs.makedirs(parent_dir, exist_ok=True)
+
+        with fs.open(fs_path, "wb") as f:
+            pickle.dump(data, f)
+
+        logger.info(f"Checkpoint saved to {path}")
+
+    @classmethod
+    def load(cls, path: str) -> Optional["PackAssignmentCheckpoint"]:
+        """Load checkpoint from file (supports GCS/S3 via fsspec).
+
+        Returns None if checkpoint doesn't exist.
+        """
+        import pickle
+
+        fs, fs_path = fsspec.core.url_to_fs(path)
+        if not fs.exists(fs_path):
+            return None
+
+        with fs.open(fs_path, "rb") as f:
+            data = pickle.load(f)
+
+        return cls(
+            config=PackAssignmentConfig(**data["config"]),
+            parquet_paths=data["parquet_paths"],
+            timestamp=data["timestamp"],
+            processed_shard_indices=data["processed_shard_indices"],
+            shard_info=[ShardInfo(**s) for s in data["shard_info"]],
+            token_lengths=data["token_lengths"],
+            patch_counts=data["patch_counts"],
+        )
+
+    def validate(self, parquet_paths: List[str], config: PackAssignmentConfig) -> bool:
+        """Validate checkpoint is compatible with current run."""
+        # Check paths match
+        if self.parquet_paths != parquet_paths:
+            logger.warning("Checkpoint parquet_paths mismatch, cannot resume")
+            return False
+
+        # Check config matches (at least the critical fields)
+        if (self.config.max_length != config.max_length or
+            self.config.max_patches != config.max_patches or
+            self.config.features_per_patch != config.features_per_patch):
+            logger.warning("Checkpoint config mismatch, cannot resume")
+            return False
+
+        return True
+
+
 # =============================================================================
 # Parallel Processing for Pack Assignments
 # =============================================================================
@@ -871,6 +969,8 @@ def compute_sample_lengths_lightweight(
     tokenizer,
     config: PackAssignmentConfig,
     processor=None,
+    checkpoint_path: Optional[str] = None,
+    checkpoint_interval: int = 10,
 ) -> Tuple[Dict[str, np.ndarray], List[ShardInfo]]:
     """
     Compute sample lengths from raw parquet files without full image preprocessing.
@@ -890,21 +990,48 @@ def compute_sample_lengths_lightweight(
         processor: Optional HuggingFace processor for applying chat template to
                    conversation-format text. Required if text_column contains
                    message dicts instead of plain strings.
+        checkpoint_path: Optional path to save/load checkpoints. Enables resume on interrupt.
+        checkpoint_interval: Save checkpoint every N shards (default: 10).
 
     Returns:
         Tuple of:
         - Dict with "tokens" and "patches" arrays suitable for pack_documents()
         - List of ShardInfo for tracking shard boundaries
     """
+    import time
+
     token_lengths = []
     patch_counts = []
     shard_info = []
     current_idx = 0
+    start_shard_idx = 0
+
+    # Track samples exceeding max_length
+    exceeded_samples = 0
+    exceeded_examples = []  # Store first few examples for debugging
+
+    # Try to load existing checkpoint
+    if checkpoint_path:
+        checkpoint = PackAssignmentCheckpoint.load(checkpoint_path)
+        if checkpoint and checkpoint.validate(parquet_paths, config):
+            start_shard_idx = len(checkpoint.processed_shard_indices)
+            token_lengths = checkpoint.token_lengths.tolist()
+            patch_counts = checkpoint.patch_counts.tolist()
+            shard_info = list(checkpoint.shard_info)
+            current_idx = sum(s.num_samples for s in shard_info)
+            logger.info(f"Resuming from checkpoint: {start_shard_idx}/{len(parquet_paths)} shards processed")
+            logger.info(f"  Already processed {current_idx:,} samples")
+        elif checkpoint:
+            logger.warning("Checkpoint validation failed, starting fresh")
 
     logger.info(f"Computing sample lengths from {len(parquet_paths)} parquet files...")
 
-    for path in parquet_paths:
-        logger.info(f"Processing {path}...")
+    for shard_idx, path in enumerate(parquet_paths):
+        # Skip already processed shards (from checkpoint)
+        if shard_idx < start_shard_idx:
+            continue
+
+        logger.info(f"Processing shard {shard_idx + 1}/{len(parquet_paths)}: {path}...")
 
         # Read parquet file (supports GCS, S3, local paths via fsspec)
         fs, fs_path = fsspec.core.url_to_fs(path)
@@ -977,16 +1104,51 @@ def compute_sample_lengths_lightweight(
             # Each image expands to features_per_patch tokens
             effective_tokens = text_token_count + num_images * (config.features_per_patch+1)
 
+            # Track samples exceeding max_length
+            if effective_tokens > config.max_length:
+                exceeded_samples += 1
+                if len(exceeded_examples) < 5:  # Only store first 5 examples
+                    exceeded_examples.append({
+                        "shard": path,
+                        "row": i,
+                        "tokens": effective_tokens,
+                        "max_length": config.max_length,
+                    })
+
             token_lengths.append(effective_tokens)
             patch_counts.append(patch_count)
 
         current_idx += num_samples
-        logger.info(f"  Processed {num_samples} samples, total: {current_idx}")
+        logger.info(f"  Processed {num_samples} samples, total: {current_idx:,}")
+
+        # Save checkpoint periodically
+        if checkpoint_path and (shard_idx + 1) % checkpoint_interval == 0:
+            ckpt = PackAssignmentCheckpoint(
+                config=config,
+                parquet_paths=parquet_paths,
+                timestamp=time.time(),
+                processed_shard_indices=list(range(shard_idx + 1)),
+                shard_info=list(shard_info),
+                token_lengths=np.array(token_lengths, dtype=np.int32),
+                patch_counts=np.array(patch_counts, dtype=np.int32),
+            )
+            ckpt.save(checkpoint_path)
+            logger.info(f"  Checkpoint saved at shard {shard_idx + 1}/{len(parquet_paths)}")
 
     total_samples = len(token_lengths)
     logger.info(f"Sample length computation complete. Total samples: {total_samples}")
     logger.info(f"  Token lengths: mean={np.mean(token_lengths):.1f}, max={np.max(token_lengths)}")
     logger.info(f"  Patch counts: mean={np.mean(patch_counts):.1f}, max={np.max(patch_counts)}")
+
+    # Warn about samples exceeding max_length
+    if exceeded_samples > 0:
+        pct = 100 * exceeded_samples / total_samples
+        logger.warning(f"  WARNING: {exceeded_samples:,} samples ({pct:.2f}%) exceed max_length={config.max_length}")
+        logger.warning(f"  These samples will be truncated during training.")
+        for ex in exceeded_examples:
+            logger.warning(f"    - {ex['shard']} row {ex['row']}: {ex['tokens']} tokens")
+        if len(exceeded_examples) < exceeded_samples:
+            logger.warning(f"    - ... and {exceeded_samples - len(exceeded_examples)} more")
 
     return {
         "tokens": np.array(token_lengths, dtype=np.int32),
@@ -1001,6 +1163,8 @@ def compute_pack_assignments(
     config: Optional[PackAssignmentConfig] = None,
     num_workers: int = 1,
     processor=None,
+    checkpoint_dir: Optional[str] = None,
+    checkpoint_interval: int = 10,
 ) -> PackAssignmentResult:
     """
     Compute pack assignments from raw parquet files and save to JSON.
@@ -1019,6 +1183,9 @@ def compute_pack_assignments(
         processor: Optional HuggingFace processor for applying chat template to
                    conversation-format text. Required if text_column contains
                    message dicts instead of plain strings.
+        checkpoint_dir: Optional directory for saving/loading checkpoints.
+                       Enables resume on interrupt. Supports GCS/S3 paths.
+        checkpoint_interval: Save checkpoint every N shards (default: 10).
 
     Returns:
         PackAssignmentResult with assignments and metadata
@@ -1026,9 +1193,21 @@ def compute_pack_assignments(
     if config is None:
         config = PackAssignmentConfig()
 
+    # Setup checkpoint path
+    checkpoint_path = None
+    if checkpoint_dir:
+        # Create checkpoint directory (supports GCS/S3)
+        fs, fs_dir = fsspec.core.url_to_fs(checkpoint_dir)
+        fs.makedirs(fs_dir, exist_ok=True)
+        checkpoint_path = f"{checkpoint_dir}/pack_lengths_checkpoint.pkl"
+        logger.info(f"Checkpointing enabled: {checkpoint_path} (every {checkpoint_interval} shards)")
+
     # 1. Compute sample lengths (parallel or sequential)
     if num_workers > 1:
         # Parallel processing - need tokenizer name (string)
+        # Note: Parallel mode doesn't support checkpointing yet (TODO)
+        if checkpoint_path:
+            logger.warning("Checkpointing not yet supported with parallel mode, ignoring checkpoint_dir")
         if isinstance(tokenizer, str):
             tokenizer_name = tokenizer
         else:
@@ -1041,7 +1220,9 @@ def compute_pack_assignments(
         # Sequential processing - can use tokenizer object directly
         logger.info("Using sequential processing (set num_workers > 1 for parallel)")
         lengths, shard_info = compute_sample_lengths_lightweight(
-            parquet_paths, tokenizer, config, processor=processor
+            parquet_paths, tokenizer, config, processor=processor,
+            checkpoint_path=checkpoint_path,
+            checkpoint_interval=checkpoint_interval,
         )
 
     num_samples = len(lengths["tokens"])
