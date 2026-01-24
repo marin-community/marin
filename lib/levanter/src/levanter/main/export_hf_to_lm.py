@@ -19,7 +19,7 @@ from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
-from levanter.utils.jax_utils import use_cpu_device
+from levanter.utils.jax_utils import local_cpu_mesh
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ def main(config: ImportHfConfig):
     converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
 
     logger.info("Loading HF model...")
-    with use_cpu_device():
+    with local_cpu_mesh():
         model = converter.load_pretrained(
             config.model.model_type,
             config=config.model if not config.use_hf_model_config else None,
@@ -107,7 +107,7 @@ def main(config: ImportHfConfig):
         logger.info(f"Checkpoint committed to Tensorstore successfully! Total time: {elapsed:.2f}s")
 
     save_checkpoint(
-        tree=model,
+        tree={"model": model},
         checkpoint_path=config.output_path,
         manager=manager,
         commit_callback=commit_callback,
