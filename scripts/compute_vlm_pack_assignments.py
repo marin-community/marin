@@ -8,11 +8,13 @@ PackedVLMDataset for efficient streaming training.
 
 Usage:
     python scripts/compute_vlm_pack_assignments.py \
-        --input-pattern "gs://marin-vlm/stage1_sharded/*.parquet" \
-        --output "gs://marin-vlm/stage1_sharded/pack_assignments.json" \
+        --input-pattern "gs://marin-vlm/stage2_sharded/*.parquet" \
+        --output "gs://marin-vlm/stage2_sharded/pack_assignments.json" \
         --model "Qwen/Qwen3-1.7B" \
         --max-length 2048 \
-        --max-patches 10
+        --max-patches 10 \
+        --num-workers 50 \
+        --checkpoint-dir "gs://marin-vlm/checkpoints_packing"
 
 Requirements:
     pip install fsspec gcsfs  # For GCS support
