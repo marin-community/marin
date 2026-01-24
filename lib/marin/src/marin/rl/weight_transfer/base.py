@@ -60,7 +60,8 @@ class WeightTransferClientMetrics:
 class WeightUpdate:
     """Result of receiving weights from a weight transfer server."""
 
-    model: PyTree
+    model: PyTree | None
+    state_dict: dict
     weight_id: int
 
 
@@ -82,6 +83,8 @@ class WeightTransferConfig:
     # Arrow Flight specific
     flight_host: str = "0.0.0.0"
     flight_port: int = 0  # 0 = auto-assign
+    convert_to_bfloat16: bool = True
+    """Whether to convert weights to bfloat16 during transfer. Reduces transfer size by 50% for float32 weights."""
 
 
 class WeightTransferServer(ABC):
@@ -111,14 +114,18 @@ class WeightTransferClient(ABC):
     """Abstract base class for weight transfer clients (inference worker side)."""
 
     @abstractmethod
-    def receive_weights(self, old_model: PyTree) -> WeightUpdate | None:
+    def receive_weights(self, old_model: PyTree | None) -> WeightUpdate | None:
         """Receive weights from server.
 
         Args:
             old_model: Previous model for memory optimization (optional)
+            apply_weight_update: Whether to apply the weight update to the model
 
         Returns:
-            WeightUpdate containing the new model and weight_id if update available, None otherwise.
+            WeightUpdate containing the new model or state_dict and weight_id if update available,
+            None otherwise. If old_model is None, the weight update will only contain the new state
+            dict but will not apply the weight update. If old model is not None, the weight update
+            will be applied to the model.
         """
         pass
 

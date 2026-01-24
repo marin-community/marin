@@ -16,6 +16,7 @@
 import time
 
 import pytest
+from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.run import evaluate
@@ -39,8 +40,7 @@ def model_config():
         engine_kwargs={"enforce_eager": True, "max_model_len": 1024},
         generation_params={"max_tokens": 16},
     )
-    yield config
-    config.destroy()
+    return config
 
 
 @pytest.mark.tpu_ci
@@ -54,6 +54,7 @@ def test_lm_eval_harness_levanter(current_date_time, model_config):
         evals=[mmlu_config],
         max_eval_instances=5,
         launch_with_ray=True,
+        resource_config=ResourceConfig.with_cpu(cpu=1),
         engine_kwargs=model_config.engine_kwargs,
     )
     evaluate(config=config)

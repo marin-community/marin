@@ -21,7 +21,7 @@ from levanter.data import DataLoader
 from levanter.data.text import LMMixtureDatasetConfig, SingleDatasetLMConfigBase
 from levanter.eval import TaggedEvaluator, eval_model
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, compute_next_token_loss
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
@@ -45,8 +45,6 @@ class EvalLmConfig:
     log_entropy: bool = False
     log_top2_gap: bool = False
     log_param_stats: bool = False
-
-    local_model_dir: str = "/opt/gcsfuse_mount/models"
 
 
 def main(config: EvalLmConfig):
@@ -99,7 +97,7 @@ def main(config: EvalLmConfig):
             with hax.axis_mapping(compute_axis_mapping):
                 model = inference_mode(model, True)
                 model = mp.cast_to_compute(model)
-                return compute_next_token_loss(model, example, key=None)
+                return model.compute_next_token_loss(example, key=None)
 
         def compute_logits(model: LmHeadModel, example: LmExample):
             model = mp.cast_to_compute(model)
@@ -143,7 +141,9 @@ def main(config: EvalLmConfig):
             for name, dataset in config.data.validation_sets(Pos).items():
                 if config.trainer.max_eval_batches is not None:
                     dataset = dataset.take(config.trainer.max_eval_batches * config.trainer.eval_batch_size)
-                loader = DataLoader(dataset, batch_size=config.trainer.eval_batch_size)
+                loader = DataLoader(
+                    dataset, batch_size=config.trainer.eval_batch_size, axis_resources=compute_axis_mapping
+                )
                 entropy_hist = levanter.analysis.compute_entropy_histogram(
                     model,
                     Vocab,
@@ -163,7 +163,9 @@ def main(config: EvalLmConfig):
             for name, dataset in config.data.validation_sets(Pos).items():
                 if config.trainer.max_eval_batches is not None:
                     dataset = dataset.take(config.trainer.max_eval_batches * config.trainer.eval_batch_size)
-                    loader = DataLoader(dataset, batch_size=config.trainer.eval_batch_size)
+                    loader = DataLoader(
+                        dataset, batch_size=config.trainer.eval_batch_size, axis_resources=compute_axis_mapping
+                    )
                     top2_gap_hist = levanter.analysis.compute_top2_gap_histogram(
                         model,
                         Vocab,

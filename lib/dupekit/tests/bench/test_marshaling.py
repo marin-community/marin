@@ -18,20 +18,9 @@ Benchmarks include the cost of converting Arrow data to target format (Dicts, St
 """
 
 import pytest
-import pyarrow.parquet as pq
 import pyarrow as pa
 from typing import Any
 import dupekit
-
-
-@pytest.fixture(scope="module")
-def in_memory_table(tmp_path_factory: pytest.TempPathFactory, parquet_file: str) -> pa.Table:
-    """
-    Loads 250k rows into memory once.
-    """
-    pf = pq.ParquetFile(parquet_file)
-    first_batch = next(pf.iter_batches(batch_size=250_000))
-    return pa.Table.from_batches([first_batch])
 
 
 @pytest.mark.parametrize(

@@ -35,6 +35,47 @@ cluster infrastructure for Marin. We use Ray for:
 - **Training**: Distributed model training via Levanter
 - **Inference**: GPU/TPU actor pools for model serving
 
+### Ray token authentication
+
+Marin clusters use Ray token authentication (Ray >= 2.53). Ray APIs (dashboard, jobs, status) require a shared token.
+
+- Cluster-side: the token is fetched from GCP Secret Manager into `/home/ray/.ray/auth_token` during `setup_commands`
+  (runs inside the Ray container) and `RAY_AUTH_MODE=token` is set via Docker run options.
+- Client-side (your laptop): `scripts/ray/cluster.py` will automatically fetch/cache the token into `~/.ray/` when you
+  connect to a specific cluster config. You can also install tokens explicitly (see below).
+
+All clusters use the same `RAY_AUTH_TOKEN` Secret Manager secret, and clients use the standard Ray token file path
+`~/.ray/auth_token`. To install the default token locally (or re-run `make dev_setup`):
+
+```bash
+make get_ray_auth_token
+```
+
+
+To connect + authenticate (recommended), use the cluster helper (fetches/caches the token, sets up port-forwarding, and can
+open the dashboard):
+
+```bash
+uv run scripts/ray/cluster.py --cluster us-central2 auth
+```
+
+For the full developer workflow (including other clusters and using "raw" Ray CLIs), see
+[`docs/dev-guide/guidelines-internal.md`](../docs/dev-guide/guidelines-internal.md#ray-token-authentication).
+
+#### One-time: create the production token secret
+
+You will only need to do this if setting up in a new GCP project or similar.
+
+Clusters read their token from the `RAY_AUTH_TOKEN` Secret Manager secret.
+
+If `make get_ray_auth_token` fails because the secret doesn’t exist yet, create it once:
+
+```bash
+export RAY_AUTH_MODE=token
+ray get-auth-token --generate  # writes ~/.ray/auth_token (don’t commit this)
+make init_ray_auth_token_secret
+```
+
 For **data processing** (downloads, transforms, deduplication), we use Zephyr instead of raw Ray.
 
 **Useful Documentation**:
@@ -162,18 +203,38 @@ actually do anything under the hood to ensure that a job is actually using the n
 the config file configures each worker with only 120 visible CPUs.
 
 ### Restarting the Cluster
+
+#### Restart Policy
+
+When you need to restart a cluster, follow this policy:
+
+1. **Notify**: Post in the #infra Discord channel about your plan to restart the cluster
+2. **Check for running jobs**: Check if there are any active jobs on the cluster
+3. **Ping affected users** (optional): If there are running jobs and you plan to use `--preserve-jobs=0`, ping the relevant people who own those jobs and give them time to respond (e.g., 15-30 minutes)
+4. **Proceed with restart**: After notification and any necessary waiting period, proceed with the restart
+
+>[!NOTE]
+>The job restoration logic (enabled by default with `--preserve-jobs=1`) works reliably in most cases. However, being considerate of other users' work is still important.
+
+**When to restart**: Restarts are appropriate when:
+- The cluster is in a broken state (e.g., workers not connecting)
+- The autoscaler is not functioning properly
+- Configuration changes require a fresh start
+
+#### Common Restart Scenario
+
 There is currently an error on the Ray autoscaler side with spot-TPU instances, where the Ray autoscaler is not able
 to detect when spot-TPU instances are dead and as a result, we may be left in a state with just the head node and
 no more spot-TPU worker instances starting up. When this state occurs, please message in the #infra Discord
 that you are going to restart the cluster, and then run `uv run scripts/ray/cluster.py --config <config> restart-cluster`.
 
-Notes:
-* Please check whether there are any running jobs from other users before restarting so that you do not kill all their
-jobs without getting permission first.
-* You can specify `--preserve-jobs=0` when restarting the cluster if you want to skip backing up running jobs and start
-with a completely clean slate (the default value is `--preserve-jobs=1`, which backs up jobs and resubmits them after the restart).
-Example: `uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml restart-cluster --preserve-jobs=0`
-* See the instructions below if there are any reserved workers on the cluster, though in many cases the command above is all you need.
+#### Restart Options
+
+* **Job preservation**: By default, `--preserve-jobs=1` backs up running jobs and resubmits them after restart. For a completely clean slate, use `--preserve-jobs=0`:
+  ```bash
+  uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml restart-cluster --preserve-jobs=0
+  ```
+* **Reserved workers**: If there are any reserved workers on the cluster, see the instructions below, though in many cases the command above is all you need.
 
 ### Adding manual workers
 

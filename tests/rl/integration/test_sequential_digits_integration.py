@@ -38,7 +38,7 @@ from tests.rl.integration.config import (
 )
 from tests.rl.integration.tasks import create_sequential_digits_rollout_batch, validate_sequential_digits_model
 
-pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integration tests on CI environment")
+pytestmark = pytest.mark.skipif(os.environ.get("CI") is not None, reason="Skipping integration tests on CI environment")
 
 logger = logging.getLogger(__name__)
 

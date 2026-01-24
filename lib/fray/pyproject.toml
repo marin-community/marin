@@ -19,13 +19,14 @@ dependencies = [
     "httpx>=0.28.1",
     "fastapi>=0.100.0",
     "uvicorn[standard]>=0.23.0",
+    "iris",
 ]
 
 [project.scripts]
 fray = "fray.cli:main"
 
 [project.optional-dependencies]
-ray = ["ray==2.45"]
+ray = ["ray==2.53.0"]
 
 [dependency-groups]
 fray_test = [

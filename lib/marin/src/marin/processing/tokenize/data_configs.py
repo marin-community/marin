@@ -20,10 +20,9 @@ from typing import Literal
 
 import numpy
 import transformers
-
 from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
-from marin.execution import unwrap_versioned_value
 
+from marin.execution import unwrap_versioned_value
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
 from marin.utils import load_tokenizer_with_backoff
@@ -34,6 +33,14 @@ PermutationType = Literal["linear", "feistel"]
 TokenizerStep = ExecutorStep[TokenizeConfig]
 
 logger = logging.getLogger(__name__)
+
+_KNOWN_VOCAB_SIZES: dict[str, int] = {
+    "EleutherAI/gpt-neox-20b": 50_257,
+    "meta-llama/Meta-Llama-3.1-8B": 128_256,
+    "stanford-crfm/marin-tokenizer": 128_256,
+    "meta-llama/Llama-2-7b": 32_000,
+    "gpt2": 50_257,
+}
 
 
 def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_raw_paths: bool) -> LMDatasetSourceConfig:
@@ -46,18 +53,6 @@ def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_r
         return step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
     else:
         return step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
-
-
-def as_single_lm_data_source(
-    input: TokenizerStep | InputName,  # noqa: A002
-) -> LMDatasetSourceConfig:
-    """
-    Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
-
-    Args:
-        input: The training set to use
-    """
-    return step_to_lm_mixture_component(input, include_raw_paths=True)
 
 
 def lm_data_config(
@@ -165,71 +160,6 @@ def lm_mixture_data_config(
         num_validation_sequences=num_validation_sequences,
         block_cross_document_attention=block_cross_document_attention,
         **kwargs,
-    )
-
-
-def interpolate_mixture_configs(
-    mixtures: list[LMMixtureDatasetConfig],
-    weights: list[float],
-) -> LMMixtureDatasetConfig:
-    """
-    Interpolates multiple mixture configs into a single config.
-
-    Args:
-        mixtures: List of LMMixtureDatasetConfig to interpolate.
-        weights: List of weights for each mixture config. Must sum to 1.0.
-
-    Returns:
-        A new LMMixtureDatasetConfig that is the weighted average of the input configs.
-    """
-    if len(mixtures) != len(weights):
-        raise ValueError("mixtures and weights must have the same length")
-
-    if not all(isinstance(m, LMMixtureDatasetConfig) for m in mixtures):
-        raise TypeError("All items in mixtures must be LMMixtureDatasetConfig instances")
-
-    if not all(isinstance(w, int | float) for w in weights):
-        raise TypeError("All items in weights must be numeric")
-
-    if not numpy.isclose(sum(weights), 1.0):
-        raise ValueError("Weights must sum to 1.0")
-
-    # verify they have the same tokenizer and other properties
-    tokenizer = mixtures[0].tokenizer
-    for mixture in mixtures:
-        if mixture.tokenizer != tokenizer and not _are_tokenizers_equivalent(mixture.tokenizer, tokenizer):
-            raise ValueError(
-                "All mixtures must have the same tokenizer, but got:" f" {mixture.tokenizer} vs {tokenizer}"
-            )
-
-        if mixture.shuffle != mixtures[0].shuffle:
-            raise ValueError("All mixtures must have the same shuffle policy")
-        if mixture.max_train_batches != mixtures[0].max_train_batches:
-            raise ValueError("All mixtures must have the same max_train_batches")
-        if mixture.num_validation_sequences != mixtures[0].num_validation_sequences:
-            raise ValueError("All mixtures must have the same num_validation_sequences")
-
-    mixture_train_weights = [mixture.train_weights for mixture in mixtures]
-
-    combined_weights = interpolate_mixture_weights(mixture_train_weights, weights)
-
-    combined_configs = {}
-    for mixture in mixtures:
-        for name, config in mixture.configs.items():
-            if name not in combined_configs:
-                combined_configs[name] = config
-            else:
-                pass
-
-    return LMMixtureDatasetConfig(
-        configs=combined_configs,
-        train_weights=combined_weights,
-        tokenizer=mixtures[0].tokenizer,
-        cache_dir=None,
-        shuffle=mixtures[0].shuffle,
-        max_train_batches=mixtures[0].max_train_batches,
-        num_validation_sequences=mixtures[0].num_validation_sequences,
-        permutation_type=mixtures[0].permutation_type,
     )
 
 
@@ -409,6 +339,24 @@ def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LMMixtureDatasetC
 def _load_tokenizer(tokenizer_name: str) -> transformers.PreTrainedTokenizer:
     """Load and cache a tokenizer by name"""
     return load_tokenizer_with_backoff(tokenizer_name)
+
+
+@lru_cache(maxsize=128)
+def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
+    """Return the vocabulary size for a tokenizer name.
+
+    Args:
+        tokenizer_name: HuggingFace tokenizer name or path.
+
+    Returns:
+        Vocabulary size for the tokenizer.
+    """
+    resolved_name = unwrap_versioned_value(tokenizer_name)
+    if resolved_name in _KNOWN_VOCAB_SIZES:
+        return _KNOWN_VOCAB_SIZES[resolved_name]
+
+    tokenizer = _load_tokenizer(resolved_name)
+    return len(tokenizer)
 
 
 def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:

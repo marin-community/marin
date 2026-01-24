@@ -101,6 +101,7 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
+from pathlib import Path
 from threading import Event, Thread
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
@@ -108,6 +109,7 @@ from urllib.parse import urlparse
 import draccus
 import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
+
 from fray import (
     Cluster,
     Entrypoint,
@@ -130,6 +132,41 @@ from marin.execution.executor_step_status import (
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
+
+_LOCAL_DATA_BROWSER_PORT_RE = re.compile(r"^\s*port\s*:\s*(\d+)\s*(?:#.*)?$")
+_LOCAL_DATA_BROWSER_CONFIG_REL = Path("data_browser") / "conf" / "local.conf"
+
+
+def _find_data_browser_local_conf(max_parents: int = 6) -> Path | None:
+    here = Path.cwd().resolve()
+    for _ in range(max_parents + 1):
+        candidate = here / _LOCAL_DATA_BROWSER_CONFIG_REL
+        if candidate.exists():
+            return candidate
+        parent = here.parent
+        if parent == here:
+            break
+        here = parent
+    return None
+
+
+def _get_local_data_browser_port(default: int = 5000) -> int:
+    # looks for the port in the local data browser config file
+    config_path = _find_data_browser_local_conf()
+    if config_path is None:
+        return default
+
+    try:
+        with config_path.open() as fp:
+            for line in fp:
+                match = _LOCAL_DATA_BROWSER_PORT_RE.match(line)
+                if match:
+                    return int(match.group(1))
+    except OSError:
+        return default
+
+    return default
+
 
 ConfigT = TypeVar("ConfigT", covariant=True, bound=dataclass)
 T_co = TypeVar("T_co", covariant=True)
@@ -268,6 +305,9 @@ class ExecutorStep(Generic[ConfigT]):
 
     pip_dependency_groups: list[str] | None = None
     """List of `extra` dependencies from pyproject.toml to include with this step."""
+
+    resources: ResourceConfig | None = None
+    """Resource requirements for this step (GPU, TPU, CPU). If None, defaults to CPU."""
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -667,6 +707,7 @@ class Executor:
         dry_run: bool = False,
         run_only: list[str] | None = None,
         force_run_failed: bool = False,
+        max_concurrent: int | None = None,
     ):
         """
         Run the pipeline of `ExecutorStep`s.
@@ -677,7 +718,10 @@ class Executor:
                 statuses to report which steps would actually be executed.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
+            max_concurrent: Maximum number of steps to run concurrently. If None, run all ready steps in parallel.
         """
+        if max_concurrent is not None and max_concurrent < 1:
+            raise ValueError(f"max_concurrent must be a positive integer, got {max_concurrent}")
 
         # Gather all the steps, compute versions and output paths for all of them.
         logger.info(f"### Inspecting the {len(steps)} provided steps ###")
@@ -702,9 +746,11 @@ class Executor:
         self.write_infos()
 
         logger.info(f"### Launching {len(steps_to_run)} steps ###")
+        if max_concurrent is not None:
+            logger.info(f"### Max concurrent steps: {max_concurrent} ###")
         if dry_run:
             self._dry_run_plan = []
-        self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
+        self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed, max_concurrent=max_concurrent)
 
         if dry_run:
             self._log_dry_run_summary()
@@ -719,6 +765,7 @@ class Executor:
         *,
         dry_run: bool,
         force_run_failed: bool,
+        max_concurrent: int | None = None,
     ) -> None:
         remaining_deps: dict[ExecutorStep, set[ExecutorStep]] = {
             step: set(dep for dep in self.dependencies[step] if dep in steps_to_run) for step in steps_to_run
@@ -732,8 +779,10 @@ class Executor:
         running: dict[ExecutorStep, StepRunner | None] = {}
 
         while ready or running:
-            while ready:
-                step = ready.pop()
+            # Launch ready steps, respecting max_concurrent limit if set
+            # Use pop(0) for FIFO ordering
+            while ready and (max_concurrent is None or len(running) < max_concurrent):
+                step = ready.pop(0)
                 runner = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
                 if runner is not None:
                     self.step_runners[step] = runner
@@ -805,12 +854,12 @@ class Executor:
 
             step_fn = _call_remote
 
-        # always run driver functions on a non-preemptible node
-        non_preemptible_cpu = ResourceConfig.with_cpu(preemptible=False)
+        # Use the step's resources if specified, otherwise default to CPU
+        step_resources = step.resources if step.resources is not None else ResourceConfig.with_cpu(preemptible=False)
         fray_job = JobRequest(
             name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
             entrypoint=Entrypoint.from_callable(step_fn, args=[config]),
-            resources=non_preemptible_cpu,
+            resources=step_resources,
             environment=EnvironmentConfig.create(extras=step.pip_dependency_groups or []),
         )
 
@@ -1037,11 +1086,10 @@ class Executor:
 
     def get_experiment_url(self) -> str:
         """Return the URL where the experiment can be viewed."""
-        # TODO: remove hardcoding
         if self.prefix.startswith("gs://"):
             host = "https://marin.community/data-browser"
         else:
-            host = "http://localhost:5000"
+            host = f"http://localhost:{_get_local_data_browser_port()}"
 
         return host + "/experiment?path=" + urllib.parse.quote(self.executor_info_path)
 
@@ -1067,6 +1115,8 @@ class Executor:
 
         # Print where to find the executor info (experiments JSON)
         logger.info(f"Writing executor info to {self.executor_info_path}")
+        if not self.prefix.startswith("gs://"):
+            logger.info("Start data browser: cd data_browser && uv run python run-dev.py --config conf/local.conf")
         logger.info("To view the experiment page, go to:")
         logger.info("")
         logger.info(self.get_experiment_url())
@@ -1180,6 +1230,9 @@ class ExecutorMainConfig:
     run_only: list[str] | None = None
     """Run these steps (matched by regex.search) and their dependencies only. If None, run all steps."""
 
+    max_concurrent: int | None = None
+    """Maximum number of steps to run concurrently. If None, run all ready steps in parallel (default)."""
+
 
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
@@ -1212,11 +1265,19 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
         description=description,
     )
 
-    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
+    executor.run(
+        steps=steps,
+        dry_run=config.dry_run,
+        run_only=config.run_only,
+        force_run_failed=config.force_run_failed,
+        max_concurrent=config.max_concurrent,
+    )
     time_out = time.time()
     logger.info(f"Executor run took {time_out - time_in:.2f}s")
     # print json path again so it's easy to copy
     logger.info(f"Executor info written to {executor.executor_info_path}")
+    if not executor.prefix.startswith("gs://"):
+        logger.info("Start data browser: cd data_browser && uv run python run-dev.py --config conf/local.conf")
     logger.info(f"View the experiment at {executor.get_experiment_url()}")
 
 

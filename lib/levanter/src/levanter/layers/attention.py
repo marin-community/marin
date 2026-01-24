@@ -7,7 +7,7 @@ import logging
 import math
 import warnings
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from numbers import Integral
 from typing import Optional, Union, cast, overload
 
@@ -54,12 +54,15 @@ from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig
 logger = logging.getLogger(__name__)
 
 
-class AttentionBackend(Enum):
+class AttentionBackend(StrEnum):
     DEFAULT = "default"  # use the default attention type for the accelerator
     NVTE = "nvte"  # with Transformer Engine on NVIDIA GPUs
     SPLASH = "splash"  # on TPU.
     JAX_FLASH = "jax_flash"  # Use the JAX reference implementation
     VANILLA = "vanilla"  # regular dot product attention
+
+
+DEFAULT_SPLASH_BLOCK_SIZE = 512
 
 
 def default_attention_type() -> AttentionBackend:
@@ -1359,7 +1362,7 @@ def _tpu_splash_attention(
         segment_ids_axes = None
 
     # MaxText uses a block size of 512
-    block_size = block_size or 512
+    block_size = block_size or DEFAULT_SPLASH_BLOCK_SIZE
 
     # Compute sharding factors from the mesh (OUTSIDE shard_map)
     mesh = jax.sharding.get_abstract_mesh()
@@ -1551,6 +1554,7 @@ class AttentionConfig:
         attn_backend: Which attention backend to use
         flash_attention_block_size: Block size for flash attention
         rope: Configuration for rotary position embeddings
+        sliding_window: Optional sliding window size for attention masks.
         scaling_factor: Optional scaling factor for attention scores. If None, defaults to 1/sqrt(head_size)
         qk_norm: Optional configuration for QK normalization. If None, no normalization is applied.
     """
@@ -1566,6 +1570,7 @@ class AttentionConfig:
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = None
     rope: Optional[RotaryEmbeddingsConfig] = None
+    sliding_window: Optional[int] = None
     scaling_factor: Optional[float] = None
     logits_soft_cap: Optional[float] = None
     qk_norm: Optional[LayerNormConfigBase] = None
@@ -1699,6 +1704,9 @@ class Attention(eqx.Module):
         # Distinguish key sequence axis for attention
         k = k.rename({"position": "key_position"})
         v = v.rename({"position": "key_position"})
+
+        if self.config.sliding_window is not None and isinstance(mask, AttentionMask):
+            mask = mask.with_sliding_window(self.config.sliding_window)
 
         # Apply attention
         attn_output = dot_product_attention(
@@ -2380,6 +2388,9 @@ class AttentionWithSink(Attention):
 
         k = k.rename({"position": "key_position"})
         v = v.rename({"position": "key_position"})
+
+        if self.config.sliding_window is not None and isinstance(mask, AttentionMask):
+            mask = mask.with_sliding_window(self.config.sliding_window)
 
         attn_output = dot_product_attention(
             "position",

@@ -15,7 +15,7 @@ FROM rust:1.91-slim AS rust-builder
 
 
 # Main build
-FROM rayproject/ray:2.45.0-py311-cpu
+FROM rayproject/ray:2.53.0-py311-cpu
 ARG VLLM_VERSION=0.11.1
 
 # For some reason, ray destroys the apt sources list, so we need to restore it
@@ -65,6 +65,7 @@ ENV CARGO_HOME=/home/ray/.cargo
 
 RUN sudo mkdir -p /opt/marin/
 RUN sudo chown -R ray /opt/marin/
+RUN sudo mkdir -p /home/ray/.ray && sudo chown -R ray /home/ray/.ray
 
 # Ray uses conda
 ENV PATH=/home/ray/anaconda3/bin:/home/ray/anaconda3/condabin:$PATH

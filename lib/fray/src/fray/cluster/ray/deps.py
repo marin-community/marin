@@ -144,13 +144,9 @@ def build_python_path(submodules_dir: str = "submodules") -> list[str]:
     if not os.path.exists(submodules_dir):
         return paths
 
-    # Iterate through the directories inside submodules
     for submodule in os.listdir(submodules_dir):
         submodule_path = os.path.join(submodules_dir, submodule)
-
-        # Check if it's a directory
         if os.path.isdir(submodule_path):
-            # Add both submodule and submodule/src paths, because why not
             paths.append(submodule_path)
             src_path = os.path.join(submodule_path, "src")
             if os.path.isdir(src_path):
@@ -165,7 +161,7 @@ def build_runtime_env_for_packages(
     env_vars: dict | None = None,
 ) -> RuntimeEnv:
     """Inject the appropriate UV environment for the given packages."""
-    env_vars = env_vars or {}
+    env_vars = dict(env_vars or {})
     pip_packages = pip_packages or []
     extra = extra or []
 

@@ -31,6 +31,12 @@ def reset_fray_context():
 
 @pytest.fixture(autouse=True)
 def fray_cluster():
-    set_current_cluster(create_cluster("local?use_isolated_env=False"))
+    set_current_cluster(create_cluster("local"))
     yield
     set_current_cluster(None)
+
+
+@pytest.fixture(autouse=True)
+def disable_wandb(monkeypatch):
+    """Disable WANDB logging during tests."""
+    monkeypatch.setenv("WANDB_MODE", "disabled")
