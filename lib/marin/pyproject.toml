@@ -153,6 +153,20 @@ eval = [
     "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
 ]
 
+# Evalchemy for reasoning-focused LLM evaluations (AIME, MATH500, HumanEval+, etc.)
+# Note: Evalchemy is cloned and run at runtime by the EvalchemyEvaluator rather than
+# being installed as a pip dependency, due to local file dependencies in evalchemy's
+# pyproject.toml that don't work with pip git installs.
+# The evaluator clones from commit 6ed674159b37f740f2353a86f596f49f6ac13c19 (2025-01-08)
+evalchemy = [
+    # Core dependencies needed to run evalchemy
+    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    "sympy>=1.12.1,<1.14",
+    "antlr4-python3-runtime==4.11",
+    "bespokelabs-curator",  # Required by evalchemy's curator_lm module
+    "sqlalchemy",  # Required by evalchemy's database models
+]
+
 vllm =[
     "vllm-tpu==0.13.2.post6",
     "triton==3.5.0; platform_system == 'Linux' and platform_machine == 'x86_64'",

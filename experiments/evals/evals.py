@@ -17,6 +17,7 @@ Canonical set of evals.
 """
 
 import logging
+from typing import Sequence
 
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
@@ -30,6 +31,7 @@ from marin.execution.executor import (
 )
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
+from experiments.evals.evalchemy_task_configs import EVALCHEMY_CORE_TASKS
 from experiments.evals.task_configs import (
     BASE_GENERATION_TASKS,
     CORE_TASKS,
@@ -44,6 +46,10 @@ from experiments.evals.task_configs import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Wandb project name for evaluations
+# Note: Also defined in evalchemy_evaluator.py to avoid circular imports.
+WANDB_PROJECT = "marin"
 
 
 def evaluate_lm_evaluation_harness(
@@ -375,3 +381,337 @@ def default_key_evals(
             max_eval_instances=max_eval_instances,
         ),
     ]
+
+
+def evaluate_evalchemy(
+    model_name: str,
+    model_path: str,
+    evals: Sequence[EvalTaskConfig],
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = None,
+    generation_params: dict | None = None,
+    resource_config: ResourceConfig | None = None,
+    apply_chat_template: bool = False,
+    wandb_tags: list[str] | None = None,
+    discover_latest_checkpoint: bool = True,
+) -> ExecutorStep:
+    """
+    Create an ExecutorStep to evaluate the model using Evalchemy.
+
+    Args:
+        model_name (str): Name of the model.
+        model_path (str): Path to the model.
+        evals (Sequence[EvalTaskConfig]): Evaluations to run with Evalchemy.
+        max_eval_instances (int | None): Maximum number of evaluation instances to run.
+        engine_kwargs (dict | None): Additional engine kwargs for vLLM.
+        generation_params (dict | None): Generation parameters including:
+            - temperature: float (e.g., 0.7)
+            - top_p: float (e.g., 1.0)
+            - max_gen_toks: int (e.g., 32768)
+            - seeds: list[int] for multiple runs with different seeds
+        resource_config (ResourceConfig | None): Resource configuration for the job.
+        apply_chat_template (bool): Whether to apply chat template.
+        wandb_tags (list[str] | None): Tags to add to the WandB run.
+        discover_latest_checkpoint (bool): Whether to discover the latest checkpoint.
+    """
+    # Include task names in the step name to ensure different tasks get different output paths
+    task_names = "_".join(sorted(e.name for e in evals))
+    return ExecutorStep(
+        name=f"evaluation/evalchemy/{model_name}/{task_names}",
+        fn=evaluate,
+        config=EvaluationConfig(
+            evaluator="evalchemy",
+            model_name=model_name,
+            model_path=model_path,
+            evaluation_path=this_output_path(),
+            evals=evals,
+            max_eval_instances=max_eval_instances,
+            launch_with_ray=True,
+            discover_latest_checkpoint=discover_latest_checkpoint,
+            engine_kwargs=engine_kwargs,
+            generation_params=generation_params,
+            resource_config=resource_config,
+            apply_chat_template=apply_chat_template,
+            wandb_tags=wandb_tags,
+        ),
+    )
+
+
+def default_evalchemy_eval(
+    step: ExecutorStep | InputName | str,
+    resource_config: ResourceConfig = ResourceConfig.with_tpu("v5p-8"),
+    evals: Sequence[EvalTaskConfig] | None = None,
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = None,
+    generation_params: dict | None = None,
+    apply_chat_template: bool = False,
+    discover_latest_checkpoint: bool = True,
+) -> ExecutorStep:
+    """
+    Create an ExecutorStep to evaluate the model using Evalchemy reasoning benchmarks.
+
+    Args:
+        step (ExecutorStep | InputName | str): Step to evaluate.
+        resource_config (ResourceConfig): Resource configuration (defaults to v5p-8 TPU).
+        evals (list[EvalTaskConfig] | None): List of evals to run. Defaults to EVALCHEMY_CORE_TASKS.
+        max_eval_instances (int | None): Maximum number of evaluation instances to run.
+        engine_kwargs (dict | None): Additional vLLM engine kwargs (optional for evalchemy).
+        generation_params (dict | None): Generation parameters including:
+            - temperature: float (e.g., 0.7)
+            - top_p: float (e.g., 1.0)
+            - max_gen_toks: int (e.g., 32768)
+            - seed: int for reproducibility
+        apply_chat_template (bool): Whether to apply chat template.
+        discover_latest_checkpoint (bool): Whether to discover the latest checkpoint.
+    """
+    name, model_step_path = extract_model_name_and_path(step)
+
+    logger.info(f"Creating Evalchemy evaluation step for {name}")
+
+    if evals is None:
+        evals = EVALCHEMY_CORE_TASKS
+
+    logger.info(f"Running Evalchemy evals on the following tasks: {evals}")
+
+    return evaluate_evalchemy(
+        name,
+        model_step_path,
+        evals,
+        max_eval_instances=max_eval_instances,
+        engine_kwargs=engine_kwargs or {},  # Pass empty dict to avoid warning
+        generation_params=generation_params,
+        resource_config=resource_config,
+        apply_chat_template=apply_chat_template,
+        discover_latest_checkpoint=discover_latest_checkpoint,
+    )
+
+
+def compile_evalchemy_results(steps: list[ExecutorStep], seeds: list[int] | None = None) -> ExecutorStep:
+    """
+    Compile results from multiple Evalchemy evaluation steps into aggregated metrics.
+
+    Takes a list of ExecutorSteps for evalchemy tasks and compiles the results into a
+    single DataFrame, then logs averaged results to wandb.
+
+    Args:
+        steps: List of ExecutorSteps from evalchemy evaluations (one per seed).
+        seeds: List of seeds used for the evaluations (for wandb config).
+
+    Returns:
+        ExecutorStep that compiles and logs aggregated results.
+    """
+    from marin.execution.executor import OutputName
+
+    def _compile_results_fn(config) -> None:
+        """Function that will be executed by the ExecutorStep to compile results."""
+        import json
+        import re
+        import fsspec
+        import pandas as pd
+
+        all_results = []
+        input_paths = config["input_paths"]
+        output_path = config["output_path"]
+        seeds_config = config.get("seeds", [])
+
+        logger.info(f"Compiling evalchemy results from {len(input_paths)} input paths")
+
+        if not input_paths:
+            raise Exception("No input paths found!")
+
+        fs = fsspec.filesystem("gcs")
+
+        for input_path in input_paths:
+            # Normalize path
+            base_dir = input_path
+            if base_dir.endswith("results.json"):
+                base_dir = base_dir.rsplit("/", 1)[0]
+
+            logger.info(f"Loading evalchemy samples from root {base_dir}")
+
+            # Normalize to GCS URL
+            if base_dir.startswith("gs://"):
+                gcs_root = base_dir
+            else:
+                gcs_root = "gs://" + base_dir.lstrip("/")
+
+            # Pattern for sample files (evalchemy uses same structure as lm-eval)
+            pattern = gcs_root.rstrip("/") + "/*/*/samples_*.jsonl"
+            sample_files = fs.glob(pattern)
+
+            if not sample_files:
+                logger.warning(f"No samples_*.jsonl files found for input root {base_dir}")
+                continue
+
+            for sample_file in sample_files:
+                logger.info(f"Reading samples from {sample_file}")
+                path_parts = sample_file.split("/")
+
+                # Infer dataset_name from the task directory
+                if len(path_parts) >= 3:
+                    task_dir = path_parts[-3]
+                    if "_" in task_dir:
+                        dataset_name = task_dir.rsplit("_", 1)[0]
+                    else:
+                        dataset_name = task_dir
+                else:
+                    dataset_name = "unknown_dataset"
+
+                # Infer model_name from directory structure
+                if len(path_parts) >= 4:
+                    model_dir = path_parts[-4]
+                elif len(path_parts) >= 2:
+                    model_dir = path_parts[-2]
+                else:
+                    model_dir = "unknown_model"
+
+                # Strip hash suffix from model_dir
+                if "-" in model_dir:
+                    model_name = model_dir.rsplit("-", 1)[0]
+                else:
+                    model_name = model_dir
+
+                # Read JSONL samples
+                with fs.open(sample_file, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            record = json.loads(line)
+                        except Exception:
+                            logger.warning(f"Failed to parse JSON line in {sample_file}")
+                            continue
+
+                        record["dataset_name"] = dataset_name.lower()
+                        record["model_name"] = model_name.lower()
+                        all_results.append(record)
+
+        if not all_results:
+            raise Exception("No results found in any of the provided steps")
+
+        df = pd.DataFrame(all_results)
+
+        # Extract base model name and seed from model_name
+        def extract_base_model_and_seed(model_name):
+            """Extract base model name and seed from model_name like 'model-task-seed42'"""
+            match = re.search(r'-seed(\d+)(?=-|$)', model_name)
+            if match:
+                seed = int(match.group(1))
+                base_model = model_name[:match.start()]
+                return base_model, seed
+            return model_name, None
+
+        df[['base_model_name', 'seed']] = df['model_name'].apply(
+            lambda x: pd.Series(extract_base_model_and_seed(x))
+        )
+
+        # Save compiled results
+        results_file = f"{output_path}/compiled_results.json"
+        with fsspec.open(results_file, "w") as f:
+            json.dump(all_results, f, indent=2)
+
+        csv_file = f"{output_path}/compiled_results.csv"
+        with fsspec.open(csv_file, "w") as f:
+            df.to_csv(f, index=False)
+
+        logger.info(f"Compiled results saved to: {results_file}")
+
+        # Compute averaged results across seeds
+        accuracy_cols = [col for col in df.columns if col in ['exact_match', 'acc', 'accuracy', 'correct']]
+
+        if accuracy_cols and 'base_model_name' in df.columns and 'dataset_name' in df.columns:
+            avg_results = []
+            for (base_model, dataset), group in df.groupby(['base_model_name', 'dataset_name']):
+                per_seed_accuracies = {}
+                for col in accuracy_cols:
+                    if col in group.columns:
+                        seed_accs = group.groupby('seed')[col].mean()
+                        per_seed_accuracies[col] = seed_accs
+
+                result = {
+                    'base_model_name': base_model,
+                    'dataset_name': dataset,
+                    'num_seeds': group['seed'].nunique(),
+                    'seeds': sorted(group['seed'].dropna().unique().tolist()),
+                }
+
+                for col in accuracy_cols:
+                    if col in per_seed_accuracies:
+                        seed_accs = per_seed_accuracies[col]
+                        result[f'{col}_mean'] = seed_accs.mean()
+                        result[f'{col}_std'] = seed_accs.std()
+                        result[f'{col}_per_seed'] = seed_accs.to_dict()
+
+                avg_results.append(result)
+
+            avg_df = pd.DataFrame(avg_results)
+
+            # Save averaged results
+            avg_results_file = f"{output_path}/averaged_results.json"
+            with fsspec.open(avg_results_file, "w") as f:
+                json.dump(avg_results, f, indent=2)
+
+            avg_csv_file = f"{output_path}/averaged_results.csv"
+            with fsspec.open(avg_csv_file, "w") as f:
+                avg_df.to_csv(f, index=False)
+
+            logger.info(f"Averaged results saved to: {avg_results_file}")
+            logger.info(f"Averaged results:\n{avg_df.to_string()}")
+
+            # Log averaged results to wandb - one run per model
+            try:
+                import wandb
+
+                num_seeds = len(seeds_config) if seeds_config else avg_df['num_seeds'].max()
+
+                for base_model in avg_df['base_model_name'].unique():
+                    model_df = avg_df[avg_df['base_model_name'] == base_model]
+
+                    # Wandb run name: evalchemy-{model}-averaged-{n}seeds (lowercase)
+                    wandb_run_name = f"evalchemy-{base_model.lower()}-averaged-{num_seeds}seeds"
+
+                    wandb.init(
+                        project=WANDB_PROJECT,
+                        name=wandb_run_name,
+                        job_type="eval",
+                        tags=["evalchemy", "averaged-results", base_model.lower()[:64]],
+                        config={
+                            "base_model_name": base_model,
+                            "num_seeds": num_seeds,
+                            "seeds": seeds_config,
+                        },
+                        reinit=True,
+                    )
+
+                    # Log averaged metrics for each dataset
+                    for _, row in model_df.iterrows():
+                        dataset = row['dataset_name']
+                        for col in accuracy_cols:
+                            mean_col = f'{col}_mean'
+                            std_col = f'{col}_std'
+                            if mean_col in row and std_col in row:
+                                wandb.log({
+                                    f"{dataset}/{col}_mean": row[mean_col],
+                                    f"{dataset}/{col}_std": row[std_col],
+                                })
+
+                    wandb.log({"averaged_results": wandb.Table(dataframe=model_df)})
+                    wandb.finish()
+                    logger.info(f"Averaged results for {base_model} logged to wandb as '{wandb_run_name}'")
+
+            except Exception as e:
+                logger.warning(f"Failed to log averaged results to wandb: {e}")
+        else:
+            logger.warning("Could not compute averaged results: missing accuracy columns or grouping columns")
+
+    # Create input paths from steps
+    input_paths = [step.cd("results.json") for step in steps]
+    output_path = OutputName("compiled_results")
+
+    return ExecutorStep(
+        name="evaluation/evalchemy/compile_results",
+        fn=_compile_results_fn,
+        config={"input_paths": input_paths, "output_path": output_path, "seeds": seeds or []},
+        description="Compile results from multiple evalchemy evaluation steps",
+    )

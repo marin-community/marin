@@ -28,6 +28,7 @@ import draccus
 
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluators.evalchemy_evaluator import EvalchemyEvaluator
 from marin.evaluation.evaluators.levanter_lm_eval_evaluator import LevanterLmEvalEvaluator
 from marin.evaluation.evaluators.lm_evaluation_harness_evaluator import LMEvaluationHarnessEvaluator
 from marin.evaluation.evaluators.simple_evaluator import SimpleEvaluator
@@ -38,6 +39,7 @@ logger = logging.getLogger(__name__)
 EVALUATORS = {
     "lm_evaluation_harness": LMEvaluationHarnessEvaluator,
     "levanter_lm_evaluation_harness": LevanterLmEvalEvaluator,
+    "evalchemy": EvalchemyEvaluator,
     "debug": SimpleEvaluator,
 }
 
