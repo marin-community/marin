@@ -82,7 +82,7 @@ class EnvironmentEvalConfig:
     """Configuration for environment evaluation."""
 
     checkpoint: str
-    """Path to model checkpoint (HuggingFace repo or local path)."""
+    """Path to Levanter format checkpoint on GCS."""
 
     env_config: EnvConfig
 
@@ -170,7 +170,6 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
                 # use the compute axis mapping for inference
                 axis_mapping=trainer_config.compute_axis_mapping,
                 vocab_axis=Vocab,
-                tokenizer=tokenizer,
                 key=key,
             )
             logger.info(f"Policy model: {policy_model}")

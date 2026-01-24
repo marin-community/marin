@@ -247,7 +247,6 @@ class TrainWorker:
                 model_config=config.model,
                 trainer_config=config.trainer,
                 vocab_axis=Vocab,
-                tokenizer=self.tokenizer,
                 mesh=config.trainer.device_mesh,
                 axis_mapping=self.config.trainer.parameter_axis_mapping,
                 key=model_key,
