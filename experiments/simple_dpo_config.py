@@ -45,7 +45,7 @@ class SimpleDPOConfig:
 
     weight_decay: float = 0.0
     warmup: float = 0.03
-    cooldown: float = 0.0
+    cooldown: float | None = None
     lr_schedule: str = "linear"
     min_lr_ratio: float = 0.0
     max_grad_norm: float | None = None

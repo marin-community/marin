@@ -53,12 +53,13 @@ tokenized_preferences = lm_data_config(
 )
 
 dpo_config = SimpleDPOConfig(
-    resources=ResourceConfig.with_tpu("v5p-8"),
+    resources=ResourceConfig.with_tpu("v5p-16"),
     train_batch_size=128,
     num_train_steps=2150,
     learning_rate=5e-7,
     lr_schedule="cosine",
     warmup=0.1,
+    cooldown=None,
     wandb_project="dpo",
     tokenizer=marin_tokenizer,
     model_name_or_path=LLAMA3_8B_HF_PATH,
