@@ -19,6 +19,7 @@ creates N tasks). Tasks are the unit of scheduling and execution. Job state is
 aggregated from task states.
 """
 
+import json
 import logging
 import uuid
 from pathlib import Path
@@ -33,13 +34,56 @@ from iris.cluster.controller.events import (
     TaskStateChangedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.state import ControllerEndpoint, ControllerState
+from iris.cluster.controller.scheduler import TaskScheduleResult
+from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerTask
 from iris.cluster.types import JobId, TaskId, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.errors import rpc_error_handler
 from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_TRANSACTION_LIMIT = 50
+
+
+def _task_state_name(state: int) -> str:
+    """Convert proto TaskState enum to snake_case string for dashboard display."""
+    state_map: dict[int, str] = {
+        cluster_pb2.TASK_STATE_PENDING: "pending",
+        cluster_pb2.TASK_STATE_BUILDING: "building",
+        cluster_pb2.TASK_STATE_RUNNING: "running",
+        cluster_pb2.TASK_STATE_SUCCEEDED: "succeeded",
+        cluster_pb2.TASK_STATE_FAILED: "failed",
+        cluster_pb2.TASK_STATE_KILLED: "killed",
+        cluster_pb2.TASK_STATE_WORKER_FAILED: "worker_failed",
+        cluster_pb2.TASK_STATE_UNSCHEDULABLE: "unschedulable",
+    }
+    return state_map.get(state, f"unknown({state})")
+
+
+class VmManagerProtocol(Protocol):
+    """Protocol for VM manager operations."""
+
+    def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
+        """Get info for a specific VM."""
+        ...
+
+    def init_log(self, vm_id: str, tail: int | None = None) -> str:
+        """Get initialization log for a VM."""
+        ...
+
+
+class AutoscalerProtocol(Protocol):
+    """Protocol for autoscaler operations used by ControllerServiceImpl."""
+
+    def get_status(self) -> vm_pb2.AutoscalerStatus:
+        """Get autoscaler status."""
+        ...
+
+    @property
+    def vm_manager(self) -> VmManagerProtocol | None:
+        """Get the VM manager, if available."""
+        ...
 
 
 class SchedulerProtocol(Protocol):
@@ -49,6 +93,15 @@ class SchedulerProtocol(Protocol):
 
     def kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
         """Send KILL RPCs to workers for tasks that were running."""
+        ...
+
+    def task_schedule_status(self, task: ControllerTask) -> TaskScheduleResult:
+        """Get the current scheduling status of a task (for dashboard display)."""
+        ...
+
+    @property
+    def autoscaler(self) -> AutoscalerProtocol | None:
+        """Get the autoscaler instance, if autoscaling is enabled."""
         ...
 
 
@@ -189,7 +242,6 @@ class ControllerServiceImpl:
                 parent_job_id=str(job.parent_job_id) if job.parent_job_id else "",
                 failure_count=total_failure_count,
                 preemption_count=total_preemption_count,
-                num_tasks=len(task_statuses),
                 tasks=task_statuses,
             )
         )
@@ -245,10 +297,20 @@ class ControllerServiceImpl:
         """List all jobs."""
         jobs = []
         for j in self._state.list_all_jobs():
-            # Aggregate failure and preemption counts from all tasks
+            # Aggregate counts from all tasks in single pass
             tasks = self._state.get_job_tasks(j.job_id)
-            total_failure_count = sum(task.failure_count for task in tasks)
-            total_preemption_count = sum(task.preemption_count for task in tasks)
+            total_failure_count = 0
+            total_preemption_count = 0
+            task_state_counts: dict[str, int] = {}
+            completed_count = 0
+
+            for task in tasks:
+                total_failure_count += task.failure_count
+                total_preemption_count += task.preemption_count
+                state_name = _task_state_name(task.state)
+                task_state_counts[state_name] = task_state_counts.get(state_name, 0) + 1
+                if state_name in ("succeeded", "killed"):
+                    completed_count += 1
 
             jobs.append(
                 cluster_pb2.JobStatus(
@@ -261,6 +323,12 @@ class ControllerServiceImpl:
                     parent_job_id=str(j.parent_job_id) if j.parent_job_id else "",
                     failure_count=total_failure_count,
                     preemption_count=total_preemption_count,
+                    name=j.request.name if j.request else "",
+                    submitted_at_ms=j.submitted_at_ms or 0,
+                    resources=j.request.resources if j.request else cluster_pb2.ResourceSpecProto(),
+                    task_state_counts=task_state_counts,
+                    task_count=len(tasks),
+                    completed_count=completed_count,
                 )
             )
         return cluster_pb2.Controller.ListJobsResponse(jobs=jobs)
@@ -325,6 +393,13 @@ class ControllerServiceImpl:
                 if worker:
                     worker_address = worker.address
 
+            # Add scheduling diagnostics for pending tasks
+            pending_reason = ""
+            can_be_scheduled = task.can_be_scheduled()
+            if task.state == cluster_pb2.TASK_STATE_PENDING:
+                schedule_status = self._scheduler.task_schedule_status(task)
+                pending_reason = schedule_status.failure_reason or ""
+
             task_statuses.append(
                 cluster_pb2.TaskStatus(
                     task_id=str(task.task_id),
@@ -338,6 +413,8 @@ class ControllerServiceImpl:
                     exit_code=task.exit_code or 0,
                     error=task.error or "",
                     current_attempt_id=task.current_attempt_id,
+                    pending_reason=pending_reason,
+                    can_be_scheduled=can_be_scheduled,
                 )
             )
 
@@ -423,6 +500,8 @@ class ControllerServiceImpl:
                 consecutive_failures=w.consecutive_failures,
                 last_heartbeat_ms=w.last_heartbeat_ms,
                 running_job_ids=list(w.running_tasks),  # Now contains task IDs
+                address=w.address,
+                metadata=w.metadata,
             )
             for w in self._state.list_all_workers()
         ]
@@ -510,3 +589,67 @@ class ControllerServiceImpl:
                 for e in endpoints
             ]
         )
+
+    # --- Autoscaler ---
+
+    def get_autoscaler_status(
+        self,
+        request: cluster_pb2.Controller.GetAutoscalerStatusRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
+        """Get current autoscaler status."""
+        autoscaler = self._scheduler.autoscaler
+        if not autoscaler:
+            return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
+
+        return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=autoscaler.get_status())
+
+    # --- VM Logs ---
+
+    def get_vm_logs(
+        self,
+        request: cluster_pb2.Controller.GetVmLogsRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetVmLogsResponse:
+        """Get initialization logs for a VM."""
+        autoscaler = self._scheduler.autoscaler
+        if not autoscaler or not autoscaler.vm_manager:
+            raise ConnectError(Code.UNAVAILABLE, "Autoscaler not configured")
+
+        vm_manager = autoscaler.vm_manager
+        vm_info = vm_manager.get_vm(request.vm_id)
+        if not vm_info:
+            raise ConnectError(Code.NOT_FOUND, f"VM {request.vm_id} not found")
+
+        tail = request.tail if request.tail > 0 else None
+        logs = vm_manager.init_log(request.vm_id, tail)
+
+        return cluster_pb2.Controller.GetVmLogsResponse(
+            logs=logs,
+            vm_id=vm_info.vm_id,
+            state=vm_info.state,
+        )
+
+    # --- Transactions ---
+
+    def get_transactions(
+        self,
+        request: cluster_pb2.Controller.GetTransactionsRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetTransactionsResponse:
+        """Get recent controller actions for the dashboard action log."""
+        limit = request.limit if request.limit > 0 else DEFAULT_TRANSACTION_LIMIT
+        transactions = self._state.get_transactions(limit=limit)
+        actions = []
+        for txn in transactions:
+            for action in txn.actions:
+                details_str = json.dumps(action.details) if action.details else ""
+                actions.append(
+                    cluster_pb2.Controller.TransactionAction(
+                        timestamp_ms=action.timestamp_ms,
+                        action=action.action,
+                        entity_id=action.entity_id,
+                        details=details_str,
+                    )
+                )
+        return cluster_pb2.Controller.GetTransactionsResponse(actions=actions)

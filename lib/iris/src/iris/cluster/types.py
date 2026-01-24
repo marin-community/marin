@@ -40,6 +40,21 @@ EndpointId = NewType("EndpointId", str)
 
 
 @dataclass(frozen=True)
+class WorkerIdleInfo:
+    """Idle status for a single worker."""
+
+    worker_id: str
+    running_task_ids: frozenset[str]
+
+    @property
+    def is_idle(self) -> bool:
+        return len(self.running_task_ids) == 0
+
+
+WorkerIdleMap = dict[str, WorkerIdleInfo]
+
+
+@dataclass(frozen=True)
 class AttributeValue:
     """Typed attribute value for worker attributes and constraint matching.
 
@@ -364,6 +379,28 @@ def is_task_finished(state: int) -> bool:
         }
     )
     return state in terminal_states
+
+
+def job_task_counts(job: cluster_pb2.JobStatus) -> dict[str, int]:
+    """Compute task state counts from tasks[] in JobStatus proto.
+
+    Returns a dict with keys: pending, running, succeeded, failed.
+    """
+    counts = {"pending": 0, "running": 0, "succeeded": 0, "failed": 0}
+    for task in job.tasks:
+        if task.state == cluster_pb2.TASK_STATE_PENDING:
+            counts["pending"] += 1
+        elif task.state == cluster_pb2.TASK_STATE_RUNNING:
+            counts["running"] += 1
+        elif task.state == cluster_pb2.TASK_STATE_SUCCEEDED:
+            counts["succeeded"] += 1
+        elif task.state in (
+            cluster_pb2.TASK_STATE_FAILED,
+            cluster_pb2.TASK_STATE_KILLED,
+            cluster_pb2.TASK_STATE_WORKER_FAILED,
+        ):
+            counts["failed"] += 1
+    return counts
 
 
 JobState = cluster_pb2.JobState

@@ -22,7 +22,7 @@ from pathlib import Path
 
 
 def fix_imports(file_path: Path) -> None:
-    """Fix imports in a generated _connect.py file."""
+    """Fix imports in generated Python files to use relative imports."""
     content = file_path.read_text()
 
     # Pattern: import <name>_pb2 as <name>__pb2
@@ -64,8 +64,10 @@ def main():
     # Run buf generate
     run_buf_generate(root_dir)
 
-    # Fix imports in all generated Connect files
+    # Fix imports in all generated Python files (both _pb2.py and _connect.py)
     print("\nFixing imports in generated files...")
+    for pb2_file in rpc_dir.glob("*_pb2.py"):
+        fix_imports(pb2_file)
     for connect_file in rpc_dir.glob("*_connect.py"):
         fix_imports(connect_file)
 

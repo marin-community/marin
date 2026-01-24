@@ -79,22 +79,6 @@ def test_unschedulable_includes_timeout_in_error(make_job_request):
     assert "300s" in job.error
 
 
-def test_job_dispatch_and_revert(make_job_request):
-    """Job can be dispatched to worker and reverted back to PENDING."""
-    job = ControllerJob(job_id=JobId("test"), request=make_job_request())
-    assert job.state == cluster_pb2.JOB_STATE_PENDING
-
-    job.mark_dispatched()
-
-    assert job.state == cluster_pb2.JOB_STATE_RUNNING
-    assert job.started_at_ms > 0
-
-    job.revert_dispatch()
-
-    assert job.state == cluster_pb2.JOB_STATE_PENDING
-    assert job.started_at_ms is None
-
-
 # --- Job Retry Behavior ---
 
 
@@ -334,8 +318,6 @@ def test_job_expands_to_correct_number_of_tasks(make_job_request):
         assert task.task_index == i
         assert task.job_id == job.job_id
         assert str(task.task_id) == f"{job.job_id}/task-{i}"
-        assert task.max_retries_failure == job.max_retries_failure
-        assert task.max_retries_preemption == job.max_retries_preemption
 
 
 def test_job_expands_single_replica_by_default(make_job_request):

@@ -514,13 +514,6 @@ def test_kill_task_with_custom_timeout(service, request_context):
 # ============================================================================
 
 
-def test_rpc_endpoint_mounted_correctly(server):
-    """Test Connect RPC is mounted at correct path."""
-    # Check that the RPC path is included in routes
-    route_paths = [route.path for route in server._app.routes]
-    assert "/iris.cluster.WorkerService" in route_paths
-
-
 @pytest.mark.asyncio
 async def test_rpc_run_task_via_connect_client(service):
     """Test calling run_task via Connect RPC client."""

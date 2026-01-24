@@ -1,0 +1,40 @@
+# Iris VM CLI configuration for europe-west4
+# Usage: uv run python -m iris.cluster.vm.cli create-slice --config examples/demo.yaml --scale-group tpu_v5e_4
+
+provider:
+  type: tpu
+  project_id: hai-gcp-models
+  region: europe-west4
+  zone: europe-west4-b
+
+docker:
+  image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
+  worker_port: 10001
+
+controller:
+  address: "${IRIS_CONTROLLER_ADDRESS}"
+
+scale_groups:
+  # tpu_v5e_4:
+  #   accelerator_type: v5litepod-4
+  #   runtime_version: v2-alpha-tpuv5-lite
+  #   min_slices: 4
+  #   max_slices: 1024
+  #   zones: [europe-west4-b]
+  #   preemptible: true
+
+  # tpu_v5e_8:
+  #   accelerator_type: v5litepod-8
+  #   runtime_version: v2-alpha-tpuv5-lite
+  #   min_slices: 0
+  #   max_slices: 1024
+  #   zones: [europe-west4-b]
+  #   preemptible: true
+
+  tpu_v5e_16:
+    accelerator_type: v5litepod-16
+    runtime_version: v2-alpha-tpuv5-lite
+    min_slices: 1
+    max_slices: 2
+    zones: [europe-west4-b]
+    preemptible: true

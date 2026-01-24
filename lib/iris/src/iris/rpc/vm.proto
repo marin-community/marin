@@ -1,0 +1,153 @@
+// Copyright 2025 The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+package iris.vm;
+
+// VM lifecycle states
+enum VmState {
+  VM_STATE_UNSPECIFIED = 0;
+  VM_STATE_BOOTING = 1;      // VM allocated, waiting for SSH
+  VM_STATE_INITIALIZING = 2; // SSH available, running bootstrap
+  VM_STATE_READY = 3;        // Worker registered with controller
+  VM_STATE_UNHEALTHY = 4;    // Health check failed
+  VM_STATE_STOPPING = 5;     // Termination requested
+  VM_STATE_TERMINATED = 6;   // VM deleted
+  VM_STATE_FAILED = 7;       // Boot or init failed
+  VM_STATE_PREEMPTED = 8;    // Spot/preemptible VM reclaimed
+}
+
+// Scaling action types
+enum ScalingAction {
+  SCALING_ACTION_UNSPECIFIED = 0;
+  SCALING_ACTION_SCALE_UP = 1;
+  SCALING_ACTION_SCALE_DOWN = 2;
+  SCALING_ACTION_NONE = 3;
+}
+
+// Information about a managed VM
+message VmInfo {
+  string vm_id = 1;
+  string slice_id = 2;
+  string scale_group = 3;
+  VmState state = 4;
+  string address = 5;
+  string zone = 6;
+  int64 created_at_ms = 7;
+  int64 state_changed_at_ms = 8;
+
+  // Worker info (populated after registration)
+  string worker_id = 10;
+  bool worker_healthy = 11;
+
+  // Initialization tracking
+  string init_phase = 20;
+  string init_log_tail = 21;
+  string init_error = 22;
+
+  // Labels/metadata
+  map<string, string> labels = 30;
+}
+
+// A TPU slice (atomic group of VMs)
+message SliceInfo {
+  string slice_id = 1;
+  string scale_group = 2;
+  int64 created_at_ms = 3;
+  repeated VmInfo vms = 4;
+}
+
+// Configuration for a scale group
+message ScaleGroupConfig {
+  string name = 1;
+  int32 min_slices = 2;
+  int32 max_slices = 3;
+
+  // TPU configuration
+  string accelerator_type = 10;
+  string runtime_version = 11;
+  bool preemptible = 12;
+
+  // Zones to use (in priority order)
+  repeated string zones = 20;
+
+  // Priority for waterfall routing (lower = higher priority, default 100)
+  int32 priority = 30;
+}
+
+// A scaling decision
+message ScalingDecision {
+  string scale_group = 1;
+  ScalingAction action = 2;
+  int32 slice_delta = 3;
+  string reason = 4;
+}
+
+// Bootstrap configuration passed to VmBootstrap
+message BootstrapConfig {
+  string controller_address = 1;  // Address workers use to connect (e.g., "10.0.0.1:10000")
+  string worker_id = 2;           // Auto-generated if empty
+  int32 worker_port = 3;          // Default: 10001
+  string docker_image = 4;        // Worker image to run
+  string cache_dir = 5;           // Default: /var/cache/iris
+  map<string, string> env_vars = 6;
+}
+
+// Timeout configuration
+message TimeoutConfig {
+  int32 boot_timeout_seconds = 1;        // Default: 300 (5 min)
+  int32 init_timeout_seconds = 2;        // Default: 600 (10 min)
+  int32 ssh_connect_timeout_seconds = 3; // Default: 30
+  int32 ssh_poll_interval_seconds = 4;   // Default: 5
+}
+
+// Runtime state of a scale group (for status API)
+message ScaleGroupStatus {
+  string name = 1;
+  ScaleGroupConfig config = 2;
+
+  // Current demand
+  int32 current_demand = 20;
+  int32 peak_demand = 21;
+
+  // Backoff state
+  int64 backoff_until_ms = 30;
+  int32 consecutive_failures = 31;
+
+  // Rate limiting
+  int64 last_scale_up_ms = 40;
+  int64 last_scale_down_ms = 41;
+
+  // Slices in this group
+  repeated SliceInfo slices = 50;
+}
+
+// Autoscaler action/event log entry
+message AutoscalerAction {
+  int64 timestamp_ms = 1;
+  string action_type = 2;     // "scale_up", "scale_down", "quota_exceeded", "backoff_triggered", "worker_failed"
+  string scale_group = 3;
+  string slice_id = 4;        // Empty for group-level actions
+  string reason = 5;
+  string status = 6;          // "pending", "completed", "failed"
+}
+
+// Full autoscaler status (for RPC response)
+message AutoscalerStatus {
+  repeated ScaleGroupStatus groups = 1;
+  map<string, int32> current_demand = 2;
+  int64 last_evaluation_ms = 3;
+  repeated AutoscalerAction recent_actions = 4;  // Last N actions (max 100)
+}

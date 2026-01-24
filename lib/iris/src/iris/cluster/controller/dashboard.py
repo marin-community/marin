@@ -12,9 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""HTTP dashboard with Connect RPC, web UI at /, and REST API at /api/*."""
+"""HTTP dashboard with Connect RPC and web UI.
 
-# TODO: observability, aggregate stats over jobs, log to stable storage
+The dashboard serves:
+- Web UI at / (main dashboard)
+- Web UI at /job/{job_id} (job detail page)
+- Connect RPC at /iris.cluster.ControllerService/* (called directly by JS)
+- Health check at /health
+
+All data fetching happens via Connect RPC calls from the browser JavaScript.
+"""
 
 import uvicorn
 from starlette.applications import Starlette
@@ -23,48 +30,9 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
-from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.types import JobId
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
-
-
-class FakeRequestContext:
-    """Minimal stub RequestContext for internal REST-to-RPC bridging.
-
-    RPC methods never actually access the context, so this satisfies the type signature.
-    """
-
-    pass
-
-
-def _job_state_name(state: int) -> str:
-    state_map: dict[int, str] = {
-        cluster_pb2.JOB_STATE_PENDING: "pending",
-        cluster_pb2.JOB_STATE_BUILDING: "building",
-        cluster_pb2.JOB_STATE_RUNNING: "running",
-        cluster_pb2.JOB_STATE_SUCCEEDED: "succeeded",
-        cluster_pb2.JOB_STATE_FAILED: "failed",
-        cluster_pb2.JOB_STATE_KILLED: "killed",
-        cluster_pb2.JOB_STATE_WORKER_FAILED: "worker_failed",
-    }
-    return state_map.get(state, f"unknown({state})")
-
-
-def _task_state_name(state: int) -> str:
-    state_map: dict[int, str] = {
-        cluster_pb2.TASK_STATE_PENDING: "pending",
-        cluster_pb2.TASK_STATE_BUILDING: "building",
-        cluster_pb2.TASK_STATE_RUNNING: "running",
-        cluster_pb2.TASK_STATE_SUCCEEDED: "succeeded",
-        cluster_pb2.TASK_STATE_FAILED: "failed",
-        cluster_pb2.TASK_STATE_KILLED: "killed",
-        cluster_pb2.TASK_STATE_WORKER_FAILED: "worker_failed",
-        cluster_pb2.TASK_STATE_UNSCHEDULABLE: "unschedulable",
-    }
-    return state_map.get(state, f"unknown({state})")
-
 
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html>
@@ -87,30 +55,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     h2 {
       color: #34495e;
       margin-top: 30px;
-    }
-    .stats {
-      display: flex;
-      gap: 20px;
-      flex-wrap: wrap;
-      margin-bottom: 20px;
-    }
-    .stat-card {
-      background: white;
-      padding: 20px;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      min-width: 150px;
-      text-align: center;
-    }
-    .stat-value {
-      font-size: 32px;
-      font-weight: bold;
-      color: #3498db;
-    }
-    .stat-label {
-      font-size: 14px;
-      color: #7f8c8d;
-      margin-top: 5px;
     }
     table {
       width: 100%;
@@ -171,65 +115,358 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       border-radius: 8px;
       text-align: center;
     }
+    /* Autoscaler status */
+    .autoscaler-status {
+      background: white;
+      padding: 15px 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+      display: flex;
+      gap: 30px;
+      align-items: center;
+    }
+    .autoscaler-status .status-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .autoscaler-status .status-indicator {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    .autoscaler-status .status-indicator.active { background: #27ae60; }
+    .autoscaler-status .status-indicator.disabled { background: #95a5a6; }
+    .autoscaler-status .status-indicator.backoff { background: #f39c12; }
+    .scale-groups-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 20px;
+    }
+    .group-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .group-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .group-status-dot.available { background: #27ae60; }
+    .group-status-dot.backoff { background: #f39c12; }
+    .action-type {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .action-type.scale_up { background: #d4edda; color: #155724; }
+    .action-type.scale_down { background: #cce5ff; color: #004085; }
+    .action-type.quota_exceeded { background: #f8d7da; color: #721c24; }
+    .action-type.backoff_triggered { background: #fff3cd; color: #856404; }
+    .action-type.worker_failed { background: #f8d7da; color: #721c24; }
+    /* VM tree display */
+    .scale-group {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+    .scale-group-header {
+      background: #3498db;
+      color: white;
+      padding: 15px 20px;
+    }
+    .scale-group-header h3 {
+      margin: 0 0 5px 0;
+    }
+    .scale-group-meta {
+      font-size: 14px;
+      opacity: 0.9;
+    }
+    .slice-row {
+      padding: 10px 20px;
+      border-bottom: 1px solid #ecf0f1;
+      cursor: pointer;
+    }
+    .slice-row:hover {
+      background: #f8f9fa;
+    }
+    .slice-toggle {
+      margin-right: 10px;
+      font-family: monospace;
+    }
+    .slice-state {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+      margin-left: 10px;
+    }
+    .slice-state.ready { background: #d4edda; color: #155724; }
+    .slice-state.initializing { background: #fff3cd; color: #856404; }
+    .slice-state.booting { background: #cce5ff; color: #004085; }
+    .slice-state.failed { background: #f8d7da; color: #721c24; }
+    .slice-state.stopping { background: #e2e3e5; color: #383d41; }
+    .slice-state.preempted { background: #e2d3f0; color: #6c3483; }
+    .vm-list {
+      display: none;
+      padding: 10px 20px 10px 50px;
+      background: #f8f9fa;
+    }
+    .vm-list.expanded {
+      display: block;
+    }
+    .vm-row {
+      padding: 5px 0;
+      font-family: monospace;
+      font-size: 13px;
+    }
+    .vm-state-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+    .vm-state-indicator.ready { background: #27ae60; }
+    .vm-state-indicator.initializing { background: #f39c12; }
+    .vm-state-indicator.booting { background: #3498db; }
+    .vm-state-indicator.failed { background: #e74c3c; }
+    .vm-state-indicator.unhealthy { background: #e74c3c; }
+    .vm-state-indicator.stopping { background: #95a5a6; }
+    .vm-state-indicator.terminated { background: #bdc3c7; }
+    .vm-state-indicator.preempted { background: #9b59b6; }
+    .no-vms-message {
+      padding: 40px;
+      text-align: center;
+      color: #7f8c8d;
+    }
+    /* Compact job view */
+    .job-list {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      overflow: hidden;
+    }
+    .job-row {
+      padding: 12px 20px;
+      border-bottom: 1px solid #ecf0f1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    .job-row:hover {
+      background: #f8f9fa;
+    }
+    .job-toggle {
+      font-family: monospace;
+      color: #7f8c8d;
+      width: 15px;
+    }
+    .job-id {
+      font-family: monospace;
+      color: #3498db;
+      width: 80px;
+    }
+    .job-name {
+      flex: 1;
+      font-weight: 500;
+      word-break: break-word;
+    }
+    .task-badges {
+      display: flex;
+      gap: 2px;
+      align-items: center;
+    }
+    .task-badge {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .task-badge.succeeded { background: #27ae60; }
+    .task-badge.running { background: #3498db; }
+    .task-badge.building { background: #9b59b6; }
+    .task-badge.pending { background: #ecf0f1; border: 1px solid #bdc3c7; }
+    .task-badge.failed { background: #e74c3c; }
+    .task-badge.killed { background: #95a5a6; }
+    .task-badge.worker_failed { background: #9b59b6; }
+    .task-summary {
+      color: #7f8c8d;
+      font-size: 13px;
+      width: 100px;
+    }
+    .job-state {
+      font-weight: 500;
+      width: 100px;
+    }
+    .job-duration {
+      color: #7f8c8d;
+      font-size: 13px;
+      width: 80px;
+      text-align: right;
+    }
+    .task-list {
+      display: none;
+      background: #f8f9fa;
+      padding: 10px 20px 10px 55px;
+      border-bottom: 1px solid #ecf0f1;
+    }
+    .task-list.expanded {
+      display: block;
+    }
+    .task-row {
+      padding: 6px 0;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    .task-row .task-id {
+      font-family: monospace;
+      width: 120px;
+    }
+    .task-row .task-worker {
+      width: 100px;
+      color: #7f8c8d;
+    }
+    .task-row .task-state {
+      width: 100px;
+    }
+    .task-row .task-attempts {
+      color: #7f8c8d;
+      font-size: 12px;
+    }
+    .task-icon {
+      margin-right: 5px;
+    }
+    .task-icon.succeeded { color: #27ae60; }
+    .task-icon.running { color: #3498db; }
+    .task-icon.building { color: #9b59b6; }
+    .task-icon.pending { color: #7f8c8d; }
+    .task-icon.failed { color: #e74c3c; }
+    .task-icon.killed { color: #95a5a6; }
+    .task-icon.worker_failed { color: #9b59b6; }
+    .no-jobs {
+      padding: 40px;
+      text-align: center;
+      color: #7f8c8d;
+    }
+    /* Tab navigation */
+    .tab-nav {
+      display: flex;
+      background: white;
+      border-radius: 8px 8px 0 0;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      margin-bottom: 0;
+    }
+    .tab-btn {
+      padding: 15px 30px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 500;
+      color: #7f8c8d;
+      border-bottom: 3px solid transparent;
+      transition: all 0.2s;
+    }
+    .tab-btn:hover {
+      color: #3498db;
+      background: #f8f9fa;
+    }
+    .tab-btn.active {
+      color: #3498db;
+      border-bottom-color: #3498db;
+      background: #f8f9fa;
+    }
+    .tab-content {
+      display: none;
+      background: white;
+      padding: 20px;
+      border-radius: 0 0 8px 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .tab-content.active {
+      display: block;
+    }
   </style>
 </head>
 <body>
   <h1>Iris Controller Dashboard</h1>
 
-  <div class="stats" id="stats">
-    <div class="stat-card">
-      <div class="stat-value" id="jobs-pending">-</div>
-      <div class="stat-label">Jobs Pending</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="jobs-running">-</div>
-      <div class="stat-label">Jobs Running</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="jobs-completed">-</div>
-      <div class="stat-label">Jobs Completed</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="jobs-building">-</div>
-      <div class="stat-label">Jobs Building</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="workers-healthy">-</div>
-      <div class="stat-label">Workers Healthy</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="workers-total">-</div>
-      <div class="stat-label">Workers Total</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-value" id="endpoints-count">-</div>
-      <div class="stat-label">Endpoints</div>
+  <div class="tab-nav">
+    <button class="tab-btn active" data-tab="jobs">Jobs</button>
+    <button class="tab-btn" data-tab="workers">Workers</button>
+    <button class="tab-btn" data-tab="endpoints">Endpoints</button>
+    <button class="tab-btn" data-tab="vms">VMs</button>
+    <button class="tab-btn" data-tab="autoscaler">Autoscaler</button>
+  </div>
+
+  <div id="tab-jobs" class="tab-content active">
+    <div id="jobs-list" class="job-list">
+      <div class="no-jobs">Loading...</div>
     </div>
   </div>
 
-  <h2>Recent Actions</h2>
-  <div class="actions-log" id="actions"></div>
+  <div id="tab-workers" class="tab-content">
+    <table id="workers-table">
+      <tr><th>ID</th><th>Healthy</th><th>CPU</th><th>Memory</th><th>Running Tasks</th><th>Last Heartbeat</th></tr>
+    </table>
+  </div>
 
-  <h2>Workers</h2>
-  <table id="workers-table">
-    <tr><th>ID</th><th>Healthy</th><th>CPU</th><th>Memory</th><th>Running Jobs</th><th>Last Heartbeat</th></tr>
-  </table>
+  <div id="tab-endpoints" class="tab-content">
+    <table id="endpoints-table">
+      <tr><th>Name</th><th>Address</th><th>Job</th><th>Metadata</th></tr>
+    </table>
+    <div id="no-endpoints" class="no-jobs" style="display:none">No endpoints registered</div>
+  </div>
 
-  <h2>Job Queue</h2>
-  <table id="jobs-table">
-    <tr><th>ID</th><th>Name</th><th>State</th><th>Resources</th><th>Worker</th><th>Error</th></tr>
-  </table>
+  <div id="tab-vms" class="tab-content">
+    <div id="vms-container">
+      <div class="no-vms-message">No scale groups configured</div>
+    </div>
+  </div>
 
-  <h2>Endpoints</h2>
-  <table id="endpoints-table">
-    <tr><th>Name</th><th>Address</th><th>Job</th></tr>
-  </table>
+  <div id="tab-autoscaler" class="tab-content">
+    <div id="autoscaler-status-bar" class="autoscaler-status">
+      <div class="status-item">
+        <span class="status-indicator disabled"></span>
+        <span>Status: <strong id="autoscaler-enabled">Disabled</strong></span>
+      </div>
+      <div class="status-item">
+        <span>Last Evaluation: <strong id="last-evaluation">-</strong></span>
+      </div>
+    </div>
 
-  <h2>Users</h2>
-  <div class="future-feature">Coming in future release</div>
+    <h3>Scale Groups</h3>
+    <table class="scale-groups-table" id="scale-groups-table">
+      <tr>
+        <th>Group</th>
+        <th>Booting</th>
+        <th>Init</th>
+        <th>Ready</th>
+        <th>Failed</th>
+        <th>Demand</th>
+        <th>Status</th>
+      </tr>
+    </table>
 
-  <h2>Reservations</h2>
-  <div class="future-feature">Coming in future release</div>
+    <h3>Recent Actions</h3>
+    <div class="actions-log" id="autoscaler-actions"></div>
+  </div>
 
   <script>
     function escapeHtml(text) {
@@ -246,41 +483,415 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
     }
 
+    function formatRelativeTime(timestampMs) {
+      if (!timestampMs) return '-';
+      const seconds = Math.floor((Date.now() - parseInt(timestampMs)) / 1000);
+      if (seconds < 60) return `${seconds}s ago`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+      if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+      return `${Math.floor(seconds / 86400)}d ago`;
+    }
+
+    function formatDuration(startMs, endMs) {
+      if (!startMs) return '-';
+      const end = endMs || Date.now();
+      const seconds = Math.floor((end - parseInt(startMs)) / 1000);
+      if (seconds < 60) return `${seconds}s`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+      return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+    }
+
+    // RPC helper: call Connect RPC endpoint with JSON
+    async function rpc(method, body = {}) {
+      const response = await fetch(`/iris.cluster.ControllerService/${method}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      if (!response.ok) {
+        throw new Error(`RPC ${method} failed: ${response.status}`);
+      }
+      return response.json();
+    }
+
+    // Convert proto enum to lowercase name (JOB_STATE_PENDING -> pending)
+    function stateToName(protoState) {
+      if (!protoState) return 'pending';
+      return protoState.replace(/^(JOB_STATE_|TASK_STATE_)/, '').toLowerCase();
+    }
+
+    // Cache for task data to avoid refetching on expand
+    const jobTasksCache = {};
+
+    async function fetchJobTasks(jobId) {
+      if (!jobTasksCache[jobId]) {
+        // RPC uses camelCase field names (Connect RPC standard)
+        const resp = await rpc('ListTasks', {jobId: jobId});
+        // Transform tasks for dashboard consumption
+        jobTasksCache[jobId] = (resp.tasks || []).map(t => ({
+          task_id: t.taskId,
+          task_index: t.taskIndex,
+          state: stateToName(t.state),
+          worker_id: t.workerId,
+          worker_address: t.workerAddress,
+          started_at_ms: parseInt(t.startedAtMs || 0),
+          finished_at_ms: parseInt(t.finishedAtMs || 0),
+          exit_code: t.exitCode,
+          error: t.error,
+          num_attempts: (t.attempts || []).length || 1,
+          pending_reason: t.pendingReason,
+          can_be_scheduled: t.canBeScheduled
+        }));
+      }
+      return jobTasksCache[jobId];
+    }
+
+    function renderJobsTab(jobs) {
+      const container = document.getElementById('jobs-list');
+      if (!jobs || jobs.length === 0) {
+        container.innerHTML = '<div class="no-jobs">No jobs</div>';
+        return;
+      }
+
+      // Sort: running/building first, then pending, then completed
+      const stateOrder = {running: 0, building: 1, pending: 2, succeeded: 3, failed: 4, killed: 5, worker_failed: 6};
+      jobs.sort((a, b) => (stateOrder[a.state] || 99) - (stateOrder[b.state] || 99));
+
+      container.innerHTML = jobs.map(job => {
+        const jobId = job.job_id;
+        const shortId = jobId.slice(0, 8);
+        const taskCount = job.task_count || 0;
+        const completedCount = job.completed_count || 0;
+
+        // Build task badges based on state counts
+        const badges = buildTaskBadges(job);
+
+        // Format duration
+        let duration = '-';
+        if (job.started_at_ms) {
+          const endMs = job.finished_at_ms || Date.now();
+          duration = formatDuration(job.started_at_ms, endMs);
+        } else if (job.submitted_at_ms) {
+          duration = 'queued ' + formatRelativeTime(job.submitted_at_ms);
+        }
+
+        return `<div class="job-row" onclick="toggleJobTasks(this, '${jobId}')">
+          <span class="job-toggle">\u25b6</span>
+          <a href="/job/${jobId}" class="job-id" onclick="event.stopPropagation()">${shortId}...</a>
+          <span class="job-name">${escapeHtml(job.name || 'unnamed')}</span>
+          <span class="task-badges">${badges}</span>
+          <span class="task-summary">${completedCount}/${taskCount} tasks</span>
+          <span class="job-state status-${job.state}">${job.state}</span>
+          <span class="job-duration">${duration}</span>
+        </div>
+        <div class="task-list" id="tasks-${jobId}">Loading tasks...</div>`;
+      }).join('');
+    }
+
+    function buildTaskBadges(job) {
+      // Build badges from task state counts if available
+      const counts = job.task_state_counts || {};
+      const total = job.task_count || 0;
+
+      if (total === 0) {
+        return '<span style="color:#7f8c8d;font-size:12px">no tasks</span>';
+      }
+
+      // Use task state counts if available, otherwise estimate from job state
+      const succeeded = counts.succeeded || 0;
+      const running = counts.running || 0;
+      const building = counts.building || 0;
+      const failed = counts.failed || 0;
+      const killed = counts.killed || 0;
+      const workerFailed = counts.worker_failed || 0;
+      const pending = counts.pending || (total - succeeded - running - building - failed - killed - workerFailed);
+
+      let badges = '';
+      for (let i = 0; i < succeeded; i++) badges += '<span class="task-badge succeeded"></span>';
+      for (let i = 0; i < running; i++) badges += '<span class="task-badge running"></span>';
+      for (let i = 0; i < building; i++) badges += '<span class="task-badge building"></span>';
+      for (let i = 0; i < failed; i++) badges += '<span class="task-badge failed"></span>';
+      for (let i = 0; i < workerFailed; i++) badges += '<span class="task-badge worker_failed"></span>';
+      for (let i = 0; i < killed; i++) badges += '<span class="task-badge killed"></span>';
+      for (let i = 0; i < pending; i++) badges += '<span class="task-badge pending"></span>';
+      return badges;
+    }
+
+    async function toggleJobTasks(row, jobId) {
+      const taskList = document.getElementById('tasks-' + jobId);
+      const toggle = row.querySelector('.job-toggle');
+
+      if (taskList.classList.contains('expanded')) {
+        taskList.classList.remove('expanded');
+        toggle.textContent = '\u25b6';
+        return;
+      }
+
+      toggle.textContent = '\u25bc';
+      taskList.classList.add('expanded');
+
+      // Fetch and render tasks
+      try {
+        const tasks = await fetchJobTasks(jobId);
+        taskList.innerHTML = tasks.map(t => {
+          const stateIcon = getTaskStateIcon(t.state);
+          const taskIdShort = t.task_id.length > 12 ? t.task_id.slice(0, 12) + '...' : t.task_id;
+          return `<div class="task-row">
+            <span class="task-id">${escapeHtml(taskIdShort)}</span>
+            <span class="task-worker">${escapeHtml(t.worker_id || '-')}</span>
+            <span class="task-state"><span class="task-icon ${t.state}">${stateIcon}</span>${t.state}</span>
+            <span class="task-attempts">(${t.num_attempts} attempt${t.num_attempts !== 1 ? 's' : ''})</span>
+          </div>`;
+        }).join('') || '<div class="task-row">No tasks</div>';
+      } catch (e) {
+        taskList.innerHTML = '<div class="task-row" style="color:#e74c3c">Failed to load tasks</div>';
+      }
+    }
+
+    function getTaskStateIcon(state) {
+      const icons = {
+        succeeded: '\u2713',
+        running: '\u25d0',
+        building: '\u25d0',
+        pending: '\u25cb',
+        failed: '\u2715',
+        killed: '\u25cb',
+        worker_failed: '\u2715',
+        unschedulable: '!'
+      };
+      return icons[state] || '?';
+    }
+
+    function formatVmState(state) {
+      if (!state) return 'unknown';
+      return state.replace('VM_STATE_', '').toLowerCase();
+    }
+
+    function computeSliceStateCounts(slices) {
+      // Compute slice state counts from SliceInfo[] (mirrors Python helper)
+      const counts = {booting: 0, initializing: 0, ready: 0, failed: 0};
+      for (const s of slices) {
+        const vms = s.vms || [];
+        if (vms.length === 0) continue;
+        // Skip terminated VM groups
+        if (vms.every(vm => vm.state === "VM_STATE_TERMINATED")) continue;
+        const anyFailed = vms.some(vm => vm.state === "VM_STATE_FAILED" || vm.state === "VM_STATE_PREEMPTED");
+        const allReady = vms.every(vm => vm.state === "VM_STATE_READY");
+        if (anyFailed) {
+          counts.failed++;
+        } else if (allReady) {
+          counts.ready++;
+        } else if (vms.some(vm => vm.state === "VM_STATE_INITIALIZING")) {
+          counts.initializing++;
+        } else if (vms.some(vm => vm.state === "VM_STATE_BOOTING")) {
+          counts.booting++;
+        }
+      }
+      return counts;
+    }
+
+    function toggleSlice(row) {
+      const vmList = row.nextElementSibling;
+      const toggle = row.querySelector('.slice-toggle');
+      if (vmList.classList.contains('expanded')) {
+        vmList.classList.remove('expanded');
+        toggle.textContent = '\u25b6';
+      } else {
+        vmList.classList.add('expanded');
+        toggle.textContent = '\u25bc';
+      }
+    }
+
+    function renderVmsTab(data) {
+      const container = document.getElementById('vms-container');
+      if (!data.groups || data.groups.length === 0) {
+        container.innerHTML = '<div class="no-vms-message">No scale groups configured</div>';
+        return;
+      }
+
+      container.innerHTML = data.groups.map(group => {
+        const config = group.config || {};
+        const slices = group.slices || [];
+        const counts = computeSliceStateCounts(slices);
+
+        const slicesHtml = slices.map(slice => {
+          // Determine slice state from constituent VMs (RPC uses camelCase)
+          const vms = slice.vms || [];
+          const vmStates = vms.map(vm => formatVmState(vm.state));
+          const allReady = vms.length > 0 && vms.every(vm => vm.state === "VM_STATE_READY");
+          const anyFailed = vms.some(vm => vm.state === "VM_STATE_FAILED" || vm.state === "VM_STATE_PREEMPTED");
+          const sliceState = anyFailed ? 'failed' :
+                             allReady ? 'ready' :
+                             vmStates.some(s => s === 'booting') ? 'booting' :
+                             vmStates.some(s => s === 'stopping') ? 'stopping' :
+                             vmStates.some(s => s === 'preempted') ? 'preempted' :
+                             'initializing';
+
+          const vmsHtml = vms.map(vm => {
+            const vmState = formatVmState(vm.state);
+            return `<div class="vm-row">
+              <span class="vm-state-indicator ${vmState}"></span>
+              ${escapeHtml(vm.vmId)} &nbsp; ${vmState.toUpperCase()} &nbsp;
+              ${escapeHtml(vm.address || '-')} &nbsp;
+              ${vm.workerId ? escapeHtml(vm.workerId) : ''}
+              ${vm.initError ? '<span style="color:#e74c3c">'+escapeHtml(vm.initError)+'</span>' : ''}
+            </div>`;
+          }).join('');
+
+          return `<div class="slice-row" onclick="toggleSlice(this)">
+            <span class="slice-toggle">\u25b6</span>
+            <strong>${escapeHtml(slice.sliceId)}</strong>
+            <span class="slice-state ${sliceState}">${sliceState.toUpperCase()}</span>
+            <span style="color:#7f8c8d">(${vms.length} VMs)</span>
+          </div>
+          <div class="vm-list">${vmsHtml || '<div>No VMs</div>'}</div>`;
+        }).join('');
+
+        const statesSummary = Object.entries(counts)
+          .filter(([k, v]) => v > 0)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join(', ') || 'no slices';
+
+        return `<div class="scale-group">
+          <div class="scale-group-header">
+            <h3>${escapeHtml(group.name)}</h3>
+            <div class="scale-group-meta">
+              Accelerator: ${escapeHtml(config.accelerator_type || '-')} |
+              Min: ${config.min_slices || 0} Max: ${config.max_slices || 0} |
+              Demand: ${group.current_demand || 0} |
+              ${statesSummary}
+            </div>
+          </div>
+          ${slicesHtml || '<div class="no-vms-message">No slices in this group</div>'}
+        </div>`;
+      }).join('');
+    }
+
+    function renderAutoscalerTab(data) {
+      // Update status bar
+      const statusIndicator = document.querySelector('#autoscaler-status-bar .status-indicator');
+      const enabledEl = document.getElementById('autoscaler-enabled');
+      const lastEvalEl = document.getElementById('last-evaluation');
+
+      if (data.enabled === false) {
+        statusIndicator.className = 'status-indicator disabled';
+        enabledEl.textContent = 'Disabled';
+        lastEvalEl.textContent = '-';
+        document.getElementById('scale-groups-table').innerHTML =
+          '<tr><th>Group</th><th>Booting</th><th>Init</th><th>Ready</th><th>Failed</th><th>Demand</th><th>Status</th></tr>';
+        document.getElementById('autoscaler-actions').innerHTML =
+          '<div class="action-entry">Autoscaler not configured</div>';
+        return;
+      }
+
+      statusIndicator.className = 'status-indicator active';
+      enabledEl.textContent = 'Active';
+      // RPC uses camelCase: lastEvaluationMs
+      lastEvalEl.textContent = data.lastEvaluationMs ?
+        formatRelativeTime(parseInt(data.lastEvaluationMs)) : '-';
+
+      // Render scale groups table (RPC uses camelCase)
+      const groups = data.groups || [];
+      const groupsHtml = groups.map(g => {
+        const counts = computeSliceStateCounts(g.slices || []);
+        const isBackoff = g.backoffUntilMs && parseInt(g.backoffUntilMs) > Date.now();
+        const statusClass = isBackoff ? 'backoff' : 'available';
+        const statusText = isBackoff ? 'Backoff' : 'Available';
+
+        return `<tr>
+          <td><strong>${escapeHtml(g.name)}</strong></td>
+          <td>${counts.booting || 0}</td>
+          <td>${counts.initializing || 0}</td>
+          <td>${counts.ready || 0}</td>
+          <td>${counts.failed || 0}</td>
+          <td>${g.currentDemand || 0}</td>
+          <td><span class="group-status"><span class="group-status-dot ${statusClass}"></span> ${statusText}</span></td>
+        </tr>`;
+      }).join('');
+
+      const headerRow = '<tr><th>Group</th><th>Booting</th><th>Init</th>' +
+        '<th>Ready</th><th>Failed</th><th>Demand</th><th>Status</th></tr>';
+      document.getElementById('scale-groups-table').innerHTML = headerRow + groupsHtml;
+
+      // Render actions log (newest first) - RPC uses camelCase
+      const actions = (data.recentActions || []).slice().reverse();
+      const actionsHtml = actions.map(a => {
+        const time = new Date(parseInt(a.timestampMs)).toLocaleTimeString();
+        const actionType = a.actionType || 'unknown';
+        const sliceInfo = a.sliceId ? ` [${escapeHtml(a.sliceId.slice(0,20))}...]` : '';
+        const status = a.status || 'completed';
+        const statusClass = status === 'pending' ? 'status-pending' :
+                            status === 'failed' ? 'status-failed' : 'status-succeeded';
+        const statusBadge = status !== 'completed'
+          ? `<span class="${statusClass}" style="margin-left:5px">[${status}]</span>` : '';
+        return `<div class="action-entry">
+          <span class="action-time">${time}</span>
+          <span class="action-type ${actionType}">${actionType.replace('_', ' ')}</span>${statusBadge}
+          <strong>${escapeHtml(a.scaleGroup)}</strong>${sliceInfo}
+          ${a.reason ? ' - ' + escapeHtml(a.reason) : ''}
+        </div>`;
+      }).join('');
+
+      document.getElementById('autoscaler-actions').innerHTML =
+        actionsHtml || '<div class="action-entry">No recent actions</div>';
+    }
+
     async function refresh() {
       try {
-        const [stats, actions, workers, jobs, endpoints] = await Promise.all([
-          fetch('/api/stats').then(r => r.json()),
-          fetch('/api/actions').then(r => r.json()),
-          fetch('/api/workers').then(r => r.json()),
-          fetch('/api/jobs').then(r => r.json()),
-          fetch('/api/endpoints').then(r => r.json())
+        // Fetch data via RPCs
+        const [workersResp, jobsResp, endpointsResp, autoscalerResp] = await Promise.all([
+          rpc('ListWorkers'),
+          rpc('ListJobs'),
+          rpc('ListEndpoints', {prefix: ''}),
+          rpc('GetAutoscalerStatus')
         ]);
 
-        // Update stats
-        document.getElementById('jobs-pending').textContent = stats.jobs_pending;
-        document.getElementById('jobs-running').textContent = stats.jobs_running;
-        document.getElementById('jobs-completed').textContent = stats.jobs_completed;
-        document.getElementById('jobs-building').textContent = stats.jobs_building;
-        document.getElementById('workers-healthy').textContent = stats.workers_healthy;
-        document.getElementById('workers-total').textContent = stats.workers_total;
-        document.getElementById('endpoints-count').textContent = stats.endpoints_count;
+        // Transform workers for dashboard consumption (RPC uses camelCase)
+        const workers = (workersResp.workers || []).map(w => ({
+          worker_id: w.workerId,
+          address: w.address,
+          healthy: w.healthy,
+          last_heartbeat_ms: parseInt(w.lastHeartbeatMs || 0),
+          running_tasks: (w.runningJobIds || []).length,
+          resources: {
+            cpu: w.metadata ? w.metadata.cpuCount : 0,
+            memory_bytes: w.metadata ? parseInt(w.metadata.memoryBytes || 0) : 0
+          }
+        }));
 
-        // Update actions log
-        const actionsHtml = actions.map(a => {
-          const time = new Date(a.timestamp_ms).toLocaleTimeString();
-          const jobInfo = a.job_id ? ` [job: ${a.job_id.slice(0,8)}...]` : '';
-          const workerInfo = a.worker_id ? ` [worker: ${escapeHtml(a.worker_id)}]` : '';
-          const details = a.details ? ` - ${escapeHtml(a.details)}` : '';
-          return `<div class="action-entry"><span class="action-time">${time}</span>` +
-            `${escapeHtml(a.action)}${jobInfo}${workerInfo}${details}</div>`;
-        }).reverse().join('');
-        document.getElementById('actions').innerHTML = actionsHtml || '<div class="action-entry">No actions yet</div>';
+        // Transform jobs for dashboard consumption (RPC uses camelCase)
+        const jobs = (jobsResp.jobs || []).map(j => ({
+          job_id: j.jobId,
+          name: j.name,
+          state: stateToName(j.state),
+          started_at_ms: parseInt(j.startedAtMs || 0),
+          finished_at_ms: parseInt(j.finishedAtMs || 0),
+          submitted_at_ms: parseInt(j.submittedAtMs || 0),
+          failure_count: j.failureCount || 0,
+          preemption_count: j.preemptionCount || 0,
+          task_count: j.taskCount || 0,
+          completed_count: j.completedCount || 0,
+          task_state_counts: j.taskStateCounts || {},
+          resources: j.resources || {}
+        }));
+
+        // Transform endpoints (camelCase: jobId)
+        const endpoints = (endpointsResp.endpoints || []).map(e => ({
+          name: e.name,
+          address: e.address,
+          job_id: e.jobId,
+          metadata: e.metadata || {}
+        }));
+
+        // Extract autoscaler status (camelCase: recentActions)
+        const autoscaler = autoscalerResp.status || {enabled: false, groups: [], recentActions: []};
 
         // Update workers table
         const workersHtml = workers.map(w => {
-          const lastHb = w.last_heartbeat_ms
-            ? new Date(w.last_heartbeat_ms).toLocaleString() : '-';
+          const lastHb = formatRelativeTime(w.last_heartbeat_ms);
           const healthClass = w.healthy ? 'healthy' : 'unhealthy';
+          const healthIndicator = w.healthy ? '\u25cf' : '\u25cb';
+          const healthText = w.healthy ? 'Yes' : 'No';
           const wid = escapeHtml(w.worker_id);
           const workerLink = w.address
             ? `<a href="http://${escapeHtml(w.address)}/" class="worker-link" target="_blank">${wid}</a>`
@@ -290,7 +901,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const memory = memBytes ? formatBytes(memBytes) : '-';
           return `<tr>
             <td>${workerLink}</td>
-            <td class="${healthClass}">${w.healthy ? 'Yes' : 'No'}</td>
+            <td class="${healthClass}">${healthIndicator} ${healthText}</td>
             <td>${cpu}</td>
             <td>${memory}</td>
             <td>${w.running_tasks}</td>
@@ -301,42 +912,72 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           '<th>Running Tasks</th><th>Last Heartbeat</th></tr>';
         document.getElementById('workers-table').innerHTML = workersHeader + workersHtml;
 
-        // Update jobs table
-        const jobsHtml = jobs.map(j => {
-          const jid = escapeHtml(j.job_id);
-          const jobLink = `<a href="/job/${jid}" class="job-link">${jid.slice(0,8)}...</a>`;
-          const jobMemBytes = j.resources ? (j.resources.memory_bytes || 0) : 0;
-          const resources = j.resources
-            ? `${j.resources.cpu} CPU, ${jobMemBytes ? formatBytes(jobMemBytes) : '-'}` : '-';
-          return `<tr>
-            <td>${jobLink}</td>
-            <td>${escapeHtml(j.name)}</td>
-            <td class="status-${j.state}">${escapeHtml(j.state)}</td>
-            <td>${resources}</td>
-            <td>${escapeHtml(j.worker_id) || '-'}</td>
-            <td>${escapeHtml(j.error) || '-'}</td>
-          </tr>`;
-        }).join('');
-        const jobsHeader = '<tr><th>ID</th><th>Name</th><th>State</th><th>Resources</th>' +
-          '<th>Worker</th><th>Error</th></tr>';
-        document.getElementById('jobs-table').innerHTML = jobsHeader + jobsHtml;
+        // Update jobs tab with compact view
+        renderJobsTab(jobs);
 
         // Update endpoints table
-        const endpointsHtml = endpoints.map(e => {
-          const eid = escapeHtml(e.job_id);
-          const jobLink = `<a href="/job/${eid}" class="job-link">${eid.slice(0,8)}...</a>`;
-          return `<tr>
-            <td>${escapeHtml(e.name)}</td>
-            <td>${escapeHtml(e.address)}</td>
-            <td>${jobLink}</td>
-          </tr>`;
-        }).join('');
-        document.getElementById('endpoints-table').innerHTML =
-          '<tr><th>Name</th><th>Address</th><th>Job</th></tr>' + endpointsHtml;
+        if (endpoints.length === 0) {
+          document.getElementById('endpoints-table').style.display = 'none';
+          document.getElementById('no-endpoints').style.display = 'block';
+        } else {
+          document.getElementById('endpoints-table').style.display = '';
+          document.getElementById('no-endpoints').style.display = 'none';
+          const endpointsHtml = endpoints.map(e => {
+            const eid = escapeHtml(e.job_id);
+            const jobLink = `<a href="/job/${eid}" class="job-link">${eid.slice(0,8)}...</a>`;
+            const metaStr = e.metadata ? Object.entries(e.metadata).map(([k,v]) => `${k}=${v}`).join(', ') : '-';
+            return `<tr>
+              <td>${escapeHtml(e.name)}</td>
+              <td>${escapeHtml(e.address)}</td>
+              <td>${jobLink}</td>
+              <td>${escapeHtml(metaStr)}</td>
+            </tr>`;
+          }).join('');
+          document.getElementById('endpoints-table').innerHTML =
+            '<tr><th>Name</th><th>Address</th><th>Job</th><th>Metadata</th></tr>' + endpointsHtml;
+        }
+
+        // Update VMs tab (use autoscaler groups)
+        renderVmsTab({groups: autoscaler.groups || []});
+
+        // Update Autoscaler tab
+        renderAutoscalerTab(autoscaler);
       } catch (e) {
         console.error('Failed to refresh:', e);
       }
     }
+
+    // Tab switching with URL hash routing
+    function switchTab(tabName) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+      const btn = document.querySelector(`.tab-btn[data-tab="${tabName}"]`);
+      if (btn) {
+        btn.classList.add('active');
+        document.getElementById('tab-' + tabName).classList.add('active');
+      }
+    }
+
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tabName = btn.dataset.tab;
+        window.location.hash = tabName;
+        switchTab(tabName);
+      });
+    });
+
+    // Handle initial hash and hash changes
+    function handleHash() {
+      const hash = window.location.hash.slice(1);
+      const validTabs = ['jobs', 'workers', 'endpoints', 'vms', 'autoscaler'];
+      if (validTabs.includes(hash)) {
+        switchTab(hash);
+      }
+    }
+
+    window.addEventListener('hashchange', handleHash);
+    handleHash();
 
     refresh();
     setInterval(refresh, 5000);
@@ -581,15 +1222,62 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
       return stateMap[state] || '';
     }
 
+    // RPC helper: call Connect RPC endpoint with JSON
+    async function rpc(method, body = {}) {
+      const response = await fetch(`/iris.cluster.ControllerService/${method}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      if (!response.ok) {
+        throw new Error(`RPC ${method} failed: ${response.status}`);
+      }
+      return response.json();
+    }
+
+    // Convert proto enum to lowercase name (JOB_STATE_PENDING -> pending)
+    function stateToName(protoState) {
+      if (!protoState) return 'pending';
+      return protoState.replace(/^(JOB_STATE_|TASK_STATE_)/, '').toLowerCase();
+    }
+
     async function refresh() {
       try {
-        // Fetch job status from controller
-        const [jobResponse, tasksResponse] = await Promise.all([
-          fetch(`/api/jobs`).then(r => r.json()),
-          fetch(`/api/jobs/${encodeURIComponent(jobId)}/tasks`).then(r => r.json())
+        // Fetch job status from controller via RPC (camelCase)
+        const [jobsResp, tasksResp] = await Promise.all([
+          rpc('ListJobs'),
+          rpc('ListTasks', {jobId: jobId})
         ]);
 
-        const job = jobResponse.find(j => j.job_id === jobId);
+        // Transform job data (RPC uses camelCase)
+        const jobs = (jobsResp.jobs || []).map(j => ({
+          job_id: j.jobId,
+          state: stateToName(j.state),
+          failure_count: j.failureCount || 0,
+          error: j.error,
+          started_at_ms: parseInt(j.startedAtMs || 0),
+          finished_at_ms: parseInt(j.finishedAtMs || 0),
+          resources: {
+            cpu: j.resources ? j.resources.cpu : 0,
+            memory_bytes: j.resources ? parseInt(j.resources.memoryBytes || 0) : 0
+          }
+        }));
+
+        // Transform tasks (RPC uses camelCase)
+        const tasksResponse = (tasksResp.tasks || []).map(t => ({
+          task_id: t.taskId,
+          task_index: t.taskIndex,
+          state: stateToName(t.state),
+          worker_id: t.workerId || '',
+          started_at_ms: parseInt(t.startedAtMs || 0),
+          finished_at_ms: parseInt(t.finishedAtMs || 0),
+          exit_code: t.exitCode,
+          error: t.error || '',
+          num_attempts: (t.attempts || []).length || 1,
+          pending_reason: t.pendingReason || ''
+        }));
+
+        const job = jobs.find(j => j.job_id === jobId);
         if (!job) {
           document.getElementById('error-container').innerHTML =
             '<div class="error-message">Job not found</div>';
@@ -696,18 +1384,21 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
 
 
 class ControllerDashboard:
-    """HTTP dashboard with Connect RPC and web UI."""
+    """HTTP dashboard with Connect RPC and web UI.
+
+    The dashboard serves a single-page web UI that fetches all data directly
+    via Connect RPC calls to the ControllerService. This eliminates the need
+    for a separate REST API layer and ensures the dashboard shows exactly
+    what the RPC returns.
+    """
 
     def __init__(
         self,
         service: ControllerServiceImpl,
-        scheduler: Scheduler,
         host: str = "0.0.0.0",
         port: int = 8080,
     ):
         self._service = service
-        self._state = service._state
-        self._scheduler = scheduler
         self._host = host
         self._port = port
         self._app = self._create_app()
@@ -722,19 +1413,9 @@ class ControllerDashboard:
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         routes = [
-            # Web dashboard
             Route("/", self._dashboard),
             Route("/job/{job_id}", self._job_detail_page),
-            # REST API (for dashboard)
-            Route("/api/stats", self._api_stats),
-            Route("/api/actions", self._api_actions),
-            Route("/api/workers", self._api_workers),
-            Route("/api/jobs", self._api_jobs),
-            Route("/api/jobs/{job_id}/attempts", self._api_job_attempts),
-            Route("/api/jobs/{job_id}/tasks", self._api_job_tasks),
-            Route("/api/endpoints", self._api_endpoints),
             Route("/health", self._health),
-            # Connect RPC - mount WSGI app wrapped for ASGI
             Mount(rpc_wsgi_app.path, app=rpc_app),
         ]
         return Starlette(routes=routes)
@@ -742,202 +1423,25 @@ class ControllerDashboard:
     def _dashboard(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(DASHBOARD_HTML)
 
-    def _api_stats(self, _request: Request) -> JSONResponse:
-        ctx = FakeRequestContext()
-        jobs_response = self._service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), ctx)
-        workers = self._state.list_all_workers()
-
-        jobs_pending = sum(1 for j in jobs_response.jobs if j.state == cluster_pb2.JOB_STATE_PENDING)
-        jobs_running = sum(1 for j in jobs_response.jobs if j.state == cluster_pb2.JOB_STATE_RUNNING)
-        jobs_building = sum(1 for j in jobs_response.jobs if j.state == cluster_pb2.JOB_STATE_BUILDING)
-        jobs_completed = sum(
-            1
-            for j in jobs_response.jobs
-            if j.state
-            in (
-                cluster_pb2.JOB_STATE_SUCCEEDED,
-                cluster_pb2.JOB_STATE_FAILED,
-                cluster_pb2.JOB_STATE_KILLED,
-                cluster_pb2.JOB_STATE_WORKER_FAILED,
-            )
-        )
-        workers_healthy = sum(1 for w in workers if w.healthy)
-
-        # Count endpoints for running jobs
-        endpoints_count = sum(
-            1
-            for ep in self._state.list_all_endpoints()
-            if (job := self._state.get_job(ep.job_id)) and job.state == cluster_pb2.JOB_STATE_RUNNING
-        )
-
-        return JSONResponse(
-            {
-                "jobs_pending": jobs_pending,
-                "jobs_running": jobs_running,
-                "jobs_building": jobs_building,
-                "jobs_completed": jobs_completed,
-                "workers_healthy": workers_healthy,
-                "workers_total": len(workers),
-                "endpoints_count": endpoints_count,
-            }
-        )
-
-    def _api_actions(self, _request: Request) -> JSONResponse:
-        transactions = self._state.get_transactions(limit=50)
-        actions = []
-        for txn in transactions:
-            for action in txn.actions:
-                actions.append(
-                    {
-                        "timestamp_ms": action.timestamp_ms,
-                        "action": action.action,
-                        "entity_id": action.entity_id,
-                        "details": action.details,
-                    }
-                )
-        return JSONResponse(actions)
-
-    def _api_workers(self, _request: Request) -> JSONResponse:
-        workers = self._state.list_all_workers()
-        return JSONResponse(
-            [
-                {
-                    "worker_id": str(w.worker_id),
-                    "address": w.address,
-                    "healthy": w.healthy,
-                    "running_tasks": len(w.running_tasks),
-                    "consecutive_failures": w.consecutive_failures,
-                    "last_heartbeat_ms": w.last_heartbeat_ms,
-                    "resources": {
-                        "cpu": w.metadata.cpu_count,
-                        "memory_bytes": w.metadata.memory_bytes,
-                    },
-                }
-                for w in workers
-            ]
-        )
-
-    def _api_jobs(self, _request: Request) -> JSONResponse:
-        jobs = self._state.list_all_jobs()
-        return JSONResponse(
-            [
-                {
-                    "job_id": str(j.job_id),
-                    "name": j.request.name,
-                    "state": _job_state_name(j.state),
-                    "error": j.error,
-                    "submitted_at_ms": j.submitted_at_ms,
-                    "started_at_ms": j.started_at_ms,
-                    "finished_at_ms": j.finished_at_ms,
-                    "failure_count": j.failure_count,
-                    "preemption_count": j.preemption_count,
-                    "resources": {
-                        "cpu": j.request.resources.cpu if j.request.resources else 0,
-                        "memory_bytes": j.request.resources.memory_bytes if j.request.resources else 0,
-                    },
-                }
-                for j in jobs
-            ]
-        )
-
-    def _api_job_attempts(self, request: Request) -> JSONResponse:
-        """Get retry information for a job.
-
-        Jobs don't have attempts - tasks do. This endpoint returns retry counts
-        and the current job state. For detailed attempt history, query the
-        task attempts via /api/jobs/{job_id}/tasks.
-        """
-        job_id = request.path_params["job_id"]
-        job = self._state.get_job(JobId(job_id))
-        if not job:
-            return JSONResponse({"error": "Job not found"}, status_code=404)
-
-        return JSONResponse(
-            {
-                "failure_count": job.failure_count,
-                "preemption_count": job.preemption_count,
-                "current_state": _job_state_name(job.state),
-                "exit_code": job.exit_code,
-                "error": job.error,
-                "started_at_ms": job.started_at_ms,
-                "finished_at_ms": job.finished_at_ms,
-            }
-        )
-
-    def _api_job_tasks(self, request: Request) -> JSONResponse:
-        """Get all tasks for a specific job."""
-        job_id = request.path_params["job_id"]
-        job = self._state.get_job(JobId(job_id))
-        if not job:
-            return JSONResponse({"error": "Job not found"}, status_code=404)
-
-        tasks = self._state.get_job_tasks(job.job_id)
-        task_data = []
-        for t in tasks:
-            worker_id = t.worker_id  # Property reading from attempts
-            worker_address = ""
-            if worker_id:
-                worker = self._state.get_worker(worker_id)
-                if worker:
-                    worker_address = worker.address
-
-            # Add diagnostic information for pending tasks
-            pending_reason = None
-            if t.state == cluster_pb2.TASK_STATE_PENDING:
-                schedule_status = self._scheduler.task_schedule_status(t)
-                pending_reason = schedule_status.failure_reason
-
-            task_data.append(
-                {
-                    "task_id": str(t.task_id),
-                    "task_index": t.task_index,
-                    "state": _task_state_name(t.state),
-                    "worker_id": str(worker_id) if worker_id else None,
-                    "worker_address": worker_address,
-                    "started_at_ms": t.started_at_ms or 0,
-                    "finished_at_ms": t.finished_at_ms or 0,
-                    "exit_code": t.exit_code,
-                    "error": t.error or "",
-                    "current_attempt_id": t.current_attempt_id,
-                    "num_attempts": len(t.attempts),
-                    "pending_reason": pending_reason,
-                    "can_be_scheduled": t.can_be_scheduled(),
-                }
-            )
-
-        return JSONResponse(task_data)
-
-    def _api_endpoints(self, _request: Request) -> JSONResponse:
-        endpoints = []
-        for ep in self._state.list_all_endpoints():
-            job = self._state.get_job(ep.job_id)
-            if job and job.state == cluster_pb2.JOB_STATE_RUNNING:
-                endpoints.append(
-                    {
-                        "endpoint_id": ep.endpoint_id,
-                        "name": ep.name,
-                        "address": ep.address,
-                        "job_id": str(ep.job_id),
-                        "metadata": dict(ep.metadata),
-                    }
-                )
-        return JSONResponse(endpoints)
-
     def _job_detail_page(self, request: Request) -> HTMLResponse:
+        import html
+
         job_id = request.path_params["job_id"]
-        return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", job_id))
+        return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", html.escape(job_id)))
 
     def _health(self, _request: Request) -> JSONResponse:
-        workers = self._state.list_all_workers()
-        jobs = self._state.list_all_jobs()
-        healthy_count = sum(1 for w in workers if w.healthy)
+        """Health check endpoint using RPC to query state."""
+        workers_resp = self._service.list_workers(cluster_pb2.Controller.ListWorkersRequest(), None)
+        jobs_resp = self._service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), None)
+
+        healthy_count = sum(1 for w in workers_resp.workers if w.healthy)
 
         return JSONResponse(
             {
                 "status": "ok",
-                "workers": len(workers),
+                "workers": len(workers_resp.workers),
                 "healthy_workers": healthy_count,
-                "jobs": len(jobs),
+                "jobs": len(jobs_resp.jobs),
             }
         )
 

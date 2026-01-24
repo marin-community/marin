@@ -59,14 +59,19 @@ class LocalEnvironmentProvider:
         cpu: int = 1000,
         memory_gb: int = 1000,
         attributes: dict[str, str | int | float] | None = None,
+        device: cluster_pb2.DeviceConfig | None = None,
     ):
         self._cpu = cpu
         self._memory_gb = memory_gb
         self._attributes = attributes or {}
+        self._device = device
 
     def probe(self) -> cluster_pb2.WorkerMetadata:
-        device = cluster_pb2.DeviceConfig()
-        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+        if self._device is not None:
+            device = self._device
+        else:
+            device = cluster_pb2.DeviceConfig()
+            device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
 
         proto_attrs = {}
         for key, value in self._attributes.items():

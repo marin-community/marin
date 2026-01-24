@@ -18,9 +18,10 @@ This script boots an iris cluster (in-process by default, no Docker required),
 seeds it with quick demo jobs, and optionally launches a Jupyter notebook for
 interactive exploration.
 
-By default, the cluster simulates multi-host TPU workers: 8 workers split
-across two TPU slices ("tpu-a" and "tpu-b", 4 workers each). This enables
-demonstrating coscheduled jobs that land all tasks on the same TPU slice.
+Workers are created on-demand by the autoscaler when jobs are submitted. The
+autoscaler manages two scale groups:
+- cpu: For jobs without device requirements
+- tpu_v5e_4: For TPU jobs (v5litepod-4 topology)
 
 Usage:
     # Validate that the cluster works (for CI)
@@ -51,13 +52,22 @@ from iris.cluster.client.local_client import (
     _LocalImageProvider,
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
-from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.cluster.worker.builder import ImageCache
-from iris.cluster.worker.bundle_cache import BundleCache
-from iris.cluster.worker.docker import DockerRuntime
+from iris.cluster.types import (
+    CoschedulingConfig,
+    Entrypoint,
+    EnvironmentSpec,
+    ResourceSpec,
+    get_tpu_topology,
+    tpu_device,
+)
+from iris.cluster.vm.autoscaler import Autoscaler, AutoscalerConfig
+from iris.cluster.vm.managed_vm import ManagedVm, VmRegistry
+from iris.cluster.vm.scaling_group import ScalingGroup
+from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.time_utils import now_ms
 
 # The iris project root (lib/iris/) - used as workspace for the example
 IRIS_ROOT = Path(__file__).parent.parent
@@ -73,6 +83,254 @@ def find_free_port() -> int:
 
 
 # =============================================================================
+# Local VM Manager for Demo (implements VmGroupProtocol and VmManagerProtocol)
+# =============================================================================
+
+
+class LocalVmGroup(VmGroupProtocol):
+    """In-process VM group that wraps Worker instances.
+
+    For the demo, each VM group represents a "slice" that contains one or more
+    workers. Workers become ready immediately (no bootstrap delay).
+    """
+
+    def __init__(
+        self,
+        group_id: str,
+        scale_group: str,
+        workers: list[Worker],
+        worker_ids: list[str],
+        vm_registry: VmRegistry,
+    ):
+        self._group_id = group_id
+        self._scale_group = scale_group
+        self._workers = workers
+        self._worker_ids = worker_ids
+        self._created_at_ms = now_ms()
+        self._vm_registry = vm_registry
+        self._terminated = False
+
+        # Create mock ManagedVm instances for each worker (for autoscaler compatibility)
+        self._managed_vms: list[ManagedVm] = []
+        for i, worker_id in enumerate(worker_ids):
+            # Create a minimal ManagedVm that's immediately ready
+            # We don't use ManagedVm's lifecycle thread since workers are in-process
+            vm_info = vm_pb2.VmInfo(
+                vm_id=f"{group_id}-vm-{i}",
+                slice_id=group_id,
+                scale_group=scale_group,
+                state=vm_pb2.VM_STATE_READY,
+                address="127.0.0.1",
+                zone="local",
+                worker_id=worker_id,
+                created_at_ms=self._created_at_ms,
+                state_changed_at_ms=self._created_at_ms,
+            )
+            # Create a stub ManagedVm that just holds the info
+            managed_vm = _StubManagedVm(vm_info)
+            self._managed_vms.append(managed_vm)
+            vm_registry.register(managed_vm)
+
+    @property
+    def group_id(self) -> str:
+        return self._group_id
+
+    @property
+    def slice_id(self) -> str:
+        return self._group_id
+
+    @property
+    def scale_group(self) -> str:
+        return self._scale_group
+
+    @property
+    def created_at_ms(self) -> int:
+        return self._created_at_ms
+
+    def status(self) -> VmGroupStatus:
+        if self._terminated:
+            return VmGroupStatus(
+                vms=[
+                    VmSnapshot(
+                        vm_id=vm.info.vm_id,
+                        state=vm_pb2.VM_STATE_TERMINATED,
+                        address="",
+                        init_phase="",
+                        init_error="",
+                    )
+                    for vm in self._managed_vms
+                ]
+            )
+        return VmGroupStatus(
+            vms=[
+                VmSnapshot(
+                    vm_id=vm.info.vm_id,
+                    state=vm_pb2.VM_STATE_READY,
+                    address="127.0.0.1",
+                    init_phase="ready",
+                    init_error="",
+                )
+                for vm in self._managed_vms
+            ]
+        )
+
+    def vms(self) -> list[ManagedVm]:
+        return self._managed_vms
+
+    def terminate(self) -> None:
+        if self._terminated:
+            return
+        self._terminated = True
+        for worker in self._workers:
+            worker.stop()
+        for vm in self._managed_vms:
+            self._vm_registry.unregister(vm.info.vm_id)
+
+    def to_proto(self) -> vm_pb2.SliceInfo:
+        return vm_pb2.SliceInfo(
+            slice_id=self._group_id,
+            scale_group=self._scale_group,
+            created_at_ms=self._created_at_ms,
+            vms=[vm.info for vm in self._managed_vms],
+        )
+
+
+class _StubManagedVm(ManagedVm):
+    """Minimal ManagedVm stub that holds VmInfo without lifecycle management.
+
+    Used by LocalVmGroup to satisfy the VmGroupProtocol interface without
+    running actual bootstrap threads.
+    """
+
+    def __init__(self, info: vm_pb2.VmInfo):
+        # Don't call super().__init__ - just set the minimal attributes
+        self.info = info
+        self._log_lines: list[str] = []
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def init_log(self, tail: int | None = None) -> str:
+        return ""
+
+    def check_health(self) -> bool:
+        return True
+
+
+class LocalVmManager:
+    """VmManager for in-process demo workers.
+
+    Creates LocalVmGroup instances containing in-process Worker instances.
+    Workers are created with appropriate attributes based on the scale group
+    configuration (TPU topology, etc.).
+    """
+
+    def __init__(
+        self,
+        scale_group_config: vm_pb2.ScaleGroupConfig,
+        controller_address: str,
+        cache_path: Path,
+        fake_bundle: Path,
+        vm_registry: VmRegistry,
+    ):
+        self._config = scale_group_config
+        self._controller_address = controller_address
+        self._cache_path = cache_path
+        self._fake_bundle = fake_bundle
+        self._vm_registry = vm_registry
+        self._slice_counter = 0
+
+    def create_vm_group(self, tags: dict[str, str] | None = None) -> VmGroupProtocol:
+        """Create a new VM group with workers."""
+        slice_id = f"{self._config.name}-slice-{self._slice_counter}"
+        self._slice_counter += 1
+
+        # Determine worker count based on accelerator type
+        if self._config.accelerator_type:
+            try:
+                topo = get_tpu_topology(self._config.accelerator_type)
+                worker_count = topo.vm_count
+            except ValueError:
+                worker_count = 1
+        else:
+            worker_count = 1
+
+        # Create workers
+        workers: list[Worker] = []
+        worker_ids: list[str] = []
+
+        bundle_provider = _LocalBundleProvider(self._fake_bundle)
+        image_provider = _LocalImageProvider()
+        container_runtime = _LocalContainerRuntime()
+
+        for tpu_worker_id in range(worker_count):
+            worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
+            worker_port = find_free_port()
+
+            # Set up worker attributes
+            attributes: dict[str, str | int | float] = {}
+            if self._config.accelerator_type:
+                attributes["tpu-name"] = slice_id
+                attributes["tpu-worker-id"] = tpu_worker_id
+                attributes["tpu-topology"] = self._config.accelerator_type
+
+            # Create device config if accelerator is specified
+            device = None
+            if self._config.accelerator_type:
+                topo = get_tpu_topology(self._config.accelerator_type)
+                device = tpu_device(self._config.accelerator_type, count=topo.chips_per_vm)
+
+            environment_provider = LocalEnvironmentProvider(
+                cpu=1000,
+                memory_gb=1000,
+                attributes=attributes,
+                device=device,
+            )
+
+            worker_config = WorkerConfig(
+                host="127.0.0.1",
+                port=worker_port,
+                cache_dir=self._cache_path,
+                controller_address=self._controller_address,
+                worker_id=worker_id,
+                poll_interval_seconds=0.1,  # Fast polling for demos
+            )
+            worker = Worker(
+                worker_config,
+                cache_dir=self._cache_path,
+                bundle_provider=bundle_provider,
+                image_provider=image_provider,
+                container_runtime=container_runtime,
+                environment_provider=environment_provider,
+            )
+            worker.start()
+            workers.append(worker)
+            worker_ids.append(worker_id)
+
+        logger.info(
+            "LocalVmManager created VM group %s with %d workers for scale group %s",
+            slice_id,
+            len(workers),
+            self._config.name,
+        )
+
+        return LocalVmGroup(
+            group_id=slice_id,
+            scale_group=self._config.name,
+            workers=workers,
+            worker_ids=worker_ids,
+            vm_registry=self._vm_registry,
+        )
+
+    def discover_vm_groups(self) -> list[VmGroupProtocol]:
+        """Return empty list - no recovery for local demo."""
+        return []
+
+
+# =============================================================================
 # Demo Cluster
 # =============================================================================
 
@@ -83,6 +341,10 @@ class DemoCluster:
     Supports two execution modes:
     - In-process (default): Fast, no Docker required, jobs run in threads
     - Docker: Real containers, matches production behavior
+
+    Workers are created on-demand by the autoscaler. The autoscaler manages:
+    - cpu: For jobs without device requirements (min_slices=1)
+    - tpu_v5e_4: For TPU jobs (v5litepod-4 topology)
 
     Example:
         with DemoCluster() as demo:
@@ -95,43 +357,114 @@ class DemoCluster:
     def __init__(
         self,
         use_docker: bool = False,
-        tpu_slices: list[tuple[str, int]] | None = None,
     ):
         self._use_docker = use_docker
-        if tpu_slices is None:
-            tpu_slices = [("tpu-a", 4), ("tpu-b", 4)]
-        self._tpu_slices = tpu_slices
         self._controller_port = find_free_port()
 
         # Will be initialized in __enter__
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._controller: Controller | None = None
-        self._workers: list[Worker] = []
-        self._worker_ids: list[str] = []
-        self._worker_ports: list[int] = []
+        self._autoscaler: Autoscaler | None = None
+        self._vm_registry: VmRegistry | None = None
         self._controller_client: ControllerServiceClientSync | None = None
         self._rpc_client: IrisClient | None = None
+
+        # Paths initialized in __enter__
+        self._cache_path: Path | None = None
+        self._fake_bundle: Path | None = None
 
         # Jupyter integration
         self._notebook_proc: subprocess.Popen | None = None
         self._notebook_url: str | None = None
 
+    def _create_autoscaler(self) -> Autoscaler:
+        """Create the autoscaler with scale groups for CPU and TPU workers."""
+        assert self._cache_path is not None
+        assert self._fake_bundle is not None
+
+        vm_registry = VmRegistry()
+        self._vm_registry = vm_registry
+
+        # Scale group configs
+        cpu_config = vm_pb2.ScaleGroupConfig(
+            name="cpu",
+            accelerator_type="",  # Empty = matches jobs without device requirements
+            min_slices=1,  # Always have at least one CPU worker for simple jobs
+            max_slices=4,
+        )
+        tpu_config = vm_pb2.ScaleGroupConfig(
+            name="tpu_v5e_16",
+            accelerator_type="v5litepod-16",  # 4 VMs per slice to match original 4 workers/slice
+            min_slices=0,
+            max_slices=4,
+        )
+
+        controller_address = f"http://127.0.0.1:{self._controller_port}"
+
+        # Create VM managers for each scale group
+        cpu_vm_manager = LocalVmManager(
+            scale_group_config=cpu_config,
+            controller_address=controller_address,
+            cache_path=self._cache_path,
+            fake_bundle=self._fake_bundle,
+            vm_registry=vm_registry,
+        )
+        tpu_vm_manager = LocalVmManager(
+            scale_group_config=tpu_config,
+            controller_address=controller_address,
+            cache_path=self._cache_path,
+            fake_bundle=self._fake_bundle,
+            vm_registry=vm_registry,
+        )
+
+        # Create scale groups
+        # Use fast scale-up but slow scale-down to keep workers alive during demo/notebook
+        cpu_scale_group = ScalingGroup(
+            config=cpu_config,
+            vm_manager=cpu_vm_manager,
+            scale_up_cooldown_ms=1000,  # 1 second
+            scale_down_cooldown_ms=300_000,  # 5 minutes - workers stay alive for demo
+        )
+        tpu_scale_group = ScalingGroup(
+            config=tpu_config,
+            vm_manager=tpu_vm_manager,
+            scale_up_cooldown_ms=1000,  # 1 second
+            scale_down_cooldown_ms=300_000,  # 5 minutes - workers stay alive for demo
+        )
+
+        # Create autoscaler with fast evaluation interval
+        autoscaler_config = AutoscalerConfig(
+            evaluation_interval_seconds=2.0,  # Fast for demo
+        )
+        autoscaler = Autoscaler(
+            scale_groups={
+                "cpu": cpu_scale_group,
+                "tpu_v5e_16": tpu_scale_group,
+            },
+            vm_registry=vm_registry,
+            config=autoscaler_config,
+        )
+
+        return autoscaler
+
     def __enter__(self):
-        """Start controller and worker."""
-        # Clean up any orphaned containers from previous runs
+        """Start controller with autoscaler."""
         self._temp_dir = tempfile.TemporaryDirectory(prefix="demo_cluster_")
         temp_path = Path(self._temp_dir.name)
         bundle_dir = temp_path / "bundles"
         bundle_dir.mkdir()
-        cache_path = temp_path / "cache"
-        cache_path.mkdir()
+        self._cache_path = temp_path / "cache"
+        self._cache_path.mkdir()
 
         # Create fake bundle with minimal structure
-        fake_bundle = temp_path / "fake_bundle"
-        fake_bundle.mkdir()
-        (fake_bundle / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
+        self._fake_bundle = temp_path / "fake_bundle"
+        self._fake_bundle.mkdir()
+        (self._fake_bundle / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
 
-        # Start Controller first (workers need to connect to it)
+        # Create autoscaler (needs paths set up first)
+        self._autoscaler = self._create_autoscaler()
+
+        # Start Controller with autoscaler
         controller_config = ControllerConfig(
             host="127.0.0.1",
             port=self._controller_port,
@@ -140,6 +473,7 @@ class DemoCluster:
         self._controller = Controller(
             config=controller_config,
             worker_stub_factory=RpcWorkerStubFactory(),
+            autoscaler=self._autoscaler,
         )
         self._controller.start()
 
@@ -149,57 +483,10 @@ class DemoCluster:
             timeout_ms=30000,
         )
 
-        # Select providers based on use_docker flag
-        if self._use_docker:
-            bundle_provider = BundleCache(cache_path, max_bundles=100)
-            image_provider = ImageCache(cache_path, registry="", max_images=100)
-            container_runtime = DockerRuntime()
-        else:
-            bundle_provider = _LocalBundleProvider(fake_bundle)
-            image_provider = _LocalImageProvider()
-            container_runtime = _LocalContainerRuntime()
-
-        # Start Workers - create workers for each TPU slice with appropriate attributes
-        worker_idx = 0
-        for tpu_name, slice_size in self._tpu_slices:
-            for tpu_worker_id in range(slice_size):
-                attributes = {
-                    "tpu-name": tpu_name,
-                    "tpu-worker-id": tpu_worker_id,
-                }
-                if self._use_docker:
-                    environment_provider = None  # Use default (probe real system)
-                else:
-                    environment_provider = LocalEnvironmentProvider(cpu=1000, memory_gb=1000, attributes=attributes)
-
-                worker_id = f"worker-{worker_idx}-{uuid.uuid4().hex[:8]}"
-                worker_port = find_free_port()
-                worker_config = WorkerConfig(
-                    host="127.0.0.1",
-                    port=worker_port,
-                    cache_dir=cache_path,
-                    controller_address=f"http://127.0.0.1:{self._controller_port}",
-                    worker_id=worker_id,
-                    poll_interval_seconds=0.1,  # Fast polling for demos
-                )
-                worker = Worker(
-                    worker_config,
-                    cache_dir=cache_path,
-                    bundle_provider=bundle_provider,
-                    image_provider=image_provider,
-                    container_runtime=container_runtime,
-                    environment_provider=environment_provider,
-                )
-                worker.start()
-                self._workers.append(worker)
-                self._worker_ids.append(worker_id)
-                self._worker_ports.append(worker_port)
-                worker_idx += 1
-
-        # Wait for workers to register with controller. Workers send heartbeats
-        # every 0.1s (poll_interval_seconds), and registration happens on first
-        # heartbeat. 2s is conservative to handle slow CI environments.
-        time.sleep(2.0)
+        # Wait for autoscaler to create initial workers (min_slices=1 for cpu)
+        # Workers send heartbeats every 0.1s, and registration happens on first heartbeat
+        logger.info("Waiting for autoscaler to create initial workers...")
+        time.sleep(3.0)
 
         return self
 
@@ -219,8 +506,6 @@ class DemoCluster:
             self._rpc_client = None
         if self._controller_client:
             self._controller_client.close()
-        for worker in self._workers:
-            worker.stop()
         if self._controller:
             self._controller.stop()
         if self._temp_dir:
@@ -229,12 +514,6 @@ class DemoCluster:
     @property
     def controller_url(self) -> str:
         return f"http://127.0.0.1:{self._controller_port}"
-
-    @property
-    def worker_url(self) -> str:
-        if self._worker_ports:
-            return f"http://127.0.0.1:{self._worker_ports[0]}"
-        return ""
 
     @property
     def client(self) -> IrisClient:
@@ -311,12 +590,17 @@ class DemoCluster:
             results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
             print(f"  {name}: {cluster_pb2.JobState.Name(status.state)}")
 
-        # Coscheduled jobs require TPU workers which aren't available in docker mode
+        # Coscheduled TPU job - triggers autoscaler to create TPU workers
         if not self._use_docker:
             job = self.client.submit(
                 entrypoint=Entrypoint.from_callable(distributed_work),
                 name="demo-coscheduled",
-                resources=ResourceSpec(cpu=1, memory="512m", replicas=4),
+                resources=ResourceSpec(
+                    cpu=1,
+                    memory="512m",
+                    replicas=4,
+                    device=tpu_device("v5litepod-16"),  # 4 VMs per slice for coscheduling
+                ),
                 environment=EnvironmentSpec(workspace="/app"),
                 coscheduling=CoschedulingConfig(group_by="tpu-name"),
             )
@@ -453,7 +737,7 @@ class DemoCluster:
 def main(no_browser: bool, validate_only: bool, test_notebook: bool, verbose: bool):
     """Launch demo cluster with Jupyter notebook.
 
-    Runs in TPU simulation mode with 8 workers (4 on tpu-a, 4 on tpu-b).
+    Workers are created on-demand by the autoscaler when jobs are submitted.
     Jobs execute in-process (no Docker required).
     """
     if verbose:
@@ -467,7 +751,7 @@ def main(no_browser: bool, validate_only: bool, test_notebook: bool, verbose: bo
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
 
-    print("Starting demo cluster (TPU simulation mode)...")
+    print("Starting demo cluster with autoscaler...")
 
     with DemoCluster() as demo:
         print(f"Controller: {demo.controller_url}")

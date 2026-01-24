@@ -16,6 +16,8 @@ edition = "2023";
 
 package iris.cluster;
 
+import "vm.proto";
+
 // ============================================================================
 // SHARED TYPES
 // ============================================================================
@@ -69,6 +71,10 @@ message TaskStatus {
 
   int32 current_attempt_id = 14;
   repeated TaskAttempt attempts = 15;
+
+  // Scheduling diagnostics for pending tasks (dashboard display)
+  string pending_reason = 16;         // Why task can't be scheduled (empty if schedulable)
+  bool can_be_scheduled = 17;         // Whether task is currently schedulable
 }
 
 // Record of a single task execution attempt
@@ -125,13 +131,21 @@ message JobStatus {
   int32 failure_count = 17;                // Total task failures (aggregated)
   int32 preemption_count = 18;             // Total task preemptions (aggregated)
 
-  // Per-task status information
-  int32 num_tasks = 19;
-  int32 tasks_pending = 20;
-  int32 tasks_running = 21;
-  int32 tasks_succeeded = 22;
-  int32 tasks_failed = 23;
   repeated TaskStatus tasks = 24;          // Per-task status (always included)
+
+  // Job metadata from request (for dashboard display)
+  string name = 25;                        // Job name from request
+  int64 submitted_at_ms = 26;              // Submission timestamp
+
+  // Resource specification from job request (for dashboard display)
+  ResourceSpecProto resources = 27;
+
+  // Aggregated task state counts: {"running": 2, "pending": 5, "succeeded": 10}
+  map<string, int32> task_state_counts = 28;
+
+  // Convenience counts (could derive from task_state_counts)
+  int32 task_count = 29;
+  int32 completed_count = 30;
 }
 
 // JobAttempt message removed: Jobs don't have attempts - tasks do.
@@ -402,6 +416,8 @@ message Controller {
     int32 consecutive_failures = 3;
     int64 last_heartbeat_ms = 4;
     repeated string running_job_ids = 5;
+    string address = 6;                    // Worker RPC address (host:port)
+    WorkerMetadata metadata = 7;           // Full worker metadata
   }
 
   message ListWorkersRequest {}
@@ -464,6 +480,41 @@ message Controller {
 
   message ListEndpointsResponse {
     repeated Endpoint endpoints = 1;
+  }
+
+  // --- Autoscaler ---
+  message GetAutoscalerStatusRequest {}
+
+  message GetAutoscalerStatusResponse {
+    iris.vm.AutoscalerStatus status = 1;
+  }
+
+  // --- VM Logs ---
+  message GetVmLogsRequest {
+    string vm_id = 1;
+    int32 tail = 2;  // 0 = all lines
+  }
+
+  message GetVmLogsResponse {
+    string logs = 1;
+    string vm_id = 2;
+    iris.vm.VmState state = 3;
+  }
+
+  // --- Transactions / Actions Log ---
+  message TransactionAction {
+    int64 timestamp_ms = 1;
+    string action = 2;
+    string entity_id = 3;
+    string details = 4;
+  }
+
+  message GetTransactionsRequest {
+    int32 limit = 1;  // 0 = default (50)
+  }
+
+  message GetTransactionsResponse {
+    repeated TransactionAction actions = 1;
   }
 }
 
@@ -563,6 +614,15 @@ service ControllerService {
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (Empty);
   rpc LookupEndpoint(Controller.LookupEndpointRequest) returns (Controller.LookupEndpointResponse);
   rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
+
+  // Autoscaler
+  rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);
+
+  // VM Logs
+  rpc GetVmLogs(Controller.GetVmLogsRequest) returns (Controller.GetVmLogsResponse);
+
+  // Transactions / Actions Log
+  rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
 }
 
 service WorkerService {

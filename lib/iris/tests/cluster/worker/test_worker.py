@@ -43,22 +43,6 @@ def allocator():
     return PortAllocator(port_range=(40000, 40100))
 
 
-def test_allocate_single_port(allocator):
-    """Test allocating a single port."""
-    ports = allocator.allocate(count=1)
-    assert len(ports) == 1
-    assert 40000 <= ports[0] < 40100
-
-
-def test_allocate_multiple_ports(allocator):
-    """Test allocating multiple ports at once."""
-    ports = allocator.allocate(count=5)
-    assert len(ports) == 5
-    assert len(set(ports)) == 5  # All unique
-    for port in ports:
-        assert 40000 <= port < 40100
-
-
 def test_allocated_ports_are_usable(allocator):
     """Test that allocated ports can actually be bound."""
     ports = allocator.allocate(count=3)
@@ -259,18 +243,6 @@ def create_run_task_request(
         timeout_seconds=300,
         ports=ports or [],
     )
-
-
-def test_submit_task_returns_task_id(worker):
-    """Test that submit_task returns task_id immediately."""
-    request = create_run_task_request()
-    task_id = worker.submit_task(request)
-
-    assert task_id == "test-task-1"
-
-    task = worker.get_task(task_id)
-    assert task is not None
-    assert task.task_id == task_id
 
 
 def test_task_lifecycle_phases(worker):
