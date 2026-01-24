@@ -78,7 +78,7 @@ BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  #
 # ============================================================================
 
 # Flash attention block size (set to None to disable flash attention)
-FLASH_ATTENTION_BLOCK_SIZE = 512
+FLASH_ATTENTION_BLOCK_SIZE = 256
 
 # Vision encoder: SigLIP-like (matches google/siglip-so400m-patch14-384)
 vision_config = SiglipVisionConfig(
@@ -176,7 +176,7 @@ data_config = ImageMixtureDatasetConfig(
     # IMPORTANT: Packing requires disable_anyres=True (set above).
     # For streaming mode, provide pack_assignments_path (pre-computed offline).
     enable_packing=True,
-    max_segments_per_pack=64,  # Maximum samples per packed example
+    max_segments_per_pack=4,  # Maximum samples per packed example
     # Pre-computed pack assignments from: python scripts/compute_vlm_pack_assignments.py
     pack_assignments_path="gs://marin-vlm/stage1_sharded/pack_assignments.json",
 )
@@ -185,7 +185,7 @@ data_config = ImageMixtureDatasetConfig(
 # 4. TRAINING CONFIGURATION
 # ============================================================================
 # Dataset size: 558K samples
-DATASET_SIZE = 558128
+DATASET_SIZE = 186043
 NUM_EPOCHS = 1
 NUM_TRAIN_STEPS = (DATASET_SIZE // BATCH_SIZE) * NUM_EPOCHS
 
