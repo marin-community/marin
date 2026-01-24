@@ -1215,11 +1215,19 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         # This controls how many image tokens the processor expands <image> placeholders to
         # Without this, the processor uses its default anyres config and produces more tokens
         if disable_anyres:
-            # Set single resolution mode in processor
+            # Set single resolution mode in processor AND image_processor
+            # IMPORTANT: Must set on both because CustomVLMProcessor.from_processor_and_tokenizer
+            # reads from image_processor first, then falls back to processor
             if hasattr(processor, 'image_grid_pinpoints'):
                 processor.image_grid_pinpoints = grid_pinpoints if grid_pinpoints else [[patch_size, patch_size]]
             if hasattr(processor, 'vision_aspect_ratio'):
                 processor.vision_aspect_ratio = "single"
+            # Also set on image_processor (critical for CustomVLMProcessor)
+            if hasattr(processor, 'image_processor'):
+                if hasattr(processor.image_processor, 'image_grid_pinpoints'):
+                    processor.image_processor.image_grid_pinpoints = grid_pinpoints if grid_pinpoints else [[patch_size, patch_size]]
+                if hasattr(processor.image_processor, 'vision_aspect_ratio'):
+                    processor.image_processor.vision_aspect_ratio = "single"
 
         # Pre-compute grid_pinpoints arrays for vectorized _compute_grid_shape
         # Note: empty list [] is treated as no grid pinpoints (disable_anyres case)
@@ -1277,13 +1285,20 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             self._processor.num_image_tokens = num_image_tokens
 
         # Apply disable_anyres configuration if needed
+        # IMPORTANT: Must set on both processor AND image_processor because
+        # CustomVLMProcessor.from_processor_and_tokenizer reads from image_processor first
         if self.disable_anyres:
+            grid_config = self.grid_pinpoints if self.grid_pinpoints else [[self.patch_size, self.patch_size]]
             if hasattr(self._processor, 'image_grid_pinpoints'):
-                self._processor.image_grid_pinpoints = (
-                    self.grid_pinpoints if self.grid_pinpoints else [[self.patch_size, self.patch_size]]
-                )
+                self._processor.image_grid_pinpoints = grid_config
             if hasattr(self._processor, 'vision_aspect_ratio'):
                 self._processor.vision_aspect_ratio = "single"
+            # Also set on image_processor (critical for CustomVLMProcessor)
+            if hasattr(self._processor, 'image_processor'):
+                if hasattr(self._processor.image_processor, 'image_grid_pinpoints'):
+                    self._processor.image_processor.image_grid_pinpoints = grid_config
+                if hasattr(self._processor.image_processor, 'vision_aspect_ratio'):
+                    self._processor.image_processor.vision_aspect_ratio = "single"
 
         # Recreate custom tokenizer if it was originally provided
         if self._tokenizer_name_or_path is not None:
@@ -3207,12 +3222,22 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
 
                 logger.info(f"Using streaming packing with pack_assignments: {self.pack_assignments_path}")
 
+                # Determine disable_anyres from vision_aspect_ratio
+                disable_anyres = (self.vision_aspect_ratio == "single")
+
                 # PackedVLMDataset wraps the raw data source, not the processed mixture
                 # It reads parquet directly and applies packing based on pre-computed assignments
+                # IMPORTANT: Must pass all BatchImageProcessor configuration parameters!
                 mixture = PackedVLMDataset(
                     pack_assignments_file=self.pack_assignments_path,
                     processor=self.the_processor,
                     max_length=self.max_length,
+                    # BatchImageProcessor configuration - critical for correct token expansion
+                    tokenizer=self.the_tokenizer,
+                    disable_anyres=disable_anyres,
+                    grid_pinpoints=self.image_grid_pinpoints,
+                    vision_feature_height=self.vision_feature_height,
+                    patch_size=384,  # Standard VLM patch size
                 )
             else:
                 # Cached packing: compute pack assignments on-the-fly

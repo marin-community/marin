@@ -247,8 +247,7 @@ def parse_args():
         "--enable_packing",
         action="store_true",
         help="Enable VLM sequence packing. Multiple samples are combined into a single training example "
-        "with attention masks preventing cross-sample attention. IMPORTANT: Requires --disable_anyres "
-        "and uses cached mode (not streaming).",
+        "with attention masks preventing cross-sample attention. IMPORTANT: Requires --disable_anyres.",
     )
     parser.add_argument(
         "--max_segments_per_pack",
@@ -261,6 +260,15 @@ def parse_args():
         type=str,
         default=None,
         help="Directory to cache pack assignments. If None, uses cache_dir/packing/",
+    )
+    parser.add_argument(
+        "--pack_assignments_path",
+        type=str,
+        default=None,
+        help="Path to pre-computed pack_assignments.json for streaming mode packing. "
+        "Can be a GCS path (gs://...) or local path. When specified, enables streaming mode "
+        "with pre-computed pack assignments (use_cache=False). Generate with: "
+        "python scripts/compute_vlm_pack_assignments.py",
     )
 
     # Checkpoint arguments
@@ -472,11 +480,16 @@ def main():
     logger.info("-" * 60)
 
     # Log packing settings
-    if args.enable_packing:
+    if args.enable_packing or args.pack_assignments_path:
         logger.info("Packing Configuration:")
         logger.info(f"  Packing enabled: True")
         logger.info(f"  Max segments per pack: {args.max_segments_per_pack}")
-        logger.info(f"  Packing cache dir: {args.packing_cache_dir or f'{args.cache_dir}/packing'}")
+        if args.pack_assignments_path:
+            logger.info(f"  Pack assignments path: {args.pack_assignments_path}")
+            logger.info(f"  Mode: Streaming (pre-computed pack assignments)")
+        else:
+            logger.info(f"  Packing cache dir: {args.packing_cache_dir or f'{args.cache_dir}/packing'}")
+            logger.info(f"  Mode: Cached (online pack computation)")
         logger.info("-" * 60)
 
     # Helper to format data URLs - don't add file:// if already has a scheme
@@ -497,10 +510,24 @@ def main():
     logger.info(f"Using vision_feature_height={vision_feature_height} (features_per_patch={vision_feature_height**2})")
 
     # Validate packing requirements
-    if args.enable_packing:
+    if args.enable_packing or args.pack_assignments_path:
         if not args.disable_anyres:
             logger.warning("WARNING: Packing requires --disable_anyres. Enabling it automatically.")
             args.disable_anyres = True
+        # If pack_assignments_path is provided, enable packing automatically
+        if args.pack_assignments_path:
+            args.enable_packing = True
+
+    # Determine use_cache based on packing mode:
+    # - pack_assignments_path: streaming mode (use_cache=False)
+    # - enable_packing without path: cached mode (use_cache=True)
+    # - no packing: respect --no_cache flag
+    if args.pack_assignments_path:
+        use_cache = False  # Streaming mode with pre-computed pack assignments
+    elif args.enable_packing:
+        use_cache = True  # Cached mode for online pack computation
+    else:
+        use_cache = not args.no_cache
 
     # Create data config
     data_config = ImageMixtureDatasetConfig(
@@ -516,8 +543,7 @@ def main():
         processor=args.model_name,
         tokenizer=args.tokenizer,  # Use CustomVLMProcessor with custom tokenizer (e.g., Qwen3)
         max_length=args.max_length,
-        # Packing requires cached mode; streaming mode requires no packing
-        use_cache=args.enable_packing or not args.no_cache,
+        use_cache=use_cache,
         vision_feature_height=vision_feature_height,  # Must match model's vision encoder output
         # Pass anyres settings to data config to sync with model config
         # Without this, HF processor uses anyres_max_9 which calculates extra tokens for grid patches
@@ -527,9 +553,12 @@ def main():
         enable_packing=args.enable_packing,
         max_segments_per_pack=args.max_segments_per_pack,
         packing_cache_dir=args.packing_cache_dir,
+        pack_assignments_path=args.pack_assignments_path,  # For streaming mode packing
     )
 
-    if args.no_cache:
+    if args.pack_assignments_path:
+        logger.info("Using streaming mode with pre-computed pack assignments")
+    elif args.no_cache:
         logger.info("Using streaming mode (no caching) - images will be processed on-the-fly")
 
     # Log dataset file count

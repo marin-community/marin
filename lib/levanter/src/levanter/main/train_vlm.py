@@ -98,7 +98,7 @@ def _load_vision_weights(model, checkpoint_path, axis_mapping, mp, tokenizer):
     return model
 
 
-def _load_llm_weights(model, checkpoint_path, axis_mapping, mp, Vocab):
+def _load_llm_weights(model, checkpoint_path, axis_mapping, mp, tokenizer):
     """Load language model weights from a separate HuggingFace checkpoint.
 
     Args:
@@ -106,7 +106,8 @@ def _load_llm_weights(model, checkpoint_path, axis_mapping, mp, Vocab):
         checkpoint_path: HuggingFace checkpoint path (e.g., 'Qwen/Qwen3-1.7B')
         axis_mapping: Axis mapping for sharding
         mp: Mixed precision policy
-        Vocab: Vocabulary axis
+        tokenizer: Already-loaded tokenizer to pass to HFCheckpointConverter
+                   (avoids network calls on non-leader workers in distributed mode)
 
     Returns:
         Model with LLM weights loaded
@@ -114,11 +115,14 @@ def _load_llm_weights(model, checkpoint_path, axis_mapping, mp, Vocab):
     from transformers import Qwen3Config as HfQwen3Config
 
     # Create converter to load state dict from HF checkpoint
+    # We pass the already-loaded tokenizer from main() to avoid network calls
+    # on non-leader workers, which would fail with local_files_only=True
     text_config = model.config.text_config
     converter = HFCheckpointConverter(
         text_config.__class__,
         reference_checkpoint=checkpoint_path,
         trust_remote_code=True,
+        tokenizer=tokenizer,
         HfConfigClass=HfQwen3Config,
     )
 
@@ -151,6 +155,11 @@ def _compute_max_num_patches(config, first_ex=None):
     This returns the max number of GRID patches (excluding the base patch).
     The total patches = max_num_patches + 1 (for base) is computed in _pad_pixel_values().
 
+    For packed datasets (e.g., PackedVLMDataset), first_ex["pixel_values"] has shape
+    (max_patches, C, H, W) where max_patches is the packing config's max_patches.
+    In this case, we use the actual shape from first_ex to determine NumPatches,
+    which may be larger than 1 even when disable_anyres is True.
+
     Args:
         config: VLM training config with model.image_grid_pinpoints and vision_config
         first_ex: Optional first example from dataset for fallback
@@ -158,6 +167,15 @@ def _compute_max_num_patches(config, first_ex=None):
     Returns:
         Maximum number of grid patches (excluding base)
     """
+    # If we have a first example, prefer its actual shape
+    # This is critical for packed mode where max_patches may be > 1 even with disable_anyres
+    if first_ex is not None:
+        pv = first_ex["pixel_values"]
+        if pv.ndim == 4:  # (num_patches, C, H, W)
+            # first_ex has total patches, subtract 1 for grid patches only
+            # (but for packed mode, this is the packing's max_patches, so return total - 1)
+            return pv.shape[0] - 1
+
     # Handle disable_anyres case: vision_aspect_ratio="single" means no grid patches
     vision_aspect_ratio = getattr(config.model, "vision_aspect_ratio", "anyres_max_9")
     if vision_aspect_ratio == "single" or (
@@ -177,9 +195,6 @@ def _compute_max_num_patches(config, first_ex=None):
         max_patches_per_dim = max_resolution // patch_size
         # Return grid patches only; +1 for base is added in _pad_pixel_values()
         return max_patches_per_dim * max_patches_per_dim
-    elif first_ex is not None:
-        # first_ex has total patches (including base), subtract 1 for grid patches only
-        return first_ex["pixel_values"].shape[0] - 1
     else:
         return DEFAULT_NUM_PATCHES
 
@@ -713,7 +728,7 @@ def main(config: TrainVLMConfig):
                 if config.llm_checkpoint:
                     logger.info(f"Loading LLM from: {config.llm_checkpoint}")
                     model = _load_llm_weights(
-                        model, config.llm_checkpoint, parameter_axis_mapping, trainer.mp, Vocab
+                        model, config.llm_checkpoint, parameter_axis_mapping, trainer.mp, tokenizer
                     )
 
                 model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)

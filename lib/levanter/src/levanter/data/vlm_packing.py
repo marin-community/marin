@@ -90,6 +90,7 @@ class PackedImageTextDict(TypedDict, total=False):
     # Optional fields from original ImageTextDict (carried through for compatibility)
     attention_mask: np.ndarray  # (max_length,) - 1 for valid, 0 for pad
     combined_mask: np.ndarray  # (max_length,) int32 - validity mask for position ID computation
+    grid_mask: np.ndarray  # (max_patches,) - True for valid patches, False for padding
 
 
 @dataclass
@@ -1920,6 +1921,10 @@ class PackedVLMDataset(AsyncDataset):
         # This is required for the model to use precomputed position_ids
         combined_mask = attention_mask.copy()
 
+        # Grid mask: True for valid patches, False for padding
+        # This is needed by the vision encoder to know which patches are real vs padding
+        grid_mask = (image_segment_ids >= 0)
+
         return PackedImageTextDict(
             input_ids=input_ids,
             pixel_values=pixel_values,
@@ -1929,6 +1934,7 @@ class PackedVLMDataset(AsyncDataset):
             position_ids=position_ids,
             attention_mask=attention_mask,
             combined_mask=combined_mask,
+            grid_mask=grid_mask,
             num_segments=len(samples),
         )
 
@@ -1961,6 +1967,7 @@ class PackedVLMDataset(AsyncDataset):
             loss_mask=np.zeros(self._max_length, dtype=np.float32),
             segment_ids=np.full(self._max_length, -1, dtype=np.int32),
             image_segment_ids=np.full(max_patches, -1, dtype=np.int32),
+            grid_mask=np.zeros(max_patches, dtype=bool),
             position_ids=np.zeros(self._max_length, dtype=np.int32),
             attention_mask=np.zeros(self._max_length, dtype=np.int32),
             num_segments=0,
