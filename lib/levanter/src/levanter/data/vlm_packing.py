@@ -887,6 +887,8 @@ def compute_sample_lengths_parallel(
     config: PackAssignmentConfig,
     num_workers: Optional[int] = None,
     processor=None,
+    checkpoint_path: Optional[str] = None,
+    checkpoint_interval: int = 10,
 ) -> Tuple[Dict[str, np.ndarray], List[ShardInfo]]:
     """
     Parallel version of compute_sample_lengths_lightweight.
@@ -902,6 +904,8 @@ def compute_sample_lengths_parallel(
         processor: Optional HuggingFace processor for applying chat template to
                    conversation-format text. Required if text_column contains
                    message dicts instead of plain strings.
+        checkpoint_path: Optional path to save/load checkpoints. Enables resume on interrupt.
+        checkpoint_interval: Save checkpoint every N completed shards (default: 10).
 
     Returns:
         Tuple of:
@@ -920,90 +924,165 @@ def compute_sample_lengths_parallel(
     if num_workers is None:
         num_workers = min(mp.cpu_count(), len(parquet_paths), 32)
 
-    logger.info(f"Processing {len(parquet_paths)} parquet files with {num_workers} parallel workers...")
+    # Build path -> index mapping
+    path_to_idx = {path: idx for idx, path in enumerate(parquet_paths)}
 
-    # Load tokenizer in main thread - threads share memory so no need for per-worker loading
-    logger.info(f"Loading tokenizer: {tokenizer_name}")
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
-    logger.info("Tokenizer loaded. Starting parallel processing...")
+    # Try to load existing checkpoint
+    # completed_results: shard_idx -> (path, tokens, patches, num_samples, exceeded_count)
+    completed_results: Dict[int, Tuple[str, List[int], List[int], int, int]] = {}
+    if checkpoint_path:
+        checkpoint = PackAssignmentCheckpoint.load(checkpoint_path)
+        if checkpoint and checkpoint.validate(parquet_paths, config):
+            # Restore completed results from checkpoint
+            # Checkpoint stores concatenated data; we need to split by shard
+            offset = 0
+            for shard_idx, shard in zip(checkpoint.processed_shard_indices, checkpoint.shard_info):
+                num_samples = shard.num_samples
+                tokens = checkpoint.token_lengths[offset:offset + num_samples].tolist()
+                patches = checkpoint.patch_counts[offset:offset + num_samples].tolist()
+                completed_results[shard_idx] = (shard.path, tokens, patches, num_samples, 0)
+                offset += num_samples
+            logger.info(f"Resuming from checkpoint: {len(completed_results)}/{len(parquet_paths)} shards already processed")
+        elif checkpoint:
+            logger.warning("Checkpoint validation failed, starting fresh")
 
-    # Use ThreadPoolExecutor for I/O-bound tasks
-    # - Threads share memory: GCS auth, fsspec state, tokenizer all shared
-    # - Python GIL is released during I/O operations (file reads)
-    # - No serialization/pickle overhead
-    results = []
-    total_samples = 0
-    total_exceeded = 0
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        futures = {
-            executor.submit(_process_single_parquet_thread, path, config, tokenizer, processor): path
-            for path in parquet_paths
-        }
+    # Filter out already processed shards
+    pending_paths = [(idx, path) for idx, path in enumerate(parquet_paths) if idx not in completed_results]
 
-        if use_tqdm:
-            # Use tqdm progress bar
-            pbar = tqdm(
-                as_completed(futures),
-                total=len(futures),
-                desc="Processing parquet files",
-                unit="file",
+    if not pending_paths:
+        logger.info("All shards already processed from checkpoint, skipping parallel processing")
+    else:
+        logger.info(f"Processing {len(pending_paths)} parquet files with {num_workers} parallel workers...")
+
+        # Load tokenizer in main thread - threads share memory so no need for per-worker loading
+        logger.info(f"Loading tokenizer: {tokenizer_name}")
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
+        logger.info("Tokenizer loaded. Starting parallel processing...")
+
+        # Use ThreadPoolExecutor for I/O-bound tasks
+        total_samples = sum(r[3] for r in completed_results.values())
+        total_exceeded = sum(r[4] for r in completed_results.values())
+        newly_completed = 0
+
+        def _save_checkpoint():
+            """Save checkpoint with all completed results."""
+            if not checkpoint_path:
+                return
+            # Sort by shard index and build checkpoint data
+            sorted_indices = sorted(completed_results.keys())
+            all_tokens = []
+            all_patches = []
+            shard_info_list = []
+            current_idx = 0
+            for shard_idx in sorted_indices:
+                path, tokens, patches, num_samples, _ = completed_results[shard_idx]
+                all_tokens.extend(tokens)
+                all_patches.extend(patches)
+                shard_info_list.append(ShardInfo(path=path, start_idx=current_idx, num_samples=num_samples))
+                current_idx += num_samples
+
+            ckpt = PackAssignmentCheckpoint(
+                config=config,
+                parquet_paths=parquet_paths,
+                timestamp=time.time(),
+                processed_shard_indices=sorted_indices,
+                shard_info=shard_info_list,
+                token_lengths=np.array(all_tokens, dtype=np.int32),
+                patch_counts=np.array(all_patches, dtype=np.int32),
             )
-            completed = 0
-            for future in pbar:
-                path = futures[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                    total_samples += result[3]
-                    total_exceeded += result[4]  # exceeded_count
-                    completed += 1
-                    pbar.set_postfix({"samples": f"{total_samples:,}"})
-                    # Print summary every 100 files
-                    if completed % 100 == 0:
-                        pct = 100 * total_exceeded / total_samples if total_samples > 0 else 0
-                        logger.info(f"  [Progress] {completed}/{len(parquet_paths)} files: "
-                                   f"{total_exceeded:,} samples ({pct:.2f}%) exceed max_length={config.max_length}")
-                except Exception as e:
-                    logger.error(f"Failed: {path} - {e}")
-                    raise
-            pbar.close()
-        else:
-            # Fallback to logger-based progress
-            completed = 0
-            for future in as_completed(futures):
-                path = futures[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                    completed += 1
-                    total_samples += result[3]
-                    total_exceeded += result[4]  # exceeded_count
-                    if completed % 10 == 0 or completed == len(parquet_paths):
-                        logger.info(f"  Progress: {completed}/{len(parquet_paths)} files, {total_samples:,} samples")
-                    # Print summary every 100 files
-                    if completed % 100 == 0:
-                        pct = 100 * total_exceeded / total_samples if total_samples > 0 else 0
-                        logger.info(f"  [Progress] {completed}/{len(parquet_paths)} files: "
-                                   f"{total_exceeded:,} samples ({pct:.2f}%) exceed max_length={config.max_length}")
-                except Exception as e:
-                    logger.error(f"Failed: {path} - {e}")
-                    raise
+            ckpt.save(checkpoint_path)
+            logger.info(f"  Checkpoint saved: {len(sorted_indices)}/{len(parquet_paths)} shards")
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = {
+                executor.submit(_process_single_parquet_thread, path, config, tokenizer, processor): (idx, path)
+                for idx, path in pending_paths
+            }
+
+            if use_tqdm:
+                # Use tqdm progress bar
+                pbar = tqdm(
+                    as_completed(futures),
+                    total=len(futures),
+                    desc="Processing parquet files",
+                    unit="file",
+                    initial=len(completed_results),
+                )
+                for future in pbar:
+                    shard_idx, path = futures[future]
+                    try:
+                        result = future.result()
+                        completed_results[shard_idx] = result
+                        total_samples += result[3]
+                        total_exceeded += result[4]
+                        newly_completed += 1
+                        pbar.set_postfix({"samples": f"{total_samples:,}"})
+
+                        # Save checkpoint periodically
+                        if checkpoint_path and newly_completed % checkpoint_interval == 0:
+                            _save_checkpoint()
+
+                        # Print summary every 100 files
+                        if newly_completed % 100 == 0:
+                            pct = 100 * total_exceeded / total_samples if total_samples > 0 else 0
+                            logger.info(f"  [Progress] {len(completed_results)}/{len(parquet_paths)} files: "
+                                       f"{total_exceeded:,} samples ({pct:.2f}%) exceed max_length={config.max_length}")
+                    except Exception as e:
+                        logger.error(f"Failed: {path} - {e}")
+                        # Save checkpoint before raising to preserve progress
+                        if checkpoint_path and completed_results:
+                            _save_checkpoint()
+                        raise
+                pbar.close()
+            else:
+                # Fallback to logger-based progress
+                for future in as_completed(futures):
+                    shard_idx, path = futures[future]
+                    try:
+                        result = future.result()
+                        completed_results[shard_idx] = result
+                        newly_completed += 1
+                        total_samples += result[3]
+                        total_exceeded += result[4]
+
+                        if newly_completed % 10 == 0 or len(completed_results) == len(parquet_paths):
+                            logger.info(f"  Progress: {len(completed_results)}/{len(parquet_paths)} files, {total_samples:,} samples")
+
+                        # Save checkpoint periodically
+                        if checkpoint_path and newly_completed % checkpoint_interval == 0:
+                            _save_checkpoint()
+
+                        # Print summary every 100 files
+                        if newly_completed % 100 == 0:
+                            pct = 100 * total_exceeded / total_samples if total_samples > 0 else 0
+                            logger.info(f"  [Progress] {len(completed_results)}/{len(parquet_paths)} files: "
+                                       f"{total_exceeded:,} samples ({pct:.2f}%) exceed max_length={config.max_length}")
+                    except Exception as e:
+                        logger.error(f"Failed: {path} - {e}")
+                        # Save checkpoint before raising to preserve progress
+                        if checkpoint_path and completed_results:
+                            _save_checkpoint()
+                        raise
+
+        # Save final checkpoint
+        if checkpoint_path:
+            _save_checkpoint()
 
     # Sort results by original order and merge
-    path_to_result = {r[0]: r for r in results}
-
     all_tokens = []
     all_patches = []
     shard_info = []
     current_idx = 0
+    total_exceeded = 0
 
-    for path in parquet_paths:
-        _, tokens, patches, num_samples, _ = path_to_result[path]
+    for shard_idx in range(len(parquet_paths)):
+        path, tokens, patches, num_samples, exceeded = completed_results[shard_idx]
         all_tokens.extend(tokens)
         all_patches.extend(patches)
         shard_info.append(ShardInfo(path=path, start_idx=current_idx, num_samples=num_samples))
         current_idx += num_samples
+        total_exceeded += exceeded
 
     total_samples = len(all_tokens)
     logger.info(f"Parallel processing complete. Total: {total_samples} samples from {len(parquet_paths)} files")
@@ -1269,16 +1348,15 @@ def compute_pack_assignments(
     # 1. Compute sample lengths (parallel or sequential)
     if num_workers > 1:
         # Parallel processing - need tokenizer name (string)
-        # Note: Parallel mode doesn't support checkpointing yet (TODO)
-        if checkpoint_path:
-            logger.warning("Checkpointing not yet supported with parallel mode, ignoring checkpoint_dir")
         if isinstance(tokenizer, str):
             tokenizer_name = tokenizer
         else:
             tokenizer_name = tokenizer.name_or_path
         logger.info(f"Using parallel processing with {num_workers} workers")
         lengths, shard_info = compute_sample_lengths_parallel(
-            parquet_paths, tokenizer_name, config, num_workers, processor=processor
+            parquet_paths, tokenizer_name, config, num_workers, processor=processor,
+            checkpoint_path=checkpoint_path,
+            checkpoint_interval=checkpoint_interval,
         )
     else:
         # Sequential processing - can use tokenizer object directly

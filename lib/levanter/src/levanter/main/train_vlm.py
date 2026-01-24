@@ -60,6 +60,13 @@ def _load_vision_weights(model, checkpoint_path, axis_mapping, mp):
         Model with vision weights loaded
     """
     from transformers import SiglipConfig as HfSiglipConfig
+    from levanter.compat.hf_checkpoints import load_tokenizer
+
+    # Pre-load dummy tokenizer for vision-only model
+    # This ensures proper distributed sync - leader downloads, others use cache
+    # Passing a string directly to HFCheckpointConverter would fail on non-leader
+    # workers because they use local_files_only=True and GPT-2 isn't cached
+    dummy_tokenizer = load_tokenizer("gpt2")
 
     # Create converter to load state dict from HF checkpoint
     vision_config = model.config.vision_config
@@ -67,7 +74,7 @@ def _load_vision_weights(model, checkpoint_path, axis_mapping, mp):
         vision_config.__class__,
         reference_checkpoint=checkpoint_path,
         trust_remote_code=True,
-        tokenizer="gpt2",  # Dummy tokenizer for vision-only model
+        tokenizer=dummy_tokenizer,  # Pass loaded tokenizer object, not string
         HfConfigClass=HfSiglipConfig,
     )
 

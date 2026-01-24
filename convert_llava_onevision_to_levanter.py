@@ -350,7 +350,31 @@ def select_prompt(caption: str, item_id: str) -> str:
         return rng.choice(SHORT_PROMPTS)
 
 
-def extract_source(item_id: str) -> str:
+def extract_source_from_item(item: Dict[str, Any]) -> str:
+    """
+    Extract source name from an item.
+
+    Tries multiple methods in order:
+    1. Check for 'source' field in item (FineVision format)
+    2. Check for 'data_source' field in item (LLaVA-OneVision-1.5-Instruct-Data format)
+    3. Fall back to parsing 'id' field
+
+    Returns the source name.
+    """
+    # Method 1: Check for 'source' field (FineVision datasets)
+    if 'source' in item and item['source']:
+        return str(item['source'])
+
+    # Method 2: Check for 'data_source' field (LLaVA-OneVision-1.5-Instruct-Data)
+    if 'data_source' in item and item['data_source']:
+        return str(item['data_source'])
+
+    # Method 3: Fall back to parsing item_id
+    item_id = item.get('id', '')
+    return extract_source_from_id(item_id)
+
+
+def extract_source_from_id(item_id: str) -> str:
     """
     Extract source name from item id.
 
@@ -399,6 +423,12 @@ def extract_source(item_id: str) -> str:
             return source
 
     return 'unknown'
+
+
+# Keep old function name for backward compatibility
+def extract_source(item_id: str) -> str:
+    """Backward compatible wrapper - use extract_source_from_id for new code."""
+    return extract_source_from_id(item_id)
 
 
 def get_checkpoint_path(output_path: str) -> str:
@@ -591,7 +621,7 @@ def convert_to_levanter(item: Dict[str, Any], include_source: bool = True) -> Di
 
     # Add source field for shuffle quality analysis
     if include_source:
-        result["source"] = extract_source(item_id)
+        result["source"] = extract_source_from_item(item)
 
     return result
 
@@ -1277,7 +1307,7 @@ def process_dataset_download_first(
                                     item = row.to_dict()
                                     item_id = item.get('id', '')
 
-                                    source = extract_source(item_id)
+                                    source = extract_source_from_item(item)
                                     local_source_counts[source] += 1
 
                                     try:
@@ -1771,7 +1801,7 @@ def process_dataset(
             # Track items for initial phase (first 10 items for debugging)
             if idx < 10:
                 item_id = item.get('id', 'unknown')
-                source = extract_source(item_id)
+                source = extract_source_from_item(item)
                 print(f"  Item {idx}: source={source}, id={item_id[:50]}...")
 
             if idx == 10:
@@ -1795,7 +1825,7 @@ def process_dataset(
                     continue
 
                 # Track source distribution
-                source = extract_source(item_id)
+                source = extract_source_from_item(item)
                 source_counts[source] += 1
 
                 # Convert to Levanter format
