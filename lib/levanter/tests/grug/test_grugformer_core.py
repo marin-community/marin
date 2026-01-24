@@ -43,14 +43,14 @@ def test_forward_shapes_and_jit_compile():
     mesh = _make_grug_mesh()
     with jax.set_mesh(mesh):
         params = init_parameters(cfg, key=jax.random.key(0))
-        tokens = jax.random.randint(jax.random.key(1), (2, seq), 0, cfg.vocab_size)
+        tokens = jax.random.randint(jax.random.key(1), (batch, seq), 0, cfg.vocab_size)
 
         logits = forward(params, tokens, cfg, mask=AttentionMask.causal())
         assert logits.shape == (batch, seq, cfg.vocab_size)
 
         jit_forward = jax.jit(forward, static_argnames=("cfg",))
         logits_jit = jit_forward(params, tokens, cfg, mask=AttentionMask.causal())
-        assert logits_jit.shape == (2, seq, cfg.vocab_size)
+        assert logits_jit.shape == (batch, seq, cfg.vocab_size)
 
 
 def test_parameter_sharding_specs_are_named():
@@ -77,8 +77,10 @@ def test_parameter_sharding_specs_are_named():
 def test_full_like_preserves_sharding_under_mesh():
     mesh = _make_grug_mesh()
     with jax.set_mesh(mesh):
+        batch = len(jax.devices())
         sharding = NamedSharding(mesh, P(("data",), None))
-        segment_ids = jax.device_put(jnp.array([[0, 0, 1, 1], [5, 5, 5, -1]], dtype=jnp.int32), sharding)
+        segment_ids = jnp.arange(batch * 4, dtype=jnp.int32).reshape(batch, 4)
+        segment_ids = jax.device_put(segment_ids, sharding)
 
         batch_slice = segment_ids[:, 0]
         init_last = jnp.full_like(batch_slice, jnp.int32(-2))
