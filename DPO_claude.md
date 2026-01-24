@@ -18,6 +18,89 @@ This document analyzes the changes made to Haliax and Levanter for DPO support, 
 
 ---
 
+## Why DPO Surfaces These Issues (DPO vs LM Training)
+
+DPO (Direct Preference Optimization) training differs fundamentally from standard LM pretraining in ways that expose latent bugs in JAX/Equinox/Haliax interactions:
+
+### Key Architectural Differences
+
+| Aspect | LM Pretraining | DPO Training |
+|--------|---------------|--------------|
+| **Models** | Single model | Two models: policy + reference |
+| **Trainability** | All parameters trained | Policy trained, reference **frozen** |
+| **Memory** | 1x model size | 2x model size (both loaded) |
+| **Gradients** | All params get gradients | Only policy params get gradients |
+| **Model structure** | Flat `LmHeadModel` | Nested `DpoModel(policy, reference)` |
+
+### The DpoModel Structure
+
+```python
+@dataclass
+class DpoModel:
+    policy: LmHeadModel    # Trainable - gets gradients
+    reference: LmHeadModel # Frozen - NO gradients, used for KL penalty
+```
+
+The DPO loss requires computing log-probabilities from **both** models:
+```python
+# Policy model (trainable)
+logp_pi_chosen = _logp_sum(model.policy, example.chosen)
+logp_pi_rejected = _logp_sum(model.policy, example.rejected)
+
+# Reference model (frozen) - used for KL divergence penalty
+logp_ref_chosen = _logp_sum(reference_model, example.chosen)
+logp_ref_rejected = _logp_sum(reference_model, example.rejected)
+
+# DPO loss combines both
+loss = -log_sigmoid(beta * (delta_pi - delta_ref))
+```
+
+### Why Each Issue Manifests in DPO
+
+1. **`eqx.partition` creating `NamedArray(array=None)`** (quantization.py, trainer_state.py)
+   - In LM training: All params are trainable, partition rarely creates None placeholders
+   - In DPO: Reference model is frozen → `eqx.partition(model, is_trainable)` creates `NamedArray(array=None)` for ALL reference params
+   - This corrupts the model if NamedArray isn't treated as a leaf
+
+2. **`pspec_for` failing on None arrays** (partitioning.py)
+   - In LM training: Model state always has real arrays
+   - In DPO: After partitioning for gradients, reference model becomes `NamedArray(array=None)` placeholders
+   - When combining/sharding, `pspec_for` tries to read shape from None
+
+3. **Memory pressure requiring proper sharding** (scan.py)
+   - In LM training: Single 8B model fits in memory even with suboptimal sharding
+   - In DPO: Two 8B models (16B total params) → OOM if layers aren't sharded immediately after vmap
+   - The `auto_sharded` call after vmap becomes critical
+
+4. **vmap + sharding dimension mismatch** (partitioning.py batch_dim check)
+   - In LM training: Less common to call `auto_sharded` inside vmap
+   - In DPO: Model initialization with `Stacked.init` uses vmap, and we want to shard immediately
+   - The batch_dim check prevents crashes when sharding is attempted inside vmap
+
+### The Frozen Reference Model Problem
+
+The core issue is that DPO's **frozen reference model** creates a code path that standard LM training never exercises:
+
+```python
+# Standard LM training filter
+is_trainable = True  # Everything trains
+
+# DPO training filter
+def is_trainable(model):
+    return _bool_tree_like(model.policy, True), _bool_tree_like(model.reference, False)
+```
+
+When you partition with this filter:
+```python
+trainable, non_trainable = eqx.partition(dpo_model, is_trainable)
+# trainable.policy = LmHeadModel(...)  ← Real weights
+# trainable.reference = LmHeadModel(NamedArray(None), NamedArray(None), ...)  ← CORRUPTED!
+```
+
+Without treating NamedArray as a leaf, the reference model becomes a tree of `NamedArray(array=None)` objects that silently poison downstream operations.
+
+---
+
 ## Detailed Analysis
 
 ### 1. `haliax/nn/scan.py` - auto_sharded after vmap
@@ -50,6 +133,8 @@ def fn(*args, **kwargs):
 
 **Verified by testing**: Removing this line causes OOM on v5p-32 (43.84G needed, 37.13G available) because all transformer layers are replicated instead of sharded.
 
+**DPO-specific impact**: DPO loads **two** Llama 8B models (policy + reference), doubling memory requirements. Without immediate sharding after vmap, OOM is guaranteed on typical TPU configurations. Standard LM training with a single model might survive with replicated layers on larger TPUs, masking this bug.
+
 **Recommendation**: **KEEP** this change.
 
 ---
@@ -76,6 +161,8 @@ if getattr(named.array, "batch_dim", None) is not None:
 
 The `batch_dim` attribute is set by JAX on batched tracers, making it a reliable indicator that we're inside a vmap. Deferring sharding is correct - the array will be sharded after vmap completes and axes are properly reconciled.
 
+**DPO-specific impact**: DPO model initialization creates both policy and reference via `Stacked.init`, which uses vmap internally. The interaction between vmap (for layer stacking) and auto_sharded (for memory efficiency) is exercised more heavily in DPO due to initializing two complete models.
+
 **Recommendation**: **KEEP** this change.
 
 ---
@@ -99,6 +186,8 @@ def partition_spec(node: typing.Any):
 3. When combining partial model states
 
 Without this check, `pspec_for` would try to access `node.axes`, which calls `jnp.shape(self.array)` and fails on None.
+
+**DPO-specific impact**: DPO's frozen reference model creates `NamedArray(array=None)` placeholders throughout the non-trainable partition. Any operation that iterates over model parameters and calls `pspec_for` (e.g., checkpointing, sharding, model averaging) will crash without this fix. Standard LM training rarely creates None placeholders because all params are trainable.
 
 **Recommendation**: **KEEP** this change.
 
@@ -144,6 +233,14 @@ eqx.partition(na, lambda _: False, is_leaf=lambda x: isinstance(x, NamedArray))
 
 The `update is None` check is also necessary because when a parameter has no gradient (frozen), `updates` will be None for that leaf, and we should keep the original value.
 
+**DPO-specific impact**: This is the **most critical** fix for DPO. The entire reference model (billions of parameters) has `updates=None` because it's frozen. Without treating NamedArray as a leaf:
+- `eqx.partition` decomposes each NamedArray into `(array, axes)`
+- The filter returns `False` for frozen params
+- Result: `NamedArray(array=None, axes=original_axes)` - a corrupted placeholder that looks valid but contains no data
+- These corrupted NamedArrays propagate through the model, causing silent data loss or crashes
+
+In standard LM training, all params are trainable, so this code path is never exercised.
+
 **Recommendation**: **KEEP** these changes.
 
 ---
@@ -179,6 +276,13 @@ def _partition_trainable_params(model, filter):
 The new code does work correctly, but it's ~50 lines of manual tree walking that duplicates what `eqx.partition` already does, just to avoid passing `is_leaf`.
 
 **The helper functions** (`_fill_missing_namedarrays`, `_has_missing_namedarrays`) were added as safety nets for model averaging. With the quantization.py fixes, these may not be strictly necessary, but they don't hurt as defensive checks.
+
+**DPO-specific impact**: These functions are called during:
+- `_partition_trainable_params`: Separates policy (trainable) from reference (frozen)
+- `cast_params_by_trainability`: Casts policy to f32 for gradients, reference to bf16 for compute
+- Checkpointing: Saves/loads the DpoModel structure
+
+In standard LM training, the trainable filter is simply `True` for all params, so partition/combine operations are trivial. DPO's mixed trainability (policy=True, reference=False) exercises these code paths with non-trivial filter specs.
 
 **Recommendation**: **SIMPLIFY** by using `is_leaf` with `eqx.partition` instead of manual tree_map. Keep the helper functions as defensive checks.
 
@@ -253,3 +357,18 @@ The core issue is that **NamedArray is a PyTree**, but many Equinox/JAX utilitie
 3. `auto_sharded` during vmap sees mismatched array/axes dimensions
 
 The fixes treat NamedArray as an **atomic leaf** in contexts where recursion is problematic. This is the correct approach - NamedArray should be treated as a unit, not decomposed into its array + axis_names components during model transformations.
+
+### Why Standard LM Training Doesn't Expose These Bugs
+
+| Operation | LM Training | DPO Training |
+|-----------|-------------|--------------|
+| `eqx.partition(model, trainable)` | `trainable=True` for all → no None placeholders | `trainable=False` for reference → NamedArray(None) everywhere |
+| Memory for model init | Single model fits even if not optimally sharded | Two models require immediate sharding or OOM |
+| Gradient computation | All params get gradients | Reference params frozen → None updates |
+| Model structure | Flat LmHeadModel | Nested DpoModel with mixed trainability |
+
+DPO is essentially a **stress test** for JAX/Equinox/Haliax interactions because it:
+1. Loads 2x the parameters (policy + reference)
+2. Has mixed trainability (some params frozen)
+3. Requires careful memory management (sharding both models)
+4. Uses nested model structures (DpoModel wrapping two LmHeadModels)
