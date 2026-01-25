@@ -797,10 +797,16 @@ def get_download_first_checkpoint_path(output_path: str, local_checkpoint_dir: O
 
 
 def load_download_first_checkpoint(
-    checkpoint_path: str
+    checkpoint_path: str,
+    default_repo_id: Optional[str] = None
 ) -> Tuple[List[List[Tuple[str, str]]], List[int], int, int, Counter, int, int]:
     """
     Load checkpoint for download-first mode from LOCAL filesystem.
+
+    Args:
+        checkpoint_path: Path to the checkpoint file
+        default_repo_id: Default repo ID to use for old checkpoint format (single repo)
+                        that only stores filenames without repo_id
 
     Returns:
         batches: Pre-computed batches (list of (repo_id, filename) tuple lists) to maintain same batching on resume
@@ -829,7 +835,24 @@ def load_download_first_checkpoint(
             if 'batches' in data:
                 # Convert lists back to tuples (JSON doesn't preserve tuple type)
                 raw_batches = data.get('batches', [])
-                batches = [[tuple(item) for item in batch] for batch in raw_batches]
+                batches = []
+                for batch in raw_batches:
+                    converted_batch = []
+                    for item in batch:
+                        if isinstance(item, (list, tuple)) and len(item) == 2:
+                            # New format: (repo_id, filename)
+                            converted_batch.append(tuple(item))
+                        elif isinstance(item, str):
+                            # Old format (single repo): only filename string
+                            if default_repo_id:
+                                converted_batch.append((default_repo_id, item))
+                            else:
+                                print(f"Warning: Old checkpoint format with filename-only item, "
+                                      f"but no default_repo_id provided. Skipping: {item[:50]}...")
+                        else:
+                            print(f"Warning: Unknown item format in checkpoint batch: {type(item)}")
+                    if converted_batch:
+                        batches.append(converted_batch)
                 batch_sizes = data.get('batch_sizes', [0] * len(batches))  # Default to 0 if not present
             elif 'shuffled_files' in data:
                 # Old format - convert to single batch (will need re-batching)
@@ -1171,6 +1194,9 @@ def process_dataset_download_first(
             except Exception as e:
                 print(f"Warning: Could not download checkpoint from GCS: {e}")
         
+        # For single repo, pass it as default to support old checkpoint format
+        # that only stores filenames without repo_id
+        default_repo_id = repo_ids[0] if len(repo_ids) == 1 else None
         (
             checkpoint_batches,
             checkpoint_batch_sizes,
@@ -1179,7 +1205,7 @@ def process_dataset_download_first(
             source_counts,
             total_processed,
             total_written
-        ) = load_download_first_checkpoint(checkpoint_path)
+        ) = load_download_first_checkpoint(checkpoint_path, default_repo_id=default_repo_id)
 
         if checkpoint_batches:
             batches = checkpoint_batches
