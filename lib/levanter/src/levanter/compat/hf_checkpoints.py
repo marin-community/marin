@@ -1111,7 +1111,11 @@ def _is_jax_distributed_initialized():
 def _clear_hf_cache_for_model(model_name: str):
     """Clear HuggingFace cache for a specific model to remove corrupted files."""
     try:
-        from huggingface_hub import scan_cache_dir
+        from huggingface_hub import scan_cache_dir, constants
+        cache_dir = os.environ.get("HF_HUB_CACHE", constants.HF_HUB_CACHE)
+        if not os.path.exists(cache_dir):
+            logger.info(f"HF cache directory does not exist: {cache_dir}, skipping")
+            return
         cache_info = scan_cache_dir()
         for repo in cache_info.repos:
             if model_name in repo.repo_id:
@@ -1127,8 +1131,34 @@ def _clear_hf_cache_for_model(model_name: str):
         logger.warning(f"Failed to clear HuggingFace cache: {e}")
 
 
-def _hf_load_with_retry(load_fn, *args, max_retries: int = 20, base_delay: float = 2.0, max_delay: float = 128.0, **kwargs):
-    """Load with retry logic for rate limit and file corruption errors (no JAX synchronization). Internal use with _patch_hf_hub_download."""
+def _clear_local_fsspec_cache_for_model(model_name: str):
+    """Clear local fsspec download cache for a specific model to remove corrupted files."""
+    try:
+        import shutil
+        local_cache_dir = os.path.join(tempfile.gettempdir(), "levanter_hf_cache")
+        if not os.path.exists(local_cache_dir):
+            logger.info(f"Local fsspec cache directory does not exist: {local_cache_dir}, skipping")
+            return
+
+        # Extract the last part of the model name (e.g., "Qwen3-1.7B" from "gs://bucket/tokenizers/Qwen3-1.7B")
+        model_basename = model_name.rstrip("/").split("/")[-1]
+
+        # Find and delete directories matching the model name
+        for item in os.listdir(local_cache_dir):
+            item_path = os.path.join(local_cache_dir, item)
+            if os.path.isdir(item_path) and model_basename in item:
+                logger.info(f"Clearing corrupted local fsspec cache: {item_path}")
+                shutil.rmtree(item_path, ignore_errors=True)
+    except Exception as e:
+        logger.warning(f"Failed to clear local fsspec cache: {e}")
+
+
+def _hf_load_with_retry(load_fn, *args, max_retries: int = 20, base_delay: float = 2.0, max_delay: float = 128.0, is_fsspec_path: bool = False, **kwargs):
+    """Load with retry logic for rate limit and file corruption errors (no JAX synchronization). Internal use with _patch_hf_hub_download.
+
+    Args:
+        is_fsspec_path: If True, clear local fsspec cache on corruption. If False, clear HF cache.
+    """
     for attempt in range(max_retries):
         try:
             with _patch_hf_hub_download():
@@ -1149,12 +1179,15 @@ def _hf_load_with_retry(load_fn, *args, max_retries: int = 20, base_delay: float
                     if is_corrupted:
                         # Clear corrupted cache before retrying
                         logger.warning(
-                            f"Corrupted HuggingFace cache detected, clearing and retrying in {delay:.1f}s "
+                            f"Corrupted cache detected, clearing and retrying in {delay:.1f}s "
                             f"(attempt {attempt + 1}/{max_retries}): {error_str[:100]}"
                         )
-                        # Try to extract model name from args
+                        # Clear the appropriate cache based on path type
                         if args:
-                            _clear_hf_cache_for_model(str(args[0]))
+                            if is_fsspec_path:
+                                _clear_local_fsspec_cache_for_model(str(args[0]))
+                            else:
+                                _clear_hf_cache_for_model(str(args[0]))
                     else:
                         logger.warning(
                             f"Rate limited by HuggingFace Hub, retrying in {delay:.1f}s "
@@ -1220,7 +1253,7 @@ def hf_load_with_retry(load_fn, *args, max_retries: int = 20, base_delay: float 
                 raise
 
 
-def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 20, base_delay: float = 2.0, max_delay: float = 128.0, **kwargs):
+def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 20, base_delay: float = 2.0, max_delay: float = 128.0, is_fsspec_path: bool = False, **kwargs):
     """
     Wrapper that ensures only rank 0 downloads from HF Hub while other ranks wait.
     All ranks then use the cached result. Includes retry logic for rate limit errors.
@@ -1235,6 +1268,7 @@ def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 20, base_delay: f
         max_retries: Maximum number of retries for rate limit errors
         base_delay: Base delay in seconds for exponential backoff
         max_delay: Maximum delay in seconds (caps exponential backoff)
+        is_fsspec_path: If True, clear local fsspec cache on corruption. If False, clear HF cache.
         **kwargs: Keyword arguments to pass to load_fn
     """
     global _hf_load_sync_count
@@ -1242,7 +1276,7 @@ def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 20, base_delay: f
     # Check if JAX distributed is initialized - if not, fall back to direct loading
     # to avoid initializing JAX before jax.distributed.initialize() is called
     if not _is_jax_distributed_initialized():
-        return _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, **kwargs)
+        return _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, is_fsspec_path=is_fsspec_path, **kwargs)
 
     # JAX distributed is initialized, safe to use process_index/process_count
     is_leader = jax.process_index() == 0
@@ -1251,7 +1285,7 @@ def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 20, base_delay: f
     if num_processes > 1:
         # Distributed mode: only leader downloads, others wait
         if is_leader:
-            result = _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, **kwargs)
+            result = _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, is_fsspec_path=is_fsspec_path, **kwargs)
 
         # Synchronize all ranks - non-leaders wait here for leader to finish downloading
         sync_global_devices(f"hf_load_{_hf_load_sync_count}")
@@ -1265,7 +1299,7 @@ def _hf_load_with_rank_sync(load_fn, *args, max_retries: int = 20, base_delay: f
                 result = load_fn(*args, local_files_only=True, **kwargs)
     else:
         # Single process mode: Direct load with retry
-        result = _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, **kwargs)
+        result = _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, is_fsspec_path=is_fsspec_path, **kwargs)
 
     return result
 
@@ -1341,7 +1375,8 @@ def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trus
     """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec.
     In distributed mode, only rank 0 downloads while others wait and use the cached result."""
     # Handle fsspec paths (gs://, s3://, etc.) by downloading first
-    if _is_url_like(model_name_or_path):
+    is_fsspec_path = _is_url_like(model_name_or_path)
+    if is_fsspec_path:
         model_name_or_path = _download_from_fsspec_if_needed(model_name_or_path, local_cache_dir)
         # Don't pass revision for local paths
         revision = None
@@ -1352,6 +1387,7 @@ def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trus
         revision=revision,
         cache_dir=local_cache_dir,
         trust_remote_code=trust_remote_code,
+        is_fsspec_path=is_fsspec_path,
     )
 
 
@@ -1359,7 +1395,8 @@ def load_processor(model_name_or_path, revision=None, local_cache_dir=None, trus
     """Like AutoProcessor.from_pretrained, but works with gs:// paths or anything on fsspec.
     In distributed mode, only rank 0 downloads while others wait and use the cached result."""
     # Handle fsspec paths (gs://, s3://, etc.) by downloading first
-    if _is_url_like(model_name_or_path):
+    is_fsspec_path = _is_url_like(model_name_or_path)
+    if is_fsspec_path:
         model_name_or_path = _download_from_fsspec_if_needed(model_name_or_path, local_cache_dir)
         # Don't pass revision for local paths
         revision = None
@@ -1370,6 +1407,7 @@ def load_processor(model_name_or_path, revision=None, local_cache_dir=None, trus
         revision=revision,
         cache_dir=local_cache_dir,
         trust_remote_code=trust_remote_code,
+        is_fsspec_path=is_fsspec_path,
     )
 
 

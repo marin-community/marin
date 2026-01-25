@@ -69,7 +69,7 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - per_device_parallelism: samples processed per device at a time (limited by memory)
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
-PER_DEVICE_PARALLELISM = 2  # 1 sample per device (memory-safe for VLM with large images)
+PER_DEVICE_PARALLELISM = 1  # 1 sample per device (memory-safe for VLM with large images)
 GRADIENT_ACCUMULATION_STEPS = 1  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
@@ -78,7 +78,7 @@ BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  #
 # ============================================================================
 
 # Flash attention block size (set to None to disable flash attention)
-FLASH_ATTENTION_BLOCK_SIZE = 512
+FLASH_ATTENTION_BLOCK_SIZE = 1024
 
 # Vision encoder: SigLIP-like (matches google/siglip-so400m-patch14-384)
 vision_config = SiglipVisionConfig(
@@ -195,7 +195,7 @@ train_config = SimpleVlmTrainConfig(
     per_device_parallelism=PER_DEVICE_PARALLELISM,
     num_train_steps=NUM_TRAIN_STEPS,
     epoch=0,  # Disable epoch mode (use num_train_steps instead)
-    learning_rate=1e-4,
+    learning_rate=2e-4,
     warmup=0.002,  # 3% warmup
     weight_decay=0.0,
     min_lr_ratio=0.01,  # Final LR = 1% of peak LR
