@@ -361,6 +361,63 @@ class Qwen3Renderer(Renderer):
             )
         ]
 
+
+class OrzRenderer(Renderer):
+    """Renderer that matches DeepMath's orz chat template exactly."""
+
+    _PREAMBLE = (
+        "A conversation between User and Assistant. The User asks a question, and the Assistant solves it. "
+        "The Assistant first thinks about the reasoning process in the mind and then provides the User with the answer. "
+        "The reasoning process is enclosed within <think> </think> and answer is enclosed within <answer> </answer> tags, "
+        "respectively, i.e., <think> reasoning process here </think> <answer> answer here </answer>. "
+    )
+    _USER_PREFIX = (
+        "User: You must put your answer inside <answer> </answer> tags, i.e., <answer> answer here </answer>. "
+        "And your final answer will be extracted automatically by the \\boxed{} tag.\n"
+        "This is the problem:\n"
+    )
+    _ASSISTANT_PREFIX = "Assistant: <think>"
+    _ASSISTANT_SUFFIX = "</answer>\n"
+
+    @property
+    def _bos_tokens(self) -> list[int]:
+        if self.tokenizer.bos_token is None:
+            return []
+        return self.tokenizer.encode(self.tokenizer.bos_token, add_special_tokens=False)
+
+    def get_stop_sequences(self) -> list[int]:
+        return []
+
+    def _render_message(self, message: Message) -> list[int]:
+        if message["role"] == "user":
+            text = f"{self._USER_PREFIX}{message['content']}\n"
+            return self.tokenizer.encode(text, add_special_tokens=False)
+        if message["role"] == "assistant":
+            text = f"{self._ASSISTANT_PREFIX}{message['content']}{self._ASSISTANT_SUFFIX}"
+            return self.tokenizer.encode(text, add_special_tokens=False)
+        # DeepMath's orz template ignores system/tool messages.
+        return []
+
+    def build_generation_prompt(
+        self, messages: list[Message], role: Role = "assistant", prefill: str | None = None
+    ) -> list[int]:
+        tokens: list[int] = []
+        tokens.extend(self._bos_tokens)
+        tokens.extend(self.tokenizer.encode(self._PREAMBLE, add_special_tokens=False))
+        for message in messages:
+            tokens.extend(self._render_message(message))
+        if role != "assistant":
+            raise ValueError(f"OrzRenderer only supports assistant generation, got: {role}")
+        tokens.extend(self.tokenizer.encode(self._ASSISTANT_PREFIX, add_special_tokens=False))
+        if prefill:
+            tokens.extend(self.tokenizer.encode(prefill, add_special_tokens=False))
+        return tokens
+
+    def parse_response(self, response: list[int]) -> tuple[Message, bool]:
+        # No explicit stop token; parse the full response.
+        str_response = self.tokenizer.decode(response)
+        return Message(role="assistant", content=str_response), True
+
     def parse_response(self, response: list[int]) -> tuple[Message, bool]:
         assistant_message, parse_success = parse_response_for_stop_token(
             response, self.tokenizer, self._end_message_token

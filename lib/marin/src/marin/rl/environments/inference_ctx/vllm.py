@@ -33,7 +33,7 @@ from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
-from marin.rl.environments.inference_ctx.render import Llama3Renderer, Qwen3Renderer, Renderer, Message
+from marin.rl.environments.inference_ctx.render import Llama3Renderer, OrzRenderer, Qwen3Renderer, Renderer, Message
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,8 @@ class vLLMInferenceContext(BaseInferenceContext):
     def _get_renderer(model_name: str, tokenizer) -> Renderer:
         """Get the appropriate renderer based on model name."""
         model_name_lower = model_name.lower()
+        if "orz" in model_name_lower:
+            return OrzRenderer(tokenizer)
         if "qwen" in model_name_lower:
             return Qwen3Renderer(tokenizer)
         elif "llama" in model_name_lower:
