@@ -27,7 +27,6 @@ from haliax.types import PrecisionLike
 
 from ._src.fp8 import dot_general_with_precision, in_qdq, out_qdq
 from .axis import Axis
-from .core import NamedArray
 from .hof import vmap
 
 T = TypeVar("T")
@@ -68,7 +67,7 @@ def partition_for_grad_overwrite(grad: T) -> tuple[T, T]:
         return isinstance(v, OverwriteWithGradient)
 
     def is_leaf(v):
-        return isinstance(v, (OverwriteWithGradient, NamedArray))
+        return isinstance(v, OverwriteWithGradient)
 
     x, y = eqx.partition(grad, is_overwrite_with_gradient, is_leaf=is_leaf)
     return x, y
@@ -89,12 +88,10 @@ def apply_updates(tree, updates, overwrites):
     def _apply_update(tree, update, overwrite):
         if overwrite is not None:
             return overwrite
-        if update is None:
-            return tree
         return eqx.apply_updates(tree, update)
 
     def is_leaf(x):
-        return x is None or isinstance(x, OverwriteWithGradient) or isinstance(x, NamedArray)
+        return isinstance(x, OverwriteWithGradient)
 
     return jax.tree_util.tree_map(_apply_update, tree, updates, overwrites, is_leaf=is_leaf)
 

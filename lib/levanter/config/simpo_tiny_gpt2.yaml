@@ -1,4 +1,4 @@
-# Tiny DPO sanity-check config for train_dpo.py.
+# Tiny SimPO sanity-check config for train_simpo.py.
 
 data:
   train_urls:
@@ -16,7 +16,7 @@ data:
     pack: false
     slice_strategy: raise
   tokenizer: gpt2
-  cache_dir: cache/dpo_tiny
+  cache_dir: cache/simpo_tiny
   shuffle: true
 
 model:
@@ -40,13 +40,12 @@ trainer:
       - every: 5
 
 optimizer:
-  learning_rate: 1e-3
+  learning_rate: 6e-7
   weight_decay: 0.0
   warmup: 0.0
 
-reference_model_path: hf-internal-testing/tiny-random-gpt2
-reference_is_hf: true
-beta: 0.1
+beta: 2.0
+gamma_beta_ratio: 0.5
 validation_split_fraction: 0.1
 
 # Repeat the tiny dataset enough times to hit ~20 steps with batch size 16

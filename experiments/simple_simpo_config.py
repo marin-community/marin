@@ -19,25 +19,24 @@ from levanter.schedule import IntSchedule
 
 
 @dataclass(frozen=True)
-class SimpleDPOConfig:
+class SimpleSimPOConfig:
     """
-    A simplified configuration for Direct Preference Optimization (DPO).
+    A simplified configuration for Simple Preference Optimization (SimPO).
     """
 
     resources: ResourceConfig
 
     train_batch_size: int | IntSchedule = 128
     num_train_steps: int = 10000
-    learning_rate: float = 1e-6
+    learning_rate: float = 6e-7
     wandb_project: str | None = None
 
     tokenizer: str | None = None
     model_name_or_path: str | None = None
     initialize_from_checkpoint_path: str | None = None
 
-    reference_model_path: str | None = None
-    reference_is_hf: bool = True
-    beta: float = 0.1
+    beta: float = 2.0
+    gamma_beta_ratio: float = 0.5
     validation_split_fraction: float | None = 0.1
 
     train_seq_len: int | None = None

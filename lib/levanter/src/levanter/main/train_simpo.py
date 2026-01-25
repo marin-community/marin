@@ -8,9 +8,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional, Union, cast
 
-import equinox as eqx
 import haliax as hax
-import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
@@ -32,66 +30,62 @@ from levanter.data.text import (
     dataset_for_format,
 )
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.metrics import Metric, ReductionType
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import Trainer, TrainerConfig
-from levanter.utils.jax_utils import parameter_count, use_cpu_device
-from levanter.utils.tree_utils import inference_mode
+from levanter.utils.jax_utils import parameter_count
 
 from levanter.data.text import DpoExample
 
 logger = logging.getLogger(__name__)
 
 
-class DpoModel(eqx.Module):
-    policy: LmHeadModel
-    reference: LmHeadModel
-
-
-def _policy_model_for_hf_save(model: DpoModel | LmHeadModel) -> LmHeadModel:
-    return model.policy if isinstance(model, DpoModel) else model
-
-
-def _bool_tree_like(tree, value: bool):
-    return jax.tree_util.tree_map(lambda _: value, tree, is_leaf=lambda x: isinstance(x, hax.NamedArray))
-
-
-def dpo_loss_from_logps(
-    delta_pi: hax.NamedArray | jnp.ndarray,
-    delta_ref: hax.NamedArray | jnp.ndarray,
+def simpo_loss_from_logps(
+    avg_logp_chosen: hax.NamedArray | jnp.ndarray,
+    avg_logp_rejected: hax.NamedArray | jnp.ndarray,
     *,
     beta: float,
+    gamma_beta_ratio: float,
 ) -> tuple[jnp.ndarray, dict[str, Metric]]:
-    if isinstance(delta_pi, hax.NamedArray) or isinstance(delta_ref, hax.NamedArray):
-        if not isinstance(delta_pi, hax.NamedArray) or not isinstance(delta_ref, hax.NamedArray):
-            raise TypeError("delta_pi and delta_ref must both be NamedArray when using named computations.")
-        logits = (delta_pi - delta_ref) * beta
-        loss = hax.mean(hax.nn.softplus(-logits)).scalar()
+    if isinstance(avg_logp_chosen, hax.NamedArray) or isinstance(avg_logp_rejected, hax.NamedArray):
+        if not isinstance(avg_logp_chosen, hax.NamedArray) or not isinstance(avg_logp_rejected, hax.NamedArray):
+            raise TypeError(
+                "avg_logp_chosen and avg_logp_rejected must both be NamedArray when using named computations."
+            )
+        logits = (avg_logp_chosen - avg_logp_rejected) - gamma_beta_ratio
+        loss = hax.mean(hax.nn.softplus(-beta * logits)).scalar()
         metrics = {
-            "dpo_loss": Metric.from_value(loss, ReductionType.MEAN),
-            "dpo_margin_policy": Metric.from_value(hax.mean(delta_pi).scalar(), ReductionType.MEAN),
-            "dpo_margin_ref": Metric.from_value(hax.mean(delta_ref).scalar(), ReductionType.MEAN),
-            "dpo_accuracy": Metric.from_value(hax.mean(logits > 0).scalar(), ReductionType.MEAN),
+            "simpo_loss": Metric.from_value(loss, ReductionType.MEAN),
+            "simpo_chosen_logp": Metric.from_value(hax.mean(avg_logp_chosen).scalar(), ReductionType.MEAN),
+            "simpo_rejected_logp": Metric.from_value(hax.mean(avg_logp_rejected).scalar(), ReductionType.MEAN),
+            "simpo_margin": Metric.from_value(
+                hax.mean(avg_logp_chosen - avg_logp_rejected).scalar(), ReductionType.MEAN
+            ),
+            "simpo_accuracy": Metric.from_value(hax.mean(logits > 0).scalar(), ReductionType.MEAN),
         }
         return loss, metrics
 
-    logits = beta * (delta_pi - delta_ref)
-    loss = jnp.mean(hax.nn.softplus(-logits))
+    logits = (avg_logp_chosen - avg_logp_rejected) - gamma_beta_ratio
+    loss = jnp.mean(hax.nn.softplus(-beta * logits))
     metrics = {
-        "dpo_loss": Metric.from_value(loss, ReductionType.MEAN),
-        "dpo_margin_policy": Metric.from_value(jnp.mean(delta_pi), ReductionType.MEAN),
-        "dpo_margin_ref": Metric.from_value(jnp.mean(delta_ref), ReductionType.MEAN),
-        "dpo_accuracy": Metric.from_value(jnp.mean(logits > 0), ReductionType.MEAN),
+        "simpo_loss": Metric.from_value(loss, ReductionType.MEAN),
+        "simpo_chosen_logp": Metric.from_value(jnp.mean(avg_logp_chosen), ReductionType.MEAN),
+        "simpo_rejected_logp": Metric.from_value(jnp.mean(avg_logp_rejected), ReductionType.MEAN),
+        "simpo_margin": Metric.from_value(jnp.mean(avg_logp_chosen - avg_logp_rejected), ReductionType.MEAN),
+        "simpo_accuracy": Metric.from_value(jnp.mean(logits > 0), ReductionType.MEAN),
     }
     return loss, metrics
 
 
-def _logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
+def _average_logp(model: LmHeadModel, example: LmExample, *, key=None) -> hax.NamedArray:
     nll = model.compute_next_token_loss(example, reduction=None, reduction_axis=(), key=key)
     Pos = example.tokens.resolve_axis("position")
-    return -hax.sum(nll, axis=Pos)
+    logp_sum = -hax.sum(nll, axis=Pos)
+    denom = hax.sum(example.loss_weight, axis=Pos)
+    zeros = hax.zeros_like(logp_sum)
+    return hax.where(denom != 0, logp_sum / denom, zeros)
 
 
 def _validate_preference_chat_formats(config: SingleDatasetLMConfig | LMMixtureDatasetConfig) -> None:
@@ -100,7 +94,7 @@ def _validate_preference_chat_formats(config: SingleDatasetLMConfig | LMMixtureD
     non_preference = {name: fmt for name, fmt in formats.items() if not isinstance(fmt, PreferenceChatLmDatasetFormat)}
     if non_preference:
         bad = ", ".join(sorted(non_preference.keys()))
-        raise ValueError(f"DPO training requires preference_chat datasets. Non-preference datasets: {bad}")
+        raise ValueError(f"SimPO training requires preference_chat datasets. Non-preference datasets: {bad}")
 
     packed = {name: fmt for name, fmt in formats.items() if fmt.pack}
     if packed:
@@ -211,22 +205,19 @@ def _build_validation_split_mixture(
 
 
 @dataclass
-class TrainDpoConfig:
+class TrainSimpoConfig:
     data: Union[SingleDatasetLMConfig, LMMixtureDatasetConfig] = field(default_factory=UrlSingleDatasetLMConfig)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     model: LmConfig = field(default_factory=LlamaConfig)
     train_seq_len: int | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
 
-    reference_model_path: str = ""
-    reference_is_hf: bool = True
-
-    beta: float = 0.1
+    beta: float = 2.0
+    gamma_beta_ratio: float = 0.5
+    validation_split_fraction: float | None = 0.1
 
     initialize_from_hf: Union[bool, str] = False
     use_hf_model_config: bool = False
-
-    validation_split_fraction: float | None = 0.1
 
     hf_save_path: Optional[str] = None
     hf_upload: Optional[str] = None
@@ -238,9 +229,7 @@ class TrainDpoConfig:
     epoch: int = 0
 
 
-def main(config: TrainDpoConfig):
-    if not config.reference_model_path:
-        raise ValueError("reference_model_path must be provided for DPO training.")
+def main(config: TrainSimpoConfig):
 
     _validate_preference_chat_formats(config.data)
 
@@ -271,34 +260,22 @@ def main(config: TrainDpoConfig):
     levanter.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    def loss_function(model: DpoModel, example: DpoExample, *, key=None):
-        reference_model = inference_mode(model.reference, True)
-
+    def loss_function(model: LmHeadModel, example: DpoExample, *, key=None):
         if key is not None:
             key_chosen, key_rejected = jrandom.split(key)
         else:
             key_chosen = None
             key_rejected = None
 
-        logp_pi_chosen = _logp_sum(model.policy, example.chosen, key=key_chosen)
-        logp_pi_rejected = _logp_sum(model.policy, example.rejected, key=key_rejected)
+        avg_logp_chosen = _average_logp(model, example.chosen, key=key_chosen)
+        avg_logp_rejected = _average_logp(model, example.rejected, key=key_rejected)
 
-        logp_ref_chosen = _logp_sum(reference_model, example.chosen, key=key_chosen)
-        logp_ref_rejected = _logp_sum(reference_model, example.rejected, key=key_rejected)
-
-        delta_pi = logp_pi_chosen - logp_pi_rejected
-        delta_ref = logp_ref_chosen - logp_ref_rejected
-
-        loss, metrics = dpo_loss_from_logps(delta_pi, delta_ref, beta=config.beta)
-        chosen_reward = (logp_pi_chosen - logp_ref_chosen) * config.beta
-        rejected_reward = (logp_pi_rejected - logp_ref_rejected) * config.beta
-        if isinstance(chosen_reward, hax.NamedArray):
-            metrics["dpo_chosen_reward"] = Metric.from_value(hax.mean(chosen_reward).scalar(), ReductionType.MEAN)
-            metrics["dpo_rejected_reward"] = Metric.from_value(hax.mean(rejected_reward).scalar(), ReductionType.MEAN)
-        else:
-            metrics["dpo_chosen_reward"] = Metric.from_value(jnp.mean(chosen_reward), ReductionType.MEAN)
-            metrics["dpo_rejected_reward"] = Metric.from_value(jnp.mean(rejected_reward), ReductionType.MEAN)
-        return loss, metrics
+        return simpo_loss_from_logps(
+            avg_logp_chosen,
+            avg_logp_rejected,
+            beta=config.beta,
+            gamma_beta_ratio=config.gamma_beta_ratio,
+        )
 
     with Trainer(config.trainer, optimizer, loss_function) as trainer:
         seed = config.trainer.seed
@@ -366,20 +343,7 @@ def main(config: TrainDpoConfig):
 
         train_dataset = cast(AsyncDataset[DpoExample], train_dataset)
 
-        init_policy_key, init_reference_key = jrandom.split(model_key)
-        initial_model = DpoModel(
-            policy=config.model.build(Vocab, key=init_policy_key),
-            reference=config.model.build(Vocab, key=init_reference_key),
-        )
-        trainable_filter = DpoModel(
-            policy=_bool_tree_like(initial_model.policy, True),
-            reference=_bool_tree_like(initial_model.reference, False),
-        )
-        state = trainer.initial_state(training_key, model=initial_model, is_trainable=trainable_filter)
-
-        policy_model = state.model.policy
-        state = dataclasses.replace(state, model=None)
-        gc.collect()
+        state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
 
         if int(state.step) == 0:
             if config.initialize_from_hf:
@@ -388,49 +352,23 @@ def main(config: TrainDpoConfig):
                     "No training checkpoint found. Initializing model from HF checkpoint"
                     f" '{converter.reference_checkpoint}'"
                 )
-                policy_model = converter.load_pretrained(
+                state = dataclasses.replace(state, model=None)
+                gc.collect()
+                model = converter.load_pretrained(
                     config.model.model_type,
                     config=config.model if not config.use_hf_model_config else None,
                     axis_mapping=parameter_axis_mapping,
                     dtype=trainer.mp.compute_dtype,
                 )
-                policy_model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(policy_model)
+                model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
+                state = dataclasses.replace(state, model=model)
             elif config.initialize_from_checkpoint_path is not None:
-                with use_cpu_device():
-                    policy_model = eqx.filter_eval_shape(config.model.build, Vocab, key=init_policy_key)
-                    policy_model = load_checkpoint(
-                        policy_model, config.initialize_from_checkpoint_path, subpath="model"
-                    )
-                policy_model = hax.shard(policy_model, parameter_axis_mapping)
-                policy_model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(policy_model)
+                state = load_checkpoint(state, config.initialize_from_checkpoint_path)
+                state = dataclasses.replace(state, step=jnp.array(0))
             else:
                 logger.info("No checkpoint found. Starting from scratch.")
 
-        if config.reference_is_hf:
-            if converter is None:
-                raise ValueError("reference_is_hf requires a HFCompatConfig model.")
-            reference_model = converter.load_pretrained(
-                config.model.model_type,
-                ref=config.reference_model_path,
-                config=config.model if not config.use_hf_model_config else None,
-                axis_mapping=parameter_axis_mapping,
-                dtype=trainer.mp.compute_dtype,
-            )
-            reference_model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(reference_model)
-        else:
-            with use_cpu_device():
-                reference_model = eqx.filter_eval_shape(config.model.build, Vocab, key=model_key)
-                reference_model = load_checkpoint(reference_model, config.reference_model_path, subpath="model")
-            reference_model = hax.shard(reference_model, parameter_axis_mapping)
-
-        reference_model = cast(LmHeadModel, inference_mode(reference_model, True))
-        reference_model = named_jit(trainer.mp.cast_to_compute, parameter_axis_mapping)(reference_model)
-        state = dataclasses.replace(
-            state,
-            model=DpoModel(policy=policy_model, reference=reference_model),
-        )
-
-        levanter.tracker.log_summary({"parameter_count": parameter_count(policy_model)})
+        levanter.tracker.log_summary({"parameter_count": parameter_count(state.model)})
 
         flops_per_token = config.model.flops_per_token(vocab_size, Pos.size)
         flops_per_example = 3 * flops_per_token * Pos.size if flops_per_token is not None else None
@@ -483,9 +421,8 @@ def main(config: TrainDpoConfig):
                 if upload_to_hf is not None:
                     hf_upload_kwargs["commit_message"] = f"Upload for step {step.step} from Levanter"
 
-                policy_model = _policy_model_for_hf_save(step.eval_model)
                 converter.save_pretrained(
-                    policy_model,
+                    step.eval_model,
                     os.path.join(full_save_path, f"step-{step.step}"),
                     upload_to_hf=upload_to_hf,
                     dtype=save_dtype,

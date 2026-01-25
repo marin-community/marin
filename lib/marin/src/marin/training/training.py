@@ -32,9 +32,9 @@ from fray.cluster import (
     current_cluster,
 )
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
-from levanter.main import train_dpo
+from levanter.main import train_simpo
 from levanter.main import train_lm
-from levanter.main.train_dpo import TrainDpoConfig
+from levanter.main.train_simpo import TrainSimpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
@@ -71,10 +71,10 @@ class TrainLmOnPodConfig:
 
 
 @dataclass(frozen=True)
-class TrainDpoOnPodConfig:
-    """Configuration for DPO training on a pod."""
+class TrainSimpoOnPodConfig:
+    """Configuration for SimPO training on a pod."""
 
-    train_config: TrainDpoConfig
+    train_config: TrainSimpoConfig
     resources: ResourceConfig
     output_path: str | None = None
     """Base output directory to be used for training, mainly for use with executor framework."""
@@ -97,8 +97,8 @@ class TrainDpoOnPodConfig:
     """
 
 
-TrainConfigT = TypeVar("TrainConfigT", TrainLmConfig, TrainDpoConfig)
-TrainOnPodConfigT = TypeVar("TrainOnPodConfigT", TrainLmOnPodConfig, TrainDpoOnPodConfig)
+TrainConfigT = TypeVar("TrainConfigT", TrainLmConfig, TrainSimpoConfig)
+TrainOnPodConfigT = TypeVar("TrainOnPodConfigT", TrainLmOnPodConfig, TrainSimpoOnPodConfig)
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
@@ -271,9 +271,9 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     cluster.wait(job_id, raise_on_failure=True)
 
 
-def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
+def run_levanter_train_simpo(config: TrainSimpoOnPodConfig):
     """
-    Run the Levanter DPO training main function on a Ray cluster.
+    Run the Levanter SimPO training main function on a Ray cluster.
 
     This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
     It should also be run with a Ray cluster already running.
@@ -318,8 +318,8 @@ def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
     cluster = current_cluster()
 
     job_request = JobRequest(
-        name="train_dpo",
-        entrypoint=Entrypoint.from_callable(train_dpo.main, args=[train_config]),
+        name="train_simpo",
+        entrypoint=Entrypoint.from_callable(train_simpo.main, args=[train_config]),
         resources=config.resources,
         environment=EnvironmentConfig.create(env_vars=env),
         max_retries_failure=10,

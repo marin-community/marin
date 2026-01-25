@@ -1427,7 +1427,7 @@ class PreferenceChatProcessor(BatchProcessor[dict, ProcessedPreferenceChatDict])
 
         if skipped_indices:
             logger.warning(
-                "DPO preference batch had %d invalid rows with empty chosen/rejected; skipping. Indices: %s",
+                "Preference batch had %d invalid rows with empty chosen/rejected; skipping. Indices: %s",
                 len(skipped_indices),
                 skipped_indices[:10],
             )
