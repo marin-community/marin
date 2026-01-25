@@ -50,6 +50,49 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def download_gcs_to_local(gcs_path: str, cache_dir: Optional[str] = None) -> str:
+    """
+    Download a GCS path to local cache for HuggingFace loading.
+
+    Args:
+        gcs_path: GCS path (gs://bucket/path) or local/HF Hub path
+        cache_dir: Optional cache directory (defaults to ~/.cache/vlm_preprocess)
+
+    Returns:
+        Local path to the downloaded directory, or original path if not GCS
+    """
+    if not gcs_path.startswith("gs://"):
+        # Not a GCS path, return as-is (local path or HF Hub name)
+        return gcs_path
+
+    if cache_dir is None:
+        cache_dir = os.path.expanduser("~/.cache/vlm_preprocess")
+
+    # Create a cache key from the GCS path
+    cache_key = gcs_path.replace("gs://", "").replace("/", "_")
+    local_path = os.path.join(cache_dir, cache_key)
+
+    if os.path.exists(local_path):
+        logger.info(f"Using cached: {gcs_path} -> {local_path}")
+        return local_path
+
+    logger.info(f"Downloading: {gcs_path} -> {local_path}")
+    os.makedirs(local_path, exist_ok=True)
+
+    fs, fs_path = fsspec.core.url_to_fs(gcs_path)
+
+    # Download all files in the directory
+    files = fs.ls(fs_path)
+    for file_path in files:
+        if fs.isfile(file_path):
+            file_name = os.path.basename(file_path)
+            local_file = os.path.join(local_path, file_name)
+            fs.get(file_path, local_file)
+
+    logger.info(f"Downloaded {len(files)} files to {local_path}")
+    return local_path
+
+
 @dataclass
 class PreprocessConfig:
     """Configuration for VLM preprocessing."""
@@ -283,8 +326,12 @@ def process_shard(
     from transformers import AutoProcessor, AutoTokenizer
 
     # Load tokenizer and processor (in worker process)
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, trust_remote_code=True)
-    processor = AutoProcessor.from_pretrained(processor_name, trust_remote_code=True)
+    # Support GCS paths by downloading to local cache
+    tokenizer_path = download_gcs_to_local(tokenizer_name)
+    processor_path = download_gcs_to_local(processor_name)
+
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True)
 
     # Read input parquet
     fs, fs_path = fsspec.core.url_to_fs(shard_path)
