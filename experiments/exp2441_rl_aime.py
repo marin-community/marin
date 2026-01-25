@@ -42,6 +42,11 @@ from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
 from marin.rl.rl_losses import RLOOLoss
 
+from experiments.models import (
+    ModelConfig as HFModelConfig,
+    levanter_model_step,
+)
+
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
     RLExperimentConfig,
@@ -52,11 +57,17 @@ logger = logging.getLogger(__name__)
 
 # DeepMath-Zero-7B uses zwhe99/Qwen2.5-7B-orz as the base model
 # (a Qwen2.5-7B variant with the "orz" chat template for think/answer format)
+qwen2_5_7b_orz_hf_config = HFModelConfig(
+    hf_repo_id="zwhe99/Qwen2.5-7B-orz",
+    hf_revision="5625e85",
+    config_class=QwenConfig,
+)
+
 qwen_2_5_7b_orz = ModelConfig(
     name="zwhe99/Qwen2.5-7B-orz",
     type="qwen",
     tokenizer="zwhe99/Qwen2.5-7B-orz",
-    checkpoint="zwhe99/Qwen2.5-7B-orz",
+    checkpoint=levanter_model_step(qwen2_5_7b_orz_hf_config).as_input_name(),
     config_class=QwenConfig,
 )
 
