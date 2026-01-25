@@ -58,6 +58,9 @@ class PreprocessConfig:
     messages_key: str = "messages"
     images_key: str = "images"
     image_pad_token: str = "<|image_pad|>"
+    # Vision markers to wrap image tokens (matching BatchImageProcessor)
+    vision_start_token: str = "<|vision_start|>"
+    vision_end_token: str = "<|vision_end|>"
 
 
 def list_parquet_files(pattern: str) -> List[str]:
@@ -164,17 +167,17 @@ def create_loss_mask(input_ids: np.ndarray, tokenizer) -> np.ndarray:
     # Use searchsorted to efficiently find the first end after each start
     loss_mask = np.zeros(n, dtype=np.float32)
 
-    # Content starts after <|im_start|>assistant + newline/space
-    # We look for the position after the assistant tokens
-    content_starts = pattern_starts + 1 + num_ast + 1  # +1 for whitespace after "assistant"
+    # Content starts after <|im_start|>assistant (includes the newline/whitespace after "assistant")
+    # This matches HuggingFace and BatchImageProcessor behavior
+    content_starts = pattern_starts + 1 + num_ast  # No extra +1, newline IS included
 
     for content_start in content_starts:
         # Find first <|im_end|> after content_start
         end_idx = np.searchsorted(im_end_positions, content_start)
         if end_idx < len(im_end_positions):
             content_end = im_end_positions[end_idx]
-            # Include content tokens but not <|im_end|>
-            loss_mask[content_start:content_end] = 1.0
+            # Include content tokens AND <|im_end|> token (matches BatchImageProcessor)
+            loss_mask[content_start:content_end + 1] = 1.0
 
     return loss_mask
 
@@ -224,9 +227,14 @@ def preprocess_sample(
             "num_images": num_images,
         }
 
-    # 2. Expand <image> placeholders to image_pad tokens
-    # Each <image> → features_per_patch copies of image_pad_token
-    expanded_image_placeholder = config.image_pad_token * config.features_per_patch
+    # 2. Expand <image> placeholders to image_pad tokens with vision markers
+    # Each <image> → <|vision_start|><|image_pad|>*N<|vision_end|>
+    # This matches BatchImageProcessor behavior exactly
+    expanded_image_placeholder = (
+        config.vision_start_token +
+        (config.image_pad_token * config.features_per_patch) +
+        config.vision_end_token
+    )
     text = text.replace("<image>", expanded_image_placeholder)
 
     # 3. Tokenize
@@ -258,7 +266,7 @@ def process_shard(
     tokenizer_name: str,
     processor_name: str,
     config: PreprocessConfig,
-) -> Tuple[str, int, int]:
+) -> Tuple[str, int, int, int]:
     """
     Process a single parquet shard.
 
@@ -270,7 +278,7 @@ def process_shard(
         config: Preprocessing configuration
 
     Returns:
-        Tuple of (output_path, num_samples, num_errors)
+        Tuple of (output_path, input_rows, output_rows, num_errors)
     """
     from transformers import AutoProcessor, AutoTokenizer
 
@@ -283,6 +291,7 @@ def process_shard(
     with fs.open(fs_path, "rb") as f:
         table = pq.read_table(f)
     df = table.to_pandas()
+    input_rows = len(df)
 
     # Process each row
     processed_rows = []
@@ -347,10 +356,11 @@ def process_shard(
             os.remove(tmp_path)
 
     # Cleanup
+    output_rows = len(columns["input_ids"])
     del df, table, processed_rows, out_table
     gc.collect()
 
-    return output_path, len(columns["input_ids"]), num_errors
+    return output_path, input_rows, output_rows, num_errors
 
 
 def process_shard_wrapper(args):
@@ -505,7 +515,8 @@ def main():
             logger.info(f"Resuming from shard {start_idx}")
 
     # Process shards
-    total_samples = 0
+    total_input_rows = 0
+    total_output_rows = 0
     total_errors = 0
 
     if args.num_workers > 1:
@@ -533,12 +544,14 @@ def main():
             for future in as_completed(futures):
                 shard_idx = futures[future]
                 try:
-                    output_path, num_samples, num_errors = future.result()
-                    total_samples += num_samples
+                    output_path, input_rows, output_rows, num_errors = future.result()
+                    total_input_rows += input_rows
+                    total_output_rows += output_rows
                     total_errors += num_errors
                     processed_shards.append(output_path)
-                    logger.info(f"[{shard_idx + 1}/{len(input_paths)}] Processed: {output_path} "
-                               f"({num_samples} samples, {num_errors} errors)")
+                    logger.info(f"[{shard_idx + 1}/{len(input_paths)}] {os.path.basename(input_paths[shard_idx])}: "
+                               f"input={input_rows} rows → output={output_rows} rows "
+                               f"({num_errors} errors)")
 
                     # Save checkpoint
                     if args.checkpoint_dir and (shard_idx + 1) % args.checkpoint_interval == 0:
@@ -555,18 +568,20 @@ def main():
             output_path = os.path.join(args.output_dir, input_name)
 
             try:
-                output_path, num_samples, num_errors = process_shard(
+                output_path, input_rows, output_rows, num_errors = process_shard(
                     input_path,
                     output_path,
                     args.tokenizer,
                     args.processor,
                     config,
                 )
-                total_samples += num_samples
+                total_input_rows += input_rows
+                total_output_rows += output_rows
                 total_errors += num_errors
                 processed_shards.append(output_path)
-                logger.info(f"[{i + 1}/{len(input_paths)}] Processed: {output_path} "
-                           f"({num_samples} samples, {num_errors} errors)")
+                logger.info(f"[{i + 1}/{len(input_paths)}] {os.path.basename(input_path)}: "
+                           f"input={input_rows} rows → output={output_rows} rows "
+                           f"({num_errors} errors)")
 
                 # Save checkpoint
                 if args.checkpoint_dir and (i + 1) % args.checkpoint_interval == 0:
@@ -583,14 +598,15 @@ def main():
     print("\n" + "=" * 60)
     print("Preprocessing Summary")
     print("=" * 60)
-    print(f"Input pattern:     {args.input_pattern}")
-    print(f"Output directory:  {args.output_dir}")
-    print(f"Number of shards:  {len(input_paths)}")
-    print(f"Total samples:     {total_samples}")
-    print(f"Total errors:      {total_errors}")
-    print(f"Parallel workers:  {args.num_workers}")
+    print(f"Input pattern:      {args.input_pattern}")
+    print(f"Output directory:   {args.output_dir}")
+    print(f"Number of shards:   {len(input_paths)}")
+    print(f"Total input rows:   {total_input_rows}")
+    print(f"Total output rows:  {total_output_rows}")
+    print(f"Total errors:       {total_errors}")
+    print(f"Parallel workers:   {args.num_workers}")
     if args.checkpoint_dir:
-        print(f"Checkpoint dir:    {args.checkpoint_dir}")
+        print(f"Checkpoint dir:     {args.checkpoint_dir}")
     print("=" * 60)
 
 

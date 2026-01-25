@@ -449,16 +449,19 @@ class VLMPrepackedDataset(AsyncDataset):
             grid_mask = sample.get("grid_mask")
 
             if pv is not None and len(pv) > 0:
-                all_pixel_values.append(pv)
-
                 if grid_mask is not None:
-                    # Valid patch -> seg_id, invalid patch -> -1
-                    patch_seg_ids = np.where(grid_mask, seg_id, -1)
+                    # Filter out padded patches - only keep valid ones
+                    # This is important when samples are pre-padded (e.g., from PreprocessedVLMDataset)
+                    valid_mask = np.asarray(grid_mask, dtype=bool)
+                    valid_pv = pv[valid_mask]
+                    if len(valid_pv) > 0:
+                        all_pixel_values.append(valid_pv)
+                        # All appended patches are valid, assign seg_id
+                        image_segment_ids.extend([seg_id] * len(valid_pv))
                 else:
                     # All patches valid if no grid_mask
-                    patch_seg_ids = np.full(len(pv), seg_id, dtype=np.int32)
-
-                image_segment_ids.extend(patch_seg_ids.tolist())
+                    all_pixel_values.append(pv)
+                    image_segment_ids.extend([seg_id] * len(pv))
 
         # 3. Concatenate and pad
         if all_input_ids:
@@ -2135,6 +2138,7 @@ class PreprocessedVLMDataset(AsyncDataset):
         max_num_patches: int = 1,
         patch_size: int = 384,
         prefetch_threshold: float = 0.8,
+        disable_anyres: bool = True,
     ):
         """
         Initialize the preprocessed VLM dataset.
@@ -2145,12 +2149,14 @@ class PreprocessedVLMDataset(AsyncDataset):
             max_num_patches: Maximum number of patches per sample
             patch_size: Size of each image patch (default 384)
             prefetch_threshold: Start prefetching next shard at this progress
+            disable_anyres: If True, only use base patch for each image (no anyres sub-patches)
         """
         super().__init__()
 
         self.image_processor = image_processor
         self.max_num_patches = max_num_patches
         self.patch_size = patch_size
+        self.disable_anyres = disable_anyres
 
         # Build shard info from parquet paths
         self._shard_info = self._build_shard_info(parquet_paths)
@@ -2225,10 +2231,25 @@ class PreprocessedVLMDataset(AsyncDataset):
             return pixel_values, grid_mask
 
         # Load and process images
+        # Handle various image formats: PIL, str (path), bytes, or dict
         try:
-            pil_images = [load_image(img) for img in images]
+            processed_images = []
+            for img in images:
+                if isinstance(img, bytes):
+                    # Raw bytes from parquet - wrap in dict format for load_image
+                    processed_images.append(load_image({"bytes": img}))
+                else:
+                    processed_images.append(load_image(img))
+            pil_images = processed_images
             processed = self.image_processor(pil_images, return_tensors="np")
             pixel_values = processed["pixel_values"]
+
+            # Handle disable_anyres: only use base patch (first patch) from each image
+            # HF processor outputs shape: (num_images, num_patches_per_image, C, H, W)
+            # With disable_anyres, we only want the base patches: (num_images, C, H, W)
+            if self.disable_anyres and pixel_values.ndim == 5:
+                # Take only the first patch from each image
+                pixel_values = pixel_values[:, 0, :, :, :]  # (num_images, C, H, W)
         except Exception as e:
             logger.warning(f"Failed to process images: {e}")
             pixel_values = np.zeros(
