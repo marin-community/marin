@@ -660,29 +660,15 @@ def main(config: TrainVLMConfig):
             key=data_key, epochs=config.epoch, max_num_patches=max_num_patches
         )
 
-        # Get shape info from first example (preferred) or config (fallback)
-        first_ex = _get_first_example(train_dataset_mixture)
-
-        # Define axes from config (works for both cached and streaming modes)
+        # Define axes from config (deterministic across all workers)
         Pos = hax.Axis("position", config.data.max_length)
 
-        if first_ex is not None:
-            # Use actual data shape (preferred)
-            max_num_patches = _compute_max_num_patches(config, first_ex)
-            channels = first_ex["pixel_values"].shape[1]
-            height = first_ex["pixel_values"].shape[2]
-            width = first_ex["pixel_values"].shape[3]
-            logger.info(f"Got image shape from first example: C={channels}, H={height}, W={width}")
-        else:
-            # Fallback: use config-based values when extraction fails
-            # This handles "Already borrowed" errors in distributed settings
-            logger.warning(
-                "Could not extract first example from dataset. "
-                "Using config-based image shape fallback."
-            )
-            max_num_patches = _compute_max_num_patches(config, first_ex=None)
-            channels, height, width = _get_image_shape_from_config(config)
-            logger.info(f"Using config-based image shape: C={channels}, H={height}, W={width}")
+        # Always use config-based values for deterministic multi-controller behavior
+        # This avoids non-determinism from _get_first_example() which can succeed
+        # on some workers and fail on others, causing XLA compilation divergence
+        max_num_patches = _compute_max_num_patches(config, first_ex=None)
+        channels, height, width = _get_image_shape_from_config(config)
+        logger.info(f"Using config-based image shape: C={channels}, H={height}, W={width}")
 
         # Total patches = max_num_patches (grid) + 1 (base)
         NumPatches = hax.Axis("num_patches", max_num_patches + 1)
