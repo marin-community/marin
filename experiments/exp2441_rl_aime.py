@@ -122,7 +122,7 @@ def create_aime_curriculum(run_id: str, experiment_config: RLExperimentConfig) -
 
     return CurriculumConfig(
         lessons=lessons,
-        eval_frequency=1,
+        eval_frequency=10,
         micro_eval_frequency=9999999,  # Effectively disable micro-eval
         actor_name=f"curriculum-{run_id}",
         eval_n_examples=30,  # AIME25 has 30 problems
