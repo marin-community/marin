@@ -57,6 +57,7 @@ from marin.rl.environments.inference_ctx import (
     AsyncvLLMInferenceContext,
     BaseInferenceContext,
 )
+from marin.rl.metrics import pass_at_k_estimator
 from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
@@ -194,7 +195,9 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
 
     for group in batch.groups:
         pass_at_k_for_current_group = 0.0
+        pass_at_one_for_current_group = 0.0
         avg_at_k_for_current_group = 0.0
+        correct_flags: list[bool] = []
         for rollout in group.rollouts:
             rollout_stats_list.append(
                 RolloutStats(
@@ -207,17 +210,22 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
             )
 
             if rollout.correctness_reward is not None:
-                pass_at_k_for_current_group = max(pass_at_k_for_current_group, rollout.correctness_reward)
                 avg_at_k_for_current_group += rollout.correctness_reward
+                correct_flags.append(rollout.correctness_reward > 0.0)
+            else:
+                correct_flags.append(False)
 
             total_count += 1
             if rollout.episode_reward > 0:
                 success_count += 1
             reward_sum += rollout.episode_reward
 
+        if correct_flags:
+            pass_at_k_for_current_group = pass_at_k_estimator(correct_flags, len(correct_flags))
+            pass_at_one_for_current_group = pass_at_k_estimator(correct_flags, 1)
+
         pass_at_k += pass_at_k_for_current_group
-        if group.rollouts[0].correctness_reward is not None:
-            pass_at_one += group.rollouts[0].correctness_reward
+        pass_at_one += pass_at_one_for_current_group
 
         avg_at_k += avg_at_k_for_current_group / len(group.rollouts)
 
