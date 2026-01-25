@@ -1,7 +1,6 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import abc
 import asyncio
 import dataclasses
 import functools
@@ -315,93 +314,7 @@ class UrlDatasetSourceConfig(LmDatasetSourceConfigBase):
         return urls
 
 
-LmDatasetSourceConfig: TypeAlias = LmDatasetSourceConfigBase
-LMDatasetSourceConfig: TypeAlias = LmDatasetSourceConfigBase
-
-
 @dataclass(frozen=True)
-class LMTaskConfig(abc.ABC):
-    tokenizer: str = "gpt2"
-    vocab_size: int | None = None  # if using the passthrough tokenizer, this is required
-
-    # config related to caching
-    cache_dir: str | None = "cache/"
-    cache_options: CacheOptions = field(default_factory=CacheOptions)
-    enforce_eos: bool = True  # whether to append eos even if the tokenizer doesn't
-    auto_build_caches: bool = True
-    """Whether to build dataset caches automatically when they are missing.
-
-    If False, any attempt to access a cache that does not already exist will raise
-    a FileNotFoundError instead of building the cache on the fly.
-    """
-
-    chat_template: str | None = None  # If set, use this template for chat datasets. Otherwise, use the tokenizer's.
-
-    shuffle: bool | int = False
-    """whether to shuffle the dataset. True means shuffle the whole dataset, False means don't shuffle.
-    If you want to shuffle in eras, set this to the era length"""
-    permutation_type: Literal["feistel", "linear"] | None = None
-    """
-    Type of permutation to use for shuffle.
-
-    If None, defaults to linear, but this will change in the future since Feistel is better.
-    """
-
-    block_cross_document_attention: bool = True
-    """Whether to block attention across document boundaries.
-
-    If True (default), attention is blocked across documents using segment ids derived from EOS tokens.
-    If False, full causal attention is allowed across packed documents.
-    """
-
-    @cached_property
-    def the_tokenizer(self) -> HfTokenizer:
-        if self.tokenizer == "passthrough":
-            return PassthroughTokenizer(self.vocab_size)
-        else:
-            return load_tokenizer(self.tokenizer)
-
-    @abc.abstractmethod
-    def train_set(
-        self,
-        Pos: Axis,
-        batch_schedule: BatchSchedule,
-        *,
-        key: PRNGKeyArray,
-        epochs: int | None = None,
-    ) -> AsyncDataset[LmExample]:
-        pass
-
-    @abc.abstractmethod
-    def train_sets(
-        self,
-        Pos: Axis,
-        *,
-        key: PRNGKeyArray,
-        epochs: int | None = None,
-    ) -> Mapping[str, AsyncDataset[LmExample]]:
-        pass
-
-    @abc.abstractmethod
-    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
-        pass
-
-    @abc.abstractmethod
-    def build_caches(self, split: str) -> Mapping[str, TreeCache[dict]]:
-        pass
-
-    @property
-    @abc.abstractmethod
-    def sources(self) -> Mapping[str, LmDatasetSourceConfigBase]:
-        pass
-
-    def tagged_eval_sets(self, Pos: Axis) -> list[tuple[AsyncDataset[LmExample], list[str]]]:
-        tags = {name: (config.tags or []) + [name] for name, config in self.sources.items()}
-        eval_sets = self.validation_sets(Pos)
-
-        return [(eval_sets[name], tags[name]) for name in eval_sets]
-
-
 class DatasetComponentBase(ChoiceRegistry):
     @classmethod
     def default_choice_name(cls) -> str | None:
@@ -599,8 +512,41 @@ def _component_cache_dir(name: str, component: DatasetComponent, default_root: s
 
 
 @dataclass(frozen=True)
-class LmDataConfig(LMTaskConfig):
+class LmDataConfig:
     """Unified LM data config built from components."""
+
+    tokenizer: str = "gpt2"
+    vocab_size: int | None = None  # if using the passthrough tokenizer, this is required
+
+    # config related to caching
+    cache_dir: str | None = "cache/"
+    cache_options: CacheOptions = field(default_factory=CacheOptions)
+    enforce_eos: bool = True  # whether to append eos even if the tokenizer doesn't
+    auto_build_caches: bool = True
+    """Whether to build dataset caches automatically when they are missing.
+
+    If False, any attempt to access a cache that does not already exist will raise
+    a FileNotFoundError instead of building the cache on the fly.
+    """
+
+    chat_template: str | None = None  # If set, use this template for chat datasets. Otherwise, use the tokenizer's.
+
+    shuffle: bool | int = False
+    """whether to shuffle the dataset. True means shuffle the whole dataset, False means don't shuffle.
+    If you want to shuffle in eras, set this to the era length"""
+    permutation_type: Literal["feistel", "linear"] | None = None
+    """
+    Type of permutation to use for shuffle.
+
+    If None, defaults to linear, but this will change in the future since Feistel is better.
+    """
+
+    block_cross_document_attention: bool = True
+    """Whether to block attention across document boundaries.
+
+    If True (default), attention is blocked across documents using segment ids derived from EOS tokens.
+    If False, full causal attention is allowed across packed documents.
+    """
 
     components: dict[str, DatasetComponentBase] = field(default_factory=dict)
     train_weights: dict[str, float] | list[tuple[int, dict[str, float]]] | None = None
@@ -632,6 +578,13 @@ class LmDataConfig(LMTaskConfig):
             assert (
                 self.experiment_budget is None and self.target_budget is None
             ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
+
+    @cached_property
+    def the_tokenizer(self) -> HfTokenizer:
+        if self.tokenizer == "passthrough":
+            return PassthroughTokenizer(self.vocab_size)
+        else:
+            return load_tokenizer(self.tokenizer)
 
     def _has_nonzero_weight(self, name: str) -> bool:
         weights = self.train_weights

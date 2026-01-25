@@ -36,7 +36,7 @@ from fray.job import create_job_ctx
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
-    LMDatasetSourceConfig,
+    LmDatasetSourceConfigBase,
     TextLmDatasetFormat,
     UrlDatasetSourceConfig,
     preprocessor_for_format,
@@ -65,7 +65,7 @@ class TokenizeConfigBase(abc.ABC):
     @abc.abstractmethod
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
-    ) -> LMDatasetSourceConfig:
+    ) -> LmDatasetSourceConfigBase:
         """
         Create a Levanter dataset source config from this config and the actual output path.
         """
@@ -100,7 +100,7 @@ class TokenizeConfig(TokenizeConfigBase):
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
-    ) -> LMDatasetSourceConfig:
+    ) -> LmDatasetSourceConfigBase:
         """
         For use in Levanter training runs with mixtures of datasets.
 
@@ -160,7 +160,7 @@ class HfTokenizeConfig(TokenizeConfigBase):
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
-    ) -> LMDatasetSourceConfig:
+    ) -> LmDatasetSourceConfigBase:
         return HfDatasetSourceConfig(
             id=self.id,
             name=self.name,

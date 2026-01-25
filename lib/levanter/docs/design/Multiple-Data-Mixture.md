@@ -28,18 +28,18 @@ as specified in the [Data Loader design](Data-Loader-Design.md).
 
 ## Design and Implementation
 ### Configuration
-#### LMDatasetSourceConfig
-We first introduce a new `LMDatasetSourceConfig` class to represent a dataset source. It takes in a list of URLs or a Hugging Face Dataset name/id. This class will be used for specifying a single dataset source.
+#### Dataset source config
+We first introduce a new `LmDatasetSourceConfigBase` class to represent a dataset source. It is a choice registry with
+concrete subclasses like `UrlDatasetSourceConfig` and `HfDatasetSourceConfig` that specify URLs or a Hugging Face
+dataset name/id.
 
 ```yaml
 @dataclass
-class LMDatasetSourceConfig:
-    """This class represents a dataset source with URLs or hf name/id"""
-    id: Optional[str] = None  # id (or path) for hf dataset
-    name: Optional[str] = None  # name for hf dataset
-
-    train_urls: List[str] = ()  # type: ignore
-    validation_urls: List[str] = ()  # type:ignore
+class LmDatasetSourceConfigBase:
+    """Base dataset source config; use UrlDatasetSourceConfig/HfDatasetSourceConfig for concrete sources."""
+    tags: list[str] | None = None
+    cache_dir: str | None = None
+    format: LmDatasetFormatBase = TextLmDatasetFormat()
 ```
 
 Note that we do not include `cache_dir` here, as data cache is dependent on the tokenizer used.
