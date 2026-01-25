@@ -552,19 +552,25 @@ class RolloutWorker:
             group = batch.groups[group_idx]
             if not group.rollouts:
                 continue
-            rollout = random.choice(group.rollouts)
-            prompt_text = self._tokenizer.decode(rollout.prompt_tokens, skip_special_tokens=False)
-            response_text = self._tokenizer.decode(rollout.response_tokens, skip_special_tokens=False)
-            rows.append(
-                {"prompt": prompt_text, "response": response_text, "reward": rollout.episode_reward, "step": step}
-            )
+            for rollout_idx, rollout in enumerate(group.rollouts):
+                prompt_text = self._tokenizer.decode(rollout.prompt_tokens, skip_special_tokens=False)
+                response_text = self._tokenizer.decode(rollout.response_tokens, skip_special_tokens=False)
+                rows.append(
+                    {
+                        "prompt": prompt_text,
+                        "response": response_text,
+                        "reward": rollout.episode_reward,
+                        "step": step,
+                        "sample_index": rollout_idx,
+                    }
+                )
 
         if not rows:
             return
 
-        table = wandb.Table(columns=["prompt", "response", "reward", "step"])
+        table = wandb.Table(columns=["prompt", "response", "reward", "step", "sample_index"])
         for row in rows:
-            table.add_data(row["prompt"], row["response"], row["reward"], row["step"])
+            table.add_data(row["prompt"], row["response"], row["reward"], row["step"], row["sample_index"])
 
         prefix = f"inference.{eval_type}/{lesson_id}"
         metrics = {f"{prefix}/sample_table": table}
