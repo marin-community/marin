@@ -26,7 +26,7 @@ from connectrpc.request import RequestContext
 
 from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint
-from iris.cluster.worker.builder import BuildResult, VenvCache
+from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
 from iris.cluster.worker.service import WorkerServiceImpl
@@ -148,21 +148,12 @@ def mock_bundle_cache():
 
 
 @pytest.fixture
-def mock_venv_cache():
-    """Create mock VenvCache."""
-    cache = Mock(spec=VenvCache)
-    cache.compute_deps_hash = Mock(return_value="abc123")
-    return cache
-
-
-@pytest.fixture
 def mock_image_cache():
     """Create mock ImageBuilder."""
     builder = Mock(spec=ImageBuilder)
     builder.build = Mock(
         return_value=BuildResult(
             image_tag="test-image:latest",
-            deps_hash="abc123",
             build_time_ms=1000,
             from_cache=False,
         )
@@ -199,7 +190,7 @@ def mock_runtime():
 
 
 @pytest.fixture
-def worker(mock_bundle_cache, mock_venv_cache, mock_image_cache, mock_runtime):
+def worker(mock_bundle_cache, mock_image_cache, mock_runtime):
     """Create Worker with mocked dependencies."""
     config = WorkerConfig(
         port=0,
@@ -453,9 +444,8 @@ def test_task_failure_error_appears_in_logs(worker, mock_bundle_cache):
     assert any("Bundle download failed" in log.data for log in error_logs)
 
 
-def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_image_cache):
+def test_port_retry_on_binding_failure(mock_bundle_cache, mock_image_cache):
     """Test that task retries with new ports when port binding fails."""
-    del mock_venv_cache  # unused
     runtime = Mock(spec=DockerRuntime)
     runtime.create_container = Mock(return_value="container123")
 
@@ -514,9 +504,8 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_
     assert any("Port conflict" in log.data for log in build_logs)
 
 
-def test_port_retry_exhausted(mock_bundle_cache, mock_venv_cache, mock_image_cache):
+def test_port_retry_exhausted(mock_bundle_cache, mock_image_cache):
     """Test that task fails after max port retries are exhausted."""
-    del mock_venv_cache  # unused
     runtime = Mock(spec=DockerRuntime)
     runtime.create_container = Mock(return_value="container123")
     runtime.start_container = Mock(side_effect=RuntimeError("failed to bind host port: address already in use"))

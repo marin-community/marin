@@ -31,7 +31,7 @@ from iris.rpc import cluster_pb2
 from iris.time_utils import ExponentialBackoff, now_ms
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.errors import format_exception_with_traceback
-from iris.cluster.worker.builder import ImageCache, ImageProvider, VenvCache
+from iris.cluster.worker.builder import ImageCache, ImageProvider
 from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, DockerRuntime
@@ -138,7 +138,6 @@ class Worker:
 
         # Use overrides if provided, otherwise create defaults
         self._bundle_cache = bundle_provider or BundleCache(self._cache_dir, max_bundles=100)
-        self._venv_cache = VenvCache()
         self._image_cache = image_provider or ImageCache(
             self._cache_dir,
             registry=config.registry,
@@ -372,9 +371,6 @@ class Worker:
             env_config = task.request.environment
             extras = list(env_config.extras)
 
-            # Compute deps_hash for caching
-            deps_hash = self._venv_cache.compute_deps_hash(bundle_path)
-
             task.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="populating uv cache")
             task.logs.add("build", "Building Docker image...")
 
@@ -388,7 +384,6 @@ class Worker:
                 base_image=base_image,
                 extras=extras,
                 job_id=task.job_id,
-                deps_hash=deps_hash,
                 task_logs=task.logs,
             )
 

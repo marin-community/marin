@@ -25,7 +25,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
-from iris.cluster.worker.builder import BuildResult, ImageCache, VenvCache
+from iris.cluster.worker.builder import BuildResult, ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime
@@ -49,21 +49,12 @@ def mock_bundle_cache():
 
 
 @pytest.fixture
-def mock_venv_cache():
-    """Create mock VenvCache."""
-    cache = Mock(spec=VenvCache)
-    cache.compute_deps_hash = Mock(return_value="abc123")
-    return cache
-
-
-@pytest.fixture
 def mock_image_cache():
     """Create mock ImageCache."""
     cache = Mock(spec=ImageCache)
     cache.build = Mock(
         return_value=BuildResult(
             image_tag="test-image:latest",
-            deps_hash="abc123",
             build_time_ms=1000,
             from_cache=False,
         )
@@ -102,7 +93,7 @@ def mock_runtime():
 
 
 @pytest.fixture
-def worker(mock_bundle_cache, mock_venv_cache, mock_image_cache, mock_runtime):
+def worker(mock_bundle_cache, mock_image_cache, mock_runtime):
     """Create Worker with mocked dependencies."""
     config = WorkerConfig(
         port=0,
