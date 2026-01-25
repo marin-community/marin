@@ -7,21 +7,10 @@ import dataclasses
 import functools
 import logging
 import os
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
-from typing import (
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Sequence,
-    Tuple,
-    TypeAlias,
-    TypeVar,
-    Union,
-)
+from typing import Literal, TypeAlias, TypeVar
 
 import equinox as eqx
 import haliax as hax
@@ -83,8 +72,8 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         super().__init__()
         self.doc_cache = doc_cache
         self.seq_len = seq_len
-        self._store: Optional[TreeStore] = doc_cache.store
-        self._cached_len: Optional[int] = None
+        self._store: TreeStore | None = doc_cache.store
+        self._cached_len: int | None = None
 
     async def async_len(self) -> int:
         token_arrays = await self._await_token_cache()
@@ -101,7 +90,7 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
     def is_finite(self) -> bool:
         return True
 
-    async def current_len(self) -> Optional[int]:
+    async def current_len(self) -> int | None:
         store = await self._await_token_cache()
         return store.data_size // self.seq_len
 
@@ -137,7 +126,7 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
         dataset: AsyncDataset[np.ndarray],
         Pos: Axis,
         *,
-        eos_id: Optional[int] = None,
+        eos_id: int | None = None,
         block_cross_document_attention: bool = True,
     ):
         self.dataset = dataset
@@ -183,7 +172,7 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
         input_ids_key: str,
         loss_weights_key: str | None,
         loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None,
-        eos_id: Optional[int] = None,
+        eos_id: int | None = None,
         block_cross_document_attention: bool = True,
     ):
         self.dataset = dataset
@@ -239,14 +228,14 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, LmExample]):
 class LmDatasetSourceConfigBase(ChoiceRegistry):
     """This class represents a dataset source with URLs or hf name/id."""
 
-    tags: Optional[List[str]] = None
+    tags: list[str] | None = None
     """tags for the dataset. Typically the name of the dataset in the config will be added as a tag as well"""
     cache_dir: str | None = None  # Optionally override the cache dir for this component
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
     """format of the dataset."""
 
     @abc.abstractmethod
-    def get_shard_source(self, split) -> Optional[ShardedDataSource[dict]]:
+    def get_shard_source(self, split) -> ShardedDataSource[dict] | None:
         raise NotImplementedError
 
     def load_cache(
@@ -270,11 +259,11 @@ class HfDatasetSourceConfig(LmDatasetSourceConfigBase):
     """
 
     id: str = dataclasses.field(kw_only=True)
-    name: Optional[str] = None  # name for hf dataset
+    name: str | None = None  # name for hf dataset
     stream: bool = True  # whether to use streaming when doing hf
-    splits: Optional[List[str]] = None
+    splits: list[str] | None = None
 
-    def get_shard_source(self, split) -> Optional[ShardedDataSource[dict]]:
+    def get_shard_source(self, split) -> ShardedDataSource[dict] | None:
         if self.splits is not None and split not in self.splits:
             logger.warning(f"Splits {split} not found for {self.id} {self.name}")
             return None
@@ -301,7 +290,7 @@ class UrlDatasetSourceConfig(LmDatasetSourceConfigBase):
     train_urls: list[str] = ()  # type: ignore
     validation_urls: list[str] = ()  # type:ignore
 
-    def get_shard_source(self, split) -> Optional[ShardedDataSource[dict]]:
+    def get_shard_source(self, split) -> ShardedDataSource[dict] | None:
         split_urls = self.urls_for_split(split)
 
         if len(split_urls) == 0:
@@ -333,10 +322,10 @@ LMDatasetSourceConfig: TypeAlias = LmDatasetSourceConfigBase
 @dataclass(frozen=True)
 class LMTaskConfig(abc.ABC):
     tokenizer: str = "gpt2"
-    vocab_size: Optional[int] = None  # if using the passthrough tokenizer, this is required
+    vocab_size: int | None = None  # if using the passthrough tokenizer, this is required
 
     # config related to caching
-    cache_dir: Optional[str] = "cache/"
+    cache_dir: str | None = "cache/"
     cache_options: CacheOptions = field(default_factory=CacheOptions)
     enforce_eos: bool = True  # whether to append eos even if the tokenizer doesn't
     auto_build_caches: bool = True
@@ -379,7 +368,7 @@ class LMTaskConfig(abc.ABC):
         batch_schedule: BatchSchedule,
         *,
         key: PRNGKeyArray,
-        epochs: Optional[int] = None,
+        epochs: int | None = None,
     ) -> AsyncDataset[LmExample]:
         pass
 
@@ -389,7 +378,7 @@ class LMTaskConfig(abc.ABC):
         Pos: Axis,
         *,
         key: PRNGKeyArray,
-        epochs: Optional[int] = None,
+        epochs: int | None = None,
     ) -> Mapping[str, AsyncDataset[LmExample]]:
         pass
 
@@ -406,22 +395,38 @@ class LMTaskConfig(abc.ABC):
     def sources(self) -> Mapping[str, LmDatasetSourceConfigBase]:
         pass
 
-    def tagged_eval_sets(self, Pos: Axis) -> list[Tuple[AsyncDataset[LmExample], List[str]]]:
+    def tagged_eval_sets(self, Pos: Axis) -> list[tuple[AsyncDataset[LmExample], list[str]]]:
         tags = {name: (config.tags or []) + [name] for name, config in self.sources.items()}
         eval_sets = self.validation_sets(Pos)
 
         return [(eval_sets[name], tags[name]) for name in eval_sets]
 
 
+class DatasetComponentBase(ChoiceRegistry):
+    @classmethod
+    def default_choice_name(cls) -> str | None:
+        return "cached"
+
+
+@DatasetComponentBase.register_subclass("cached")
 @dataclass(frozen=True)
-class DatasetComponent:
-    """A single dataset component with optional source and cache."""
+class DatasetComponent(DatasetComponentBase):
+    """A single cache-backed dataset component with optional source."""
 
     source: LmDatasetSourceConfigBase | None = None
     cache_dir: str | None = None
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
     pack: bool | int | Literal["pad"] | None = None
-    tags: Optional[List[str]] = None
+    tags: list[str] | None = None
+
+
+@DatasetComponentBase.register_subclass("direct")
+@dataclass(frozen=True)
+class DirectDatasetComponent(DatasetComponentBase):
+    """A programmatic dataset component that supplies AsyncDataset[LmExample] instances directly."""
+
+    datasets: Mapping[str, AsyncDataset[LmExample]]
+    tags: list[str] | None = None
 
 
 def _effective_pack(component: DatasetComponent) -> bool | int | Literal["pad"]:
@@ -597,15 +602,15 @@ def _component_cache_dir(name: str, component: DatasetComponent, default_root: s
 class LmDataConfig(LMTaskConfig):
     """Unified LM data config built from components."""
 
-    components: Dict[str, DatasetComponent] = field(default_factory=dict)
-    train_weights: Union[Dict[str, float], List[Tuple[int, Dict[str, float]]]] | None = None
+    components: dict[str, DatasetComponentBase] = field(default_factory=dict)
+    train_weights: dict[str, float] | list[tuple[int, dict[str, float]]] | None = None
 
     stop_strategy: str = field(default=StopStrategy.RESTART_STRATEGY)
-    target_budget: Optional[int] = None
-    experiment_budget: Optional[int] = None
+    target_budget: int | None = None
+    experiment_budget: int | None = None
     mixture_block_size: int = 2048
-    max_train_batches: Optional[Dict[str, int]] = None
-    num_validation_sequences: Optional[Dict[str, int]] = None
+    max_train_batches: dict[str, int] | None = None
+    num_validation_sequences: dict[str, int] | None = None
 
     def __post_init__(self):
         if self.components and self.train_weights is None:
@@ -628,17 +633,48 @@ class LmDataConfig(LMTaskConfig):
                 self.experiment_budget is None and self.target_budget is None
             ), "max_train_batches/num_validation_sequences and simulated data budget cannot all be set"
 
-    def build_token_datasets(self, caches: Mapping[str, TreeCache[dict]], Pos: Axis):
-        return {
-            name: dataset_for_component(
-                self.components[name],
+    def _has_nonzero_weight(self, name: str) -> bool:
+        weights = self.train_weights
+        if weights is None:
+            return True
+        if isinstance(weights, dict):
+            return weights.get(name, 0) > 0
+        return any(w.get(name, 0) > 0 for _, w in weights)
+
+    def build_token_datasets(self, caches: Mapping[str, TreeCache[dict]], Pos: Axis, *, split: str):
+        datasets: dict[str, AsyncDataset[LmExample]] = {}
+        for name, component in self.components.items():
+            if split == "train" and not self._has_nonzero_weight(name):
+                continue
+
+            if isinstance(component, DirectDatasetComponent):
+                direct = component.datasets.get(split)
+                if direct is None:
+                    if split == "train":
+                        raise ValueError(f"Direct dataset format missing {split} split for component {name}")
+                    logger.warning("Direct dataset format missing %s split for component %s", split, name)
+                    continue
+                datasets[name] = direct
+                continue
+
+            if not isinstance(component, DatasetComponent):
+                raise ValueError(f"Unsupported component type for {name}: {type(component)}")
+
+            cache = caches.get(name)
+            if cache is None:
+                if split == "train":
+                    raise ValueError(f"No cache available for component {name} in {split} split")
+                continue
+
+            datasets[name] = dataset_for_component(
+                component,
                 Pos,
                 cache,
                 eos_id=self.the_tokenizer.eos_token_id,
                 block_cross_document_attention=self.block_cross_document_attention,
             )
-            for name, cache in caches.items()
-        }
+
+        return datasets
 
     def train_set(
         self,
@@ -646,7 +682,7 @@ class LmDataConfig(LMTaskConfig):
         batch_schedule: BatchSchedule,
         *,
         key: PRNGKeyArray,
-        epochs: Optional[int] = None,
+        epochs: int | None = None,
     ) -> AsyncDataset[LmExample]:
         mix_key, shuffle_key = jax.random.split(key)
         weights = self.train_weights
@@ -667,12 +703,12 @@ class LmDataConfig(LMTaskConfig):
         self,
         Pos: Axis,
         *,
-        initial_batch_size: Optional[int] = None,
-        epochs: Optional[int] = None,
+        initial_batch_size: int | None = None,
+        epochs: int | None = None,
         key: PRNGKeyArray,
     ) -> Mapping[str, AsyncDataset[LmExample]]:
         doc_caches = self.build_caches("train")
-        datasets = self.build_token_datasets(doc_caches, Pos)
+        datasets = self.build_token_datasets(doc_caches, Pos, split="train")
 
         if epochs:
             raise ValueError("Epochs are not supported for mixture datasets")
@@ -706,7 +742,7 @@ class LmDataConfig(LMTaskConfig):
             )
         if self.experiment_budget is not None and self.target_budget is not None:
             simulated_data_ratio = self.experiment_budget / self.target_budget
-            sliced_datasets: Dict[str, AsyncDataset[LmExample]] = {}
+            sliced_datasets: dict[str, AsyncDataset[LmExample]] = {}
             for name, ds in datasets.items():
                 true_length_of_dataset = len(ds.as_sync_dataset())
                 simulated_length_of_dataset = int(true_length_of_dataset * simulated_data_ratio)
@@ -737,11 +773,11 @@ class LmDataConfig(LMTaskConfig):
 
     def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
         doc_caches = self.build_caches("validation")
-        validation_datasets = self.build_token_datasets(doc_caches, Pos)
+        validation_datasets = self.build_token_datasets(doc_caches, Pos, split="validation")
 
         if self.num_validation_sequences is not None:
             train_doc_caches = self.build_caches("train")
-            train_datasets = self.build_token_datasets(train_doc_caches, Pos)
+            train_datasets = self.build_token_datasets(train_doc_caches, Pos, split="train")
 
             for name, num_sequences in self.num_validation_sequences.items():
                 len_dataset = len(train_datasets[name].as_sync_dataset())
@@ -752,17 +788,17 @@ class LmDataConfig(LMTaskConfig):
 
         return validation_datasets
 
-    def build_caches(self, split: str) -> Dict[str, TreeCache[dict]]:
+    def build_caches(self, split: str) -> dict[str, TreeCache[dict]]:
         caches: dict[str, TreeCache[dict]] = {}
-        weights = self.train_weights
         for name, component in self.components.items():
-            if split == "train" and weights is not None:
-                if isinstance(weights, dict):
-                    has_nonzero = weights.get(name, 0) > 0
-                else:
-                    has_nonzero = any(w.get(name, 0) > 0 for _, w in weights)
-                if not has_nonzero:
-                    continue
+            if split == "train" and not self._has_nonzero_weight(name):
+                continue
+
+            if isinstance(component, DirectDatasetComponent):
+                continue
+
+            if not isinstance(component, DatasetComponent):
+                raise ValueError(f"Unsupported component type for {name}: {type(component)}")
 
             cache_root = _component_cache_dir(name, component, self.cache_dir)
             source = component.source
@@ -809,9 +845,13 @@ class LmDataConfig(LMTaskConfig):
 
     @property
     def sources(self) -> Mapping[str, LmDatasetSourceConfigBase]:
-        return {name: comp.source for name, comp in self.components.items() if comp.source is not None}
+        sources: dict[str, LmDatasetSourceConfigBase] = {}
+        for name, comp in self.components.items():
+            if isinstance(comp, DatasetComponent) and comp.source is not None:
+                sources[name] = comp.source
+        return sources
 
-    def tagged_eval_sets(self, Pos: Axis) -> list[Tuple[AsyncDataset[LmExample], List[str]]]:
+    def tagged_eval_sets(self, Pos: Axis) -> list[tuple[AsyncDataset[LmExample], list[str]]]:
         eval_sets = self.validation_sets(Pos)
         tagged = []
         for name, ds in eval_sets.items():

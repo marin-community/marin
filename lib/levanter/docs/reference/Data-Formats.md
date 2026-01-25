@@ -162,6 +162,22 @@ without needing to rebuild the cache.
 
 ---
 
+## Programmatic direct datasets
+
+Used when you construct an `AsyncDataset[LmExample]` directly in code and want to plug it into the
+component/mixture plumbing without cache build/load.
+
+```python
+from levanter.data.text import DirectDatasetComponent, LmDataConfig
+
+component = DirectDatasetComponent(datasets={"train": train_ds, "validation": val_ds})
+config = LmDataConfig(components={"special": component})
+```
+
+Direct datasets are expected to yield `LmExample` instances that already include any masking/packing behavior.
+
+---
+
 
 # API
 
@@ -170,6 +186,8 @@ without needing to rebuild the cache.
 
 ::: levanter.data.text.LmDataConfig
 ::: levanter.data.text.DatasetComponent
+::: levanter.data.text.DatasetComponentBase
+::: levanter.data.text.DirectDatasetComponent
 ::: levanter.data.text.LmDatasetSourceConfigBase
 ::: levanter.data.text.HfDatasetSourceConfig
 ::: levanter.data.text.UrlDatasetSourceConfig

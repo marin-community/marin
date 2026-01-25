@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, Mapping, Optional, Sequence, TypedDict
+from typing import Any, Literal, TypedDict
 
 import numpy as np
 from draccus import ChoiceRegistry
@@ -15,7 +16,7 @@ from levanter.utils.hf_utils import HfTokenizer, num_cpus_used_by_tokenizer
 
 class LmDatasetFormatBase(ChoiceRegistry):
     @classmethod
-    def default_choice_name(cls) -> Optional[str]:
+    def default_choice_name(cls) -> str | None:
         return "text"
 
 
