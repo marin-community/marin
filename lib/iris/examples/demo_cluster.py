@@ -331,6 +331,273 @@ class LocalVmManager:
 
 
 # =============================================================================
+# GCP Cluster Demo (--cluster mode)
+# =============================================================================
+
+
+DEFAULT_CONTROLLER_PORT = 10000
+
+
+def _wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> bool:
+    """Wait for a port to become available.
+
+    Returns True if port is ready, False if timeout.
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                return True
+        except (ConnectionRefusedError, OSError, TimeoutError):
+            time.sleep(0.5)
+    return False
+
+
+def _discover_controller_vm(zone: str, project: str) -> str | None:
+    """Find the controller VM in the given zone using name-based filter."""
+    result = subprocess.run(
+        [
+            "gcloud",
+            "compute",
+            "instances",
+            "list",
+            f"--project={project}",
+            f"--zones={zone}",
+            "--filter=name~^iris-controller",
+            "--format=value(name)",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        logger.error("Error listing instances: %s", result.stderr)
+        return None
+
+    vm_names = result.stdout.strip().split("\n")
+    vm_names = [v for v in vm_names if v]
+
+    if not vm_names:
+        return None
+    if len(vm_names) > 1:
+        logger.warning("Multiple controller VMs found: %s", vm_names)
+    return vm_names[0]
+
+
+class ClusterDemoCluster:
+    """Demo cluster backed by a real GCP cluster.
+
+    This class manages a real GCP cluster using GcpController for the controller
+    VM lifecycle. An SSH tunnel is established for local access to the controller.
+
+    Example:
+        with ClusterDemoCluster(config_path) as demo:
+            results = demo.seed_cluster()
+            if demo.validate_seed_results(results):
+                demo.launch_jupyter()
+                demo.wait_for_interrupt()
+    """
+
+    def __init__(self, config_path: Path):
+        from iris.cluster.vm.config import load_config
+        from iris.cluster.vm.controller import GcpController
+
+        self._config_path = config_path
+        self._config = load_config(config_path)
+        self._controller = GcpController(self._config)
+        self._controller_url: str | None = None
+        self._tunnel_proc: subprocess.Popen | None = None
+        self._local_port = find_free_port()
+        self._rpc_client: IrisClient | None = None
+
+    def __enter__(self):
+        """Start controller VM and establish tunnel."""
+
+        # Try to discover existing controller first
+        zone = self._config.zone
+        project = self._config.project_id
+        vm_name = _discover_controller_vm(zone, project)
+
+        if vm_name:
+            logger.info("Found existing controller VM: %s", vm_name)
+            self._controller_url = f"http://localhost:{self._local_port}"
+        else:
+            logger.info("Starting new controller VM...")
+            # GcpController.start() creates VM and waits for health
+            controller_address = self._controller.start()
+            logger.info("Controller started at %s", controller_address)
+            self._controller_url = f"http://localhost:{self._local_port}"
+
+        # Establish SSH tunnel
+        vm_name = _discover_controller_vm(zone, project)
+        if not vm_name:
+            raise RuntimeError("Controller VM not found after start")
+
+        logger.info("Establishing SSH tunnel to %s:%d...", vm_name, DEFAULT_CONTROLLER_PORT)
+        self._tunnel_proc = subprocess.Popen(
+            [
+                "gcloud",
+                "compute",
+                "ssh",
+                vm_name,
+                f"--project={project}",
+                f"--zone={zone}",
+                "--",
+                "-L",
+                f"{self._local_port}:localhost:{DEFAULT_CONTROLLER_PORT}",
+                "-N",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "LogLevel=ERROR",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+
+        if not _wait_for_port(self._local_port, timeout=30):
+            stderr = self._tunnel_proc.stderr.read().decode() if self._tunnel_proc.stderr else ""
+            self._tunnel_proc.terminate()
+            self._tunnel_proc.wait()
+            raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
+
+        logger.info("SSH tunnel established on port %d", self._local_port)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Cleanup tunnel and optionally stop controller."""
+        del exc_type, exc_val, exc_tb  # unused
+
+        if self._rpc_client:
+            self._rpc_client = None
+
+        if self._tunnel_proc:
+            self._tunnel_proc.terminate()
+            try:
+                self._tunnel_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._tunnel_proc.kill()
+                self._tunnel_proc.wait()
+            self._tunnel_proc = None
+
+        # Note: We don't stop the controller by default - user can use cleanup-cluster.py
+        logger.info("Demo cluster session ended. Controller VM is still running.")
+        logger.info("To stop: uv run python scripts/cleanup-cluster.py --zone %s", self._config.zone)
+
+    @property
+    def controller_url(self) -> str:
+        if self._controller_url is None:
+            raise RuntimeError("Cluster not started")
+        return self._controller_url
+
+    @property
+    def client(self) -> IrisClient:
+        """IrisClient for this cluster."""
+        if self._rpc_client is None:
+            self._rpc_client = IrisClient.remote(
+                self.controller_url,
+                workspace=IRIS_ROOT,
+            )
+        return self._rpc_client
+
+    def seed_cluster(self) -> list[tuple[str, str]]:
+        """Submit demo jobs to the cluster (TPU jobs for real cluster)."""
+        results = []
+
+        def hello():
+            print("Hello from iris!")
+            return 42
+
+        def compute(a, b):
+            result = a + b
+            print(f"{a} + {b} = {result}")
+            return result
+
+        # Get TPU type from config
+        tpu_type = None
+        for group in self._config.scale_groups.values():
+            if group.accelerator_type:
+                tpu_type = group.accelerator_type
+                break
+
+        if tpu_type is None:
+            raise RuntimeError("No TPU scale group found in config")
+
+        from iris.cluster.types import CoschedulingConfig, get_tpu_topology
+
+        topo = get_tpu_topology(tpu_type)
+        replicas = topo.vm_count
+
+        # Simple TPU job
+        print(f"  Submitting demo-hello (TPU: {tpu_type})...")
+        job = self.client.submit(
+            entrypoint=Entrypoint.from_callable(hello),
+            name="demo-hello",
+            resources=ResourceSpec(cpu=1, memory="512m", device=tpu_device(tpu_type)),
+            environment=EnvironmentSpec(workspace="/app"),
+        )
+        status = job.wait(timeout=600)  # 10 min for TPU provisioning
+        results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
+        print(f"  demo-hello: {cluster_pb2.JobState.Name(status.state)}")
+
+        # Compute job
+        print(f"  Submitting demo-compute (TPU: {tpu_type})...")
+        job = self.client.submit(
+            entrypoint=Entrypoint.from_callable(compute, 10, 32),
+            name="demo-compute",
+            resources=ResourceSpec(cpu=1, memory="512m", device=tpu_device(tpu_type)),
+            environment=EnvironmentSpec(workspace="/app"),
+        )
+        status = job.wait(timeout=600)
+        results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
+        print(f"  demo-compute: {cluster_pb2.JobState.Name(status.state)}")
+
+        # Coscheduled TPU job
+        def distributed_work():
+            from iris.cluster.client import get_job_info
+
+            info = get_job_info()
+            if info is None:
+                raise RuntimeError("Not running in an Iris job context")
+            print(f"Task {info.task_index} of {info.num_tasks} on worker {info.worker_id}")
+            return f"Task {info.task_index} done"
+
+        print(f"  Submitting demo-coscheduled ({replicas} replicas, TPU: {tpu_type})...")
+        job = self.client.submit(
+            entrypoint=Entrypoint.from_callable(distributed_work),
+            name="demo-coscheduled",
+            resources=ResourceSpec(
+                cpu=1,
+                memory="512m",
+                replicas=replicas,
+                device=tpu_device(tpu_type),
+            ),
+            environment=EnvironmentSpec(workspace="/app"),
+            coscheduling=CoschedulingConfig(group_by="tpu-name"),
+        )
+        status = job.wait(timeout=600)
+        results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
+        print(f"  demo-coscheduled: {cluster_pb2.JobState.Name(status.state)}")
+
+        return results
+
+    def validate_seed_results(self, results: list[tuple[str, str]]) -> bool:
+        """Validate that seed jobs completed as expected."""
+        expected = ["JOB_STATE_SUCCEEDED"] * len(results)
+        actual = [r[1] for r in results]
+        return actual == expected
+
+    def wait_for_interrupt(self):
+        """Wait for Ctrl+C, keeping the cluster running."""
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+
+
+# =============================================================================
 # Demo Cluster
 # =============================================================================
 
@@ -734,11 +1001,32 @@ class DemoCluster:
 @click.option("--validate-only", is_flag=True, help="Run seed jobs and exit (for CI)")
 @click.option("--test-notebook", is_flag=True, help="Run notebook programmatically and validate (for CI)")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
-def main(no_browser: bool, validate_only: bool, test_notebook: bool, verbose: bool):
+@click.option("--cluster", is_flag=True, help="Use real GCP cluster instead of in-process")
+@click.option(
+    "--config",
+    "config_file",
+    type=click.Path(exists=True, path_type=Path),
+    help="Cluster config for --cluster mode (e.g., examples/eu-west4.yaml)",
+)
+def main(
+    no_browser: bool,
+    validate_only: bool,
+    test_notebook: bool,
+    verbose: bool,
+    cluster: bool,
+    config_file: Path | None,
+):
     """Launch demo cluster with Jupyter notebook.
 
-    Workers are created on-demand by the autoscaler when jobs are submitted.
-    Jobs execute in-process (no Docker required).
+    By default runs in-process (no Docker required). Use --cluster to boot a
+    real GCP cluster with TPU workers.
+
+    Examples:
+        # In-process mode (fast, for local testing)
+        uv run python examples/demo_cluster.py --validate-only
+
+        # Real GCP cluster mode
+        uv run python examples/demo_cluster.py --cluster --config examples/eu-west4.yaml
     """
     if verbose:
         logging.basicConfig(
@@ -751,9 +1039,21 @@ def main(no_browser: bool, validate_only: bool, test_notebook: bool, verbose: bo
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
 
-    print("Starting demo cluster with autoscaler...")
+    # Validate cluster mode requirements
+    if cluster and config_file is None:
+        print("ERROR: --cluster requires --config (e.g., --config examples/eu-west4.yaml)")
+        sys.exit(1)
 
-    with DemoCluster() as demo:
+    if cluster:
+        assert config_file is not None  # Validated above
+        print(f"Starting GCP cluster from config: {config_file}")
+        print("Note: TPU provisioning can take 5-10 minutes")
+        demo_class = ClusterDemoCluster(config_file)
+    else:
+        print("Starting demo cluster with autoscaler...")
+        demo_class = DemoCluster()
+
+    with demo_class as demo:
         print(f"Controller: {demo.controller_url}")
         print()
         print("Seeding cluster with demo jobs...")
@@ -772,6 +1072,14 @@ def main(no_browser: bool, validate_only: bool, test_notebook: bool, verbose: bo
 
         if validate_only:
             print("Validation passed!")
+            return
+
+        if cluster:
+            # In cluster mode, just wait for interrupt (no Jupyter)
+            print()
+            print("Cluster is running. Press Ctrl+C to disconnect.")
+            print("Note: Controller VM will remain running. Use cleanup-cluster.py to stop.")
+            demo.wait_for_interrupt()
             return
 
         if test_notebook:
