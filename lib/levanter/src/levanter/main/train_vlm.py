@@ -663,10 +663,28 @@ def main(config: TrainVLMConfig):
         # Define axes from config (deterministic across all workers)
         Pos = hax.Axis("position", config.data.max_length)
 
-        # Always use config-based values for deterministic multi-controller behavior
-        # This avoids non-determinism from _get_first_example() which can succeed
-        # on some workers and fail on others, causing XLA compilation divergence
-        max_num_patches = _compute_max_num_patches(config, first_ex=None)
+        # Get max_num_patches from packing config if available (deterministic)
+        # This avoids non-determinism from _get_first_example() and respects packed data
+        if hasattr(train_dataset_mixture, '_config') and train_dataset_mixture._config is not None:
+            # PackedVLMDataset: use packing config's max_patches
+            max_num_patches = train_dataset_mixture._config.max_patches - 1  # -1 for base patch
+            logger.info(f"Using max_num_patches={max_num_patches} from packing config")
+        elif hasattr(train_dataset_mixture, 'datasets'):
+            # MixtureDataset: check if any underlying dataset is packed
+            for ds in train_dataset_mixture.datasets.values():
+                if hasattr(ds, '_config') and ds._config is not None:
+                    max_num_patches = ds._config.max_patches - 1
+                    logger.info(f"Using max_num_patches={max_num_patches} from packing config (via mixture)")
+                    break
+            else:
+                max_num_patches = _compute_max_num_patches(config, first_ex=None)
+                logger.info(f"Using max_num_patches={max_num_patches} from model config")
+        else:
+            # Non-packed mode: use config-based calculation
+            max_num_patches = _compute_max_num_patches(config, first_ex=None)
+            logger.info(f"Using max_num_patches={max_num_patches} from model config")
+
+        # Image shape always from config (deterministic)
         channels, height, width = _get_image_shape_from_config(config)
         logger.info(f"Using config-based image shape: C={channels}, H={height}, W={width}")
 

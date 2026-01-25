@@ -69,7 +69,7 @@ TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
 # - per_device_parallelism: samples processed per device at a time (limited by memory)
 # - gradient_accumulation_steps: how many micro-batches to accumulate before updating
 # - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
-PER_DEVICE_PARALLELISM = 1  # 1 sample per device (memory-safe for VLM with large images)
+PER_DEVICE_PARALLELISM = 2  # 1 sample per device (memory-safe for VLM with large images)
 GRADIENT_ACCUMULATION_STEPS = 1  # Accumulate 4 micro-batches
 BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
 
@@ -78,7 +78,7 @@ BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  #
 # ============================================================================
 
 # Flash attention block size (set to None to disable flash attention)
-FLASH_ATTENTION_BLOCK_SIZE = 256
+FLASH_ATTENTION_BLOCK_SIZE = 1024
 
 # Vision encoder: SigLIP-like (matches google/siglip-so400m-patch14-384)
 vision_config = SiglipVisionConfig(
@@ -184,7 +184,7 @@ data_config = ImageMixtureDatasetConfig(
 # 4. TRAINING CONFIGURATION
 # ============================================================================
 # Dataset size: 558K samples
-DATASET_SIZE = 3417011
+DATASET_SIZE = 5125936
 NUM_EPOCHS = 1
 NUM_TRAIN_STEPS = (DATASET_SIZE // BATCH_SIZE) * NUM_EPOCHS
 

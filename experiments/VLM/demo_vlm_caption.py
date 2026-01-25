@@ -24,7 +24,7 @@ Architecture:
 
 Usage:
     # Basic usage with default checkpoint
-    python experiments/VLM/demo_vlm_caption.py --image_path path/to/image.jpg
+    python experiments/VLM/demo_vlm_caption.py --image_path 7-1-scaled.jpg --checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-2-80caa3/checkpoints/step-20000
 
     # With custom prompt
     python experiments/VLM/demo_vlm_caption.py \
