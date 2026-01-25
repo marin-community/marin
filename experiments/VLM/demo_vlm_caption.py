@@ -116,7 +116,7 @@ class VLMCaptionConfig:
     trainer: TrainerConfig = field(
         default_factory=lambda: TrainerConfig(
             mesh=MeshConfig(
-                axes={"model": 8, "data": 1},  # 8-way model parallelism for head sharding
+                axes={"model": -1, "data": 1},  # 8-way model parallelism for head sharding
                 compute_mapping={
                     "vision_batch": DEFAULT_DP_AXES,
                     "kv_head": "model",    # CORRECT axis name for paged attention sharding (16 heads / 8 = 2 per core)

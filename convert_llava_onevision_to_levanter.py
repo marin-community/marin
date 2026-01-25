@@ -241,6 +241,11 @@ def write_shard_to_local(
     dataset = Dataset.from_list(rows)
     dataset.to_parquet(local_path)
 
+    # CRITICAL: Ensure data is fully flushed to disk before upload
+    # Without this, gcloud storage cp may see inconsistent file size
+    with open(local_path, 'rb') as f:
+        os.fsync(f.fileno())
+
     # Explicit memory cleanup
     del dataset
     gc.collect()
@@ -894,30 +899,39 @@ def save_download_first_checkpoint(
 def download_parquet_batch(
     files: List[Tuple[str, str]],
     download_dir: str,
-    max_workers: int = 16
+    max_workers: int = 16,
+    timeout_minutes: float = 3.0,
+    max_retries: int = 10
 ) -> List[str]:
     """
-    Download a batch of parquet files in parallel.
+    Download a batch of parquet files in parallel with per-file timeout and retry.
 
     Args:
         files: List of (repo_id, filename) tuples
         download_dir: Directory to download files to
         max_workers: Number of parallel download workers
+        timeout_minutes: Timeout for each file download in minutes (default: 3)
+        max_retries: Maximum number of retries per file (default: 4)
 
     Returns list of local file paths.
     """
+    import concurrent.futures
+
     if not HF_HUB_AVAILABLE:
         raise RuntimeError("huggingface_hub not installed")
 
     # Enable high-performance mode
     os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+    # Enable hf_transfer for faster downloads (if installed: pip install hf_transfer)
+    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
 
+    timeout_seconds = timeout_minutes * 60
     local_paths = []
-    download_errors = []
+    permanently_failed = []
 
     def download_file(repo_id: str, filename: str) -> Optional[str]:
+        """Download a single file."""
         try:
-            # Create a repo-specific subdirectory to avoid filename conflicts
             repo_download_dir = os.path.join(download_dir, repo_id.replace("/", "_"))
             local_path = hf_hub_download(
                 repo_id=repo_id,
@@ -928,40 +942,139 @@ def download_parquet_batch(
             )
             return local_path
         except Exception as e:
-            print(f"Error downloading {repo_id}/{filename}: {e}", file=sys.stderr)
-            return None
+            print(f"  Error downloading {repo_id}/{filename}: {e}", file=sys.stderr)
+            raise
 
     print(f"Downloading {len(files)} files with {max_workers} workers...")
-    start_time = time.time()
+    print(f"  Per-file timeout: {timeout_minutes:.0f} min, Max retries: {max_retries}")
+    overall_start_time = time.time()
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(download_file, repo_id, filename): (repo_id, filename) for repo_id, filename in files}
+    # Track retry counts for each file
+    retry_counts = {(repo_id, filename): 0 for repo_id, filename in files}
+    pending_files = list(files)
 
-        # Use tqdm for progress bar
-        pbar = tqdm(
-            as_completed(futures),
-            total=len(files),
-            desc="  Downloading",
-            unit="file"
-        )
+    # Process files with retry loop
+    round_num = 0
+    while pending_files:
+        round_num += 1
+        current_batch = pending_files
+        pending_files = []  # Will be filled with files that need retry
 
-        for future in pbar:
-            result = future.result()
-            if result:
-                local_paths.append(result)
-                pbar.set_postfix(ok=len(local_paths), err=len(download_errors))
-            else:
-                download_errors.append(futures[future])
-                pbar.set_postfix(ok=len(local_paths), err=len(download_errors))
+        if round_num > 1:
+            print(f"  Retry round {round_num - 1}: {len(current_batch)} files to retry...")
 
-        pbar.close()
+        # Create executor (don't use 'with' to avoid waiting on shutdown)
+        executor = ThreadPoolExecutor(max_workers=max_workers)
 
-    elapsed = time.time() - start_time
+        try:
+            # Submit all downloads for this round and track start times
+            future_to_file = {}
+            future_start_times = {}
+            for repo_id, filename in current_batch:
+                future = executor.submit(download_file, repo_id, filename)
+                future_to_file[future] = (repo_id, filename)
+                future_start_times[future] = time.time()
+
+            # Progress bar
+            pbar = tqdm(
+                total=len(current_batch),
+                desc=f"  Downloading (round {round_num})" if round_num > 1 else "  Downloading",
+                unit="file"
+            )
+
+            # Process futures with timeout checking
+            while future_to_file:
+                # Wait for some futures to complete (check every 30 seconds)
+                done, not_done = concurrent.futures.wait(
+                    future_to_file.keys(),
+                    timeout=30,
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
+
+                # Process completed futures
+                for future in done:
+                    repo_id, filename = future_to_file.pop(future)
+                    del future_start_times[future]
+                    pbar.update(1)
+
+                    try:
+                        result = future.result()
+                        if result:
+                            local_paths.append(result)
+                    except Exception as e:
+                        # Download error - check if we should retry
+                        if retry_counts[(repo_id, filename)] < max_retries:
+                            retry_counts[(repo_id, filename)] += 1
+                            pending_files.append((repo_id, filename))
+                            print(f"  Error: {filename}, will retry (attempt {retry_counts[(repo_id, filename)]}/{max_retries})")
+                        else:
+                            permanently_failed.append((repo_id, filename))
+                            print(f"  FAILED (max retries exceeded): {filename}", file=sys.stderr)
+
+                    pbar.set_postfix(
+                        ok=len(local_paths),
+                        retry=len(pending_files),
+                        failed=len(permanently_failed)
+                    )
+
+                # Check for timed-out futures (still running but exceeded timeout)
+                current_time = time.time()
+                timed_out = []
+                for future in list(future_to_file.keys()):
+                    elapsed = current_time - future_start_times[future]
+                    if elapsed > timeout_seconds:
+                        timed_out.append(future)
+
+                # Handle timed-out downloads
+                for future in timed_out:
+                    repo_id, filename = future_to_file.pop(future)
+                    del future_start_times[future]
+                    pbar.update(1)
+
+                    # Cancel the future (won't stop running thread, but marks it)
+                    future.cancel()
+
+                    print(f"  TIMEOUT ({timeout_minutes:.0f} min): {filename}", file=sys.stderr)
+
+                    if retry_counts[(repo_id, filename)] < max_retries:
+                        retry_counts[(repo_id, filename)] += 1
+                        pending_files.append((repo_id, filename))
+                        print(f"    Will retry (attempt {retry_counts[(repo_id, filename)]}/{max_retries})")
+                    else:
+                        permanently_failed.append((repo_id, filename))
+                        print(f"    FAILED (max retries exceeded)", file=sys.stderr)
+
+                    pbar.set_postfix(
+                        ok=len(local_paths),
+                        retry=len(pending_files),
+                        failed=len(permanently_failed)
+                    )
+
+            pbar.close()
+
+        finally:
+            # Shutdown executor WITHOUT waiting for pending tasks
+            # This allows timed-out downloads to be abandoned
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                # Python < 3.9 doesn't support cancel_futures
+                executor.shutdown(wait=False)
+
+        # Summary for this round
+        if pending_files:
+            print(f"  Round {round_num}: {len(local_paths)} ok, {len(pending_files)} to retry, {len(permanently_failed)} failed")
+
+    elapsed = time.time() - overall_start_time
     rate = len(files) / elapsed if elapsed > 0 else 0
-    print(f"  Download complete: {len(local_paths)} files in {elapsed:.1f}s ({rate:.1f} files/sec)")
+    print(f"  Download complete: {len(local_paths)}/{len(files)} files in {elapsed:.1f}s ({rate:.1f} files/sec)")
 
-    if download_errors:
-        print(f"  Warning: Failed to download {len(download_errors)} files")
+    if permanently_failed:
+        print(f"  WARNING: {len(permanently_failed)} files failed after {max_retries} retries:")
+        for repo_id, filename in permanently_failed[:10]:
+            print(f"    - {repo_id}/{filename}")
+        if len(permanently_failed) > 10:
+            print(f"    ... and {len(permanently_failed) - 10} more")
 
     return local_paths
 
@@ -983,7 +1096,9 @@ def process_dataset_download_first(
     resume: bool = False,
     checkpoint_dir: Optional[str] = None,
     local_shard_dir: Optional[str] = None,
-    max_local_shards: int = 20
+    max_local_shards: int = 20,
+    download_timeout_minutes: float = 3.0,
+    download_max_retries: int = 10
 ):
     """
     Process dataset using download-first mode with batch processing.
@@ -1158,7 +1273,9 @@ def process_dataset_download_first(
             local_paths = download_parquet_batch(
                 batch_files,
                 download_dir,
-                max_workers=download_workers
+                max_workers=download_workers,
+                timeout_minutes=download_timeout_minutes,
+                max_retries=download_max_retries
             )
 
             if not local_paths:
@@ -2103,6 +2220,18 @@ def main():
         help="Number of parallel download workers (default: 16)"
     )
     parser.add_argument(
+        "--download-timeout",
+        type=float,
+        default=3.0,
+        help="Timeout for each file download in minutes (default: 3). Files exceeding this will be retried."
+    )
+    parser.add_argument(
+        "--download-max-retries",
+        type=int,
+        default=10,
+        help="Maximum number of retries for failed/timed-out downloads (default: 10)"
+    )
+    parser.add_argument(
         "--upload-workers",
         type=int,
         default=8,
@@ -2194,6 +2323,8 @@ def main():
         print(f"Checkpoint dir: {args.checkpoint_dir or args.download_dir} (local)")
         print(f"Local shard dir: {args.local_shard_dir or args.download_dir + '/shards'}")
         print(f"Download workers: {args.download_workers}")
+        print(f"Download timeout: {args.download_timeout} min")
+        print(f"Download max retries: {args.download_max_retries}")
         print(f"Read workers: {args.read_workers}")
         print(f"Write workers: {args.write_workers}")
         print(f"Upload workers: {args.upload_workers}")
@@ -2229,7 +2360,9 @@ def main():
             resume=args.resume,
             checkpoint_dir=args.checkpoint_dir,
             local_shard_dir=args.local_shard_dir,
-            max_local_shards=args.max_local_shards
+            max_local_shards=args.max_local_shards,
+            download_timeout_minutes=args.download_timeout,
+            download_max_retries=args.download_max_retries
         )
     else:
         # Use streaming mode (original)
