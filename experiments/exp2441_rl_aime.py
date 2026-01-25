@@ -90,12 +90,12 @@ def create_aime_curriculum(run_id: str, experiment_config: RLExperimentConfig) -
         stop_tokens=None,
     )
     # DeepMath evaluation sampling parameters:
-    # temperature=0.6, top_p=0.95, n=16
+    # temperature=0.6, top_p=0.95, (n=32, doubled following Sober and Olmo 3)
     eval_sampling = SamplingParams(
         temperature=0.6,
         top_p=0.95,
         n_prompts=experiment_config.n_prompts,
-        n_generations_per_prompt=experiment_config.n_generations_per_prompt,
+        n_generations_per_prompt=experiment_config.eval_n_generations_per_prompt,
         max_output_tokens=experiment_config.max_output_tokens,
         top_k=4096,
         stop_tokens=None,
@@ -167,12 +167,13 @@ def main():
         max_grad_norm=1.0,
         # data.max_prompt_length=2048
         max_input_tokens=2048,
-        # reduced data.max_response_length to 32768 following: https://arxiv.org/pdf/2504.07086
+        # reduced data.max_response_length to 32768 following Sober https://arxiv.org/pdf/2504.07086
         max_output_tokens=32768,
-        # Sampling: n=16 generations per prompt
+        # Sampling: n=16 generations per prompt (n=32 for eval, following Sober and OLMo 3)
         # data.gen_batch_size=1536 / n=16 => ~96 prompts per generation batch
         n_prompts=96,
         n_generations_per_prompt=16,
+        eval_n_generations_per_prompt=32,
         # trainer.total_training_steps=500
         num_train_steps=500,
         inflight_weight_updates=True,

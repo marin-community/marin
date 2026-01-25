@@ -86,6 +86,7 @@ class RLExperimentConfig:
     max_output_tokens: int = 512
     n_prompts: int = 64
     n_generations_per_prompt: int = 16
+    eval_n_generations_per_prompt: int = 16
 
     # replay buffer
     replay_buffer_capacity: int = 4096

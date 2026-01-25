@@ -65,6 +65,15 @@ def create_math_curriculum(run_id: str, experiment_config: RLExperimentConfig) -
         stop_tokens=None,
     )
 
+    eval_sampling = SamplingParams(
+        temperature=1.0,
+        n_prompts=experiment_config.n_prompts,
+        n_generations_per_prompt=experiment_config.eval_n_generations_per_prompt,
+        max_output_tokens=experiment_config.max_output_tokens,
+        top_k=4096,
+        stop_tokens=None,
+    )
+
     lessons = {
         "math_full": LessonConfig(
             lesson_id="math_full",
@@ -74,6 +83,7 @@ def create_math_curriculum(run_id: str, experiment_config: RLExperimentConfig) -
             ),
             dependencies=[],
             sampling_params=default_sampling,
+            eval_sampling_params=eval_sampling,
         ),
     }
 
@@ -112,6 +122,7 @@ def main():
         max_output_tokens=1024,
         n_prompts=64,
         n_generations_per_prompt=16,
+        eval_n_generations_per_prompt=16,
         inflight_weight_updates=True,
         max_rollout_step_delay=1,
     )
