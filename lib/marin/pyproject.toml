@@ -160,6 +160,13 @@ vllm =[
 
 math = ["pylatexenc", "sympy"]
 
+aime = [
+    "pylatexenc",
+    "sympy",
+    "antlr4-python3-runtime==4.11.0",
+    "math-verify[antlr4_11_0]==0.7.0",
+]
+
 [[tool.uv.index]]
 name = "marin-resiliparse"
 url = "https://marin-community.github.io/chatnoir-resiliparse/simple"

@@ -92,6 +92,9 @@ class RLExperimentConfig:
     replay_buffer_alpha: float = 3.0
     replay_buffer_max_samples: int = 1
 
+    # system prompt
+    system_prompt: str | None = None
+
     # execution
     debug_mode: bool = False
     inflight_weight_updates: bool = False
@@ -106,6 +109,9 @@ class RLExperimentConfig:
     inference_gpu_memory_utilization: float = 0.90
     inference_top_k: int = 4096  # Workaround for vllm-project/tpu-inference#1386
     inference_n: int = 8
+
+    # pip dependency groups
+    pip_dependency_groups: list[str] = dataclasses.field(default_factory=lambda: ["vllm", "math"])
 
     # run config (TPU slice info)
     train_tpu_type: str = "v5p-8"
@@ -215,6 +221,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
             load_format="dummy" if config.inflight_weight_updates else "auto",
         ),
         initial_checkpoint=config.model_config.checkpoint,
+        system_prompt=config.system_prompt,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_id=name,
@@ -232,7 +239,9 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
             tags=[*config.tags, "rollout", config.model_config.name.split("/")[-1]],
         ),
         pip_dependency_groups=(
-            config.model_config.pip_dependency_groups if config.model_config.pip_dependency_groups else ["vllm", "math"]
+            config.model_config.pip_dependency_groups
+            if config.model_config.pip_dependency_groups
+            else config.pip_dependency_groups
         ),
     )
 
@@ -241,5 +250,5 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
         description=f"Async RL training: {name}",
         fn=RLJob.make_step_fn(),
         config=job_config,
-        pip_dependency_groups=["vllm", "math"],
+        pip_dependency_groups=config.pip_dependency_groups,
     )
