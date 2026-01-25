@@ -21,7 +21,8 @@ Levanter is incorporated into `lib/levanter`. Start with the shared instructions
 ## Testing
 
 * Run `uv run pytest tests -m "not entry and not slow and not ray"` to execute the default Levanter suite.
-* Do not relax numerical tolerances without prior agreement. Prefer `assert_allclose` with 1e-4 for complex modules and 1e-5 for simpler ones unless a specific case demands otherwise.
+* Do not relax numerical tolerances without prior agreement from a human. Prefer `assert_allclose` with 1e-4 for complex modules and 1e-5 for simpler ones unless a specific case demands otherwise.
+* Batch sizes should generally be a low multiple (e.g. 1 or 2) of the number of `len(jax.devices())` to ensure multi-device correctness.
 * Mark long-running tests with `@pytest.mark.slow` so they stay out of the default suite.
 * Always protect PyTorch-dependent tests with `@skip_if_no_torch` so they skip cleanly when PyTorch is unavailable.
 * **CI tip:** use `astral-sh/setup-uv` to install `uv`, run `uv python install`, and then run `uv sync`/`uv pip` to guarantee the expected Python version in workflows.

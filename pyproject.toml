@@ -192,4 +192,4 @@ markers = [
 testpaths = ["tests", "experiments"]
 
 # Make sure we timeout before CI kills us, and don't run TPU or slow tests by default
-addopts = "--session-timeout=480 -m 'not tpu_ci and not slow'"
+#addopts = "--session-timeout=480 -m 'not tpu_ci and not slow'"
