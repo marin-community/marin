@@ -3238,7 +3238,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
                     grid_pinpoints=self.image_grid_pinpoints,
                     vision_feature_height=self.vision_feature_height,
                     patch_size=384,  # Standard VLM patch size
-                    prefetch_threshold=0.3,  # Start prefetching next shard earlier (at 30% instead of 80%)
+                    prefetch_threshold=0.5,  # Default: start prefetching at 80% of shard
                 )
             else:
                 # Cached packing: compute pack assignments on-the-fly

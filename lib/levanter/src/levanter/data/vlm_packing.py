@@ -1681,6 +1681,47 @@ class SequentialShardLoader:
         except Exception as e:
             logger.warning(f"Prefetch failed for shard {shard_idx}: {e}")
 
+    def get_samples_batch(self, global_indices: List[int]) -> List[Dict[str, Any]]:
+        """
+        Batch load multiple samples, optimizing shard access.
+
+        Instead of loading samples one by one (which may cause frequent shard switches),
+        this method groups indices by shard and loads each shard only once.
+
+        Args:
+            global_indices: List of global sample indices to load
+
+        Returns:
+            List of sample dicts in the same order as input indices
+        """
+        if not global_indices:
+            return []
+
+        # 1. Group indices by shard to minimize shard switches
+        from collections import defaultdict
+        indices_by_shard: Dict[int, List[Tuple[int, int]]] = defaultdict(list)
+        for result_idx, global_idx in enumerate(global_indices):
+            shard_idx, local_idx = self._find_shard(global_idx)
+            indices_by_shard[shard_idx].append((result_idx, local_idx))
+
+        # Log how many shards we're accessing
+        num_shards = len(indices_by_shard)
+        logger.debug(f"Batch loading {len(global_indices)} samples from {num_shards} shards")
+
+        # 2. Load samples shard by shard (in sorted order to be sequential)
+        results: List[Optional[Dict[str, Any]]] = [None] * len(global_indices)
+        for shard_idx in sorted(indices_by_shard.keys()):
+            # Switch to this shard if needed
+            if shard_idx != self._current_shard_idx:
+                self._switch_to_shard(shard_idx)
+
+            # Extract all samples from this shard
+            for result_idx, local_idx in indices_by_shard[shard_idx]:
+                raw_dict = self._current_df.iloc[local_idx].to_dict()
+                results[result_idx] = _convert_numpy_to_python(raw_dict)
+
+        return results  # type: ignore
+
 
 class PackedVLMDataset(AsyncDataset):
     """
@@ -1801,11 +1842,11 @@ class PackedVLMDataset(AsyncDataset):
         """
         Load and assemble packed samples for the given pack indices.
 
-        This method:
-        1. Looks up which samples belong to each pack
-        2. Loads raw samples from parquet
-        3. Processes images with BatchImageProcessor
-        4. Assembles into PackedImageTextDict format
+        This method uses batch loading to minimize shard switches:
+        1. Collect all sample indices needed for all packs
+        2. Batch load all samples (optimized shard access)
+        3. Process images with BatchImageProcessor
+        4. Assemble into PackedImageTextDict format
 
         Args:
             indices: Pack indices to load
@@ -1813,19 +1854,34 @@ class PackedVLMDataset(AsyncDataset):
         Returns:
             List of PackedImageTextDict, one per requested pack
         """
-        results = []
+        if not indices:
+            return []
+
+        # 1. Collect all sample indices and their pack boundaries
+        all_sample_indices: List[int] = []
+        pack_boundaries: List[Tuple[int, int]] = []  # (start, end) for each pack
 
         for pack_idx in indices:
             pack_range = self._pack_ranges[pack_idx]
+            start = len(all_sample_indices)
+            all_sample_indices.extend(pack_range)
+            end = len(all_sample_indices)
+            pack_boundaries.append((start, end))
 
-            # 1. Load raw samples
-            raw_samples = [self._get_sample(i) for i in pack_range]
+        # 2. Batch load all raw samples (optimized shard access)
+        # This loads samples grouped by shard, minimizing shard switches
+        all_raw_samples = self._shard_loader.get_samples_batch(all_sample_indices)
 
-            # 2. Process with BatchImageProcessor
-            # BatchImageProcessor.__call__ takes a batch and returns a batch
+        # 3. Process and assemble each pack
+        results = []
+        for i, pack_idx in enumerate(indices):
+            start, end = pack_boundaries[i]
+            raw_samples = all_raw_samples[start:end]
+
+            # Process with BatchImageProcessor
             processed_samples = list(self._batch_processor(raw_samples))
 
-            # 3. Assemble into packed format
+            # Assemble into packed format
             if processed_samples:
                 packed = self._assemble_pack(processed_samples)
             else:

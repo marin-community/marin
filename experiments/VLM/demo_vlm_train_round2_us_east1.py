@@ -202,9 +202,9 @@ train_config = SimpleVlmTrainConfig(
     # Full bfloat16: params and compute both in bfloat16 (saves memory)
     mp="bfloat16",
 
-    # Streaming mode: increase prefetch for better throughput (data loading was falling behind)
-    streaming_max_buffered_batches=64,
-    streaming_prefetch_size=32,
+    # Streaming mode prefetch settings
+    streaming_max_buffered_batches=16,
+    streaming_prefetch_size=8,
 
     # Checkpointing
     steps_per_export=1000,
