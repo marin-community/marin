@@ -584,7 +584,7 @@ def test_bundle(tmp_path):
 
 
 @pytest.fixture
-def real_worker(cache_dir):
+def real_worker(cache_dir, docker_cleanup_scope):
     """Create Worker with real components (not mocks)."""
     config = WorkerConfig(
         port=0,

@@ -157,8 +157,8 @@ def check_docker_available():
 
 
 @pytest.mark.slow
-def test_image_caching(tmp_path, docker_bundle):
-    """Test that subsequent builds to confirm cache usage."""
+def test_image_caching(tmp_path, docker_bundle, docker_cleanup_scope):
+    """Test that subsequent builds use the cache."""
     if not check_docker_available():
         pytest.skip("Docker not available")
 
@@ -191,12 +191,9 @@ def test_image_caching(tmp_path, docker_bundle):
     assert result2.build_time_ms == 0
     assert result2.image_tag == result1.image_tag
 
-    # Cleanup
-    subprocess.run(["docker", "rmi", result1.image_tag], stdout=subprocess.DEVNULL, check=False)
-
 
 @pytest.mark.slow
-def test_image_build_with_extras(tmp_path):
+def test_image_build_with_extras(tmp_path, docker_cleanup_scope):
     """Test building image with extras."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -251,6 +248,3 @@ packages = ["src/test_app"]
     )
 
     assert result.from_cache is False
-
-    # Cleanup
-    subprocess.run(["docker", "rmi", result.image_tag], stdout=subprocess.DEVNULL, check=False)
