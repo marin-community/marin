@@ -2075,3 +2075,222 @@ class PackedVLMDataset(AsyncDataset):
     def current_pack_idx(self, value: int):
         """Set current pack index (for resuming from checkpoint)."""
         self._state.pack_idx = value
+
+
+# =============================================================================
+# Preprocessed VLM Dataset
+# =============================================================================
+
+
+class PreprocessedImageTextDict(TypedDict, total=False):
+    """
+    Data structure for preprocessed VLM samples.
+
+    This format is output by the preprocess_vlm_data.py script and contains
+    all fields needed for training EXCEPT pixel_values (which are computed
+    at training time from the original images).
+    """
+
+    # Preprocessed fields
+    input_ids: np.ndarray  # (seq_len,) int32 - tokenized with expanded image tokens
+    attention_mask: np.ndarray  # (seq_len,) int32 - 1 for valid, 0 for padding
+    loss_mask: np.ndarray  # (seq_len,) float32 - 1.0 for assistant, 0.0 for others
+
+    # Original fields (kept as-is)
+    images: List[Any]  # Original images (paths/bytes/URLs) - NOT pixel_values
+    num_images: int  # Number of images (for validation)
+
+
+class PreprocessedVLMDataset(AsyncDataset):
+    """
+    Dataset that loads preprocessed VLM data and only processes images at training time.
+
+    This dataset expects parquet files with:
+    - input_ids: Tokenized text with expanded image tokens
+    - attention_mask: Valid token mask
+    - loss_mask: Loss computation mask
+    - images: Original images (paths, URLs, or bytes)
+    - num_images: Number of images per sample
+
+    At training time, only images → pixel_values conversion is performed,
+    which is the most expensive operation. All tokenization and loss_mask
+    computation is done offline.
+
+    Usage:
+        dataset = PreprocessedVLMDataset(
+            parquet_paths=["gs://bucket/preprocessed/*.parquet"],
+            image_processor=hf_image_processor,
+            max_num_patches=1,
+            patch_size=384,
+        )
+
+        # Get a batch
+        batch = await dataset.get_batch([0, 1, 2])
+    """
+
+    def __init__(
+        self,
+        parquet_paths: List[str],
+        image_processor,
+        max_num_patches: int = 1,
+        patch_size: int = 384,
+        prefetch_threshold: float = 0.8,
+    ):
+        """
+        Initialize the preprocessed VLM dataset.
+
+        Args:
+            parquet_paths: List of paths to preprocessed parquet files
+            image_processor: HuggingFace image processor for images → pixel_values
+            max_num_patches: Maximum number of patches per sample
+            patch_size: Size of each image patch (default 384)
+            prefetch_threshold: Start prefetching next shard at this progress
+        """
+        super().__init__()
+
+        self.image_processor = image_processor
+        self.max_num_patches = max_num_patches
+        self.patch_size = patch_size
+
+        # Build shard info from parquet paths
+        self._shard_info = self._build_shard_info(parquet_paths)
+        self._total_samples = sum(s.num_samples for s in self._shard_info)
+
+        # Sequential shard loader with prefetching
+        self._shard_loader = SequentialShardLoader(
+            shard_info=self._shard_info,
+            prefetch_threshold=prefetch_threshold,
+        )
+
+        logger.info(f"PreprocessedVLMDataset initialized: {len(self._shard_info)} shards, "
+                    f"{self._total_samples} samples")
+
+    def _build_shard_info(self, parquet_paths: List[str]) -> List[ShardInfo]:
+        """Build shard info from parquet paths."""
+        shard_info = []
+        current_idx = 0
+
+        for path in sorted(parquet_paths):
+            # Get number of rows in this parquet file
+            fs, fs_path = fsspec.core.url_to_fs(path)
+            with fs.open(fs_path, "rb") as f:
+                metadata = pq.read_metadata(f)
+                num_rows = metadata.num_rows
+
+            shard_info.append(ShardInfo(
+                path=path,
+                start_idx=current_idx,
+                num_samples=num_rows,
+            ))
+            current_idx += num_rows
+
+        return shard_info
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def async_len(self) -> int:
+        return self._total_samples
+
+    async def final_length_is_known(self) -> bool:
+        return True
+
+    async def current_len(self) -> Optional[int]:
+        return self._total_samples
+
+    def _process_images(
+        self,
+        images: List[Any],
+        num_images: int,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Process images to pixel_values and grid_mask.
+
+        Args:
+            images: List of images (paths, URLs, or bytes)
+            num_images: Expected number of images
+
+        Returns:
+            Tuple of (pixel_values, grid_mask)
+        """
+        from levanter.data.image import load_image
+
+        if not images or num_images == 0:
+            # Text-only sample
+            pixel_values = np.zeros(
+                (self.max_num_patches, 3, self.patch_size, self.patch_size),
+                dtype=np.float32,
+            )
+            grid_mask = np.zeros(self.max_num_patches, dtype=np.bool_)
+            return pixel_values, grid_mask
+
+        # Load and process images
+        try:
+            pil_images = [load_image(img) for img in images]
+            processed = self.image_processor(pil_images, return_tensors="np")
+            pixel_values = processed["pixel_values"]
+        except Exception as e:
+            logger.warning(f"Failed to process images: {e}")
+            pixel_values = np.zeros(
+                (self.max_num_patches, 3, self.patch_size, self.patch_size),
+                dtype=np.float32,
+            )
+            grid_mask = np.zeros(self.max_num_patches, dtype=np.bool_)
+            return pixel_values, grid_mask
+
+        # Pad to max_num_patches
+        actual_patches = len(pixel_values)
+        if actual_patches < self.max_num_patches:
+            pad_shape = (self.max_num_patches - actual_patches,) + pixel_values.shape[1:]
+            padding = np.zeros(pad_shape, dtype=pixel_values.dtype)
+            pixel_values = np.concatenate([pixel_values, padding], axis=0)
+        elif actual_patches > self.max_num_patches:
+            pixel_values = pixel_values[:self.max_num_patches]
+            actual_patches = self.max_num_patches
+
+        # Grid mask: True for valid patches, False for padding
+        grid_mask = np.zeros(self.max_num_patches, dtype=np.bool_)
+        grid_mask[:actual_patches] = True
+
+        return pixel_values, grid_mask
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[Dict[str, Any]]:
+        """
+        Load preprocessed samples and process images.
+
+        Args:
+            indices: Sample indices to load
+
+        Returns:
+            List of ImageTextDict-like samples
+        """
+        if not indices:
+            return []
+
+        # Load raw samples from parquet (batch optimized)
+        raw_samples = self._shard_loader.get_samples_batch(list(indices))
+
+        results = []
+        for sample in raw_samples:
+            # Convert numpy arrays from parquet
+            sample = _convert_numpy_to_python(sample)
+
+            # Get preprocessed fields
+            input_ids = np.array(sample["input_ids"], dtype=np.int32)
+            attention_mask = np.array(sample["attention_mask"], dtype=np.int32)
+            loss_mask = np.array(sample["loss_mask"], dtype=np.float32)
+            images = sample.get("images", [])
+            num_images = sample.get("num_images", 0)
+
+            # Process images → pixel_values + grid_mask
+            pixel_values, grid_mask = self._process_images(images, num_images)
+
+            results.append({
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "loss_mask": loss_mask,
+                "pixel_values": pixel_values,
+                "grid_mask": grid_mask,
+            })
+
+        return results
