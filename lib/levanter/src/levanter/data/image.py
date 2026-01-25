@@ -2289,10 +2289,10 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
     """
 
     # How many processed examples to cache in memory
-    DEFAULT_CACHE_SIZE = 256  # ~256 examples * ~2MB each = ~512MB
+    DEFAULT_CACHE_SIZE = 2048  # ~256 examples * ~2MB each = ~512MB
 
     # When remaining rows in current shard < this threshold, prefetch next shard
-    PREFETCH_THRESHOLD = 1000
+    PREFETCH_THRESHOLD = 2000
 
     # Per-processor locks - each processor instance gets its own lock
     # This allows different processors to run in parallel while ensuring
@@ -3238,6 +3238,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
                     grid_pinpoints=self.image_grid_pinpoints,
                     vision_feature_height=self.vision_feature_height,
                     patch_size=384,  # Standard VLM patch size
+                    prefetch_threshold=0.3,  # Start prefetching next shard earlier (at 30% instead of 80%)
                 )
             else:
                 # Cached packing: compute pack assignments on-the-fly

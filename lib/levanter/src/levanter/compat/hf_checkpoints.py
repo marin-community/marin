@@ -1631,7 +1631,11 @@ def _patch_hf_hub_download():
         original_validate_repo_id = huggingface_hub.utils._validators.validate_repo_id
 
         def custom_validate_repo_id(repo_id):
+            # Skip validation for fsspec URLs (gs://, s3://, etc.)
             if _is_url_like(repo_id):
+                return
+            # Skip validation for local filesystem paths
+            if os.path.isabs(repo_id) or repo_id.startswith("./") or repo_id.startswith("../"):
                 return
             return original_validate_repo_id(repo_id)
 
