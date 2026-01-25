@@ -156,7 +156,7 @@ def main():
         experiment_name_suffix="deepmath-zero-7b",
         # data.train_batch_size=512
         train_batch_size=512,
-        per_device_parallelism=16,
+        per_device_parallelism=8,
         # actor_rollout_ref.actor.optim.lr=1e-6
         learning_rate=1e-6,
         # actor_rollout_ref.actor.optim.weight_decay=0.1
