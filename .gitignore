@@ -1,8 +1,6 @@
 # redundant, but Ray looks for this otherwise.
 .git
 
-CLAUDE.md
-
 logs/
 
 # CPU profiles
