@@ -118,7 +118,6 @@ class RLExperimentConfig:
     inference_tpu_type: str = "v5p-8"
     num_train_slices: int = 1
     num_rollout_workers: int = 1
-    run_env_vars: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 def get_stop_tokens(model_type: str) -> list[str]:
@@ -232,7 +231,6 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
             num_train_slices=config.num_train_slices,
             num_rollout_workers=config.num_rollout_workers,
             inference_tpu_type=config.inference_tpu_type,
-            env_vars=config.run_env_vars,
         ),
         inflight_weight_updates=config.inflight_weight_updates,
         rollout_tracker=RolloutTrackerConfig(

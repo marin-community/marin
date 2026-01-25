@@ -143,7 +143,6 @@ def main():
         model_config=qwen_2_5_7b_orz,
         system_prompt=SYSTEM_PROMPT,
         pip_dependency_groups=["vllm", "aime"],
-        run_env_vars={"LIBTPU_INIT_ARGS": "--xla_tpu_scoped_vmem_limit_kib=65536"},
         rl_loss=RLOOLoss(
             kl_coef=0.0,  # No KL penalty (use_kl_loss=False, kl_loss_coef=0.0)
             clip_epsilon_low=0.2,  # clip_ratio_low=0.2
