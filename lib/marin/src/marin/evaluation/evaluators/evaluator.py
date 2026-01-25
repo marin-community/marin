@@ -12,17 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import shutil
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
-from fray.cluster import ResourceConfig
+from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 from fray.cluster.ray import get_scheduling_strategy
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.utils import is_remote_path
+from marin.utils import remove_tpu_lockfile_on_exit
 
 
 @dataclass(frozen=True)
@@ -63,36 +62,6 @@ class ModelConfig:
     """
     Whether or not this model was trained with a Chat Template in the tokenizer
     """
-
-    downloaded_to: str | None = field(default=None, init=False, repr=False)
-    """Local path used when staging a remote checkpoint for this run."""
-
-    def ensure_downloaded(self, local_path: str | None = None) -> str | None:
-        """
-        Ensures that the model checkpoint is downloaded to `local_path` if necessary.
-        """
-        if self.path is None:
-            return None
-        if self.engine_kwargs.get("load_format") in {"runai_streamer", "runai_streamer_sharded"} and (
-            self.path.startswith("gs://") or self.path.startswith("s3://")
-        ):
-            # vLLM can stream model weights directly from object stores in this mode.
-            return None
-        elif is_remote_path(self.path):
-            raise ValueError(
-                f"Refusing to stage remote model checkpoint to local disk: {self.path}. "
-                "vLLM should read directly from object storage; set engine_kwargs['load_format'] "
-                "to 'runai_streamer' (or 'runai_streamer_sharded' for pre-sharded "
-                "'model-rank-*-part-*.safetensors' checkpoints)."
-            )
-        return None
-
-    def destroy(self) -> None:
-        """Deletes the model checkpoint."""
-        if self.downloaded_to and os.path.exists(self.downloaded_to):
-            shutil.rmtree(self.downloaded_to, ignore_errors=True)
-            print(f"Deleted local checkpoint at {self.downloaded_to}.")
-        self.downloaded_to = None
 
 
 class Evaluator(ABC):
@@ -141,3 +110,56 @@ class Evaluator(ABC):
     ) -> None:
         """What to run to evaluate."""
         pass
+
+
+def launch_evaluate_with_ray(
+    *,
+    evaluator: Evaluator,
+    job_name: str,
+    model: ModelConfig,
+    evals: list[EvalTaskConfig],
+    output_path: str,
+    resource_config: ResourceConfig,
+    max_eval_instances: int | None = None,
+    wandb_tags: list[str] | None = None,
+    extras: Sequence[str] = (),
+    pip_packages: Sequence[str] = (),
+    env_vars: dict[str, str] | None = None,
+    configure_logging: bool = True,
+) -> None:
+    """Launch an evaluator on the Ray/Fray cluster."""
+
+    def launch(
+        model: ModelConfig,
+        evals: list[EvalTaskConfig],
+        output_path: str,
+        max_eval_instances: int | None = None,
+        wandb_tags: list[str] | None = None,
+    ) -> None:
+        if configure_logging:
+            import logging
+
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+        evaluator.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
+
+    def _run() -> None:
+        with remove_tpu_lockfile_on_exit():
+            launch(model, evals, output_path, max_eval_instances, wandb_tags)
+
+    if resource_config is None:
+        resource_config = ResourceConfig()
+
+    job_request = JobRequest(
+        name=job_name,
+        entrypoint=Entrypoint.from_callable(_run),
+        resources=resource_config,
+        environment=EnvironmentConfig.create(
+            extras=list(extras),
+            pip_packages=list(pip_packages),
+            env_vars=env_vars,
+        ),
+    )
+
+    cluster = current_cluster()
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)

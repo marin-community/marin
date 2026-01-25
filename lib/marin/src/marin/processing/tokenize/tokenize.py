@@ -21,11 +21,13 @@ them first then tokenizes the downloaded files.
 
 import abc
 import dataclasses
+import json
 import logging
 import os
 import re
 from collections.abc import Iterator, Sequence
 from typing import Any
+import fsspec
 
 import draccus
 from fray.job.context import JobContext
@@ -276,6 +278,8 @@ def tokenize(config: TokenizeConfigBase):
     if isinstance(config, TokenizeConfig):
         train_paths = _get_filepaths_to_tokenize(config.train_paths) if config.train_paths else []
         validation_paths = _get_filepaths_to_tokenize(config.validation_paths) if config.validation_paths else []
+        # Validate expanded paths to catch validation/test files that were inside directories
+        _validate_train_urls(train_paths, warn=config.allow_test_in_train)
     elif isinstance(config, HfTokenizeConfig):
         logger.info(f"Loading dataset metadata for {config.id}" + (f" (config: {config.name})" if config.name else ""))
 
@@ -357,12 +361,30 @@ def tokenize(config: TokenizeConfigBase):
                 )
             ),
             context=cluster_ctx,
+            verbose=False,
         )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
         consolidate_shard_caches(
             shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar, context=cluster_ctx
         )
+
+        # Aggregate token counts from shard stats
+        total_tokens = 0
+        total_elements = 0
+        for shard_path in shard_paths:
+            stats_path = f"{shard_path}/.stats.json"
+            with fsspec.open(stats_path) as f:
+                stats = json.load(f)
+                total_tokens += stats.get("token_count", 0)
+                total_elements += stats.get("num_rows", 0)
+
+        stats_path = os.path.join(prefix, ".stats.json")
+        logger.info(
+            f"Writing total token count ({total_tokens:,}) and element count ({total_elements:,}) to {stats_path}"
+        )
+        with fsspec.open(stats_path, "w") as f:
+            json.dump({"total_tokens": total_tokens, "total_elements": total_elements}, f)
 
     if train_paths:
         run_pipeline(train_paths, "train")

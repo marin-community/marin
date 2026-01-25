@@ -22,6 +22,7 @@ import urllib.request
 from pathlib import Path
 from typing import Protocol
 
+from iris.cluster.types import get_tpu_topology
 from iris.rpc import cluster_pb2
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,76 @@ def collect_workdir_size_mb(workdir: Path) -> int:
     return int(size_str)
 
 
+def _get_extra_attributes() -> dict[str, str]:
+    """Get extra worker attributes from IRIS_WORKER_ATTRIBUTES env var.
+
+    Format: key1=value1,key2=value2,...
+    Example: taint:maintenance=true,pool=large-jobs
+
+    Values are always strings; the caller is responsible for type conversion if needed.
+    """
+    attrs_env = os.environ.get("IRIS_WORKER_ATTRIBUTES", "")
+    if not attrs_env:
+        return {}
+    result: dict[str, str] = {}
+    for pair in attrs_env.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            logger.warning("Skipping malformed attribute (no '='): %s", pair)
+            continue
+        key, value = pair.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key:
+            result[key] = value
+    return result
+
+
+def _build_worker_attributes(
+    tpu_name: str,
+    tpu_worker_id: str,
+    device: cluster_pb2.DeviceConfig,
+    extra_attributes: dict[str, str],
+) -> dict[str, cluster_pb2.AttributeValue]:
+    """Build worker attributes for constraint-based scheduling.
+
+    Populates standard attributes from the TPU environment:
+    - tpu-name: TPU slice name
+    - tpu-worker-id: Worker ID within the slice (0-indexed)
+    - tpu-topology: TPU topology variant (e.g., "v5litepod-16")
+    - tpu-vm-count: Number of VMs in the TPU slice
+
+    Also merges in extra_attributes from IRIS_WORKER_ATTRIBUTES env var.
+    Extra attributes are treated as strings.
+    """
+    attributes: dict[str, cluster_pb2.AttributeValue] = {}
+
+    if tpu_name:
+        attributes["tpu-name"] = cluster_pb2.AttributeValue(string_value=tpu_name)
+        attributes["tpu-worker-id"] = cluster_pb2.AttributeValue(int_value=int(tpu_worker_id) if tpu_worker_id else 0)
+
+        # Extract topology from device config if available
+        if device.HasField("tpu") and device.tpu.variant:
+            tpu_variant = device.tpu.variant
+            attributes["tpu-topology"] = cluster_pb2.AttributeValue(string_value=tpu_variant)
+
+            # Look up VM count from topology
+            try:
+                topo = get_tpu_topology(tpu_variant)
+                attributes["tpu-vm-count"] = cluster_pb2.AttributeValue(int_value=topo.vm_count)
+            except ValueError:
+                # Unknown topology - don't add vm-count attribute
+                logger.warning("Unknown TPU topology: %s", tpu_variant)
+
+    # Add extra attributes from environment
+    for key, value in extra_attributes.items():
+        attributes[key] = cluster_pb2.AttributeValue(string_value=value)
+
+    return attributes
+
+
 class EnvironmentProvider(Protocol):
     """Protocol for worker environment probing."""
 
@@ -163,7 +234,19 @@ class DefaultEnvironmentProvider:
         # Build device config
         device = cluster_pb2.DeviceConfig()
         if tpu_name:
-            device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant=tpu_name))
+            tpu_chip_count = 0
+            try:
+                topo = get_tpu_topology(tpu_name)
+                tpu_chip_count = topo.chips_per_vm
+            except ValueError:
+                logger.warning("Unknown TPU topology: %s", tpu_name)
+
+            device.tpu.CopyFrom(
+                cluster_pb2.TpuDevice(
+                    variant=tpu_name,
+                    count=tpu_chip_count,
+                )
+            )
         elif gpu_count > 0:
             device.gpu.CopyFrom(
                 cluster_pb2.GpuDevice(
@@ -174,16 +257,23 @@ class DefaultEnvironmentProvider:
         else:
             device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
 
+        # Get extra worker attributes from environment
+        extra_attributes = _get_extra_attributes()
+
         memory_gb = memory_bytes // (1024**3)
         logger.info(
-            "Worker environment: hostname=%s ip=%s cpu=%d memory=%dGB gpu=%d tpu=%s",
+            "Worker environment: hostname=%s ip=%s cpu=%d memory=%dGB gpu=%d tpu=%s extra_attributes=%s",
             hostname,
             ip_address,
             cpu_count,
             memory_gb,
             gpu_count,
             tpu_name or "none",
+            extra_attributes or "none",
         )
+
+        # Build worker attributes for constraint-based scheduling
+        attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device, extra_attributes)
 
         return cluster_pb2.WorkerMetadata(
             hostname=hostname,
@@ -201,4 +291,5 @@ class DefaultEnvironmentProvider:
             gce_instance_name=gce_instance_name,
             gce_zone=gce_zone,
             device=device,
+            attributes=attributes,
         )

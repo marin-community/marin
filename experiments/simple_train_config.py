@@ -92,7 +92,7 @@ class SimpleTrainConfig:
     """Whether to run the JAX profiler during training."""
     profiler_start_step: int = 5
     """Which step to start profiling."""
-    profiler_num_steps: int = 100
+    profiler_num_steps: int = 25
     """How many steps to profile for once started."""
 
     explicit_mesh_axes: bool = False

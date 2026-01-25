@@ -241,16 +241,6 @@ function renderRunGenerationInferenceStep({step, steps}) {
   return {name: "run_inference", description};
 }
 
-function renderMeduSampleStep({step, steps}) {
-  const description = <table>
-    <tbody>
-      <tr><td>Input data:</td><td>{renderPath({path: step.config.input_path, steps})}</td></tr>
-      <tr><td>Processor:</td><td>{step.config.processor_type}</td></tr>
-    </tbody>
-  </table>;
-  return {name: "sample", description};
-}
-
 function renderTrainClassifierStep({step, steps}) {
   const rows = step.config.datasets.map((dataset, index) => {
     return <tr key={index}>
@@ -539,7 +529,6 @@ const stepRenderers = {
   // Inference for data filtering
   "marin.processing.classification.inference.run_inference": renderRunClassificationInferenceStep,
   "marin.generation.inference.run_inference": renderRunGenerationInferenceStep,
-  "marin.datashop.pipeline.run_medu_dataset_sampling_pipeline": renderMeduSampleStep,
   "marin.processing.classification.fasttext.train_fasttext.train": renderTrainClassifierStep,
   "marin.processing.classification.bert.train_bert.train": renderTrainClassifierStep,
   "marin.classifiers.hf.launch_ray_training.launch_training_with_ray": renderHfLaunchTrainingStep,

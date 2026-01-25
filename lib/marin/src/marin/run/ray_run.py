@@ -181,7 +181,7 @@ async def submit_and_track_job(
         "config": {"setup_timeout_seconds": 1800},
         # Don't ship local artifacts/config into the Ray working_dir. In particular,
         # `wandb/` can contain a persisted settings file that forces offline mode.
-        "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs", "wandb/", ".wandb/"],
+        "excludes": [".git", "docs/", "tests/", "**/*.pack", "lib/levanter/docs", "wandb/", ".wandb/"],
     }
 
     # add the TPU dependency for cluster jobs.
