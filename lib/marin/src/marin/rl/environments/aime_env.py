@@ -816,7 +816,14 @@ class AimeEnv(MarinEnv):
             # Method 2: math_verify parse + verify
             try:
                 mathv_pred = parse(solution_str_for_grading)
-                mathv_correct = verify(parse(f"\\boxed{{${ground_truth}$}}"), mathv_pred)
+                mathv_correct = verify(
+                    parse(f"\\boxed{{${ground_truth}$}}"),
+                    mathv_pred,
+                    float_rounding=6,
+                    numeric_precision=15,
+                    strict=True,
+                    timeout_seconds=3,
+                )
             except Exception:
                 mathv_correct = False
 
