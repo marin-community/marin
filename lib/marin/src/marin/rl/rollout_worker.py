@@ -354,11 +354,17 @@ class RolloutWorker:
         env = self._load_environment(lesson_id)
         lesson_config = self.config.curriculum_config.lessons[lesson_id]
 
-        # Get sampling params from lesson config
-        temperature = lesson_config.sampling_params.temperature
-        top_k = lesson_config.sampling_params.top_k
-        stop_tokens = lesson_config.sampling_params.stop_tokens
-        max_tokens = lesson_config.sampling_params.max_output_tokens
+        # Get sampling params from lesson config, with eval override when present.
+        if mode == "eval" and lesson_config.eval_sampling_params is not None:
+            sampling_params = lesson_config.eval_sampling_params
+        else:
+            sampling_params = lesson_config.sampling_params
+
+        temperature = sampling_params.temperature
+        top_p = sampling_params.top_p
+        top_k = sampling_params.top_k
+        stop_tokens = sampling_params.stop_tokens
+        max_tokens = sampling_params.max_output_tokens
 
         rollout_groups, metrics = env.sample(
             inference_ctx=self._policy_ctx,
@@ -369,6 +375,7 @@ class RolloutWorker:
             mode=mode,
             max_tokens=max_tokens,
             top_k=top_k,
+            top_p=top_p,
             stop=stop_tokens,
             system_prompt=self.config.system_prompt,
         )
@@ -582,23 +589,27 @@ class RolloutWorker:
 
     def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> RolloutBatchStats:
         """Evaluate a single lesson and log metrics."""
-        N_EVAL_GENERATIONS = 1
+        lesson_config = self.config.curriculum_config.lessons[lesson_id]
+        if lesson_config.eval_sampling_params is not None:
+            sampling_params = lesson_config.eval_sampling_params
+        else:
+            sampling_params = lesson_config.sampling_params
+        n_generations = sampling_params.n_generations_per_prompt
 
         batch, _ = self._sample_batch(
             lesson_id=lesson_id,
             n_examples=n_examples,
-            n_generations=N_EVAL_GENERATIONS,
+            n_generations=n_generations,
             mode="eval",
             rng=rng,
         )
         stats = _compute_batch_stats(batch, lesson_id)
         self._log_prompt_example(lesson_id, batch, step, eval_type=eval_type)
-        sampling_params = self.config.curriculum_config.lessons[lesson_id].sampling_params
         metrics = self._build_eval_metrics(
             prefix=f"inference.{eval_type}",
             lesson_id=lesson_id,
             batch=batch,
-            n_generations=N_EVAL_GENERATIONS,
+            n_generations=n_generations,
             temperature=sampling_params.temperature,
             top_k=sampling_params.top_k,
         )

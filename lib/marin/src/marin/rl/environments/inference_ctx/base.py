@@ -45,6 +45,7 @@ class BaseInferenceContext:
         temperature: float,
         n: int,
         max_tokens: int | None = None,
+        top_p: float | None = None,
         top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,

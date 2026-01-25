@@ -79,6 +79,7 @@ class SamplingParams:
     """Parameters for sampling rollouts from an environment."""
 
     temperature: float = 1.0
+    top_p: float | None = None
     top_k: int | None = None
     n_prompts: int = 8
     n_generations_per_prompt: int = 4
@@ -123,6 +124,9 @@ class LessonConfig:
 
     sampling_params: SamplingParams = field(default_factory=SamplingParams)
     """Per-lesson sampling configuration (overrides global defaults)."""
+
+    eval_sampling_params: SamplingParams | None = None
+    """Optional sampling configuration override for eval/micro-eval."""
 
 
 @dataclass

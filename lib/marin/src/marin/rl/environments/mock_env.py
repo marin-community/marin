@@ -291,6 +291,7 @@ class MockEnv(MarinEnv):
         prng_key,
         mode: str = "train",
         max_tokens: int | None = None,
+        top_p: float | None = None,
         top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
@@ -320,6 +321,7 @@ class MockEnv(MarinEnv):
             temperature=temperature,
             n=n_generations,
             max_tokens=max_tokens,
+            top_p=top_p,
             stop=stop,
         )
 

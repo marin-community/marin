@@ -78,10 +78,22 @@ def create_aime_curriculum(run_id: str, experiment_config: RLExperimentConfig) -
     Uses zwhe99/DeepMath-103K for training data following
     the DeepMath-Zero approach for AIME-style math problems.
     """
-    # DeepMath sampling parameters:
+    # DeepMath training sampling parameters:
     # temperature=1.0, top_p=1.0, n=16
     default_sampling = SamplingParams(
         temperature=1.0,
+        top_p=1.0,
+        n_prompts=experiment_config.n_prompts,
+        n_generations_per_prompt=experiment_config.n_generations_per_prompt,
+        max_output_tokens=experiment_config.max_output_tokens,
+        top_k=4096,
+        stop_tokens=None,
+    )
+    # DeepMath evaluation sampling parameters:
+    # temperature=0.6, top_p=0.95, n=16
+    eval_sampling = SamplingParams(
+        temperature=0.6,
+        top_p=0.95,
         n_prompts=experiment_config.n_prompts,
         n_generations_per_prompt=experiment_config.n_generations_per_prompt,
         max_output_tokens=experiment_config.max_output_tokens,
@@ -104,6 +116,7 @@ def create_aime_curriculum(run_id: str, experiment_config: RLExperimentConfig) -
             ),
             dependencies=[],
             sampling_params=default_sampling,
+            eval_sampling_params=eval_sampling,
         ),
     }
 

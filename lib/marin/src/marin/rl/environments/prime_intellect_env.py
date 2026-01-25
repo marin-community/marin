@@ -94,6 +94,7 @@ class PrimeIntellectEnv(MarinEnv):
         prng_key,
         mode: str = "train",
         max_tokens: int | None = None,
+        top_p: float | None = None,
         top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
@@ -114,6 +115,7 @@ class PrimeIntellectEnv(MarinEnv):
         sampling_args = {
             "max_tokens": max_tokens or self.max_tokens,
             "temperature": temperature,
+            "top_p": top_p,
             "top_k": top_k,
             "logprobs": True,
             "stop": stop,
