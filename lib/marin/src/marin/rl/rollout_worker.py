@@ -304,6 +304,7 @@ class RolloutWorker:
         self._shutdown_complete = threading.Event()
         self._shutdown_condition = threading.Condition()
         self._current_weight_step: int = -2
+        self._last_wandb_step: int = -1
 
         self._tokenizer = config.tokenizer
 
@@ -467,6 +468,15 @@ class RolloutWorker:
         if self.weight_transfer_thread:
             self.weight_transfer_thread.join()
 
+    def _log_metrics(self, metrics: Mapping[str, Any], *, step: int | None) -> None:
+        """Log metrics with a monotonic, non-negative step for WandB."""
+        if step is None:
+            self.tracker.log(metrics, step=None)
+            return
+        safe_step = max(0, step, self._last_wandb_step)
+        self._last_wandb_step = safe_step
+        self.tracker.log(metrics, step=safe_step)
+
     def _apply_weight_update(self, update: WeightUpdate):
         """Apply a newly received weight update to the inference context."""
         self._current_weight_step = update.weight_id
@@ -574,7 +584,7 @@ class RolloutWorker:
 
         prefix = f"inference.{eval_type}/{lesson_id}"
         metrics = {f"{prefix}/sample_table": table}
-        self.tracker.log(metrics, step=step)
+        self._log_metrics(metrics, step=step)
         logger.info(f"Logged {len(rows)} eval samples for lesson {lesson_id} at step {step}")
 
     def _build_eval_metrics(
@@ -627,7 +637,7 @@ class RolloutWorker:
             temperature=sampling_params.temperature,
             top_k=sampling_params.top_k,
         )
-        self.tracker.log(metrics, step=self._current_weight_step)
+        self._log_metrics(metrics, step=self._current_weight_step)
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, self._current_weight_step, metrics)
         # only update curriculum for full evals
         if eval_type == "eval":
@@ -809,7 +819,7 @@ class RolloutWorker:
                 # Add throughput metrics (already prefixed with "inference.throughput/")
                 log_metrics.update(throughput_metrics)
                 logger.info(f"Logging metrics at step {step} (weight_step={self._current_weight_step})...")
-                self.tracker.log(log_metrics, step=self._current_weight_step)
+                self._log_metrics(log_metrics, step=self._current_weight_step)
 
         logger.info(f"Inference worker completed after generating {step} rollouts")
         if use_jax_rng:
