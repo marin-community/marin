@@ -526,6 +526,55 @@ def get_all_partition_names() -> list[str]:
     return list(DOLMA3_POOL_PARTITIONS.keys())
 
 
+def get_web_partitions_by_topic() -> dict[str, list[str]]:
+    """Get CC + olmOCR PDF partitions grouped by topic (24 topics).
+
+    This groups all web-scraped content (Common Crawl and olmOCR PDFs) by their
+    topic category. For topics that exist in both CC and olmOCR, the partitions
+    are combined. For topics only in olmOCR (6 topics), only PDF partitions are
+    included.
+
+    Returns:
+        Dictionary mapping topic names to lists of partition names.
+        - 18 topics have both CC (multiple quality tiers) + olmOCR partitions
+        - 6 topics have only olmOCR PDF partitions
+    """
+    result: dict[str, list[str]] = {}
+
+    for topic in OLMOCR_TOPICS:
+        partitions = []
+
+        # Add Common Crawl partitions if this topic exists in CC
+        if topic in COMMON_CRAWL_TOPICS:
+            partitions.extend(get_common_crawl_partitions_by_topic(topic))
+
+        # Add olmOCR PDF partitions
+        if topic == "science_math_and_technology":
+            # This topic is split into part1 and part2
+            partitions.append(f"olmocr_pdfs/{topic}/part1")
+            partitions.append(f"olmocr_pdfs/{topic}/part2")
+        else:
+            partitions.append(f"olmocr_pdfs/{topic}")
+
+        result[topic] = partitions
+
+    return result
+
+
+def get_web_topics() -> list[str]:
+    """Get all 24 topic names for web content (CC + olmOCR PDFs)."""
+    return list(OLMOCR_TOPICS)
+
+
+def get_all_web_partitions() -> list[str]:
+    """Get all CC + olmOCR PDF partitions (315 partitions total).
+
+    Returns:
+        List of all partition names for web content.
+    """
+    return get_common_crawl_partitions() + get_olmocr_pdfs_partitions()
+
+
 # =============================================================================
 # VERIFICATION
 # =============================================================================
