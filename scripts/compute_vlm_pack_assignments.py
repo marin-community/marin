@@ -11,6 +11,7 @@ Usage:
         --input-pattern "gs://marin-vlm/stage2_sharded/*.parquet" \
         --output "gs://marin-vlm/stage2_sharded/pack_assignments.json" \
         --model "Qwen/Qwen3-1.7B" \
+        --processor "llava-hf/llava-onevision-qwen2-0.5b-ov-hf" \
         --max-length 2048 \
         --max-patches 10 \
         --num-workers 50 \
@@ -229,7 +230,7 @@ def main():
             num_workers=args.num_workers,
             checkpoint_dir=args.checkpoint_dir,
             checkpoint_interval=args.checkpoint_interval,
-            processor=processor,  # For conversation format data
+            processor=args.processor if args.num_workers > 1 else processor,  # Pass name for parallel, object for sequential
         )
 
         # 5. Upload to remote if needed

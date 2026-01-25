@@ -861,12 +861,15 @@ def _process_single_parquet_process(
                 except Exception:
                     text = ""
             else:
-                text = ""
+                raise ValueError(
+                    "Conversation format detected but no processor provided. "
+                    "Please pass --processor argument to compute_vlm_pack_assignments.py"
+                )
         else:
             text = str(text_data) if text_data else ""
 
-        # Tokenize text (without image tokens)
-        text_tokens = tokenizer(text, add_special_tokens=False)["input_ids"]
+        # Tokenize text (with special tokens to match HF processor behavior)
+        text_tokens = tokenizer(text, add_special_tokens=True)["input_ids"]
         text_token_count = len(text_tokens)
 
         # Count images
@@ -886,7 +889,7 @@ def _process_single_parquet_process(
 
         # Effective tokens = text tokens + image token expansion
         # Each image expands to features_per_patch tokens
-        effective_tokens = text_token_count + num_images * (config.features_per_patch + 1)
+        effective_tokens = text_token_count + num_images * (config.features_per_patch + 3)
 
         # Track samples exceeding max_length
         if effective_tokens > config.max_length:
@@ -956,12 +959,15 @@ def _process_single_parquet_thread(
                 except Exception:
                     text = ""
             else:
-                text = ""
+                raise ValueError(
+                    "Conversation format detected but no processor provided. "
+                    "Please pass --processor argument to compute_vlm_pack_assignments.py"
+                )
         else:
             text = str(text_data) if text_data else ""
 
-        # Tokenize text (without image tokens)
-        text_tokens = tokenizer(text, add_special_tokens=False)["input_ids"]
+        # Tokenize text (with special tokens to match HF processor behavior)
+        text_tokens = tokenizer(text, add_special_tokens=True)["input_ids"]
         text_token_count = len(text_tokens)
 
         # Count images
@@ -1044,7 +1050,10 @@ def compute_sample_lengths_parallel(
         elif hasattr(processor, 'name_or_path'):
             processor_name = processor.name_or_path
         else:
-            logger.warning("Processor object has no name_or_path, chat template will not be applied")
+            raise ValueError(
+                "Processor object has no name_or_path attribute. "
+                "For parallel processing, pass processor name (string) instead of processor object."
+            )
 
     # Build path -> index mapping
     path_to_idx = {path: idx for idx, path in enumerate(parquet_paths)}
@@ -1332,14 +1341,16 @@ def compute_sample_lengths_lightweight(
                         logger.warning(f"Failed to apply chat template: {e}. Using empty string.")
                         text = ""
                 else:
-                    logger.warning("Conversation format detected but no processor provided. Using empty string.")
-                    text = ""
+                    raise ValueError(
+                        "Conversation format detected but no processor provided. "
+                        "Please pass --processor argument to compute_vlm_pack_assignments.py"
+                    )
             else:
                 text = str(text_data) if text_data else ""
 
-            # Tokenize text (without image tokens)
+            # Tokenize text (with special tokens to match HF processor behavior)
             # Note: We don't expand <image> placeholders here, just count base tokens
-            text_tokens = tokenizer(text, add_special_tokens=False)["input_ids"]
+            text_tokens = tokenizer(text, add_special_tokens=True)["input_ids"]
             text_token_count = len(text_tokens)
 
             # Count images
