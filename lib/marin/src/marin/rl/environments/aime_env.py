@@ -710,7 +710,7 @@ class AimeEnv(MarinEnv):
         reward_sum = 0.0
         format_sum = 0.0
         correct_sum = 0.0
-        response_token_count = 0
+        response_lengths: list[int] = []
         truncated_count = 0
 
         for example, completion in zip(sampled_examples, completions, strict=True):
@@ -741,7 +741,7 @@ class AimeEnv(MarinEnv):
                 reward_sum += reward
                 format_sum += fmt_score
                 correct_sum += correct_score
-                response_token_count += rollout.response_tokens.size
+                response_lengths.append(rollout.response_tokens.size)
 
                 if choice.finish_reason == "length":
                     truncated_count += 1
@@ -757,7 +757,10 @@ class AimeEnv(MarinEnv):
             f"{prefix}_mean_reward": reward_sum / total_choices,
             f"{prefix}_format_accuracy": format_sum / total_choices,
             f"{prefix}_correct_accuracy": correct_sum / total_choices,
-            f"{prefix}_mean_response_tokens": response_token_count / total_choices,
+            f"{prefix}_mean_response_tokens": float(np.mean(response_lengths)),
+            f"{prefix}_std_response_tokens": float(np.std(response_lengths)),
+            f"{prefix}_min_response_tokens": float(np.min(response_lengths)),
+            f"{prefix}_max_response_tokens": float(np.max(response_lengths)),
             f"{prefix}_total_responses": float(total_choices),
             f"{prefix}_sampled_examples": float(len(sampled_examples)),
             f"{prefix}_truncated_percentage": float(truncated_count) / total_choices,

@@ -620,7 +620,7 @@ class RolloutWorker:
             sampling_params = lesson_config.sampling_params
         n_generations = sampling_params.n_generations_per_prompt
 
-        batch, _ = self._sample_batch(
+        batch, env_metrics = self._sample_batch(
             lesson_id=lesson_id,
             n_examples=n_examples,
             n_generations=n_generations,
@@ -637,6 +637,8 @@ class RolloutWorker:
             temperature=sampling_params.temperature,
             top_k=sampling_params.top_k,
         )
+        if env_metrics:
+            metrics.update({f"inference.env.{k}": v for k, v in env_metrics.items()})
         self._log_metrics(metrics, step=self._current_weight_step)
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, self._current_weight_step, metrics)
         # only update curriculum for full evals
