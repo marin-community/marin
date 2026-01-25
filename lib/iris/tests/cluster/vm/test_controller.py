@@ -229,3 +229,124 @@ manual_hosts:
         assert config.controller_vm.image == "gcr.io/project/iris-controller:latest"
         assert config.controller_vm.port == 10000
         assert config.ssh_user == "ubuntu"
+
+
+class TestConfigSerialization:
+    """Tests for IrisClusterConfig.to_dict() serialization."""
+
+    def test_to_dict_includes_scale_groups(self, tmp_path: Path):
+        """to_dict() properly serializes scale groups."""
+        config_content = """\
+provider:
+  type: tpu
+  project_id: my-project
+  zone: us-central1-a
+
+docker:
+  image: gcr.io/project/iris-worker:latest
+
+controller:
+  address: "http://10.0.0.1:10000"
+
+scale_groups:
+  tpu_v5e_8:
+    accelerator_type: v5litepod-8
+    runtime_version: v2-alpha-tpuv5-lite
+    min_slices: 1
+    max_slices: 10
+    zones: [us-central1-a]
+    preemptible: true
+"""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(config_content)
+
+        config = load_config(config_path)
+        d = config.to_dict()
+
+        assert d["provider"]["type"] == "tpu"
+        assert d["provider"]["project_id"] == "my-project"
+        assert d["docker"]["image"] == "gcr.io/project/iris-worker:latest"
+        assert "tpu_v5e_8" in d["scale_groups"]
+        sg = d["scale_groups"]["tpu_v5e_8"]
+        assert sg["accelerator_type"] == "v5litepod-8"
+        assert sg["min_slices"] == 1
+        assert sg["max_slices"] == 10
+        assert sg["preemptible"] is True
+
+    def test_to_dict_round_trips_through_yaml(self, tmp_path: Path):
+        """Config serialized to YAML can be loaded back."""
+        import yaml
+
+        config_content = """\
+provider:
+  type: tpu
+  project_id: my-project
+  zone: us-central1-a
+
+docker:
+  image: gcr.io/project/iris-worker:latest
+  worker_port: 10001
+
+controller:
+  address: "http://10.0.0.1:10000"
+
+scale_groups:
+  tpu_v5e_8:
+    accelerator_type: v5litepod-8
+    runtime_version: v2-alpha-tpuv5-lite
+    min_slices: 1
+    max_slices: 10
+    zones: [us-central1-a]
+    preemptible: true
+    priority: 50
+"""
+        config_path = tmp_path / "original.yaml"
+        config_path.write_text(config_content)
+
+        original_config = load_config(config_path)
+        yaml_str = yaml.dump(original_config.to_dict(), default_flow_style=False)
+
+        round_trip_path = tmp_path / "round_trip.yaml"
+        round_trip_path.write_text(yaml_str)
+        loaded_config = load_config(round_trip_path)
+
+        assert loaded_config.provider_type == original_config.provider_type
+        assert loaded_config.project_id == original_config.project_id
+        assert loaded_config.docker_image == original_config.docker_image
+        assert len(loaded_config.scale_groups) == len(original_config.scale_groups)
+        assert "tpu_v5e_8" in loaded_config.scale_groups
+        assert loaded_config.scale_groups["tpu_v5e_8"].priority == 50
+
+
+class TestBootstrapScriptConfig:
+    """Tests for bootstrap script config injection."""
+
+    def test_bootstrap_script_includes_config_when_provided(self):
+        """Bootstrap script writes config file when provided."""
+        from iris.cluster.vm.controller import _build_controller_bootstrap_script
+
+        config_yaml = "provider:\n  type: tpu\n"
+        script = _build_controller_bootstrap_script(
+            docker_image="gcr.io/project/iris:latest",
+            port=10000,
+            config_yaml=config_yaml,
+        )
+
+        assert "/etc/iris/config.yaml" in script
+        assert "IRIS_CONFIG_EOF" in script
+        assert "--config /etc/iris/config.yaml" in script
+        assert "-v /etc/iris/config.yaml:/etc/iris/config.yaml:ro" in script
+
+    def test_bootstrap_script_omits_config_when_empty(self):
+        """Bootstrap script skips config setup when not provided."""
+        from iris.cluster.vm.controller import _build_controller_bootstrap_script
+
+        script = _build_controller_bootstrap_script(
+            docker_image="gcr.io/project/iris:latest",
+            port=10000,
+            config_yaml="",
+        )
+
+        assert "IRIS_CONFIG_EOF" not in script
+        assert "--config" not in script
+        assert "# No config file provided" in script

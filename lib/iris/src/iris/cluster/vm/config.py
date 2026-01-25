@@ -121,6 +121,65 @@ class IrisClusterConfig:
             connect_timeout=self.ssh_connect_timeout_seconds,
         )
 
+    def to_dict(self) -> dict:
+        """Convert config back to dict for YAML serialization.
+
+        Used when passing the cluster config to the controller VM so the
+        autoscaler knows which scale groups to manage.
+        """
+        result: dict = {
+            "provider": {
+                "type": self.provider_type,
+            },
+            "docker": {
+                "image": self.docker_image,
+                "worker_port": self.worker_port,
+            },
+            "controller": {
+                "address": self.controller_address,
+            },
+            "timeouts": {
+                "boot_timeout_seconds": self.boot_timeout_seconds,
+                "init_timeout_seconds": self.init_timeout_seconds,
+                "ssh_connect_timeout_seconds": self.ssh_connect_timeout_seconds,
+                "ssh_poll_interval_seconds": self.ssh_poll_interval_seconds,
+            },
+        }
+
+        if self.project_id:
+            result["provider"]["project_id"] = self.project_id
+        if self.region:
+            result["provider"]["region"] = self.region
+        if self.zone:
+            result["provider"]["zone"] = self.zone
+
+        if self.ssh_user != "root" or self.ssh_private_key:
+            result["auth"] = {"ssh_user": self.ssh_user}
+            if self.ssh_private_key:
+                result["auth"]["ssh_private_key"] = self.ssh_private_key
+
+        if self.manual_hosts:
+            result["manual_hosts"] = self.manual_hosts
+
+        if self.scale_groups:
+            result["scale_groups"] = {
+                name: {
+                    "accelerator_type": cfg.accelerator_type,
+                    "runtime_version": cfg.runtime_version,
+                    "min_slices": cfg.min_slices,
+                    "max_slices": cfg.max_slices,
+                    "zones": list(cfg.zones),
+                    "preemptible": cfg.preemptible,
+                    "priority": cfg.priority,
+                }
+                for name, cfg in self.scale_groups.items()
+            }
+
+        if self.label_prefix != "iris":
+            result["label_prefix"] = self.label_prefix
+
+        return result
+
 
 @dataclass
 class ScaleGroupSpec:
@@ -209,8 +268,10 @@ def load_config(config_path: Path | str) -> IrisClusterConfig:
         host=controller_vm_data.get("host", ""),
     )
 
-    # Only warn about missing controller address if controller VM is not enabled
-    if not controller_address and not controller_vm.enabled:
+    # Warn about missing controller address only for manual provider without controller VM.
+    # GCP/TPU providers use metadata-based discovery (workers query for iris-controller metadata),
+    # so they don't require controller_address in config.
+    if not controller_address and not controller_vm.enabled and provider_type == "manual":
         logger.warning("No controller address configured - workers will fail to start")
 
     # Parse manual hosts
@@ -270,7 +331,7 @@ def load_config(config_path: Path | str) -> IrisClusterConfig:
 
 def create_autoscaler_from_config(
     config: IrisClusterConfig,
-    autoscaler_config=None,
+    autoscaler_config=None,  # AutoscalerConfig | None - type is from autoscaler module
     dry_run: bool = False,
 ):
     """Create autoscaler with per-group managers from configuration.

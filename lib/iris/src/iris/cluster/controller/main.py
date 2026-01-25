@@ -14,13 +14,40 @@
 
 """Click-based CLI for the Iris controller daemon."""
 
+import logging
 import signal
+import sys
 import threading
 from pathlib import Path
 
 import click
 
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+
+logger = logging.getLogger(__name__)
+
+
+def configure_logging(level: int = logging.INFO) -> None:
+    """Configure structured logging for the controller.
+
+    Sets up a consistent log format with timestamps and component names
+    that makes it easy to grep and analyze logs.
+    """
+    root = logging.getLogger()
+    root.setLevel(level)
+
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(level)
+
+    formatter = logging.Formatter(
+        fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    handler.setFormatter(formatter)
+
+    # Clear existing handlers to avoid duplicate logs
+    root.handlers.clear()
+    root.addHandler(handler)
 
 
 @click.group()
@@ -36,6 +63,7 @@ def cli():
 @click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
 @click.option("--worker-timeout", default=60.0, type=float, help="Worker heartbeat timeout (seconds)")
 @click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config for autoscaling")
+@click.option("--log-level", default="INFO", type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR"]), help="Log level")
 def serve(
     host: str,
     port: int,
@@ -43,6 +71,7 @@ def serve(
     scheduler_interval: float,
     worker_timeout: float,
     config_file: str | None,
+    log_level: str,
 ):
     """Start the Iris controller service.
 
@@ -51,6 +80,12 @@ def serve(
     """
     from iris.cluster.vm.autoscaler import Autoscaler
     from iris.cluster.vm.config import create_autoscaler_from_config, load_config
+
+    configure_logging(level=getattr(logging, log_level))
+
+    logger.info("Initializing Iris controller")
+    logger.info("Configuration: host=%s port=%d bundle_dir=%s", host, port, bundle_dir)
+    logger.info("Configuration: scheduler_interval=%.2fs worker_timeout=%.2fs", scheduler_interval, worker_timeout)
 
     config = ControllerConfig(
         host=host,
@@ -62,32 +97,56 @@ def serve(
 
     autoscaler: Autoscaler | None = None
     if config_file:
-        click.echo(f"Loading cluster config from {config_file}...")
-        cluster_config = load_config(Path(config_file))
-        autoscaler = create_autoscaler_from_config(cluster_config)
-        autoscaler.reconcile()
-        click.echo(f"Autoscaler initialized with {len(autoscaler.groups)} scale group(s)")
+        logger.info("Loading cluster config from %s", config_file)
+        try:
+            cluster_config = load_config(Path(config_file))
+            logger.info("Cluster config loaded: %d scale groups defined", len(cluster_config.scale_groups))
+        except Exception as e:
+            logger.exception("Failed to load cluster config from %s", config_file)
+            raise click.ClickException(f"Failed to load cluster config: {e}") from e
 
-    controller = Controller(
-        config=config,
-        worker_stub_factory=RpcWorkerStubFactory(),
-        autoscaler=autoscaler,
-    )
+        try:
+            autoscaler = create_autoscaler_from_config(cluster_config)
+            logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
+        except Exception as e:
+            logger.exception("Failed to create autoscaler from config")
+            raise click.ClickException(f"Failed to create autoscaler: {e}") from e
 
-    click.echo(f"Starting Iris controller on {host}:{port}")
-    click.echo(f"  Bundle dir: {config.bundle_dir}")
-    click.echo(f"  Scheduler interval: {scheduler_interval}s")
-    click.echo(f"  Worker timeout: {worker_timeout}s")
-    if autoscaler:
-        click.echo("  Autoscaler: enabled")
+        try:
+            autoscaler.reconcile()
+            logger.info("Autoscaler initial reconcile completed")
+        except Exception as e:
+            logger.exception("Autoscaler initial reconcile failed")
+            raise click.ClickException(f"Autoscaler reconcile failed: {e}") from e
+    else:
+        logger.info("No cluster config provided, autoscaler disabled")
 
-    controller.start()
+    try:
+        controller = Controller(
+            config=config,
+            worker_stub_factory=RpcWorkerStubFactory(),
+            autoscaler=autoscaler,
+        )
+        logger.info("Controller instance created")
+    except Exception as e:
+        logger.exception("Failed to create controller")
+        raise click.ClickException(f"Failed to create controller: {e}") from e
+
+    try:
+        controller.start()
+        logger.info("Controller started successfully on %s:%d", host, port)
+    except Exception as e:
+        logger.exception("Failed to start controller")
+        raise click.ClickException(f"Failed to start controller: {e}") from e
+
+    logger.info("Controller is ready to accept connections")
 
     stop_event = threading.Event()
 
     def handle_shutdown(_signum, _frame):
-        click.echo("\nShutting down controller...")
+        logger.info("Shutdown signal received, stopping controller...")
         controller.stop()
+        logger.info("Controller stopped")
         stop_event.set()
 
     signal.signal(signal.SIGTERM, handle_shutdown)

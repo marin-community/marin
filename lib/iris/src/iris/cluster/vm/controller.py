@@ -116,33 +116,64 @@ class ControllerProtocol(Protocol):
         """Get controller status."""
         ...
 
+    def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
+        """Fetch startup script logs for debugging. Returns None if unavailable."""
+        ...
+
 
 # Bootstrap script for controller VM - simpler than worker bootstrap
 CONTROLLER_BOOTSTRAP_SCRIPT = """
 set -e
 
-echo "[iris-controller] Starting controller bootstrap"
+echo "[iris-controller] ================================================"
+echo "[iris-controller] Starting controller bootstrap at $(date -Iseconds)"
+echo "[iris-controller] ================================================"
+
+# Write config file if provided
+{config_setup}
 
 # Install Docker if missing
 if ! command -v docker &> /dev/null; then
-    echo "[iris-controller] Installing Docker..."
+    echo "[iris-controller] [1/5] Docker not found, installing..."
     curl -fsSL https://get.docker.com | sudo sh
     sudo systemctl enable docker
     sudo systemctl start docker
+    echo "[iris-controller] [1/5] Docker installation complete"
+else
+    echo "[iris-controller] [1/5] Docker already installed: $(docker --version)"
 fi
 
+echo "[iris-controller] [2/5] Ensuring Docker daemon is running..."
 sudo systemctl start docker || true
+if sudo docker info > /dev/null 2>&1; then
+    echo "[iris-controller] [2/5] Docker daemon is running"
+else
+    echo "[iris-controller] [2/5] ERROR: Docker daemon failed to start"
+    exit 1
+fi
 
 # Configure docker for GCP Artifact Registry
+echo "[iris-controller] [3/5] Configuring Docker for GCP Artifact Registry..."
 sudo gcloud auth configure-docker \
   europe-west4-docker.pkg.dev,us-central1-docker.pkg.dev,us-docker.pkg.dev --quiet 2>/dev/null || true
+echo "[iris-controller] [3/5] Docker registry configuration complete"
 
-echo "[iris-controller] Pulling image: {docker_image}"
-sudo docker pull {docker_image}
+echo "[iris-controller] [4/5] Pulling image: {docker_image}"
+echo "[iris-controller]       This may take several minutes for large images..."
+if sudo docker pull {docker_image}; then
+    echo "[iris-controller] [4/5] Image pull complete"
+else
+    echo "[iris-controller] [4/5] ERROR: Image pull failed"
+    exit 1
+fi
 
 # Stop existing controller if running
-sudo docker stop {container_name} 2>/dev/null || true
-sudo docker rm {container_name} 2>/dev/null || true
+echo "[iris-controller] [5/5] Starting controller container..."
+if sudo docker ps -a --format '{{{{.Names}}}}' | grep -q "^{container_name}$"; then
+    echo "[iris-controller]       Stopping existing container..."
+    sudo docker stop {container_name} 2>/dev/null || true
+    sudo docker rm {container_name} 2>/dev/null || true
+fi
 
 # Create cache directory
 sudo mkdir -p /var/cache/iris
@@ -152,41 +183,101 @@ sudo docker run -d --name {container_name} \
     --network=host \
     --restart=unless-stopped \
     -v /var/cache/iris:/var/cache/iris \
-    {docker_image}
+    {config_volume} \
+    {docker_image} \
+    python -m iris.cluster.controller.main serve \
+        --host 0.0.0.0 --port {port} {config_flag}
 
-echo "[iris-controller] Controller container started"
+echo "[iris-controller] [5/5] Controller container started"
 
 # Wait for health
+echo "[iris-controller] Waiting for controller to become healthy..."
 for i in $(seq 1 60); do
+    echo "[iris-controller] Health check attempt $i/60 at $(date -Iseconds)..."
     if curl -sf http://localhost:{port}/health > /dev/null 2>&1; then
-        echo "[iris-controller] Controller is healthy"
+        echo "[iris-controller] ================================================"
+        echo "[iris-controller] Controller is healthy! Bootstrap complete."
+        echo "[iris-controller] ================================================"
         exit 0
+    fi
+    # Show brief container status every 5 attempts
+    if [ $((i % 5)) -eq 0 ]; then
+        STATUS=$(sudo docker inspect --format='{{{{.State.Status}}}}' {container_name} 2>/dev/null || echo 'unknown')
+        echo "[iris-controller] Container status: $STATUS"
     fi
     sleep 2
 done
 
+echo "[iris-controller] ================================================"
 echo "[iris-controller] ERROR: Controller failed to become healthy"
+echo "[iris-controller] ================================================"
+echo "[iris-controller] Container logs (last 50 lines):"
 sudo docker logs {container_name} --tail 50
 exit 1
 """
 
+CONFIG_SETUP_TEMPLATE = """
+sudo mkdir -p /etc/iris
+cat > /tmp/iris_config.yaml << 'IRIS_CONFIG_EOF'
+{config_yaml}
+IRIS_CONFIG_EOF
+sudo mv /tmp/iris_config.yaml /etc/iris/config.yaml
+echo "[iris-controller] Config written to /etc/iris/config.yaml"
+"""
 
-def _build_controller_bootstrap_script(docker_image: str, port: int) -> str:
-    """Build bootstrap script for controller VM."""
+
+def _build_controller_bootstrap_script(
+    docker_image: str,
+    port: int,
+    config_yaml: str = "",
+) -> str:
+    """Build bootstrap script for controller VM.
+
+    Args:
+        docker_image: Docker image to run
+        port: Controller port
+        config_yaml: Optional YAML config to write to /etc/iris/config.yaml
+    """
+    if config_yaml:
+        config_setup = CONFIG_SETUP_TEMPLATE.format(config_yaml=config_yaml)
+        config_volume = "-v /etc/iris/config.yaml:/etc/iris/config.yaml:ro"
+        config_flag = "--config /etc/iris/config.yaml"
+    else:
+        config_setup = "# No config file provided"
+        config_volume = ""
+        config_flag = ""
+
     return CONTROLLER_BOOTSTRAP_SCRIPT.format(
         docker_image=docker_image,
         container_name=CONTROLLER_CONTAINER_NAME,
         port=port,
+        config_setup=config_setup,
+        config_volume=config_volume,
+        config_flag=config_flag,
     )
 
 
-def _check_health_http(address: str, timeout: float = 5.0) -> bool:
-    """Check controller health via HTTP endpoint."""
+def _check_health_http(address: str, timeout: float = 5.0, log_result: bool = False) -> bool:
+    """Check controller health via HTTP endpoint.
+
+    Args:
+        address: Controller address (e.g. http://1.2.3.4:10000)
+        timeout: Request timeout in seconds
+        log_result: If True, log the result of the health check
+    """
     try:
         with httpx.Client(timeout=timeout) as client:
             response = client.get(f"{address}/health")
+            if log_result:
+                logger.info("Health check %s: status=%d", address, response.status_code)
             return response.status_code == 200
-    except httpx.HTTPError:
+    except httpx.HTTPError as e:
+        if log_result:
+            logger.info("Health check %s: error=%s", address, type(e).__name__)
+        return False
+    except Exception as e:
+        if log_result:
+            logger.info("Health check %s: unexpected error=%s", address, e)
         return False
 
 
@@ -204,20 +295,30 @@ class GcpController:
         self.vm_config = config.controller_vm
         self._vm_name = f"iris-controller-{config.label_prefix}"
 
+    def _serialize_config(self) -> str:
+        """Serialize cluster config to YAML for the controller VM."""
+        import yaml
+
+        return yaml.dump(self.config.to_dict(), default_flow_style=False)
+
     def start(self) -> str:
         """Start controller GCE VM with retry logic.
 
         Idempotent: returns existing controller address if healthy.
         Otherwise cleans up stale controller and creates a new one.
         """
-        existing = self.discover()
-        if existing and self._wait_healthy(existing):
-            logger.info("Existing controller at %s is healthy", existing)
-            return existing
+        logger.info("Starting controller (project=%s, zone=%s)", self.project_id, self.zone)
 
+        existing = self.discover()
         if existing:
+            logger.info("Found existing controller at %s, checking health...", existing)
+            if self._wait_healthy(existing):
+                logger.info("Existing controller at %s is healthy", existing)
+                return existing
             logger.info("Existing controller at %s is unhealthy, cleaning up", existing)
             self.stop()
+        else:
+            logger.info("No existing controller found, creating new VM")
 
         backoff = ExponentialBackoff(
             initial=RETRY_BACKOFF_INITIAL,
@@ -226,13 +327,27 @@ class GcpController:
         )
 
         for attempt in range(MAX_RETRIES):
+            logger.info("Starting controller VM creation (attempt %d/%d)", attempt + 1, MAX_RETRIES)
             try:
                 address = self._create_vm()
-                if self._wait_healthy(address):
+
+                # Use SSH-based health check since firewall may block external port access
+                port = self.vm_config.port or DEFAULT_CONTROLLER_PORT
+                conn = GceSshConnection(
+                    project_id=self.project_id,
+                    zone=self.zone,
+                    vm_name=self._vm_name,
+                )
+                if self._wait_healthy_via_ssh(conn, port):
                     self._tag_metadata(address)
-                    logger.info("Controller started at %s", address)
+                    logger.info("Controller started successfully at %s", address)
                     return address
-                logger.warning("Controller health check failed, cleaning up")
+
+                # Health check failed - try to get logs for debugging
+                logger.warning("Controller health check failed after VM creation")
+                logs = self.fetch_startup_logs(tail_lines=30)
+                if logs:
+                    logger.warning("Startup script output:\n%s", logs)
                 self._delete_vm()
                 raise RetryableError("Health check failed after VM creation")
             except RetryableError as e:
@@ -243,6 +358,10 @@ class GcpController:
                     )
                     time.sleep(wait_time)
                 else:
+                    # Final failure - try to get logs one more time
+                    logs = self.fetch_startup_logs(tail_lines=50)
+                    if logs:
+                        logger.error("Final startup script output:\n%s", logs)
                     raise RuntimeError(f"Failed to start controller after {MAX_RETRIES} attempts") from e
 
         raise RuntimeError("Controller start failed unexpectedly")
@@ -277,7 +396,8 @@ class GcpController:
             vm_name=vm_name,
         )
 
-        bootstrap_script = _build_controller_bootstrap_script(self.vm_config.image, port)
+        config_yaml = self._serialize_config()
+        bootstrap_script = _build_controller_bootstrap_script(self.vm_config.image, port, config_yaml)
 
         def on_line(line: str) -> None:
             logger.info("[%s] %s", vm_name, line)
@@ -366,7 +486,16 @@ class GcpController:
         boot_disk_size = self.vm_config.boot_disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB
         port = self.vm_config.port or DEFAULT_CONTROLLER_PORT
 
-        bootstrap_script = _build_controller_bootstrap_script(self.vm_config.image, port)
+        config_yaml = self._serialize_config()
+        bootstrap_script = _build_controller_bootstrap_script(self.vm_config.image, port, config_yaml)
+
+        # Log bootstrap script summary for visibility
+        script_lines = bootstrap_script.strip().split("\n")
+        logger.info(
+            "Bootstrap script prepared (%d lines). Key steps: Docker install, image pull (%s), container start",
+            len(script_lines),
+            self.vm_config.image,
+        )
 
         cmd = [
             "gcloud",
@@ -386,16 +515,23 @@ class GcpController:
             "--format=json",
         ]
 
-        logger.info("Creating controller VM: %s", self._vm_name)
+        logger.info("Creating controller VM: %s (zone=%s, type=%s)", self._vm_name, self.zone, machine_type)
+        logger.info("VM creation in progress... (this may take 30-60 seconds)")
         logger.debug("Running: %s", " ".join(cmd))
 
+        start_time = time.time()
         result = subprocess.run(cmd, input=bootstrap_script, capture_output=True, text=True)
+        elapsed = time.time() - start_time
+
         if result.returncode != 0:
             error_msg = result.stderr.strip()
             if "already exists" in error_msg.lower():
-                logger.info("Controller VM already exists, getting its IP")
+                logger.info("Controller VM already exists (detected in %.1fs), getting its IP", elapsed)
                 return self._get_vm_address()
+            logger.error("VM creation failed after %.1fs: %s", elapsed, error_msg)
             raise RetryableError(f"Failed to create controller VM: {error_msg}")
+
+        logger.info("VM created successfully in %.1fs, extracting IP address...", elapsed)
 
         try:
             parsed = json.loads(result.stdout)
@@ -407,7 +543,13 @@ class GcpController:
                 if access_configs:
                     ip = access_configs[0].get("natIP")
                     if ip:
-                        return f"http://{ip}:{port}"
+                        address = f"http://{ip}:{port}"
+                        logger.info("Controller VM address: %s", address)
+                        logger.info(
+                            "Startup script is now running on the VM. "
+                            "Use 'iris cluster logs' or check serial console for progress."
+                        )
+                        return address
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
             logger.warning("Failed to parse VM creation output: %s", e)
 
@@ -456,12 +598,74 @@ class GcpController:
                 logger.warning("Failed to delete controller VM: %s", error)
 
     def _wait_healthy(self, address: str, timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS) -> bool:
-        """Poll health endpoint until healthy or timeout."""
+        """Poll health endpoint until healthy or timeout with verbose logging."""
+        logger.info("Starting health check polling for %s (timeout=%ds)", address, int(timeout))
+        start_time = time.time()
+        attempt = 0
+
         backoff = ExponentialBackoff(
             initial=HEALTH_CHECK_BACKOFF_INITIAL,
             maximum=HEALTH_CHECK_BACKOFF_MAX,
         )
-        return backoff.wait_until(lambda: _check_health_http(address), timeout=timeout)
+
+        def check_with_logging() -> bool:
+            nonlocal attempt
+            attempt += 1
+            elapsed = time.time() - start_time
+            result = _check_health_http(address, log_result=True)
+            if result:
+                logger.info("Health check succeeded after %d attempts (%.1fs elapsed)", attempt, elapsed)
+            return result
+
+        success = backoff.wait_until(check_with_logging, timeout=timeout)
+        if not success:
+            elapsed = time.time() - start_time
+            logger.warning(
+                "Health check failed after %d attempts (%.1fs elapsed, timeout=%ds)",
+                attempt,
+                elapsed,
+                int(timeout),
+            )
+        return success
+
+    def _wait_healthy_via_ssh(
+        self, conn: SshConnection, port: int, timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS
+    ) -> bool:
+        """Poll health endpoint via SSH until healthy or timeout.
+
+        Uses SSH to run curl on the remote host, avoiding firewall issues
+        that can block external HTTP access to the controller port.
+        """
+        logger.info("Starting SSH-based health check polling (port=%d, timeout=%ds)", port, int(timeout))
+        start_time = time.time()
+        attempt = 0
+
+        backoff = ExponentialBackoff(
+            initial=HEALTH_CHECK_BACKOFF_INITIAL,
+            maximum=HEALTH_CHECK_BACKOFF_MAX,
+        )
+
+        def check_with_logging() -> bool:
+            nonlocal attempt
+            attempt += 1
+            result = check_health(conn, port)
+            elapsed = time.time() - start_time
+            if result:
+                logger.info("SSH health check succeeded after %d attempts (%.1fs elapsed)", attempt, elapsed)
+            else:
+                logger.info("SSH health check attempt %d failed (%.1fs elapsed)", attempt, elapsed)
+            return result
+
+        success = backoff.wait_until(check_with_logging, timeout=timeout)
+        if not success:
+            elapsed = time.time() - start_time
+            logger.warning(
+                "SSH health check failed after %d attempts (%.1fs elapsed, timeout=%ds)",
+                attempt,
+                elapsed,
+                int(timeout),
+            )
+        return success
 
     def _tag_metadata(self, address: str) -> None:
         """Tag VM with controller address metadata for worker discovery."""
@@ -479,6 +683,50 @@ class GcpController:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             logger.warning("Failed to tag controller VM: %s", result.stderr.strip())
+
+    def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
+        """Fetch the startup script logs from the controller VM via serial console.
+
+        This can be used to debug startup failures by viewing the startup script
+        output. Returns None if logs cannot be fetched.
+
+        Args:
+            tail_lines: Number of lines to return from the end of the log
+        """
+        vm_name = self._find_controller_vm_name()
+        if not vm_name:
+            logger.warning("Cannot fetch logs: controller VM not found")
+            return None
+
+        cmd = [
+            "gcloud",
+            "compute",
+            "instances",
+            "get-serial-port-output",
+            vm_name,
+            f"--project={self.project_id}",
+            f"--zone={self.zone}",
+        ]
+
+        logger.info("Fetching serial console output from %s...", vm_name)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            logger.warning("Failed to fetch serial console output: %s", result.stderr.strip())
+            return None
+
+        # Filter for iris-controller lines and take the last N lines
+        all_lines = result.stdout.split("\n")
+        iris_lines = [line for line in all_lines if "[iris-controller]" in line]
+
+        if iris_lines:
+            output_lines = iris_lines[-tail_lines:]
+            logger.info("Found %d iris-controller log lines (showing last %d)", len(iris_lines), len(output_lines))
+            return "\n".join(output_lines)
+
+        # If no iris-controller lines, return the raw tail
+        logger.info("No [iris-controller] lines found, returning raw serial output tail")
+        return "\n".join(all_lines[-tail_lines:])
 
 
 CONTROLLER_STOP_SCRIPT = """
@@ -508,6 +756,12 @@ class ManualController:
         port = self._vm_config.port or DEFAULT_CONTROLLER_PORT
         self.address = f"http://{self._vm_config.host}:{port}"
 
+    def _serialize_config(self) -> str:
+        """Serialize cluster config to YAML for the controller VM."""
+        import yaml
+
+        return yaml.dump(self.config.to_dict(), default_flow_style=False)
+
     def start(self) -> str:
         """Start controller via SSH bootstrap."""
         if not self._vm_config.image:
@@ -519,7 +773,8 @@ class ManualController:
         logger.info("Bootstrapping controller on %s via SSH", host)
 
         conn = self._create_ssh_connection(host)
-        bootstrap_script = _build_controller_bootstrap_script(self._vm_config.image, port)
+        config_yaml = self._serialize_config()
+        bootstrap_script = _build_controller_bootstrap_script(self._vm_config.image, port, config_yaml)
 
         def on_line(line: str) -> None:
             logger.info("[%s] %s", host, line)
@@ -614,13 +869,33 @@ class ManualController:
             connect_timeout=self.config.ssh_connect_timeout_seconds,
         )
 
+    def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
+        """Fetch container logs from manual controller via SSH.
+
+        For ManualController, we fetch Docker container logs instead of
+        serial console output since there's no GCP VM.
+        """
+        host = self._vm_config.host
+        conn = self._create_ssh_connection(host)
+
+        logger.info("Fetching container logs from %s...", host)
+        try:
+            result = conn.run(f"sudo docker logs {CONTROLLER_CONTAINER_NAME} --tail {tail_lines}", timeout=30)
+            if result.returncode == 0:
+                return result.stdout
+            logger.warning("Failed to fetch container logs: %s", result.stderr)
+            return None
+        except Exception as e:
+            logger.warning("Error fetching container logs: %s", e)
+            return None
+
 
 def create_controller(config: IrisClusterConfig) -> ControllerProtocol:
     """Factory function to create appropriate controller type.
 
-    For GCP provider with controller VM enabled, creates GcpController.
+    For GCP provider (gcp or tpu) with controller VM enabled, creates GcpController.
     Otherwise creates ManualController using the static controller address.
     """
-    if config.provider_type == "gcp" and config.controller_vm.enabled:
+    if config.provider_type in ("gcp", "tpu") and config.controller_vm.enabled:
         return GcpController(config)
     return ManualController(config)
