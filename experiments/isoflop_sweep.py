@@ -265,7 +265,7 @@ class Marin2025Recipe:
     # --- Search step sizes for isoflop sweeps ---
     small_budget_step_size: int = 128
     large_budget_step_size: int = 256
-    budget_step_threshold: float = 9e18
+    budget_step_threshold: float = 2e19
 
     def _compute_learning_rate(self, batch_size: int, hidden_dim: int) -> float:
         """Compute learning rate from batch size and hidden dim."""
@@ -273,7 +273,7 @@ class Marin2025Recipe:
 
     def _compute_beta2(self, batch_size: int) -> float:
         """Compute beta2 from batch size."""
-        return self.beta2_base ** (batch_size / self.beta2_batch_divisor)
+        return max(0.95, self.beta2_base ** (batch_size / self.beta2_batch_divisor))
 
     def compute_num_layers(self, hidden_size: int) -> int:
         """Compute number of layers from hidden size using the depth-width formula."""

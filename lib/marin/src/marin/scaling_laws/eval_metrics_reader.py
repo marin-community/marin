@@ -43,7 +43,7 @@ def _backfill_metrics_from_wandb(
     checkpoint_path: str,
     metrics_file: str,
     entity_project: str,
-) -> bool:
+):
     """
     Backfill tracker_metrics.jsonl from WandB for a training run.
 
@@ -58,31 +58,25 @@ def _backfill_metrics_from_wandb(
     Returns:
         True if backfill succeeded, False otherwise
     """
-    try:
-        run_id = extract_run_name_from_path(checkpoint_path)
-        logger.info(f"Attempting to backfill metrics for run_id: {run_id}")
+    run_id = extract_run_name_from_path(checkpoint_path)
+    logger.info(f"Attempting to backfill metrics for run_id: {run_id}")
 
-        api = wandb.Api()
-        run = api.run(f"{entity_project}/{run_id}")
+    api = wandb.Api()
+    run = api.run(f"{entity_project}/{run_id}")
 
-        # Build record matching WandbTracker._write_replicate_file format
-        record = {
-            "config": dict(run.config),
-            "summary": {k: v for k, v in run.summary.items() if not k.startswith("_")},
-        }
+    # Build record matching WandbTracker._write_replicate_file format
+    record = {
+        "config": dict(run.config),
+        "summary": {k: v for k, v in run.summary.items() if not k.startswith("_")},
+    }
 
-        fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
-        fs.makedirs(os.path.dirname(metrics_file), exist_ok=True)
+    fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
+    fs.makedirs(os.path.dirname(metrics_file), exist_ok=True)
 
-        with fs.open(metrics_file, "w") as f:
-            f.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+    with fs.open(metrics_file, "w") as f:
+        f.write(json.dumps(record, sort_keys=True, default=str) + "\n")
 
-        logger.info(f"Successfully backfilled metrics to {metrics_file}")
-        return True
-
-    except Exception as e:
-        logger.warning(f"Failed to backfill metrics from WandB: {e}")
-        return False
+    logger.info(f"Successfully backfilled metrics to {metrics_file}")
 
 
 def read_eval_records(
@@ -113,15 +107,11 @@ def read_eval_records(
         if not fs.exists(metrics_file):
             logger.info(f"{metrics_file} does not exist, attempting to backfill from WandB...")
 
-            success = _backfill_metrics_from_wandb(
+            _backfill_metrics_from_wandb(
                 checkpoint_path=run_path,
                 metrics_file=metrics_file,
                 entity_project=wandb_entity_project,
             )
-            if not success:
-                raise RuntimeError(
-                    f"Backfill from WandB failed for run {i} (path={run_path}, metrics_file={metrics_file})"
-                )
 
         with fs.open(metrics_file, "r") as f:
             for line in f:
