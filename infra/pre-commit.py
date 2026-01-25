@@ -1,4 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "click",
+#     "pyyaml",
+# ]
+# ///
 # Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -141,7 +148,7 @@ def check_ruff(files: list[pathlib.Path], fix: bool) -> int:
         return 0
 
     click.echo("\nRuff linter:")
-    args = ["uv", "run", "--all-packages", "ruff", "check"]
+    args = ["uvx", "ruff@0.14.3", "check"]
     if fix:
         args.extend(["--fix", "--exit-non-zero-on-fix"])
 
@@ -156,7 +163,7 @@ def check_black(files: list[pathlib.Path], fix: bool, config: pathlib.Path | Non
         return 0
 
     click.echo("\nBlack formatter:")
-    args = ["uv", "run", "--all-packages", "black", "--check"]
+    args = ["uvx", "black@25.9.0", "--check"]
     if fix:
         # When fixing, use --diff to show changes but still exit non-zero if files would be formatted
         args.append("--diff")
@@ -170,7 +177,7 @@ def check_black(files: list[pathlib.Path], fix: bool, config: pathlib.Path | Non
 
     # If check failed (files need formatting) and fix is requested, format them
     if result.returncode != 0 and fix:
-        format_args = ["uv", "run", "--all-packages", "black"]
+        format_args = ["uvx", "black@25.9.0"]
         if config:
             format_args.extend(["--config", str(config)])
         format_args.extend(file_args)
@@ -253,7 +260,7 @@ def check_mypy(files: list[pathlib.Path], fix: bool) -> int:
         return 0
 
     click.echo("\nMypy type checker:")
-    args = ["uv", "run", "--all-packages", "mypy", "--ignore-missing-imports", "--python-version=3.11"]
+    args = ["uvx", "mypy@1.19.1", "--ignore-missing-imports", "--python-version=3.11"]
 
     test_excluded = [f for f in files if not str(f.relative_to(ROOT_DIR)).startswith("tests/")]
     if not test_excluded:
@@ -532,7 +539,7 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
         return 0
 
     click.echo("\nPyrefly type checker:")
-    args = ["uv", "run", "--all-packages", "pyrefly", "check", "--baseline", ".pyrefly-baseline.json"]
+    args = ["uvx", "pyrefly@0.40.0", "check", "--baseline", ".pyrefly-baseline.json"]
     return run_cmd(args).returncode
 
 

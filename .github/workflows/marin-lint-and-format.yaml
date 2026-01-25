@@ -21,8 +21,5 @@ jobs:
         python-version: "3.11"
         enable-cache: true
 
-    - name: Set up Python
-      run: uv python install
-
     - name: Run pre-commit checks
-      run: uv run python infra/pre-commit.py --all-files
+      run: ./infra/pre-commit.py --all-files

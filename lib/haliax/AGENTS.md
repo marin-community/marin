@@ -22,10 +22,10 @@ repository. Follow these notes when implementing new features or fixing bugs.
 ## Code Style
 
 * **Python version**: the project targets Python >=3.10.
-* **Formatting and Linting**: We use `uv run python infra/pre-commit.py` (ruff, black, license headers) to keep files consistent.
+* **Formatting and Linting**: We use `./infra/pre-commit.py` (ruff, black, license headers) to keep files consistent.
 * **Typing**: the code base uses `mypy` for static type checking. `mypy` is run by the same `infra/pre-commit.py` entrypoint and the
   configuration is found in `pyproject.toml`.
-* **Run `uv run python infra/pre-commit.py --all-files`** before committing. The CI workflows run the same checks.
+* **Run `./infra/pre-commit.py --all-files`** before committing. The CI workflows run the same checks.
 * **Use `uv run` for commands.** When running tools like `pytest` or other scripts, invoke them via `uv run` so the development dependencies are active.
 * **Doc Strings**: All public functions, classes, and modules should have docstrings, unless
   their purpose is painfully obvious. Use
