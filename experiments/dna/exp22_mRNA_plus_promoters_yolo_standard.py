@@ -13,7 +13,9 @@
 # limitations under the License.
 
 """
-YOLO experiment for animal mRNA + promoters.
+YOLO experiment for animal mRNA + promoters with standard training (no loss downweighting).
+
+See exp22_mRNA_plus_promoters_yolo_repeat_downweight.py for the variant with repeat downweighting.
 
 https://github.com/Open-Athena/bolinas-dna/issues/22
 """
