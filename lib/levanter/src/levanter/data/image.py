@@ -4330,6 +4330,10 @@ class ImageDataLoaderIterator(DataLoaderIterator):
 
         def get_pixel_values(d: ImageTextDict) -> numpy.ndarray:
             pv = d["pixel_values"]
+            if pv is None:
+                # Pure text sample - return zeros (same as padding)
+                # Shape: (num_patches, channels, height, width)
+                return numpy.zeros(pixel_shape[1:], dtype=self.dl.pixel_dtype)
             if pv.ndim == 4 and target_num_patches > 1:
                 pv = self._pad_pixel_values_to_num_patches(pv, target_num_patches)
             elif pv.ndim == 4 and target_num_patches == 1:
@@ -4376,6 +4380,10 @@ class ImageDataLoaderIterator(DataLoaderIterator):
                 return mask
             # Fallback: compute from pixel_values shape (for backwards compatibility)
             pv = d["pixel_values"]
+            if pv is None:
+                # Pure text sample - all patches are padding (no valid image patches)
+                # This ensures combined_mask will mask out all image placeholder tokens
+                return numpy.zeros(target_num_patches, dtype=numpy.bool_)
             actual_patches = pv.shape[0] if pv.ndim == 4 else 1
             mask = numpy.zeros(target_num_patches, dtype=numpy.bool_)
             mask[:actual_patches] = True
