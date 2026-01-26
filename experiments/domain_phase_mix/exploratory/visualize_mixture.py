@@ -240,7 +240,7 @@ def create_all_baselines_chart(
     """Create a chart showing all baseline mixtures with their BPB, arc_challenge acc, and choice_logprob scores.
 
     Args:
-        baselines: Dict mapping names to {"weights": [...], "bpb": float, "arc_acc": float, "choice_logprob": float}.
+        baselines: Dict mapping names to {"weights": [...], "bpb": float, "arc_acc": float, "arc_bpb": float, "choice_logprob": float}.
         title: Chart title.
         width: Figure width.
         height: Figure height.
@@ -272,6 +272,16 @@ def create_all_baselines_chart(
         else:
             arc_acc_str = ""
 
+        # Arc challenge BPB with optional predicted value
+        arc_bpb = data.get('arc_bpb')
+        if arc_bpb is not None:
+            if 'arc_bpb' in predicted:
+                arc_bpb_str = f"Arc BPB: {arc_bpb:.4f} (pred: {predicted['arc_bpb']:.4f})"
+            else:
+                arc_bpb_str = f"Arc BPB: {arc_bpb:.4f}"
+        else:
+            arc_bpb_str = ""
+
         # Choice logprob with optional predicted value
         logprob = data.get('choice_logprob')
         if logprob is not None:
@@ -285,6 +295,8 @@ def create_all_baselines_chart(
         lines = [name, f"<b>{bpb_str}</b>"]
         if arc_acc_str:
             lines.append(f"<b>{arc_acc_str}</b>")
+        if arc_bpb_str:
+            lines.append(f"<b>{arc_bpb_str}</b>")
         if logprob_str:
             lines.append(f"<b>{logprob_str}</b>")
         subplot_titles.append("<br>".join(lines))
@@ -410,26 +422,30 @@ def load_baselines_from_csv(csv_path: str) -> dict[str, dict]:
         90009: "90009: RegMix 5-fold\n(opt. arc_challenge/bpb)",
     }
 
-    # Predicted values from RegMix regression analysis (regmix_regression_kfold.py)
+    # Predicted values from RegMix regression analysis (regmix_regression_kfold.results.txt)
     # These are the predicted metric values for the optimized mixtures
     regmix_predictions = {
         90006: {
-            "bpb": 1.1319,
-            "choice_logprob": -5.7010,
-            "arc_acc": 0.1825,
+            "bpb": 1.1422,
+            "arc_bpb": 1.3601,
+            "choice_logprob": -5.6879,
+            "arc_acc": 0.1824,
         },
         90007: {
-            "bpb": 1.1321,
-            "choice_logprob": -5.6934,
+            "bpb": 1.1422,
+            "arc_bpb": 1.3481,
+            "choice_logprob": -5.6666,
             "arc_acc": 0.1842,
         },
         90008: {
-            "bpb": 1.1412,
-            "choice_logprob": -5.6912,
-            "arc_acc": 0.1858,
+            "bpb": 1.1506,
+            "arc_bpb": 1.3379,
+            "choice_logprob": -5.6642,
+            "arc_acc": 0.1859,
         },
         90009: {
             "bpb": 1.1590,
+            "arc_bpb": 1.3331,
             "choice_logprob": -5.6707,
             "arc_acc": 0.1861,
         },
@@ -451,6 +467,7 @@ def load_baselines_from_csv(csv_path: str) -> dict[str, dict]:
             "weights": weights,
             "bpb": row['eval/paloma/c4_en/bpb'],
             "arc_acc": row['lm_eval/arc_challenge/acc'],
+            "arc_bpb": row['lm_eval/arc_challenge/bpb'],
             "choice_logprob": row['lm_eval/arc_challenge/choice_logprob'],
         }
 

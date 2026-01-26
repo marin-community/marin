@@ -1,6 +1,8 @@
 # redundant, but Ray looks for this otherwise.
 .git
 
+calvin_artifacts/
+
 logs/
 
 # CPU profiles
@@ -227,3 +229,4 @@ scr/*
 .marin.yaml
 
 /scratch
+lib/marin/src/marin/download/huggingface/validate_hf_download.py
