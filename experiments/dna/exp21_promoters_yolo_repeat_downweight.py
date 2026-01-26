@@ -13,7 +13,9 @@
 # limitations under the License.
 
 """
-YOLO experiment for animal promoters.
+YOLO experiment for animal promoters with loss downweighting on repetitive DNA elements.
+
+See exp21_promoters_yolo_standard.py for the baseline without downweighting.
 
 https://github.com/Open-Athena/bolinas-dna/issues/21
 """
