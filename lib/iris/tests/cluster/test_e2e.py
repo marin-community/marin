@@ -275,14 +275,14 @@ class E2ECluster:
 
 
 @pytest.fixture(scope="session")
-def test_cluster(use_docker):
+def test_cluster(use_docker, docker_cleanup_session):
     """Provide a running test cluster for E2E tests (session-scoped)."""
     with E2ECluster(use_docker=use_docker) as cluster:
         yield cluster
 
 
 @pytest.fixture(scope="session")
-def multi_worker_cluster(use_docker):
+def multi_worker_cluster(use_docker, docker_cleanup_session):
     """Provide a cluster with multiple workers (session-scoped)."""
     with E2ECluster(num_workers=3, use_docker=use_docker) as cluster:
         yield cluster
