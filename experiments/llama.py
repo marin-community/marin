@@ -25,6 +25,7 @@ from fray.cluster import ResourceConfig
 from levanter.data.text import ChatLmDatasetFormat
 
 llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
+llama3_tokenizer_gcs = "gs://marin-us-central2/tokenizers/llama-3.1-8b"
 llama3_tokenizer_vocab_size = 128_256
 llama3_instruct_tokenizer = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 

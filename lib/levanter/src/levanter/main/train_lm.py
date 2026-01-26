@@ -70,8 +70,17 @@ class TrainLmConfig:
     log_entropy: bool = False
 
 
+_TOKENIZER_GCS_OVERRIDES = {
+    "meta-llama/Meta-Llama-3.1-8B": "gs://marin-us-central2/tokenizers/llama-3.1-8b",
+}
+
+
 def main(config: TrainLmConfig):
-    tokenizer = config.data.the_tokenizer
+    from levanter.compat.hf_checkpoints import load_tokenizer
+
+    tokenizer_path = config.data.tokenizer
+    tokenizer_path = _TOKENIZER_GCS_OVERRIDES.get(tokenizer_path, tokenizer_path)
+    tokenizer = load_tokenizer(tokenizer_path)
 
     # this is some unpleasant code to allow us to initialize from a hf checkpoint. If this is your first read through,
     # I recommend skipping it for now

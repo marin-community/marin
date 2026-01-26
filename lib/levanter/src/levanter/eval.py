@@ -12,6 +12,7 @@ from typing import Callable, Mapping, Optional, Sequence, TypeVar
 
 import equinox as eqx
 import fsspec
+import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
@@ -227,8 +228,8 @@ def cb_tagged_lm_evaluate(
             levanter.tracker.log(log_dict, step=step_count)
             metrics_to_write.update(log_dict)
 
-        # Write metrics to file if checkpoint_path is provided
-        if checkpoint_path is not None and metrics_to_write:
+        # Write metrics to file if checkpoint_path is provided (only on head node to avoid GCS rate limits)
+        if checkpoint_path is not None and metrics_to_write and jax.process_index() == 0:
             metrics_file = os.path.join(checkpoint_path, "eval_metrics.jsonl")
             fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
             fs.makedirs(checkpoint_path, exist_ok=True)
