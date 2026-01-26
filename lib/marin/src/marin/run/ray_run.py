@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# ruff: noqa
 
 import argparse
 import asyncio
@@ -25,6 +26,13 @@ import time
 from pathlib import Path
 
 import yaml
+
+os.environ.setdefault("RAY_AUTH_MODE", "token")
+_default_token_path = Path.home() / ".ray" / "auth_token"
+if _default_token_path.exists() and "RAY_AUTH_TOKEN_PATH" not in os.environ:
+    os.environ["RAY_AUTH_TOKEN_PATH"] = str(_default_token_path)
+
+
 from ray.job_submission import JobSubmissionClient
 
 from marin.cluster.config import find_config_by_region
@@ -138,7 +146,7 @@ async def submit_and_track_job(
     runtime_dict = {
         "working_dir": current_dir,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"],
+        "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"],
     }
 
     # add the TPU dependency for cluster jobs.

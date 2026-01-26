@@ -24,6 +24,7 @@ Marin application code).
 
 import ast
 import fnmatch
+import json
 import os
 import pathlib
 import subprocess
@@ -46,6 +47,9 @@ EXCLUDE_PATTERNS = [
     ".git/**",
     ".github/**",
     "tests/snapshots/**",
+    # grpc generated files
+    "**/*_connect.py",
+    "**/*_pb2.py",
     "**/*.gz",
     "**/*.pb",
     "**/*.index",
@@ -465,6 +469,64 @@ def check_eof_newline(files: list[pathlib.Path], fix: bool) -> int:
     return 0
 
 
+def check_notebooks(files: list[pathlib.Path], fix: bool) -> int:
+    """Check that Jupyter notebooks have cleared outputs and normalized formatting.
+
+    TODO: Consider generating static HTML versions of notebooks (via nbconvert) and uploading
+    to GCS, then recording the GCS path in the cleared notebook. This would preserve a trace
+    of what the author saw at commit time while still keeping git diffs clean.
+    """
+    nb_files = [f for f in files if f.suffix == ".ipynb"]
+    if not nb_files:
+        return 0
+
+    click.echo("\nJupyter notebooks:")
+    notebooks_needing_clean = []
+
+    for nb_path in nb_files:
+        try:
+            with open(nb_path) as f:
+                notebook = json.load(f)
+        except Exception as e:
+            click.echo(f"  Error reading {nb_path.relative_to(ROOT_DIR)}: {e}")
+            continue
+
+        needs_cleaning = False
+
+        # Check if any code cells have outputs or execution_count
+        if "cells" in notebook:
+            for cell in notebook["cells"]:
+                if cell.get("cell_type") == "code":
+                    if cell.get("outputs") or cell.get("execution_count") is not None:
+                        needs_cleaning = True
+                        break
+
+        if needs_cleaning:
+            notebooks_needing_clean.append(nb_path)
+
+            if fix:
+                # Clear outputs and execution counts from code cells
+                for cell in notebook.get("cells", []):
+                    if cell.get("cell_type") == "code":
+                        cell["outputs"] = []
+                        cell["execution_count"] = None
+
+                # Write back with normalized formatting (indent=1, sorted keys like Jupyter does)
+                with open(nb_path, "w") as f:
+                    json.dump(notebook, f, indent=1, ensure_ascii=False, sort_keys=True)
+                    f.write("\n")  # Jupyter adds trailing newline
+
+    if notebooks_needing_clean:
+        if not fix:
+            click.echo(f"  {len(notebooks_needing_clean)} notebooks with outputs or execution counts")
+            for f in notebooks_needing_clean:
+                click.echo(f"    - {f.relative_to(ROOT_DIR)}")
+        return 1
+
+    click.echo("  All notebooks are clean")
+    return 0
+
+
 def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
@@ -509,7 +571,14 @@ PRECOMMIT_CONFIGS = [
         ],
     ),
     PrecommitConfig(
-        patterns=["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"],
+        patterns=[
+            "lib/marin/src/**/*.py",
+            "lib/levanter/src/**/*.py",
+            "lib/haliax/src/**/*.py",
+            "lib/fray/src/**/*.py",
+            "lib/iris/src/**/*.py",
+            "lib/zephyr/src/**/*.py",
+        ],
         checks=[
             check_pyrefly,
         ],
@@ -523,6 +592,12 @@ PRECOMMIT_CONFIGS = [
             check_toml_yaml,
             check_trailing_whitespace,
             check_eof_newline,
+        ],
+    ),
+    PrecommitConfig(
+        patterns=["**/*.ipynb"],
+        checks=[
+            check_notebooks,
         ],
     ),
 ]
