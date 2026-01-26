@@ -82,11 +82,18 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
         raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
 
-def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path: str):
+def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path: str, expected_size: int | None = None):
     """Stream a file from HfFileSystem to another fsspec path using atomic write.
 
     Uses atomic_rename to write to a temp file first, then rename on success.
     This enables recovery across individual files if the job is interrupted.
+
+    Args:
+        gcs_output_path: Base output path for the download.
+        file_path: Source file path on HuggingFace.
+        fsspec_file_path: Target file path on the destination filesystem.
+        expected_size: Expected file size in bytes for validation. If provided,
+            the download will fail if the downloaded size doesn't match.
     """
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
     target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
@@ -103,12 +110,21 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
     for attempt in range(max_retries):
         try:
             target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
+            bytes_written = 0
             with atomic_rename(fsspec_file_path) as temp_path:
                 with hf_fs.open(file_path, "rb") as src_file, fsspec.open(temp_path, "wb") as dest_file:
                     while chunk := src_file.read(chunk_size):
                         dest_file.write(chunk)
-            logger.info(f"Streamed {file_path} successfully to {fsspec_file_path}")
-            return {"file_path": file_path, "status": "success"}
+                        bytes_written += len(chunk)
+
+            # Validate file size if expected_size is provided
+            if expected_size is not None and bytes_written != expected_size:
+                raise ValueError(
+                    f"Size mismatch for {file_path}: expected {expected_size} bytes, got {bytes_written} bytes"
+                )
+
+            logger.info(f"Streamed {file_path} successfully to {fsspec_file_path} ({bytes_written} bytes)")
+            return {"file_path": file_path, "status": "success", "size": bytes_written}
         except Exception as e:
             last_exception = e
             # Base wait: min 5s, then exponential: 5, 10, 20, 40, 80, 160, 320, 600 (capped)
@@ -180,18 +196,31 @@ def download_hf(cfg: DownloadConfig) -> None:
     if not files:
         raise ValueError(f"No files found for dataset `{cfg.hf_dataset_id}. Used glob patterns: {cfg.hf_urls_glob}")
 
+    # Get file sizes for validation
+    logger.info("Getting file sizes for validation...")
+    file_sizes: dict[str, int] = {}
+    for file in files:
+        try:
+            info = hf_fs.info(file, revision=cfg.revision)
+            file_sizes[file] = info.get("size", 0)
+        except Exception as e:
+            logger.warning(f"Could not get size for {file}: {e}")
+            file_sizes[file] = 0  # Will skip validation for this file
+
     download_tasks = []
 
     for file in files:
         try:
             fsspec_file_path = os.path.join(output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
             # Hf file paths are always of format : hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
-            download_tasks.append((output_path, file, fsspec_file_path))
+            expected_size = file_sizes.get(file) or None  # Convert 0 to None to skip validation
+            download_tasks.append((output_path, file, fsspec_file_path, expected_size))
         except Exception as e:
             logging.exception(f"Error preparing task for {file}: {e}")
 
     total_files = len(download_tasks)
-    logger.info(f"Total number of files to process: {total_files}")
+    total_size_gb = sum(file_sizes.values()) / (1024**3)
+    logger.info(f"Total number of files to process: {total_files} ({total_size_gb:.2f} GB)")
 
     pipeline = (
         Dataset.from_list(download_tasks)

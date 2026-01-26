@@ -131,11 +131,15 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     spec = _as_spec(source)
     decoder = msgspec.json.Decoder()
 
-    with open_file(spec.path, "rt") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                yield decoder.decode(line)
+    try:
+        with open_file(spec.path, "rt") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    yield decoder.decode(line)
+    except Exception as e:
+        logger.error(f"Error reading JSONL file {spec.path}: {e}")
+        raise
 
 
 def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
