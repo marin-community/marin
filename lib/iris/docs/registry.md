@@ -6,48 +6,75 @@
 
 ## Goal
 
-- **What**: Per-scale-group provider configuration with typed dataclasses, plus dead code cleanup
-- **Why**: Current top-level provider config prevents mixed-provider clusters (e.g., TPU + manual hosts)
-- **Scope**: `lib/iris/src/iris/cluster/vm/` — config parsing, provider dataclasses, SSH cleanup
+- **What**: Per-scale-group provider configuration via protobuf, plus dead code cleanup
+- **Why**: Current top-level provider config prevents mixed-provider clusters (e.g., TPU + manual hosts in same cluster)
+- **Scope**: `lib/iris/src/iris/rpc/vm.proto`, `lib/iris/src/iris/cluster/vm/config.py`, SSH cleanup
 
 ---
 
 ## Non-Goals
 
-- **Full registry pattern**: Only 2 providers exist. Add registry infrastructure when a third provider is needed.
-- **Removing `_create_manager()` dispatch**: Simple if/elif is appropriate for 2 types.
-- **Breaking change to YAML**: Support both top-level and per-group provider config during transition.
+- **Python-side registry pattern**: Config is protobuf-first; no separate Python dataclasses for provider config
+- **Removing `_create_manager()` dispatch**: Simple if/elif is appropriate for 2 provider types
 
 ---
 
 ## Design Overview
 
-### Architecture
+### Current State
 
-1. **Typed provider config dataclasses** (`TpuProviderConfig`, `ManualProviderConfig`) hold provider-specific fields
-2. **Per-scale-group `provider:` section** in YAML allows mixed-provider clusters
-3. **Existing `_create_manager()` if/elif dispatch** remains — no registry pattern
-4. **Backward compatibility**: Top-level `provider:` applies to groups without explicit provider
+Config is now protobuf-based:
+- `IrisClusterConfig` proto holds top-level `provider_type`, `project_id`, `manual_hosts`
+- `ScaleGroupConfig` proto has no provider info
+- `ScaleGroupSpec` Python dataclass wraps proto with `provider` and `hosts` fields
+- `load_config()` uses `ParseDict()` to parse YAML → proto
+
+### Proposed Change
+
+Add `ProviderConfig` message to proto with `oneof` for provider-specific fields:
+
+```protobuf
+message ProviderConfig {
+  oneof provider {
+    TpuProvider tpu = 1;
+    ManualProvider manual = 2;
+  }
+}
+
+message TpuProvider {
+  string project_id = 1;
+}
+
+message ManualProvider {
+  repeated string hosts = 1;
+  string ssh_user = 2;
+  string ssh_key_file = 3;
+  int32 ssh_port = 4;
+}
+```
+
+Then add `ProviderConfig provider = 90;` to `ScaleGroupConfig`.
 
 ### Data Flow
 
 ```
-YAML → load_config() → IrisClusterConfig
-                            ↓
-                    ScaleGroupSpec (with parsed ProviderConfig)
-                            ↓
-                    _create_manager() [if/elif dispatch]
-                            ↓
-                    TpuVmManager | ManualVmManager
+YAML → ParseDict() → IrisClusterConfig (proto)
+                           ↓
+         scale_groups[name].provider (ProviderConfig)
+                           ↓
+         _create_manager() [if/elif on provider.WhichOneof()]
+                           ↓
+         TpuVmManager | ManualVmManager
 ```
 
 ### Key Decisions
 
 | Decision | Rationale |
 |----------|-----------|
-| No registry pattern | Only 2 providers; if/elif is 40 lines vs 150+ for registry |
-| Typed dataclasses | Type safety for provider-specific fields without runtime overhead |
-| Backward compat | Existing configs continue to work; gradual migration |
+| Proto-first | Config already uses `ParseDict()`; keep single source of truth |
+| `oneof` for providers | Type-safe, extensible, auto-generates Python accessors |
+| Keep `_create_manager()` | Simple if/elif for 2 providers; add registry when third appears |
+| Remove top-level provider | Per AGENTS.md: no backward compat; update all call sites |
 
 ---
 
@@ -56,9 +83,12 @@ YAML → load_config() → IrisClusterConfig
 ### Directory Tree
 
 ```
-lib/iris/src/iris/cluster/vm/
-  config.py <modified>
-  ssh.py <modified>
+lib/iris/src/iris/
+  rpc/
+    vm.proto <modified>
+  cluster/vm/
+    config.py <modified>
+    ssh.py <modified>
 lib/iris/examples/
   demo.yaml <modified>
   eu-west4.yaml <modified>
@@ -68,41 +98,74 @@ lib/iris/tests/cluster/vm/
 
 ### File-by-File Overview
 
+#### `vm.proto` (modified)
+
+**Purpose**: Protobuf definitions for VM management.
+
+**Changes**:
+1. Add `TpuProvider` message with `project_id`
+2. Add `ManualProvider` message with `hosts`, `ssh_user`, `ssh_key_file`, `ssh_port`
+3. Add `ProviderConfig` message with `oneof provider`
+4. Add `ProviderConfig provider = 90` field to `ScaleGroupConfig`
+
+**Key interfaces**:
+```protobuf
+message TpuProvider {
+  string project_id = 1;
+}
+
+message ManualProvider {
+  repeated string hosts = 1;
+  string ssh_user = 2;           // Default: "root"
+  string ssh_key_file = 3;
+  int32 ssh_port = 4;            // Default: 22
+}
+
+message ProviderConfig {
+  oneof provider {
+    TpuProvider tpu = 1;
+    ManualProvider manual = 2;
+  }
+}
+
+message ScaleGroupConfig {
+  // ... existing fields ...
+
+  // Per-group provider config (overrides top-level if set)
+  ProviderConfig provider = 90;
+}
+```
+
 #### `config.py` (modified)
 
 **Purpose**: Cluster configuration loading and autoscaler creation.
 
 **Changes**:
-1. Add `TpuProviderConfig` and `ManualProviderConfig` dataclasses
-2. Add `parse_provider_config()` function to dispatch on `type` field
-3. Update `load_config()` to parse per-group provider config
-4. Update `_create_manager()` to accept typed config instead of kwargs
+1. Update `create_autoscaler_from_config()` to read `group_config.provider`
+2. Extract provider-specific fields from proto messages
+3. Remove `ScaleGroupSpec` dataclass (no longer needed - proto has all info)
 
-**Key interfaces**:
+**Key logic**:
 ```python
-@dataclass
-class TpuProviderConfig:
-    type: Literal["tpu"] = "tpu"
-    project_id: str = ""
+def _get_provider_config(
+    group_config: vm_pb2.ScaleGroupConfig,
+) -> tuple[str, str | None, list[str] | None]:
+    """Extract provider type and config from scale group.
 
-@dataclass
-class ManualProviderConfig:
-    type: Literal["manual"] = "manual"
-    hosts: list[str] = field(default_factory=list)
-    ssh_user: str = "root"
-    ssh_key_file: str | None = None
-    ssh_port: int = 22
+    Returns: (provider_type, project_id, hosts)
+    Raises: ValueError if provider not set
+    """
+    if not group_config.HasField("provider"):
+        raise ValueError(f"Scale group {group_config.name} missing provider config")
 
-ProviderConfig = TpuProviderConfig | ManualProviderConfig
+    provider = group_config.provider
+    which = provider.WhichOneof("provider")
+    if which == "tpu":
+        return ("tpu", provider.tpu.project_id, None)
+    if which == "manual":
+        return ("manual", None, list(provider.manual.hosts))
 
-def parse_provider_config(data: dict) -> ProviderConfig:
-    """Parse dict into typed provider config."""
-    type_name = data.get("type", "manual")
-    if type_name == "tpu":
-        return TpuProviderConfig(**data)
-    if type_name == "manual":
-        return ManualProviderConfig(**data)
-    raise ValueError(f"Unknown provider: {type_name}")
+    raise ValueError(f"Unknown provider type in {group_config.name}")
 ```
 
 #### `ssh.py` (modified)
@@ -120,48 +183,45 @@ def parse_provider_config(data: dict) -> ProviderConfig:
 
 #### `examples/demo.yaml`, `examples/eu-west4.yaml` (modified)
 
-**Changes**: Add per-group provider format (top-level still works as fallback):
+**Changes**: Move provider config into each scale group, remove top-level provider fields:
 
 ```yaml
-# Old format (still supported as fallback)
-provider:
-  type: tpu
-  project_id: hai-gcp-models
-
-# New format (per-group)
 scale_groups:
   tpu_v5e_16:
     provider:
-      type: tpu
-      project_id: hai-gcp-models
+      tpu:
+        project_id: hai-gcp-models
     accelerator_type: v5litepod-16
+    zones: [europe-west4-b]
 
   manual_workers:
     provider:
-      type: manual
-      hosts: [10.0.0.1, 10.0.0.2]
-      ssh_user: ray
+      manual:
+        hosts: [10.0.0.1, 10.0.0.2]
+        ssh_user: ray
+    accelerator_type: cpu
+    zones: [local]
 ```
 
 #### `test_config.py` (modified)
 
-**Changes**: Add tests for provider config parsing and backward compatibility.
+**Changes**: Add tests for per-group provider parsing.
 
 ---
 
 ## Alternatives Considered
 
-### Alternative A: Full Registry Pattern
+### Alternative A: Python Dataclasses for Provider Config
 
-Config classes register themselves via `ProviderConfig.register()`. Dispatch uses registry lookup.
+Add `TpuProviderConfig` and `ManualProviderConfig` Python dataclasses alongside proto.
 
-**Trade-offs**: Adds ~100 lines of infrastructure (Protocol with ClassVar registry, register/parse methods). Only 2 providers exist; unlikely to add more soon. Deferred until third provider needed.
+**Trade-offs**: Duplicates type definitions. Config already uses `ParseDict()` which handles YAML → proto directly. Adding Python dataclasses creates two sources of truth.
 
-### Alternative B: Union Type Without Dataclasses
+### Alternative B: Keep Provider in ScaleGroupSpec Only
 
-Use `dict` with runtime type checking instead of typed dataclasses.
+Keep `ScaleGroupSpec` Python dataclass, don't modify proto.
 
-**Trade-offs**: Loses type safety and IDE support. Current kwargs-based approach already has this problem.
+**Trade-offs**: Provider config isn't serializable. Can't round-trip config to YAML. `ScaleGroupSpec` becomes the "real" config instead of the proto.
 
 ---
 
@@ -176,49 +236,62 @@ Use `dict` with runtime type checking instead of typed dataclasses.
 2. Remove `GcloudSshConnectionFactory` Protocol
 3. Remove `make_direct_ssh_factory()`, `make_in_memory_connection_factory()`, `make_gcloud_ssh_factory()`
 
-**Verify**: `uv run pytest lib/iris/tests/ -v` — all tests pass (code is unused)
+**Verify**: `uv run pytest lib/iris/tests/ -v` — all tests pass
 
-### Step 2: Add Provider Config Dataclasses
+### Step 2: Add Provider Messages to Proto
 
-**Files**: `config.py`
+**Files**: `vm.proto`
 
 **Actions**:
-1. Add `TpuProviderConfig` dataclass with `type`, `project_id` fields
-2. Add `ManualProviderConfig` dataclass with `type`, `hosts`, `ssh_*` fields
-3. Add `ProviderConfig` type alias as union
-4. Add `parse_provider_config()` function
+1. Add `TpuProvider` message
+2. Add `ManualProvider` message
+3. Add `ProviderConfig` message with `oneof`
+4. Add `provider` field to `ScaleGroupConfig`
 
-**Verify**: Type checker passes
+**Verify**: `uv run python -c "from iris.rpc import vm_pb2; print(vm_pb2.ProviderConfig.DESCRIPTOR.fields_by_name)"`
 
 ### Step 3: Update Config Parsing
 
 **Files**: `config.py`
 
 **Actions**:
-1. Update `load_config()` to parse `scale_groups[name].provider` into typed config
-2. Fall back to top-level `provider:` if group has no explicit provider
-3. Store parsed `ProviderConfig` in `ScaleGroupSpec`
+1. Add `_get_provider_config()` helper to extract provider from group
+2. Update `create_autoscaler_from_config()` to use new helper
+3. Remove `ScaleGroupSpec` dataclass
+4. Remove top-level `provider_type`, `project_id`, `manual_hosts` handling
 
-**Verify**: `uv run python -c "from iris.cluster.vm.config import load_config; c = load_config('lib/iris/examples/eu-west4.yaml'); print(c)"`
+**Verify**: Load example YAML with per-group providers
 
-### Step 4: Update Manager Creation
+### Step 4: Update Example Configs
 
-**Files**: `config.py`
+**Files**: `examples/demo.yaml`, `examples/eu-west4.yaml`
 
 **Actions**:
-1. Update `_create_manager()` to accept `ProviderConfig` instead of kwargs
-2. Use `isinstance()` or match on `config.type` to dispatch
+1. Move provider config into each scale group
+2. Remove top-level `provider_type`, `project_id`, `manual_hosts`
 
-**Verify**: `uv run pytest lib/iris/tests/cluster/vm/test_controller.py -v`
+**Verify**: `uv run python -c "from iris.cluster.vm.config import load_config; print(load_config('lib/iris/examples/eu-west4.yaml'))"`
 
-### Step 5: Add Tests
+### Step 5: Update All Call Sites
+
+**Files**: Any code creating `IrisClusterConfig` or `ScaleGroupConfig` directly
+
+**Actions**:
+1. Search for usages of `provider_type`, `project_id`, `manual_hosts` on `IrisClusterConfig`
+2. Update to use per-group `provider` field instead
+3. Update any tests that use old config format
+
+**Verify**: `uv run pytest lib/iris/tests/ -v`
+
+### Step 6: Add Tests
 
 **Files**: `test_config.py`
 
 **Actions**:
-1. Test `parse_provider_config()` for tpu, manual, unknown
-2. Test per-group provider parsing
-3. Test fallback to top-level provider
+1. Test per-group TPU provider parsing
+2. Test per-group manual provider parsing
+3. Test mixed providers in same cluster
+4. Test error when provider missing
 
 **Verify**: `uv run pytest lib/iris/tests/cluster/vm/test_config.py -v`
 
@@ -228,41 +301,37 @@ Use `dict` with runtime type checking instead of typed dataclasses.
 
 ### Testing Strategy
 
-- **Unit tests**: `parse_provider_config()`, config loading with per-group providers
-- **Integration tests**: Existing autoscaler tests continue to pass
-- **Manual verification**: Load example YAML files
+- **Unit tests**: Provider parsing, error cases
+- **Integration tests**: Full autoscaler creation with mixed providers
+- **Proto tests**: Verify `WhichOneof()` works correctly
 
 ### Error Handling
 
-- `ValueError` for unknown provider type (lists available: tpu, manual)
-- `ValueError` for missing required fields (e.g., `project_id` for TPU, `hosts` for manual)
-- Errors propagate to caller
-
-### Migration
-
-Backward compatible:
-1. If `scale_groups[name].provider` exists, use it
-2. Else if top-level `provider:` exists, use it as default
-3. Else raise error (no provider specified)
+- `ValueError` if scale group missing `provider` field
+- `ValueError` if TPU provider missing `project_id`
+- `ValueError` if manual provider missing `hosts`
 
 ---
 
 ## Open Questions
 
-1. **Remove redundant top-level fields?** With per-group providers, `IrisClusterConfig.project_id`, `manual_hosts`, etc. are redundant. Options:
-   - Keep as defaults (current plan)
-   - Deprecate with warning
-   - Remove (breaking change)
+1. **Remove `ScaleGroupSpec`?** With provider in proto, `ScaleGroupSpec` is only needed for `create_autoscaler_from_specs()`. Options:
+   - Keep for programmatic API
+   - Remove and have callers build proto directly
+
+2. **Remove top-level provider fields from proto?** Fields `provider_type`, `project_id`, `manual_hosts` on `IrisClusterConfig` become unused. Options:
+   - Remove from proto (clean)
+   - Leave in proto but ignore (avoid proto version bump)
 
 ---
 
 ## Plan Review
 
 **Potential issues**:
-- Union type `TpuProviderConfig | ManualProviderConfig` requires Python 3.10+ or `Union[]`
-- `isinstance()` checks in `_create_manager()` are slightly less elegant than registry dispatch, but appropriate for 2 types
+- Proto `oneof` requires checking `WhichOneof()` at runtime — slightly more verbose than Python union types
+- Need to regenerate proto stubs after modifying `vm.proto`
 
 **Alignment with guidelines**:
-- Follows AGENTS.md preference for simple solutions
-- No unnecessary abstraction
-- Tests verify behavior
+- Protobuf-first matches existing `load_config()` pattern
+- Simple if/elif dispatch for 2 providers
+- No unnecessary Python abstractions

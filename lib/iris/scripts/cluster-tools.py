@@ -13,9 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unified cluster tools for probing, debugging, and validating Iris clusters.
+"""Unified cluster tools for probing, debugging, cleaning, and validating Iris clusters.
 
-This script provides commands to discover, probe, monitor, and validate an Iris
+This script provides commands to discover, probe, monitor, validate, and clean up an Iris
 controller running on a GCP VM. It handles SSH tunneling transparently for RPC commands.
 
 Usage:
@@ -29,6 +29,8 @@ Usage:
     uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models bootstrap-logs
     uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models list-jobs
     uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate
+    uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models cleanup
+    uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models cleanup --no-dry-run
 """
 
 import json
@@ -62,17 +64,15 @@ DEFAULT_VALIDATION_TIMEOUT = 600  # 10 minutes for TPU provisioning
 # -----------------------------------------------------------------------------
 
 
-def discover_controller_vm(zone: str, project: str) -> str | None:
-    """Find the controller VM in the given zone using name-based filter.
+def run_gcloud(args: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
+    """Run a gcloud command and return the result."""
+    return subprocess.run(["gcloud", *args], capture_output=True, text=True, check=check)
 
-    Uses name pattern 'iris-controller*' since the metadata-based filter
-    doesn't work reliably with --zones in gcloud.
 
-    Returns the VM name if found, None otherwise.
-    """
-    result = subprocess.run(
+def list_controller_vms(zone: str, project: str) -> list[str]:
+    """Find iris controller VMs in the zone. Returns list of VM names."""
+    result = run_gcloud(
         [
-            "gcloud",
             "compute",
             "instances",
             "list",
@@ -80,17 +80,23 @@ def discover_controller_vm(zone: str, project: str) -> str | None:
             f"--zones={zone}",
             "--filter=name~^iris-controller",
             "--format=value(name)",
-        ],
-        capture_output=True,
-        text=True,
+        ]
     )
     if result.returncode != 0:
         click.echo(f"Error listing instances: {result.stderr}", err=True)
-        return None
+        return []
 
-    vm_names = result.stdout.strip().split("\n")
-    vm_names = [v for v in vm_names if v]
+    names = result.stdout.strip().split("\n")
+    return [n for n in names if n]
 
+
+def discover_controller_vm(zone: str, project: str) -> str | None:
+    """Find the controller VM in the given zone.
+
+    Returns the first VM name if found, None otherwise.
+    Warns if multiple controller VMs are found.
+    """
+    vm_names = list_controller_vms(zone, project)
     if not vm_names:
         return None
     if len(vm_names) > 1:
@@ -100,9 +106,8 @@ def discover_controller_vm(zone: str, project: str) -> str | None:
 
 def get_vm_status(vm_name: str, zone: str, project: str) -> dict | None:
     """Get detailed status of a VM."""
-    result = subprocess.run(
+    result = run_gcloud(
         [
-            "gcloud",
             "compute",
             "instances",
             "describe",
@@ -110,9 +115,7 @@ def get_vm_status(vm_name: str, zone: str, project: str) -> dict | None:
             f"--project={project}",
             f"--zone={zone}",
             "--format=json",
-        ],
-        capture_output=True,
-        text=True,
+        ]
     )
     if result.returncode != 0:
         return None
@@ -898,6 +901,180 @@ def validate(
             click.echo(f"Using workspace: {ws}")
             click.echo(f"TPU type: {tpu_type}")
             _run_validation(url, ws, tpu_type)
+
+
+# -----------------------------------------------------------------------------
+# Cleanup helpers
+# -----------------------------------------------------------------------------
+
+
+def list_tpu_slices(zone: str, project: str) -> list[str]:
+    """Find iris-managed TPU slices in the zone."""
+    result = run_gcloud(
+        [
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "list",
+            f"--project={project}",
+            f"--zone={zone}",
+            "--filter=name~^iris-",
+            "--format=json",
+        ]
+    )
+    if result.returncode != 0:
+        click.echo(f"Warning: Failed to list TPUs: {result.stderr.strip()}", err=True)
+        return []
+
+    if not result.stdout.strip():
+        return []
+
+    try:
+        tpus = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        click.echo(f"Warning: Failed to parse TPU list: {result.stdout[:200]}", err=True)
+        return []
+
+    names = []
+    for tpu in tpus:
+        name = tpu.get("name", "")
+        # GCP returns full resource path like 'projects/proj/locations/zone/nodes/my-tpu'
+        if "/" in name:
+            name = name.split("/")[-1]
+        if name:
+            names.append(name)
+    return names
+
+
+def delete_vm(name: str, zone: str, project: str) -> bool:
+    """Delete a GCE VM. Returns True on success."""
+    result = run_gcloud(
+        [
+            "compute",
+            "instances",
+            "delete",
+            name,
+            f"--project={project}",
+            f"--zone={zone}",
+            "--quiet",
+        ]
+    )
+    if result.returncode != 0:
+        error = result.stderr.strip()
+        if "not found" in error.lower():
+            click.echo(f"  VM {name} already deleted")
+            return True
+        click.echo(f"  Failed to delete VM {name}: {error}", err=True)
+        return False
+    return True
+
+
+def delete_tpu(name: str, zone: str, project: str) -> bool:
+    """Delete a TPU slice. Returns True on success."""
+    result = run_gcloud(
+        [
+            "compute",
+            "tpus",
+            "tpu-vm",
+            "delete",
+            name,
+            f"--project={project}",
+            f"--zone={zone}",
+            "--quiet",
+        ]
+    )
+    if result.returncode != 0:
+        error = result.stderr.strip()
+        if "not found" in error.lower():
+            click.echo(f"  TPU {name} already deleted")
+            return True
+        click.echo(f"  Failed to delete TPU {name}: {error}", err=True)
+        return False
+    return True
+
+
+@cli.command()
+@click.option(
+    "--dry-run/--no-dry-run",
+    default=True,
+    help="Dry-run mode (default: True). Use --no-dry-run to actually delete.",
+)
+@click.pass_context
+def cleanup(ctx: click.Context, dry_run: bool) -> None:
+    """Clean all iris VMs and TPUs from the zone.
+
+    Finds and deletes all iris-managed resources:
+    - Controller VMs (name matches 'iris-controller*')
+    - TPU slices (name matches 'iris-*')
+
+    By default runs in dry-run mode to show what would be deleted.
+    Use --no-dry-run to actually perform deletions.
+
+    Examples:
+        # Show what would be deleted (safe, no changes)
+        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models cleanup
+
+        # Actually delete resources
+        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models cleanup --no-dry-run
+    """
+    zone = ctx.obj["zone"]
+    project = ctx.obj["project"]
+
+    click.echo(f"Scanning zone {zone} in project {project}...")
+    if dry_run:
+        click.echo("(DRY-RUN mode - no changes will be made)")
+    click.echo()
+
+    # Find controller VMs
+    controller_vms = list_controller_vms(zone, project)
+    if controller_vms:
+        click.echo(f"Found {len(controller_vms)} controller VM(s):")
+        for name in controller_vms:
+            click.echo(f"  - {name}")
+    else:
+        click.echo("No controller VMs found.")
+    click.echo()
+
+    # Find TPU slices
+    tpu_slices = list_tpu_slices(zone, project)
+    if tpu_slices:
+        click.echo(f"Found {len(tpu_slices)} TPU slice(s):")
+        for name in tpu_slices:
+            click.echo(f"  - {name}")
+    else:
+        click.echo("No TPU slices found.")
+    click.echo()
+
+    total_resources = len(controller_vms) + len(tpu_slices)
+    if total_resources == 0:
+        click.echo("Nothing to clean up.")
+        return
+
+    if dry_run:
+        click.echo(f"Would delete {total_resources} resource(s). Use --no-dry-run to delete.")
+        return
+
+    # Perform deletions
+    click.echo("Deleting resources...")
+    failed = 0
+
+    for name in controller_vms:
+        click.echo(f"Deleting VM: {name}")
+        if not delete_vm(name, zone, project):
+            failed += 1
+
+    for name in tpu_slices:
+        click.echo(f"Deleting TPU: {name}")
+        if not delete_tpu(name, zone, project):
+            failed += 1
+
+    click.echo()
+    deleted = total_resources - failed
+    click.echo(f"Deleted {deleted}/{total_resources} resource(s).")
+
+    if failed > 0:
+        click.echo(f"Failed to delete {failed} resource(s).", err=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
