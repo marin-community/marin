@@ -133,13 +133,19 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
 
     try:
         with open_file(spec.path, "rt") as f:
-            for line in f:
+            for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if line:
-                    yield decoder.decode(line)
+                    try:
+                        yield decoder.decode(line)
+                    except Exception as e:
+                        logger.error(f"Error decoding line {line_num} in {spec.path}: {e}")
+                        raise RuntimeError(f"Error decoding line {line_num} in {spec.path}: {e}") from e
+    except RuntimeError:
+        raise  # Re-raise wrapped error
     except Exception as e:
         logger.error(f"Error reading JSONL file {spec.path}: {e}")
-        raise
+        raise RuntimeError(f"Error reading JSONL file {spec.path}: {e}") from e
 
 
 def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
