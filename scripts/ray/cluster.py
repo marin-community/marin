@@ -765,7 +765,9 @@ def job_logs(ctx, job_id, follow, tail, grep):
                 prev_proc = ray_proc
 
             if tail is not None:
-                tail_proc = subprocess.Popen(["tail", f"-{tail}"], stdin=prev_proc.stdout, stdout=subprocess.PIPE, text=True)
+                tail_proc = subprocess.Popen(
+                    ["tail", f"-{tail}"], stdin=prev_proc.stdout, stdout=subprocess.PIPE, text=True
+                )
                 prev_proc.stdout.close()
                 output, _ = tail_proc.communicate(timeout=120)
             else:
