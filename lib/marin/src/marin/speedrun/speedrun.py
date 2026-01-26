@@ -23,6 +23,7 @@ import dataclasses
 import datetime
 import json
 import logging
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -35,7 +36,7 @@ from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize import add_validation_sets_to_mixture, lm_data_config
 from marin.speedrun.paloma_local_download import speedrun_paloma_tokenized
 from marin.training.training import TrainLmOnPodConfig
-from marin.utilities.wandb_utils import WANDB_PROJECT
+from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 from marin.utils import asdict_excluding
 
 import wandb
@@ -208,9 +209,22 @@ class SpeedrunResultsConfig:
 ### Utils and analysis functions ###
 
 
+def _wandb_mode_disabled() -> bool:
+    mode = os.getenv("WANDB_MODE")
+    if mode is None:
+        return False
+    return mode.lower() in {"disabled", "offline", "dryrun"}
+
+
+def _default_wandb_entity() -> str:
+    if _wandb_mode_disabled() or not os.getenv("WANDB_API_KEY"):
+        return WANDB_ENTITY
+    return wandb.Api().default_entity
+
+
 def get_step_times_from_wandb(run_id: str, entity: str | None = None, project: str = WANDB_PROJECT) -> list[float]:
     if entity is None:
-        entity = wandb.Api().default_entity
+        entity = _default_wandb_entity()
     run = wandb.Api().run(f"{entity}/{project}/{run_id}")
     return [
         row["throughput/duration"]
@@ -398,7 +412,7 @@ def default_speedrun(
         and train_step.config.train_config.trainer
         and train_step.config.train_config.trainer.tracker
     ):
-        wandb_entity = train_step.config.train_config.trainer.tracker.entity or wandb.Api().default_entity
+        wandb_entity = train_step.config.train_config.trainer.tracker.entity or _default_wandb_entity()
         wandb_project = train_step.config.train_config.trainer.tracker.project or WANDB_PROJECT
 
         # (Nikil) this is a hack (the ExecutorStep isn't populated when using an override path, so can't get configs when
