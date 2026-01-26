@@ -56,11 +56,11 @@ docker_image: test-image:latest
 worker_port: 10001
 
 controller_vm:
-  enabled: true
-  image: gcr.io/test-project/iris-controller:latest
-  machine_type: n2-standard-4
-  boot_disk_size_gb: 50
-  port: 10000
+  gcp:
+    image: gcr.io/test-project/iris-controller:latest
+    machine_type: n2-standard-4
+    boot_disk_size_gb: 50
+    port: 10000
 
 scale_groups:
   test_group:
@@ -76,7 +76,7 @@ scale_groups:
 
 @pytest.fixture
 def manual_config(tmp_path: Path) -> Path:
-    """Create a manual controller config file with SSH bootstrap using flat format."""
+    """Create a manual controller config file with SSH bootstrap using oneof format."""
     config_path = tmp_path / "manual_config.yaml"
     config_content = """
 provider_type: manual
@@ -85,10 +85,10 @@ docker_image: gcr.io/test-project/iris-worker:latest
 worker_port: 10001
 
 controller_vm:
-  enabled: false
-  host: 10.0.0.100
-  image: gcr.io/test-project/iris-controller:latest
-  port: 10000
+  manual:
+    host: 10.0.0.100
+    image: gcr.io/test-project/iris-controller:latest
+    port: 10000
 
 ssh_user: ubuntu
 ssh_private_key: ~/.ssh/id_rsa
@@ -101,14 +101,15 @@ manual_hosts:
 
 
 def test_creates_gcp_controller_for_gcp_provider_with_vm_enabled():
-    """create_controller returns GcpController for GCP with VM enabled."""
+    """create_controller returns GcpController for GCP with gcp config."""
     config = vm_pb2.IrisClusterConfig(
         provider_type="gcp",
         project_id="test-project",
         zone="us-central1-a",
         controller_vm=vm_pb2.ControllerVmConfig(
-            enabled=True,
-            image="gcr.io/test/controller:latest",
+            gcp=vm_pb2.GcpControllerConfig(
+                image="gcr.io/test/controller:latest",
+            ),
         ),
     )
     controller = create_controller(config)
@@ -120,9 +121,10 @@ def test_creates_manual_controller_for_manual_provider():
     config = vm_pb2.IrisClusterConfig(
         provider_type="manual",
         controller_vm=vm_pb2.ControllerVmConfig(
-            enabled=False,
-            host="10.0.0.100",
-            image="gcr.io/test/controller:latest",
+            manual=vm_pb2.ManualControllerConfig(
+                host="10.0.0.100",
+                image="gcr.io/test/controller:latest",
+            ),
         ),
     )
     controller = create_controller(config)

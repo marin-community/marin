@@ -242,21 +242,35 @@ class AutoscalerStatus(_message.Message):
     recent_actions: _containers.RepeatedCompositeFieldContainer[AutoscalerAction]
     def __init__(self, groups: _Optional[_Iterable[_Union[ScaleGroupStatus, _Mapping]]] = ..., current_demand: _Optional[_Mapping[str, int]] = ..., last_evaluation_ms: _Optional[int] = ..., recent_actions: _Optional[_Iterable[_Union[AutoscalerAction, _Mapping]]] = ...) -> None: ...
 
-class ControllerVmConfig(_message.Message):
-    __slots__ = ("enabled", "image", "machine_type", "boot_disk_size_gb", "port", "host")
-    ENABLED_FIELD_NUMBER: _ClassVar[int]
+class GcpControllerConfig(_message.Message):
+    __slots__ = ("image", "machine_type", "boot_disk_size_gb", "port")
     IMAGE_FIELD_NUMBER: _ClassVar[int]
     MACHINE_TYPE_FIELD_NUMBER: _ClassVar[int]
     BOOT_DISK_SIZE_GB_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
-    HOST_FIELD_NUMBER: _ClassVar[int]
-    enabled: bool
     image: str
     machine_type: str
     boot_disk_size_gb: int
     port: int
+    def __init__(self, image: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., port: _Optional[int] = ...) -> None: ...
+
+class ManualControllerConfig(_message.Message):
+    __slots__ = ("host", "image", "port")
+    HOST_FIELD_NUMBER: _ClassVar[int]
+    IMAGE_FIELD_NUMBER: _ClassVar[int]
+    PORT_FIELD_NUMBER: _ClassVar[int]
     host: str
-    def __init__(self, enabled: _Optional[bool] = ..., image: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., port: _Optional[int] = ..., host: _Optional[str] = ...) -> None: ...
+    image: str
+    port: int
+    def __init__(self, host: _Optional[str] = ..., image: _Optional[str] = ..., port: _Optional[int] = ...) -> None: ...
+
+class ControllerVmConfig(_message.Message):
+    __slots__ = ("gcp", "manual")
+    GCP_FIELD_NUMBER: _ClassVar[int]
+    MANUAL_FIELD_NUMBER: _ClassVar[int]
+    gcp: GcpControllerConfig
+    manual: ManualControllerConfig
+    def __init__(self, gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
     __slots__ = ("provider_type", "project_id", "region", "zone", "ssh_user", "ssh_private_key", "docker_image", "worker_port", "controller_address", "controller_vm", "manual_hosts", "scale_groups", "boot_timeout_seconds", "init_timeout_seconds", "ssh_connect_timeout_seconds", "ssh_poll_interval_seconds", "label_prefix")

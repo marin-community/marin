@@ -36,10 +36,11 @@ def ssh_bootstrap_config() -> vm_pb2.IrisClusterConfig:
     return vm_pb2.IrisClusterConfig(
         provider_type="manual",
         controller_vm=vm_pb2.ControllerVmConfig(
-            enabled=False,
-            host="10.0.0.100",
-            image="gcr.io/project/iris-controller:latest",
-            port=10000,
+            manual=vm_pb2.ManualControllerConfig(
+                host="10.0.0.100",
+                image="gcr.io/project/iris-controller:latest",
+                port=10000,
+            ),
         ),
         ssh_user="ubuntu",
         ssh_private_key="/home/ubuntu/.ssh/id_rsa",
@@ -54,20 +55,23 @@ def gcp_config() -> vm_pb2.IrisClusterConfig:
         project_id="my-project",
         zone="us-central1-a",
         controller_vm=vm_pb2.ControllerVmConfig(
-            enabled=True,
-            image="gcr.io/project/iris-controller:latest",
-            port=10000,
+            gcp=vm_pb2.GcpControllerConfig(
+                image="gcr.io/project/iris-controller:latest",
+                port=10000,
+            ),
         ),
     )
 
 
 def test_manual_controller_requires_host():
-    """ManualController requires controller_vm.host."""
+    """ManualController requires controller_vm.manual.host."""
     config = vm_pb2.IrisClusterConfig(
         provider_type="manual",
-        controller_vm=vm_pb2.ControllerVmConfig(enabled=False),
+        controller_vm=vm_pb2.ControllerVmConfig(
+            manual=vm_pb2.ManualControllerConfig(host=""),
+        ),
     )
-    with pytest.raises(RuntimeError, match=r"controller_vm\.host is required"):
+    with pytest.raises(RuntimeError, match=r"controller_vm\.manual\.host is required"):
         ManualController(config)
 
 
@@ -76,8 +80,10 @@ def test_manual_controller_start_requires_image():
     config = vm_pb2.IrisClusterConfig(
         provider_type="manual",
         controller_vm=vm_pb2.ControllerVmConfig(
-            host="10.0.0.100",
-            image="",
+            manual=vm_pb2.ManualControllerConfig(
+                host="10.0.0.100",
+                image="",
+            ),
         ),
     )
     controller = ManualController(config)
@@ -195,21 +201,33 @@ def test_create_controller_returns_manual_for_manual_provider(ssh_bootstrap_conf
     assert isinstance(controller, ManualController)
 
 
+def test_create_controller_raises_on_missing_config():
+    """create_controller raises ValueError when no oneof is set."""
+    config = vm_pb2.IrisClusterConfig(
+        provider_type="gcp",
+        project_id="test-project",
+        zone="us-central1-a",
+        # controller_vm left empty - no gcp or manual set
+    )
+    with pytest.raises(ValueError, match="No controller config specified"):
+        create_controller(config)
+
+
 class TestConfigParsing:
     """Tests for config parsing with controller VM settings."""
 
-    def test_load_config_with_controller_host(self, tmp_path: Path):
-        """Config with controller_vm.host is parsed correctly."""
+    def test_load_config_with_manual_controller(self, tmp_path: Path):
+        """Config with controller_vm.manual is parsed correctly."""
         config_content = """\
 provider_type: manual
 
 docker_image: gcr.io/project/iris-worker:latest
 
 controller_vm:
-  enabled: false
-  host: 10.0.0.100
-  image: gcr.io/project/iris-controller:latest
-  port: 10000
+  manual:
+    host: 10.0.0.100
+    image: gcr.io/project/iris-controller:latest
+    port: 10000
 
 ssh_user: ubuntu
 ssh_private_key: ~/.ssh/id_rsa
@@ -222,9 +240,9 @@ manual_hosts:
 
         config = load_config(config_path)
 
-        assert config.controller_vm.host == "10.0.0.100"
-        assert config.controller_vm.image == "gcr.io/project/iris-controller:latest"
-        assert config.controller_vm.port == 10000
+        assert config.controller_vm.manual.host == "10.0.0.100"
+        assert config.controller_vm.manual.image == "gcr.io/project/iris-controller:latest"
+        assert config.controller_vm.manual.port == 10000
         assert config.ssh_user == "ubuntu"
 
 
@@ -364,9 +382,11 @@ class TestHealthCheckIntegration:
         config = vm_pb2.IrisClusterConfig(
             provider_type="manual",
             controller_vm=vm_pb2.ControllerVmConfig(
-                host="10.0.0.100",
-                image="gcr.io/project/iris-controller:latest",
-                port=10000,
+                manual=vm_pb2.ManualControllerConfig(
+                    host="10.0.0.100",
+                    image="gcr.io/project/iris-controller:latest",
+                    port=10000,
+                ),
             ),
             ssh_user="ubuntu",
             ssh_private_key="/home/ubuntu/.ssh/id_rsa",
@@ -396,9 +416,11 @@ class TestHealthCheckIntegration:
         config = vm_pb2.IrisClusterConfig(
             provider_type="manual",
             controller_vm=vm_pb2.ControllerVmConfig(
-                host="10.0.0.100",
-                image="gcr.io/project/iris-controller:latest",
-                port=10000,
+                manual=vm_pb2.ManualControllerConfig(
+                    host="10.0.0.100",
+                    image="gcr.io/project/iris-controller:latest",
+                    port=10000,
+                ),
             ),
             ssh_user="ubuntu",
             ssh_private_key="/home/ubuntu/.ssh/id_rsa",
@@ -425,10 +447,11 @@ class TestHealthCheckIntegration:
             project_id="my-project",
             zone="us-central1-a",
             controller_vm=vm_pb2.ControllerVmConfig(
-                enabled=True,
-                image="gcr.io/project/iris-controller:latest",
-                port=10000,
-                machine_type="n2-standard-4",
+                gcp=vm_pb2.GcpControllerConfig(
+                    image="gcr.io/project/iris-controller:latest",
+                    port=10000,
+                    machine_type="n2-standard-4",
+                ),
             ),
         )
         controller = GcpController(config)
@@ -464,10 +487,11 @@ class TestHealthCheckIntegration:
             project_id="my-project",
             zone="us-central1-a",
             controller_vm=vm_pb2.ControllerVmConfig(
-                enabled=True,
-                image="gcr.io/project/iris-controller:latest",
-                port=10000,
-                machine_type="n2-standard-4",
+                gcp=vm_pb2.GcpControllerConfig(
+                    image="gcr.io/project/iris-controller:latest",
+                    port=10000,
+                    machine_type="n2-standard-4",
+                ),
             ),
         )
         controller = GcpController(config)

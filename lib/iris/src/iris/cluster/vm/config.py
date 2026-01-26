@@ -47,38 +47,57 @@ IrisClusterConfig = vm_pb2.IrisClusterConfig
 def load_config(config_path: Path | str) -> vm_pb2.IrisClusterConfig:
     """Load cluster config from YAML file.
 
-    YAML structure uses flat field names matching the IrisClusterConfig proto:
+    YAML structure uses flat field names matching the IrisClusterConfig proto.
+    The controller_vm field uses a oneof pattern for type-safe configuration.
 
+    GCP controller example:
     ```yaml
     provider_type: tpu
     project_id: my-project
     region: us-east1
     zone: us-east1-d
 
-    ssh_user: ray
-    ssh_private_key: ~/.ssh/key.pem
-
     docker_image: gcr.io/project/iris-worker:v1
     worker_port: 10001
 
-    controller_address: "10.0.0.1:10000"
     controller_vm:
-      enabled: true
-      image: gcr.io/project/iris-controller:v1
-      port: 10000
-
-    manual_hosts:
-      - 10.0.0.1
-      - 10.0.0.2
+      gcp:
+        image: gcr.io/project/iris-controller:v1
+        machine_type: n2-standard-4
+        port: 10000
 
     scale_groups:
       tpu_v5p_8:
+        provider:
+          tpu:
+            project_id: my-project
         accelerator_type: v5p-8
         runtime_version: v2-alpha-tpuv5
         zones: [us-central1-a]
         min_slices: 0
         max_slices: 10
-        preemptible: true
+    ```
+
+    Manual controller example:
+    ```yaml
+    provider_type: manual
+
+    docker_image: gcr.io/project/iris-worker:v1
+
+    controller_vm:
+      manual:
+        host: 10.0.0.100
+        image: gcr.io/project/iris-controller:v1
+        port: 10000
+
+    ssh_user: ubuntu
+    ssh_private_key: ~/.ssh/key.pem
+
+    scale_groups:
+      manual_hosts:
+        provider:
+          manual:
+            hosts: [10.0.0.1, 10.0.0.2]
     ```
     """
     config_path = Path(config_path)
@@ -99,10 +118,6 @@ def load_config(config_path: Path | str) -> vm_pb2.IrisClusterConfig:
                 sg_data["name"] = name
 
     config = ParseDict(data, vm_pb2.IrisClusterConfig())
-
-    # Warn about missing controller address only for manual provider without controller VM.
-    if not config.controller_address and not config.controller_vm.enabled and config.provider_type == "manual":
-        logger.warning("No controller address configured - workers will fail to start")
 
     logger.info(
         "Config loaded: provider=%s, scale_groups=%s",

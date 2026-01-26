@@ -8,10 +8,10 @@ docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:lates
 worker_port: 10001
 
 controller_vm:
-  enabled: true
-  image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest
-  machine_type: n2-standard-4
-  port: 10000
+  gcp:
+    image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest
+    machine_type: n2-standard-4
+    port: 10000
 
 scale_groups:
   tpu_v5e_16:

@@ -329,7 +329,7 @@ class GcpController:
         self.config = config
         self.project_id = config.project_id or ""
         self.zone = config.zone or "us-central1-a"
-        self.vm_config = config.controller_vm
+        self._gcp_config = config.controller_vm.gcp
         self._vm_name = f"iris-controller-{config.label_prefix or 'iris'}"
 
     def _serialize_config(self) -> str:
@@ -369,7 +369,7 @@ class GcpController:
                 address = self._create_vm()
 
                 # Use SSH-based health check since firewall may block external port access
-                port = self.vm_config.port or DEFAULT_CONTROLLER_PORT
+                port = self._gcp_config.port or DEFAULT_CONTROLLER_PORT
                 conn = GceSshConnection(
                     project_id=self.project_id,
                     zone=self.zone,
@@ -423,7 +423,7 @@ class GcpController:
         if not vm_name:
             raise RuntimeError("Controller VM not found. Use 'start' to create a new one.")
 
-        port = self.vm_config.port or DEFAULT_CONTROLLER_PORT
+        port = self._gcp_config.port or DEFAULT_CONTROLLER_PORT
 
         logger.info("Reloading controller on VM %s via SSH", vm_name)
 
@@ -434,7 +434,7 @@ class GcpController:
         )
 
         config_yaml = self._serialize_config()
-        bootstrap_script = _build_controller_bootstrap_script(self.vm_config.image, port, config_yaml)
+        bootstrap_script = _build_controller_bootstrap_script(self._gcp_config.image, port, config_yaml)
 
         def on_line(line: str) -> None:
             logger.info("[%s] %s", vm_name, line)
@@ -514,19 +514,19 @@ class GcpController:
 
     def _create_vm(self) -> str:
         """Create GCE VM and run bootstrap, return controller address."""
-        machine_type = self.vm_config.machine_type or DEFAULT_MACHINE_TYPE
-        boot_disk_size = self.vm_config.boot_disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB
-        port = self.vm_config.port or DEFAULT_CONTROLLER_PORT
+        machine_type = self._gcp_config.machine_type or DEFAULT_MACHINE_TYPE
+        boot_disk_size = self._gcp_config.boot_disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB
+        port = self._gcp_config.port or DEFAULT_CONTROLLER_PORT
 
         config_yaml = self._serialize_config()
-        bootstrap_script = _build_controller_bootstrap_script(self.vm_config.image, port, config_yaml)
+        bootstrap_script = _build_controller_bootstrap_script(self._gcp_config.image, port, config_yaml)
 
         # Log bootstrap script summary for visibility
         script_lines = bootstrap_script.strip().split("\n")
         logger.info(
             "Bootstrap script prepared (%d lines). Key steps: Docker install, image pull (%s), container start",
             len(script_lines),
-            self.vm_config.image,
+            self._gcp_config.image,
         )
 
         cmd = [
@@ -589,7 +589,7 @@ class GcpController:
 
     def _get_vm_address(self) -> str:
         """Get the external IP address of the controller VM."""
-        port = self.vm_config.port or DEFAULT_CONTROLLER_PORT
+        port = self._gcp_config.port or DEFAULT_CONTROLLER_PORT
         cmd = [
             "gcloud",
             "compute",
@@ -735,19 +735,19 @@ class ManualController:
     """Controller on a manually-managed host via SSH bootstrap.
 
     SSHs into the configured host to start/stop the controller container.
-    Requires controller_vm.host to be configured.
+    Requires controller_vm.manual.host to be configured.
     """
 
     def __init__(self, config: vm_pb2.IrisClusterConfig):
         self.config = config
-        self._vm_config = config.controller_vm
+        self._manual_config = config.controller_vm.manual
         self._bootstrapped = False
 
-        if not self._vm_config.host:
-            raise RuntimeError("controller_vm.host is required for ManualController")
+        if not self._manual_config.host:
+            raise RuntimeError("controller_vm.manual.host is required for ManualController")
 
-        port = self._vm_config.port or DEFAULT_CONTROLLER_PORT
-        self.address = f"http://{self._vm_config.host}:{port}"
+        port = self._manual_config.port or DEFAULT_CONTROLLER_PORT
+        self.address = f"http://{self._manual_config.host}:{port}"
 
     def _serialize_config(self) -> str:
         """Serialize cluster config to YAML for the controller VM."""
@@ -757,17 +757,17 @@ class ManualController:
 
     def start(self) -> str:
         """Start controller via SSH bootstrap."""
-        if not self._vm_config.image:
+        if not self._manual_config.image:
             raise RuntimeError("controller_vm.image required for SSH bootstrap")
 
-        host = self._vm_config.host
-        port = self._vm_config.port or DEFAULT_CONTROLLER_PORT
+        host = self._manual_config.host
+        port = self._manual_config.port or DEFAULT_CONTROLLER_PORT
 
         logger.info("Bootstrapping controller on %s via SSH", host)
 
         conn = self._create_ssh_connection(host)
         config_yaml = self._serialize_config()
-        bootstrap_script = _build_controller_bootstrap_script(self._vm_config.image, port, config_yaml)
+        bootstrap_script = _build_controller_bootstrap_script(self._manual_config.image, port, config_yaml)
 
         def on_line(line: str) -> None:
             logger.info("[%s] %s", host, line)
@@ -793,7 +793,7 @@ class ManualController:
             logger.info("Controller was not bootstrapped by us, skipping stop")
             return
 
-        host = self._vm_config.host
+        host = self._manual_config.host
         logger.info("Stopping controller on %s via SSH", host)
 
         conn = self._create_ssh_connection(host)
@@ -823,8 +823,8 @@ class ManualController:
 
     def discover(self) -> str | None:
         """Return address if controller is healthy via SSH check."""
-        host = self._vm_config.host
-        port = self._vm_config.port or DEFAULT_CONTROLLER_PORT
+        host = self._manual_config.host
+        port = self._manual_config.port or DEFAULT_CONTROLLER_PORT
         conn = self._create_ssh_connection(host)
         if check_health(conn, port):
             return self.address
@@ -832,8 +832,8 @@ class ManualController:
 
     def status(self) -> ControllerStatus:
         """Check health of controller via SSH."""
-        host = self._vm_config.host
-        port = self._vm_config.port or DEFAULT_CONTROLLER_PORT
+        host = self._manual_config.host
+        port = self._manual_config.port or DEFAULT_CONTROLLER_PORT
         conn = self._create_ssh_connection(host)
         healthy = check_health(conn, port)
         return ControllerStatus(
@@ -857,7 +857,7 @@ class ManualController:
         For ManualController, we fetch Docker container logs instead of
         serial console output since there's no GCP VM.
         """
-        host = self._vm_config.host
+        host = self._manual_config.host
         conn = self._create_ssh_connection(host)
 
         logger.info("Fetching container logs from %s...", host)
@@ -875,9 +875,14 @@ class ManualController:
 def create_controller(config: vm_pb2.IrisClusterConfig) -> ControllerProtocol:
     """Factory function to create appropriate controller type.
 
-    For GCP provider (gcp or tpu) with controller VM enabled, creates GcpController.
-    Otherwise creates ManualController using the static controller address.
+    Dispatches based on the controller_vm.controller oneof field:
+    - gcp: Creates GcpController for GCP-managed VMs
+    - manual: Creates ManualController for SSH bootstrap to pre-existing hosts
     """
-    if config.provider_type in ("gcp", "tpu") and config.controller_vm.enabled:
+    controller_vm = config.controller_vm
+    which = controller_vm.WhichOneof("controller")
+    if which == "gcp":
         return GcpController(config)
-    return ManualController(config)
+    if which == "manual":
+        return ManualController(config)
+    raise ValueError("No controller config specified in controller_vm")
