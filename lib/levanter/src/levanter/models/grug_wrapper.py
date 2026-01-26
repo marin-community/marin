@@ -171,7 +171,7 @@ class GrugWrapper(LmHeadModel[Any]):
         dtype = jnp.float32 if loss_dtype is None else loss_dtype
 
         if reduction is None:
-            per_pos = grug_loss_fn(
+            per_pos, _ = grug_loss_fn(
                 self.params,
                 tokens.array,
                 loss_weight.array,
@@ -185,7 +185,7 @@ class GrugWrapper(LmHeadModel[Any]):
 
         # Fast path: scalar mean/sum reduction over all axes.
         if reduction_axis is None and reduction is hax.mean:
-            return grug_loss_fn(
+            loss, _ = grug_loss_fn(
                 self.params,
                 tokens.array,
                 loss_weight.array,
@@ -195,8 +195,9 @@ class GrugWrapper(LmHeadModel[Any]):
                 logsumexp_weight=logsumexp_weight,
                 loss_dtype=dtype,
             )
+            return loss
         if reduction_axis is None and reduction is hax.sum:
-            return grug_loss_fn(
+            loss, _ = grug_loss_fn(
                 self.params,
                 tokens.array,
                 loss_weight.array,
@@ -206,8 +207,9 @@ class GrugWrapper(LmHeadModel[Any]):
                 logsumexp_weight=logsumexp_weight,
                 loss_dtype=dtype,
             )
+            return loss
 
-        per_pos = grug_loss_fn(
+        per_pos, _ = grug_loss_fn(
             self.params,
             tokens.array,
             loss_weight.array,

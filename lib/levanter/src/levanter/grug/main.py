@@ -26,10 +26,12 @@ def synthetic_batch_iterator(
     seq_len: int,
     vocab_size: int,
 ) -> Iterator[dict[str, jax.Array]]:
-    """Infinite generator of random token/label pairs."""
+    """Infinite generator of patterned token/label pairs."""
 
     def _step(key: jax.Array) -> dict[str, jax.Array]:
-        tokens = jax.random.randint(key, (batch_size, seq_len), 0, vocab_size)
+        starts = jax.random.randint(key, (batch_size, 1), 0, vocab_size)
+        offsets = jnp.arange(seq_len)[None, :]
+        tokens = (starts + offsets) % vocab_size
         return {"tokens": tokens[:, :-1], "labels": tokens[:, 1:]}
 
     while True:

@@ -138,6 +138,7 @@ def reference_attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     logits_dtype: jnp.dtype | None,
+    sinks: Float[Array, "Hq"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     head_dim = q.shape[-1]
     num_q_heads = q.shape[2]
@@ -152,6 +153,9 @@ def reference_attention(
 
     scale = 1.0 / math.sqrt(head_dim)
     scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
+
+    # GPT-OSS-style attention sinks: add a per-head sink logit to the softmax
+    # denominator (concat-and-drop), which reduces attention mass on real tokens.
 
     explicit = None
     if mask is None:
@@ -182,7 +186,18 @@ def reference_attention(
             scores = scores + explicit
     if logits_dtype is not None:
         scores = scores.astype(logits_dtype)
-    weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
+    if sinks is not None:
+        # Compute softmax with an extra sink position, but do not return sink weights.
+        # scores: [B, H, Q, K], sinks: [H]
+        max_scores = jnp.max(scores, axis=-1, keepdims=True)
+        sinks_bh = sinks[None, :, None, None]
+        max_or_sink = jnp.maximum(max_scores, sinks_bh)
+        scores_exp = jnp.exp(scores - max_or_sink)
+        sinks_exp = jnp.exp(sinks_bh - max_or_sink)
+        denom = scores_exp.sum(axis=-1, keepdims=True) + sinks_exp
+        weights = (scores_exp / denom).astype(v.dtype)
+    else:
+        weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
     ctx = jnp.einsum("bhqk,bkhd->bqhd", weights, v)
     return ctx.astype(v.dtype)
 
@@ -210,6 +225,7 @@ def _tpu_splash_attention(
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | jax.Array | None,
+    sinks: Float[Array, "Hq"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
     from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
@@ -362,17 +378,23 @@ def _tpu_splash_attention(
     kernel_sharding = NamedSharding(mesh, P(q_pspec[1], q_pspec[2]))
     kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
 
+    # Sinks are replicated (per-head scalars)
+    sinks_spec = P(None) if sinks is not None else None
+
     @functools.partial(
         shard_map,
         mesh=mesh,
-        in_specs=(q_pspec, k_pspec, v_pspec, segment_ids_axes, kernel_specs),
+        in_specs=(q_pspec, k_pspec, v_pspec, segment_ids_axes, kernel_specs, sinks_spec),
         out_specs=q_pspec,
         check_rep=False,
     )
-    def wrap(q_bhsd, k_bhsd, v_bhsd, seg_ids, kernel):
-        return jax.vmap(kernel, in_axes=(0, 0, 0, segment_batch_axis))(q_bhsd, k_bhsd, v_bhsd, seg_ids)
+    def wrap(q_bhsd, k_bhsd, v_bhsd, seg_ids, kernel, sinks_):
+        def call_kernel(q_b, k_b, v_b, seg_id):
+            return kernel(q_b, k_b, v_b, segment_ids=seg_id, sinks=sinks_)
 
-    out = wrap(q_, k_, v_, segment_ids, splash_kernel)
+        return jax.vmap(call_kernel, in_axes=(0, 0, 0, segment_batch_axis))(q_bhsd, k_bhsd, v_bhsd, seg_ids)
+
+    out = wrap(q_, k_, v_, segment_ids, splash_kernel, sinks)
     return jnp.transpose(out, (0, 2, 1, 3)).astype(v.dtype)
 
 
@@ -381,12 +403,13 @@ def attention(
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    sinks: Float[Array, "Hq"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     if jax.default_backend() == "tpu":
         if isinstance(mask, jax.Array):
-            return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
-        return _tpu_splash_attention(q, k, v, mask)
-    return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+            return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, sinks=sinks)
+        return _tpu_splash_attention(q, k, v, mask, sinks=sinks)
+    return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, sinks=sinks)
 
 
 __all__ = [
