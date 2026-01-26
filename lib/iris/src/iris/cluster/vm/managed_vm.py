@@ -39,6 +39,7 @@ from iris.cluster.vm.ssh import (
     wait_for_connection,
 )
 from iris.rpc import vm_pb2
+from iris.rpc.proto_utils import vm_state_name
 from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
@@ -58,27 +59,6 @@ class BootstrapError(Exception):
 
 class QuotaExceededError(Exception):
     """Raised when cloud provider quota is exceeded."""
-
-
-# ============================================================================
-# State Name Utility
-# ============================================================================
-
-
-def _state_name(state: int | vm_pb2.VmState) -> str:
-    """Convert VM state enum to readable name."""
-    names: dict[int, str] = {
-        vm_pb2.VM_STATE_UNSPECIFIED: "UNSPECIFIED",
-        vm_pb2.VM_STATE_BOOTING: "BOOTING",
-        vm_pb2.VM_STATE_INITIALIZING: "INITIALIZING",
-        vm_pb2.VM_STATE_READY: "READY",
-        vm_pb2.VM_STATE_UNHEALTHY: "UNHEALTHY",
-        vm_pb2.VM_STATE_STOPPING: "STOPPING",
-        vm_pb2.VM_STATE_TERMINATED: "TERMINATED",
-        vm_pb2.VM_STATE_FAILED: "FAILED",
-        vm_pb2.VM_STATE_PREEMPTED: "PREEMPTED",
-    }
-    return names.get(int(state), f"UNKNOWN({state})")
 
 
 # ============================================================================
@@ -421,7 +401,7 @@ class ManagedVm:
         self.info.state_changed_at_ms = now_ms()
         if self._phase:
             self.info.init_phase = self._phase
-        logger.info("VM %s: %s -> %s", self.info.vm_id, _state_name(old_state), _state_name(new_state))
+        logger.info("VM %s: %s -> %s", self.info.vm_id, vm_state_name(old_state), vm_state_name(new_state))
 
     def init_log(self, tail: int | None = None) -> str:
         """Return bootstrap log (empty if not yet initializing)."""

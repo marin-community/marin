@@ -39,38 +39,12 @@ from iris.cluster.controller.state import ControllerEndpoint, ControllerState, C
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.errors import rpc_error_handler
+from iris.rpc.proto_utils import task_state_name
 from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRANSACTION_LIMIT = 50
-
-
-def _task_state_name(state: int) -> str:
-    """Convert proto TaskState enum to snake_case string for dashboard display."""
-    state_map: dict[int, str] = {
-        cluster_pb2.TASK_STATE_PENDING: "pending",
-        cluster_pb2.TASK_STATE_BUILDING: "building",
-        cluster_pb2.TASK_STATE_RUNNING: "running",
-        cluster_pb2.TASK_STATE_SUCCEEDED: "succeeded",
-        cluster_pb2.TASK_STATE_FAILED: "failed",
-        cluster_pb2.TASK_STATE_KILLED: "killed",
-        cluster_pb2.TASK_STATE_WORKER_FAILED: "worker_failed",
-        cluster_pb2.TASK_STATE_UNSCHEDULABLE: "unschedulable",
-    }
-    return state_map.get(state, f"unknown({state})")
-
-
-class VmManagerProtocol(Protocol):
-    """Protocol for VM manager operations."""
-
-    def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
-        """Get info for a specific VM."""
-        ...
-
-    def init_log(self, vm_id: str, tail: int | None = None) -> str:
-        """Get initialization log for a VM."""
-        ...
 
 
 class AutoscalerProtocol(Protocol):
@@ -80,9 +54,12 @@ class AutoscalerProtocol(Protocol):
         """Get autoscaler status."""
         ...
 
-    @property
-    def vm_manager(self) -> VmManagerProtocol | None:
-        """Get the VM manager, if available."""
+    def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
+        """Get info for a specific VM."""
+        ...
+
+    def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
+        """Get initialization log for a VM."""
         ...
 
 
@@ -307,9 +284,9 @@ class ControllerServiceImpl:
             for task in tasks:
                 total_failure_count += task.failure_count
                 total_preemption_count += task.preemption_count
-                state_name = _task_state_name(task.state)
+                state_name = task_state_name(task.state)
                 task_state_counts[state_name] = task_state_counts.get(state_name, 0) + 1
-                if state_name in ("succeeded", "killed"):
+                if state_name in ("TASK_STATE_SUCCEEDED", "TASK_STATE_KILLED"):
                     completed_count += 1
 
             jobs.append(
@@ -613,16 +590,15 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.GetVmLogsResponse:
         """Get initialization logs for a VM."""
         autoscaler = self._scheduler.autoscaler
-        if not autoscaler or not autoscaler.vm_manager:
+        if not autoscaler:
             raise ConnectError(Code.UNAVAILABLE, "Autoscaler not configured")
 
-        vm_manager = autoscaler.vm_manager
-        vm_info = vm_manager.get_vm(request.vm_id)
+        vm_info = autoscaler.get_vm(request.vm_id)
         if not vm_info:
             raise ConnectError(Code.NOT_FOUND, f"VM {request.vm_id} not found")
 
         tail = request.tail if request.tail > 0 else None
-        logs = vm_manager.init_log(request.vm_id, tail)
+        logs = autoscaler.get_init_log(request.vm_id, tail)
 
         return cluster_pb2.Controller.GetVmLogsResponse(
             logs=logs,

@@ -41,6 +41,7 @@ from iris.cluster.vm.config import (
 from iris.cluster.vm.controller import create_controller
 from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
+from iris.rpc.proto_utils import vm_state_name
 from iris.rpc_cli import ServiceCommands
 
 # =============================================================================
@@ -54,33 +55,6 @@ def handle_error(ctx: click.Context, message: str, error: Exception) -> None:
     if ctx.obj and ctx.obj.get("traceback"):
         traceback.print_exc()
     raise SystemExit(1)
-
-
-def _vm_state_name(state: int) -> str:
-    """Convert VmState enum to human-readable name."""
-    state_names = {
-        vm_pb2.VM_STATE_UNSPECIFIED: "UNSPECIFIED",
-        vm_pb2.VM_STATE_BOOTING: "BOOTING",
-        vm_pb2.VM_STATE_INITIALIZING: "INITIALIZING",
-        vm_pb2.VM_STATE_READY: "READY",
-        vm_pb2.VM_STATE_UNHEALTHY: "UNHEALTHY",
-        vm_pb2.VM_STATE_STOPPING: "STOPPING",
-        vm_pb2.VM_STATE_TERMINATED: "TERMINATED",
-        vm_pb2.VM_STATE_FAILED: "FAILED",
-        vm_pb2.VM_STATE_PREEMPTED: "PREEMPTED",
-    }
-    return state_names.get(state, f"UNKNOWN({state})")
-
-
-def _scaling_action_name(action: int) -> str:
-    """Convert ScalingAction enum to human-readable name."""
-    action_names = {
-        vm_pb2.SCALING_ACTION_UNSPECIFIED: "UNSPECIFIED",
-        vm_pb2.SCALING_ACTION_SCALE_UP: "SCALE_UP",
-        vm_pb2.SCALING_ACTION_SCALE_DOWN: "SCALE_DOWN",
-        vm_pb2.SCALING_ACTION_NONE: "NONE",
-    }
-    return action_names.get(action, f"UNKNOWN({action})")
 
 
 def _format_timestamp(ms: int) -> str:
@@ -164,7 +138,7 @@ def _wait_for_slice_obj(slice_obj, poll_interval: float = 5.0) -> bool:
 
         # Log state changes
         for vm in slice_obj.vms():
-            state = _vm_state_name(vm.info.state)
+            state = vm_state_name(vm.info.state)
             if last_states.get(vm.info.vm_id) != state:
                 click.echo(f"  {vm.info.vm_id}: {state}")
                 last_states[vm.info.vm_id] = state
@@ -646,7 +620,7 @@ def slice_get(ctx, slice_id: str):
                 click.echo()
 
                 for vm in vms:
-                    state = _vm_state_name(vm.info.state)
+                    state = vm_state_name(vm.info.state)
                     click.echo(f"  {vm.info.vm_id}:")
                     click.echo(f"    State: {state}")
                     click.echo(f"    Address: {vm.info.address or '(none)'}")
@@ -735,7 +709,7 @@ def _status_via_controller(controller_url: str, scale_group: str | None):
                 )
                 click.echo(f"    {slice_info.slice_id}: {status_str}")
                 for vm_info in slice_info.vms:
-                    state = _vm_state_name(vm_info.state)
+                    state = vm_state_name(vm_info.state)
                     click.echo(f"      {vm_info.vm_id}: {state} ({vm_info.address})")
                     if vm_info.init_error:
                         click.echo(f"        Error: {vm_info.init_error}")
@@ -768,7 +742,7 @@ def _status_via_autoscaler(config_file: str, scale_group: str | None):
             click.echo(f"      Created: {_format_timestamp(vm_group.created_at_ms)}")
 
             for vm in vm_group.vms():
-                state = _vm_state_name(vm.info.state)
+                state = vm_state_name(vm.info.state)
                 addr = vm.info.address or "no address"
                 click.echo(f"        {vm.info.vm_id}: {state} ({addr})")
                 if vm.info.init_error:
@@ -810,7 +784,7 @@ def _logs_via_controller(controller_url: str, vm_id: str, tail: int):
         raise SystemExit(1) from None
 
     click.echo(f"VM: {returned_vm_id}")
-    click.echo(f"State: {_vm_state_name(state)}")
+    click.echo(f"State: {vm_state_name(state)}")
     click.echo("---")
     if log_content:
         click.echo(log_content)
@@ -829,7 +803,7 @@ def _logs_via_autoscaler(config_file: str, vm_id: str, tail: int):
                 if vm.info.vm_id == vm_id:
                     log_content = vm.init_log(tail if tail > 0 else None)
                     click.echo(f"VM: {vm_id}")
-                    click.echo(f"State: {_vm_state_name(vm.info.state)}")
+                    click.echo(f"State: {vm_state_name(vm.info.state)}")
                     click.echo("---")
                     if log_content:
                         click.echo(log_content)
@@ -854,7 +828,7 @@ def vm_get(ctx, vm_id: str):
         for vm_group in group.vm_groups():
             for vm in vm_group.vms():
                 if vm.info.vm_id == vm_id:
-                    state = _vm_state_name(vm.info.state)
+                    state = vm_state_name(vm.info.state)
                     click.echo(f"VM: {vm.info.vm_id}")
                     click.echo(f"Slice: {vm.info.slice_id}")
                     click.echo(f"Scale Group: {group_name}")
@@ -939,7 +913,7 @@ def cluster_init(
     # Show initial status
     click.echo("\nInitial status:")
     for vm in slice_obj.vms():
-        state = _vm_state_name(vm.info.state)
+        state = vm_state_name(vm.info.state)
         click.echo(f"  {vm.info.vm_id}: {state} ({vm.info.address})")
 
 

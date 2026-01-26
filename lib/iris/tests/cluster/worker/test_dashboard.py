@@ -239,7 +239,7 @@ def test_get_task_success(client, service):
     assert data["job_id"] == "job-details"
     assert "attempt_id" in data
     assert data["attempt_id"] >= 0
-    assert data["status"] == "succeeded"  # Task completes immediately with mock runtime
+    assert data["status"] == "TASK_STATE_SUCCEEDED"  # Task completes immediately with mock runtime
     assert data["exit_code"] == 0
     assert "http" in data["ports"]
     assert "grpc" in data["ports"]

@@ -362,9 +362,9 @@ def test_list_jobs_includes_task_counts(client, state):
     # RPC uses camelCase field names
     assert j["taskCount"] == 3
     assert j["completedCount"] == 1  # Only succeeded counts
-    assert j["taskStateCounts"]["succeeded"] == 1
-    assert j["taskStateCounts"]["running"] == 1
-    assert j["taskStateCounts"]["pending"] == 1
+    assert j["taskStateCounts"]["TASK_STATE_SUCCEEDED"] == 1
+    assert j["taskStateCounts"]["TASK_STATE_RUNNING"] == 1
+    assert j["taskStateCounts"]["TASK_STATE_PENDING"] == 1
 
 
 def test_get_job_status_returns_retry_info(client, state, job_request):
