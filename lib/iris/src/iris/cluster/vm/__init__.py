@@ -100,10 +100,8 @@ from iris.cluster.vm.config import (
     create_autoscaler_from_config,
     create_autoscaler_from_specs,
     create_manual_autoscaler,
+    get_ssh_config,
     load_config,
-    to_bootstrap_config,
-    to_ssh_config,
-    to_timeout_config,
 )
 
 __all__ = [
@@ -148,12 +146,10 @@ __all__ = [
     "create_autoscaler_from_config",
     "create_autoscaler_from_specs",
     "create_manual_autoscaler",
+    "get_ssh_config",
     "load_config",
     "route_demand",
     "run_streaming_with_retry",
     "shutdown_worker",
-    "to_bootstrap_config",
-    "to_ssh_config",
-    "to_timeout_config",
     "wait_for_connection",
 ]

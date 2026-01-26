@@ -22,9 +22,10 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
+from . import config_pb2 as config__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x08vm.proto\x12\x07iris.vm\"\x98\x04\n\x06VmInfo\x12\x13\n\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x19\n\x08slice_id\x18\x02 \x01(\tR\x07sliceId\x12\x1f\n\x0bscale_group\x18\x03 \x01(\tR\nscaleGroup\x12&\n\x05state\x18\x04 \x01(\x0e\x32\x10.iris.vm.VmStateR\x05state\x12\x18\n\x07\x61\x64\x64ress\x18\x05 \x01(\tR\x07\x61\x64\x64ress\x12\x12\n\x04zone\x18\x06 \x01(\tR\x04zone\x12\"\n\rcreated_at_ms\x18\x07 \x01(\x03R\x0b\x63reatedAtMs\x12-\n\x13state_changed_at_ms\x18\x08 \x01(\x03R\x10stateChangedAtMs\x12\x1b\n\tworker_id\x18\n \x01(\tR\x08workerId\x12%\n\x0eworker_healthy\x18\x0b \x01(\x08R\rworkerHealthy\x12\x1d\n\ninit_phase\x18\x14 \x01(\tR\tinitPhase\x12\"\n\rinit_log_tail\x18\x15 \x01(\tR\x0binitLogTail\x12\x1d\n\ninit_error\x18\x16 \x01(\tR\tinitError\x12\x33\n\x06labels\x18\x1e \x03(\x0b\x32\x1b.iris.vm.VmInfo.LabelsEntryR\x06labels\x1a\x39\n\x0bLabelsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\x8e\x01\n\tSliceInfo\x12\x19\n\x08slice_id\x18\x01 \x01(\tR\x07sliceId\x12\x1f\n\x0bscale_group\x18\x02 \x01(\tR\nscaleGroup\x12\"\n\rcreated_at_ms\x18\x03 \x01(\x03R\x0b\x63reatedAtMs\x12!\n\x03vms\x18\x04 \x03(\x0b\x32\x0f.iris.vm.VmInfoR\x03vms\",\n\x0bTpuProvider\x12\x1d\n\nproject_id\x18\x01 \x01(\tR\tprojectId\"~\n\x0eManualProvider\x12\x14\n\x05hosts\x18\x01 \x03(\tR\x05hosts\x12\x19\n\x08ssh_user\x18\x02 \x01(\tR\x07sshUser\x12 \n\x0cssh_key_file\x18\x03 \x01(\tR\nsshKeyFile\x12\x19\n\x08ssh_port\x18\x04 \x01(\x05R\x07sshPort\"y\n\x0eProviderConfig\x12(\n\x03tpu\x18\x01 \x01(\x0b\x32\x14.iris.vm.TpuProviderH\x00R\x03tpu\x12\x31\n\x06manual\x18\x02 \x01(\x0b\x32\x17.iris.vm.ManualProviderH\x00R\x06manualB\n\n\x08provider\"\xc1\x02\n\x10ScaleGroupConfig\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n\nmin_slices\x18\x02 \x01(\x05R\tminSlices\x12\x1d\n\nmax_slices\x18\x03 \x01(\x05R\tmaxSlices\x12)\n\x10\x61\x63\x63\x65lerator_type\x18\n \x01(\tR\x0f\x61\x63\x63\x65leratorType\x12\'\n\x0fruntime_version\x18\x0b \x01(\tR\x0eruntimeVersion\x12 \n\x0bpreemptible\x18\x0c \x01(\x08R\x0bpreemptible\x12\x14\n\x05zones\x18\x14 \x03(\tR\x05zones\x12\x1a\n\x08priority\x18\x1e \x01(\x05R\x08priority\x12\x33\n\x08provider\x18Z \x01(\x0b\x32\x17.iris.vm.ProviderConfigR\x08provider\"\x9b\x01\n\x0fScalingDecision\x12\x1f\n\x0bscale_group\x18\x01 \x01(\tR\nscaleGroup\x12.\n\x06\x61\x63tion\x18\x02 \x01(\x0e\x32\x16.iris.vm.ScalingActionR\x06\x61\x63tion\x12\x1f\n\x0bslice_delta\x18\x03 \x01(\x05R\nsliceDelta\x12\x16\n\x06reason\x18\x04 \x01(\tR\x06reason\"\xbc\x02\n\x0f\x42ootstrapConfig\x12-\n\x12\x63ontroller_address\x18\x01 \x01(\tR\x11\x63ontrollerAddress\x12\x1b\n\tworker_id\x18\x02 \x01(\tR\x08workerId\x12\x1f\n\x0bworker_port\x18\x03 \x01(\x05R\nworkerPort\x12!\n\x0c\x64ocker_image\x18\x04 \x01(\tR\x0b\x64ockerImage\x12\x1b\n\tcache_dir\x18\x05 \x01(\tR\x08\x63\x61\x63heDir\x12@\n\x08\x65nv_vars\x18\x06 \x03(\x0b\x32%.iris.vm.BootstrapConfig.EnvVarsEntryR\x07\x65nvVars\x1a:\n\x0c\x45nvVarsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\xed\x01\n\rTimeoutConfig\x12\x30\n\x14\x62oot_timeout_seconds\x18\x01 \x01(\x05R\x12\x62ootTimeoutSeconds\x12\x30\n\x14init_timeout_seconds\x18\x02 \x01(\x05R\x12initTimeoutSeconds\x12=\n\x1bssh_connect_timeout_seconds\x18\x03 \x01(\x05R\x18sshConnectTimeoutSeconds\x12\x39\n\x19ssh_poll_interval_seconds\x18\x04 \x01(\x05R\x16sshPollIntervalSeconds\"\x80\x03\n\x10ScaleGroupStatus\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x31\n\x06\x63onfig\x18\x02 \x01(\x0b\x32\x19.iris.vm.ScaleGroupConfigR\x06\x63onfig\x12%\n\x0e\x63urrent_demand\x18\x14 \x01(\x05R\rcurrentDemand\x12\x1f\n\x0bpeak_demand\x18\x15 \x01(\x05R\npeakDemand\x12(\n\x10\x62\x61\x63koff_until_ms\x18\x1e \x01(\x03R\x0e\x62\x61\x63koffUntilMs\x12\x31\n\x14\x63onsecutive_failures\x18\x1f \x01(\x05R\x13\x63onsecutiveFailures\x12\'\n\x10last_scale_up_ms\x18( \x01(\x03R\rlastScaleUpMs\x12+\n\x12last_scale_down_ms\x18) \x01(\x03R\x0flastScaleDownMs\x12*\n\x06slices\x18\x32 \x03(\x0b\x32\x12.iris.vm.SliceInfoR\x06slices\"\xc2\x01\n\x10\x41utoscalerAction\x12!\n\x0ctimestamp_ms\x18\x01 \x01(\x03R\x0btimestampMs\x12\x1f\n\x0b\x61\x63tion_type\x18\x02 \x01(\tR\nactionType\x12\x1f\n\x0bscale_group\x18\x03 \x01(\tR\nscaleGroup\x12\x19\n\x08slice_id\x18\x04 \x01(\tR\x07sliceId\x12\x16\n\x06reason\x18\x05 \x01(\tR\x06reason\x12\x16\n\x06status\x18\x06 \x01(\tR\x06status\"\xcc\x02\n\x10\x41utoscalerStatus\x12\x31\n\x06groups\x18\x01 \x03(\x0b\x32\x19.iris.vm.ScaleGroupStatusR\x06groups\x12S\n\x0e\x63urrent_demand\x18\x02 \x03(\x0b\x32,.iris.vm.AutoscalerStatus.CurrentDemandEntryR\rcurrentDemand\x12,\n\x12last_evaluation_ms\x18\x03 \x01(\x03R\x10lastEvaluationMs\x12@\n\x0erecent_actions\x18\x04 \x03(\x0b\x32\x19.iris.vm.AutoscalerActionR\rrecentActions\x1a@\n\x12\x43urrentDemandEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\x05R\x05value:\x02\x38\x01\"\x8d\x01\n\x13GcpControllerConfig\x12\x14\n\x05image\x18\x01 \x01(\tR\x05image\x12!\n\x0cmachine_type\x18\x02 \x01(\tR\x0bmachineType\x12)\n\x11\x62oot_disk_size_gb\x18\x03 \x01(\x05R\x0e\x62ootDiskSizeGb\x12\x12\n\x04port\x18\x04 \x01(\x05R\x04port\"V\n\x16ManualControllerConfig\x12\x12\n\x04host\x18\x01 \x01(\tR\x04host\x12\x14\n\x05image\x18\x02 \x01(\tR\x05image\x12\x12\n\x04port\x18\x03 \x01(\x05R\x04port\"\x8f\x01\n\x12\x43ontrollerVmConfig\x12\x30\n\x03gcp\x18\x01 \x01(\x0b\x32\x1c.iris.vm.GcpControllerConfigH\x00R\x03gcp\x12\x39\n\x06manual\x18\x02 \x01(\x0b\x32\x1f.iris.vm.ManualControllerConfigH\x00R\x06manualB\x0c\n\ncontroller\"\xca\x06\n\x11IrisClusterConfig\x12#\n\rprovider_type\x18\x01 \x01(\tR\x0cproviderType\x12\x1d\n\nproject_id\x18\x02 \x01(\tR\tprojectId\x12\x16\n\x06region\x18\x03 \x01(\tR\x06region\x12\x12\n\x04zone\x18\x04 \x01(\tR\x04zone\x12\x19\n\x08ssh_user\x18\n \x01(\tR\x07sshUser\x12&\n\x0fssh_private_key\x18\x0b \x01(\tR\rsshPrivateKey\x12!\n\x0c\x64ocker_image\x18\x14 \x01(\tR\x0b\x64ockerImage\x12\x1f\n\x0bworker_port\x18\x15 \x01(\x05R\nworkerPort\x12-\n\x12\x63ontroller_address\x18\x1e \x01(\tR\x11\x63ontrollerAddress\x12@\n\rcontroller_vm\x18\x1f \x01(\x0b\x32\x1b.iris.vm.ControllerVmConfigR\x0c\x63ontrollerVm\x12!\n\x0cmanual_hosts\x18( \x03(\tR\x0bmanualHosts\x12N\n\x0cscale_groups\x18\x32 \x03(\x0b\x32+.iris.vm.IrisClusterConfig.ScaleGroupsEntryR\x0bscaleGroups\x12\x30\n\x14\x62oot_timeout_seconds\x18< \x01(\x05R\x12\x62ootTimeoutSeconds\x12\x30\n\x14init_timeout_seconds\x18= \x01(\x05R\x12initTimeoutSeconds\x12=\n\x1bssh_connect_timeout_seconds\x18> \x01(\x05R\x18sshConnectTimeoutSeconds\x12\x39\n\x19ssh_poll_interval_seconds\x18? \x01(\x05R\x16sshPollIntervalSeconds\x12!\n\x0clabel_prefix\x18\x46 \x01(\tR\x0blabelPrefix\x1aY\n\x10ScaleGroupsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12/\n\x05value\x18\x02 \x01(\x0b\x32\x19.iris.vm.ScaleGroupConfigR\x05value:\x02\x38\x01*\xdd\x01\n\x07VmState\x12\x18\n\x14VM_STATE_UNSPECIFIED\x10\x00\x12\x14\n\x10VM_STATE_BOOTING\x10\x01\x12\x19\n\x15VM_STATE_INITIALIZING\x10\x02\x12\x12\n\x0eVM_STATE_READY\x10\x03\x12\x16\n\x12VM_STATE_UNHEALTHY\x10\x04\x12\x15\n\x11VM_STATE_STOPPING\x10\x05\x12\x17\n\x13VM_STATE_TERMINATED\x10\x06\x12\x13\n\x0fVM_STATE_FAILED\x10\x07\x12\x16\n\x12VM_STATE_PREEMPTED\x10\x08*\x84\x01\n\rScalingAction\x12\x1e\n\x1aSCALING_ACTION_UNSPECIFIED\x10\x00\x12\x1b\n\x17SCALING_ACTION_SCALE_UP\x10\x01\x12\x1d\n\x19SCALING_ACTION_SCALE_DOWN\x10\x02\x12\x17\n\x13SCALING_ACTION_NONE\x10\x03\x42S\n\x0b\x63om.iris.vmB\x07VmProtoP\x01\xa2\x02\x03IVX\xaa\x02\x07Iris.Vm\xca\x02\x07Iris\\Vm\xe2\x02\x13Iris\\Vm\\GPBMetadata\xea\x02\x08Iris::Vmb\x08\x65\x64itionsp\xe8\x07')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x08vm.proto\x12\x07iris.vm\x1a\x0c\x63onfig.proto\"\x98\x04\n\x06VmInfo\x12\x13\n\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x19\n\x08slice_id\x18\x02 \x01(\tR\x07sliceId\x12\x1f\n\x0bscale_group\x18\x03 \x01(\tR\nscaleGroup\x12&\n\x05state\x18\x04 \x01(\x0e\x32\x10.iris.vm.VmStateR\x05state\x12\x18\n\x07\x61\x64\x64ress\x18\x05 \x01(\tR\x07\x61\x64\x64ress\x12\x12\n\x04zone\x18\x06 \x01(\tR\x04zone\x12\"\n\rcreated_at_ms\x18\x07 \x01(\x03R\x0b\x63reatedAtMs\x12-\n\x13state_changed_at_ms\x18\x08 \x01(\x03R\x10stateChangedAtMs\x12\x1b\n\tworker_id\x18\n \x01(\tR\x08workerId\x12%\n\x0eworker_healthy\x18\x0b \x01(\x08R\rworkerHealthy\x12\x1d\n\ninit_phase\x18\x14 \x01(\tR\tinitPhase\x12\"\n\rinit_log_tail\x18\x15 \x01(\tR\x0binitLogTail\x12\x1d\n\ninit_error\x18\x16 \x01(\tR\tinitError\x12\x33\n\x06labels\x18\x1e \x03(\x0b\x32\x1b.iris.vm.VmInfo.LabelsEntryR\x06labels\x1a\x39\n\x0bLabelsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\x8e\x01\n\tSliceInfo\x12\x19\n\x08slice_id\x18\x01 \x01(\tR\x07sliceId\x12\x1f\n\x0bscale_group\x18\x02 \x01(\tR\nscaleGroup\x12\"\n\rcreated_at_ms\x18\x03 \x01(\x03R\x0b\x63reatedAtMs\x12!\n\x03vms\x18\x04 \x03(\x0b\x32\x0f.iris.vm.VmInfoR\x03vms\"\x9b\x01\n\x0fScalingDecision\x12\x1f\n\x0bscale_group\x18\x01 \x01(\tR\nscaleGroup\x12.\n\x06\x61\x63tion\x18\x02 \x01(\x0e\x32\x16.iris.vm.ScalingActionR\x06\x61\x63tion\x12\x1f\n\x0bslice_delta\x18\x03 \x01(\x05R\nsliceDelta\x12\x16\n\x06reason\x18\x04 \x01(\tR\x06reason\"\x84\x03\n\x10ScaleGroupStatus\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x35\n\x06\x63onfig\x18\x02 \x01(\x0b\x32\x1d.iris.config.ScaleGroupConfigR\x06\x63onfig\x12%\n\x0e\x63urrent_demand\x18\x14 \x01(\x05R\rcurrentDemand\x12\x1f\n\x0bpeak_demand\x18\x15 \x01(\x05R\npeakDemand\x12(\n\x10\x62\x61\x63koff_until_ms\x18\x1e \x01(\x03R\x0e\x62\x61\x63koffUntilMs\x12\x31\n\x14\x63onsecutive_failures\x18\x1f \x01(\x05R\x13\x63onsecutiveFailures\x12\'\n\x10last_scale_up_ms\x18( \x01(\x03R\rlastScaleUpMs\x12+\n\x12last_scale_down_ms\x18) \x01(\x03R\x0flastScaleDownMs\x12*\n\x06slices\x18\x32 \x03(\x0b\x32\x12.iris.vm.SliceInfoR\x06slices\"\xc2\x01\n\x10\x41utoscalerAction\x12!\n\x0ctimestamp_ms\x18\x01 \x01(\x03R\x0btimestampMs\x12\x1f\n\x0b\x61\x63tion_type\x18\x02 \x01(\tR\nactionType\x12\x1f\n\x0bscale_group\x18\x03 \x01(\tR\nscaleGroup\x12\x19\n\x08slice_id\x18\x04 \x01(\tR\x07sliceId\x12\x16\n\x06reason\x18\x05 \x01(\tR\x06reason\x12\x16\n\x06status\x18\x06 \x01(\tR\x06status\"\xcc\x02\n\x10\x41utoscalerStatus\x12\x31\n\x06groups\x18\x01 \x03(\x0b\x32\x19.iris.vm.ScaleGroupStatusR\x06groups\x12S\n\x0e\x63urrent_demand\x18\x02 \x03(\x0b\x32,.iris.vm.AutoscalerStatus.CurrentDemandEntryR\rcurrentDemand\x12,\n\x12last_evaluation_ms\x18\x03 \x01(\x03R\x10lastEvaluationMs\x12@\n\x0erecent_actions\x18\x04 \x03(\x0b\x32\x19.iris.vm.AutoscalerActionR\rrecentActions\x1a@\n\x12\x43urrentDemandEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\x05R\x05value:\x02\x38\x01*\xdd\x01\n\x07VmState\x12\x18\n\x14VM_STATE_UNSPECIFIED\x10\x00\x12\x14\n\x10VM_STATE_BOOTING\x10\x01\x12\x19\n\x15VM_STATE_INITIALIZING\x10\x02\x12\x12\n\x0eVM_STATE_READY\x10\x03\x12\x16\n\x12VM_STATE_UNHEALTHY\x10\x04\x12\x15\n\x11VM_STATE_STOPPING\x10\x05\x12\x17\n\x13VM_STATE_TERMINATED\x10\x06\x12\x13\n\x0fVM_STATE_FAILED\x10\x07\x12\x16\n\x12VM_STATE_PREEMPTED\x10\x08*\x84\x01\n\rScalingAction\x12\x1e\n\x1aSCALING_ACTION_UNSPECIFIED\x10\x00\x12\x1b\n\x17SCALING_ACTION_SCALE_UP\x10\x01\x12\x1d\n\x19SCALING_ACTION_SCALE_DOWN\x10\x02\x12\x17\n\x13SCALING_ACTION_NONE\x10\x03\x42S\n\x0b\x63om.iris.vmB\x07VmProtoP\x01\xa2\x02\x03IVX\xaa\x02\x07Iris.Vm\xca\x02\x07Iris\\Vm\xe2\x02\x13Iris\\Vm\\GPBMetadata\xea\x02\x08Iris::Vmb\x08\x65\x64itionsp\xe8\x07')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -34,54 +35,26 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._serialized_options = b'\n\013com.iris.vmB\007VmProtoP\001\242\002\003IVX\252\002\007Iris.Vm\312\002\007Iris\\Vm\342\002\023Iris\\Vm\\GPBMetadata\352\002\010Iris::Vm'
   _globals['_VMINFO_LABELSENTRY']._loaded_options = None
   _globals['_VMINFO_LABELSENTRY']._serialized_options = b'8\001'
-  _globals['_BOOTSTRAPCONFIG_ENVVARSENTRY']._loaded_options = None
-  _globals['_BOOTSTRAPCONFIG_ENVVARSENTRY']._serialized_options = b'8\001'
   _globals['_AUTOSCALERSTATUS_CURRENTDEMANDENTRY']._loaded_options = None
   _globals['_AUTOSCALERSTATUS_CURRENTDEMANDENTRY']._serialized_options = b'8\001'
-  _globals['_IRISCLUSTERCONFIG_SCALEGROUPSENTRY']._loaded_options = None
-  _globals['_IRISCLUSTERCONFIG_SCALEGROUPSENTRY']._serialized_options = b'8\001'
-  _globals['_VMSTATE']._serialized_start=4186
-  _globals['_VMSTATE']._serialized_end=4407
-  _globals['_SCALINGACTION']._serialized_start=4410
-  _globals['_SCALINGACTION']._serialized_end=4542
-  _globals['_VMINFO']._serialized_start=22
-  _globals['_VMINFO']._serialized_end=558
-  _globals['_VMINFO_LABELSENTRY']._serialized_start=501
-  _globals['_VMINFO_LABELSENTRY']._serialized_end=558
-  _globals['_SLICEINFO']._serialized_start=561
-  _globals['_SLICEINFO']._serialized_end=703
-  _globals['_TPUPROVIDER']._serialized_start=705
-  _globals['_TPUPROVIDER']._serialized_end=749
-  _globals['_MANUALPROVIDER']._serialized_start=751
-  _globals['_MANUALPROVIDER']._serialized_end=877
-  _globals['_PROVIDERCONFIG']._serialized_start=879
-  _globals['_PROVIDERCONFIG']._serialized_end=1000
-  _globals['_SCALEGROUPCONFIG']._serialized_start=1003
-  _globals['_SCALEGROUPCONFIG']._serialized_end=1324
-  _globals['_SCALINGDECISION']._serialized_start=1327
-  _globals['_SCALINGDECISION']._serialized_end=1482
-  _globals['_BOOTSTRAPCONFIG']._serialized_start=1485
-  _globals['_BOOTSTRAPCONFIG']._serialized_end=1801
-  _globals['_BOOTSTRAPCONFIG_ENVVARSENTRY']._serialized_start=1743
-  _globals['_BOOTSTRAPCONFIG_ENVVARSENTRY']._serialized_end=1801
-  _globals['_TIMEOUTCONFIG']._serialized_start=1804
-  _globals['_TIMEOUTCONFIG']._serialized_end=2041
-  _globals['_SCALEGROUPSTATUS']._serialized_start=2044
-  _globals['_SCALEGROUPSTATUS']._serialized_end=2428
-  _globals['_AUTOSCALERACTION']._serialized_start=2431
-  _globals['_AUTOSCALERACTION']._serialized_end=2625
-  _globals['_AUTOSCALERSTATUS']._serialized_start=2628
-  _globals['_AUTOSCALERSTATUS']._serialized_end=2960
-  _globals['_AUTOSCALERSTATUS_CURRENTDEMANDENTRY']._serialized_start=2896
-  _globals['_AUTOSCALERSTATUS_CURRENTDEMANDENTRY']._serialized_end=2960
-  _globals['_GCPCONTROLLERCONFIG']._serialized_start=2963
-  _globals['_GCPCONTROLLERCONFIG']._serialized_end=3104
-  _globals['_MANUALCONTROLLERCONFIG']._serialized_start=3106
-  _globals['_MANUALCONTROLLERCONFIG']._serialized_end=3192
-  _globals['_CONTROLLERVMCONFIG']._serialized_start=3195
-  _globals['_CONTROLLERVMCONFIG']._serialized_end=3338
-  _globals['_IRISCLUSTERCONFIG']._serialized_start=3341
-  _globals['_IRISCLUSTERCONFIG']._serialized_end=4183
-  _globals['_IRISCLUSTERCONFIG_SCALEGROUPSENTRY']._serialized_start=4094
-  _globals['_IRISCLUSTERCONFIG_SCALEGROUPSENTRY']._serialized_end=4183
+  _globals['_VMSTATE']._serialized_start=1801
+  _globals['_VMSTATE']._serialized_end=2022
+  _globals['_SCALINGACTION']._serialized_start=2025
+  _globals['_SCALINGACTION']._serialized_end=2157
+  _globals['_VMINFO']._serialized_start=36
+  _globals['_VMINFO']._serialized_end=572
+  _globals['_VMINFO_LABELSENTRY']._serialized_start=515
+  _globals['_VMINFO_LABELSENTRY']._serialized_end=572
+  _globals['_SLICEINFO']._serialized_start=575
+  _globals['_SLICEINFO']._serialized_end=717
+  _globals['_SCALINGDECISION']._serialized_start=720
+  _globals['_SCALINGDECISION']._serialized_end=875
+  _globals['_SCALEGROUPSTATUS']._serialized_start=878
+  _globals['_SCALEGROUPSTATUS']._serialized_end=1266
+  _globals['_AUTOSCALERACTION']._serialized_start=1269
+  _globals['_AUTOSCALERACTION']._serialized_end=1463
+  _globals['_AUTOSCALERSTATUS']._serialized_start=1466
+  _globals['_AUTOSCALERSTATUS']._serialized_end=1798
+  _globals['_AUTOSCALERSTATUS_CURRENTDEMANDENTRY']._serialized_start=1734
+  _globals['_AUTOSCALERSTATUS_CURRENTDEMANDENTRY']._serialized_end=1798
 # @@protoc_insertion_point(module_scope)

@@ -36,18 +36,18 @@ from iris.cluster.vm.managed_vm import SshConfig, TrackedVmFactory, VmRegistry
 from iris.cluster.vm.manual_platform import ManualVmManager
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.cluster.vm.vm_platform import VmManagerProtocol
-from iris.rpc import vm_pb2
+from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
 
-# Re-export IrisClusterConfig from proto for backwards compatibility with __init__.py
-IrisClusterConfig = vm_pb2.IrisClusterConfig
+# Re-export IrisClusterConfig from proto for public API
+IrisClusterConfig = config_pb2.IrisClusterConfig
 
 
-def load_config(config_path: Path | str) -> vm_pb2.IrisClusterConfig:
+def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     """Load cluster config from YAML file.
 
-    YAML structure uses flat field names matching the IrisClusterConfig proto.
+    Configuration uses a nested structure with bootstrap, timeouts, and ssh sub-configs.
     The controller_vm field uses a oneof pattern for type-safe configuration.
 
     GCP controller example:
@@ -57,8 +57,15 @@ def load_config(config_path: Path | str) -> vm_pb2.IrisClusterConfig:
     region: us-east1
     zone: us-east1-d
 
-    docker_image: gcr.io/project/iris-worker:v1
-    worker_port: 10001
+    bootstrap:
+      docker_image: gcr.io/project/iris-worker:v1
+      worker_port: 10001
+      controller_address: "10.0.0.1:10000"
+
+    timeouts:
+      boot_timeout_seconds: 300
+      init_timeout_seconds: 600
+      ssh_poll_interval_seconds: 5
 
     controller_vm:
       gcp:
@@ -82,7 +89,15 @@ def load_config(config_path: Path | str) -> vm_pb2.IrisClusterConfig:
     ```yaml
     provider_type: manual
 
-    docker_image: gcr.io/project/iris-worker:v1
+    bootstrap:
+      docker_image: gcr.io/project/iris-worker:v1
+      worker_port: 10001
+
+    ssh:
+      user: ubuntu
+      key_file: ~/.ssh/key.pem
+      port: 22
+      connect_timeout: 30
 
     controller_vm:
       manual:
@@ -90,14 +105,13 @@ def load_config(config_path: Path | str) -> vm_pb2.IrisClusterConfig:
         image: gcr.io/project/iris-controller:v1
         port: 10000
 
-    ssh_user: ubuntu
-    ssh_private_key: ~/.ssh/key.pem
-
     scale_groups:
       manual_hosts:
         provider:
           manual:
             hosts: [10.0.0.1, 10.0.0.2]
+            ssh_user: ubuntu        # Per-group SSH override
+            ssh_key_file: ~/.ssh/manual_key
     ```
     """
     config_path = Path(config_path)
@@ -105,9 +119,11 @@ def load_config(config_path: Path | str) -> vm_pb2.IrisClusterConfig:
     with open(config_path) as f:
         data = yaml.safe_load(f)
 
-    # Expand env vars in controller_address
-    if "controller_address" in data:
-        data["controller_address"] = os.path.expandvars(data["controller_address"])
+    # Expand environment variables in controller_address only.
+    # Other fields (e.g., docker_image, ssh.key_file) are used as-is.
+    # This is intentional - controller_address often needs $IRIS_CONTROLLER_ADDRESS for dynamic discovery.
+    if "bootstrap" in data and "controller_address" in data["bootstrap"]:
+        data["bootstrap"]["controller_address"] = os.path.expandvars(data["bootstrap"]["controller_address"])
 
     # Ensure scale_groups have their name field set (proto uses map key, but config field needs it)
     if "scale_groups" in data:
@@ -117,7 +133,7 @@ def load_config(config_path: Path | str) -> vm_pb2.IrisClusterConfig:
             elif "name" not in sg_data:
                 sg_data["name"] = name
 
-    config = ParseDict(data, vm_pb2.IrisClusterConfig())
+    config = ParseDict(data, config_pb2.IrisClusterConfig())
 
     logger.info(
         "Config loaded: provider=%s, scale_groups=%s",
@@ -128,36 +144,72 @@ def load_config(config_path: Path | str) -> vm_pb2.IrisClusterConfig:
     return config
 
 
-def config_to_dict(config: vm_pb2.IrisClusterConfig) -> dict:
+def config_to_dict(config: config_pb2.IrisClusterConfig) -> dict:
     """Convert config to dict for YAML serialization."""
     return MessageToDict(config, preserving_proto_field_name=True)
 
 
-def to_bootstrap_config(config: vm_pb2.IrisClusterConfig) -> vm_pb2.BootstrapConfig:
-    """Convert cluster config to BootstrapConfig proto."""
-    return vm_pb2.BootstrapConfig(
-        controller_address=config.controller_address,
-        docker_image=config.docker_image,
-        worker_port=config.worker_port,
-    )
+def get_ssh_config(
+    cluster_config: config_pb2.IrisClusterConfig,
+    group_name: str | None = None,
+) -> SshConfig:
+    """Get SSH config by merging cluster defaults with per-group overrides.
 
+    If cluster_config.ssh is not set, uses defaults:
+    - user: "root"
+    - port: 22
+    - connect_timeout: 30
+    - key_file: None (passwordless/agent auth)
 
-def to_timeout_config(config: vm_pb2.IrisClusterConfig) -> vm_pb2.TimeoutConfig:
-    """Convert cluster config to TimeoutConfig proto with defaults."""
-    return vm_pb2.TimeoutConfig(
-        boot_timeout_seconds=config.boot_timeout_seconds or 300,
-        init_timeout_seconds=config.init_timeout_seconds or 600,
-        ssh_connect_timeout_seconds=config.ssh_connect_timeout_seconds or 30,
-        ssh_poll_interval_seconds=config.ssh_poll_interval_seconds or 5,
-    )
+    For manual providers, per-group overrides from provider.manual take precedence.
 
+    Args:
+        cluster_config: The cluster configuration.
+        group_name: Optional scale group name. If provided and the group uses
+            manual provider, per-group SSH overrides will be applied.
 
-def to_ssh_config(config: vm_pb2.IrisClusterConfig) -> SshConfig:
-    """Convert cluster config to SshConfig for manual SSH."""
+    Returns:
+        SshConfig with all settings populated (using defaults where not specified).
+    """
+    ssh = cluster_config.ssh
+    user = ssh.user or "root"
+    key_file = ssh.key_file or None
+    port = ssh.port or 22
+    connect_timeout = ssh.connect_timeout or 30
+
+    # Apply per-group overrides if group_name provided
+    if group_name and group_name in cluster_config.scale_groups:
+        group_config = cluster_config.scale_groups[group_name]
+        if group_config.HasField("provider"):
+            provider = group_config.provider
+            if provider.WhichOneof("provider") == "manual":
+                manual = provider.manual
+                if manual.ssh_user:
+                    user = manual.ssh_user
+                if manual.ssh_key_file:
+                    key_file = manual.ssh_key_file
+                if manual.ssh_port:
+                    port = manual.ssh_port
+
     return SshConfig(
-        user=config.ssh_user or "root",
-        key_file=config.ssh_private_key or None,
-        connect_timeout=config.ssh_connect_timeout_seconds or 30,
+        user=user,
+        key_file=key_file,
+        port=port,
+        connect_timeout=connect_timeout,
+    )
+
+
+def with_timeout_defaults(timeouts: config_pb2.TimeoutConfig) -> config_pb2.TimeoutConfig:
+    """Apply default values to unset timeout fields.
+
+    Protobuf uses 0 as the default for int32 fields, which can cause issues
+    when 0 is passed to code expecting positive values. This function ensures
+    all timeout fields have sensible defaults.
+    """
+    return config_pb2.TimeoutConfig(
+        boot_timeout_seconds=timeouts.boot_timeout_seconds or 300,
+        init_timeout_seconds=timeouts.init_timeout_seconds or 600,
+        ssh_poll_interval_seconds=timeouts.ssh_poll_interval_seconds or 5,
     )
 
 
@@ -169,18 +221,19 @@ class ScaleGroupSpec:
     factory instantiation, such as the provider type and manual hosts.
     """
 
-    config: vm_pb2.ScaleGroupConfig
+    config: config_pb2.ScaleGroupConfig
     provider: str = "tpu"
     hosts: list[str] = field(default_factory=list)
 
 
-def _get_provider_config(
-    group_config: vm_pb2.ScaleGroupConfig,
-    cluster_config: vm_pb2.IrisClusterConfig,
-) -> tuple[str, str | None, list[str] | None, SshConfig | None]:
-    """Extract provider type and config from scale group.
+def _get_provider_info(
+    group_config: config_pb2.ScaleGroupConfig,
+) -> tuple[str, str | None, list[str] | None]:
+    """Extract provider type and provider-specific info from scale group.
 
-    Returns: (provider_type, project_id, hosts, ssh_config)
+    Returns: (provider_type, project_id, hosts)
+        - For TPU: (\"tpu\", project_id, None)
+        - For manual: (\"manual\", None, hosts)
 
     Raises:
         ValueError: If scale group missing provider config or unknown provider type
@@ -193,24 +246,18 @@ def _get_provider_config(
     if which == "tpu":
         if not provider.tpu.project_id:
             raise ValueError(f"TPU provider in {group_config.name} missing project_id")
-        return ("tpu", provider.tpu.project_id, None, None)
+        return ("tpu", provider.tpu.project_id, None)
     if which == "manual":
         manual = provider.manual
         if not manual.hosts:
             raise ValueError(f"Manual provider in {group_config.name} missing hosts")
-        ssh_config = SshConfig(
-            user=manual.ssh_user or cluster_config.ssh_user or "root",
-            key_file=manual.ssh_key_file or cluster_config.ssh_private_key or None,
-            connect_timeout=cluster_config.ssh_connect_timeout_seconds or 30,
-            port=manual.ssh_port or 22,
-        )
-        return ("manual", None, list(manual.hosts), ssh_config)
+        return ("manual", None, list(manual.hosts))
 
     raise ValueError(f"Unknown provider type in scale group {group_config.name}")
 
 
 def create_autoscaler_from_config(
-    config: vm_pb2.IrisClusterConfig,
+    config: config_pb2.IrisClusterConfig,
     autoscaler_config=None,  # AutoscalerConfig | None - type is from autoscaler module
     dry_run: bool = False,
 ):
@@ -248,36 +295,20 @@ def create_autoscaler_from_config(
 
     scale_groups: dict[str, ScalingGroup] = {}
 
-    for name, group_config in config.scale_groups.items():
-        provider_type, project_id, hosts, ssh_config = _get_provider_config(group_config, config)
-
-        # Use per-group ssh_config if available, otherwise fall back to cluster-level
-        if ssh_config is None and provider_type == "manual":
-            ssh_config = to_ssh_config(config)
-
-        manager = _create_manager(
-            provider=provider_type,
-            config=group_config,
-            bootstrap_config=to_bootstrap_config(config),
-            timeouts=to_timeout_config(config),
+    for name in config.scale_groups:
+        manager = _create_manager_from_config(
+            group_name=name,
+            cluster_config=config,
             vm_factory=vm_factory,
-            project_id=project_id,
-            hosts=hosts,
-            ssh_config=ssh_config,
-            label_prefix=config.label_prefix or "iris",
             dry_run=dry_run,
         )
 
         scale_groups[name] = ScalingGroup(
-            config=group_config,
+            config=config.scale_groups[name],
             vm_manager=manager,
         )
 
-        logger.info(
-            "Created scale group %s with provider=%s",
-            name,
-            provider_type,
-        )
+        logger.info("Created scale group %s", name)
 
     return Autoscaler(
         scale_groups=scale_groups,
@@ -289,8 +320,8 @@ def create_autoscaler_from_config(
 def create_autoscaler_from_specs(
     specs: dict[str, ScaleGroupSpec],
     project_id: str,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeouts: vm_pb2.TimeoutConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeouts: config_pb2.TimeoutConfig,
     ssh_config: SshConfig | None = None,
     autoscaler_config=None,
     label_prefix: str = "iris",
@@ -368,7 +399,7 @@ def create_manual_autoscaler(
     This is the quick path for initializing hosts without a config file.
     Builds appropriate spec objects and delegates to create_autoscaler_from_specs.
     """
-    bootstrap_config = vm_pb2.BootstrapConfig(
+    bootstrap_config = config_pb2.BootstrapConfig(
         controller_address=controller_address,
         docker_image=docker_image,
         worker_port=worker_port,
@@ -379,7 +410,7 @@ def create_manual_autoscaler(
         key_file=ssh_key,
     )
 
-    sg_config = vm_pb2.ScaleGroupConfig(
+    sg_config = config_pb2.ScaleGroupConfig(
         name="manual",
         min_slices=0,
         max_slices=len(hosts),
@@ -387,10 +418,9 @@ def create_manual_autoscaler(
         zones=["local"],
     )
 
-    timeouts = vm_pb2.TimeoutConfig(
+    timeouts = config_pb2.TimeoutConfig(
         boot_timeout_seconds=300,
         init_timeout_seconds=600,
-        ssh_connect_timeout_seconds=30,
         ssh_poll_interval_seconds=5,
     )
 
@@ -409,11 +439,72 @@ def create_manual_autoscaler(
     )
 
 
+def _create_manager_from_config(
+    group_name: str,
+    cluster_config: config_pb2.IrisClusterConfig,
+    vm_factory: TrackedVmFactory,
+    *,
+    dry_run: bool = False,
+) -> VmManagerProtocol:
+    """Create a VmManager for a scale group from config.
+
+    Args:
+        group_name: Name of the scale group in cluster_config.scale_groups
+        cluster_config: The full cluster configuration
+        vm_factory: Factory for creating VMs
+        dry_run: If True, don't actually create VMs
+
+    Returns:
+        A VmManager appropriate for the provider type
+
+    Raises:
+        ValueError: If group_name not found, provider missing, or invalid config
+    """
+    if group_name not in cluster_config.scale_groups:
+        raise ValueError(f"Scale group {group_name} not found in cluster config")
+
+    group_config = cluster_config.scale_groups[group_name]
+    provider_type, project_id, hosts = _get_provider_info(group_config)
+
+    label_prefix = cluster_config.label_prefix or "iris"
+    timeouts = with_timeout_defaults(cluster_config.timeouts)
+
+    if provider_type == "tpu":
+        if not project_id:
+            raise ValueError(f"project_id required for TPU scale group {group_name}")
+        return TpuVmManager(  # type: ignore[return-value]
+            project_id=project_id,
+            config=group_config,
+            bootstrap_config=cluster_config.bootstrap,
+            timeouts=timeouts,
+            vm_factory=vm_factory,
+            label_prefix=label_prefix,
+            dry_run=dry_run,
+        )
+
+    if provider_type == "manual":
+        if not hosts:
+            raise ValueError(f"hosts required for manual scale group {group_name}")
+        ssh_config = get_ssh_config(cluster_config, group_name)
+        return ManualVmManager(
+            hosts=hosts,
+            config=group_config,
+            bootstrap_config=cluster_config.bootstrap,
+            timeouts=timeouts,
+            vm_factory=vm_factory,
+            ssh_config=ssh_config,
+            label_prefix=label_prefix,
+            dry_run=dry_run,
+        )
+
+    raise ValueError(f"Unknown provider: {provider_type}")
+
+
 def _create_manager(
     provider: str,
-    config: vm_pb2.ScaleGroupConfig,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeouts: vm_pb2.TimeoutConfig,
+    config: config_pb2.ScaleGroupConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeouts: config_pb2.TimeoutConfig,
     vm_factory: TrackedVmFactory,
     *,
     project_id: str | None = None,
@@ -422,7 +513,12 @@ def _create_manager(
     label_prefix: str = "iris",
     dry_run: bool = False,
 ) -> VmManagerProtocol:
-    """Create the appropriate VmManager based on provider type."""
+    """Create the appropriate VmManager based on provider type.
+
+    This is the lower-level factory used by create_autoscaler_from_specs
+    when the caller provides explicit bootstrap/timeout/ssh configs rather
+    than resolving from a cluster config.
+    """
     if provider == "tpu":
         if not project_id:
             raise ValueError(f"project_id required for TPU scale group {config.name}")

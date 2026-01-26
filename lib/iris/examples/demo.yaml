@@ -5,10 +5,15 @@
 region: europe-west4
 zone: europe-west4-b
 
-docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
-worker_port: 10001
+bootstrap:
+  docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
+  worker_port: 10001
+  controller_address: "${IRIS_CONTROLLER_ADDRESS}"
 
-controller_address: "${IRIS_CONTROLLER_ADDRESS}"
+timeouts:
+  boot_timeout_seconds: 300
+  init_timeout_seconds: 600
+  ssh_poll_interval_seconds: 5
 
 scale_groups:
   # tpu_v5e_4:

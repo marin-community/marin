@@ -25,12 +25,18 @@ def fix_imports(file_path: Path) -> None:
     """Fix imports in generated Python files to use relative imports."""
     content = file_path.read_text()
 
-    # Pattern: import <name>_pb2 as <name>__pb2
+    # Pattern 1: import <name>_pb2 as <name>__pb2 (used in _pb2.py files)
     # Replace with: from . import <name>_pb2 as <name>__pb2
-    pattern = r"^import (\w+_pb2) as (\w+__pb2)$"
-    replacement = r"from . import \1 as \2"
+    pattern1 = r"^import (\w+_pb2) as (\w+__pb2)$"
+    replacement1 = r"from . import \1 as \2"
 
-    new_content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+    # Pattern 2: import <name>_pb2 as _<name>_pb2 (used in _pb2.pyi files)
+    # Replace with: from . import <name>_pb2 as _<name>_pb2
+    pattern2 = r"^import (\w+_pb2) as (_\w+_pb2)$"
+    replacement2 = r"from . import \1 as \2"
+
+    new_content = re.sub(pattern1, replacement1, content, flags=re.MULTILINE)
+    new_content = re.sub(pattern2, replacement2, new_content, flags=re.MULTILINE)
 
     if new_content != content:
         file_path.write_text(new_content)
@@ -70,6 +76,8 @@ def main():
         fix_imports(pb2_file)
     for connect_file in rpc_dir.glob("*_connect.py"):
         fix_imports(connect_file)
+    for pyi_file in rpc_dir.glob("*_pb2.pyi"):
+        fix_imports(pyi_file)
 
     print("\n✓ Generation complete!")
 

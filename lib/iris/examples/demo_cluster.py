@@ -65,7 +65,7 @@ from iris.cluster.vm.managed_vm import ManagedVm, VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import cluster_pb2, vm_pb2
+from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import now_ms
 
@@ -230,7 +230,7 @@ class LocalVmManager:
 
     def __init__(
         self,
-        scale_group_config: vm_pb2.ScaleGroupConfig,
+        scale_group_config: config_pb2.ScaleGroupConfig,
         controller_address: str,
         cache_path: Path,
         fake_bundle: Path,
@@ -647,13 +647,13 @@ class DemoCluster:
         self._vm_registry = vm_registry
 
         # Scale group configs
-        cpu_config = vm_pb2.ScaleGroupConfig(
+        cpu_config = config_pb2.ScaleGroupConfig(
             name="cpu",
             accelerator_type="",  # Empty = matches jobs without device requirements
             min_slices=1,  # Always have at least one CPU worker for simple jobs
             max_slices=4,
         )
-        tpu_config = vm_pb2.ScaleGroupConfig(
+        tpu_config = config_pb2.ScaleGroupConfig(
             name="tpu_v5e_16",
             accelerator_type="v5litepod-16",  # 4 VMs per slice to match original 4 workers/slice
             min_slices=0,

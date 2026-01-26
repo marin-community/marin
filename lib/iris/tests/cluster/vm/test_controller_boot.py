@@ -33,7 +33,7 @@ from iris.cluster.vm.controller import (
     ManualController,
     create_controller,
 )
-from iris.rpc import vm_pb2
+from iris.rpc import config_pb2
 
 
 @pytest.fixture
@@ -44,7 +44,7 @@ def cli_runner() -> CliRunner:
 
 @pytest.fixture
 def gcp_config(tmp_path: Path) -> Path:
-    """Create a GCP controller config file using flat proto-compatible format."""
+    """Create a GCP controller config file."""
     config_path = tmp_path / "gcp_config.yaml"
     config_content = """
 provider_type: gcp
@@ -52,8 +52,9 @@ project_id: test-project
 region: us-central1
 zone: us-central1-a
 
-docker_image: test-image:latest
-worker_port: 10001
+bootstrap:
+  docker_image: test-image:latest
+  worker_port: 10001
 
 controller_vm:
   gcp:
@@ -76,13 +77,14 @@ scale_groups:
 
 @pytest.fixture
 def manual_config(tmp_path: Path) -> Path:
-    """Create a manual controller config file with SSH bootstrap using oneof format."""
+    """Create a manual controller config file with SSH bootstrap."""
     config_path = tmp_path / "manual_config.yaml"
     config_content = """
 provider_type: manual
 
-docker_image: gcr.io/test-project/iris-worker:latest
-worker_port: 10001
+bootstrap:
+  docker_image: gcr.io/test-project/iris-worker:latest
+  worker_port: 10001
 
 controller_vm:
   manual:
@@ -90,11 +92,16 @@ controller_vm:
     image: gcr.io/test-project/iris-controller:latest
     port: 10000
 
-ssh_user: ubuntu
-ssh_private_key: ~/.ssh/id_rsa
+ssh:
+  user: ubuntu
+  key_file: ~/.ssh/id_rsa
+  connect_timeout: 30
 
-manual_hosts:
-  - 10.0.0.1
+scale_groups:
+  manual_hosts:
+    provider:
+      manual:
+        hosts: [10.0.0.1]
 """
     config_path.write_text(config_content)
     return config_path
@@ -102,12 +109,12 @@ manual_hosts:
 
 def test_creates_gcp_controller_for_gcp_provider_with_vm_enabled():
     """create_controller returns GcpController for GCP with gcp config."""
-    config = vm_pb2.IrisClusterConfig(
+    config = config_pb2.IrisClusterConfig(
         provider_type="gcp",
         project_id="test-project",
         zone="us-central1-a",
-        controller_vm=vm_pb2.ControllerVmConfig(
-            gcp=vm_pb2.GcpControllerConfig(
+        controller_vm=config_pb2.ControllerVmConfig(
+            gcp=config_pb2.GcpControllerConfig(
                 image="gcr.io/test/controller:latest",
             ),
         ),
@@ -118,10 +125,10 @@ def test_creates_gcp_controller_for_gcp_provider_with_vm_enabled():
 
 def test_creates_manual_controller_for_manual_provider():
     """create_controller returns ManualController for manual provider with host."""
-    config = vm_pb2.IrisClusterConfig(
+    config = config_pb2.IrisClusterConfig(
         provider_type="manual",
-        controller_vm=vm_pb2.ControllerVmConfig(
-            manual=vm_pb2.ManualControllerConfig(
+        controller_vm=config_pb2.ControllerVmConfig(
+            manual=config_pb2.ManualControllerConfig(
                 host="10.0.0.100",
                 image="gcr.io/test/controller:latest",
             ),

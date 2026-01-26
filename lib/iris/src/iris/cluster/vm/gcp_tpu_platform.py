@@ -32,7 +32,7 @@ from iris.cluster.types import get_tpu_topology
 from iris.cluster.vm.managed_vm import ManagedVm, VmFactory, VmRegistry
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
 from iris.cluster.vm.ssh import GcloudSshConnection
-from iris.rpc import vm_pb2
+from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
@@ -152,9 +152,9 @@ class TpuVmManager:
     def __init__(
         self,
         project_id: str,
-        config: vm_pb2.ScaleGroupConfig,
-        bootstrap_config: vm_pb2.BootstrapConfig,
-        timeouts: vm_pb2.TimeoutConfig,
+        config: config_pb2.ScaleGroupConfig,
+        bootstrap_config: config_pb2.BootstrapConfig,
+        timeouts: config_pb2.TimeoutConfig,
         vm_factory: VmFactory,
         label_prefix: str = "iris",
         dry_run: bool = False,

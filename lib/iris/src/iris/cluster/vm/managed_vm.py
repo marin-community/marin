@@ -38,7 +38,7 @@ from iris.cluster.vm.ssh import (
     shutdown_worker,
     wait_for_connection,
 )
-from iris.rpc import vm_pb2
+from iris.rpc import config_pb2, vm_pb2
 from iris.rpc.proto_utils import vm_state_name
 from iris.time_utils import now_ms
 
@@ -156,7 +156,7 @@ exit 1
 """
 
 
-def _build_env_flags(config: vm_pb2.BootstrapConfig, vm_address: str) -> str:
+def _build_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str:
     """Generate docker -e flags with proper escaping.
 
     Note: IRIS_CONTROLLER_ADDRESS is set from the shell variable $CONTROLLER_ADDRESS
@@ -174,7 +174,7 @@ def _build_env_flags(config: vm_pb2.BootstrapConfig, vm_address: str) -> str:
 
 
 def _build_bootstrap_script(
-    config: vm_pb2.BootstrapConfig,
+    config: config_pb2.BootstrapConfig,
     vm_address: str,
     discovery_preamble: str = "",
 ) -> str:
@@ -243,8 +243,8 @@ class ManagedVm:
         slice_id: str,
         scale_group: str,
         zone: str,
-        bootstrap_config: vm_pb2.BootstrapConfig,
-        timeouts: vm_pb2.TimeoutConfig,
+        bootstrap_config: config_pb2.BootstrapConfig,
+        timeouts: config_pb2.TimeoutConfig,
         conn: SshConnection,
         labels: dict[str, str] | None = None,
         address: str | None = None,
@@ -506,8 +506,8 @@ class VmFactory(Protocol):
         scale_group: str,
         zone: str,
         conn: SshConnection,
-        bootstrap_config: vm_pb2.BootstrapConfig,
-        timeouts: vm_pb2.TimeoutConfig,
+        bootstrap_config: config_pb2.BootstrapConfig,
+        timeouts: config_pb2.TimeoutConfig,
         labels: dict[str, str],
         address: str | None = None,
         discovery_preamble: str = "",
@@ -551,8 +551,8 @@ class TrackedVmFactory:
         scale_group: str,
         zone: str,
         conn: SshConnection,
-        bootstrap_config: vm_pb2.BootstrapConfig,
-        timeouts: vm_pb2.TimeoutConfig,
+        bootstrap_config: config_pb2.BootstrapConfig,
+        timeouts: config_pb2.TimeoutConfig,
         labels: dict[str, str],
         address: str | None = None,
         discovery_preamble: str = "",

@@ -25,7 +25,7 @@ import yaml
 from click.testing import CliRunner
 
 from iris.cli import iris
-from iris.rpc import vm_pb2
+from iris.rpc import config_pb2
 from tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig
 
 
@@ -41,7 +41,7 @@ def _create_test_autoscaler(scale_group_name: str = "test-group"):
     from iris.cluster.vm.managed_vm import VmRegistry
     from iris.cluster.vm.scaling_group import ScalingGroup
 
-    sg_config = vm_pb2.ScaleGroupConfig(
+    sg_config = config_pb2.ScaleGroupConfig(
         name=scale_group_name,
         accelerator_type="v5p-8",
         min_slices=0,
@@ -72,24 +72,25 @@ def test_autoscaler():
 def mock_config():
     """Create a mock IrisClusterConfig for CLI testing."""
     config = MagicMock()
-    config.controller_address = "10.0.0.100:10000"
+    config.bootstrap.controller_address = "10.0.0.100:10000"
     config.scale_groups = {"test-group": MagicMock()}
     return config
 
 
 @pytest.fixture
 def config_file(tmp_path: Path) -> Path:
-    """Create a temporary config file for testing.
-
-    Uses the flat proto-compatible YAML format matching IrisClusterConfig.
-    """
+    """Create a temporary config file for testing."""
     config = {
         "provider_type": "manual",
         "manual_hosts": ["10.0.0.1", "10.0.0.2"],
-        "ssh_user": "root",
-        "docker_image": "test-image:latest",
-        "worker_port": 10001,
-        "controller_address": "10.0.0.100:10000",
+        "bootstrap": {
+            "docker_image": "test-image:latest",
+            "worker_port": 10001,
+            "controller_address": "10.0.0.100:10000",
+        },
+        "ssh": {
+            "user": "root",
+        },
         "scale_groups": {
             "manual": {"accelerator_type": "cpu", "min_slices": 0, "max_slices": 10},
         },

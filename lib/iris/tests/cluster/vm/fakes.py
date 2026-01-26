@@ -28,7 +28,7 @@ from enum import Enum, auto
 from iris.cluster.types import get_tpu_topology
 from iris.cluster.vm.managed_vm import QuotaExceededError
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
-from iris.rpc import vm_pb2
+from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
@@ -200,7 +200,7 @@ class FakeVmManagerConfig:
         failure_mode: Failure injection mode for create_vm_group
     """
 
-    config: vm_pb2.ScaleGroupConfig
+    config: config_pb2.ScaleGroupConfig
     boot_delay_ms: int = 0
     init_delay_ms: int = 0
     failure_mode: FailureMode = field(default=FailureMode.NONE)

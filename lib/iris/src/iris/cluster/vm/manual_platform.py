@@ -44,7 +44,7 @@ from iris.cluster.vm.vm_platform import (
     VmSnapshot,
 )
 from iris.cluster.vm.ssh import DirectSshConnection, check_health
-from iris.rpc import vm_pb2
+from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
@@ -161,9 +161,9 @@ class ManualVmManager:
     def __init__(
         self,
         hosts: list[str],
-        config: vm_pb2.ScaleGroupConfig,
-        bootstrap_config: vm_pb2.BootstrapConfig,
-        timeouts: vm_pb2.TimeoutConfig,
+        config: config_pb2.ScaleGroupConfig,
+        bootstrap_config: config_pb2.BootstrapConfig,
+        timeouts: config_pb2.TimeoutConfig,
         vm_factory: VmFactory,
         ssh_config: SshConfig | None = None,
         label_prefix: str = "iris",

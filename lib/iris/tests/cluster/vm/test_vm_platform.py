@@ -35,7 +35,7 @@ from iris.cluster.vm.managed_vm import PoolExhaustedError, TrackedVmFactory, VmR
 from iris.cluster.vm.manual_platform import ManualVmGroup, ManualVmManager
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
 from iris.cluster.vm.ssh import InMemorySshConnection
-from iris.rpc import vm_pb2
+from iris.rpc import config_pb2, vm_pb2
 
 # =============================================================================
 # Test Helpers
@@ -94,9 +94,9 @@ def registry() -> VmRegistry:
 
 
 @pytest.fixture
-def bootstrap_config() -> vm_pb2.BootstrapConfig:
+def bootstrap_config() -> config_pb2.BootstrapConfig:
     """Standard bootstrap configuration for tests."""
-    return vm_pb2.BootstrapConfig(
+    return config_pb2.BootstrapConfig(
         controller_address="10.0.0.1:10000",
         worker_id="test-worker",
         worker_port=10001,
@@ -106,20 +106,19 @@ def bootstrap_config() -> vm_pb2.BootstrapConfig:
 
 
 @pytest.fixture
-def timeout_config() -> vm_pb2.TimeoutConfig:
+def timeout_config() -> config_pb2.TimeoutConfig:
     """Timeout configuration for tests."""
-    return vm_pb2.TimeoutConfig(
+    return config_pb2.TimeoutConfig(
         boot_timeout_seconds=5,
         init_timeout_seconds=10,
-        ssh_connect_timeout_seconds=2,
         ssh_poll_interval_seconds=1,
     )
 
 
 @pytest.fixture
-def v5p8_scale_group() -> vm_pb2.ScaleGroupConfig:
+def v5p8_scale_group() -> config_pb2.ScaleGroupConfig:
     """Single-host TPU scale group (v5p-8)."""
-    return vm_pb2.ScaleGroupConfig(
+    return config_pb2.ScaleGroupConfig(
         name="tpu-v5p-8",
         min_slices=0,
         max_slices=10,
@@ -130,9 +129,9 @@ def v5p8_scale_group() -> vm_pb2.ScaleGroupConfig:
 
 
 @pytest.fixture
-def v5p16_scale_group() -> vm_pb2.ScaleGroupConfig:
+def v5p16_scale_group() -> config_pb2.ScaleGroupConfig:
     """Multi-host TPU scale group (v5p-16, 2 VMs per slice)."""
-    return vm_pb2.ScaleGroupConfig(
+    return config_pb2.ScaleGroupConfig(
         name="tpu-v5p-16",
         min_slices=0,
         max_slices=5,
@@ -143,9 +142,9 @@ def v5p16_scale_group() -> vm_pb2.ScaleGroupConfig:
 
 
 @pytest.fixture
-def manual_scale_group() -> vm_pb2.ScaleGroupConfig:
+def manual_scale_group() -> config_pb2.ScaleGroupConfig:
     """Scale group config for manual hosts."""
-    return vm_pb2.ScaleGroupConfig(
+    return config_pb2.ScaleGroupConfig(
         name="manual-hosts",
         min_slices=0,
         max_slices=3,
@@ -316,10 +315,10 @@ def test_vm_group_terminate_stops_and_unregisters_vms(
 def vm_manager_factory(
     request: pytest.FixtureRequest,
     mock_factory: MagicMock,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeout_config: vm_pb2.TimeoutConfig,
-    v5p8_scale_group: vm_pb2.ScaleGroupConfig,
-    manual_scale_group: vm_pb2.ScaleGroupConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
+    v5p8_scale_group: config_pb2.ScaleGroupConfig,
+    manual_scale_group: config_pb2.ScaleGroupConfig,
 ) -> tuple[str, object]:
     """Factory that creates either TpuVmManager or ManualVmManager."""
     if request.param == "tpu":
@@ -387,9 +386,9 @@ def test_vm_manager_create_returns_vm_group(
 def test_vm_manager_create_with_tags_propagates(
     mock_run: MagicMock,
     mock_factory: MagicMock,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeout_config: vm_pb2.TimeoutConfig,
-    manual_scale_group: vm_pb2.ScaleGroupConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
+    manual_scale_group: config_pb2.ScaleGroupConfig,
 ):
     """VmManager.create_vm_group(tags=...) propagates tags to VMs."""
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -420,9 +419,9 @@ def test_vm_manager_create_with_tags_propagates(
 def test_tpu_manager_create_raises_on_gcloud_failure(
     mock_run: MagicMock,
     mock_factory: MagicMock,
-    v5p8_scale_group: vm_pb2.ScaleGroupConfig,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeout_config: vm_pb2.TimeoutConfig,
+    v5p8_scale_group: config_pb2.ScaleGroupConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
 ):
     """TpuVmManager.create_vm_group() raises RuntimeError when gcloud fails."""
     mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="TPU quota exceeded")
@@ -452,13 +451,13 @@ def test_tpu_manager_creates_correct_vm_count_for_topology(
     accelerator_type: str,
     expected_vm_count: int,
     mock_factory: MagicMock,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeout_config: vm_pb2.TimeoutConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
 ):
     """TpuVmManager creates correct number of VMs based on accelerator topology."""
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
-    config = vm_pb2.ScaleGroupConfig(
+    config = config_pb2.ScaleGroupConfig(
         name=f"tpu-{accelerator_type}",
         min_slices=0,
         max_slices=10,
@@ -485,9 +484,9 @@ def test_tpu_manager_creates_correct_vm_count_for_topology(
 def test_tpu_manager_vm_ids_include_worker_index_for_multi_host(
     mock_run: MagicMock,
     mock_factory: MagicMock,
-    v5p16_scale_group: vm_pb2.ScaleGroupConfig,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeout_config: vm_pb2.TimeoutConfig,
+    v5p16_scale_group: config_pb2.ScaleGroupConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
 ):
     """TpuVmManager generates VM IDs with worker index suffix for multi-host TPUs."""
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -513,9 +512,9 @@ def test_tpu_manager_vm_ids_include_worker_index_for_multi_host(
 def test_tpu_manager_discover_creates_groups_for_found_tpus(
     mock_run: MagicMock,
     mock_factory: MagicMock,
-    v5p8_scale_group: vm_pb2.ScaleGroupConfig,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeout_config: vm_pb2.TimeoutConfig,
+    v5p8_scale_group: config_pb2.ScaleGroupConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
 ):
     """TpuVmManager.discover_vm_groups() creates TpuVmGroup for each discovered TPU."""
     tpu_data = [
@@ -562,9 +561,9 @@ def test_tpu_manager_discover_creates_groups_for_found_tpus(
 def test_tpu_manager_discover_skips_tpus_in_deleting_state(
     mock_run: MagicMock,
     mock_factory: MagicMock,
-    v5p8_scale_group: vm_pb2.ScaleGroupConfig,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeout_config: vm_pb2.TimeoutConfig,
+    v5p8_scale_group: config_pb2.ScaleGroupConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
 ):
     """TpuVmManager.discover_vm_groups() skips TPUs in DELETING or other non-adoptable states."""
     tpu_data = [
@@ -643,9 +642,9 @@ def test_tpu_vm_group_terminate_deletes_tpu_resource(mock_run: MagicMock, regist
 
 def test_manual_manager_raises_pool_exhausted_when_no_hosts(
     mock_factory: MagicMock,
-    manual_scale_group: vm_pb2.ScaleGroupConfig,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeout_config: vm_pb2.TimeoutConfig,
+    manual_scale_group: config_pb2.ScaleGroupConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
 ):
     """ManualVmManager.create_vm_group() raises PoolExhaustedError when no hosts available."""
     manager = ManualVmManager(
@@ -664,9 +663,9 @@ def test_manual_manager_raises_pool_exhausted_when_no_hosts(
 
 def test_manual_manager_removes_host_from_pool_on_create(
     mock_factory: MagicMock,
-    manual_scale_group: vm_pb2.ScaleGroupConfig,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeout_config: vm_pb2.TimeoutConfig,
+    manual_scale_group: config_pb2.ScaleGroupConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
 ):
     """ManualVmManager.create_vm_group() removes host from available pool."""
     hosts = ["10.0.0.1", "10.0.0.2"]
@@ -687,9 +686,9 @@ def test_manual_manager_removes_host_from_pool_on_create(
 
 def test_manual_vm_group_terminate_returns_host_to_pool(
     mock_factory: MagicMock,
-    manual_scale_group: vm_pb2.ScaleGroupConfig,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeout_config: vm_pb2.TimeoutConfig,
+    manual_scale_group: config_pb2.ScaleGroupConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
 ):
     """ManualVmGroup.terminate() returns host to the manager's available pool."""
     hosts = ["10.0.0.1"]
@@ -741,9 +740,9 @@ def test_manual_vm_group_terminate_calls_on_terminate_callback(registry: VmRegis
 def test_manual_manager_discovers_hosts_with_running_workers(
     mock_check_health: MagicMock,
     mock_factory: MagicMock,
-    manual_scale_group: vm_pb2.ScaleGroupConfig,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeout_config: vm_pb2.TimeoutConfig,
+    manual_scale_group: config_pb2.ScaleGroupConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
 ):
     """ManualVmManager.discover_vm_groups() creates groups for hosts with running workers."""
     hosts = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
@@ -836,8 +835,8 @@ def test_registry_concurrent_access_is_safe(registry: VmRegistry):
 def test_factory_creates_registers_and_starts_vm(
     mock_managed_vm_class: MagicMock,
     registry: VmRegistry,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeout_config: vm_pb2.TimeoutConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
 ):
     """TrackedVmFactory creates a VM, registers it, and starts its lifecycle."""
     factory = TrackedVmFactory(registry)
@@ -866,8 +865,8 @@ def test_factory_creates_registers_and_starts_vm(
 @patch("iris.cluster.vm.managed_vm.ManagedVm")
 def test_factory_and_registry_integration(
     mock_managed_vm_class: MagicMock,
-    bootstrap_config: vm_pb2.BootstrapConfig,
-    timeout_config: vm_pb2.TimeoutConfig,
+    bootstrap_config: config_pb2.BootstrapConfig,
+    timeout_config: config_pb2.TimeoutConfig,
 ):
     """Full workflow: create VMs via factory, query via registry, unregister."""
     registry = VmRegistry()

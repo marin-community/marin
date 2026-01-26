@@ -16,6 +16,8 @@ edition = "2023";
 
 package iris.vm;
 
+import "config.proto";
+
 // VM lifecycle states
 enum VmState {
   VM_STATE_UNSPECIFIED = 0;
@@ -69,48 +71,6 @@ message SliceInfo {
   repeated VmInfo vms = 4;
 }
 
-// Provider configuration for TPU scale groups
-message TpuProvider {
-  string project_id = 1;
-}
-
-// Provider configuration for manual (pre-existing hosts) scale groups
-message ManualProvider {
-  repeated string hosts = 1;
-  string ssh_user = 2;           // Default: "root"
-  string ssh_key_file = 3;
-  int32 ssh_port = 4;            // Default: 22
-}
-
-// Per-scale-group provider configuration
-message ProviderConfig {
-  oneof provider {
-    TpuProvider tpu = 1;
-    ManualProvider manual = 2;
-  }
-}
-
-// Configuration for a scale group
-message ScaleGroupConfig {
-  string name = 1;
-  int32 min_slices = 2;
-  int32 max_slices = 3;
-
-  // TPU configuration
-  string accelerator_type = 10;
-  string runtime_version = 11;
-  bool preemptible = 12;
-
-  // Zones to use (in priority order)
-  repeated string zones = 20;
-
-  // Priority for waterfall routing (lower = higher priority, default 100)
-  int32 priority = 30;
-
-  // Per-group provider configuration
-  ProviderConfig provider = 90;
-}
-
 // A scaling decision
 message ScalingDecision {
   string scale_group = 1;
@@ -119,28 +79,10 @@ message ScalingDecision {
   string reason = 4;
 }
 
-// Bootstrap configuration passed to VmBootstrap
-message BootstrapConfig {
-  string controller_address = 1;  // Address workers use to connect (e.g., "10.0.0.1:10000")
-  string worker_id = 2;           // Auto-generated if empty
-  int32 worker_port = 3;          // Default: 10001
-  string docker_image = 4;        // Worker image to run
-  string cache_dir = 5;           // Default: /var/cache/iris
-  map<string, string> env_vars = 6;
-}
-
-// Timeout configuration
-message TimeoutConfig {
-  int32 boot_timeout_seconds = 1;        // Default: 300 (5 min)
-  int32 init_timeout_seconds = 2;        // Default: 600 (10 min)
-  int32 ssh_connect_timeout_seconds = 3; // Default: 30
-  int32 ssh_poll_interval_seconds = 4;   // Default: 5
-}
-
 // Runtime state of a scale group (for status API)
 message ScaleGroupStatus {
   string name = 1;
-  ScaleGroupConfig config = 2;
+  iris.config.ScaleGroupConfig config = 2;
 
   // Current demand
   int32 current_demand = 20;
@@ -174,63 +116,4 @@ message AutoscalerStatus {
   map<string, int32> current_demand = 2;
   int64 last_evaluation_ms = 3;
   repeated AutoscalerAction recent_actions = 4;  // Last N actions (max 100)
-}
-
-// GCP-managed controller configuration
-message GcpControllerConfig {
-  string image = 1;
-  string machine_type = 2;      // Default: "n2-standard-4"
-  int32 boot_disk_size_gb = 3;  // Default: 50
-  int32 port = 4;               // Default: 10000
-}
-
-// Manually-managed controller configuration (SSH bootstrap)
-message ManualControllerConfig {
-  string host = 1;
-  string image = 2;
-  int32 port = 3;               // Default: 10000
-}
-
-// Controller configuration using oneof for type-safe dispatch
-message ControllerVmConfig {
-  oneof controller {
-    GcpControllerConfig gcp = 1;
-    ManualControllerConfig manual = 2;
-  }
-}
-
-// Full cluster configuration - single source of truth
-message IrisClusterConfig {
-  // Provider settings
-  string provider_type = 1;     // "tpu" or "manual"
-  string project_id = 2;
-  string region = 3;
-  string zone = 4;
-
-  // Auth settings
-  string ssh_user = 10;         // Default: "root"
-  string ssh_private_key = 11;
-
-  // Docker/worker settings
-  string docker_image = 20;
-  int32 worker_port = 21;       // Default: 10001
-
-  // Controller settings
-  string controller_address = 30;
-  ControllerVmConfig controller_vm = 31;
-
-  // For manual provider
-  repeated string manual_hosts = 40;
-
-  // Scale groups (name -> config)
-  map<string, ScaleGroupConfig> scale_groups = 50;
-
-  // Timeouts (inline, not nested)
-  int32 boot_timeout_seconds = 60;        // Default: 300
-  int32 init_timeout_seconds = 61;        // Default: 600
-  int32 ssh_connect_timeout_seconds = 62; // Default: 30
-  int32 ssh_poll_interval_seconds = 63;   // Default: 5
-
-  // GCP label prefix
-  string label_prefix = 70;     // Default: "iris"
 }

@@ -46,7 +46,7 @@ from iris.cluster.vm.ssh import (
 )
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.rpc import vm_pb2
+from iris.rpc import config_pb2
 from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -318,7 +318,7 @@ class GcpController:
     container. The VM is tagged with metadata for worker discovery.
     """
 
-    def __init__(self, config: vm_pb2.IrisClusterConfig):
+    def __init__(self, config: config_pb2.IrisClusterConfig):
         self.config = config
         self.project_id = config.project_id or ""
         self.zone = config.zone or "us-central1-a"
@@ -731,7 +731,7 @@ class ManualController:
     Requires controller_vm.manual.host to be configured.
     """
 
-    def __init__(self, config: vm_pb2.IrisClusterConfig):
+    def __init__(self, config: config_pb2.IrisClusterConfig):
         self.config = config
         self._manual_config = config.controller_vm.manual
         self._bootstrapped = False
@@ -837,11 +837,12 @@ class ManualController:
 
     def _create_ssh_connection(self, host: str) -> DirectSshConnection:
         """Create SSH connection for the given host."""
+        ssh = self.config.ssh
         return DirectSshConnection(
             host=host,
-            user=self.config.ssh_user or "root",
-            key_file=self.config.ssh_private_key or None,
-            connect_timeout=self.config.ssh_connect_timeout_seconds or 30,
+            user=ssh.user or "root",
+            key_file=ssh.key_file or None,
+            connect_timeout=ssh.connect_timeout or 30,
         )
 
     def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
@@ -865,7 +866,7 @@ class ManualController:
             return None
 
 
-def create_controller(config: vm_pb2.IrisClusterConfig) -> ControllerProtocol:
+def create_controller(config: config_pb2.IrisClusterConfig) -> ControllerProtocol:
     """Factory function to create appropriate controller type.
 
     Dispatches based on the controller_vm.controller oneof field:

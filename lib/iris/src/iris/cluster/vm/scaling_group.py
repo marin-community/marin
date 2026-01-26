@@ -26,7 +26,7 @@ from enum import Enum
 
 from iris.cluster.types import VmWorkerStatusMap
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmManagerProtocol
-from iris.rpc import vm_pb2
+from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class ScalingGroup:
 
     def __init__(
         self,
-        config: vm_pb2.ScaleGroupConfig,
+        config: config_pb2.ScaleGroupConfig,
         vm_manager: VmManagerProtocol,
         scale_up_cooldown_ms: int = DEFAULT_SCALE_UP_COOLDOWN_MS,
         scale_down_cooldown_ms: int = DEFAULT_SCALE_DOWN_COOLDOWN_MS,
@@ -114,7 +114,7 @@ class ScalingGroup:
         self._quota_timeout_ms = quota_timeout_ms
 
     @property
-    def config(self) -> vm_pb2.ScaleGroupConfig:
+    def config(self) -> config_pb2.ScaleGroupConfig:
         """Configuration for this scale group."""
         return self._config
 

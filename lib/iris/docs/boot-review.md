@@ -203,45 +203,26 @@ def to_timeout_config(config: vm_pb2.IrisClusterConfig) -> vm_pb2.TimeoutConfig:
 
 **YAML Config Changes**:
 
-The YAML format is flattened to match proto field names directly. This eliminates the nested `provider:`, `docker:`, `controller:`, and `timeouts:` sections.
+Configuration uses a nested structure with `bootstrap`, `timeouts`, and `ssh` sub-configs.
 
-**Before** (`examples/eu-west4.yaml`):
-```yaml
-provider:
-  type: tpu
-  project_id: hai-gcp-models
-  region: europe-west4
-  zone: europe-west4-b
-
-docker:
-  image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
-  worker_port: 10001
-
-controller:
-  vm:
-    enabled: true
-    image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest
-    machine_type: n2-standard-4
-    port: 10000
-
-scale_groups:
-  tpu_v5e_16:
-    accelerator_type: v5litepod-16
-    ...
-```
-
-**After** (`examples/eu-west4.yaml`):
+**Current format** (`examples/eu-west4.yaml`):
 ```yaml
 # Iris cluster configuration for europe-west4
-# Flat structure matching IrisClusterConfig proto
+# Uses nested bootstrap/timeouts/ssh structure
 
-provider_type: tpu
 project_id: hai-gcp-models
 region: europe-west4
 zone: europe-west4-b
 
-docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
-worker_port: 10001
+bootstrap:
+  docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
+  worker_port: 10001
+
+timeouts:
+  boot_timeout_seconds: 300
+  init_timeout_seconds: 600
+  ssh_connect_timeout_seconds: 30
+  ssh_poll_interval_seconds: 5
 
 controller_vm:
   gcp:
@@ -251,6 +232,9 @@ controller_vm:
 
 scale_groups:
   tpu_v5e_16:
+    provider:
+      tpu:
+        project_id: hai-gcp-models
     accelerator_type: v5litepod-16
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 0
@@ -260,23 +244,30 @@ scale_groups:
     priority: 100
 ```
 
-**After** (`examples/demo.yaml`):
+**Current format** (`examples/demo.yaml`):
 ```yaml
 # Iris demo configuration
 # Uses env var for controller address (external controller)
 
-provider_type: tpu
-project_id: hai-gcp-models
 region: europe-west4
 zone: europe-west4-b
 
-docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
-worker_port: 10001
+bootstrap:
+  docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
+  worker_port: 10001
+  controller_address: "${IRIS_CONTROLLER_ADDRESS}"
 
-controller_address: "${IRIS_CONTROLLER_ADDRESS}"
+timeouts:
+  boot_timeout_seconds: 300
+  init_timeout_seconds: 600
+  ssh_connect_timeout_seconds: 30
+  ssh_poll_interval_seconds: 5
 
 scale_groups:
   tpu_v5e_16:
+    provider:
+      tpu:
+        project_id: hai-gcp-models
     accelerator_type: v5litepod-16
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 1

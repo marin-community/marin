@@ -422,14 +422,14 @@ def test_get_autoscaler_status_returns_disabled_when_no_autoscaler(client):
 @pytest.fixture
 def mock_autoscaler():
     """Create a mock autoscaler that returns a status proto."""
-    from iris.rpc import vm_pb2
+    from iris.rpc import config_pb2, vm_pb2
 
     autoscaler = Mock()
     autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
         groups=[
             vm_pb2.ScaleGroupStatus(
                 name="test-group",
-                config=vm_pb2.ScaleGroupConfig(
+                config=config_pb2.ScaleGroupConfig(
                     name="test-group",
                     accelerator_type="v4-8",
                     min_slices=1,

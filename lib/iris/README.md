@@ -120,32 +120,60 @@ iris build controller-image -t iris-controller:v1 --push --region us-central1
 
 ## Configuration
 
+Configuration uses a nested structure with `bootstrap`, `timeouts`, and `ssh` sub-configs:
+
 ```yaml
-provider:
-  type: gcp
-  project_id: my-project
-  region: us-central1
-  zone: us-central1-a
+# Cluster-level settings
+project_id: my-project
+region: us-central1
+zone: us-central1-a
 
-docker:
-  image: us-central1-docker.pkg.dev/my-project/marin/iris-worker:latest
+# Bootstrap config for worker VMs
+bootstrap:
+  docker_image: us-central1-docker.pkg.dev/my-project/marin/iris-worker:latest
   worker_port: 10001
+  controller_address: "10.0.0.1:10000"  # Or use env var: "${IRIS_CONTROLLER_ADDRESS}"
 
-controller:
-  vm:
-    enabled: true
+# Timeout settings (VM lifecycle)
+timeouts:
+  boot_timeout_seconds: 300        # Time for VM to become SSH-reachable
+  init_timeout_seconds: 600        # Time for worker to register with controller
+  ssh_poll_interval_seconds: 5     # Interval for health checks
+
+# SSH config (for manual provider)
+ssh:
+  user: ubuntu
+  key_file: ~/.ssh/cluster_key
+  port: 22
+  connect_timeout: 30
+
+# Controller VM (GCP-managed)
+controller_vm:
+  gcp:
     image: us-central1-docker.pkg.dev/my-project/marin/iris-controller:latest
     machine_type: n2-standard-4
     port: 10000
 
+# Scale groups define VM pools with autoscaling
 scale_groups:
   tpu_v5e_4:
+    provider:
+      tpu:
+        project_id: my-project
     accelerator_type: v5litepod-4
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 0
     max_slices: 10
     preemptible: true
     zones: [us-central1-a, us-central1-b]
+
+  # Manual hosts example (no cloud provisioning)
+  manual_hosts:
+    provider:
+      manual:
+        hosts: [10.0.0.1, 10.0.0.2]
+        ssh_user: ubuntu        # Per-group SSH override
+        ssh_key_file: ~/.ssh/manual_key
 ```
 
 ## Directory Structure
