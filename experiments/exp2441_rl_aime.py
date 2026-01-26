@@ -21,7 +21,7 @@ zwhe99/Qwen2.5-7B-orz as the base model.
 Hyperparameters follow DeepMath/scripts/train/deepmath-zero-7b.sh:
 - GRPO advantage estimator
 - lr=1e-6, weight_decay=0.1, grad_clip=1.0
-- train_batch_size=512, max_prompt_length=2048, (max_response_length is reduced to 32768 following https://arxiv.org/pdf/2504.07086)
+- train_batch_size=512, max_prompt_length=2048, max_response_length=10240
 - n=16 generations per prompt, temperature=1.0
 - clip_ratio_low=0.2, clip_ratio_high=0.28
 - token-level loss, no KL penalty
@@ -167,9 +167,9 @@ def main():
         max_grad_norm=1.0,
         # data.max_prompt_length=2048
         max_input_tokens=2048,
-        # reduced data.max_response_length to 32768 following Sober https://arxiv.org/pdf/2504.07086
-        max_output_tokens=32768,
-        # Sampling: n=16 generations per prompt (n=32 for eval, following Sober and OLMo 3)
+        # data.max_response_length=10240
+        max_output_tokens=10240,
+        # Sampling: n=16 generations per prompt
         # data.gen_batch_size=1536 / n=16 => ~96 prompts per generation batch
         n_prompts=96,
         n_generations_per_prompt=16,
