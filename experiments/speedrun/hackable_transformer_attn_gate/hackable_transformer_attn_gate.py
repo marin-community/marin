@@ -527,7 +527,7 @@ def build_run(
     )
 
     lr_tag = f"_lr_x{_format_multiplier_label(lr_multiplier)}" if lr_multiplier is not None else ""
-    run_name = f"hacktx_{size}_{'attngate' if use_gate else 'stdattn'}_{seq_len}_splash_lr_sweep{lr_tag}_v5p32_separate"
+    run_name = f"hacktx_{size}_{'attngate' if use_gate else 'stdattn'}_{seq_len}_splash_lr_{lr_tag}_separate"
     desc = (
         f"Hackable Transformer ({size}); "
         f"{'Gated Attention' if use_gate else 'Std Attention'} (Splash); "
@@ -558,7 +558,6 @@ if __name__ == "__main__":
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
     use_gate = "elementwise"
     steps = []
-    # Sweep LR from 1x to 4x at 0.5x increments (paper suggests higher LR for gated attention)
     lr_mults = _lr_multipliers(start=1.0, stop=4.0, step=0.5)
     for s in sizes:
         for m in lr_mults:
