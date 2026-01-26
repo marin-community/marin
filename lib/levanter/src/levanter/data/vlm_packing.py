@@ -2315,3 +2315,234 @@ class PreprocessedVLMDataset(AsyncDataset):
             })
 
         return results
+
+
+class PreprocessedPackedVLMDataset(AsyncDataset):
+    """
+    Dataset that loads pre-packed preprocessed VLM data.
+
+    This dataset expects parquet files with already-packed samples containing:
+    - input_ids: Packed tokenized sequences
+    - attention_mask: Valid token mask
+    - loss_mask: Loss computation mask
+    - segment_ids: Segment IDs for each token
+    - position_ids: Position IDs (reset per segment)
+    - images: Original images (base64 encoded or paths)
+    - image_segment_ids: Segment ID for each image
+    - num_segments: Number of segments in this pack
+    - num_images: Total number of images
+
+    At training time, only images → pixel_values conversion is performed.
+
+    Usage:
+        dataset = PreprocessedPackedVLMDataset(
+            parquet_paths=["gs://bucket/packed/*.parquet"],
+            image_processor=hf_image_processor,
+            max_num_patches=10,
+            patch_size=384,
+        )
+
+        batch = await dataset.get_batch([0, 1, 2])
+    """
+
+    def __init__(
+        self,
+        parquet_paths: List[str],
+        image_processor,
+        max_num_patches: int = 10,
+        patch_size: int = 384,
+        prefetch_threshold: float = 0.8,
+    ):
+        """
+        Initialize the preprocessed packed VLM dataset.
+
+        Args:
+            parquet_paths: List of paths to pre-packed parquet files
+            image_processor: HuggingFace image processor for images → pixel_values
+            max_num_patches: Maximum number of patches per packed sample
+            patch_size: Size of each image patch (default 384)
+            prefetch_threshold: Start prefetching next shard at this progress
+        """
+        super().__init__()
+
+        self.image_processor = image_processor
+        self.max_num_patches = max_num_patches
+        self.patch_size = patch_size
+
+        # Build shard info from parquet paths
+        self._shard_info = self._build_shard_info(parquet_paths)
+        self._total_samples = sum(s.num_samples for s in self._shard_info)
+
+        # Sequential shard loader with prefetching
+        self._shard_loader = SequentialShardLoader(
+            shard_info=self._shard_info,
+            prefetch_threshold=prefetch_threshold,
+        )
+
+        logger.info(f"PreprocessedPackedVLMDataset initialized: {len(self._shard_info)} shards, "
+                    f"{self._total_samples} packed samples, max_patches={max_num_patches}")
+
+    def _build_shard_info(self, parquet_paths: List[str]) -> List[ShardInfo]:
+        """Build shard info from parquet paths."""
+        shard_info = []
+        current_idx = 0
+
+        for path in sorted(parquet_paths):
+            # Get number of rows in this parquet file
+            fs, fs_path = fsspec.core.url_to_fs(path)
+            with fs.open(fs_path, "rb") as f:
+                metadata = pq.read_metadata(f)
+                num_rows = metadata.num_rows
+
+            shard_info.append(ShardInfo(
+                path=path,
+                start_idx=current_idx,
+                num_samples=num_rows,
+            ))
+            current_idx += num_rows
+
+        return shard_info
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def async_len(self) -> int:
+        return self._total_samples
+
+    async def final_length_is_known(self) -> bool:
+        return True
+
+    async def current_len(self) -> Optional[int]:
+        return self._total_samples
+
+    def _decode_image(self, image_str: str):
+        """Decode image from string (base64 or path)."""
+        import base64
+        from io import BytesIO
+        from PIL import Image
+
+        if image_str.startswith("base64:"):
+            # Decode base64
+            image_bytes = base64.b64decode(image_str[7:])
+            return Image.open(BytesIO(image_bytes)).convert("RGB")
+        else:
+            # Treat as path
+            from levanter.data.image import load_image
+            return load_image(image_str)
+
+    def _process_images(
+        self,
+        images: List[str],
+        num_images: int,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Process images to pixel_values and grid_mask.
+
+        Args:
+            images: List of image strings (base64 encoded or paths)
+            num_images: Expected number of valid images
+
+        Returns:
+            Tuple of (pixel_values, grid_mask)
+        """
+        if not images or num_images == 0:
+            # No images - return zeros
+            pixel_values = np.zeros(
+                (self.max_num_patches, 3, self.patch_size, self.patch_size),
+                dtype=np.float32,
+            )
+            grid_mask = np.zeros(self.max_num_patches, dtype=np.bool_)
+            return pixel_values, grid_mask
+
+        try:
+            # Decode and process only valid images (up to num_images)
+            valid_images = [self._decode_image(img) for img in images[:num_images] if img]
+            if not valid_images:
+                pixel_values = np.zeros(
+                    (self.max_num_patches, 3, self.patch_size, self.patch_size),
+                    dtype=np.float32,
+                )
+                grid_mask = np.zeros(self.max_num_patches, dtype=np.bool_)
+                return pixel_values, grid_mask
+
+            processed = self.image_processor(valid_images, return_tensors="np")
+            pixel_values = processed["pixel_values"]
+
+            # With disable_anyres=True, take only base patch from each image
+            if pixel_values.ndim == 5:
+                pixel_values = pixel_values[:, 0, :, :, :]  # (num_images, C, H, W)
+        except Exception as e:
+            logger.warning(f"Failed to process images: {e}")
+            pixel_values = np.zeros(
+                (self.max_num_patches, 3, self.patch_size, self.patch_size),
+                dtype=np.float32,
+            )
+            grid_mask = np.zeros(self.max_num_patches, dtype=np.bool_)
+            return pixel_values, grid_mask
+
+        # Pad to max_num_patches
+        actual_patches = len(pixel_values)
+        if actual_patches < self.max_num_patches:
+            pad_shape = (self.max_num_patches - actual_patches,) + pixel_values.shape[1:]
+            padding = np.zeros(pad_shape, dtype=pixel_values.dtype)
+            pixel_values = np.concatenate([pixel_values, padding], axis=0)
+        elif actual_patches > self.max_num_patches:
+            pixel_values = pixel_values[:self.max_num_patches]
+            actual_patches = self.max_num_patches
+
+        # Grid mask: True for valid patches
+        grid_mask = np.zeros(self.max_num_patches, dtype=np.bool_)
+        grid_mask[:actual_patches] = True
+
+        return pixel_values, grid_mask
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[Dict[str, Any]]:
+        """
+        Load pre-packed samples and process images.
+
+        Args:
+            indices: Sample indices to load
+
+        Returns:
+            List of packed samples with pixel_values
+        """
+        if not indices:
+            return []
+
+        # Load raw samples from parquet
+        raw_samples = self._shard_loader.get_samples_batch(list(indices))
+
+        results = []
+        for sample in raw_samples:
+            # Convert numpy arrays from parquet
+            sample = _convert_numpy_to_python(sample)
+
+            # Get packed fields
+            input_ids = np.array(sample["input_ids"], dtype=np.int32)
+            attention_mask = np.array(sample["attention_mask"], dtype=np.int32)
+            loss_mask = np.array(sample["loss_mask"], dtype=np.float32)
+            segment_ids = np.array(sample["segment_ids"], dtype=np.int32)
+            position_ids = np.array(sample["position_ids"], dtype=np.int32)
+            image_segment_ids = np.array(sample["image_segment_ids"], dtype=np.int32)
+            num_segments = sample.get("num_segments", 1)
+            num_images = sample.get("num_images", 0)
+
+            # Get images (list of base64 or path strings)
+            images = sample.get("images", [])
+
+            # Process images → pixel_values + grid_mask
+            pixel_values, grid_mask = self._process_images(images, num_images)
+
+            results.append({
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "loss_mask": loss_mask,
+                "segment_ids": segment_ids,
+                "position_ids": position_ids,
+                "pixel_values": pixel_values,
+                "grid_mask": grid_mask,
+                "image_segment_ids": image_segment_ids,
+                "num_segments": num_segments,
+            })
+
+        return results

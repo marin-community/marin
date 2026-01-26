@@ -3150,7 +3150,27 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
     packing mode using PackedVLMDataset. This allows use_cache=False with packing.
     Generate this file using: scripts/compute_vlm_pack_assignments.py"""
 
+    # Preprocessed data configuration
+    use_preprocessed: bool = False
+    """Use preprocessed and pre-packed parquet files. When True, data is loaded from
+    preprocessed_train_urls instead of configs. The preprocessed files should contain
+    already-packed samples with input_ids, segment_ids, position_ids, images, etc.
+    Generate these files using: scripts/preprocess_vlm_data.py --enable-packing"""
+
+    preprocessed_train_urls: Optional[List[str]] = None
+    """URLs to preprocessed parquet files. Required when use_preprocessed=True.
+    Example: ["gs://bucket/preprocessed/*.parquet"]"""
+
+    preprocessed_max_patches: int = 10
+    """Maximum number of image patches per packed sample in preprocessed data."""
+
     def __post_init__(self):
+        # Skip configs validation when using preprocessed data
+        if self.use_preprocessed:
+            if not self.preprocessed_train_urls:
+                raise ValueError("preprocessed_train_urls must be provided when use_preprocessed=True")
+            return
+
         if len(self.configs) == 0:
             raise ValueError("At least one dataset must be provided")
 
@@ -3168,6 +3188,53 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
         epochs: Optional[int] = None,
         max_num_patches: Optional[int] = None,
     ) -> AsyncDataset[ImageTextDict]:
+        # Check for preprocessed mode first
+        if self.use_preprocessed:
+            if not self.preprocessed_train_urls:
+                raise ValueError("preprocessed_train_urls must be provided when use_preprocessed=True")
+
+            from levanter.data.vlm_packing import PreprocessedPackedVLMDataset
+
+            # Expand glob patterns to get actual file paths
+            all_paths = []
+            for url_pattern in self.preprocessed_train_urls:
+                fs, fs_path = fsspec.core.url_to_fs(url_pattern)
+                matching = fs.glob(fs_path)
+                if url_pattern.startswith("gs://"):
+                    matching = [f"gs://{p}" for p in matching]
+                elif url_pattern.startswith("s3://"):
+                    matching = [f"s3://{p}" for p in matching]
+                all_paths.extend(sorted(matching))
+
+            if not all_paths:
+                raise ValueError(f"No files found matching preprocessed_train_urls: {self.preprocessed_train_urls}")
+
+            logger.info(f"Using preprocessed packed data: {len(all_paths)} files")
+
+            max_patches = max_num_patches if max_num_patches is not None else self.preprocessed_max_patches
+
+            dataset = PreprocessedPackedVLMDataset(
+                parquet_paths=all_paths,
+                image_processor=self.the_processor.image_processor,
+                max_num_patches=max_patches,
+                patch_size=384,
+            )
+
+            # Apply shuffle if configured
+            if key is None:
+                key = jax.random.PRNGKey(0)
+
+            if self.shuffle is True:
+                dataset = dataset.shuffle(key)
+            elif isinstance(self.shuffle, int):
+                dataset = dataset.era_shuffle(self.shuffle, key=key)
+
+            # Apply epoch wrapping if configured
+            if epochs and epochs > 0:
+                dataset = EpochDataset(dataset, max_epochs=epochs)
+
+            return dataset
+
         image_datasets = self.training_sets(max_num_patches=max_num_patches)
 
         if key is None:

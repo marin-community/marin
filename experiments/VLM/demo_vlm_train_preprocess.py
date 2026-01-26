@@ -1,0 +1,273 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Demo VLM Training with Preprocessed Data
+
+Train a Vision-Language Model (LLaVA-OneVision architecture):
+- Vision Encoder: SigLIP (384x384, patch16)
+- Language Model: Qwen3-1.7B
+- Projector: 2-layer MLP
+
+Data: Preprocessed and pre-packed parquet files (from preprocess_vlm_data.py)
+- Tokenization and loss_mask computed offline
+- Packing already applied (multiple samples per row)
+- Only image → pixel_values conversion at training time
+
+Usage:
+    # 1. First, generate preprocessed data:
+    python scripts/preprocess_vlm_data.py \
+        --input-pattern "gs://marin-vlm/stage1_sharded/*.parquet" \
+        --output-dir "gs://marin-vlm/stage1_preprocessed/" \
+        --tokenizer "gs://marin-vlm/tokenizers/Qwen3-1.7B" \
+        --processor "gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf" \
+        --max-length 2048 --features-per-patch 576 \
+        --enable-packing --max-patches 10 --max-segments 64 \
+        --num-workers 50
+
+    # 2. Then run training:
+    python experiments/VLM/demo_vlm_train_preprocess.py
+"""
+
+import os
+
+from huggingface_hub import login
+
+login(token="YOUR_HF_TOKEN_HERE")
+
+from fray.cluster import ResourceConfig
+from levanter.data.image import ImageMixtureDatasetConfig
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.models.llava_onevision import LlavaOnevisionConfig
+from levanter.models.qwen import Qwen3Config
+from levanter.models.siglip import SiglipVisionConfig
+from levanter.utils.mesh import MeshConfig
+from haliax.partitioning import ResourceAxis
+from marin.execution.executor import executor_main
+
+from experiments.defaults import default_train_vlm
+from experiments.simple_vlm_train_config import SimpleVlmTrainConfig
+
+# ============================================================================
+# 1. RESOURCE CONFIGURATION
+# ============================================================================
+# Options:
+#   - ResourceConfig.with_tpu("v4-8")   # Small TPU slice
+#   - ResourceConfig.with_tpu("v4-32")  # Medium TPU slice
+#   - ResourceConfig.with_tpu("v4-128") # Large TPU slice
+#   - ResourceConfig.with_gpu("H100", count=8)  # GPU cluster
+#   - ResourceConfig.with_cpu()  # CPU only (for testing)
+# Can be overridden via TPU_TYPE environment variable (e.g., -e TPU_TYPE v4-128)
+TPU_TYPE = os.environ.get("TPU_TYPE", "v5p-64")
+RESOURCES = ResourceConfig.with_tpu(TPU_TYPE)
+
+# Extract TPU chip count from TPU_TYPE (e.g., "v5p-64" -> 64)
+TPU_CHIPS = int(TPU_TYPE.split("-")[-1])
+
+# Gradient accumulation configuration
+# - per_device_parallelism: samples processed per device at a time (limited by memory)
+# - gradient_accumulation_steps: how many micro-batches to accumulate before updating
+# - effective batch size = TPU_CHIPS * per_device_parallelism * gradient_accumulation_steps
+PER_DEVICE_PARALLELISM = 2  # 1 sample per device (memory-safe for VLM with large images)
+GRADIENT_ACCUMULATION_STEPS = 1  # Accumulate 4 micro-batches
+BATCH_SIZE = TPU_CHIPS * PER_DEVICE_PARALLELISM * GRADIENT_ACCUMULATION_STEPS  # Effective batch = 256 for v5p-64
+
+# ============================================================================
+# 2. MODEL CONFIGURATION
+# ============================================================================
+
+# Flash attention block size (set to None to disable flash attention)
+FLASH_ATTENTION_BLOCK_SIZE = 1024
+
+# Vision encoder: SigLIP-like (matches google/siglip-so400m-patch14-384)
+vision_config = SiglipVisionConfig(
+    hidden_size=1152,
+    intermediate_size=4304,
+    num_hidden_layers=27,
+    num_attention_heads=16,
+    image_size=384,
+    patch_size=16,  # Must match vision_checkpoint (siglip2-so400m-patch16-384)
+    flash_attention_block_size=FLASH_ATTENTION_BLOCK_SIZE,
+    gradient_checkpointing=True,
+)
+
+# Language model: Qwen3-1.7B
+text_config = Qwen3Config(
+    max_seq_len=2048,
+    hidden_dim=2048,
+    intermediate_dim=6144,
+    num_heads=16,
+    num_kv_heads=8,
+    num_layers=28,
+    rope=Llama3RotaryEmbeddingsConfig(),
+    tie_word_embeddings=True,
+    flash_attention_block_size=FLASH_ATTENTION_BLOCK_SIZE,
+    gradient_checkpointing=True,
+)
+
+# Qwen3-1.7B <|image_pad|> token ID (hardcoded to avoid HF API call during import)
+# This prevents 429 rate limit errors when 64 workers import this module simultaneously
+IMAGE_TOKEN_INDEX = 151655
+
+# Combined VLM config
+vlm_config = LlavaOnevisionConfig(
+    vision_config=vision_config,
+    text_config=text_config,
+    vision_encoder_type="siglip",
+    vision_feature_select_strategy="full",
+    vision_aspect_ratio="single",
+    # Set disable_anyres=True to use single resolution (base patch only).
+    # This reduces memory usage and speeds up training but may lose image details.
+    # IMPORTANT: Packing requires disable_anyres=True.
+    disable_anyres=True,
+    # Use Qwen3's <|image_pad|> token ID (default 151646 is for Qwen2)
+    image_token_index=IMAGE_TOKEN_INDEX,
+    gradient_checkpointing=True,
+)
+
+# ============================================================================
+# 3. DATA CONFIGURATION (Preprocessed Packed Data)
+# ============================================================================
+# Using preprocessed and pre-packed parquet files from preprocess_vlm_data.py.
+# The preprocessed files contain:
+#   - input_ids: Already tokenized sequences
+#   - attention_mask, loss_mask: Pre-computed masks
+#   - segment_ids, position_ids: Packing information
+#   - images: Base64-encoded image data
+#   - image_segment_ids: Segment IDs for images
+#
+# Generate preprocessed data with:
+#   python scripts/preprocess_vlm_data.py \
+#       --input-pattern "gs://marin-vlm/stage1_sharded/*.parquet" \
+#       --output-dir "gs://marin-vlm/stage1_preprocessed/" \
+#       --tokenizer "gs://marin-vlm/tokenizers/Qwen3-1.7B" \
+#       --processor "gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf" \
+#       --max-length 2048 --features-per-patch 576 \
+#       --enable-packing --max-patches 10 --max-segments 64 \
+#       --num-workers 50
+
+# Compute vision_feature_height from model config to match data pipeline with model
+# This is critical: the HF processor assumes 27x27=729 tokens (384//14), but our
+# SigLIP vision encoder with patch_size=16 outputs 24x24=576 tokens (384//16).
+# Without this override, training loss won't decrease due to index wrapping.
+VISION_FEATURE_HEIGHT = vision_config.image_size // vision_config.patch_size  # 384 // 16 = 24
+
+data_config = ImageMixtureDatasetConfig(
+    cache_dir="cache/vlm_demo",
+    # Processor for image preprocessing (loaded from GCS to avoid HuggingFace download race conditions)
+    processor="gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf",
+    # Tokenizer not needed for preprocessed data (already tokenized)
+    tokenizer="gs://marin-vlm/tokenizers/Qwen3-1.7B",
+    max_length=2048,
+    vision_feature_height=VISION_FEATURE_HEIGHT,
+    vision_aspect_ratio="single",
+    image_grid_pinpoints=[[384, 384]],
+    # === Use Preprocessed Packed Data ===
+    # Data is already tokenized and packed by preprocess_vlm_data.py
+    # Only image → pixel_values conversion happens at training time
+    use_preprocessed=True,
+    preprocessed_train_urls=["gs://marin-vlm/stage1_preprocessed/*.parquet"],
+    preprocessed_max_patches=10,
+)
+
+# ============================================================================
+# 4. TRAINING CONFIGURATION
+# ============================================================================
+# Dataset size: This is the number of PACKED samples after preprocessing
+# Original: 558K samples → ~186K packed samples (with ~3 samples/pack average)
+# Check the actual count with: gsutil ls gs://marin-vlm/stage1_preprocessed/*.parquet | wc -l
+DATASET_SIZE = 93000  # Approximate packed sample count (558K / 2 samples per pack / 3 shards)
+NUM_EPOCHS = 1
+NUM_TRAIN_STEPS = (DATASET_SIZE // BATCH_SIZE) * NUM_EPOCHS
+
+train_config = SimpleVlmTrainConfig(
+    resources=RESOURCES,
+    train_batch_size=BATCH_SIZE,
+    per_device_parallelism=PER_DEVICE_PARALLELISM,
+    num_train_steps=NUM_TRAIN_STEPS,
+    epoch=0,  # Disable epoch mode (use num_train_steps instead)
+    learning_rate=1e-4,
+    warmup=0.002,  # 3% warmup
+    weight_decay=0.0,
+    min_lr_ratio=0.01,  # Final LR = 1% of peak LR
+
+    # Full bfloat16: params and compute both in bfloat16 (saves memory)
+    mp="bfloat16",
+
+    # Streaming mode: double the default prefetch for better throughput
+    streaming_max_buffered_batches=16,
+    streaming_prefetch_size=8,
+
+    # Checkpointing
+    steps_per_export=1000,
+    steps_per_eval=500,
+
+    # Resume from checkpoint: set path and enable data position restoration
+    # >>> EDIT THIS PATH to resume from a specific checkpoint <<<
+    # initialize_from_checkpoint_path="gs://your-bucket/path/to/checkpoint",
+    reset_data_loader_on_init=False,  # Continue data from correct position (not from beginning)
+
+    # Load pretrained weights from HuggingFace
+    vision_checkpoint="google/siglip2-so400m-patch16-384",
+    llm_checkpoint="Qwen/Qwen3-1.7B",
+
+    # Freeze components during training (only train projector)
+    freeze_vision_encoder=True,
+    freeze_llm=True,
+
+    # Profiler configuration
+    profiler=True,
+    profiler_start_step=10,
+    profiler_num_steps=20,
+
+    # Disable evaluation to save memory
+    no_eval=True,
+
+    # Custom mesh configuration for better memory distribution
+    mesh_config=MeshConfig(
+        axes={"data": -1, "replica": 1, "model": 1},
+        compute_mapping={
+            "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+            "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+            # vision_batch is created by flattening (batch, num_patches) in get_image_features
+            # Must be sharded to avoid OOM in vision encoder's splash attention
+            "vision_batch": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+        },
+        param_mapping={"embed": "data"},  # Only shards LLM embed (vision uses vision_embed)
+    ),
+)
+
+# ============================================================================
+# 5. EXPERIMENT NAME (via environment variable)
+# ============================================================================
+# Can be set via: -e EXP_NAME my-experiment-name
+EXP_NAME = os.environ.get("EXP_NAME", "vlm-preprocess-qwen3-1.7b")
+
+# ============================================================================
+# 6. CREATE TRAINING STEP
+# ============================================================================
+vlm_training = default_train_vlm(
+    name=EXP_NAME,
+    data_config=data_config,
+    model_config=vlm_config,
+    train_config=train_config,
+    tags=["vlm", "demo", "qwen3-1.7b", "siglip", "preprocessed"],
+    allow_out_of_region=("data.preprocessed_train_urls", "data.processor"),
+)
+
+# ============================================================================
+# 7. RUN
+# ============================================================================
+if __name__ == "__main__":
+    executor_main(steps=[vlm_training])
