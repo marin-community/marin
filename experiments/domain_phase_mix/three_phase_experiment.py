@@ -92,6 +92,8 @@ BASELINES: list[tuple[list[float], list[float], list[float]]] = [
     ([0.4977, 0.4568, 0.0455], [0.6575, 0.3140, 0.0285], [0.6756, 0.2445, 0.0799]),
     # RegMix k-fold CV optimized for lm_eval/arc_challenge/choice_logprob (10M samples)
     ([0.5203, 0.4339, 0.0458], [0.1468, 0.8256, 0.0277], [0.5405, 0.3860, 0.0735]),
+    # RegMix k-fold CV optimized for lm_eval/arc_challenge/bpb (10M samples)
+    ([0.3617, 0.5993, 0.0390], [0.0838, 0.8583, 0.0579], [0.2641, 0.7036, 0.0323]),
 ]
 
 

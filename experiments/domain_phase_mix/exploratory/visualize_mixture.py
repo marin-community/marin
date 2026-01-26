@@ -407,6 +407,7 @@ def load_baselines_from_csv(csv_path: str) -> dict[str, dict]:
         90006: "90006: RegMix\n(opt. C4-BPB)",
         90007: "90007: RegMix 5-fold\n(opt. C4-BPB)",
         90008: "90008: RegMix 5-fold\n(opt. choice_logprob)",
+        90009: "90009: RegMix 5-fold\n(opt. arc_challenge/bpb)",
     }
 
     # Predicted values from RegMix regression analysis (regmix_regression_kfold.py)
@@ -426,6 +427,11 @@ def load_baselines_from_csv(csv_path: str) -> dict[str, dict]:
             "bpb": 1.1412,
             "choice_logprob": -5.6912,
             "arc_acc": 0.1858,
+        },
+        90009: {
+            "bpb": 1.1590,
+            "choice_logprob": -5.6707,
+            "arc_acc": 0.1861,
         },
     }
 
@@ -477,7 +483,7 @@ def main():
     fig_all = create_all_baselines_chart(
         baselines=completed_baselines,
         title="Baseline & RegMix-Optimized Data Mixtures",
-        width=2000,
+        width=2400,
         height=700,
     )
 

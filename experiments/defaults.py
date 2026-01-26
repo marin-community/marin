@@ -201,6 +201,7 @@ def simulated_epoching_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    wandb_name: str | None = None,
 ) -> ExecutorStep:
     """
     Simulates the number of epochs seen in a full training run by sub-sampling individual datasets.
@@ -215,6 +216,7 @@ def simulated_epoching_train(
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
+        wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
     """
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
@@ -237,7 +239,14 @@ def simulated_epoching_train(
     )
 
     return default_train(
-        name, simulated_pretraining_data, model_config, train_config, tags, use_default_validation, eval_harness_tasks
+        name,
+        simulated_pretraining_data,
+        model_config,
+        train_config,
+        tags,
+        use_default_validation,
+        eval_harness_tasks,
+        wandb_name=wandb_name,
     )
 
 

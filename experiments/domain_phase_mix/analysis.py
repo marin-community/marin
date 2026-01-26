@@ -52,6 +52,7 @@ DEFAULT_METRICS = [
     "eval/paloma/m2d2_wikipedia_unsplit/bpb",
     "lm_eval/arc_challenge/acc",
     "lm_eval/arc_challenge/acc_norm",
+    "lm_eval/arc_challenge/bpb",
     "lm_eval/arc_challenge/choice_logprob",
     "lm_eval/hellaswag_0shot/acc",
     "lm_eval/hellaswag_0shot/acc_norm",

@@ -92,11 +92,14 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
     target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
     # Use 256 MB chunk size for large files
     chunk_size = 256 * 1024 * 1024
-    max_retries = 10
-    # 10 minutes max sleep
-    max_sleep = 10 * 60
+    max_retries = 20
+    # 15 minutes max sleep
+    max_sleep = 15 * 60
+    # Minimum base wait time to avoid too-fast retries
+    min_base_wait = 5
 
     # Retry when there is an error, such as hf rate limit
+    last_exception = None
     for attempt in range(max_retries):
         try:
             target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
@@ -107,24 +110,42 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path}")
             return {"file_path": file_path, "status": "success"}
         except Exception as e:
-            wait_base = 2**attempt
+            last_exception = e
+            # Base wait: min 5s, then exponential: 5, 10, 20, 40, 80, 160, 320, 600 (capped)
+            wait_base = max(min_base_wait, min_base_wait * (2**attempt))
+
+            error_type = type(e).__name__
+            error_msg = str(e)
 
             if isinstance(e, HfHubHTTPError):
+                status_code = getattr(e.response, "status_code", None)
                 TOO_MANY_REQUESTS = 429
-                if e.response.status_code == TOO_MANY_REQUESTS:
-                    # NOTE: RateLimit	"api\|pages\|resolvers";r=[remaining];t=[seconds remaining until reset]
+                if status_code == TOO_MANY_REQUESTS:
+                    # NOTE: RateLimit "api\|pages\|resolvers";r=[remaining];t=[seconds remaining until reset]
                     try:
-                        wait_base += int(e.response.headers["RateLimit"].split(";")[-1].split("=")[-1])
+                        rate_limit_wait = int(e.response.headers["RateLimit"].split(";")[-1].split("=")[-1])
+                        wait_base = max(wait_base, rate_limit_wait + 10)  # Add buffer to rate limit wait
                     except Exception:
                         logger.warning("Failed to parse rate limit header, using default wait period")
+                logger.warning(
+                    f"Attempt {attempt + 1}/{max_retries} failed for {file_path}: "
+                    f"HfHubHTTPError (status={status_code}): {error_msg}"
+                )
+            else:
+                logger.warning(
+                    f"Attempt {attempt + 1}/{max_retries} failed for {file_path}: " f"{error_type}: {error_msg}"
+                )
 
-            jitter = random.uniform(0, wait_base)
-            wait_time = wait_base + jitter
-            wait_time = min(wait_time, max_sleep)
+            jitter = random.uniform(0, min(wait_base * 0.25, 30))  # Up to 25% jitter, max 30s
+            wait_time = min(wait_base + jitter, max_sleep)
 
-            logger.exception(f"Attempt {attempt + 1} failed for {file_path}, retrying in {wait_time:.1f}s")
+            logger.info(f"Retrying {file_path} in {wait_time:.1f}s...")
             time.sleep(wait_time)
-    raise RuntimeError(f"Failed to download {file_path} after {max_retries} attempts")
+
+    raise RuntimeError(
+        f"Failed to download {file_path} after {max_retries} attempts. "
+        f"Last error: {type(last_exception).__name__}: {last_exception}"
+    )
 
 
 def download_hf(cfg: DownloadConfig) -> None:

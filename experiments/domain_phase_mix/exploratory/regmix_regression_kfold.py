@@ -107,6 +107,7 @@ def main():
         'eval/loss',
         'eval/paloma/c4_en/bpb',
         'lm_eval/arc_challenge/acc',
+        'lm_eval/arc_challenge/bpb',
         'lm_eval/arc_challenge/choice_logprob',
         'lm_eval/hellaswag_0shot/acc_norm',
         'lm_eval/arc_challenge/acc_norm',
@@ -357,6 +358,41 @@ def main():
     print(f"\nBest observed arc_challenge/acc in training data: {df_complete['lm_eval/arc_challenge/acc'].max():.4f}")
     print(f"Predicted optimal arc_challenge/acc: {results[target_acc]['pred_mean']:.4f}")
 
+    # Also output optimal mixture for arc_challenge/bpb
+    print("\n" + "="*60)
+    print("OPTIMIZED FOR lm_eval/arc_challenge/bpb")
+    print("="*60)
+
+    target_arc_bpb = 'lm_eval/arc_challenge/bpb'
+    optimal_arc_bpb = results[target_arc_bpb]['optimal_mixture']
+
+    print(f"\nOptimal mixture weights (predicted arc_bpb: {results[target_arc_bpb]['pred_mean']:.4f}):\n")
+    for i, phase in enumerate(phase_names):
+        phase_weights = optimal_arc_bpb[i*3:(i+1)*3]
+        print(f"{phase}:")
+        for j, domain in enumerate(domain_names):
+            print(f"  {domain:20s}: {phase_weights[j]:.4f}")
+        print()
+
+    # Print as baseline format for three_phase_experiment.py
+    print("BASELINE FORMAT (for three_phase_experiment.py):")
+    phase_0 = optimal_arc_bpb[0:3]
+    phase_1 = optimal_arc_bpb[3:6]
+    phase_2 = optimal_arc_bpb[6:9]
+    print(f"\n# RegMix k-fold CV optimized for lm_eval/arc_challenge/bpb")
+    print(f"([{phase_0[0]:.4f}, {phase_0[1]:.4f}, {phase_0[2]:.4f}], "
+          f"[{phase_1[0]:.4f}, {phase_1[1]:.4f}, {phase_1[2]:.4f}], "
+          f"[{phase_2[0]:.4f}, {phase_2[1]:.4f}, {phase_2[2]:.4f}]),")
+
+    # Compare arc_bpb values for baseline runs
+    print(f"\nBaseline runs arc_challenge/bpb values:")
+    for _, row in baseline_df.iterrows():
+        arc_bpb = row['lm_eval/arc_challenge/bpb']
+        print(f"  run_id={int(row['run_id'])}: arc_bpb={arc_bpb:.4f}")
+
+    print(f"\nBest observed arc_challenge/bpb in training data: {df_complete['lm_eval/arc_challenge/bpb'].min():.4f}")
+    print(f"Predicted optimal arc_challenge/bpb: {results[target_arc_bpb]['pred_mean']:.4f}")
+
     # ============================================================================
     # CROSS-METRIC PREDICTIONS FOR VISUALIZATION
     # ============================================================================
@@ -367,11 +403,12 @@ def main():
     print("CROSS-METRIC PREDICTIONS FOR VISUALIZATION")
     print("="*60)
 
-    key_metrics = ['eval/paloma/c4_en/bpb', 'lm_eval/arc_challenge/choice_logprob', 'lm_eval/arc_challenge/acc']
+    key_metrics = ['eval/paloma/c4_en/bpb', 'lm_eval/arc_challenge/bpb', 'lm_eval/arc_challenge/choice_logprob', 'lm_eval/arc_challenge/acc']
     optimized_mixtures = {
         '90006 (RegMix opt. C4-BPB)': results['eval/paloma/c4_en/bpb']['optimal_mixture'],
         '90007 (RegMix 5-fold opt. C4-BPB)': results['eval/paloma/c4_en/bpb']['optimal_mixture'],
         '90008 (RegMix 5-fold opt. choice_logprob)': results['lm_eval/arc_challenge/choice_logprob']['optimal_mixture'],
+        '90009 (RegMix 5-fold opt. arc_bpb)': results['lm_eval/arc_challenge/bpb']['optimal_mixture'],
     }
 
     print("\nPredicted values for each optimized mixture across all key metrics:")
@@ -413,6 +450,7 @@ def main():
 
         print(f"    {run_id}: {{")
         print(f'        "bpb": {preds["eval/paloma/c4_en/bpb"]:.4f},')
+        print(f'        "arc_bpb": {preds["lm_eval/arc_challenge/bpb"]:.4f},')
         print(f'        "choice_logprob": {preds["lm_eval/arc_challenge/choice_logprob"]:.4f},')
         print(f'        "arc_acc": {preds["lm_eval/arc_challenge/acc"]:.4f},')
         print("    },")

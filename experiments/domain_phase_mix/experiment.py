@@ -299,6 +299,7 @@ class MixtureExperiment:
                 tags=[self.name, run_name],
                 use_default_validation=True,
                 eval_harness_tasks=self.eval_harness_tasks,
+                wandb_name=full_name,
             )
         else:
             from experiments.defaults import default_train
@@ -311,6 +312,7 @@ class MixtureExperiment:
                 tags=[self.name, run_name],
                 use_default_validation=True,
                 eval_harness_tasks=self.eval_harness_tasks,
+                wandb_name=full_name,
             )
 
     def create_weight_configs_step(
