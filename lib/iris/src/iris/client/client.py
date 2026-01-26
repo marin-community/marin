@@ -47,7 +47,16 @@ from iris.cluster.client import (
     RemoteClusterClient,
     get_job_info,
 )
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobId, Namespace, ResourceSpec, is_job_finished
+from iris.cluster.types import (
+    Constraint,
+    CoschedulingConfig,
+    Entrypoint,
+    EnvironmentSpec,
+    JobId,
+    Namespace,
+    ResourceSpec,
+    is_job_finished,
+)
 from iris.rpc import cluster_pb2
 from iris.time_utils import ExponentialBackoff
 
@@ -262,8 +271,8 @@ class Job:
             status = self._client._cluster.get_job_status(self._job_id)
 
             # Initialize log pollers when we learn num_tasks
-            if not log_states and status.num_tasks > 0:
-                log_states = [_TaskLogState(i) for i in range(status.num_tasks)]
+            if not log_states and len(status.tasks) > 0:
+                log_states = [_TaskLogState(i) for i in range(len(status.tasks))]
 
             # Poll logs from all tasks
             for state in log_states:
@@ -737,6 +746,8 @@ class IrisClient:
         environment: EnvironmentSpec | None = None,
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,
+        constraints: list[Constraint] | None = None,
+        coscheduling: CoschedulingConfig | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -747,6 +758,8 @@ class IrisClient:
             environment: Environment configuration
             ports: Port names to allocate (e.g., ["actor", "metrics"])
             scheduling_timeout_seconds: Maximum time to wait for scheduling (0 = no timeout)
+            constraints: Constraints for filtering workers by attribute
+            coscheduling: Configuration for atomic multi-task scheduling
 
         Returns:
             Job handle for the submitted job
@@ -770,6 +783,8 @@ class IrisClient:
         # Convert to wire format
         resources_proto = resources.to_proto()
         environment_proto = environment.to_proto() if environment else None
+        constraints_proto = [c.to_proto() for c in constraints or []]
+        coscheduling_proto = coscheduling.to_proto() if coscheduling else None
 
         self._cluster.submit_job(
             job_id=job_id,
@@ -778,6 +793,8 @@ class IrisClient:
             environment=environment_proto,
             ports=ports,
             scheduling_timeout_seconds=scheduling_timeout_seconds,
+            constraints=constraints_proto,
+            coscheduling=coscheduling_proto,
         )
 
         return Job(self, job_id)

@@ -2011,6 +2011,7 @@ dependencies = [
     { name = "fsspec" },
     { name = "httpx" },
     { name = "humanfriendly" },
+    { name = "iris" },
     { name = "mergedeep" },
     { name = "pyyaml" },
     { name = "typing-extensions" },
@@ -2056,6 +2057,7 @@ requires-dist = [
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "humanfriendly", specifier = ">=10.0" },
+    { name = "iris", editable = "lib/iris" },
     { name = "mergedeep" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ray", marker = "extra == 'ray'", specifier = "==2.53.0" },
@@ -2976,20 +2978,29 @@ name = "iris"
 version = "0.1.0"
 source = { editable = "lib/iris" }
 dependencies = [
+    { name = "click" },
     { name = "cloudpickle" },
     { name = "connect-python" },
     { name = "fsspec" },
+    { name = "grpcio" },
     { name = "httpx" },
     { name = "humanfriendly" },
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "starlette" },
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
+[package.optional-dependencies]
+dev = [
+    { name = "ipykernel" },
+    { name = "nbconvert" },
+    { name = "nbformat" },
+]
+
 [package.dev-dependencies]
 demo = [
-    { name = "click" },
     { name = "ipykernel" },
     { name = "jupyter" },
     { name = "nbconvert" },
@@ -3002,20 +3013,26 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.3.1" },
     { name = "cloudpickle", specifier = ">=3.1.2" },
     { name = "connect-python", git = "https://github.com/connectrpc/connect-python.git?rev=5342eacecef85e52717604ee5ac7e03a1e16c7ac" },
     { name = "fsspec", specifier = ">=2024.0.0" },
+    { name = "grpcio", specifier = ">=1.76.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "humanfriendly", specifier = ">=10.0" },
+    { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=7.1.0" },
+    { name = "nbconvert", marker = "extra == 'dev'", specifier = ">=7.16.6" },
+    { name = "nbformat", marker = "extra == 'dev'", specifier = ">=5.10.4" },
     { name = "pydantic", specifier = ">=2.12.5" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "starlette", specifier = ">=0.50.0" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
 ]
+provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 demo = [
-    { name = "click", specifier = ">=8.3.1" },
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "nbconvert", specifier = ">=7.16.6" },
@@ -3641,6 +3658,7 @@ dependencies = [
     { name = "datasets" },
     { name = "deepdiff" },
     { name = "draccus" },
+    { name = "einops" },
     { name = "equinox" },
     { name = "filelock" },
     { name = "fray" },
@@ -3745,6 +3763,7 @@ requires-dist = [
     { name = "datasets", specifier = ">=3.1.0,<5.0" },
     { name = "deepdiff" },
     { name = "draccus", specifier = ">=0.11.5" },
+    { name = "einops" },
     { name = "equinox", specifier = ">=0.11.7,!=0.12.0" },
     { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.100.0" },
     { name = "filelock", specifier = "~=3.13" },
@@ -4186,6 +4205,13 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+api = [
+    { name = "aiohttp" },
+    { name = "requests" },
+    { name = "tenacity" },
+    { name = "tiktoken" },
+    { name = "tqdm" },
+]
 math = [
     { name = "antlr4-python3-runtime" },
     { name = "math-verify", extra = ["antlr4-11-0"] },
@@ -4375,7 +4401,7 @@ cpu = [
     { name = "torchvision", version = "0.24.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-5-marin-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'extra-5-marin-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform == 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'linux' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform == 'linux' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'linux' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform == 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform == 'win32' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform == 'win32' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform == 'win32' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform == 'win32' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
 ]
 eval = [
-    { name = "lm-eval", extra = ["math"] },
+    { name = "lm-eval", extra = ["api", "math"] },
 ]
 gpu = [
     { name = "jax", extra = ["cuda12"], marker = "extra == 'extra-5-marin-gpu' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
@@ -4504,7 +4530,7 @@ requires-dist = [
     { name = "jaxopt", specifier = ">=0.8.3" },
     { name = "levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "lm-eval", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
-    { name = "lm-eval", extras = ["math"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
+    { name = "lm-eval", extras = ["math", "api"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lxml", extras = ["html-clean"] },
     { name = "lz4" },
     { name = "markdownify", specifier = "==0.12.1" },

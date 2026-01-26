@@ -1,8 +1,6 @@
 # redundant, but Ray looks for this otherwise.
 .git
 
-CLAUDE.md
-
 logs/
 
 # CPU profiles
@@ -227,3 +225,5 @@ scr/*
 
 # Local host Marin config
 .marin.yaml
+
+/scratch

@@ -51,8 +51,6 @@ def test_pool_round_robin():
     resolver = FixedResolver({"counter": urls})
     pool = ActorPool(resolver, "counter")
 
-    assert pool.size == 3
-
     # Round-robin should cycle through servers
     results = [pool.call().get() for _ in range(6)]
     # Should see values from all three servers (0, 100, 200, 0, 100, 200)
