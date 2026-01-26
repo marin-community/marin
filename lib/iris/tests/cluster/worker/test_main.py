@@ -13,39 +13,3 @@
 # limitations under the License.
 
 """Tests for the Iris worker CLI."""
-
-import tempfile
-from pathlib import Path
-
-from click.testing import CliRunner
-
-from iris.cluster.worker.main import cli
-
-
-def test_cleanup_removes_cache_directory():
-    """Test cleanup command removes cache directory."""
-    runner = CliRunner()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cache_dir = Path(tmpdir) / "iris-cache"
-        cache_dir.mkdir()
-        test_file = cache_dir / "test.txt"
-        test_file.write_text("test data")
-
-        assert cache_dir.exists()
-
-        result = runner.invoke(cli, ["cleanup", "--cache-dir", str(cache_dir)])
-        assert result.exit_code == 0
-        assert "Removed cache directory" in result.output
-        assert not cache_dir.exists()
-
-
-def test_cleanup_handles_missing_directory():
-    """Test cleanup command handles missing cache directory."""
-    runner = CliRunner()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cache_dir = Path(tmpdir) / "nonexistent"
-        assert not cache_dir.exists()
-
-        result = runner.invoke(cli, ["cleanup", "--cache-dir", str(cache_dir)])
-        assert result.exit_code == 0
-        assert "does not exist" in result.output

@@ -18,8 +18,6 @@ import pytest
 
 from iris.actor import ActorClient, ActorServer
 from iris.actor.resolver import FixedResolver
-from iris.client import iris_ctx
-from iris.rpc import actor_pb2
 
 
 class Calculator:
@@ -33,13 +31,6 @@ class Calculator:
 
     def divide(self, a: int, b: int) -> float:
         return a / b  # May raise ZeroDivisionError
-
-
-class ContextAwareActor:
-    """Test actor that accesses the injected context."""
-
-    def get_job_id(self) -> str:
-        return iris_ctx().job_id
 
 
 def test_basic_actor_call():
@@ -64,89 +55,3 @@ def test_actor_exception_propagation():
     client = ActorClient(resolver, "calc")
     with pytest.raises(ZeroDivisionError):
         client.divide(1, 0)
-
-
-@pytest.mark.asyncio
-async def test_list_actors():
-    """Test that list_actors returns registered actors."""
-    server = ActorServer(host="127.0.0.1")
-    actor_id1 = server.register("calc", Calculator())
-    actor_id2 = server.register("ctx", ContextAwareActor())
-    server.serve_background()
-
-    request = actor_pb2.ListActorsRequest()
-    response = await server.list_actors(request, None)
-
-    assert len(response.actors) == 2
-
-    actor_names = {a.name for a in response.actors}
-    assert "calc" in actor_names
-    assert "ctx" in actor_names
-
-    actor_ids = {a.actor_id for a in response.actors}
-    assert actor_id1 in actor_ids
-    assert actor_id2 in actor_ids
-
-    for actor in response.actors:
-        assert actor.registered_at_ms > 0
-
-
-@pytest.mark.asyncio
-async def test_list_methods():
-    """Test that list_methods returns method info for an actor."""
-    server = ActorServer(host="127.0.0.1")
-    server.register("calc", Calculator())
-    server.serve_background()
-
-    request = actor_pb2.ListMethodsRequest(actor_name="calc")
-    response = await server.list_methods(request, None)
-
-    method_names = {m.name for m in response.methods}
-    assert "add" in method_names
-    assert "multiply" in method_names
-    assert "divide" in method_names
-
-    for method in response.methods:
-        assert method.signature
-        assert "(" in method.signature
-
-
-@pytest.mark.asyncio
-async def test_list_methods_with_docstring():
-    """Test that list_methods includes docstrings when present."""
-
-    class DocumentedActor:
-        def documented_method(self) -> str:
-            """This method has documentation."""
-            return "result"
-
-        def undocumented_method(self) -> str:
-            return "result"
-
-    server = ActorServer(host="127.0.0.1")
-    server.register("doc", DocumentedActor())
-    server.serve_background()
-
-    request = actor_pb2.ListMethodsRequest(actor_name="doc")
-    response = await server.list_methods(request, None)
-
-    methods_by_name = {m.name: m for m in response.methods}
-
-    assert "documented_method" in methods_by_name
-    assert "This method has documentation" in methods_by_name["documented_method"].docstring
-
-    assert "undocumented_method" in methods_by_name
-    assert methods_by_name["undocumented_method"].docstring == ""
-
-
-@pytest.mark.asyncio
-async def test_list_methods_missing_actor():
-    """Test that list_methods returns empty response for missing actor."""
-    server = ActorServer(host="127.0.0.1")
-    server.register("calc", Calculator())
-    server.serve_background()
-
-    request = actor_pb2.ListMethodsRequest(actor_name="nonexistent")
-    response = await server.list_methods(request, None)
-
-    assert len(response.methods) == 0

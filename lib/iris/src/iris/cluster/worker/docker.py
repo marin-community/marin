@@ -51,6 +51,8 @@ class ContainerConfig:
     timeout_seconds: int | None = None
     mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
     ports: dict[str, int] = field(default_factory=dict)  # name -> host_port
+    task_id: str | None = None
+    job_id: str | None = None
 
     def get_cpu_millicores(self) -> int | None:
         if not self.resources or not self.resources.cpu:
@@ -132,6 +134,10 @@ class ContainerRuntime(Protocol):
 
     def get_stats(self, container_id: str) -> ContainerStats: ...
 
+    def list_iris_containers(self, all_states: bool = True) -> list[str]: ...
+
+    def remove_all_iris_containers(self) -> int: ...
+
 
 class ImageBuilder(Protocol):
     """Protocol for image building (Docker build, rootfs creation, etc.)."""
@@ -194,6 +200,13 @@ except Exception:
             "-w",
             config.workdir,
         ]
+
+        # Add iris labels for discoverability
+        cmd.extend(["--label", "iris.managed=true"])
+        if config.task_id:
+            cmd.extend(["--label", f"iris.task_id={config.task_id}"])
+        if config.job_id:
+            cmd.extend(["--label", f"iris.job_id={config.job_id}"])
 
         # Resource limits (cgroups v2)
         cpu_millicores = config.get_cpu_millicores()
@@ -425,6 +438,29 @@ except Exception:
             return int(value / (1024 * 1024))
         else:
             return 0
+
+    def list_iris_containers(self, all_states: bool = True) -> list[str]:
+        """List all containers with iris.managed=true label."""
+        cmd = ["docker", "ps", "-q", "--filter", "label=iris.managed=true"]
+        if all_states:
+            cmd.append("-a")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            return []
+        return [cid for cid in result.stdout.strip().split("\n") if cid]
+
+    def remove_all_iris_containers(self) -> int:
+        """Force remove all iris-managed containers. Returns count attempted."""
+        container_ids = self.list_iris_containers(all_states=True)
+        if not container_ids:
+            return 0
+
+        subprocess.run(
+            ["docker", "rm", "-f", *container_ids],
+            capture_output=True,
+            check=False,
+        )
+        return len(container_ids)
 
 
 class DockerImageBuilder:

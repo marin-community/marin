@@ -1,0 +1,46 @@
+# Iris Controller Docker Image
+#
+# Build from the iris directory:
+#   docker build -f Dockerfile.controller -t iris-controller:latest .
+#
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    gnupg \
+    apt-transport-https \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Google Cloud SDK (required for TPU management via gcloud)
+RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+    | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+    | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    google-cloud-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for fast package management
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
+
+WORKDIR /app
+
+# Copy iris package
+COPY pyproject.toml ./
+COPY src/ ./src/
+
+# Install iris
+RUN uv pip install --system .
+
+# Default cache directory
+RUN mkdir -p /var/cache/iris
+
+# Health check endpoint - controller runs on port 10000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:10000/health || exit 1
+
+# Controller entrypoint
+CMD ["python", "-m", "iris.cluster.controller.main", "serve", "--host", "0.0.0.0", "--port", "10000"]

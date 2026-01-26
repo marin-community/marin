@@ -1,0 +1,50 @@
+# Iris demo configuration
+# Uses env var for controller address (external controller)
+# Usage: uv run python -m iris.cluster.vm.cli create-slice --config examples/demo.yaml --scale-group tpu_v5e_16
+
+region: europe-west4
+zone: europe-west4-b
+
+bootstrap:
+  docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
+  worker_port: 10001
+  controller_address: "${IRIS_CONTROLLER_ADDRESS}"
+
+timeouts:
+  boot_timeout_seconds: 300
+  init_timeout_seconds: 600
+  ssh_poll_interval_seconds: 5
+
+scale_groups:
+  # tpu_v5e_4:
+  #   provider:
+  #     tpu:
+  #       project_id: hai-gcp-models
+  #   accelerator_type: v5litepod-4
+  #   runtime_version: v2-alpha-tpuv5-lite
+  #   min_slices: 4
+  #   max_slices: 1024
+  #   zones: [europe-west4-b]
+  #   preemptible: true
+
+  # tpu_v5e_8:
+  #   provider:
+  #     tpu:
+  #       project_id: hai-gcp-models
+  #   accelerator_type: v5litepod-8
+  #   runtime_version: v2-alpha-tpuv5-lite
+  #   min_slices: 0
+  #   max_slices: 1024
+  #   zones: [europe-west4-b]
+  #   preemptible: true
+
+  tpu_v5e_16:
+    provider:
+      tpu:
+        project_id: hai-gcp-models
+    accelerator_type: v5litepod-16
+    runtime_version: v2-alpha-tpuv5-lite
+    min_slices: 1
+    max_slices: 2
+    zones: [europe-west4-b]
+    preemptible: true

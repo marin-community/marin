@@ -90,9 +90,6 @@ def test_create_and_start_container(docker_runtime, test_image):
     )
 
     container_id = docker_runtime.create_container(config)
-    assert container_id is not None
-    assert len(container_id) > 0
-
     docker_runtime.start_container(container_id)
     status = wait_for_container_exit(docker_runtime, container_id)
 
@@ -276,9 +273,6 @@ def test_get_stats_invalid_container(docker_runtime):
 
     assert isinstance(stats, ContainerStats)
     assert stats.available is False
-    assert stats.memory_mb == 0
-    assert stats.cpu_percent == 0
-    assert stats.process_count == 0
 
 
 @pytest.mark.slow

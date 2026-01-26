@@ -32,10 +32,11 @@ from iris.cluster.controller.events import (
     TaskStateChangedEvent,
     WorkerFailedEvent,
 )
-from iris.cluster.controller.scheduler import Scheduler
+from iris.cluster.controller.scheduler import Scheduler, TaskScheduleResult
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
-from iris.cluster.types import JobId, TaskId
+from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker, get_device_variant
+from iris.cluster.types import JobId, TaskId, VmWorkerStatus, VmWorkerStatusMap
+from iris.cluster.vm.autoscaler import Autoscaler
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import ExponentialBackoff
@@ -44,6 +45,35 @@ logger = logging.getLogger(__name__)
 
 # RPC timeout for dispatch - worker should respond immediately since execution is async
 DISPATCH_RPC_TIMEOUT_SECONDS = 5.0
+
+
+def compute_demand_entries(state: ControllerState) -> list:
+    """Compute demand entries from controller state.
+
+    Groups pending tasks by accelerator_type and returns DemandEntry objects.
+    Tracks ALL demand including CPU-only tasks (accelerator_type="").
+
+    Args:
+        state: Controller state with pending tasks.
+
+    Returns:
+        List of DemandEntry objects with accelerator_type and count.
+    """
+    from iris.cluster.vm.autoscaler import DemandEntry
+
+    demand_by_accelerator: dict[str, int] = {}
+    for task in state.peek_pending_tasks():
+        job = state.get_job(task.job_id)
+        if not job:
+            continue
+
+        device = job.request.resources.device
+        accelerator_type = get_device_variant(device)
+        # Track ALL demand including CPU (accelerator_type=None → "")
+        key = accelerator_type or ""
+        demand_by_accelerator[key] = demand_by_accelerator.get(key, 0) + 1
+
+    return [DemandEntry(accelerator_type=acc, count=count) for acc, count in demand_by_accelerator.items()]
 
 
 class WorkerClient(Protocol):
@@ -125,6 +155,9 @@ class ControllerConfig:
     max_dispatch_parallelism: int = 32
     """Maximum number of concurrent RPC dispatch operations."""
 
+    autoscaler_enabled: bool = False
+    worker_access_address: str = ""
+
 
 @dataclass
 class DispatchBatch:
@@ -146,6 +179,9 @@ class Controller:
     3. Checks worker health via heartbeats
     4. Applies state changes from heartbeat results
 
+    When an autoscaler is provided, manages it in a background thread that
+    provisions/terminates VM slices based on demand.
+
     Example:
         ```python
         config = ControllerConfig(port=8080)
@@ -164,12 +200,15 @@ class Controller:
     Args:
         config: Controller configuration
         worker_stub_factory: Factory for creating worker RPC stubs
+        autoscaler: Optional Autoscaler for managing VM slices. If provided,
+                   the controller will run it in a background thread.
     """
 
     def __init__(
         self,
         config: ControllerConfig,
         worker_stub_factory: WorkerStubFactory,
+        autoscaler: "Autoscaler | None" = None,
     ):
         self._config = config
         self._stub_factory = worker_stub_factory
@@ -177,7 +216,11 @@ class Controller:
         self._state = ControllerState()
         self._scheduler = Scheduler(self._state)
         self._service = ControllerServiceImpl(self._state, self, bundle_dir=config.bundle_dir)
-        self._dashboard = ControllerDashboard(self._service, self._scheduler, host=config.host, port=config.port)
+        self._dashboard = ControllerDashboard(
+            self._service,
+            host=config.host,
+            port=config.port,
+        )
 
         # Background loop state
         self._stop = False
@@ -192,6 +235,9 @@ class Controller:
             thread_name_prefix="dispatch",
         )
 
+        # Autoscaler (passed in, configured in start() if provided)
+        self._autoscaler: Autoscaler | None = autoscaler
+
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
 
@@ -203,7 +249,7 @@ class Controller:
         self._wake_event.set()
 
     def start(self) -> None:
-        """Start main controller loop and dashboard server in background daemon threads."""
+        """Start main controller loop, dashboard server, and optionally autoscaler."""
         self._stop = False
 
         # Start main controller loop
@@ -220,6 +266,10 @@ class Controller:
         )
         self._server_thread.start()
 
+        # Log autoscaler configuration if provided (runs from scheduling loop, not separate thread)
+        if self._autoscaler:
+            logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
+
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server is not None and self._server.started,
@@ -230,6 +280,7 @@ class Controller:
         """Stop all background components gracefully."""
         self._stop = True
         self._wake_event.set()
+
         if self._scheduling_loop_thread:
             self._scheduling_loop_thread.join(timeout=5.0)
 
@@ -243,7 +294,7 @@ class Controller:
         self._dispatch_executor.shutdown(wait=True, cancel_futures=True)
 
     def _run_scheduling_loop(self) -> None:
-        """Main controller loop running scheduling and worker timeout checks."""
+        """Main controller loop running scheduling, autoscaler, and worker timeout checks."""
         while not self._stop:
             self._wake_event.wait(timeout=self._config.scheduler_interval_seconds)
             self._wake_event.clear()
@@ -253,6 +304,10 @@ class Controller:
 
             self._run_scheduling()
             self._check_worker_timeouts()
+
+            # Run autoscaler if configured
+            if self._autoscaler:
+                self._run_autoscaler_once()
 
     def _run_scheduling(self) -> None:
         """Run one scheduling cycle.
@@ -433,8 +488,7 @@ class Controller:
                 if attempt < max_attempts - 1:
                     sleep_time = backoff.next_interval()
                     logger.warning(
-                        f"Dispatch attempt {attempt + 1} failed for {task.task_id}: {e}, "
-                        f"retrying in {sleep_time:.2f}s"
+                        f"Dispatch attempt {attempt + 1} failed for {task.task_id}: {e}, retrying in {sleep_time:.2f}s"
                     )
                     time.sleep(sleep_time)
 
@@ -455,6 +509,14 @@ class Controller:
         )
         if txn.tasks_to_kill:
             self.kill_tasks_on_workers(txn.tasks_to_kill)
+
+    def task_schedule_status(self, task: ControllerTask) -> TaskScheduleResult:
+        """Get the current scheduling status of a task (for dashboard display).
+
+        Delegates to the internal scheduler.
+        """
+
+        return self._scheduler.task_schedule_status(task)
 
     def kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
         """Send KILL RPCs to workers for tasks that were running.
@@ -501,6 +563,41 @@ class Controller:
         # Send kill RPCs outside lock
         if tasks_to_kill:
             self.kill_tasks_on_workers(tasks_to_kill)
+
+    def _run_autoscaler_once(self) -> None:
+        """Run one autoscaler evaluation cycle.
+
+        Called from the scheduling loop every cycle. Computes demand from pending
+        tasks and worker idle state, then runs the autoscaler.
+        """
+        if not self._autoscaler:
+            return
+
+        demand_entries = compute_demand_entries(self._state)
+        vm_status_map = self._build_vm_status_map()
+        self._autoscaler.run_once(demand_entries, vm_status_map=vm_status_map)
+
+    def _build_vm_status_map(self) -> VmWorkerStatusMap:
+        """Build a map of VM address to worker status for autoscaler.
+
+        The autoscaler needs to look up worker status by VM address (not worker_id)
+        because ManagedVm only knows the VM's IP address, not the worker's self-assigned ID.
+        Workers include their vm_address (from IRIS_VM_ADDRESS env var) in metadata.
+        """
+        result: VmWorkerStatusMap = {}
+        for worker in self._state.list_all_workers():
+            vm_addr = worker.metadata.vm_address
+            if not vm_addr:
+                raise ValueError(
+                    f"Worker {worker.worker_id} has no vm_address in metadata. "
+                    "Workers must report IRIS_VM_ADDRESS in their metadata."
+                )
+
+            result[vm_addr] = VmWorkerStatus(
+                vm_address=vm_addr,
+                running_task_ids=frozenset(str(tid) for tid in worker.running_tasks),
+            )
+        return result
 
     def _run_server(self) -> None:
         try:
@@ -564,3 +661,8 @@ class Controller:
     @property
     def url(self) -> str:
         return f"http://{self._config.host}:{self.port}"
+
+    @property
+    def autoscaler(self) -> "Autoscaler | None":
+        """The autoscaler instance, if autoscaling is enabled."""
+        return self._autoscaler

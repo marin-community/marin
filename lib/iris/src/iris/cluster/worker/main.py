@@ -32,7 +32,11 @@ def cli():
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=8080, type=int, help="Bind port")
 @click.option("--cache-dir", default="~/.cache/iris-worker", help="Cache directory")
-@click.option("--registry", required=True, help="Docker registry for built images")
+@click.option(
+    "--registry",
+    default="localhost:5000",
+    help="Docker registry for built images (optional for autoscaler-managed workers)",
+)
 @click.option("--max-concurrent-jobs", default=10, type=int, help="Max concurrent jobs")
 @click.option("--port-range", default="30000-40000", help="Port range for job ports (start-end)")
 @click.option(

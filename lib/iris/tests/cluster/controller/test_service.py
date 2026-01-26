@@ -420,6 +420,55 @@ def test_list_workers_returns_all(service, worker_metadata):
         assert w.healthy is True
 
 
+def test_worker_restart_reconciliation_marks_missing_tasks_failed(service, state, job_request, worker_metadata):
+    """Verify worker re-registration without expected tasks marks them as WORKER_FAILED."""
+    # Launch job (creates task)
+    service.launch_job(job_request("test-job"), None)
+
+    # Register worker
+    service.register_worker(
+        cluster_pb2.Controller.RegisterWorkerRequest(
+            worker_id="w1",
+            address="host:8080",
+            metadata=worker_metadata(),
+        ),
+        None,
+    )
+
+    # Get task and dispatch it to the worker
+    task = state.get_job_tasks(JobId("test-job"))[0]
+    dispatch_task(state, task, WorkerId("w1"))
+
+    # Verify task is running
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="test-job"), None)
+    assert status.job.tasks[0].state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Simulate worker restart: re-register with empty running_task_ids
+    response = service.register_worker(
+        cluster_pb2.Controller.RegisterWorkerRequest(
+            worker_id="w1",
+            address="host:8080",
+            metadata=worker_metadata(),
+            running_task_ids=[],  # Worker lost the task during restart
+        ),
+        None,
+    )
+
+    # Registration should be accepted (no reset needed)
+    assert response.accepted is True
+    assert response.should_reset is False
+
+    # Task should now be marked as WORKER_FAILED (may retry, so check attempt)
+    status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="test-job"), None)
+    task_status = status.job.tasks[0]
+    assert task_status.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+
+    # Verify the attempt recorded the worker restart error
+    assert len(task_status.attempts) == 1
+    assert task_status.attempts[0].state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert "Worker restarted without task" in task_status.attempts[0].error
+
+
 # =============================================================================
 # Task State Reporting Tests (report_task_state RPC)
 # =============================================================================

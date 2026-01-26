@@ -7,7 +7,7 @@
 - Consult the subproject manuals when working in submodule trees:
   * `lib/levanter/AGENTS.md` for Levanter-specific conventions.
   * `lib/marin/AGENTS.md` for Marin-specific conventions
-- When a recipe exists, follow it—the agent-friendly playbooks live in `docs/recipes/`. Some live in the individual `lib/*/docs` directories.
+  * `lib/iris/AGENTS.md` for Iris-specific conventions
 
 ## Shared Workflow Playbooks
 
@@ -57,7 +57,7 @@
 
 ### Deprecation
 
-- Unless specifically requested, do not introduce deprecation or fallback paths—update all call sites instead.
+**NO BACKWARD COMPATIBILITY**: Do NOT add deprecation warnings, fallback paths, or compatibility shims. Update all call sites instead. Only add backward compatibility if the user explicitly requests it.
 
 ## Comments
 

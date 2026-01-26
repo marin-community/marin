@@ -271,8 +271,8 @@ class Job:
             status = self._client._cluster.get_job_status(self._job_id)
 
             # Initialize log pollers when we learn num_tasks
-            if not log_states and status.num_tasks > 0:
-                log_states = [_TaskLogState(i) for i in range(status.num_tasks)]
+            if not log_states and len(status.tasks) > 0:
+                log_states = [_TaskLogState(i) for i in range(len(status.tasks))]
 
             # Poll logs from all tasks
             for state in log_states:
