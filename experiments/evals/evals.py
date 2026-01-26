@@ -100,9 +100,12 @@ def _infer_model_name_for_path(model_path: str) -> str:
 def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[str, InputName | str]:
     """
     Extract the model name and path from a step.
+
+    Always appends /hf for ExecutorSteps; run.py's _normalize_model_path handles
+    detecting whether the HF files are at root or in /hf at evaluation time.
     """
     if isinstance(step, ExecutorStep):
-        model_step_path = output_path_of(step, "hf" if "gcsfuse" not in step.name else "")
+        model_step_path = output_path_of(step, "hf")
         name = step.name
     elif isinstance(step, InputName):
         # `InputName.hardcoded(...)` has `step.step is None`; treat it as a direct path.
@@ -113,12 +116,8 @@ def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[s
             name = _infer_model_name_for_path(step.name)
         else:
             # If `name` is already set, the InputName refers to a specific subpath under the step's output.
-            # Otherwise default to the HF export directory (except for gcsfuse mounts).
-            model_step_path = (
-                step
-                if step.name is not None
-                else output_path_of(step.step, "hf" if "gcsfuse" not in step.step.name else "")
-            )
+            # Otherwise default to the HF export directory.
+            model_step_path = step if step.name is not None else output_path_of(step.step, "hf")
             name = step.step.name
     elif isinstance(step, str):
         model_step_path = step
