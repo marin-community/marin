@@ -29,7 +29,7 @@ import logging
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
@@ -222,80 +222,6 @@ class DirectSshConnection:
             stderr=subprocess.STDOUT,
             text=True,
         )
-
-
-# ============================================================================
-# In-Memory Implementation (for dry-run and testing)
-# ============================================================================
-
-
-class FakePopen:
-    """Minimal Popen substitute that yields simulated bootstrap output.
-
-    Used by InMemoryExecutor to simulate streaming command execution
-    without actually running any commands.
-    """
-
-    def __init__(self):
-        self.returncode: int | None = None
-        self.args: list[str] = []
-        self._output_lines = [
-            "[iris-init] Starting Iris worker bootstrap",
-            "[iris-init] Phase: prerequisites",
-            "[iris-init] Phase: docker_pull",
-            "[iris-init] Phase: worker_start",
-            "[iris-init] Phase: registration",
-            "[iris-init] Worker is healthy",
-            "[iris-init] Bootstrap complete",
-        ]
-        self._stdout = iter(line + "\n" for line in self._output_lines)
-
-    @property
-    def stdout(self):
-        return self._stdout
-
-    def wait(self, timeout: float | None = None) -> int:
-        self.returncode = 0
-        return 0
-
-    def kill(self) -> None:
-        """No-op for fake process."""
-        pass
-
-
-@dataclass
-class InMemorySshConnection:
-    """Logs commands, returns scripted success. For dry-run and testing.
-
-    Records all executed commands for verification in tests. Health check
-    commands return success by default.
-    """
-
-    _address: str
-    _zone: str = ""
-    commands: list[str] = field(default_factory=list)
-
-    @property
-    def address(self) -> str:
-        return self._address
-
-    @property
-    def zone(self) -> str:
-        return self._zone
-
-    def run(self, command: str, timeout: int = 30) -> subprocess.CompletedProcess:
-        logger.info("[in-memory] run(%s): %s", self._address, command[:80])
-        self.commands.append(command)
-        if "curl" in command and "/health" in command:
-            return subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
-        if command == "echo ok":
-            return subprocess.CompletedProcess(args=[], returncode=0, stdout="ok\n", stderr="")
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-
-    def run_streaming(self, command: str) -> FakePopen:
-        logger.info("[in-memory] run_streaming(%s): %s", self._address, command[:80])
-        self.commands.append(command)
-        return FakePopen()
 
 
 # ============================================================================

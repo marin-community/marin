@@ -21,8 +21,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from iris.cluster.vm.ssh import (
-    FakePopen,
-    InMemorySshConnection,
     check_health,
     connection_available,
     run_streaming_with_retry,
@@ -31,17 +29,22 @@ from iris.cluster.vm.ssh import (
 )
 
 
-def test_in_memory_connection_returns_success_for_echo():
-    """InMemorySshConnection returns success for echo commands."""
-    conn = InMemorySshConnection(_address="10.0.0.1")
-    result = conn.run("echo ok")
-    assert result.returncode == 0
-    assert result.stdout == "ok\n"
+def make_fake_popen(lines: list[str] | None = None):
+    """Create a mock Popen-like object for streaming tests."""
+    if lines is None:
+        lines = ["[iris-init] Bootstrap starting", "[iris-init] Bootstrap complete"]
+    mock = MagicMock()
+    mock.stdout = iter(line + "\n" for line in lines)
+    mock.returncode = 0
+    mock.wait.return_value = 0
+    mock.args = []
+    return mock
 
 
 def test_connection_available_returns_true_on_success():
     """connection_available returns True when command succeeds."""
-    conn = InMemorySshConnection(_address="10.0.0.1")
+    conn = MagicMock()
+    conn.run.return_value = MagicMock(returncode=0)
     assert connection_available(conn) is True
 
 
@@ -152,11 +155,12 @@ def test_shutdown_worker_returns_false_on_exception():
 
 def test_run_streaming_with_retry_success_first_attempt():
     """run_streaming_with_retry succeeds on first attempt."""
-    conn = InMemorySshConnection(_address="10.0.0.1")
-    lines_received = []
+    conn = MagicMock()
+    conn.run_streaming.return_value = make_fake_popen()
+    lines_received: list[str] = []
     result = run_streaming_with_retry(conn, "bootstrap script", max_retries=3, on_line=lines_received.append)
     assert result.returncode == 0
-    assert any("iris-init" in line for line in lines_received)
+    assert len(lines_received) > 0
 
 
 @patch("iris.cluster.vm.ssh.time.sleep")
@@ -168,7 +172,7 @@ def test_run_streaming_with_retry_retries_on_connection_error(_mock_sleep):
         call_count[0] += 1
         if call_count[0] < 3:
             raise OSError("Connection refused")
-        return FakePopen()
+        return make_fake_popen()
 
     conn = MagicMock()
     conn.run_streaming.side_effect = run_streaming_side_effect
@@ -191,8 +195,9 @@ def test_run_streaming_with_retry_raises_after_max_retries(_mock_sleep):
 
 def test_run_streaming_with_retry_calls_on_line_callback():
     """run_streaming_with_retry calls on_line callback for each line."""
-    conn = InMemorySshConnection(_address="10.0.0.1")
-    lines_received = []
+    expected_lines = ["line one", "line two", "line three"]
+    conn = MagicMock()
+    conn.run_streaming.return_value = make_fake_popen(expected_lines)
+    lines_received: list[str] = []
     run_streaming_with_retry(conn, "bootstrap script", on_line=lines_received.append)
-    assert len(lines_received) > 0
-    assert any("iris-init" in line for line in lines_received)
+    assert lines_received == expected_lines

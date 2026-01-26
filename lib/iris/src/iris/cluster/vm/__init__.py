@@ -28,10 +28,8 @@ Key components:
 # SSH utilities
 from iris.cluster.vm.ssh import (
     DirectSshConnection,
-    FakePopen,
     GceSshConnection,
     GcloudSshConnection,
-    InMemorySshConnection,
     SshConnection,
     check_health,
     connection_available,
@@ -114,11 +112,9 @@ __all__ = [
     "BootstrapError",
     "DemandEntry",
     "DirectSshConnection",
-    "FakePopen",
     "GceSshConnection",
     "GcloudSshConnection",
     "GroupAvailability",
-    "InMemorySshConnection",
     "ManagedVm",
     "ManualVmGroup",
     "ManualVmManager",

@@ -34,7 +34,6 @@ from iris.cluster.vm.gcp_tpu_platform import TpuVmGroup, TpuVmManager
 from iris.cluster.vm.managed_vm import PoolExhaustedError, TrackedVmFactory, VmRegistry
 from iris.cluster.vm.manual_platform import ManualVmGroup, ManualVmManager
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
-from iris.cluster.vm.ssh import InMemorySshConnection
 from iris.rpc import config_pb2, vm_pb2
 
 # =============================================================================
@@ -845,7 +844,9 @@ def test_factory_creates_registers_and_starts_vm(
     mock_vm.info = vm_pb2.VmInfo(vm_id="test-vm-001")
     mock_managed_vm_class.return_value = mock_vm
 
-    conn = InMemorySshConnection(_address="10.0.0.1")
+    conn = MagicMock()
+    conn.address = "10.0.0.1"
+    conn.zone = ""
 
     factory.create_vm(
         vm_id="test-vm-001",
@@ -886,7 +887,9 @@ def test_factory_and_registry_integration(
     mock_managed_vm_class.side_effect = mock_vms
 
     for i in range(3):
-        conn = InMemorySshConnection(_address=f"10.0.0.{i}")
+        conn = MagicMock()
+        conn.address = f"10.0.0.{i}"
+        conn.zone = ""
         factory.create_vm(
             vm_id=f"vm-{i}",
             slice_id="slice-001",
