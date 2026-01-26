@@ -18,7 +18,7 @@ Supports both YAML config files (for full cluster management) and
 programmatic configuration (for quick CLI flag-based operations).
 
 This module provides the main entry points for creating autoscalers:
-- create_autoscaler_from_config: Create from IrisClusterConfig
+- create_autoscaler_from_config: Create from IrisClusterConfig proto
 - create_autoscaler_from_specs: Create from explicit ScaleGroupSpec list
 - create_manual_autoscaler: Quick path for manual hosts without config file
 """
@@ -29,193 +29,43 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from google.protobuf.json_format import MessageToDict, ParseDict
 
 from iris.cluster.vm.gcp_tpu_platform import TpuVmManager
 from iris.cluster.vm.managed_vm import SshConfig, TrackedVmFactory, VmRegistry
 from iris.cluster.vm.manual_platform import ManualVmManager
-from iris.cluster.vm.vm_platform import VmManagerProtocol
 from iris.cluster.vm.scaling_group import ScalingGroup
+from iris.cluster.vm.vm_platform import VmManagerProtocol
 from iris.rpc import vm_pb2
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class ControllerVmConfig:
-    """Controller VM configuration for GCP-managed controllers.
-
-    For GCP controllers, set enabled=True and the system will create a VM.
-    For manual SSH bootstrap, set host to the IP/hostname of an existing machine.
-    """
-
-    enabled: bool = False
-    image: str = ""
-    machine_type: str = "n2-standard-4"
-    boot_disk_size_gb: int = 50
-    port: int = 10000
-    host: str = ""  # IP/hostname for manual controller SSH bootstrap
+# Re-export IrisClusterConfig from proto for backwards compatibility with __init__.py
+IrisClusterConfig = vm_pb2.IrisClusterConfig
 
 
-@dataclass
-class IrisClusterConfig:
-    """Unified configuration for VmManager instantiation.
+def load_config(config_path: Path | str) -> vm_pb2.IrisClusterConfig:
+    """Load cluster config from YAML file.
 
-    Mirrors the Ray cluster config structure for familiarity.
-    """
-
-    # Provider settings
-    provider_type: str = "manual"  # "tpu" or "manual"
-    project_id: str | None = None
-    region: str | None = None
-    zone: str | None = None
-
-    # Auth settings
-    ssh_user: str = "root"
-    ssh_private_key: str | None = None
-
-    # Docker/worker settings
-    docker_image: str = ""
-    worker_port: int = 10001
-
-    # Controller settings
-    controller_address: str = ""
-    controller_vm: ControllerVmConfig = field(default_factory=ControllerVmConfig)
-
-    # For manual provider
-    manual_hosts: list[str] = field(default_factory=list)
-
-    # Scale groups (name -> config)
-    scale_groups: dict[str, vm_pb2.ScaleGroupConfig] = field(default_factory=dict)
-
-    # Timeouts
-    boot_timeout_seconds: int = 300
-    init_timeout_seconds: int = 600
-    ssh_connect_timeout_seconds: int = 30
-    ssh_poll_interval_seconds: int = 5
-
-    # GCP label prefix
-    label_prefix: str = "iris"
-
-    def to_bootstrap_config(self) -> vm_pb2.BootstrapConfig:
-        """Convert to BootstrapConfig proto."""
-        return vm_pb2.BootstrapConfig(
-            controller_address=self.controller_address,
-            docker_image=self.docker_image,
-            worker_port=self.worker_port,
-        )
-
-    def to_timeout_config(self) -> vm_pb2.TimeoutConfig:
-        """Convert to TimeoutConfig proto."""
-        return vm_pb2.TimeoutConfig(
-            boot_timeout_seconds=self.boot_timeout_seconds,
-            init_timeout_seconds=self.init_timeout_seconds,
-            ssh_connect_timeout_seconds=self.ssh_connect_timeout_seconds,
-            ssh_poll_interval_seconds=self.ssh_poll_interval_seconds,
-        )
-
-    def to_ssh_config(self) -> SshConfig:
-        """Convert to SshConfig for manual SSH."""
-        return SshConfig(
-            user=self.ssh_user,
-            key_file=self.ssh_private_key,
-            connect_timeout=self.ssh_connect_timeout_seconds,
-        )
-
-    def to_dict(self) -> dict:
-        """Convert config back to dict for YAML serialization.
-
-        Used when passing the cluster config to the controller VM so the
-        autoscaler knows which scale groups to manage.
-        """
-        result: dict = {
-            "provider": {
-                "type": self.provider_type,
-            },
-            "docker": {
-                "image": self.docker_image,
-                "worker_port": self.worker_port,
-            },
-            "controller": {
-                "address": self.controller_address,
-            },
-            "timeouts": {
-                "boot_timeout_seconds": self.boot_timeout_seconds,
-                "init_timeout_seconds": self.init_timeout_seconds,
-                "ssh_connect_timeout_seconds": self.ssh_connect_timeout_seconds,
-                "ssh_poll_interval_seconds": self.ssh_poll_interval_seconds,
-            },
-        }
-
-        if self.project_id:
-            result["provider"]["project_id"] = self.project_id
-        if self.region:
-            result["provider"]["region"] = self.region
-        if self.zone:
-            result["provider"]["zone"] = self.zone
-
-        if self.ssh_user != "root" or self.ssh_private_key:
-            result["auth"] = {"ssh_user": self.ssh_user}
-            if self.ssh_private_key:
-                result["auth"]["ssh_private_key"] = self.ssh_private_key
-
-        if self.manual_hosts:
-            result["manual_hosts"] = self.manual_hosts
-
-        if self.scale_groups:
-            result["scale_groups"] = {
-                name: {
-                    "accelerator_type": cfg.accelerator_type,
-                    "runtime_version": cfg.runtime_version,
-                    "min_slices": cfg.min_slices,
-                    "max_slices": cfg.max_slices,
-                    "zones": list(cfg.zones),
-                    "preemptible": cfg.preemptible,
-                    "priority": cfg.priority,
-                }
-                for name, cfg in self.scale_groups.items()
-            }
-
-        if self.label_prefix != "iris":
-            result["label_prefix"] = self.label_prefix
-
-        return result
-
-
-@dataclass
-class ScaleGroupSpec:
-    """Extended scale group specification with provider info.
-
-    Wraps a ScaleGroupConfig proto with additional metadata needed for
-    factory instantiation, such as the provider type and manual hosts.
-    """
-
-    config: vm_pb2.ScaleGroupConfig
-    provider: str = "tpu"
-    hosts: list[str] = field(default_factory=list)
-
-
-def load_config(config_path: Path | str) -> IrisClusterConfig:
-    """Load VmManager configuration from YAML file.
-
-    YAML structure mirrors Ray cluster config:
+    YAML structure uses flat field names matching the IrisClusterConfig proto:
 
     ```yaml
-    provider:
-      type: tpu  # or "manual"
-      project_id: my-project
-      region: us-east1
-      zone: us-east1-d
+    provider_type: tpu
+    project_id: my-project
+    region: us-east1
+    zone: us-east1-d
 
-    auth:
-      ssh_user: ray
-      ssh_private_key: ~/.ssh/key.pem
+    ssh_user: ray
+    ssh_private_key: ~/.ssh/key.pem
 
-    docker:
-      image: gcr.io/project/iris-worker:v1
-      worker_port: 10001
+    docker_image: gcr.io/project/iris-worker:v1
+    worker_port: 10001
 
-    controller:
-      address: "10.0.0.1:10000"
+    controller_address: "10.0.0.1:10000"
+    controller_vm:
+      enabled: true
+      image: gcr.io/project/iris-controller:v1
+      port: 10000
 
     manual_hosts:
       - 10.0.0.1
@@ -236,101 +86,81 @@ def load_config(config_path: Path | str) -> IrisClusterConfig:
     with open(config_path) as f:
         data = yaml.safe_load(f)
 
-    # Parse provider section
-    provider = data.get("provider", {})
-    provider_type = provider.get("type", "manual")
-    project_id = provider.get("project_id")
-    region = provider.get("region")
-    zone = provider.get("zone")
+    # Expand env vars in controller_address
+    if "controller_address" in data:
+        data["controller_address"] = os.path.expandvars(data["controller_address"])
 
-    # Parse auth section
-    auth = data.get("auth", {})
-    ssh_user = auth.get("ssh_user", "root")
-    ssh_private_key = auth.get("ssh_private_key")
+    # Ensure scale_groups have their name field set (proto uses map key, but config field needs it)
+    if "scale_groups" in data:
+        for name, sg_data in data["scale_groups"].items():
+            if sg_data is None:
+                data["scale_groups"][name] = {"name": name}
+            elif "name" not in sg_data:
+                sg_data["name"] = name
 
-    # Parse docker section
-    docker = data.get("docker", {})
-    docker_image = docker.get("image", "")
-    worker_port = docker.get("worker_port", 10001)
-
-    # Parse controller section (expand env vars like ${IRIS_CONTROLLER_ADDRESS})
-    controller = data.get("controller", {})
-    controller_address = os.path.expandvars(controller.get("address", ""))
-
-    # Parse controller VM settings
-    controller_vm_data = controller.get("vm", {})
-    controller_vm = ControllerVmConfig(
-        enabled=controller_vm_data.get("enabled", False),
-        image=controller_vm_data.get("image", ""),
-        machine_type=controller_vm_data.get("machine_type", "n2-standard-4"),
-        boot_disk_size_gb=controller_vm_data.get("boot_disk_size_gb", 50),
-        port=controller_vm_data.get("port", 10000),
-        host=controller_vm_data.get("host", ""),
-    )
+    config = ParseDict(data, vm_pb2.IrisClusterConfig())
 
     # Warn about missing controller address only for manual provider without controller VM.
-    # GCP/TPU providers use metadata-based discovery (workers query for iris-controller metadata),
-    # so they don't require controller_address in config.
-    if not controller_address and not controller_vm.enabled and provider_type == "manual":
+    if not config.controller_address and not config.controller_vm.enabled and config.provider_type == "manual":
         logger.warning("No controller address configured - workers will fail to start")
-
-    # Parse manual hosts
-    manual_hosts = data.get("manual_hosts", [])
-
-    # Parse timeouts
-    timeouts = data.get("timeouts", {})
-    boot_timeout = timeouts.get("boot_timeout_seconds", 300)
-    init_timeout = timeouts.get("init_timeout_seconds", 600)
-    ssh_timeout = timeouts.get("ssh_connect_timeout_seconds", 30)
-    ssh_poll = timeouts.get("ssh_poll_interval_seconds", 5)
-
-    # Parse scale groups
-    scale_groups: dict[str, vm_pb2.ScaleGroupConfig] = {}
-    for name, sg_data in data.get("scale_groups", {}).items():
-        zones = sg_data.get("zones", [])
-        if zone and not zones:
-            zones = [zone]
-
-        scale_groups[name] = vm_pb2.ScaleGroupConfig(
-            name=name,
-            accelerator_type=sg_data.get("accelerator_type", ""),
-            runtime_version=sg_data.get("runtime_version", ""),
-            min_slices=sg_data.get("min_slices", 0),
-            max_slices=sg_data.get("max_slices", 10),
-            zones=zones,
-            preemptible=sg_data.get("preemptible", False),
-            priority=sg_data.get("priority", 100),
-        )
-        logger.debug("Loaded scale group %s: accelerator=%s, zones=%s", name, sg_data.get("accelerator_type"), zones)
 
     logger.info(
         "Config loaded: provider=%s, scale_groups=%s",
-        provider_type,
-        list(scale_groups.keys()) if scale_groups else "(none)",
+        config.provider_type or "manual",
+        list(config.scale_groups.keys()) if config.scale_groups else "(none)",
     )
 
-    return IrisClusterConfig(
-        provider_type=provider_type,
-        project_id=project_id,
-        region=region,
-        zone=zone,
-        ssh_user=ssh_user,
-        ssh_private_key=ssh_private_key,
-        docker_image=docker_image,
-        worker_port=worker_port,
-        controller_address=controller_address,
-        controller_vm=controller_vm,
-        manual_hosts=manual_hosts,
-        scale_groups=scale_groups,
-        boot_timeout_seconds=boot_timeout,
-        init_timeout_seconds=init_timeout,
-        ssh_connect_timeout_seconds=ssh_timeout,
-        ssh_poll_interval_seconds=ssh_poll,
+    return config
+
+
+def config_to_dict(config: vm_pb2.IrisClusterConfig) -> dict:
+    """Convert config to dict for YAML serialization."""
+    return MessageToDict(config, preserving_proto_field_name=True)
+
+
+def to_bootstrap_config(config: vm_pb2.IrisClusterConfig) -> vm_pb2.BootstrapConfig:
+    """Convert cluster config to BootstrapConfig proto."""
+    return vm_pb2.BootstrapConfig(
+        controller_address=config.controller_address,
+        docker_image=config.docker_image,
+        worker_port=config.worker_port,
     )
+
+
+def to_timeout_config(config: vm_pb2.IrisClusterConfig) -> vm_pb2.TimeoutConfig:
+    """Convert cluster config to TimeoutConfig proto with defaults."""
+    return vm_pb2.TimeoutConfig(
+        boot_timeout_seconds=config.boot_timeout_seconds or 300,
+        init_timeout_seconds=config.init_timeout_seconds or 600,
+        ssh_connect_timeout_seconds=config.ssh_connect_timeout_seconds or 30,
+        ssh_poll_interval_seconds=config.ssh_poll_interval_seconds or 5,
+    )
+
+
+def to_ssh_config(config: vm_pb2.IrisClusterConfig) -> SshConfig:
+    """Convert cluster config to SshConfig for manual SSH."""
+    return SshConfig(
+        user=config.ssh_user or "root",
+        key_file=config.ssh_private_key or None,
+        connect_timeout=config.ssh_connect_timeout_seconds or 30,
+    )
+
+
+@dataclass
+class ScaleGroupSpec:
+    """Extended scale group specification with provider info.
+
+    Wraps a ScaleGroupConfig proto with additional metadata needed for
+    factory instantiation, such as the provider type and manual hosts.
+    """
+
+    config: vm_pb2.ScaleGroupConfig
+    provider: str = "tpu"
+    hosts: list[str] = field(default_factory=list)
 
 
 def create_autoscaler_from_config(
-    config: IrisClusterConfig,
+    config: vm_pb2.IrisClusterConfig,
     autoscaler_config=None,  # AutoscalerConfig | None - type is from autoscaler module
     dry_run: bool = False,
 ):
@@ -345,7 +175,7 @@ def create_autoscaler_from_config(
     - The Autoscaler that coordinates scaling decisions
 
     Args:
-        config: Cluster configuration with scale groups
+        config: Cluster configuration proto with scale groups
         autoscaler_config: Optional autoscaler configuration
 
     Returns:
@@ -356,7 +186,8 @@ def create_autoscaler_from_config(
     """
     from iris.cluster.vm.autoscaler import Autoscaler, AutoscalerConfig
 
-    logger.info("Creating Autoscaler with provider=%s", config.provider_type)
+    provider_type = config.provider_type or "manual"
+    logger.info("Creating Autoscaler with provider=%s", provider_type)
 
     vm_registry = VmRegistry()
     vm_factory = TrackedVmFactory(vm_registry)
@@ -365,15 +196,15 @@ def create_autoscaler_from_config(
 
     for name, group_config in config.scale_groups.items():
         manager = _create_manager(
-            provider=config.provider_type,
+            provider=provider_type,
             config=group_config,
-            bootstrap_config=config.to_bootstrap_config(),
-            timeouts=config.to_timeout_config(),
+            bootstrap_config=to_bootstrap_config(config),
+            timeouts=to_timeout_config(config),
             vm_factory=vm_factory,
             project_id=config.project_id,
-            hosts=config.manual_hosts,
-            ssh_config=config.to_ssh_config(),
-            label_prefix=config.label_prefix,
+            hosts=list(config.manual_hosts),
+            ssh_config=to_ssh_config(config),
+            label_prefix=config.label_prefix or "iris",
             dry_run=dry_run,
         )
 
@@ -385,7 +216,7 @@ def create_autoscaler_from_config(
         logger.info(
             "Created scale group %s with provider=%s",
             name,
-            config.provider_type,
+            provider_type,
         )
 
     return Autoscaler(

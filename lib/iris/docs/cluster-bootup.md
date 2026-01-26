@@ -26,7 +26,7 @@ Establish a working workflow for booting an Iris cluster on GCP (eu-west4) using
 ┌─────────────────────────────────────────────────────────────────┐
 │ Developer Machine                                                │
 │  ├─ iris cluster --config=eu-west4.yaml start                   │
-│  ├─ scripts/probe-controller.py (SSH tunnel + health probes)   │
+│  ├─ scripts/cluster-tools.py (SSH tunnel + health probes)       │
 │  └─ iris controller-rpc (via SSH tunnel)                        │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -128,16 +128,15 @@ This allows probe commands to transparently handle SSH tunneling.
 ```
 lib/iris/
   scripts/
-    probe-controller.py <new>       # Probe/monitor controller (with SSH tunnel helper)
-    cleanup-cluster.py <new>        # Clean existing iris state
-    validate-cluster.py <new>       # Run validation jobs
+    cluster-tools.py                # Probe/monitor/validate controller (merged script)
+    cleanup-cluster.py              # Clean existing iris state
   examples/
-    eu-west4.yaml <new>             # Production config for eu-west4
+    eu-west4.yaml                   # Production config for eu-west4
   src/iris/cluster/
     vm/controller.py <modified>     # Mount config file into container
     vm/config.py <modified>         # Add to_dict() for serialization
   docs/
-    cluster-bootup.md <new>         # This plan (already created)
+    cluster-bootup.md               # This plan
 ```
 
 ---
@@ -148,9 +147,8 @@ lib/iris/
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| `scripts/probe-controller.py` | ✅ Done | Multiple probe commands implemented |
+| `scripts/cluster-tools.py` | ✅ Done | Merged probe + validate commands |
 | `scripts/cleanup-cluster.py` | ✅ Done | Dry-run + delete modes |
-| `scripts/validate-cluster.py` | ✅ Done | 3 TPU validation tests with --tpu-type option |
 | `examples/eu-west4.yaml` | ✅ Done | Production config ready |
 | `vm/controller.py` config mount | ✅ Done | Heredoc + volume mount |
 | `vm/config.py` to_dict() | ✅ Done | Serialization for YAML |
@@ -161,9 +159,8 @@ lib/iris/
 ### Completed Work
 
 **Scripts (all functional):**
-- `probe-controller.py`: discover, ssh-status, tunnel, health, autoscaler-status, list-workers, logs, bootstrap-logs, list-jobs
+- `cluster-tools.py`: discover, ssh-status, tunnel, health, autoscaler-status, list-workers, logs, bootstrap-logs, list-jobs, validate
 - `cleanup-cluster.py`: lists VMs/TPUs, dry-run by default, `--no-dry-run` to delete
-- `validate-cluster.py`: 3 TPU test cases with --tpu-type option (simple TPU job, compute with args, 2-job scheduler test)
 
 **Core changes:**
 - `vm/controller.py`: Config written via heredoc to `/etc/iris/config.yaml`, mounted read-only into container, passed via `--config` flag
@@ -203,8 +200,8 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.
 
 3. **Validate end-to-end**:
    ```bash
-   uv run scripts/probe-controller.py --zone europe-west4-b --project hai-gcp-models health
-   uv run scripts/validate-cluster.py --zone europe-west4-b --project hai-gcp-models
+   uv run scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models health
+   uv run scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate
    ```
 
 ---
@@ -217,9 +214,7 @@ e.g. if you want to query gcloud you would write scripts/query-gcloud.py with a 
 
 ## Known Issues
 
-1. **Code duplication**: `controller_tunnel()` helper is duplicated in probe-controller.py and validate-cluster.py (~50 lines each). Consider extracting to shared module.
-
-2. **Heredoc edge case**: If config YAML contains literal string `IRIS_CONFIG_EOF`, bootstrap would break. Unlikely in practice.
+1. **Heredoc edge case**: If config YAML contains literal string `IRIS_CONFIG_EOF`, bootstrap would break. Unlikely in practice.
 
 ---
 

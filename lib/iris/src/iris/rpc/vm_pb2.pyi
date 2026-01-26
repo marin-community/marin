@@ -213,3 +213,64 @@ class AutoscalerStatus(_message.Message):
     last_evaluation_ms: int
     recent_actions: _containers.RepeatedCompositeFieldContainer[AutoscalerAction]
     def __init__(self, groups: _Optional[_Iterable[_Union[ScaleGroupStatus, _Mapping]]] = ..., current_demand: _Optional[_Mapping[str, int]] = ..., last_evaluation_ms: _Optional[int] = ..., recent_actions: _Optional[_Iterable[_Union[AutoscalerAction, _Mapping]]] = ...) -> None: ...
+
+class ControllerVmConfig(_message.Message):
+    __slots__ = ("enabled", "image", "machine_type", "boot_disk_size_gb", "port", "host")
+    ENABLED_FIELD_NUMBER: _ClassVar[int]
+    IMAGE_FIELD_NUMBER: _ClassVar[int]
+    MACHINE_TYPE_FIELD_NUMBER: _ClassVar[int]
+    BOOT_DISK_SIZE_GB_FIELD_NUMBER: _ClassVar[int]
+    PORT_FIELD_NUMBER: _ClassVar[int]
+    HOST_FIELD_NUMBER: _ClassVar[int]
+    enabled: bool
+    image: str
+    machine_type: str
+    boot_disk_size_gb: int
+    port: int
+    host: str
+    def __init__(self, enabled: _Optional[bool] = ..., image: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., port: _Optional[int] = ..., host: _Optional[str] = ...) -> None: ...
+
+class IrisClusterConfig(_message.Message):
+    __slots__ = ("provider_type", "project_id", "region", "zone", "ssh_user", "ssh_private_key", "docker_image", "worker_port", "controller_address", "controller_vm", "manual_hosts", "scale_groups", "boot_timeout_seconds", "init_timeout_seconds", "ssh_connect_timeout_seconds", "ssh_poll_interval_seconds", "label_prefix")
+    class ScaleGroupsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: ScaleGroupConfig
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[ScaleGroupConfig, _Mapping]] = ...) -> None: ...
+    PROVIDER_TYPE_FIELD_NUMBER: _ClassVar[int]
+    PROJECT_ID_FIELD_NUMBER: _ClassVar[int]
+    REGION_FIELD_NUMBER: _ClassVar[int]
+    ZONE_FIELD_NUMBER: _ClassVar[int]
+    SSH_USER_FIELD_NUMBER: _ClassVar[int]
+    SSH_PRIVATE_KEY_FIELD_NUMBER: _ClassVar[int]
+    DOCKER_IMAGE_FIELD_NUMBER: _ClassVar[int]
+    WORKER_PORT_FIELD_NUMBER: _ClassVar[int]
+    CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
+    CONTROLLER_VM_FIELD_NUMBER: _ClassVar[int]
+    MANUAL_HOSTS_FIELD_NUMBER: _ClassVar[int]
+    SCALE_GROUPS_FIELD_NUMBER: _ClassVar[int]
+    BOOT_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    INIT_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    SSH_CONNECT_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    SSH_POLL_INTERVAL_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    LABEL_PREFIX_FIELD_NUMBER: _ClassVar[int]
+    provider_type: str
+    project_id: str
+    region: str
+    zone: str
+    ssh_user: str
+    ssh_private_key: str
+    docker_image: str
+    worker_port: int
+    controller_address: str
+    controller_vm: ControllerVmConfig
+    manual_hosts: _containers.RepeatedScalarFieldContainer[str]
+    scale_groups: _containers.MessageMap[str, ScaleGroupConfig]
+    boot_timeout_seconds: int
+    init_timeout_seconds: int
+    ssh_connect_timeout_seconds: int
+    ssh_poll_interval_seconds: int
+    label_prefix: str
+    def __init__(self, provider_type: _Optional[str] = ..., project_id: _Optional[str] = ..., region: _Optional[str] = ..., zone: _Optional[str] = ..., ssh_user: _Optional[str] = ..., ssh_private_key: _Optional[str] = ..., docker_image: _Optional[str] = ..., worker_port: _Optional[int] = ..., controller_address: _Optional[str] = ..., controller_vm: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., manual_hosts: _Optional[_Iterable[str]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., boot_timeout_seconds: _Optional[int] = ..., init_timeout_seconds: _Optional[int] = ..., ssh_connect_timeout_seconds: _Optional[int] = ..., ssh_poll_interval_seconds: _Optional[int] = ..., label_prefix: _Optional[str] = ...) -> None: ...

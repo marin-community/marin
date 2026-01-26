@@ -100,12 +100,15 @@ from iris.cluster.vm.autoscaler import (
 
 # Config and factory functions
 from iris.cluster.vm.config import (
-    IrisClusterConfig,
     ScaleGroupSpec,
+    config_to_dict,
     create_autoscaler_from_config,
     create_autoscaler_from_specs,
     create_manual_autoscaler,
     load_config,
+    to_bootstrap_config,
+    to_ssh_config,
+    to_timeout_config,
 )
 
 __all__ = [
@@ -124,7 +127,6 @@ __all__ = [
     "GcloudSshConnectionFactory",
     "GroupAvailability",
     "InMemorySshConnection",
-    "IrisClusterConfig",
     "ManagedVm",
     "ManualVmGroup",
     "ManualVmManager",
@@ -148,6 +150,7 @@ __all__ = [
     "VmRegistry",
     "VmSnapshot",
     "check_health",
+    "config_to_dict",
     "connection_available",
     "create_autoscaler_from_config",
     "create_autoscaler_from_specs",
@@ -159,5 +162,8 @@ __all__ = [
     "route_demand",
     "run_streaming_with_retry",
     "shutdown_worker",
+    "to_bootstrap_config",
+    "to_ssh_config",
+    "to_timeout_config",
     "wait_for_connection",
 ]

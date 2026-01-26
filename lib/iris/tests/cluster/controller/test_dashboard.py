@@ -519,12 +519,12 @@ def test_get_autoscaler_status_includes_slice_details(client_with_autoscaler):
 
 
 # =============================================================================
-# Health and Readiness Endpoint Tests
+# Health Endpoint Tests
 # =============================================================================
 
 
-def test_health_endpoint_returns_ok_with_checks(client, state, make_worker_metadata, job_request):
-    """Health endpoint returns status ok with individual check results."""
+def test_health_endpoint_returns_ok(client, state, make_worker_metadata, job_request):
+    """Health endpoint returns status ok with worker and job counts."""
     register_worker(state, "w1", "h1:8080", make_worker_metadata())
     register_worker(state, "w2", "h2:8080", make_worker_metadata())
     submit_job(state, "j1", job_request)
@@ -535,13 +535,7 @@ def test_health_endpoint_returns_ok_with_checks(client, state, make_worker_metad
     data = resp.json()
     assert data["status"] == "ok"
     assert data["workers"] == 2
-    assert data["healthy_workers"] == 2
     assert data["jobs"] == 1
-    assert "uptime_seconds" in data
-    assert data["uptime_seconds"] >= 0
-    assert "checks" in data
-    assert data["checks"]["list_workers"]["status"] == "ok"
-    assert data["checks"]["list_jobs"]["status"] == "ok"
 
 
 def test_health_endpoint_empty_cluster(client):
@@ -552,53 +546,4 @@ def test_health_endpoint_empty_cluster(client):
     data = resp.json()
     assert data["status"] == "ok"
     assert data["workers"] == 0
-    assert data["healthy_workers"] == 0
     assert data["jobs"] == 0
-
-
-def test_readiness_endpoint_returns_ready(client, state, make_worker_metadata):
-    """Readiness endpoint returns ready=true with component status."""
-    register_worker(state, "w1", "h1:8080", make_worker_metadata())
-
-    resp = client.get("/readiness")
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["ready"] is True
-    assert "uptime_seconds" in data
-    assert "components" in data
-    assert data["components"]["state"]["status"] == "ok"
-    assert data["components"]["rpc_service"]["status"] == "ok"
-    assert data["components"]["dashboard"]["status"] == "ok"
-
-
-def test_readiness_endpoint_includes_counts(client, state, make_worker_metadata, job_request):
-    """Readiness endpoint includes task and worker counts for diagnostics."""
-    register_worker(state, "w1", "h1:8080", make_worker_metadata())
-    submit_job(state, "j1", job_request)
-
-    resp = client.get("/readiness")
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["components"]["state"]["total_workers"] == 1
-    assert data["components"]["state"]["pending_tasks"] == 1
-
-
-def test_health_endpoint_returns_503_on_rpc_failure(service):
-    """Health endpoint returns 503 when RPC checks fail."""
-    from unittest.mock import patch
-
-    dashboard = ControllerDashboard(service)
-    client = TestClient(dashboard._app)
-
-    # Patch list_workers to raise an exception
-    with patch.object(service, "list_workers", side_effect=RuntimeError("test error")):
-        resp = client.get("/health")
-
-    assert resp.status_code == 503
-    data = resp.json()
-    assert data["status"] == "error"
-    assert "error" in data
-    assert "list_workers" in data["error"]
-    assert data["checks"]["list_workers"]["status"] == "error"

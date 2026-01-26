@@ -79,13 +79,17 @@ def mock_config():
 
 @pytest.fixture
 def config_file(tmp_path: Path) -> Path:
-    """Create a temporary config file for testing."""
+    """Create a temporary config file for testing.
+
+    Uses the flat proto-compatible YAML format matching IrisClusterConfig.
+    """
     config = {
-        "provider": {"type": "manual"},
+        "provider_type": "manual",
         "manual_hosts": ["10.0.0.1", "10.0.0.2"],
-        "auth": {"ssh_user": "root"},
-        "docker": {"image": "test-image:latest", "worker_port": 10001},
-        "controller": {"address": "10.0.0.100:10000"},
+        "ssh_user": "root",
+        "docker_image": "test-image:latest",
+        "worker_port": 10001,
+        "controller_address": "10.0.0.100:10000",
         "scale_groups": {
             "manual": {"accelerator_type": "cpu", "min_slices": 0, "max_slices": 10},
         },

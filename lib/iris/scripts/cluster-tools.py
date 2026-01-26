@@ -13,41 +13,53 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Multi-purpose probe script for controller debugging with SSH tunnel support.
+"""Unified cluster tools for probing, debugging, and validating Iris clusters.
 
-This script provides commands to discover, probe, and monitor an Iris controller
-running on a GCP VM. It handles SSH tunneling transparently for RPC commands.
+This script provides commands to discover, probe, monitor, and validate an Iris
+controller running on a GCP VM. It handles SSH tunneling transparently for RPC commands.
 
 Usage:
-    uv run python scripts/probe-controller.py --zone europe-west4-b discover
-    uv run python scripts/probe-controller.py --zone europe-west4-b ssh-status
-    uv run python scripts/probe-controller.py --zone europe-west4-b tunnel
-    uv run python scripts/probe-controller.py --zone europe-west4-b health
-    uv run python scripts/probe-controller.py --zone europe-west4-b autoscaler-status
-    uv run python scripts/probe-controller.py --zone europe-west4-b list-workers
-    uv run python scripts/probe-controller.py --zone europe-west4-b logs
-    uv run python scripts/probe-controller.py --zone europe-west4-b logs --tail 50
-    uv run python scripts/probe-controller.py --zone europe-west4-b logs --follow
-    uv run python scripts/probe-controller.py --zone europe-west4-b bootstrap-logs
+    uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models discover
+    uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models ssh-status
+    uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models tunnel
+    uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models health
+    uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models autoscaler-status
+    uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models list-workers
+    uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models logs
+    uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models bootstrap-logs
+    uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models list-jobs
+    uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate
 """
 
 import json
 import signal
 import socket
 import subprocess
+import sys
 import time
-from contextlib import contextmanager
 from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 
 import click
 from google.protobuf import json_format
 
+from iris.client import IrisClient
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
-CONTROLLER_METADATA_KEY = "iris-controller"
+IRIS_ROOT = Path(__file__).parent.parent
 CONTROLLER_CONTAINER_NAME = "iris-controller"
 DEFAULT_CONTROLLER_PORT = 10000
+DEFAULT_TPU_TYPE = "v5litepod-16"
+DEFAULT_VALIDATION_TIMEOUT = 600  # 10 minutes for TPU provisioning
+
+
+# -----------------------------------------------------------------------------
+# Shared utility functions
+# -----------------------------------------------------------------------------
 
 
 def discover_controller_vm(zone: str, project: str) -> str | None:
@@ -77,7 +89,7 @@ def discover_controller_vm(zone: str, project: str) -> str | None:
         return None
 
     vm_names = result.stdout.strip().split("\n")
-    vm_names = [v for v in vm_names if v]  # Filter empty strings
+    vm_names = [v for v in vm_names if v]
 
     if not vm_names:
         return None
@@ -177,12 +189,260 @@ def controller_tunnel(zone: str, project: str, local_port: int = DEFAULT_CONTROL
             proc.wait()
 
 
+# -----------------------------------------------------------------------------
+# Validation helpers
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class ValidationResult:
+    """Result of a single validation test."""
+
+    name: str
+    passed: bool
+    message: str
+    duration_seconds: float
+
+
+def run_simple_tpu_job(client: IrisClient, tpu_type: str) -> ValidationResult:
+    """Test 1: Simple TPU job that returns a value.
+
+    This test validates that the autoscaler can provision a TPU slice
+    and the worker can execute a basic job.
+    """
+    start = time.monotonic()
+
+    def hello():
+        print("Hello from validation job!")
+        return 42
+
+    try:
+        job = client.submit(
+            entrypoint=Entrypoint.from_callable(hello),
+            name="validate-hello",
+            resources=ResourceSpec(device=tpu_device(tpu_type)),
+            environment=EnvironmentSpec(workspace="/app"),
+        )
+        status = job.wait(timeout=DEFAULT_VALIDATION_TIMEOUT, raise_on_failure=False)
+
+        duration = time.monotonic() - start
+
+        if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
+            return ValidationResult(
+                name=f"Simple TPU job ({tpu_type})",
+                passed=True,
+                message=f"Job completed successfully in {duration:.1f}s",
+                duration_seconds=duration,
+            )
+        else:
+            state_name = cluster_pb2.JobState.Name(status.state)
+            return ValidationResult(
+                name=f"Simple TPU job ({tpu_type})",
+                passed=False,
+                message=f"Job ended with state {state_name}: {status.error}",
+                duration_seconds=duration,
+            )
+    except TimeoutError:
+        return ValidationResult(
+            name=f"Simple TPU job ({tpu_type})",
+            passed=False,
+            message=f"Job timed out after {DEFAULT_VALIDATION_TIMEOUT}s (TPU provisioning may take 5-10 min)",
+            duration_seconds=time.monotonic() - start,
+        )
+    except Exception as e:
+        return ValidationResult(
+            name=f"Simple TPU job ({tpu_type})",
+            passed=False,
+            message=f"Unexpected error: {e}",
+            duration_seconds=time.monotonic() - start,
+        )
+
+
+def run_compute_job(client: IrisClient, tpu_type: str) -> ValidationResult:
+    """Test 2: TPU job with arguments and return value."""
+    start = time.monotonic()
+
+    def compute(a: int, b: int) -> int:
+        result = a + b
+        print(f"{a} + {b} = {result}")
+        return result
+
+    try:
+        job = client.submit(
+            entrypoint=Entrypoint.from_callable(compute, 10, 32),
+            name="validate-compute",
+            resources=ResourceSpec(device=tpu_device(tpu_type)),
+            environment=EnvironmentSpec(workspace="/app"),
+        )
+        status = job.wait(timeout=DEFAULT_VALIDATION_TIMEOUT, raise_on_failure=False)
+
+        duration = time.monotonic() - start
+
+        if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
+            return ValidationResult(
+                name=f"Compute job with args ({tpu_type})",
+                passed=True,
+                message=f"Job completed successfully in {duration:.1f}s",
+                duration_seconds=duration,
+            )
+        else:
+            state_name = cluster_pb2.JobState.Name(status.state)
+            return ValidationResult(
+                name=f"Compute job with args ({tpu_type})",
+                passed=False,
+                message=f"Job ended with state {state_name}: {status.error}",
+                duration_seconds=duration,
+            )
+    except TimeoutError:
+        return ValidationResult(
+            name=f"Compute job with args ({tpu_type})",
+            passed=False,
+            message=f"Job timed out after {DEFAULT_VALIDATION_TIMEOUT}s",
+            duration_seconds=time.monotonic() - start,
+        )
+    except Exception as e:
+        return ValidationResult(
+            name=f"Compute job with args ({tpu_type})",
+            passed=False,
+            message=f"Unexpected error: {e}",
+            duration_seconds=time.monotonic() - start,
+        )
+
+
+def run_scheduler_test(client: IrisClient, tpu_type: str) -> ValidationResult:
+    """Test 3: Submit multiple TPU jobs to exercise the scheduler.
+
+    This test submits 2 concurrent jobs to verify the scheduler can
+    handle multiple pending jobs and the autoscaler responds appropriately.
+    """
+    start = time.monotonic()
+
+    def quick_task(task_id: int):
+        import time as time_module
+
+        time_module.sleep(1.0)
+        print(f"Task {task_id} completed")
+        return task_id
+
+    try:
+        jobs = []
+        for i in range(2):
+            job = client.submit(
+                entrypoint=Entrypoint.from_callable(quick_task, i),
+                name=f"validate-scheduler-{i}",
+                resources=ResourceSpec(device=tpu_device(tpu_type)),
+                environment=EnvironmentSpec(workspace="/app"),
+            )
+            jobs.append(job)
+
+        all_succeeded = True
+        failed_jobs = []
+        for job in jobs:
+            status = job.wait(timeout=DEFAULT_VALIDATION_TIMEOUT, raise_on_failure=False)
+            if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
+                all_succeeded = False
+                state_name = cluster_pb2.JobState.Name(status.state)
+                failed_jobs.append(f"{job.job_id}: {state_name}")
+
+        duration = time.monotonic() - start
+
+        if all_succeeded:
+            return ValidationResult(
+                name="Scheduler test (2 concurrent TPU jobs)",
+                passed=True,
+                message=f"All 2 jobs completed successfully in {duration:.1f}s",
+                duration_seconds=duration,
+            )
+        else:
+            return ValidationResult(
+                name="Scheduler test (2 concurrent TPU jobs)",
+                passed=False,
+                message=f"Some jobs failed: {', '.join(failed_jobs)}",
+                duration_seconds=duration,
+            )
+    except TimeoutError:
+        return ValidationResult(
+            name="Scheduler test (2 concurrent TPU jobs)",
+            passed=False,
+            message=f"Jobs timed out after {DEFAULT_VALIDATION_TIMEOUT}s",
+            duration_seconds=time.monotonic() - start,
+        )
+    except Exception as e:
+        return ValidationResult(
+            name="Scheduler test (2 concurrent TPU jobs)",
+            passed=False,
+            message=f"Unexpected error: {e}",
+            duration_seconds=time.monotonic() - start,
+        )
+
+
+def print_validation_results(results: list[ValidationResult]) -> bool:
+    """Print validation results and return True if all passed."""
+    click.echo()
+    click.echo("=" * 60)
+    click.echo("VALIDATION RESULTS")
+    click.echo("=" * 60)
+
+    all_passed = True
+    for result in results:
+        status = "PASS" if result.passed else "FAIL"
+        click.echo(f"[{status}] {result.name}")
+        click.echo(f"       {result.message}")
+        if not result.passed:
+            all_passed = False
+
+    click.echo("=" * 60)
+
+    total_duration = sum(r.duration_seconds for r in results)
+    passed_count = sum(1 for r in results if r.passed)
+    total_count = len(results)
+
+    if all_passed:
+        click.echo(f"All {total_count} tests passed in {total_duration:.1f}s")
+    else:
+        click.echo(f"{passed_count}/{total_count} tests passed in {total_duration:.1f}s")
+
+    return all_passed
+
+
+def _run_validation(controller_url: str, workspace: Path, tpu_type: str) -> None:
+    """Run validation tests against the controller."""
+    click.echo()
+    click.echo("Creating IrisClient...")
+    client = IrisClient.remote(controller_url, workspace=workspace)
+
+    click.echo("Running validation tests...")
+    click.echo("Note: TPU provisioning can take 5-10 minutes per job")
+    click.echo()
+
+    results: list[ValidationResult] = []
+
+    click.echo("[1/3] Running simple TPU job (may trigger TPU provisioning)...")
+    results.append(run_simple_tpu_job(client, tpu_type))
+
+    click.echo("[2/3] Running compute job with arguments...")
+    results.append(run_compute_job(client, tpu_type))
+
+    click.echo("[3/3] Running scheduler test with 2 concurrent jobs...")
+    results.append(run_scheduler_test(client, tpu_type))
+
+    all_passed = print_validation_results(results)
+
+    if not all_passed:
+        sys.exit(1)
+
+
+# -----------------------------------------------------------------------------
+# CLI commands
+# -----------------------------------------------------------------------------
+
+
 @click.group()
-@click.option("--zone", default="europe-west4-b", help="GCP zone")
-@click.option("--project", default="hai-gcp-models", help="GCP project")
+@click.option("--zone", required=True, help="GCP zone (e.g., europe-west4-b)")
+@click.option("--project", required=True, help="GCP project ID")
 @click.pass_context
 def cli(ctx: click.Context, zone: str, project: str) -> None:
-    """Probe and debug Iris controller on GCP."""
+    """Probe, debug, and validate Iris clusters on GCP."""
     ctx.ensure_object(dict)
     ctx.obj["zone"] = zone
     ctx.obj["project"] = project
@@ -210,7 +470,6 @@ def discover(ctx: click.Context) -> None:
         click.echo(f"  Machine type: {status.get('machineType', '').split('/')[-1]}")
         click.echo(f"  Zone: {status.get('zone', '').split('/')[-1]}")
 
-        # Show network info
         network_interfaces = status.get("networkInterfaces", [])
         if network_interfaces:
             internal_ip = network_interfaces[0].get("networkIP", "N/A")
@@ -221,7 +480,6 @@ def discover(ctx: click.Context) -> None:
                 external_ip = access_configs[0].get("natIP", "N/A")
                 click.echo(f"  External IP: {external_ip}")
 
-        # Show creation time
         creation_time = status.get("creationTimestamp", "N/A")
         click.echo(f"  Created: {creation_time}")
 
@@ -242,7 +500,6 @@ def ssh_status(ctx: click.Context, tail: int) -> None:
     click.echo(f"Connecting to {vm_name}...")
     click.echo()
 
-    # Run docker ps to show container status
     click.echo("=== Docker Containers ===")
     subprocess.run(
         [
@@ -414,7 +671,7 @@ def autoscaler_status(ctx: click.Context, local_port: int, json_output: bool) ->
         if status.recent_actions:
             click.echo()
             click.echo("Recent Actions:")
-            for action in status.recent_actions[-10:]:  # Show last 10
+            for action in status.recent_actions[-10:]:
                 click.echo(f"  [{action.timestamp_ms}] {action.action_type} ({action.scale_group}): {action.reason}")
 
 
@@ -475,9 +732,9 @@ def logs(ctx: click.Context, tail: int, follow: bool) -> None:
     """Fetch docker logs from the iris-controller container.
 
     Examples:
-        uv run python scripts/probe-controller.py --zone europe-west4-b logs
-        uv run python scripts/probe-controller.py --zone europe-west4-b logs --tail 50
-        uv run python scripts/probe-controller.py --zone europe-west4-b logs --follow
+        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models logs
+        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models logs --tail 50
+        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models logs --follow
     """
     zone = ctx.obj["zone"]
     project = ctx.obj["project"]
@@ -519,8 +776,8 @@ def bootstrap_logs(ctx: click.Context, tail: int) -> None:
     Useful for debugging VM initialization issues.
 
     Examples:
-        uv run python scripts/probe-controller.py --zone europe-west4-b bootstrap-logs
-        uv run python scripts/probe-controller.py --zone europe-west4-b bootstrap-logs --tail 500
+        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models bootstrap-logs
+        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models bootstrap-logs --tail 500
     """
     zone = ctx.obj["zone"]
     project = ctx.obj["project"]
@@ -532,7 +789,6 @@ def bootstrap_logs(ctx: click.Context, tail: int) -> None:
 
     click.echo(f"Fetching startup-script logs from {vm_name}...")
 
-    # GCP startup scripts log to journald with the google_metadata_script_runner tag
     subprocess.run(
         [
             "gcloud",
@@ -593,6 +849,54 @@ def list_jobs(ctx: click.Context, local_port: int, json_output: bool) -> None:
                 click.echo(f"  Task states: {counts}")
             if job.error:
                 click.echo(f"  Error: {job.error}")
+
+
+@cli.command()
+@click.option("--controller-url", help="Direct controller URL (skips SSH tunnel)")
+@click.option("--workspace", type=click.Path(exists=True, path_type=Path), help="Workspace directory")
+@click.option("--local-port", default=DEFAULT_CONTROLLER_PORT, help="Local port for SSH tunnel")
+@click.option("--tpu-type", default=DEFAULT_TPU_TYPE, help="TPU type for validation jobs")
+@click.pass_context
+def validate(
+    ctx: click.Context,
+    controller_url: str | None,
+    workspace: Path | None,
+    local_port: int,
+    tpu_type: str,
+) -> None:
+    """Run validation jobs against an Iris cluster.
+
+    This command submits TPU test jobs to verify the cluster is functioning correctly.
+    Jobs will trigger the autoscaler to provision TPU slices.
+
+    Note: TPU provisioning can take 5-10 minutes. The default timeout is 10 minutes.
+
+    Examples:
+
+        # Auto-discover controller and establish SSH tunnel
+        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate
+
+        # Connect to a local or already-tunneled controller
+        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate --controller-url http://localhost:10000
+
+        # Use a different TPU type
+        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate --tpu-type v5litepod-8
+    """
+    zone = ctx.obj["zone"]
+    project = ctx.obj["project"]
+    ws = workspace or IRIS_ROOT
+
+    if controller_url:
+        click.echo(f"Connecting to controller at {controller_url}")
+        click.echo(f"Using workspace: {ws}")
+        click.echo(f"TPU type: {tpu_type}")
+        _run_validation(controller_url, ws, tpu_type)
+    else:
+        click.echo(f"Looking for controller VM in {zone}...")
+        with controller_tunnel(zone, project, local_port) as url:
+            click.echo(f"Using workspace: {ws}")
+            click.echo(f"TPU type: {tpu_type}")
+            _run_validation(url, ws, tpu_type)
 
 
 if __name__ == "__main__":

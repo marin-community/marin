@@ -1,18 +1,16 @@
-# Iris VM CLI configuration for europe-west4
-# Usage: uv run python -m iris.cluster.vm.cli create-slice --config examples/demo.yaml --scale-group tpu_v5e_4
+# Iris demo configuration
+# Uses env var for controller address (external controller)
+# Usage: uv run python -m iris.cluster.vm.cli create-slice --config examples/demo.yaml --scale-group tpu_v5e_16
 
-provider:
-  type: tpu
-  project_id: hai-gcp-models
-  region: europe-west4
-  zone: europe-west4-b
+provider_type: tpu
+project_id: hai-gcp-models
+region: europe-west4
+zone: europe-west4-b
 
-docker:
-  image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
-  worker_port: 10001
+docker_image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-worker:latest
+worker_port: 10001
 
-controller:
-  address: "${IRIS_CONTROLLER_ADDRESS}"
+controller_address: "${IRIS_CONTROLLER_ADDRESS}"
 
 scale_groups:
   # tpu_v5e_4:

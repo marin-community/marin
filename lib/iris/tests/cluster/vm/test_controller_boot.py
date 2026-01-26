@@ -28,12 +28,12 @@ import pytest
 from click.testing import CliRunner
 
 from iris.cli import iris
-from iris.cluster.vm.config import ControllerVmConfig, IrisClusterConfig
 from iris.cluster.vm.controller import (
     GcpController,
     ManualController,
     create_controller,
 )
+from iris.rpc import vm_pb2
 
 
 @pytest.fixture
@@ -44,26 +44,23 @@ def cli_runner() -> CliRunner:
 
 @pytest.fixture
 def gcp_config(tmp_path: Path) -> Path:
-    """Create a GCP controller config file."""
+    """Create a GCP controller config file using flat proto-compatible format."""
     config_path = tmp_path / "gcp_config.yaml"
     config_content = """
-provider:
-  type: gcp
-  project_id: test-project
-  region: us-central1
-  zone: us-central1-a
+provider_type: gcp
+project_id: test-project
+region: us-central1
+zone: us-central1-a
 
-docker:
-  image: test-image:latest
-  worker_port: 10001
+docker_image: test-image:latest
+worker_port: 10001
 
-controller:
-  vm:
-    enabled: true
-    image: gcr.io/test-project/iris-controller:latest
-    machine_type: n2-standard-4
-    boot_disk_size_gb: 50
-    port: 10000
+controller_vm:
+  enabled: true
+  image: gcr.io/test-project/iris-controller:latest
+  machine_type: n2-standard-4
+  boot_disk_size_gb: 50
+  port: 10000
 
 scale_groups:
   test_group:
@@ -79,26 +76,22 @@ scale_groups:
 
 @pytest.fixture
 def manual_config(tmp_path: Path) -> Path:
-    """Create a manual controller config file with SSH bootstrap."""
+    """Create a manual controller config file with SSH bootstrap using flat format."""
     config_path = tmp_path / "manual_config.yaml"
     config_content = """
-provider:
-  type: manual
+provider_type: manual
 
-docker:
-  image: gcr.io/test-project/iris-worker:latest
-  worker_port: 10001
+docker_image: gcr.io/test-project/iris-worker:latest
+worker_port: 10001
 
-controller:
-  vm:
-    enabled: false
-    host: 10.0.0.100
-    image: gcr.io/test-project/iris-controller:latest
-    port: 10000
+controller_vm:
+  enabled: false
+  host: 10.0.0.100
+  image: gcr.io/test-project/iris-controller:latest
+  port: 10000
 
-auth:
-  ssh_user: ubuntu
-  ssh_private_key: ~/.ssh/id_rsa
+ssh_user: ubuntu
+ssh_private_key: ~/.ssh/id_rsa
 
 manual_hosts:
   - 10.0.0.1
@@ -107,23 +100,13 @@ manual_hosts:
     return config_path
 
 
-def test_manual_controller_requires_host():
-    """ManualController requires controller_vm.host to be configured."""
-    config = IrisClusterConfig(
-        provider_type="manual",
-        controller_vm=ControllerVmConfig(enabled=False),
-    )
-    with pytest.raises(RuntimeError, match=r"controller_vm\.host is required"):
-        ManualController(config)
-
-
 def test_creates_gcp_controller_for_gcp_provider_with_vm_enabled():
     """create_controller returns GcpController for GCP with VM enabled."""
-    config = IrisClusterConfig(
+    config = vm_pb2.IrisClusterConfig(
         provider_type="gcp",
         project_id="test-project",
         zone="us-central1-a",
-        controller_vm=ControllerVmConfig(
+        controller_vm=vm_pb2.ControllerVmConfig(
             enabled=True,
             image="gcr.io/test/controller:latest",
         ),
@@ -134,9 +117,9 @@ def test_creates_gcp_controller_for_gcp_provider_with_vm_enabled():
 
 def test_creates_manual_controller_for_manual_provider():
     """create_controller returns ManualController for manual provider with host."""
-    config = IrisClusterConfig(
+    config = vm_pb2.IrisClusterConfig(
         provider_type="manual",
-        controller_vm=ControllerVmConfig(
+        controller_vm=vm_pb2.ControllerVmConfig(
             enabled=False,
             host="10.0.0.100",
             image="gcr.io/test/controller:latest",

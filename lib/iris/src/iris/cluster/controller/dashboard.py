@@ -19,14 +19,11 @@ The dashboard serves:
 - Web UI at /job/{job_id} (job detail page)
 - Connect RPC at /iris.cluster.ControllerService/* (called directly by JS)
 - Health check at /health
-- Readiness check at /readiness (detailed startup diagnostics)
 
 All data fetching happens via Connect RPC calls from the browser JavaScript.
 """
 
 import logging
-import time
-import traceback
 
 import uvicorn
 from starlette.applications import Starlette
@@ -1408,7 +1405,6 @@ class ControllerDashboard:
         self._service = service
         self._host = host
         self._port = port
-        self._start_time = time.time()
         self._app = self._create_app()
         self._server: uvicorn.Server | None = None
 
@@ -1424,7 +1420,6 @@ class ControllerDashboard:
             Route("/", self._dashboard),
             Route("/job/{job_id}", self._job_detail_page),
             Route("/health", self._health),
-            Route("/readiness", self._readiness),
             Mount(rpc_wsgi_app.path, app=rpc_app),
         ]
         return Starlette(routes=routes)
@@ -1439,123 +1434,18 @@ class ControllerDashboard:
         return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", html.escape(job_id)))
 
     def _health(self, _request: Request) -> JSONResponse:
-        """Health check endpoint with error handling and diagnostics.
+        """Health check endpoint for controller availability."""
+        workers_resp = self._service.list_workers(cluster_pb2.Controller.ListWorkersRequest(), None)
+        jobs_resp = self._service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), None)
+        worker_count = len(workers_resp.workers)
+        job_count = len(jobs_resp.jobs)
 
-        Returns a JSON object with:
-        - status: "ok" if all checks pass, "error" if any check fails
-        - workers: total worker count
-        - healthy_workers: count of workers with healthy=true
-        - jobs: total job count
-        - uptime_seconds: seconds since dashboard started
-        - error: present only if status="error", contains diagnostic info
-        - checks: breakdown of individual check results
-        """
-        checks: dict[str, dict] = {}
-        errors: list[str] = []
-        uptime_seconds = time.time() - self._start_time
-
-        # Check 1: Can we list workers?
-        try:
-            workers_resp = self._service.list_workers(cluster_pb2.Controller.ListWorkersRequest(), None)
-            worker_count = len(workers_resp.workers)
-            healthy_count = sum(1 for w in workers_resp.workers if w.healthy)
-            checks["list_workers"] = {"status": "ok", "count": worker_count, "healthy": healthy_count}
-        except Exception as e:
-            logger.exception("Health check failed: list_workers")
-            checks["list_workers"] = {"status": "error", "error": str(e)}
-            errors.append(f"list_workers: {e}")
-            worker_count = 0
-            healthy_count = 0
-
-        # Check 2: Can we list jobs?
-        try:
-            jobs_resp = self._service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), None)
-            job_count = len(jobs_resp.jobs)
-            checks["list_jobs"] = {"status": "ok", "count": job_count}
-        except Exception as e:
-            logger.exception("Health check failed: list_jobs")
-            checks["list_jobs"] = {"status": "error", "error": str(e)}
-            errors.append(f"list_jobs: {e}")
-            job_count = 0
-
-        status = "error" if errors else "ok"
         response = {
-            "status": status,
-            "workers": worker_count,
-            "healthy_workers": healthy_count,
-            "jobs": job_count,
-            "uptime_seconds": round(uptime_seconds, 2),
-            "checks": checks,
-        }
-
-        if errors:
-            response["error"] = "; ".join(errors)
-            logger.warning("Health check returning error status: %s", response["error"])
-            return JSONResponse(response, status_code=503)
-
-        return JSONResponse(response)
-
-    def _readiness(self, _request: Request) -> JSONResponse:
-        """Detailed readiness check for debugging startup issues.
-
-        Returns comprehensive diagnostic information about controller state
-        including component status, configuration, and any errors.
-        More verbose than /health for debugging.
-        """
-        uptime_seconds = time.time() - self._start_time
-        components: dict[str, dict] = {}
-        errors: list[str] = []
-
-        # Component 1: State subsystem
-        try:
-            state = self._service._state
-            pending_tasks = list(state.peek_pending_tasks())
-            all_workers = list(state.list_all_workers())
-            components["state"] = {
-                "status": "ok",
-                "pending_tasks": len(pending_tasks),
-                "total_workers": len(all_workers),
-            }
-        except Exception as e:
-            logger.exception("Readiness check failed: state")
-            components["state"] = {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
-            errors.append(f"state: {e}")
-
-        # Component 2: RPC service
-        try:
-            workers_resp = self._service.list_workers(cluster_pb2.Controller.ListWorkersRequest(), None)
-            jobs_resp = self._service.list_jobs(cluster_pb2.Controller.ListJobsRequest(), None)
-            components["rpc_service"] = {
-                "status": "ok",
-                "workers_rpc": len(workers_resp.workers),
-                "jobs_rpc": len(jobs_resp.jobs),
-            }
-        except Exception as e:
-            logger.exception("Readiness check failed: rpc_service")
-            components["rpc_service"] = {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
-            errors.append(f"rpc_service: {e}")
-
-        # Component 3: Dashboard itself (always ok if we got here)
-        components["dashboard"] = {
             "status": "ok",
-            "host": self._host,
-            "port": self._port,
+            "workers": worker_count,
+            "jobs": job_count,
         }
 
-        # Summary
-        ready = len(errors) == 0
-        response: dict = {
-            "ready": ready,
-            "uptime_seconds": round(uptime_seconds, 2),
-            "components": components,
-        }
-
-        if errors:
-            response["errors"] = errors
-            logger.warning("Readiness check: not ready - %s", errors)
-            return JSONResponse(response, status_code=503)
-
-        logger.debug("Readiness check: ready (uptime=%.2fs)", uptime_seconds)
         return JSONResponse(response)
 
     def run(self) -> None:

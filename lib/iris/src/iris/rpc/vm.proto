@@ -151,3 +151,49 @@ message AutoscalerStatus {
   int64 last_evaluation_ms = 3;
   repeated AutoscalerAction recent_actions = 4;  // Last N actions (max 100)
 }
+
+// Controller VM configuration for GCP-managed controllers
+message ControllerVmConfig {
+  bool enabled = 1;
+  string image = 2;
+  string machine_type = 3;      // Default: "n2-standard-4"
+  int32 boot_disk_size_gb = 4;  // Default: 50
+  int32 port = 5;               // Default: 10000
+  string host = 6;              // IP/hostname for manual SSH bootstrap
+}
+
+// Full cluster configuration - single source of truth
+message IrisClusterConfig {
+  // Provider settings
+  string provider_type = 1;     // "tpu" or "manual"
+  string project_id = 2;
+  string region = 3;
+  string zone = 4;
+
+  // Auth settings
+  string ssh_user = 10;         // Default: "root"
+  string ssh_private_key = 11;
+
+  // Docker/worker settings
+  string docker_image = 20;
+  int32 worker_port = 21;       // Default: 10001
+
+  // Controller settings
+  string controller_address = 30;
+  ControllerVmConfig controller_vm = 31;
+
+  // For manual provider
+  repeated string manual_hosts = 40;
+
+  // Scale groups (name -> config)
+  map<string, ScaleGroupConfig> scale_groups = 50;
+
+  // Timeouts (inline, not nested)
+  int32 boot_timeout_seconds = 60;        // Default: 300
+  int32 init_timeout_seconds = 61;        // Default: 600
+  int32 ssh_connect_timeout_seconds = 62; // Default: 30
+  int32 ssh_poll_interval_seconds = 63;   // Default: 5
+
+  // GCP label prefix
+  string label_prefix = 70;     // Default: "iris"
+}

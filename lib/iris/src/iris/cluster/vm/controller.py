@@ -34,7 +34,7 @@ from typing import Protocol
 
 import httpx
 
-from iris.cluster.vm.config import IrisClusterConfig
+from iris.cluster.vm.config import config_to_dict
 from iris.cluster.vm.gcp_tpu_platform import (
     CONTROLLER_ADDRESS_METADATA_KEY,
     CONTROLLER_METADATA_KEY,
@@ -46,6 +46,7 @@ from iris.cluster.vm.ssh import (
     check_health,
     run_streaming_with_retry,
 )
+from iris.rpc import vm_pb2
 from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,42 @@ HEALTH_CHECK_BACKOFF_MAX = 10.0
 # Backoff parameters for retry loops: start at 10s, cap at 60s
 RETRY_BACKOFF_INITIAL = 10.0
 RETRY_BACKOFF_MAX = 60.0
+
+
+def wait_healthy_via_ssh(
+    conn: SshConnection,
+    port: int,
+    timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
+) -> bool:
+    """Poll health endpoint via SSH until healthy or timeout.
+
+    Uses SSH to run curl on the remote host, avoiding firewall issues
+    that can block external HTTP access to the controller port.
+    """
+    logger.info("Starting SSH-based health check (port=%d, timeout=%ds)", port, int(timeout))
+    start_time = time.time()
+    attempt = 0
+
+    backoff = ExponentialBackoff(
+        initial=HEALTH_CHECK_BACKOFF_INITIAL,
+        maximum=HEALTH_CHECK_BACKOFF_MAX,
+    )
+
+    def check_with_logging() -> bool:
+        nonlocal attempt
+        attempt += 1
+        result = check_health(conn, port)
+        elapsed = time.time() - start_time
+        if result:
+            logger.info("SSH health check succeeded after %d attempts (%.1fs)", attempt, elapsed)
+        else:
+            logger.info("SSH health check attempt %d failed (%.1fs)", attempt, elapsed)
+        return result
+
+    success = backoff.wait_until(check_with_logging, timeout=timeout)
+    if not success:
+        logger.warning("SSH health check failed after %d attempts", attempt)
+    return success
 
 
 class RetryableError(Exception):
@@ -288,18 +325,18 @@ class GcpController:
     container. The VM is tagged with metadata for worker discovery.
     """
 
-    def __init__(self, config: IrisClusterConfig):
+    def __init__(self, config: vm_pb2.IrisClusterConfig):
         self.config = config
         self.project_id = config.project_id or ""
         self.zone = config.zone or "us-central1-a"
         self.vm_config = config.controller_vm
-        self._vm_name = f"iris-controller-{config.label_prefix}"
+        self._vm_name = f"iris-controller-{config.label_prefix or 'iris'}"
 
     def _serialize_config(self) -> str:
         """Serialize cluster config to YAML for the controller VM."""
         import yaml
 
-        return yaml.dump(self.config.to_dict(), default_flow_style=False)
+        return yaml.dump(config_to_dict(self.config), default_flow_style=False)
 
     def start(self) -> str:
         """Start controller GCE VM with retry logic.
@@ -338,7 +375,7 @@ class GcpController:
                     zone=self.zone,
                     vm_name=self._vm_name,
                 )
-                if self._wait_healthy_via_ssh(conn, port):
+                if wait_healthy_via_ssh(conn, port):
                     self._tag_metadata(address)
                     logger.info("Controller started successfully at %s", address)
                     return address
@@ -411,12 +448,7 @@ class GcpController:
 
         address = self._get_vm_address()
 
-        # Health check via SSH since user may not have direct port access
-        backoff = ExponentialBackoff(
-            initial=HEALTH_CHECK_BACKOFF_INITIAL,
-            maximum=HEALTH_CHECK_BACKOFF_MAX,
-        )
-        if not backoff.wait_until(lambda: check_health(conn, port), timeout=HEALTH_CHECK_TIMEOUT_SECONDS):
+        if not wait_healthy_via_ssh(conn, port):
             raise RuntimeError(f"Controller at {address} failed health check after reload")
 
         logger.info("Controller reloaded at %s", address)
@@ -628,45 +660,6 @@ class GcpController:
             )
         return success
 
-    def _wait_healthy_via_ssh(
-        self, conn: SshConnection, port: int, timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS
-    ) -> bool:
-        """Poll health endpoint via SSH until healthy or timeout.
-
-        Uses SSH to run curl on the remote host, avoiding firewall issues
-        that can block external HTTP access to the controller port.
-        """
-        logger.info("Starting SSH-based health check polling (port=%d, timeout=%ds)", port, int(timeout))
-        start_time = time.time()
-        attempt = 0
-
-        backoff = ExponentialBackoff(
-            initial=HEALTH_CHECK_BACKOFF_INITIAL,
-            maximum=HEALTH_CHECK_BACKOFF_MAX,
-        )
-
-        def check_with_logging() -> bool:
-            nonlocal attempt
-            attempt += 1
-            result = check_health(conn, port)
-            elapsed = time.time() - start_time
-            if result:
-                logger.info("SSH health check succeeded after %d attempts (%.1fs elapsed)", attempt, elapsed)
-            else:
-                logger.info("SSH health check attempt %d failed (%.1fs elapsed)", attempt, elapsed)
-            return result
-
-        success = backoff.wait_until(check_with_logging, timeout=timeout)
-        if not success:
-            elapsed = time.time() - start_time
-            logger.warning(
-                "SSH health check failed after %d attempts (%.1fs elapsed, timeout=%ds)",
-                attempt,
-                elapsed,
-                int(timeout),
-            )
-        return success
-
     def _tag_metadata(self, address: str) -> None:
         """Tag VM with controller address metadata for worker discovery."""
         cmd = [
@@ -745,7 +738,7 @@ class ManualController:
     Requires controller_vm.host to be configured.
     """
 
-    def __init__(self, config: IrisClusterConfig):
+    def __init__(self, config: vm_pb2.IrisClusterConfig):
         self.config = config
         self._vm_config = config.controller_vm
         self._bootstrapped = False
@@ -760,7 +753,7 @@ class ManualController:
         """Serialize cluster config to YAML for the controller VM."""
         import yaml
 
-        return yaml.dump(self.config.to_dict(), default_flow_style=False)
+        return yaml.dump(config_to_dict(self.config), default_flow_style=False)
 
     def start(self) -> str:
         """Start controller via SSH bootstrap."""
@@ -788,8 +781,7 @@ class ManualController:
 
         self._bootstrapped = True
 
-        # Health check via SSH since user may not have direct port access
-        if not self._wait_healthy_via_ssh(conn, port):
+        if not wait_healthy_via_ssh(conn, port):
             raise RuntimeError(f"Controller at {self.address} failed health check after bootstrap")
 
         logger.info("Controller started at %s", self.address)
@@ -850,23 +842,13 @@ class ManualController:
             healthy=healthy,
         )
 
-    def _wait_healthy_via_ssh(
-        self, conn: SshConnection, port: int, timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS
-    ) -> bool:
-        """Poll health endpoint via SSH until healthy or timeout."""
-        backoff = ExponentialBackoff(
-            initial=HEALTH_CHECK_BACKOFF_INITIAL,
-            maximum=HEALTH_CHECK_BACKOFF_MAX,
-        )
-        return backoff.wait_until(lambda: check_health(conn, port), timeout=timeout)
-
     def _create_ssh_connection(self, host: str) -> DirectSshConnection:
         """Create SSH connection for the given host."""
         return DirectSshConnection(
             host=host,
-            user=self.config.ssh_user,
-            key_file=self.config.ssh_private_key,
-            connect_timeout=self.config.ssh_connect_timeout_seconds,
+            user=self.config.ssh_user or "root",
+            key_file=self.config.ssh_private_key or None,
+            connect_timeout=self.config.ssh_connect_timeout_seconds or 30,
         )
 
     def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
@@ -890,7 +872,7 @@ class ManualController:
             return None
 
 
-def create_controller(config: IrisClusterConfig) -> ControllerProtocol:
+def create_controller(config: vm_pb2.IrisClusterConfig) -> ControllerProtocol:
     """Factory function to create appropriate controller type.
 
     For GCP provider (gcp or tpu) with controller VM enabled, creates GcpController.
