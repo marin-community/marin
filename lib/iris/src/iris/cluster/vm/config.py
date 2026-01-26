@@ -119,6 +119,9 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     with open(config_path) as f:
         data = yaml.safe_load(f)
 
+    if not data:
+        raise ValueError(f"Config file is empty or invalid: {config_path}")
+
     # Expand environment variables in controller_address only.
     # Other fields (e.g., docker_image, ssh.key_file) are used as-is.
     # This is intentional - controller_address often needs $IRIS_CONTROLLER_ADDRESS for dynamic discovery.

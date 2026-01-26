@@ -38,6 +38,10 @@ def use_docker(request):
 # =============================================================================
 # Docker Cleanup Utilities
 # =============================================================================
+# TODO: This before/after snapshot approach can accidentally delete containers
+# created by other processes during the test window. Fix by patching
+# DockerRuntime -> TrackingDockerRuntime at the module level so all Docker
+# operations are tracked explicitly. See review.md for details.
 
 
 def _get_container_ids() -> set[str]:
