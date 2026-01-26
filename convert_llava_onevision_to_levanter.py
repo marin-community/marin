@@ -33,10 +33,12 @@ Example:
 """
 
 import argparse
+import concurrent.futures
 import gc
 import gzip
 import io
 import json
+import multiprocessing
 import os
 import random
 import subprocess
@@ -44,7 +46,7 @@ import sys
 import time
 import threading
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from pathlib import Path
 from queue import Queue
@@ -87,6 +89,42 @@ try:
     PANDAS_AVAILABLE = True
 except ImportError:
     PANDAS_AVAILABLE = False
+
+
+# =============================================================================
+# Module-level download function for multiprocessing
+# =============================================================================
+# This MUST be at module level for ProcessPoolExecutor to work with 'spawn' context
+
+def _download_single_file(args: Tuple[str, str, str]) -> str:
+    """
+    Download a single file from HuggingFace Hub.
+
+    This function is at module level because multiprocessing with 'spawn' context
+    requires picklable functions, and nested/lambda functions cannot be pickled.
+
+    Args:
+        args: Tuple of (repo_id, filename, download_dir)
+
+    Returns:
+        Local path to the downloaded file
+
+    Raises:
+        Exception: If download fails
+    """
+    repo_id, filename, download_dir = args
+
+    # Import inside function to avoid issues with multiprocessing
+    from huggingface_hub import hf_hub_download
+
+    return hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        repo_type="dataset",
+        local_dir=download_dir,
+        local_dir_use_symlinks=False,
+        resume_download=True,  # Support resuming partial downloads
+    )
 
 
 class AsyncGCSUploader:
@@ -530,97 +568,248 @@ def save_checkpoint(
         print(f"Warning: Could not save checkpoint: {e}", file=sys.stderr)
 
 
+# =============================================================================
+# Helper functions for conversation format conversion
+# =============================================================================
+
+def extract_image_bytes(image) -> Optional[bytes]:
+    """Extract bytes from various image formats."""
+    if image is None:
+        return None
+
+    if hasattr(image, 'tobytes'):
+        # PIL Image - convert to bytes
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='PNG')
+        result = img_byte_arr.getvalue()
+        img_byte_arr.close()
+        return result
+    elif isinstance(image, dict) and 'bytes' in image:
+        return image['bytes']
+    elif isinstance(image, bytes):
+        return image
+
+    return None
+
+
+def convert_conversations_to_messages(conversations: List[Dict], image) -> List[Dict]:
+    """
+    Convert LLaVA conversation format to Levanter message format.
+
+    Input: [{"from": "human", "value": "..."}, {"from": "gpt", "value": "..."}]
+    Output: [{"role": "user", "content": [...]}, {"role": "assistant", "content": [...]}]
+    """
+    messages = []
+    has_image = image is not None
+    image_added = False
+
+    for conv in conversations:
+        role_from = conv.get('from', '')
+        value = conv.get('value', '')
+
+        # Map role names
+        if role_from in ('human', 'user'):
+            role = 'user'
+        elif role_from in ('gpt', 'assistant'):
+            role = 'assistant'
+        else:
+            continue  # Skip unknown roles
+
+        # Build content
+        content = []
+
+        # Add image placeholder in first user message
+        if role == 'user' and has_image and not image_added:
+            # Check if message contains <image> placeholder
+            if '<image>' in value:
+                # Replace <image> with proper image content
+                parts = value.split('<image>')
+                for i, part in enumerate(parts):
+                    if i > 0:
+                        content.append({"type": "image"})
+                    if part.strip():
+                        content.append({"type": "text", "text": part.strip()})
+                image_added = True
+            else:
+                # Prepend image
+                content.append({"type": "image"})
+                content.append({"type": "text", "text": value})
+                image_added = True
+        else:
+            content.append({"type": "text", "text": value})
+
+        messages.append({"role": role, "content": content})
+
+    return messages
+
+
+def convert_raw_messages_to_levanter(messages_raw: List[Dict], image) -> List[Dict]:
+    """
+    Convert HuggingFace message format to Levanter format.
+    Handles both string content and structured content.
+    """
+    messages = []
+    has_image = image is not None
+    image_added = False
+
+    for msg in messages_raw:
+        role = msg.get('role', '')
+        content_raw = msg.get('content', '')
+
+        if role not in ('user', 'assistant', 'system'):
+            continue
+
+        # Handle content (can be string or list)
+        if isinstance(content_raw, str):
+            content = []
+            if role == 'user' and has_image and not image_added:
+                if '<image>' in content_raw:
+                    parts = content_raw.split('<image>')
+                    for i, part in enumerate(parts):
+                        if i > 0:
+                            content.append({"type": "image"})
+                        if part.strip():
+                            content.append({"type": "text", "text": part.strip()})
+                else:
+                    content.append({"type": "image"})
+                    content.append({"type": "text", "text": content_raw})
+                image_added = True
+            else:
+                content.append({"type": "text", "text": content_raw})
+        elif isinstance(content_raw, list):
+            # Already structured content
+            content = content_raw
+            # Check if image placeholder needs to be added
+            if role == 'user' and has_image and not image_added:
+                has_image_in_content = any(c.get('type') == 'image' for c in content)
+                if not has_image_in_content:
+                    content = [{"type": "image"}] + content
+                image_added = True
+        else:
+            content = [{"type": "text", "text": str(content_raw)}]
+
+        messages.append({"role": role, "content": content})
+
+    return messages
+
+
+def create_caption_messages(prompt: str, caption: str, image) -> List[Dict]:
+    """Create messages for caption format (original behavior)."""
+    has_image = image is not None
+
+    if has_image:
+        user_content = [{"type": "image"}, {"type": "text", "text": prompt}]
+    else:
+        user_content = [{"type": "text", "text": prompt}]
+
+    return [
+        {"role": "user", "content": user_content},
+        {"role": "assistant", "content": [{"type": "text", "text": caption}]}
+    ]
+
+
+def validate_sample(item: Dict, idx: int) -> bool:
+    """Validate that a sample will produce non-empty assistant response."""
+    # Check conversations format
+    conversations = item.get('conversations', [])
+    if conversations:
+        for conv in conversations:
+            if conv.get('from') in ('gpt', 'assistant'):
+                value = conv.get('value', '')
+                if value and value.strip():
+                    return True
+        return False
+
+    # Check messages format
+    messages = item.get('messages', [])
+    if messages:
+        for msg in messages:
+            if msg.get('role') == 'assistant':
+                content = msg.get('content', '')
+                if isinstance(content, str) and content.strip():
+                    return True
+                if isinstance(content, list):
+                    for c in content:
+                        if c.get('text', '').strip():
+                            return True
+        return False
+
+    # Check caption format
+    caption = item.get('caption', '')
+    if caption and caption.strip():
+        return True
+
+    return False
+
+
 def convert_to_levanter(item: Dict[str, Any], include_source: bool = True) -> Dict[str, Any]:
     """
-    Convert a single item from LLaVA-OneVision format to Levanter format.
-    Supports both image+text and pure text data.
+    Convert a single item from various formats to Levanter format.
+    Supports multiple input formats and both image+text and pure text data.
 
-    Input format:
+    Supported input formats:
+
+    1. Caption format (original):
         {
             "id": str,
-            "image": PIL.Image or dict with bytes (optional, can be None for text-only),
+            "image": PIL.Image or dict with bytes (optional),
             "caption": str,
             "split": str
         }
 
-    Output format (with image):
+    2. LLaVA conversation format:
         {
-            "messages": [
-                {"role": "user", "content": [{"type": "image", "text": None}, {"type": "text", "text": prompt}]},
-                {"role": "assistant", "content": [{"type": "text", "text": caption}]}
+            "conversations": [
+                {"from": "human", "value": "What is in this image?"},
+                {"from": "gpt", "value": "This image shows..."}
             ],
-            "images": [{"bytes": image_bytes}],
-            "source": str  # Optional: source dataset name (coyo, datacomp1b, etc.)
+            "image": PIL.Image or dict with bytes (optional)
         }
 
-    Output format (text-only):
+    3. HuggingFace message format:
         {
             "messages": [
-                {"role": "user", "content": [{"type": "text", "text": prompt}]},
-                {"role": "assistant", "content": [{"type": "text", "text": caption}]}
+                {"role": "user", "content": "..."},
+                {"role": "assistant", "content": "..."}
             ],
-            "images": [],
-            "source": str  # Optional: source dataset name (coyo, datacomp1b, etc.)
+            "image": PIL.Image or dict with bytes (optional)
+        }
+
+    Output format:
+        {
+            "messages": [
+                {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "..."}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
+            ],
+            "images": [{"bytes": image_bytes}] or [],
+            "source": str  # Optional
         }
     """
-    item_id = item.get('id', '')
-    caption = item.get('caption', '')
     image = item.get('image')
 
-    # Check if this is a text-only item (no image)
-    has_image = image is not None
+    # Check which input format we have
+    conversations = item.get('conversations', [])
+    messages_raw = item.get('messages', [])
 
-    image_bytes = None
-    if has_image:
-        # Get image bytes
-        if hasattr(image, 'tobytes'):
-            # PIL Image - convert to bytes
-            img_byte_arr = io.BytesIO()
-            # Save as PNG to preserve quality
-            image.save(img_byte_arr, format='PNG')
-            image_bytes = img_byte_arr.getvalue()
-            # Explicitly close and delete BytesIO to free memory
-            img_byte_arr.close()
-            del img_byte_arr
-        elif isinstance(image, dict) and 'bytes' in image:
-            image_bytes = image['bytes']
-        elif isinstance(image, bytes):
-            image_bytes = image
-        else:
-            # Unknown image format, treat as text-only
-            has_image = False
-
-    # Select prompt based on caption length
-    prompt = select_prompt(caption, item_id)
-
-    # Build Levanter format
-    if has_image and image_bytes is not None:
-        # Image + text format
-        user_content = [
-            {"type": "image"},
-            {"type": "text", "text": prompt}
-        ]
-        images_list = [{"bytes": image_bytes}]
+    if conversations:
+        # LLaVA conversation format: {"from": "human/gpt", "value": "..."}
+        messages = convert_conversations_to_messages(conversations, image)
+    elif messages_raw:
+        # HuggingFace message format: {"role": "user/assistant", "content": "..."}
+        messages = convert_raw_messages_to_levanter(messages_raw, image)
     else:
-        # Text-only format
-        user_content = [
-            {"type": "text", "text": prompt}
-        ]
-        images_list = []
+        # Caption format (original behavior)
+        caption = item.get('caption', '')
+        item_id = item.get('id', '')
+        prompt = select_prompt(caption, item_id)
+        messages = create_caption_messages(prompt, caption, image)
+
+    # Get image bytes
+    image_bytes = extract_image_bytes(image)
+    images_list = [{"bytes": image_bytes}] if image_bytes else []
 
     result = {
-        "messages": [
-            {
-                "role": "user",
-                "content": user_content
-            },
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": caption}
-                ]
-            }
-        ],
+        "messages": messages,
         "images": images_list
     }
 
@@ -929,17 +1118,18 @@ def download_parquet_batch(
     """
     Download a batch of parquet files in parallel with per-file timeout and retry.
 
+    Uses ProcessPoolExecutor instead of ThreadPoolExecutor for true timeout support.
+    Processes can be killed on timeout, unlike threads which continue running.
+
     Args:
         files: List of (repo_id, filename) tuples
         download_dir: Directory to download files to
         max_workers: Number of parallel download workers
         timeout_minutes: Timeout for each file download in minutes (default: 3)
-        max_retries: Maximum number of retries per file (default: 4)
+        max_retries: Maximum number of retries per file (default: 10)
 
     Returns list of local file paths.
     """
-    import concurrent.futures
-
     if not HF_HUB_AVAILABLE:
         raise RuntimeError("huggingface_hub not installed")
 
@@ -952,29 +1142,18 @@ def download_parquet_batch(
     local_paths = []
     permanently_failed = []
 
-    def download_file(repo_id: str, filename: str) -> Optional[str]:
-        """Download a single file."""
-        try:
-            repo_download_dir = os.path.join(download_dir, repo_id.replace("/", "_"))
-            local_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                repo_type="dataset",
-                local_dir=repo_download_dir,
-                local_dir_use_symlinks=False
-            )
-            return local_path
-        except Exception as e:
-            print(f"  Error downloading {repo_id}/{filename}: {e}", file=sys.stderr)
-            raise
-
-    print(f"Downloading {len(files)} files with {max_workers} workers...")
+    print(f"Downloading {len(files)} files with {max_workers} process workers...")
     print(f"  Per-file timeout: {timeout_minutes:.0f} min, Max retries: {max_retries}")
+    print(f"  Using ProcessPoolExecutor (processes can be killed on timeout)")
     overall_start_time = time.time()
 
     # Track retry counts for each file
     retry_counts = {(repo_id, filename): 0 for repo_id, filename in files}
     pending_files = list(files)
+
+    # Use 'spawn' context for cross-platform compatibility
+    # 'spawn' is safer than 'fork' and works on all platforms
+    mp_context = multiprocessing.get_context('spawn')
 
     # Process files with retry loop
     round_num = 0
@@ -985,18 +1164,26 @@ def download_parquet_batch(
 
         if round_num > 1:
             print(f"  Retry round {round_num - 1}: {len(current_batch)} files to retry...")
+            # Add a small delay before retry to avoid overwhelming the server
+            time.sleep(2)
 
-        # Create executor (don't use 'with' to avoid waiting on shutdown)
-        executor = ThreadPoolExecutor(max_workers=max_workers)
+        # Create ProcessPoolExecutor with spawn context
+        executor = ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_context)
 
         try:
-            # Submit all downloads for this round and track start times
+            # Submit all downloads for this round
             future_to_file = {}
-            future_start_times = {}
             for repo_id, filename in current_batch:
-                future = executor.submit(download_file, repo_id, filename)
+                # Create download directory for this repo
+                repo_download_dir = os.path.join(download_dir, repo_id.replace("/", "_"))
+                os.makedirs(repo_download_dir, exist_ok=True)
+
+                # Submit to process pool using module-level function
+                future = executor.submit(
+                    _download_single_file,
+                    (repo_id, filename, repo_download_dir)
+                )
                 future_to_file[future] = (repo_id, filename)
-                future_start_times[future] = time.time()
 
             # Progress bar
             pbar = tqdm(
@@ -1005,58 +1192,19 @@ def download_parquet_batch(
                 unit="file"
             )
 
-            # Process futures with timeout checking
-            while future_to_file:
-                # Wait for some futures to complete (check every 30 seconds)
-                done, not_done = concurrent.futures.wait(
-                    future_to_file.keys(),
-                    timeout=30,
-                    return_when=concurrent.futures.FIRST_COMPLETED
-                )
+            # Process futures as they complete
+            for future in concurrent.futures.as_completed(future_to_file.keys()):
+                repo_id, filename = future_to_file[future]
+                pbar.update(1)
 
-                # Process completed futures
-                for future in done:
-                    repo_id, filename = future_to_file.pop(future)
-                    del future_start_times[future]
-                    pbar.update(1)
-
-                    try:
-                        result = future.result()
-                        if result:
-                            local_paths.append(result)
-                    except Exception as e:
-                        # Download error - check if we should retry
-                        if retry_counts[(repo_id, filename)] < max_retries:
-                            retry_counts[(repo_id, filename)] += 1
-                            pending_files.append((repo_id, filename))
-                            print(f"  Error: {filename}, will retry (attempt {retry_counts[(repo_id, filename)]}/{max_retries})")
-                        else:
-                            permanently_failed.append((repo_id, filename))
-                            print(f"  FAILED (max retries exceeded): {filename}", file=sys.stderr)
-
-                    pbar.set_postfix(
-                        ok=len(local_paths),
-                        retry=len(pending_files),
-                        failed=len(permanently_failed)
-                    )
-
-                # Check for timed-out futures (still running but exceeded timeout)
-                current_time = time.time()
-                timed_out = []
-                for future in list(future_to_file.keys()):
-                    elapsed = current_time - future_start_times[future]
-                    if elapsed > timeout_seconds:
-                        timed_out.append(future)
-
-                # Handle timed-out downloads
-                for future in timed_out:
-                    repo_id, filename = future_to_file.pop(future)
-                    del future_start_times[future]
-                    pbar.update(1)
-
-                    # Cancel the future (won't stop running thread, but marks it)
-                    future.cancel()
-
+                try:
+                    # Get result with timeout - this is where ProcessPoolExecutor shines
+                    # If the process is stuck, it can be killed after timeout
+                    result = future.result(timeout=timeout_seconds)
+                    if result:
+                        local_paths.append(result)
+                except FuturesTimeoutError:
+                    # True timeout - process exceeded time limit
                     print(f"  TIMEOUT ({timeout_minutes:.0f} min): {filename}", file=sys.stderr)
 
                     if retry_counts[(repo_id, filename)] < max_retries:
@@ -1066,18 +1214,29 @@ def download_parquet_batch(
                     else:
                         permanently_failed.append((repo_id, filename))
                         print(f"    FAILED (max retries exceeded)", file=sys.stderr)
+                except Exception as e:
+                    # Download error - check if we should retry
+                    error_msg = str(e)[:100]  # Truncate long error messages
+                    print(f"  Error: {filename}: {error_msg}", file=sys.stderr)
 
-                    pbar.set_postfix(
-                        ok=len(local_paths),
-                        retry=len(pending_files),
-                        failed=len(permanently_failed)
-                    )
+                    if retry_counts[(repo_id, filename)] < max_retries:
+                        retry_counts[(repo_id, filename)] += 1
+                        pending_files.append((repo_id, filename))
+                        print(f"    Will retry (attempt {retry_counts[(repo_id, filename)]}/{max_retries})")
+                    else:
+                        permanently_failed.append((repo_id, filename))
+                        print(f"    FAILED (max retries exceeded)", file=sys.stderr)
+
+                pbar.set_postfix(
+                    ok=len(local_paths),
+                    retry=len(pending_files),
+                    failed=len(permanently_failed)
+                )
 
             pbar.close()
 
         finally:
-            # Shutdown executor WITHOUT waiting for pending tasks
-            # This allows timed-out downloads to be abandoned
+            # Shutdown executor - with ProcessPoolExecutor, this actually terminates processes
             try:
                 executor.shutdown(wait=False, cancel_futures=True)
             except TypeError:
