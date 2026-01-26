@@ -39,7 +39,8 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from typing import TypeVar
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -208,118 +209,49 @@ class ValidationResult:
     duration_seconds: float
 
 
-def run_simple_tpu_job(client: IrisClient, tpu_type: str) -> ValidationResult:
-    """Test 1: Simple TPU job that returns a value.
+def _job_status_to_result(name: str, status: cluster_pb2.JobStatus, duration: float) -> ValidationResult:
+    """Convert a job status to a ValidationResult."""
+    if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
+        return ValidationResult(name, True, f"Job completed in {duration:.1f}s", duration)
+    state_name = cluster_pb2.JobState.Name(status.state)
+    return ValidationResult(name, False, f"Job ended with state {state_name}: {status.error}", duration)
 
-    This test validates that the autoscaler can provision a TPU slice
-    and the worker can execute a basic job.
-    """
-    start = time.monotonic()
+
+def _submit_simple_job(client: IrisClient, tpu_type: str) -> cluster_pb2.JobStatus:
+    """Submit a simple TPU job that returns a value."""
 
     def hello():
         print("Hello from validation job!")
         return 42
 
-    try:
-        job = client.submit(
-            entrypoint=Entrypoint.from_callable(hello),
-            name="validate-hello",
-            resources=ResourceSpec(device=tpu_device(tpu_type)),
-            environment=EnvironmentSpec(workspace="/app"),
-        )
-        status = job.wait(timeout=DEFAULT_VALIDATION_TIMEOUT, raise_on_failure=False)
-
-        duration = time.monotonic() - start
-
-        if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
-            return ValidationResult(
-                name=f"Simple TPU job ({tpu_type})",
-                passed=True,
-                message=f"Job completed successfully in {duration:.1f}s",
-                duration_seconds=duration,
-            )
-        else:
-            state_name = cluster_pb2.JobState.Name(status.state)
-            return ValidationResult(
-                name=f"Simple TPU job ({tpu_type})",
-                passed=False,
-                message=f"Job ended with state {state_name}: {status.error}",
-                duration_seconds=duration,
-            )
-    except TimeoutError:
-        return ValidationResult(
-            name=f"Simple TPU job ({tpu_type})",
-            passed=False,
-            message=f"Job timed out after {DEFAULT_VALIDATION_TIMEOUT}s (TPU provisioning may take 5-10 min)",
-            duration_seconds=time.monotonic() - start,
-        )
-    except Exception as e:
-        return ValidationResult(
-            name=f"Simple TPU job ({tpu_type})",
-            passed=False,
-            message=f"Unexpected error: {e}",
-            duration_seconds=time.monotonic() - start,
-        )
+    job = client.submit(
+        entrypoint=Entrypoint.from_callable(hello),
+        name="validate-hello",
+        resources=ResourceSpec(device=tpu_device(tpu_type)),
+        environment=EnvironmentSpec(workspace="/app"),
+    )
+    return job.wait(timeout=DEFAULT_VALIDATION_TIMEOUT, raise_on_failure=False)
 
 
-def run_compute_job(client: IrisClient, tpu_type: str) -> ValidationResult:
-    """Test 2: TPU job with arguments and return value."""
-    start = time.monotonic()
+def _submit_compute_job(client: IrisClient, tpu_type: str) -> cluster_pb2.JobStatus:
+    """Submit a TPU job with arguments and return value."""
 
     def compute(a: int, b: int) -> int:
         result = a + b
         print(f"{a} + {b} = {result}")
         return result
 
-    try:
-        job = client.submit(
-            entrypoint=Entrypoint.from_callable(compute, 10, 32),
-            name="validate-compute",
-            resources=ResourceSpec(device=tpu_device(tpu_type)),
-            environment=EnvironmentSpec(workspace="/app"),
-        )
-        status = job.wait(timeout=DEFAULT_VALIDATION_TIMEOUT, raise_on_failure=False)
-
-        duration = time.monotonic() - start
-
-        if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
-            return ValidationResult(
-                name=f"Compute job with args ({tpu_type})",
-                passed=True,
-                message=f"Job completed successfully in {duration:.1f}s",
-                duration_seconds=duration,
-            )
-        else:
-            state_name = cluster_pb2.JobState.Name(status.state)
-            return ValidationResult(
-                name=f"Compute job with args ({tpu_type})",
-                passed=False,
-                message=f"Job ended with state {state_name}: {status.error}",
-                duration_seconds=duration,
-            )
-    except TimeoutError:
-        return ValidationResult(
-            name=f"Compute job with args ({tpu_type})",
-            passed=False,
-            message=f"Job timed out after {DEFAULT_VALIDATION_TIMEOUT}s",
-            duration_seconds=time.monotonic() - start,
-        )
-    except Exception as e:
-        return ValidationResult(
-            name=f"Compute job with args ({tpu_type})",
-            passed=False,
-            message=f"Unexpected error: {e}",
-            duration_seconds=time.monotonic() - start,
-        )
+    job = client.submit(
+        entrypoint=Entrypoint.from_callable(compute, 10, 32),
+        name="validate-compute",
+        resources=ResourceSpec(device=tpu_device(tpu_type)),
+        environment=EnvironmentSpec(workspace="/app"),
+    )
+    return job.wait(timeout=DEFAULT_VALIDATION_TIMEOUT, raise_on_failure=False)
 
 
-def run_scheduler_test(client: IrisClient, tpu_type: str) -> ValidationResult:
-    """Test 3: Submit multiple TPU jobs to exercise the scheduler.
-
-    This test submits 2 concurrent jobs to verify the scheduler can
-    handle multiple pending jobs and the autoscaler responds appropriately.
-    """
-    start = time.monotonic()
+def _submit_scheduler_jobs(client: IrisClient, tpu_type: str) -> list[tuple[str, cluster_pb2.JobStatus]]:
+    """Submit multiple TPU jobs to exercise the scheduler. Returns list of (job_id, status)."""
 
     def quick_task(task_id: int):
         import time as time_module
@@ -328,56 +260,33 @@ def run_scheduler_test(client: IrisClient, tpu_type: str) -> ValidationResult:
         print(f"Task {task_id} completed")
         return task_id
 
-    try:
-        jobs = []
-        for i in range(2):
-            job = client.submit(
-                entrypoint=Entrypoint.from_callable(quick_task, i),
-                name=f"validate-scheduler-{i}",
-                resources=ResourceSpec(device=tpu_device(tpu_type)),
-                environment=EnvironmentSpec(workspace="/app"),
-            )
-            jobs.append(job)
-
-        all_succeeded = True
-        failed_jobs = []
-        for job in jobs:
-            status = job.wait(timeout=DEFAULT_VALIDATION_TIMEOUT, raise_on_failure=False)
-            if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
-                all_succeeded = False
-                state_name = cluster_pb2.JobState.Name(status.state)
-                failed_jobs.append(f"{job.job_id}: {state_name}")
-
-        duration = time.monotonic() - start
-
-        if all_succeeded:
-            return ValidationResult(
-                name="Scheduler test (2 concurrent TPU jobs)",
-                passed=True,
-                message=f"All 2 jobs completed successfully in {duration:.1f}s",
-                duration_seconds=duration,
-            )
-        else:
-            return ValidationResult(
-                name="Scheduler test (2 concurrent TPU jobs)",
-                passed=False,
-                message=f"Some jobs failed: {', '.join(failed_jobs)}",
-                duration_seconds=duration,
-            )
-    except TimeoutError:
-        return ValidationResult(
-            name="Scheduler test (2 concurrent TPU jobs)",
-            passed=False,
-            message=f"Jobs timed out after {DEFAULT_VALIDATION_TIMEOUT}s",
-            duration_seconds=time.monotonic() - start,
+    jobs = []
+    for i in range(2):
+        job = client.submit(
+            entrypoint=Entrypoint.from_callable(quick_task, i),
+            name=f"validate-scheduler-{i}",
+            resources=ResourceSpec(device=tpu_device(tpu_type)),
+            environment=EnvironmentSpec(workspace="/app"),
         )
-    except Exception as e:
-        return ValidationResult(
-            name="Scheduler test (2 concurrent TPU jobs)",
-            passed=False,
-            message=f"Unexpected error: {e}",
-            duration_seconds=time.monotonic() - start,
-        )
+        jobs.append(job)
+
+    return [(job.job_id, job.wait(timeout=DEFAULT_VALIDATION_TIMEOUT, raise_on_failure=False)) for job in jobs]
+
+
+def _scheduler_results_to_validation(
+    results: list[tuple[str, cluster_pb2.JobStatus]], duration: float
+) -> ValidationResult:
+    """Convert scheduler job results to a ValidationResult."""
+    name = "Scheduler test (2 concurrent TPU jobs)"
+    failed_jobs = []
+    for job_id, status in results:
+        if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
+            state_name = cluster_pb2.JobState.Name(status.state)
+            failed_jobs.append(f"{job_id}: {state_name}")
+
+    if not failed_jobs:
+        return ValidationResult(name, True, f"All {len(results)} jobs completed in {duration:.1f}s", duration)
+    return ValidationResult(name, False, f"Some jobs failed: {', '.join(failed_jobs)}", duration)
 
 
 def print_validation_results(results: list[ValidationResult]) -> bool:
@@ -409,6 +318,31 @@ def print_validation_results(results: list[ValidationResult]) -> bool:
     return all_passed
 
 
+T = TypeVar("T")
+
+
+def _run_validation_test(
+    name: str,
+    client: IrisClient,
+    tpu_type: str,
+    submit_fn: Callable[[IrisClient, str], T],
+    result_fn: Callable[[T, float], ValidationResult] | None = None,
+) -> ValidationResult:
+    """Run a single validation test, catching TimeoutError at this level."""
+    start = time.monotonic()
+    try:
+        result = submit_fn(client, tpu_type)
+        duration = time.monotonic() - start
+        if result_fn:
+            return result_fn(result, duration)
+        # Default: result is a JobStatus
+        assert isinstance(result, cluster_pb2.JobStatus)
+        return _job_status_to_result(name, result, duration)
+    except TimeoutError:
+        duration = time.monotonic() - start
+        return ValidationResult(name, False, f"Timed out after {DEFAULT_VALIDATION_TIMEOUT}s", duration)
+
+
 def _run_validation(controller_url: str, workspace: Path, tpu_type: str) -> None:
     """Run validation tests against the controller."""
     click.echo()
@@ -422,13 +356,21 @@ def _run_validation(controller_url: str, workspace: Path, tpu_type: str) -> None
     results: list[ValidationResult] = []
 
     click.echo("[1/3] Running simple TPU job (may trigger TPU provisioning)...")
-    results.append(run_simple_tpu_job(client, tpu_type))
+    results.append(_run_validation_test(f"Simple TPU job ({tpu_type})", client, tpu_type, _submit_simple_job))
 
     click.echo("[2/3] Running compute job with arguments...")
-    results.append(run_compute_job(client, tpu_type))
+    results.append(_run_validation_test(f"Compute job with args ({tpu_type})", client, tpu_type, _submit_compute_job))
 
     click.echo("[3/3] Running scheduler test with 2 concurrent jobs...")
-    results.append(run_scheduler_test(client, tpu_type))
+    results.append(
+        _run_validation_test(
+            "Scheduler test (2 concurrent TPU jobs)",
+            client,
+            tpu_type,
+            _submit_scheduler_jobs,
+            _scheduler_results_to_validation,
+        )
+    )
 
     all_passed = print_validation_results(results)
 
