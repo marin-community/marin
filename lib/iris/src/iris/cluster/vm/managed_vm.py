@@ -109,6 +109,13 @@ echo "[iris-init] Phase: worker_start"
 sudo docker stop iris-worker 2>/dev/null || true
 sudo docker rm iris-worker 2>/dev/null || true
 
+# Clean up ALL iris-managed task containers by label
+echo "[iris-init] Cleaning up iris task containers"
+IRIS_CONTAINERS=$(sudo docker ps -aq --filter "label=iris.managed=true" 2>/dev/null || true)
+if [ -n "$IRIS_CONTAINERS" ]; then
+    sudo docker rm -f $IRIS_CONTAINERS 2>/dev/null || true
+fi
+
 # Start worker container without restart policy first (fail fast during bootstrap)
 # Note: CONTROLLER_ADDRESS is set by the discovery preamble prepended to this script
 sudo docker run -d --name iris-worker \

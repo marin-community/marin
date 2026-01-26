@@ -211,6 +211,15 @@ class _LocalContainerRuntime(ContainerRuntime):
         del container_id
         return ContainerStats(memory_mb=100, cpu_percent=10, process_count=1, available=True)
 
+    def list_iris_containers(self, all_states: bool = True) -> list[str]:
+        del all_states
+        return list(self._containers.keys())
+
+    def remove_all_iris_containers(self) -> int:
+        count = len(self._containers)
+        self._containers.clear()
+        return count
+
 
 class _LocalBundleProvider:
     def __init__(self, bundle_path: Path):

@@ -89,6 +89,8 @@ def mock_runtime():
         )
     )
     runtime.get_logs = Mock(return_value=[])
+    runtime.list_iris_containers = Mock(return_value=[])
+    runtime.remove_all_iris_containers = Mock(return_value=0)
     return runtime
 
 

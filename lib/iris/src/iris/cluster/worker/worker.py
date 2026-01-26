@@ -167,6 +167,9 @@ class Worker:
         self._controller_client: ControllerServiceClientSync | None = None
 
     def start(self) -> None:
+        # Clean up any orphaned containers from previous runs
+        self._cleanup_all_iris_containers()
+
         self._server_thread = threading.Thread(
             target=self._run_server,
             daemon=True,
@@ -193,6 +196,15 @@ class Worker:
                 daemon=True,
             )
             self._heartbeat_thread.start()
+
+    def _cleanup_all_iris_containers(self) -> None:
+        """Remove all iris-managed containers at startup.
+
+        This handles crash recovery cleanly without tracking complexity.
+        """
+        removed = self._runtime.remove_all_iris_containers()
+        if removed > 0:
+            logger.info("Startup cleanup: removed %d iris containers", removed)
 
     def stop(self) -> None:
         self._stop_heartbeat.set()
@@ -240,8 +252,6 @@ class Worker:
             print(f"Worker server error: {e}")
 
     def _heartbeat_loop(self) -> None:
-        import os
-
         metadata = self._environment_provider.probe()
 
         # Determine the address to advertise to the controller.
@@ -251,18 +261,16 @@ class Worker:
         if address_host == "0.0.0.0":
             address_host = metadata.ip_address
 
-        # Get VM address from environment (injected by ManagedVm bootstrap)
+        # Get VM address from probe (injected by ManagedVm bootstrap via IRIS_VM_ADDRESS)
         # For non-cloud workers, use host:port as both worker_id and vm_address
-        vm_address = os.environ.get("IRIS_VM_ADDRESS", "")
+        vm_address = metadata.vm_address
         if not vm_address:
             vm_address = f"{address_host}:{self._config.port}"
+            metadata.vm_address = vm_address
 
         # Derive worker_id from vm_address (no UUID generation)
         if not self._worker_id:
             self._worker_id = vm_address
-
-        # Include vm_address in metadata for autoscaler VM tracking
-        metadata.vm_address = vm_address
 
         # Controller client is created in start() before this thread starts
         assert self._controller_client is not None
@@ -272,10 +280,12 @@ class Worker:
         while not self._stop_heartbeat.is_set():
             attempt += 1
 
-            # Get running task IDs for controller restart recovery
+            # Get active task IDs for controller restart recovery (RUNNING or BUILDING)
             with self._lock:
                 running_task_ids = [
-                    t.task_id for t in self._tasks.values() if t.status == cluster_pb2.TASK_STATE_RUNNING
+                    t.task_id
+                    for t in self._tasks.values()
+                    if t.status in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
                 ]
 
             request = cluster_pb2.Controller.RegisterWorkerRequest(
@@ -308,10 +318,12 @@ class Worker:
             if self._stop_heartbeat.is_set():
                 break
             try:
-                # Update running_task_ids for each heartbeat
+                # Update active task IDs for each heartbeat
                 with self._lock:
                     running_task_ids = [
-                        t.task_id for t in self._tasks.values() if t.status == cluster_pb2.TASK_STATE_RUNNING
+                        t.task_id
+                        for t in self._tasks.values()
+                        if t.status in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
                     ]
                 request = cluster_pb2.Controller.RegisterWorkerRequest(
                     worker_id=self._worker_id,
@@ -328,28 +340,19 @@ class Worker:
                 logger.warning(f"Heartbeat failed: {e}")
 
     def _reset_worker_state(self) -> None:
-        """Reset worker state: kill all containers and clear task tracking.
+        """Reset worker state: wipe all containers and clear tracking.
 
         Called when controller signals should_reset (e.g., after controller restart
         when worker claims tasks the controller doesn't know about).
         """
-        logger.info("Resetting worker state: killing all containers")
+        logger.info("Resetting worker state")
 
-        # Kill and remove all containers
+        # Clear task tracking
         with self._lock:
-            tasks = list(self._tasks.values())
             self._tasks.clear()
 
-        for task in tasks:
-            if task.container_id:
-                try:
-                    self._runtime.kill(task.container_id, force=True)
-                except RuntimeError:
-                    pass
-                try:
-                    self._runtime.remove(task.container_id)
-                except RuntimeError:
-                    pass
+        # Wipe ALL iris containers (simple, no tracking needed)
+        self._cleanup_all_iris_containers()
 
         logger.info("Worker state reset complete")
 
@@ -481,6 +484,8 @@ class Worker:
                 timeout_seconds=task.request.timeout_seconds or None,
                 ports=task.ports,
                 mounts=[(str(task.workdir), "/workdir", "rw")],
+                task_id=task.task_id,
+                job_id=task.job_id,
             )
 
             # Create and start container with retry on port binding failures

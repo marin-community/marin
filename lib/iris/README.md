@@ -70,6 +70,37 @@ Worker Process (on each VM):
 | **Slice** | Atomic scaling unit - a complete TPU pod that succeeds or fails as a whole |
 | **VmManager** | Abstraction for VM lifecycle (GCP, Manual, or Fake for testing) |
 
+## Worker Lifecycle
+
+### Registration and Reconciliation
+
+Workers register with the controller via heartbeat (every 10 seconds). The registration
+includes `running_task_ids` - the list of tasks the worker believes it's running.
+
+The controller performs bidirectional reconciliation:
+
+1. **Worker claims unknown tasks** (e.g., controller restarted):
+   - Controller sends `should_reset=True`
+   - Worker wipes all containers and re-registers
+
+2. **Worker missing expected tasks** (e.g., worker restarted):
+   - Controller marks missing tasks as `WORKER_FAILED`
+   - Tasks will be retried on another worker
+
+### Startup Cleanup
+
+Workers wipe ALL `iris.managed=true` containers at startup. This simple approach:
+- Handles crash recovery without complex tracking
+- Cleans orphaned containers from previous runs
+- Ensures fresh state on every worker start
+
+### Container Labels
+
+Task containers are labeled for discoverability:
+- `iris.managed=true` - All iris-managed containers
+- `iris.task_id=<id>` - Task identifier
+- `iris.job_id=<id>` - Job identifier
+
 ## CLI Reference
 
 ### Cluster Commands

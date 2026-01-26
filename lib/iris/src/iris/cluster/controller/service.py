@@ -453,23 +453,44 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.RegisterWorkerResponse:
         """Register a new worker or process a heartbeat from an existing worker.
 
-        If the worker claims to be running tasks that the controller doesn't know about
-        (e.g., after controller restart), signal should_reset so the worker cleans up.
+        Performs bidirectional reconciliation:
+        1. Worker claims unknown tasks (controller restart) -> signal reset
+        2. Controller expects tasks worker doesn't report (worker restart) -> mark tasks failed
         """
-        # Check if worker claims unknown tasks (controller restart recovery)
-        if request.running_task_ids:
-            unknown_tasks = [tid for tid in request.running_task_ids if self._state.get_task(TaskId(tid)) is None]
+        worker_id = WorkerId(request.worker_id)
+        reported_tasks = set(request.running_task_ids)
+
+        # Case 1: Worker claims unknown tasks (controller restart recovery)
+        if reported_tasks:
+            unknown_tasks = [tid for tid in reported_tasks if self._state.get_task(TaskId(tid)) is None]
             if unknown_tasks:
-                logger.warning("Worker %s claims unknown tasks %s, signaling reset", request.worker_id, unknown_tasks)
+                logger.warning("Worker %s claims unknown tasks %s, signaling reset", worker_id, unknown_tasks)
                 return cluster_pb2.Controller.RegisterWorkerResponse(
                     accepted=False,
                     should_reset=True,
                 )
 
+        # Case 2: Controller expects tasks worker doesn't report (worker restart recovery)
+        existing_worker = self._state.get_worker(worker_id)
+        if existing_worker:
+            expected_tasks = existing_worker.running_tasks
+            missing_tasks = expected_tasks - {TaskId(tid) for tid in reported_tasks}
+            if missing_tasks:
+                logger.warning("Worker %s missing expected tasks %s, marking failed", worker_id, missing_tasks)
+                for task_id in missing_tasks:
+                    self._state.handle_event(
+                        TaskStateChangedEvent(
+                            task_id=task_id,
+                            new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                            error="Worker restarted without task",
+                            exit_code=1,
+                        )
+                    )
+
         # Use WORKER_REGISTERED event for both new and existing workers
         self._state.handle_event(
             WorkerRegisteredEvent(
-                worker_id=WorkerId(request.worker_id),
+                worker_id=worker_id,
                 address=request.address,
                 metadata=request.metadata,
                 timestamp_ms=now_ms(),
