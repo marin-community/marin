@@ -128,94 +128,20 @@ def config_file(tmp_path: Path) -> Path:
 # VM status command tests removed per AGENTS.md - they only test log messages/output text format
 
 
-def test_vm_status_via_config(cli_runner: CliRunner, config_file: Path, test_autoscaler, mock_config):
-    """VM status command works with --config."""
-    autoscaler, fake_manager = test_autoscaler
-    group = autoscaler.get_group("test-group")
-    slice_obj = group.scale_up()
-    fake_manager.tick()
-
-    with patch("iris.cli._load_autoscaler", return_value=(autoscaler, mock_config)):
-        result = cli_runner.invoke(iris, ["cluster", "--config", str(config_file), "vm", "status"])
-        assert result.exit_code == 0
-        assert slice_obj.slice_id in result.output
-
-
-# =============================================================================
-# VM Logs Command Tests
-# =============================================================================
-
-# VM logs display tests removed per AGENTS.md - they only test log messages/output text format
-
-
-def test_vm_logs_command_with_tail(cli_runner: CliRunner):
-    """VM logs command passes tail parameter."""
-    with patch("iris.cli._get_vm_logs") as mock_get_logs:
-        mock_get_logs.return_value = ("last line", "vm-123", vm_pb2.VM_STATE_READY)
-
-        result = cli_runner.invoke(
-            iris,
-            ["cluster", "vm", "--controller-url", "http://localhost:10000", "logs", "vm-123", "--tail", "10"],
-        )
-
-        assert result.exit_code == 0
-        mock_get_logs.assert_called_once_with("http://localhost:10000", "vm-123", 10)
-
-
-# =============================================================================
-# Autoscaler Status Command Tests (via controller)
-# =============================================================================
-
-# Autoscaler status command tests removed per AGENTS.md - they only test log messages/output text format
-
-
-# =============================================================================
-# Slice Command Tests
-# =============================================================================
-
-# Slice create/list tests removed per AGENTS.md - they only test log messages/output text format
-
-
-def test_slice_list_with_data(cli_runner: CliRunner, config_file: Path, test_autoscaler, mock_config):
-    """Slice list shows slices in table format."""
-    autoscaler, fake_manager = test_autoscaler
-    group = autoscaler.get_group("test-group")
-    slice_obj = group.scale_up()
-    fake_manager.tick()
-
-    with patch("iris.cli._load_autoscaler", return_value=(autoscaler, mock_config)):
-        result = cli_runner.invoke(iris, ["cluster", "--config", str(config_file), "slice", "list"])
-        assert result.exit_code == 0
-        assert slice_obj.slice_id in result.output
-
-
-def test_slice_get_success(cli_runner: CliRunner, config_file: Path, test_autoscaler, mock_config):
-    """Slice get shows detailed slice info."""
-    autoscaler, fake_manager = test_autoscaler
-    group = autoscaler.get_group("test-group")
-    slice_obj = group.scale_up()
-    fake_manager.tick()
-
-    with patch("iris.cli._load_autoscaler", return_value=(autoscaler, mock_config)):
-        result = cli_runner.invoke(iris, ["cluster", "--config", str(config_file), "slice", "get", slice_obj.slice_id])
-        assert result.exit_code == 0
-        assert f"Slice: {slice_obj.slice_id}" in result.output
-
-
-# Slice get/terminate tests removed per AGENTS.md - they only test log messages/output text format
-
-
 def test_slice_terminate_multiple(cli_runner: CliRunner, config_file: Path, test_autoscaler, mock_config):
-    """Slice terminate accepts multiple slice IDs."""
+    """Slice terminate removes slices from the autoscaler."""
     autoscaler, _ = test_autoscaler
     group = autoscaler.get_group("test-group")
     slice1 = group.scale_up()
     slice2 = group.scale_up()
+
+    assert len(list(group.vm_groups())) == 2
 
     with patch("iris.cli._load_autoscaler", return_value=(autoscaler, mock_config)):
         result = cli_runner.invoke(
             iris, ["cluster", "--config", str(config_file), "slice", "terminate", slice1.slice_id, slice2.slice_id]
         )
         assert result.exit_code == 0
-        assert slice1.slice_id in result.output
-        assert slice2.slice_id in result.output
+
+    # The stable behavior: slices are gone
+    assert len(list(group.vm_groups())) == 0

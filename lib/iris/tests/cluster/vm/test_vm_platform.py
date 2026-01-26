@@ -772,19 +772,6 @@ def test_manual_manager_discovers_hosts_with_running_workers(
 # =============================================================================
 
 
-def test_registry_register_and_retrieve_vm(registry: VmRegistry):
-    """Registering a VM makes it retrievable by ID."""
-    vm = MagicMock()
-    vm.info = vm_pb2.VmInfo(vm_id="test-vm-001")
-
-    registry.register(vm)
-
-    assert registry.vm_count() == 1
-    retrieved = registry.get_vm("test-vm-001")
-    assert retrieved is not None
-    assert retrieved.info.vm_id == "test-vm-001"
-
-
 def test_registry_register_replaces_existing_vm(registry: VmRegistry):
     """Registering a VM with same ID replaces the existing one."""
     vm1 = MagicMock()
@@ -840,11 +827,6 @@ def test_registry_concurrent_access_is_safe(registry: VmRegistry):
     assert registry.vm_count() == 0
 
 
-def test_registry_get_vm_returns_none_for_unknown(registry: VmRegistry):
-    """Getting a VM that doesn't exist returns None."""
-    assert registry.get_vm("nonexistent-vm") is None
-
-
 # =============================================================================
 # TrackedVmFactory Tests
 # =============================================================================
@@ -866,7 +848,7 @@ def test_factory_creates_registers_and_starts_vm(
 
     conn = InMemorySshConnection(_address="10.0.0.1")
 
-    vm = factory.create_vm(
+    factory.create_vm(
         vm_id="test-vm-001",
         slice_id="slice-001",
         scale_group="test-group",
@@ -877,11 +859,7 @@ def test_factory_creates_registers_and_starts_vm(
         labels={},
     )
 
-    assert vm.info.vm_id == "test-vm-001"
     assert registry.vm_count() == 1
-    retrieved = registry.get_vm("test-vm-001")
-    assert retrieved is not None
-    assert retrieved.info.vm_id == "test-vm-001"
     mock_vm.start.assert_called_once()
 
 

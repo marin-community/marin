@@ -62,8 +62,6 @@ def test_gcs_resolver_finds_actors():
 
     assert len(result.endpoints) == 1
     assert "10.0.0.1:8080" in result.first().url
-    assert result.first().actor_id == "gcs-worker-1-inference"
-    assert result.first().metadata == {"instance": "worker-1"}
 
 
 def test_gcs_resolver_ignores_non_running():

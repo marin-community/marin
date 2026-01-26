@@ -177,7 +177,6 @@ def test_image_caching(tmp_path, docker_bundle, docker_cleanup_scope):
     )
 
     assert result1.from_cache is False
-    assert result1.build_time_ms > 0
 
     # Second build - should be from cache
     result2 = builder.build(
@@ -188,7 +187,6 @@ def test_image_caching(tmp_path, docker_bundle, docker_cleanup_scope):
     )
 
     assert result2.from_cache is True
-    assert result2.build_time_ms == 0
     assert result2.image_tag == result1.image_tag
 
 

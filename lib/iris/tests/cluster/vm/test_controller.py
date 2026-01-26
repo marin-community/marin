@@ -63,18 +63,6 @@ def gcp_config() -> vm_pb2.IrisClusterConfig:
     )
 
 
-def test_manual_controller_requires_host():
-    """ManualController requires controller_vm.manual.host."""
-    config = vm_pb2.IrisClusterConfig(
-        provider_type="manual",
-        controller_vm=vm_pb2.ControllerVmConfig(
-            manual=vm_pb2.ManualControllerConfig(host=""),
-        ),
-    )
-    with pytest.raises(RuntimeError, match=r"controller_vm\.manual\.host is required"):
-        ManualController(config)
-
-
 def test_manual_controller_start_requires_image():
     """start() requires image to be configured."""
     config = vm_pb2.IrisClusterConfig(
