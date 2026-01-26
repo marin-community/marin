@@ -94,6 +94,8 @@ worker_setup_commands:
   # We keep the /tmp/ray directory in case we are running on the head node.
   # This shouldn't be a concern on new clusters where driver jobs are disabled on the head node.
   - rm -rf /tmp/ray/session_*/runtime_resources/
+  # Fix numpy/pandas binary incompatibility
+  - pip install --force-reinstall numpy==2.3.5 pandas==2.3.3
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
