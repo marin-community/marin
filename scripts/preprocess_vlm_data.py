@@ -42,6 +42,7 @@ import fsspec
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from tqdm import tqdm
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +54,7 @@ logger = logging.getLogger(__name__)
 def download_gcs_to_local(gcs_path: str, cache_dir: Optional[str] = None) -> str:
     """
     Download a GCS path to local cache for HuggingFace loading.
+    Uses recursive download to properly handle nested directories.
 
     Args:
         gcs_path: GCS path (gs://bucket/path) or local/HF Hub path
@@ -61,6 +63,8 @@ def download_gcs_to_local(gcs_path: str, cache_dir: Optional[str] = None) -> str
     Returns:
         Local path to the downloaded directory, or original path if not GCS
     """
+    import shutil
+
     if not gcs_path.startswith("gs://"):
         # Not a GCS path, return as-is (local path or HF Hub name)
         return gcs_path
@@ -72,24 +76,24 @@ def download_gcs_to_local(gcs_path: str, cache_dir: Optional[str] = None) -> str
     cache_key = gcs_path.replace("gs://", "").replace("/", "_")
     local_path = os.path.join(cache_dir, cache_key)
 
-    if os.path.exists(local_path):
+    # Check if cache exists AND has contents (not empty from failed previous attempt)
+    if os.path.exists(local_path) and os.listdir(local_path):
         logger.info(f"Using cached: {gcs_path} -> {local_path}")
         return local_path
 
+    # Remove empty directory if it exists (from failed previous attempt)
+    if os.path.exists(local_path):
+        logger.info(f"Removing empty cache directory: {local_path}")
+        shutil.rmtree(local_path)
+
     logger.info(f"Downloading: {gcs_path} -> {local_path}")
-    os.makedirs(local_path, exist_ok=True)
 
     fs, fs_path = fsspec.core.url_to_fs(gcs_path)
 
-    # Download all files in the directory
-    files = fs.ls(fs_path)
-    for file_path in files:
-        if fs.isfile(file_path):
-            file_name = os.path.basename(file_path)
-            local_file = os.path.join(local_path, file_name)
-            fs.get(file_path, local_file)
+    # Use recursive download to handle nested directories
+    fs.get(fs_path, local_path, recursive=True)
 
-    logger.info(f"Downloaded {len(files)} files to {local_path}")
+    logger.info(f"Downloaded to {local_path}")
     return local_path
 
 
@@ -330,8 +334,8 @@ def process_shard(
     tokenizer_path = download_gcs_to_local(tokenizer_name)
     processor_path = download_gcs_to_local(processor_name)
 
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
-    processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True, local_files_only=True)
+    processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True, local_files_only=True)
 
     # Read input parquet
     fs, fs_path = fsspec.core.url_to_fs(shard_path)
@@ -542,6 +546,14 @@ def main():
         images_key=args.images_key,
     )
 
+    # Pre-download GCS paths in main process to avoid race condition
+    # when multiple workers try to download simultaneously
+    logger.info("Pre-downloading tokenizer and processor if needed...")
+    tokenizer_path = download_gcs_to_local(args.tokenizer)
+    processor_path = download_gcs_to_local(args.processor)
+    logger.info(f"Tokenizer path: {tokenizer_path}")
+    logger.info(f"Processor path: {processor_path}")
+
     # List input files
     logger.info(f"Listing parquet files matching: {args.input_pattern}")
     input_paths = list_parquet_files(args.input_pattern)
@@ -565,6 +577,7 @@ def main():
     total_input_rows = 0
     total_output_rows = 0
     total_errors = 0
+    failed_shards = 0
 
     if args.num_workers > 1:
         # Parallel processing
@@ -579,8 +592,8 @@ def main():
             tasks.append((
                 input_path,
                 output_path,
-                args.tokenizer,
-                args.processor,
+                tokenizer_path,  # Use pre-downloaded local path
+                processor_path,  # Use pre-downloaded local path
                 config,
             ))
 
@@ -588,7 +601,8 @@ def main():
             futures = {executor.submit(process_shard_wrapper, task): i
                       for i, task in enumerate(tasks, start=start_idx)}
 
-            for future in as_completed(futures):
+            pbar = tqdm(as_completed(futures), total=len(tasks), desc="Processing shards")
+            for future in pbar:
                 shard_idx = futures[future]
                 try:
                     output_path, input_rows, output_rows, num_errors = future.result()
@@ -606,11 +620,14 @@ def main():
 
                 except Exception as e:
                     logger.error(f"Failed to process shard {shard_idx}: {e}")
+                    failed_shards += 1
     else:
         # Sequential processing
         logger.info("Processing sequentially...")
 
-        for i, input_path in enumerate(input_paths[start_idx:], start=start_idx):
+        for i, input_path in tqdm(enumerate(input_paths[start_idx:], start=start_idx),
+                                   total=len(input_paths) - start_idx,
+                                   desc="Processing shards"):
             input_name = os.path.basename(input_path)
             output_path = os.path.join(args.output_dir, input_name)
 
@@ -618,8 +635,8 @@ def main():
                 output_path, input_rows, output_rows, num_errors = process_shard(
                     input_path,
                     output_path,
-                    args.tokenizer,
-                    args.processor,
+                    tokenizer_path,  # Use pre-downloaded local path
+                    processor_path,  # Use pre-downloaded local path
                     config,
                 )
                 total_input_rows += input_rows
@@ -636,10 +653,13 @@ def main():
 
             except Exception as e:
                 logger.error(f"Failed to process shard {i}: {e}")
+                failed_shards += 1
 
-    # Final checkpoint
-    if args.checkpoint_dir:
+    # Final checkpoint - only save if we have successful shards
+    if args.checkpoint_dir and processed_shards:
         save_checkpoint(args.checkpoint_dir, processed_shards, len(input_paths) - 1)
+    elif args.checkpoint_dir and not processed_shards:
+        logger.warning("No shards processed successfully, not saving checkpoint")
 
     # Print summary
     print("\n" + "=" * 60)
@@ -650,7 +670,8 @@ def main():
     print(f"Number of shards:   {len(input_paths)}")
     print(f"Total input rows:   {total_input_rows}")
     print(f"Total output rows:  {total_output_rows}")
-    print(f"Total errors:       {total_errors}")
+    print(f"Total row errors:   {total_errors}")
+    print(f"Failed shards:      {failed_shards}")
     print(f"Parallel workers:   {args.num_workers}")
     if args.checkpoint_dir:
         print(f"Checkpoint dir:     {args.checkpoint_dir}")
