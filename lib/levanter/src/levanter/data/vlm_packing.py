@@ -109,8 +109,8 @@ class VLMPackerConfig:
     features_per_patch: int = 576
     """Number of features per image patch (vision_feature_height^2)."""
 
-    pad_token_id: int = 0
-    """Token ID to use for padding."""
+    pad_token_id: int = 151643
+    """Token ID to use for padding. Default is Qwen3's pad_token_id."""
 
     image_token_id: int = 151646
     """Token ID for <image> placeholder."""
@@ -1768,6 +1768,7 @@ class PackedVLMDataset(AsyncDataset):
         vision_feature_height: Optional[int] = None,
         max_num_patches: int = 9,
         patch_size: int = 384,
+        pad_token_id: int = 151643,
     ):
         """
         Initialize the packed VLM dataset.
@@ -1784,8 +1785,10 @@ class PackedVLMDataset(AsyncDataset):
             vision_feature_height: Vision encoder output tokens per spatial dim
             max_num_patches: Maximum number of patches for anyres
             patch_size: Size of each image patch
+            pad_token_id: Token ID to use for padding (default: 151643 for Qwen3)
         """
         super().__init__()
+        self._pad_token_id = pad_token_id
 
         # Load pack assignments
         self._assignments = load_pack_assignment_result(pack_assignments_file)
@@ -1947,7 +1950,7 @@ class PackedVLMDataset(AsyncDataset):
         # Pad to max_length
         pad_length = self._max_length - len(input_ids)
         if pad_length > 0:
-            input_ids = np.pad(input_ids, (0, pad_length), constant_values=0)
+            input_ids = np.pad(input_ids, (0, pad_length), constant_values=self._pad_token_id)
             segment_ids = segment_ids + [-1] * pad_length
         elif pad_length < 0:
             input_ids = input_ids[:self._max_length]
@@ -2032,7 +2035,7 @@ class PackedVLMDataset(AsyncDataset):
         """Create an empty pack (placeholder for failed processing)."""
         max_patches = self._config.max_patches
         return PackedImageTextDict(
-            input_ids=np.zeros(self._max_length, dtype=np.int32),
+            input_ids=np.full(self._max_length, self._pad_token_id, dtype=np.int32),
             pixel_values=np.zeros((max_patches, 3, 384, 384), dtype=np.float32),
             loss_mask=np.zeros(self._max_length, dtype=np.float32),
             segment_ids=np.full(self._max_length, -1, dtype=np.int32),

@@ -97,6 +97,7 @@ def create_streaming_packed_dataset(
     grid_pinpoints=None,
     vision_feature_height: int = 27,
     patch_size: int = 384,
+    pad_token_id: int = 151643,
 ) -> PackedVLMDataset:
     """
     Helper to create a streaming PackedVLMDataset from parquet file.
@@ -155,6 +156,7 @@ def create_streaming_packed_dataset(
         vision_feature_height=vision_feature_height,
         max_num_patches=max_patches,
         patch_size=patch_size,
+        pad_token_id=pad_token_id,
     )
 
 

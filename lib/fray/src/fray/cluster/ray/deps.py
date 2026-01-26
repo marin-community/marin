@@ -19,6 +19,7 @@ import hashlib
 import logging
 import os
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -204,7 +205,18 @@ def build_runtime_env_for_packages(
     # Ray expects a filename for the requirements txt
     req_hash = hashlib.sha256(requirements_txt_str.encode()).hexdigest()[:16]
     req_path = f"/tmp/ray_reqs_{req_hash}.txt"
-    Path(req_path).write_text(requirements_txt_str)
+    try:
+        Path(req_path).write_text(requirements_txt_str)
+    except PermissionError:
+        # File may exist but be owned by another user, use a unique temp file instead
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            prefix="ray_reqs_",
+            suffix=".txt",
+            delete=False,
+        ) as f:
+            f.write(requirements_txt_str)
+            req_path = f.name
 
     return dict(  # type: ignore[return-value]
         env_vars=env_vars | {"PYTHONPATH": ":".join(python_path)},
