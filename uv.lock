@@ -236,6 +236,7 @@ fork-strategy = "fewest"
 [manifest]
 members = [
     "fray",
+    "grugfuzz",
     "haliax",
     "iris",
     "levanter",
@@ -2582,6 +2583,57 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/3f/46/e9f19d5be65e8423f886813a2a9d0056ba94757b0c5007aa59aed1a961fa/grpcio_status-1.76.0.tar.gz", hash = "sha256:25fcbfec74c15d1a1cb5da3fab8ee9672852dc16a5a9eeb5baf7d7a9952943cd", size = 13679, upload-time = "2025-10-21T16:28:52.545Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8c/cc/27ba60ad5a5f2067963e6a858743500df408eb5855e98be778eaef8c9b02/grpcio_status-1.76.0-py3-none-any.whl", hash = "sha256:380568794055a8efbbd8871162df92012e0228a5f6dffaf57f2a00c534103b18", size = 14425, upload-time = "2025-10-21T16:28:40.853Z" },
+]
+
+[[package]]
+name = "grugfuzz"
+version = "0.1.0"
+source = { editable = "lib/grugfuzz" }
+dependencies = [
+    { name = "jax" },
+    { name = "jaxlib" },
+    { name = "levanter" },
+    { name = "numpy" },
+    { name = "torch", version = "2.9.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'extra-5-marin-cpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (platform_machine != 'arm64' and extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (platform_machine != 'arm64' and extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'darwin' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (sys_platform == 'darwin' and extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12' and extra != 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "torch", version = "2.9.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-gpu' and extra != 'extra-5-marin-tpu')" },
+    { name = "torch", version = "2.9.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'arm64' and extra == 'extra-5-marin-cpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-cpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "torch", version = "2.9.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-vllm') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+]
+
+[package.optional-dependencies]
+transformers = [
+    { name = "transformers" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "transformers" },
+]
+test = [
+    { name = "pytest" },
+    { name = "transformers" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jax" },
+    { name = "jaxlib" },
+    { name = "levanter", editable = "lib/levanter" },
+    { name = "numpy" },
+    { name = "torch" },
+    { name = "transformers", marker = "extra == 'transformers'" },
+]
+provides-extras = ["transformers"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "transformers" },
+]
+test = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "transformers" },
 ]
 
 [[package]]
