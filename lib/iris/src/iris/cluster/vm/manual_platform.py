@@ -200,7 +200,7 @@ echo "[iris-init] Using static controller at $CONTROLLER_ADDRESS"
         Raises PoolExhaustedError if no hosts are available.
         """
         if not self._available_hosts:
-            raise PoolExhaustedError(f"No hosts available in pool (total: {len(self._hosts)}, " f"all currently in use)")
+            raise PoolExhaustedError(f"No hosts available in pool (total: {len(self._hosts)}, all currently in use)")
 
         host = self._available_hosts.pop()
         group_id = f"{self._label_prefix}-{self._config.name}-{now_ms()}"

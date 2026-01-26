@@ -411,23 +411,17 @@ class ClusterDemoCluster:
 
     def __enter__(self):
         """Start controller VM and establish tunnel."""
-
-        # Try to discover existing controller first
         zone = self._config.zone
         project = self._config.project_id
-        vm_name = _discover_controller_vm(zone, project)
 
-        if vm_name:
-            logger.info("Found existing controller VM: %s", vm_name)
-            self._controller_url = f"http://localhost:{self._local_port}"
-        else:
-            logger.info("Starting new controller VM...")
-            # GcpController.start() creates VM and waits for health
-            controller_address = self._controller.start()
-            logger.info("Controller started at %s", controller_address)
-            self._controller_url = f"http://localhost:{self._local_port}"
+        # GcpController.start() is idempotent - reuses existing healthy controller
+        # or creates a new one if none exists / existing is unhealthy
+        logger.info("Ensuring controller VM is running and healthy...")
+        controller_address = self._controller.start()
+        logger.info("Controller ready at %s", controller_address)
+        self._controller_url = f"http://localhost:{self._local_port}"
 
-        # Establish SSH tunnel
+        # Find the VM name for SSH tunnel
         vm_name = _discover_controller_vm(zone, project)
         if not vm_name:
             raise RuntimeError("Controller VM not found after start")

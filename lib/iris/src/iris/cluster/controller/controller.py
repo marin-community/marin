@@ -488,8 +488,7 @@ class Controller:
                 if attempt < max_attempts - 1:
                     sleep_time = backoff.next_interval()
                     logger.warning(
-                        f"Dispatch attempt {attempt + 1} failed for {task.task_id}: {e}, "
-                        f"retrying in {sleep_time:.2f}s"
+                        f"Dispatch attempt {attempt + 1} failed for {task.task_id}: {e}, retrying in {sleep_time:.2f}s"
                     )
                     time.sleep(sleep_time)
 

@@ -466,6 +466,11 @@ class Autoscaler:
         return self._groups.get(name)
 
     @property
+    def vm_registry(self) -> VmRegistry:
+        """Access the VM registry for RPC/status use."""
+        return self._vm_registry
+
+    @property
     def groups(self) -> dict[str, ScalingGroup]:
         """All scale groups."""
         return self._groups

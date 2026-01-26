@@ -1,6 +1,7 @@
 # Iris production configuration for europe-west4 cluster
 # Usage: uv run python -m iris.cluster.vm.cli create-slice --config examples/eu-west4.yaml --scale-group tpu_v5e_16
 
+project_id: hai-gcp-models
 region: europe-west4
 zone: europe-west4-b
 

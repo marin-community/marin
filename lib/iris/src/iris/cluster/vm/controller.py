@@ -32,8 +32,6 @@ import time
 from dataclasses import dataclass
 from typing import Protocol
 
-import httpx
-
 from iris.cluster.vm.config import config_to_dict
 from iris.cluster.vm.gcp_tpu_platform import (
     CONTROLLER_ADDRESS_METADATA_KEY,
@@ -46,6 +44,8 @@ from iris.cluster.vm.ssh import (
     check_health,
     run_streaming_with_retry,
 )
+from iris.rpc import cluster_pb2
+from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc import vm_pb2
 from iris.time_utils import ExponentialBackoff
 
@@ -294,27 +294,20 @@ def _build_controller_bootstrap_script(
     )
 
 
-def _check_health_http(address: str, timeout: float = 5.0, log_result: bool = False) -> bool:
-    """Check controller health via HTTP endpoint.
+def _check_health_rpc(address: str, timeout: float = 5.0, log_result: bool = False) -> bool:
+    """Check controller health via RPC.
 
-    Args:
-        address: Controller address (e.g. http://1.2.3.4:10000)
-        timeout: Request timeout in seconds
-        log_result: If True, log the result of the health check
+    Uses a lightweight ListJobs request to verify connectivity, avoiding raw HTTP.
     """
     try:
-        with httpx.Client(timeout=timeout) as client:
-            response = client.get(f"{address}/health")
-            if log_result:
-                logger.info("Health check %s: status=%d", address, response.status_code)
-            return response.status_code == 200
-    except httpx.HTTPError as e:
+        client = ControllerServiceClientSync(address)
+        client.list_jobs(cluster_pb2.Controller.ListJobsRequest(), timeout_ms=int(timeout * 1000))
         if log_result:
-            logger.info("Health check %s: error=%s", address, type(e).__name__)
-        return False
+            logger.info("Health check %s: rpc_ok", address)
+        return True
     except Exception as e:
         if log_result:
-            logger.info("Health check %s: unexpected error=%s", address, e)
+            logger.info("Health check %s: rpc_error=%s", address, type(e).__name__)
         return False
 
 
@@ -486,7 +479,7 @@ class GcpController:
             return ControllerStatus(running=False, address=None, healthy=False, vm_name=None)
 
         vm_name = self._find_controller_vm_name()
-        healthy = _check_health_http(address)
+        healthy = _check_health_rpc(address)
 
         return ControllerStatus(
             running=True,
@@ -644,7 +637,7 @@ class GcpController:
             nonlocal attempt
             attempt += 1
             elapsed = time.time() - start_time
-            result = _check_health_http(address, log_result=True)
+            result = _check_health_rpc(address, log_result=True)
             if result:
                 logger.info("Health check succeeded after %d attempts (%.1fs elapsed)", attempt, elapsed)
             return result
