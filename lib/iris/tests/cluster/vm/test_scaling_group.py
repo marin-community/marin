@@ -22,6 +22,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from iris.cluster.types import VmWorkerStatus
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.rpc import vm_pb2
@@ -77,11 +78,13 @@ def make_mock_vm_group(
         else:
             vm_states = [vm_pb2.VM_STATE_BOOTING]
 
+    # Generate unique addresses by hashing slice_id for the third octet
+    slice_hash = abs(hash(slice_id)) % 256
     snapshots = [
         VmSnapshot(
             vm_id=f"{slice_id}-vm-{i}",
             state=state,
-            address=f"10.0.0.{i}",
+            address=f"10.0.{slice_hash}.{i}",
             init_phase="",
             init_error="" if state != vm_pb2.VM_STATE_FAILED else "test error",
         )
@@ -438,8 +441,6 @@ class TestScalingGroupIdleTracking:
 
     def test_update_slice_activity_tracks_active_slices(self, unbounded_config: vm_pb2.ScaleGroupConfig):
         """update_slice_activity updates timestamp only for slices with active workers."""
-        from iris.cluster.types import WorkerIdleInfo
-
         # Mock VMs with specific worker IDs
         discovered = [
             make_mock_vm_group("slice-001", all_ready=True),
@@ -449,19 +450,23 @@ class TestScalingGroupIdleTracking:
         group = ScalingGroup(unbounded_config, manager)
         group.reconcile()
 
-        # Mock vms() to return VMs with worker_ids
-        for slice_id in ["slice-001", "slice-002"]:
+        # Mock vms() to return VMs with worker_ids and addresses
+        slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        slice_002_addr = f"10.0.{abs(hash('slice-002')) % 256}.0"
+        for slice_id, vm_addr in [("slice-001", slice_001_addr), ("slice-002", slice_002_addr)]:
             slice_obj = group.get_slice(slice_id)
-            mock_vm = type("MockVm", (), {"info": type("Info", (), {"worker_id": f"worker-{slice_id}"})()})()
+            mock_vm = MagicMock()
+            mock_vm.info.worker_id = f"worker-{slice_id}"
+            mock_vm.info.address = vm_addr
             slice_obj.vms.return_value = [mock_vm]
 
         # slice-001 has running tasks, slice-002 is idle
-        worker_idle_map = {
-            "worker-slice-001": WorkerIdleInfo("worker-slice-001", frozenset({"task-1"})),  # Active
-            "worker-slice-002": WorkerIdleInfo("worker-slice-002", frozenset()),  # Idle
+        vm_status_map = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),  # Active
+            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),  # Idle
         }
 
-        group.update_slice_activity(worker_idle_map, timestamp_ms=5000)
+        group.update_slice_activity(vm_status_map, timestamp_ms=5000)
 
         # Only slice-001 (with active worker) should be updated
         assert group._slice_last_active.get("slice-001") == 5000
@@ -469,8 +474,6 @@ class TestScalingGroupIdleTracking:
 
     def test_scale_down_if_idle_terminates_eligible_slice(self, unbounded_config: vm_pb2.ScaleGroupConfig):
         """scale_down_if_idle terminates an eligible idle slice."""
-        from iris.cluster.types import WorkerIdleInfo
-
         discovered = [
             make_mock_vm_group("slice-001", all_ready=True),
             make_mock_vm_group("slice-002", all_ready=True),
@@ -480,15 +483,19 @@ class TestScalingGroupIdleTracking:
         group.reconcile()
 
         # Mock vms() for idle verification
-        for slice_id in ["slice-001", "slice-002"]:
+        slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        slice_002_addr = f"10.0.{abs(hash('slice-002')) % 256}.0"
+        for slice_id, vm_addr in [("slice-001", slice_001_addr), ("slice-002", slice_002_addr)]:
             slice_obj = group.get_slice(slice_id)
-            mock_vm = type("MockVm", (), {"info": type("Info", (), {"worker_id": f"worker-{slice_id}"})()})()
+            mock_vm = MagicMock()
+            mock_vm.info.worker_id = f"worker-{slice_id}"
+            mock_vm.info.address = vm_addr
             slice_obj.vms.return_value = [mock_vm]
 
         # All workers are idle
-        worker_idle_map = {
-            "worker-slice-001": WorkerIdleInfo("worker-slice-001", frozenset()),
-            "worker-slice-002": WorkerIdleInfo("worker-slice-002", frozenset()),
+        vm_status_map = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
+            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
         }
 
         # Both slices idle since 0
@@ -496,24 +503,23 @@ class TestScalingGroupIdleTracking:
         group._slice_last_active["slice-002"] = 0
 
         # Target capacity = 1, but we have 2 ready slices
-        scaled_down = group.scale_down_if_idle(worker_idle_map, target_capacity=1, timestamp_ms=10_000)
+        scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity=1, timestamp_ms=10_000)
 
         assert scaled_down is not None
         assert group.slice_count() == 1  # One slice was terminated
 
     def test_scale_down_if_idle_respects_target_capacity(self, unbounded_config: vm_pb2.ScaleGroupConfig):
         """scale_down_if_idle does nothing when at or below target capacity."""
-        from iris.cluster.types import WorkerIdleInfo
-
         discovered = [make_mock_vm_group("slice-001", all_ready=True)]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
         group = ScalingGroup(unbounded_config, manager, idle_threshold_ms=1000, scale_down_cooldown_ms=0)
         group.reconcile()
 
-        worker_idle_map = {"worker-slice-001": WorkerIdleInfo("worker-slice-001", frozenset())}
+        slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        vm_status_map = {slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset())}
 
         # Target = 1, ready = 1, should not scale down
-        scaled_down = group.scale_down_if_idle(worker_idle_map, target_capacity=1, timestamp_ms=10_000)
+        scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity=1, timestamp_ms=10_000)
 
         assert scaled_down is None
         assert group.slice_count() == 1

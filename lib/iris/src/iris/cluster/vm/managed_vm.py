@@ -156,7 +156,7 @@ exit 1
 """
 
 
-def _build_env_flags(config: vm_pb2.BootstrapConfig, worker_id: str) -> str:
+def _build_env_flags(config: vm_pb2.BootstrapConfig, vm_address: str) -> str:
     """Generate docker -e flags with proper escaping.
 
     Note: IRIS_CONTROLLER_ADDRESS is set from the shell variable $CONTROLLER_ADDRESS
@@ -167,26 +167,27 @@ def _build_env_flags(config: vm_pb2.BootstrapConfig, worker_id: str) -> str:
         flags.append(f"-e {shlex.quote(k)}={shlex.quote(v)}")
     # Use shell variable set by discovery preamble, not Python string
     flags.append('-e IRIS_CONTROLLER_ADDRESS="$CONTROLLER_ADDRESS"')
-    if worker_id:
-        flags.append(f"-e IRIS_WORKER_ID={shlex.quote(worker_id)}")
+    # Inject VM address so worker can include it in registration for autoscaler tracking
+    if vm_address:
+        flags.append(f"-e IRIS_VM_ADDRESS={shlex.quote(vm_address)}")
     return " ".join(flags)
 
 
 def _build_bootstrap_script(
     config: vm_pb2.BootstrapConfig,
-    worker_id: str,
+    vm_address: str,
     discovery_preamble: str = "",
 ) -> str:
     """Build the bootstrap script from config.
 
     Args:
         config: Bootstrap configuration
-        worker_id: Worker identifier
+        vm_address: VM IP address for autoscaler tracking
         discovery_preamble: Shell script fragment that sets CONTROLLER_ADDRESS.
             This is prepended to the main bootstrap script and must define
             the CONTROLLER_ADDRESS variable for the worker to connect.
     """
-    env_flags = _build_env_flags(config, worker_id)
+    env_flags = _build_env_flags(config, vm_address)
     main_script = BOOTSTRAP_SCRIPT.format(
         cache_dir=config.cache_dir or "/var/cache/iris",
         docker_image=config.docker_image,
@@ -284,21 +285,22 @@ class ManagedVm:
         """Main lifecycle: BOOTING -> INITIALIZING -> READY.
 
         Inlines bootstrap logic directly - no nested state machine.
+        Worker ID is not set by ManagedVm - the worker generates its own ID
+        from IRIS_VM_ADDRESS or host:port at startup.
         """
         boot_timeout = self._timeouts.boot_timeout_seconds or 300
         poll_interval = self._timeouts.ssh_poll_interval_seconds or 5
         vm_id = self.info.vm_id
-        worker_id = self._bootstrap_config.worker_id or f"worker-{id(self._conn)}"
+        vm_address = self.info.address
 
         logger.info("VM %s: Starting lifecycle (state=BOOTING)", vm_id)
 
         try:
             # If address is already known, check if worker is healthy before bootstrapping.
             # This handles controller restart recovery - skip bootstrap if worker is running.
-            if self.info.address:
+            if vm_address:
                 logger.info("VM %s: Address known, checking if worker already healthy", vm_id)
                 if self._check_worker_healthy():
-                    self.info.worker_id = f"worker-{self.info.address.replace('.', '-')}"
                     logger.info("VM %s: Worker already healthy, skipping bootstrap", vm_id)
                     self._transition(vm_pb2.VM_STATE_READY)
                     return
@@ -314,9 +316,9 @@ class ManagedVm:
             logger.info("VM %s: Connection available", vm_id)
             self._transition(vm_pb2.VM_STATE_INITIALIZING)
 
-            # Run bootstrap (inlined)
+            # Run bootstrap - pass vm_address for IRIS_VM_ADDRESS env var
             logger.info("VM %s: Starting bootstrap", vm_id)
-            script = _build_bootstrap_script(self._bootstrap_config, worker_id, self._discovery_preamble)
+            script = _build_bootstrap_script(self._bootstrap_config, vm_address, self._discovery_preamble)
 
             result = run_streaming_with_retry(
                 self._conn,
@@ -331,8 +333,7 @@ class ManagedVm:
                 self._log(f"[iris-init] Bootstrap failed: {error_msg}")
                 raise BootstrapError(error_msg)
 
-            self.info.worker_id = worker_id
-            logger.info("VM %s: Bootstrap complete, worker_id=%s", vm_id, self.info.worker_id)
+            logger.info("VM %s: Bootstrap complete", vm_id)
             self._transition(vm_pb2.VM_STATE_READY)
 
         except BootstrapError as e:

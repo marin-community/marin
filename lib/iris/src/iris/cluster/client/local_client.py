@@ -313,13 +313,14 @@ class LocalClusterClient:
         controller_address = f"http://127.0.0.1:{controller_port}"
 
         # Start Worker with local providers
+        # Worker identity = vm_address = host:port (consistent with cloud workers)
         worker_port = _find_free_port()
         worker_config = WorkerConfig(
             host="127.0.0.1",
             port=worker_port,
             cache_dir=cache_path,
             controller_address=controller_address,
-            worker_id=f"local-worker-{uuid.uuid4().hex[:8]}",
+            worker_id=f"127.0.0.1:{worker_port}",
             poll_interval_seconds=0.1,  # Fast polling for local
             port_range=port_range,
         )

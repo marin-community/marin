@@ -20,7 +20,6 @@ import socket
 import tempfile
 import threading
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -241,11 +240,9 @@ class Worker:
             print(f"Worker server error: {e}")
 
     def _heartbeat_loop(self) -> None:
-        metadata = self._environment_provider.probe()
+        import os
 
-        # Generate worker ID if not provided
-        if not self._worker_id:
-            self._worker_id = f"worker-{uuid.uuid4().hex[:8]}"
+        metadata = self._environment_provider.probe()
 
         # Determine the address to advertise to the controller.
         # If host is 0.0.0.0 (bind to all interfaces), use the probed IP for external access.
@@ -254,23 +251,49 @@ class Worker:
         if address_host == "0.0.0.0":
             address_host = metadata.ip_address
 
-        # Build registration request
-        request = cluster_pb2.Controller.RegisterWorkerRequest(
-            worker_id=self._worker_id,
-            address=f"{address_host}:{self._config.port}",
-            metadata=metadata,
-        )
+        # Get VM address from environment (injected by ManagedVm bootstrap)
+        # For non-cloud workers, use host:port as both worker_id and vm_address
+        vm_address = os.environ.get("IRIS_VM_ADDRESS", "")
+        if not vm_address:
+            vm_address = f"{address_host}:{self._config.port}"
+
+        # Derive worker_id from vm_address (no UUID generation)
+        if not self._worker_id:
+            self._worker_id = vm_address
+
+        # Include vm_address in metadata for autoscaler VM tracking
+        metadata.vm_address = vm_address
 
         # Controller client is created in start() before this thread starts
         assert self._controller_client is not None
 
-        # Retry registration until successful
+        # Retry registration until successful (or reset requested)
         attempt = 0
         while not self._stop_heartbeat.is_set():
             attempt += 1
+
+            # Get running task IDs for controller restart recovery
+            with self._lock:
+                running_task_ids = [
+                    t.task_id for t in self._tasks.values() if t.status == cluster_pb2.TASK_STATE_RUNNING
+                ]
+
+            request = cluster_pb2.Controller.RegisterWorkerRequest(
+                worker_id=self._worker_id,
+                address=f"{address_host}:{self._config.port}",
+                metadata=metadata,
+                running_task_ids=running_task_ids,
+            )
+
             try:
                 logger.debug("Registration attempt %d for worker %s", attempt, self._worker_id)
                 response = self._controller_client.register_worker(request)
+
+                if response.should_reset:
+                    logger.warning("Controller signaled reset for worker %s, cleaning up", self._worker_id)
+                    self._reset_worker_state()
+                    continue  # Re-register with empty task list
+
                 if response.accepted:
                     logger.info("Registered with controller: %s", self._worker_id)
                     break
@@ -285,9 +308,50 @@ class Worker:
             if self._stop_heartbeat.is_set():
                 break
             try:
-                self._controller_client.register_worker(request)
+                # Update running_task_ids for each heartbeat
+                with self._lock:
+                    running_task_ids = [
+                        t.task_id for t in self._tasks.values() if t.status == cluster_pb2.TASK_STATE_RUNNING
+                    ]
+                request = cluster_pb2.Controller.RegisterWorkerRequest(
+                    worker_id=self._worker_id,
+                    address=f"{address_host}:{self._config.port}",
+                    metadata=metadata,
+                    running_task_ids=running_task_ids,
+                )
+                response = self._controller_client.register_worker(request)
+
+                if response.should_reset:
+                    logger.warning("Controller signaled reset during heartbeat, cleaning up")
+                    self._reset_worker_state()
             except Exception as e:
                 logger.warning(f"Heartbeat failed: {e}")
+
+    def _reset_worker_state(self) -> None:
+        """Reset worker state: kill all containers and clear task tracking.
+
+        Called when controller signals should_reset (e.g., after controller restart
+        when worker claims tasks the controller doesn't know about).
+        """
+        logger.info("Resetting worker state: killing all containers")
+
+        # Kill and remove all containers
+        with self._lock:
+            tasks = list(self._tasks.values())
+            self._tasks.clear()
+
+        for task in tasks:
+            if task.container_id:
+                try:
+                    self._runtime.kill(task.container_id, force=True)
+                except RuntimeError:
+                    pass
+                try:
+                    self._runtime.remove(task.container_id)
+                except RuntimeError:
+                    pass
+
+        logger.info("Worker state reset complete")
 
     def _report_task_state(self, task: Task) -> None:
         """Report task state to controller."""
@@ -577,8 +641,8 @@ class Worker:
         env["IRIS_NUM_TASKS"] = str(task.num_tasks)
         env["IRIS_ATTEMPT_ID"] = str(task.attempt_id)
 
-        if self._config.worker_id:
-            env["IRIS_WORKER_ID"] = self._config.worker_id
+        if self._worker_id:
+            env["IRIS_WORKER_ID"] = self._worker_id
 
         if self._config.controller_address:
             # Only rewrite localhost addresses for Docker containers

@@ -37,7 +37,7 @@ from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 
-from iris.cluster.types import WorkerIdleMap
+from iris.cluster.types import VmWorkerStatusMap
 from iris.cluster.vm.managed_vm import VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.rpc import vm_pb2
@@ -391,14 +391,14 @@ class Autoscaler:
     def run_once(
         self,
         demand_entries: list[DemandEntry],
-        worker_idle_map: WorkerIdleMap,
+        vm_status_map: VmWorkerStatusMap,
         timestamp_ms: int | None = None,
     ) -> list[ScalingDecision]:
         """Run one evaluation cycle: cleanup -> evaluate -> execute -> idle scale-down.
 
         Args:
             demand_entries: List of demand entries with requirements and counts.
-            worker_idle_map: Map of worker_id to idle info (required for scale-down).
+            vm_status_map: Map of VM address to worker status (required for scale-down).
             timestamp_ms: Optional timestamp for testing.
 
         Returns the decisions that were made (for testing/logging).
@@ -429,7 +429,7 @@ class Autoscaler:
         # Step 4: Idle scale-down
         for group in self._groups.values():
             target_capacity = max(group.current_demand, group.min_slices)
-            scaled_down = group.scale_down_if_idle(worker_idle_map, target_capacity, timestamp_ms)
+            scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity, timestamp_ms)
             if scaled_down:
                 self._slice_created_at.pop(scaled_down.slice_id, None)
                 self._log_action(
@@ -475,29 +475,29 @@ class Autoscaler:
         """All scale groups."""
         return self._groups
 
-    def notify_worker_failed(self, worker_id: str) -> None:
+    def notify_worker_failed(self, vm_address: str) -> None:
         """Called by controller when a worker fails. Terminates the containing slice.
 
         This integrates with the existing controller failure cascade:
         1. Controller detects worker timeout/failure
         2. Controller emits WorkerFailedEvent (cascades to tasks)
-        3. Controller calls this method
+        3. Controller calls this method (with worker's vm_address)
         4. Autoscaler terminates the slice containing the failed worker
 
         If the slice was short-lived (died soon after creation), applies backoff
         to the scale group to prevent thrashing on bad zones/preemption.
         """
-        slice_id, group = self._find_slice_for_worker(worker_id)
+        slice_id, group = self._find_slice_for_worker(vm_address)
         if not slice_id or not group:
-            logger.debug("Worker %s not found in any managed slice", worker_id)
+            logger.debug("VM %s not found in any managed slice", vm_address)
             return
 
-        logger.info("Worker %s failed, terminating slice %s", worker_id, slice_id)
+        logger.info("Worker at VM %s failed, terminating slice %s", vm_address, slice_id)
         self._log_action(
             "worker_failed",
             group.name,
             slice_id=slice_id,
-            reason=f"worker {worker_id} failed",
+            reason=f"worker at VM {vm_address} failed",
         )
 
         # Check if this was a short-lived slice (preemption detection)
@@ -509,12 +509,12 @@ class Autoscaler:
         except Exception as e:
             logger.warning("Failed to terminate slice %s: %s", slice_id, e)
 
-    def _find_slice_for_worker(self, worker_id: str) -> tuple[str | None, ScalingGroup | None]:
-        """Find the slice and group containing a worker."""
+    def _find_slice_for_worker(self, vm_address: str) -> tuple[str | None, ScalingGroup | None]:
+        """Find the slice and group containing a worker by VM address."""
         for group in self._groups.values():
             for slice_obj in group.vm_groups():
                 for vm in slice_obj.vms():
-                    if vm.info.worker_id == worker_id:
+                    if vm.info.address == vm_address:
                         return slice_obj.slice_id, group
         return None, None
 

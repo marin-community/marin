@@ -341,7 +341,8 @@ def check_health(conn: SshConnection, port: int = 10001) -> bool:
     try:
         result = conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
         return result.returncode == 0
-    except Exception:
+    except Exception as e:
+        logger.debug("Health check failed for %s: %s", conn.address, e)
         return False
 
 
@@ -354,7 +355,8 @@ def shutdown_worker(conn: SshConnection, graceful: bool = True) -> bool:
     try:
         conn.run(cmd, timeout=30)
         return True
-    except Exception:
+    except Exception as e:
+        logger.debug("Shutdown worker failed for %s: %s", conn.address, e)
         return False
 
 

@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 
-from iris.cluster.types import WorkerIdleMap
+from iris.cluster.types import VmWorkerStatusMap
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmManagerProtocol
 from iris.rpc import vm_pb2
 from iris.time_utils import now_ms
@@ -261,23 +261,23 @@ class ScalingGroup:
         self._current_demand = demand
         self._peak_demand = max(self._peak_demand, demand)
 
-    def update_slice_activity(self, worker_idle_map: WorkerIdleMap, timestamp_ms: int) -> None:
+    def update_slice_activity(self, vm_status_map: VmWorkerStatusMap, timestamp_ms: int) -> None:
         """Update activity timestamps for all slices based on worker status.
 
         For each slice, if any worker has running tasks, update its last_active timestamp.
         """
         for slice_id, slice_obj in self._vm_groups.items():
-            if self._slice_has_active_workers(slice_obj, worker_idle_map):
+            if self._slice_has_active_workers(slice_obj, vm_status_map):
                 self._slice_last_active[slice_id] = timestamp_ms
 
-    def _slice_has_active_workers(self, slice_obj: VmGroupProtocol, worker_idle_map: WorkerIdleMap) -> bool:
-        """Check if any worker in a slice has running tasks."""
+    def _slice_has_active_workers(self, slice_obj: VmGroupProtocol, vm_status_map: VmWorkerStatusMap) -> bool:
+        """Check if any worker in a slice has running tasks (lookup by VM address)."""
         for vm in slice_obj.vms():
-            worker_id = vm.info.worker_id
-            if not worker_id:
+            vm_address = vm.info.address
+            if not vm_address:
                 continue
-            idle_info = worker_idle_map.get(worker_id)
-            if idle_info is not None and not idle_info.is_idle:
+            status = vm_status_map.get(vm_address)
+            if status is not None and not status.is_idle:
                 return True
         return False
 
@@ -306,7 +306,7 @@ class ScalingGroup:
 
     def scale_down_if_idle(
         self,
-        worker_idle_map: WorkerIdleMap,
+        vm_status_map: VmWorkerStatusMap,
         target_capacity: int,
         timestamp_ms: int,
     ) -> VmGroupProtocol | None:
@@ -314,21 +314,30 @@ class ScalingGroup:
 
         This method handles the complete scale-down decision and execution:
         1. Update slice activity based on worker idle status
-        2. Check if we're over target capacity
+        2. Check if we're over target capacity (using ready + pending)
         3. Find an eligible idle slice and terminate it
 
         Args:
-            worker_idle_map: Map of worker_id to idle info
-            target_capacity: Target number of ready slices (typically max(demand, min_slices))
+            vm_status_map: Map of VM address to worker status
+            target_capacity: Target number of slices (typically max(demand, min_slices))
             timestamp_ms: Current timestamp for idle calculation
 
         Returns:
             The terminated slice, or None if no scale-down occurred
         """
         # Update activity tracking
-        self.update_slice_activity(worker_idle_map, timestamp_ms)
+        self.update_slice_activity(vm_status_map, timestamp_ms)
 
-        ready = self.ready_slice_count()
+        # Use ready + pending for capacity check to prevent churn during boot
+        counts = self.slice_state_counts()
+        ready = counts["ready"]
+        pending = counts["booting"] + counts["initializing"]
+
+        # Don't scale down if total capacity (ready + pending) is at or below target
+        if ready + pending <= target_capacity:
+            return None
+
+        # Don't scale down ready slices if we're still waiting for pending
         if ready <= target_capacity:
             return None
 
@@ -339,15 +348,16 @@ class ScalingGroup:
         # Find idle slices and verify they're still idle before termination
         idle_slices = self.get_idle_slices(timestamp_ms)
         for slice_obj in idle_slices:
-            if self._verify_slice_idle(slice_obj, worker_idle_map):
+            if self._verify_slice_idle(slice_obj, vm_status_map):
                 last_active = self._slice_last_active.get(slice_obj.slice_id, 0)
                 idle_duration_ms = timestamp_ms - last_active if last_active else 0
                 logger.info(
-                    "Scale group %s: scaling down slice %s (idle for %dms, ready=%d > target=%d)",
+                    "Scale group %s: scaling down slice %s (idle for %dms, ready=%d, pending=%d, target=%d)",
                     self.name,
                     slice_obj.slice_id,
                     idle_duration_ms,
                     ready,
+                    pending,
                     target_capacity,
                 )
                 self.scale_down(slice_obj.slice_id, timestamp_ms)
@@ -355,13 +365,14 @@ class ScalingGroup:
 
         return None
 
-    def _verify_slice_idle(self, slice_obj: VmGroupProtocol, worker_idle_map: WorkerIdleMap) -> bool:
-        """Verify all workers in a slice are still idle before termination."""
+    def _verify_slice_idle(self, slice_obj: VmGroupProtocol, vm_status_map: VmWorkerStatusMap) -> bool:
+        """Verify all workers in a slice are still idle before termination (lookup by VM address)."""
         for vm in slice_obj.vms():
-            if not vm.info.worker_id:
-                return False  # VM hasn't registered worker
-            idle_info = worker_idle_map.get(vm.info.worker_id)
-            if idle_info is None or not idle_info.is_idle:
+            vm_address = vm.info.address
+            if not vm_address:
+                return False  # VM hasn't registered
+            status = vm_status_map.get(vm_address)
+            if status is None or not status.is_idle:
                 return False
         return True
 

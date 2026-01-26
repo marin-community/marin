@@ -296,6 +296,11 @@ message WorkerMetadata {
   // Additional attributes can be set via IRIS_WORKER_ATTRIBUTES env var
   // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
   map<string, AttributeValue> attributes = 40;
+
+  // VM address from IRIS_VM_ADDRESS env var, used for autoscaler VM tracking.
+  // For cloud VMs, this is the VM's IP address injected by ManagedVm.
+  // For local workers, this may be empty or a local identifier.
+  string vm_address = 41;
 }
 
 // ============================================================================
@@ -403,11 +408,17 @@ message Controller {
     string worker_id = 1;
     string address = 2;
     WorkerMetadata metadata = 3;
+    // Task IDs the worker believes it is running (for controller restart recovery).
+    // If the controller doesn't recognize these tasks, it signals should_reset.
+    repeated string running_task_ids = 4;
   }
 
   message RegisterWorkerResponse {
     bool accepted = 1;
     string controller_address = 2;   // For callbacks
+    // If true, worker should reset: kill all containers and re-register with empty task list.
+    // Set when worker claims tasks the controller doesn't know about (stale state).
+    bool should_reset = 3;
   }
 
   message WorkerHealthStatus {

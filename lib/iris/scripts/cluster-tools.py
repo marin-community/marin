@@ -143,7 +143,8 @@ def controller_tunnel(zone: str, project: str, local_port: int = DEFAULT_CONTROL
 
     Usage:
         with controller_tunnel("europe-west4-b", "hai-gcp-models") as url:
-            response = httpx.get(f"{url}/health")
+            client = ControllerServiceClientSync(url)
+            client.list_jobs(cluster_pb2.Controller.ListJobsRequest())
     """
     vm_name = discover_controller_vm(zone, project)
     if not vm_name:
@@ -610,14 +611,12 @@ def health(ctx: click.Context, local_port: int) -> None:
     project = ctx.obj["project"]
 
     with controller_tunnel(zone, project, local_port) as url:
-        import httpx
-
+        client = ControllerServiceClientSync(url)
         try:
-            response = httpx.get(f"{url}/health", timeout=10.0)
-            click.echo(f"Health check: {response.status_code}")
-            if response.text:
-                click.echo(f"Response: {response.text}")
-        except httpx.RequestError as e:
+            # Health check via RPC - if this succeeds, controller is healthy
+            client.list_jobs(cluster_pb2.Controller.ListJobsRequest())
+            click.echo("Health check: OK")
+        except Exception as e:
             click.echo(f"Health check failed: {e}", err=True)
             raise SystemExit(1) from e
 

@@ -175,7 +175,7 @@ def test_cli_start_failure_shows_error(
         return result
 
     with patch("subprocess.run", side_effect=mock_run_fail):
-        with patch("iris.cluster.vm.controller._check_health_http", return_value=False):
+        with patch("iris.cluster.vm.controller._check_health_rpc", return_value=False):
             with patch("iris.cluster.vm.controller.time.sleep"):
                 result = cli_runner.invoke(
                     iris,

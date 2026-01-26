@@ -451,7 +451,21 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.RegisterWorkerRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.RegisterWorkerResponse:
-        """Register a new worker or process a heartbeat from an existing worker."""
+        """Register a new worker or process a heartbeat from an existing worker.
+
+        If the worker claims to be running tasks that the controller doesn't know about
+        (e.g., after controller restart), signal should_reset so the worker cleans up.
+        """
+        # Check if worker claims unknown tasks (controller restart recovery)
+        if request.running_task_ids:
+            unknown_tasks = [tid for tid in request.running_task_ids if self._state.get_task(TaskId(tid)) is None]
+            if unknown_tasks:
+                logger.warning("Worker %s claims unknown tasks %s, signaling reset", request.worker_id, unknown_tasks)
+                return cluster_pb2.Controller.RegisterWorkerResponse(
+                    accepted=False,
+                    should_reset=True,
+                )
+
         # Use WORKER_REGISTERED event for both new and existing workers
         self._state.handle_event(
             WorkerRegisteredEvent(

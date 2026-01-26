@@ -40,10 +40,15 @@ EndpointId = NewType("EndpointId", str)
 
 
 @dataclass(frozen=True)
-class WorkerIdleInfo:
-    """Idle status for a single worker."""
+class VmWorkerStatus:
+    """Worker status keyed by VM address for autoscaler.
 
-    worker_id: str
+    The VM address is the worker's identity. This enables the autoscaler
+    to look up worker status directly by VM address without needing
+    to correlate separate worker_id to VM.
+    """
+
+    vm_address: str
     running_task_ids: frozenset[str]
 
     @property
@@ -51,7 +56,8 @@ class WorkerIdleInfo:
         return len(self.running_task_ids) == 0
 
 
-WorkerIdleMap = dict[str, WorkerIdleInfo]
+# Map of VM address -> worker status, used by autoscaler for idle tracking
+VmWorkerStatusMap = dict[str, VmWorkerStatus]
 
 
 @dataclass(frozen=True)

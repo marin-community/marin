@@ -35,7 +35,7 @@ from iris.cluster.controller.events import (
 from iris.cluster.controller.scheduler import Scheduler, TaskScheduleResult
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker, get_device_variant
-from iris.cluster.types import JobId, TaskId, WorkerIdleInfo
+from iris.cluster.types import JobId, TaskId, VmWorkerStatus, VmWorkerStatusMap
 from iris.cluster.vm.autoscaler import Autoscaler
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
@@ -574,15 +574,27 @@ class Controller:
             return
 
         demand_entries = compute_demand_entries(self._state)
-        worker_idle_map = self._build_worker_idle_map()
-        self._autoscaler.run_once(demand_entries, worker_idle_map=worker_idle_map)
+        vm_status_map = self._build_vm_status_map()
+        self._autoscaler.run_once(demand_entries, vm_status_map=vm_status_map)
 
-    def _build_worker_idle_map(self) -> dict[str, WorkerIdleInfo]:
-        """Build a map of worker_id to idle info for autoscaler verification."""
-        result: dict[str, WorkerIdleInfo] = {}
+    def _build_vm_status_map(self) -> VmWorkerStatusMap:
+        """Build a map of VM address to worker status for autoscaler.
+
+        The autoscaler needs to look up worker status by VM address (not worker_id)
+        because ManagedVm only knows the VM's IP address, not the worker's self-assigned ID.
+        Workers include their vm_address (from IRIS_VM_ADDRESS env var) in metadata.
+        """
+        result: VmWorkerStatusMap = {}
         for worker in self._state.list_all_workers():
-            result[str(worker.worker_id)] = WorkerIdleInfo(
-                worker_id=str(worker.worker_id),
+            vm_addr = worker.metadata.vm_address
+            if not vm_addr:
+                raise ValueError(
+                    f"Worker {worker.worker_id} has no vm_address in metadata. "
+                    "Workers must report IRIS_VM_ADDRESS in their metadata."
+                )
+
+            result[vm_addr] = VmWorkerStatus(
+                vm_address=vm_addr,
                 running_task_ids=frozenset(str(tid) for tid in worker.running_tasks),
             )
         return result

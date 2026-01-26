@@ -22,7 +22,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from iris.cluster.types import WorkerIdleInfo
+from iris.cluster.types import VmWorkerStatus
 from iris.cluster.vm.autoscaler import (
     Autoscaler,
     AutoscalerConfig,
@@ -66,11 +66,13 @@ def make_mock_slice(
         else:
             vm_states = [vm_pb2.VM_STATE_BOOTING]
 
+    # Generate unique addresses by hashing slice_id for the third octet
+    slice_hash = abs(hash(slice_id)) % 256
     snapshots = [
         VmSnapshot(
             vm_id=f"{slice_id}-vm-{i}",
             state=state,
-            address=f"10.0.0.{i}",
+            address=f"10.0.{slice_hash}.{i}",
             init_phase="",
             init_error="" if state != vm_pb2.VM_STATE_FAILED else "test error",
         )
@@ -87,7 +89,7 @@ def make_mock_slice(
         vm_mock.info = vm_pb2.VmInfo(
             vm_id=f"{slice_id}-vm-{i}",
             state=state,
-            address=f"10.0.0.{i}",
+            address=f"10.0.{slice_hash}.{i}",
             worker_id=worker_id,
         )
         mock_vms.append(vm_mock)
@@ -319,13 +321,16 @@ class TestAutoscalerScaleDown:
         demand = [DemandEntry(accelerator_type="v5p-8", count=1)]
 
         # All workers are idle
-        worker_idle_map = {
-            "worker-slice-001-0": WorkerIdleInfo("worker-slice-001-0", frozenset()),
-            "worker-slice-002-0": WorkerIdleInfo("worker-slice-002-0", frozenset()),
+        # VM addresses are generated as f"10.0.{hash(slice_id) % 256}.{i}"
+        slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        slice_002_addr = f"10.0.{abs(hash('slice-002')) % 256}.0"
+        vm_status_map = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
+            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
         }
 
         # run_once should scale down via ScalingGroup.scale_down_if_idle
-        autoscaler.run_once(demand, worker_idle_map, timestamp_ms=10_000)
+        autoscaler.run_once(demand, vm_status_map, timestamp_ms=10_000)
 
         # One slice should be terminated (longest idle first, which is slice-001)
         assert group.slice_count() == 1
@@ -349,13 +354,15 @@ class TestAutoscalerScaleDown:
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = [DemandEntry(accelerator_type="v5p-8", count=0)]
-        worker_idle_map = {
-            "worker-slice-001-0": WorkerIdleInfo("worker-slice-001-0", frozenset()),
-            "worker-slice-002-0": WorkerIdleInfo("worker-slice-002-0", frozenset()),
+        slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        slice_002_addr = f"10.0.{abs(hash('slice-002')) % 256}.0"
+        vm_status_map = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
+            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
         }
 
         # target_capacity = max(0, min_slices=2) = 2, ready=2, no scale down
-        autoscaler.run_once(demand, worker_idle_map)
+        autoscaler.run_once(demand, vm_status_map)
 
         # At min_slices, cannot scale down
         assert group.slice_count() == 2
@@ -381,13 +388,15 @@ class TestAutoscalerScaleDown:
         group._slice_last_active["slice-002"] = 1000
 
         demand = [DemandEntry(accelerator_type="v5p-8", count=1)]
-        worker_idle_map = {
-            "worker-slice-001-0": WorkerIdleInfo("worker-slice-001-0", frozenset()),
-            "worker-slice-002-0": WorkerIdleInfo("worker-slice-002-0", frozenset()),
+        slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        slice_002_addr = f"10.0.{abs(hash('slice-002')) % 256}.0"
+        vm_status_map = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
+            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
         }
 
         # At timestamp 100_000, only 99 seconds have passed (need 300 seconds)
-        autoscaler.run_once(demand, worker_idle_map, timestamp_ms=100_000)
+        autoscaler.run_once(demand, vm_status_map, timestamp_ms=100_000)
 
         # Should not scale down yet
         assert group.slice_count() == 2
@@ -441,12 +450,14 @@ class TestAutoscalerScaleDown:
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = [DemandEntry(accelerator_type="v5p-8", count=1)]
-        worker_idle_map = {
-            "worker-slice-001-0": WorkerIdleInfo("worker-slice-001-0", frozenset()),
-            "worker-slice-002-0": WorkerIdleInfo("worker-slice-002-0", frozenset()),
+        slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        slice_002_addr = f"10.0.{abs(hash('slice-002')) % 256}.0"
+        vm_status_map = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
+            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
         }
 
-        autoscaler.run_once(demand, worker_idle_map)
+        autoscaler.run_once(demand, vm_status_map)
 
         # Cooldown still active, should not scale down
         assert group.slice_count() == 2  # Started with 3, removed 1 manually
@@ -508,8 +519,8 @@ class TestAutoscalerExecution:
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = [DemandEntry(accelerator_type="v5p-8", count=2)]
-        worker_idle_map = {}  # Empty - no workers yet
-        decisions = autoscaler.run_once(demand, worker_idle_map)
+        vm_status_map = {}  # Empty - no workers yet
+        decisions = autoscaler.run_once(demand, vm_status_map)
 
         assert len(decisions) == 1
         assert decisions[0].action == ScalingAction.SCALE_UP
@@ -577,7 +588,9 @@ class TestAutoscalerWorkerFailure:
         autoscaler = make_autoscaler({"test-group": group})
         autoscaler.reconcile()
 
-        autoscaler.notify_worker_failed("worker-slice-001-0")
+        # notify_worker_failed now takes vm_address instead of worker_id
+        vm_address = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        autoscaler.notify_worker_failed(vm_address)
 
         assert group.slice_count() == 0
 
@@ -589,7 +602,8 @@ class TestAutoscalerWorkerFailure:
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
-        autoscaler.notify_worker_failed("unknown-worker")
+        # Use an unknown VM address
+        autoscaler.notify_worker_failed("10.1.2.3")
 
         assert group.slice_count() == 1
 
@@ -616,16 +630,17 @@ class TestAutoscalerIdleVerification:
 
         demand = [DemandEntry(accelerator_type="v5p-8", count=0)]
 
-        # Create worker_idle_map that reports a task running on the worker
-        worker_idle_map = {
-            "worker-slice-001-0": WorkerIdleInfo(
-                worker_id="worker-slice-001-0",
+        # Create vm_status_map that reports a task running on the worker
+        slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        vm_status_map = {
+            slice_001_addr: VmWorkerStatus(
+                vm_address=slice_001_addr,
                 running_task_ids=frozenset({"task-1"}),  # Not idle
             )
         }
 
         # run_once should not scale down because worker is not idle
-        autoscaler.run_once(demand, worker_idle_map)
+        autoscaler.run_once(demand, vm_status_map)
 
         # Slice should NOT be terminated because worker has running tasks
         assert group.slice_count() == 1
@@ -1265,7 +1280,9 @@ class TestAutoscalerActionLogging:
         autoscaler = make_autoscaler({"test-group": group})
         autoscaler.reconcile()
 
-        autoscaler.notify_worker_failed("worker-slice-001-0")
+        # notify_worker_failed now takes vm_address instead of worker_id
+        vm_address = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        autoscaler.notify_worker_failed(vm_address)
 
         status = autoscaler.get_status()
         assert len(status.recent_actions) == 1
@@ -1273,7 +1290,7 @@ class TestAutoscalerActionLogging:
         assert action.action_type == "worker_failed"
         assert action.scale_group == "test-group"
         assert action.slice_id == "slice-001"
-        assert "worker-slice-001-0" in action.reason
+        assert vm_address in action.reason
 
     def test_action_log_bounded_to_100_entries(self, scale_group_config: vm_pb2.ScaleGroupConfig):
         """Verify action log is bounded to 100 entries."""
