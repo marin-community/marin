@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-YOLO experiment for animal CDS regions.
+YOLO experiment for animal CDS regions with loss downweighting on repetitive DNA elements.
 
 https://github.com/Open-Athena/bolinas-dna/issues/27
 """
