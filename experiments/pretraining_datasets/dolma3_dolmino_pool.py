@@ -281,7 +281,8 @@ def download_dolmino_pool() -> ExecutorStep:
 
 def _get_partition_base_dir():
     """Get the base directory for partition data."""
-    return download_dolmino_pool().cd(HF_REVISION).cd("data")
+    # Note: append_sha_to_path=False in DownloadConfig, so files are directly under output_path/data/
+    return download_dolmino_pool().cd("data")
 
 
 # =============================================================================

@@ -321,22 +321,23 @@ def download_all_dolma3_pool_sources() -> list[ExecutorStep]:
 
 def _get_dolma3_pool_base_dir():
     """Get the base directory for main Dolma 3 Pool data (CC + olmOCR)."""
-    return download_dolma3_pool().cd(HF_REVISION).cd("data")
+    # Note: append_sha_to_path=False in DownloadConfig, so files are directly under output_path/data/
+    return download_dolma3_pool().cd("data")
 
 
 def _get_stack_edu_base_dir():
     """Get the base directory for Stack-Edu data."""
-    return download_stack_edu().cd("main").cd("data")
+    return download_stack_edu().cd("data")
 
 
 def _get_finemath_base_dir():
     """Get the base directory for FineMath data."""
-    return download_finemath().cd("main").cd("data")
+    return download_finemath().cd("data")
 
 
 def _get_dolma_v17_base_dir():
     """Get the base directory for Dolma v1.7 data."""
-    return download_dolma_v17().cd("main").cd("data")
+    return download_dolma_v17().cd("data")
 
 
 # =============================================================================
