@@ -16,6 +16,29 @@
 
 Provides in-memory implementations of VmGroupProtocol and VmManagerProtocol
 that simulate VM lifecycle with configurable delays and failure injection.
+
+Usage:
+    # Create a FakeVmManager with a scale group config
+    config = config_pb2.ScaleGroupConfig(name="test-group", ...)
+    manager = FakeVmManager(FakeVmManagerConfig(config=config))
+
+    # Create VM groups (they start in BOOTING state)
+    vm_group = manager.create_vm_group()
+    assert vm_group.status().vms[0].state == vm_pb2.VM_STATE_BOOTING
+
+    # Advance time to trigger state transitions (BOOTING -> INITIALIZING -> READY)
+    manager.tick(ts=now_ms())
+    assert vm_group.status().vms[0].state == vm_pb2.VM_STATE_READY
+
+    # Inject failures at the manager level
+    manager.set_failure_mode(FailureMode.QUOTA_EXCEEDED)
+    manager.create_vm_group()  # raises QuotaExceededError
+
+Key concepts:
+    - tick(ts): Advances VM state transitions based on elapsed time.
+      With default delays of 0, VMs transition instantly on tick().
+    - FailureMode: Inject quota errors or generic creation failures at the manager level.
+    - FakeVm state machine: BOOTING -> INITIALIZING -> READY
 """
 
 from __future__ import annotations
@@ -70,35 +93,21 @@ class FakeVm:
         )
         self._boot_delay_ms = boot_delay_ms
         self._init_delay_ms = init_delay_ms
-        self._should_fail = False
-
-    def set_should_fail(self, fail: bool) -> None:
-        """Mark this VM to fail on next transition."""
-        self._should_fail = fail
 
     def tick(self, ts: int) -> None:
         """Process state transitions based on elapsed time."""
         if self.info.state == vm_pb2.VM_STATE_BOOTING:
             elapsed = ts - self.info.state_changed_at_ms
             if elapsed >= self._boot_delay_ms:
-                if self._should_fail:
-                    self.info.state = vm_pb2.VM_STATE_FAILED
-                    self.info.init_error = "Boot failure (injected)"
-                    self.info.state_changed_at_ms = ts
-                    return
                 self.info.state = vm_pb2.VM_STATE_INITIALIZING
                 self.info.state_changed_at_ms = ts
 
         if self.info.state == vm_pb2.VM_STATE_INITIALIZING:
             elapsed = ts - self.info.state_changed_at_ms
             if elapsed >= self._init_delay_ms:
-                if self._should_fail:
-                    self.info.state = vm_pb2.VM_STATE_FAILED
-                    self.info.init_error = "Init failure (injected)"
-                else:
-                    self.info.state = vm_pb2.VM_STATE_READY
-                    self.info.worker_id = f"worker-{self.info.vm_id}"
-                    self.info.worker_healthy = True
+                self.info.state = vm_pb2.VM_STATE_READY
+                self.info.worker_id = f"worker-{self.info.vm_id}"
+                self.info.worker_healthy = True
                 self.info.state_changed_at_ms = ts
 
 
@@ -162,10 +171,6 @@ class FakeVmGroup:
         """
         return list(self._vms)
 
-    def fake_vms(self) -> list[FakeVm]:
-        """Get the FakeVm instances for testing."""
-        return list(self._vms)
-
     def terminate(self) -> None:
         """Mark VM group as terminated."""
         ts = now_ms()
@@ -220,10 +225,10 @@ class FakeVmManager:
         self._lock = threading.Lock()
         self._slices: dict[str, FakeVmGroup] = {}
         self._slice_counter = 0
-        self._fail_vms: set[str] = set()
 
     def create_vm_group(self, tags: dict[str, str] | None = None) -> FakeVmGroup:
         """Create a new fake VM group."""
+        del tags  # Unused
         if self._config.failure_mode == FailureMode.QUOTA_EXCEEDED:
             raise QuotaExceededError(f"Quota exceeded for {self._config.config.name}")
         if self._config.failure_mode == FailureMode.CREATE_FAILS:
@@ -250,8 +255,6 @@ class FakeVmManager:
                     boot_delay_ms=self._config.boot_delay_ms,
                     init_delay_ms=self._config.init_delay_ms,
                 )
-                if vm_id in self._fail_vms:
-                    vm.set_should_fail(True)
                 vms.append(vm)
 
             fake_vm_group = FakeVmGroup(
@@ -283,21 +286,6 @@ class FakeVmManager:
     def set_failure_mode(self, mode: FailureMode) -> None:
         """Set the failure mode for subsequent operations."""
         self._config.failure_mode = mode
-
-    def add_fail_vm(self, vm_id: str) -> None:
-        """Mark a VM ID to fail during initialization."""
-        with self._lock:
-            self._fail_vms.add(vm_id)
-            # Also update any existing VM
-            for fake_vm_group in self._slices.values():
-                for vm in fake_vm_group.fake_vms():
-                    if vm.info.vm_id == vm_id:
-                        vm.set_should_fail(True)
-
-    def clear_fail_vms(self) -> None:
-        """Clear the failure injection set."""
-        with self._lock:
-            self._fail_vms.clear()
 
     def get_slice(self, slice_id: str) -> FakeVmGroup | None:
         """Get a specific VM group by ID."""

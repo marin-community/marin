@@ -383,20 +383,24 @@ class TestAutoscalerScaleDown:
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
-        # Mark slices as recently active
-        group._slice_last_active["slice-001"] = 1000
-        group._slice_last_active["slice-002"] = 1000
-
-        demand = [DemandEntry(accelerator_type="v5p-8", count=1)]
         slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
         slice_002_addr = f"10.0.{abs(hash('slice-002')) % 256}.0"
-        vm_status_map = {
+
+        # Mark slices as active at time 1000 by calling update_slice_activity with running tasks
+        vm_status_map_active = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
+            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset({"task-2"})),
+        }
+        group.update_slice_activity(vm_status_map_active, timestamp_ms=1000)
+
+        demand = [DemandEntry(accelerator_type="v5p-8", count=1)]
+        vm_status_map_idle = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
         }
 
         # At timestamp 100_000, only 99 seconds have passed (need 300 seconds)
-        autoscaler.run_once(demand, vm_status_map, timestamp_ms=100_000)
+        autoscaler.run_once(demand, vm_status_map_idle, timestamp_ms=100_000)
 
         # Should not scale down yet
         assert group.slice_count() == 2

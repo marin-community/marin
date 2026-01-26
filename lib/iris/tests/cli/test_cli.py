@@ -25,8 +25,8 @@ import yaml
 from click.testing import CliRunner
 
 from iris.cli import iris
-from iris.rpc import config_pb2
-from tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig
+from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
+from iris.rpc import config_pb2, vm_pb2
 
 
 @pytest.fixture
@@ -35,8 +35,33 @@ def cli_runner() -> CliRunner:
     return CliRunner()
 
 
+def _make_mock_slice(slice_id: str, scale_group: str = "test-group") -> MagicMock:
+    """Create a mock VmGroupProtocol for CLI testing."""
+    mock = MagicMock()
+    mock.group_id = slice_id
+    mock.slice_id = slice_id
+    mock.scale_group = scale_group
+    mock.created_at_ms = 1000000
+    snapshots = [
+        VmSnapshot(
+            vm_id=f"{slice_id}-vm-0",
+            state=vm_pb2.VM_STATE_READY,
+            address="10.0.0.1",
+            init_phase="",
+            init_error="",
+        )
+    ]
+    mock.status.return_value = VmGroupStatus(vms=snapshots)
+    mock.to_proto.return_value = vm_pb2.SliceInfo(
+        slice_id=slice_id,
+        scale_group=scale_group,
+        created_at_ms=1000000,
+    )
+    return mock
+
+
 def _create_test_autoscaler(scale_group_name: str = "test-group"):
-    """Create a test Autoscaler with FakeVmManager."""
+    """Create a test Autoscaler with mock VmManager."""
     from iris.cluster.vm.autoscaler import Autoscaler, AutoscalerConfig
     from iris.cluster.vm.managed_vm import VmRegistry
     from iris.cluster.vm.scaling_group import ScalingGroup
@@ -48,8 +73,17 @@ def _create_test_autoscaler(scale_group_name: str = "test-group"):
         max_slices=10,
         zones=["us-central1-a"],
     )
-    fake_manager = FakeVmManager(FakeVmManagerConfig(config=sg_config))
-    scale_group = ScalingGroup(config=sg_config, vm_manager=fake_manager)
+
+    mock_manager = MagicMock()
+    mock_manager.discover_vm_groups.return_value = []
+    mock_manager._create_count = 0
+
+    def create_vm_group_side_effect(_tags: dict[str, str] | None = None) -> MagicMock:
+        mock_manager._create_count += 1
+        return _make_mock_slice(f"mock-slice-{mock_manager._create_count}", scale_group_name)
+
+    mock_manager.create_vm_group.side_effect = create_vm_group_side_effect
+    scale_group = ScalingGroup(config=sg_config, vm_manager=mock_manager)
 
     return (
         Autoscaler(
@@ -57,7 +91,7 @@ def _create_test_autoscaler(scale_group_name: str = "test-group"):
             vm_registry=VmRegistry(),
             config=AutoscalerConfig(),
         ),
-        fake_manager,
+        mock_manager,
     )
 
 
@@ -81,8 +115,10 @@ def mock_config():
 def config_file(tmp_path: Path) -> Path:
     """Create a temporary config file for testing."""
     config = {
-        "provider_type": "manual",
-        "manual_hosts": ["10.0.0.1", "10.0.0.2"],
+        "provider_type": "gcp",
+        "project_id": "test-project",
+        "region": "us-central1",
+        "zone": "us-central1-a",
         "bootstrap": {
             "docker_image": "test-image:latest",
             "worker_port": 10001,
@@ -92,7 +128,7 @@ def config_file(tmp_path: Path) -> Path:
             "user": "root",
         },
         "scale_groups": {
-            "manual": {"accelerator_type": "cpu", "min_slices": 0, "max_slices": 10},
+            "test-group": {"accelerator_type": "v5p-8", "min_slices": 0, "max_slices": 10, "zones": ["us-central1-a"]},
         },
     }
     config_path = tmp_path / "vm-config.yaml"

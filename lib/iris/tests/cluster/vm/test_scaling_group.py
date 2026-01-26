@@ -389,7 +389,7 @@ class TestScalingGroupIdleTracking:
         manager = make_mock_vm_manager()
         group = ScalingGroup(unbounded_config, manager, idle_threshold_ms=60_000)
         group.scale_up()  # Creates a slice
-        slice_id = next(iter(group._vm_groups.keys()))
+        slice_id = next(iter(group.vm_groups())).slice_id
 
         # Never had activity tracked -> eligible
         assert group.is_slice_eligible_for_scaledown(slice_id, timestamp_ms=1000)
@@ -401,8 +401,18 @@ class TestScalingGroupIdleTracking:
         group = ScalingGroup(unbounded_config, manager, idle_threshold_ms=60_000)
         group.reconcile()
 
-        # Mark slice as active
-        group._slice_last_active["slice-001"] = 1000
+        # Set up vms() mock to return VM with address
+        slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        slice_obj = group.get_slice("slice-001")
+        mock_vm = MagicMock()
+        mock_vm.info.address = slice_001_addr
+        slice_obj.vms.return_value = [mock_vm]
+
+        # Mark slice as active at t=1000 via update_slice_activity
+        vm_status_map = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
+        }
+        group.update_slice_activity(vm_status_map, timestamp_ms=1000)
 
         # Not enough time passed (30s < 60s threshold)
         assert not group.is_slice_eligible_for_scaledown("slice-001", timestamp_ms=30_000)
@@ -414,8 +424,18 @@ class TestScalingGroupIdleTracking:
         group = ScalingGroup(unbounded_config, manager, idle_threshold_ms=60_000)
         group.reconcile()
 
-        # Mark slice as active at t=1000
-        group._slice_last_active["slice-001"] = 1000
+        # Set up vms() mock to return VM with address
+        slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        slice_obj = group.get_slice("slice-001")
+        mock_vm = MagicMock()
+        mock_vm.info.address = slice_001_addr
+        slice_obj.vms.return_value = [mock_vm]
+
+        # Mark slice as active at t=1000 via update_slice_activity
+        vm_status_map = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
+        }
+        group.update_slice_activity(vm_status_map, timestamp_ms=1000)
 
         # After threshold (61s > 60s) -> eligible
         assert group.is_slice_eligible_for_scaledown("slice-001", timestamp_ms=61_001)
@@ -430,11 +450,28 @@ class TestScalingGroupIdleTracking:
         group = ScalingGroup(unbounded_config, manager, idle_threshold_ms=1000)
         group.reconcile()
 
-        # slice-001 idle since 1000, slice-002 idle since 5000
-        group._slice_last_active["slice-001"] = 1000
-        group._slice_last_active["slice-002"] = 5000
+        # Set up vms() mocks to return VMs with addresses
+        slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        slice_002_addr = f"10.0.{abs(hash('slice-002')) % 256}.0"
+        for slice_id, vm_addr in [("slice-001", slice_001_addr), ("slice-002", slice_002_addr)]:
+            slice_obj = group.get_slice(slice_id)
+            mock_vm = MagicMock()
+            mock_vm.info.address = vm_addr
+            slice_obj.vms.return_value = [mock_vm]
 
-        # At timestamp 10000, slice-001 has been idle longer
+        # Mark slice-001 as active at t=1000 (will be idle longer)
+        vm_status_map_001 = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
+        }
+        group.update_slice_activity(vm_status_map_001, timestamp_ms=1000)
+
+        # Mark slice-002 as active at t=5000 (more recently active)
+        vm_status_map_002 = {
+            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset({"task-2"})),
+        }
+        group.update_slice_activity(vm_status_map_002, timestamp_ms=5000)
+
+        # At timestamp 10000, slice-001 has been idle longer (9s vs 5s)
         idle_slices = group.get_idle_slices(timestamp_ms=10_000)
         assert len(idle_slices) == 2
         assert idle_slices[0].slice_id == "slice-001"  # Longest idle first
@@ -468,7 +505,7 @@ class TestScalingGroupIdleTracking:
 
         group.update_slice_activity(vm_status_map, timestamp_ms=5000)
 
-        # Only slice-001 (with active worker) should be updated
+        # Verify internal tracking to ensure only active slices are tracked (memory leak prevention)
         assert group._slice_last_active.get("slice-001") == 5000
         assert "slice-002" not in group._slice_last_active
 
@@ -492,18 +529,21 @@ class TestScalingGroupIdleTracking:
             mock_vm.info.address = vm_addr
             slice_obj.vms.return_value = [mock_vm]
 
-        # All workers are idle
-        vm_status_map = {
+        # Mark both slices as active at t=0 (they'll be idle for 10s, exceeding 1s threshold)
+        vm_status_map_active = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
+            slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset({"task-2"})),
+        }
+        group.update_slice_activity(vm_status_map_active, timestamp_ms=0)
+
+        # At t=10_000, workers are now idle
+        vm_status_map_idle = {
             slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset()),
             slice_002_addr: VmWorkerStatus(vm_address=slice_002_addr, running_task_ids=frozenset()),
         }
 
-        # Both slices idle since 0
-        group._slice_last_active["slice-001"] = 0
-        group._slice_last_active["slice-002"] = 0
-
         # Target capacity = 1, but we have 2 ready slices
-        scaled_down = group.scale_down_if_idle(vm_status_map, target_capacity=1, timestamp_ms=10_000)
+        scaled_down = group.scale_down_if_idle(vm_status_map_idle, target_capacity=1, timestamp_ms=10_000)
 
         assert scaled_down is not None
         assert group.slice_count() == 1  # One slice was terminated
@@ -531,13 +571,22 @@ class TestScalingGroupIdleTracking:
         group = ScalingGroup(unbounded_config, manager)
         group.reconcile()
 
-        # Track the slice
-        group._slice_last_active["slice-001"] = 1000
+        # Set up vms() mock and track the slice via update_slice_activity
+        slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        slice_obj = group.get_slice("slice-001")
+        mock_vm = MagicMock()
+        mock_vm.info.address = slice_001_addr
+        slice_obj.vms.return_value = [mock_vm]
+
+        vm_status_map = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
+        }
+        group.update_slice_activity(vm_status_map, timestamp_ms=1000)
 
         # Scale down
         group.scale_down("slice-001")
 
-        # Tracking should be cleaned up
+        # Verify internal cleanup to prevent memory leaks from stale slice tracking
         assert "slice-001" not in group._slice_last_active
 
 
@@ -806,11 +855,22 @@ class TestScalingGroupFailedSliceCleanup:
         group = ScalingGroup(unbounded_config, manager)
         group.reconcile()
 
-        # Track the slice
-        group._slice_last_active["slice-001"] = 1000
+        # Set up vms() mock and track the slice via update_slice_activity
+        # (simulating the slice was active before it failed)
+        slice_001_addr = f"10.0.{abs(hash('slice-001')) % 256}.0"
+        slice_obj = group.get_slice("slice-001")
+        mock_vm = MagicMock()
+        mock_vm.info.address = slice_001_addr
+        slice_obj.vms.return_value = [mock_vm]
+
+        vm_status_map = {
+            slice_001_addr: VmWorkerStatus(vm_address=slice_001_addr, running_task_ids=frozenset({"task-1"})),
+        }
+        group.update_slice_activity(vm_status_map, timestamp_ms=1000)
 
         group.cleanup_failed_slices(timestamp_ms=2000)
 
+        # Verify internal cleanup to prevent memory leaks from stale slice tracking
         assert "slice-001" not in group._slice_last_active
 
     def test_cleanup_failed_slices_ignores_cooldown(self, unbounded_config: config_pb2.ScaleGroupConfig):
