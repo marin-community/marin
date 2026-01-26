@@ -159,6 +159,41 @@ class ScaleGroupSpec:
     hosts: list[str] = field(default_factory=list)
 
 
+def _get_provider_config(
+    group_config: vm_pb2.ScaleGroupConfig,
+    cluster_config: vm_pb2.IrisClusterConfig,
+) -> tuple[str, str | None, list[str] | None, SshConfig | None]:
+    """Extract provider type and config from scale group.
+
+    Returns: (provider_type, project_id, hosts, ssh_config)
+
+    Raises:
+        ValueError: If scale group missing provider config or unknown provider type
+    """
+    if not group_config.HasField("provider"):
+        raise ValueError(f"Scale group {group_config.name} missing provider config")
+
+    provider = group_config.provider
+    which = provider.WhichOneof("provider")
+    if which == "tpu":
+        if not provider.tpu.project_id:
+            raise ValueError(f"TPU provider in {group_config.name} missing project_id")
+        return ("tpu", provider.tpu.project_id, None, None)
+    if which == "manual":
+        manual = provider.manual
+        if not manual.hosts:
+            raise ValueError(f"Manual provider in {group_config.name} missing hosts")
+        ssh_config = SshConfig(
+            user=manual.ssh_user or cluster_config.ssh_user or "root",
+            key_file=manual.ssh_key_file or cluster_config.ssh_private_key or None,
+            connect_timeout=cluster_config.ssh_connect_timeout_seconds or 30,
+            port=manual.ssh_port or 22,
+        )
+        return ("manual", None, list(manual.hosts), ssh_config)
+
+    raise ValueError(f"Unknown provider type in scale group {group_config.name}")
+
+
 def create_autoscaler_from_config(
     config: vm_pb2.IrisClusterConfig,
     autoscaler_config=None,  # AutoscalerConfig | None - type is from autoscaler module
@@ -174,20 +209,24 @@ def create_autoscaler_from_config(
     - ScalingGroups that own VM groups and track scaling state
     - The Autoscaler that coordinates scaling decisions
 
+    Each scale group must have a `provider` field specifying either:
+    - `tpu`: with `project_id`
+    - `manual`: with `hosts` list
+
     Args:
         config: Cluster configuration proto with scale groups
         autoscaler_config: Optional autoscaler configuration
+        dry_run: If True, don't actually create VMs
 
     Returns:
         A fully configured Autoscaler ready for use
 
     Raises:
-        ValueError: If a scale group has an unknown provider type
+        ValueError: If a scale group is missing provider config or has unknown provider type
     """
     from iris.cluster.vm.autoscaler import Autoscaler, AutoscalerConfig
 
-    provider_type = config.provider_type or "manual"
-    logger.info("Creating Autoscaler with provider=%s", provider_type)
+    logger.info("Creating Autoscaler")
 
     vm_registry = VmRegistry()
     vm_factory = TrackedVmFactory(vm_registry)
@@ -195,15 +234,21 @@ def create_autoscaler_from_config(
     scale_groups: dict[str, ScalingGroup] = {}
 
     for name, group_config in config.scale_groups.items():
+        provider_type, project_id, hosts, ssh_config = _get_provider_config(group_config, config)
+
+        # Use per-group ssh_config if available, otherwise fall back to cluster-level
+        if ssh_config is None and provider_type == "manual":
+            ssh_config = to_ssh_config(config)
+
         manager = _create_manager(
             provider=provider_type,
             config=group_config,
             bootstrap_config=to_bootstrap_config(config),
             timeouts=to_timeout_config(config),
             vm_factory=vm_factory,
-            project_id=config.project_id,
-            hosts=list(config.manual_hosts),
-            ssh_config=to_ssh_config(config),
+            project_id=project_id,
+            hosts=hosts,
+            ssh_config=ssh_config,
             label_prefix=config.label_prefix or "iris",
             dry_run=dry_run,
         )

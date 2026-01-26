@@ -69,6 +69,27 @@ message SliceInfo {
   repeated VmInfo vms = 4;
 }
 
+// Provider configuration for TPU scale groups
+message TpuProvider {
+  string project_id = 1;
+}
+
+// Provider configuration for manual (pre-existing hosts) scale groups
+message ManualProvider {
+  repeated string hosts = 1;
+  string ssh_user = 2;           // Default: "root"
+  string ssh_key_file = 3;
+  int32 ssh_port = 4;            // Default: 22
+}
+
+// Per-scale-group provider configuration
+message ProviderConfig {
+  oneof provider {
+    TpuProvider tpu = 1;
+    ManualProvider manual = 2;
+  }
+}
+
 // Configuration for a scale group
 message ScaleGroupConfig {
   string name = 1;
@@ -85,6 +106,9 @@ message ScaleGroupConfig {
 
   // Priority for waterfall routing (lower = higher priority, default 100)
   int32 priority = 30;
+
+  // Per-group provider configuration
+  ProviderConfig provider = 90;
 }
 
 // A scaling decision

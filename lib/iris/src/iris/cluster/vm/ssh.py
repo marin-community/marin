@@ -30,8 +30,8 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
 from collections.abc import Callable
+from typing import Any, Protocol, runtime_checkable
 
 from iris.time_utils import ExponentialBackoff
 
@@ -71,10 +71,6 @@ class SshConnection(Protocol):
     def zone(self) -> str:
         """Zone/location, or empty string if not applicable."""
         ...
-
-
-# Type alias for connection factories
-SshConnectionFactory = Callable[[str], SshConnection]
 
 
 # ============================================================================
@@ -300,68 +296,6 @@ class InMemorySshConnection:
         logger.info("[in-memory] run_streaming(%s): %s", self._address, command[:80])
         self.commands.append(command)
         return FakePopen()
-
-
-# ============================================================================
-# Factory Functions
-# ============================================================================
-
-
-def make_direct_ssh_factory(
-    user: str = "root",
-    key_file: str | None = None,
-    port: int = 22,
-) -> SshConnectionFactory:
-    """Create factory for DirectSshConnection.
-
-    Returns a factory function that creates DirectSshConnection instances
-    for the given host address.
-    """
-
-    def factory(host: str) -> SshConnection:
-        return DirectSshConnection(host=host, user=user, key_file=key_file, port=port)
-
-    return factory
-
-
-def make_in_memory_connection_factory() -> SshConnectionFactory:
-    """Create factory for InMemorySshConnection.
-
-    Returns a factory function that creates InMemorySshConnection instances
-    for testing and dry-run scenarios.
-    """
-
-    def factory(host: str) -> SshConnection:
-        return InMemorySshConnection(_address=host, _zone="")
-
-    return factory
-
-
-class GcloudSshConnectionFactory(Protocol):
-    """Factory protocol for GcloudSshConnection instances."""
-
-    def __call__(self, vm_id: str, worker_index: int = 0) -> SshConnection: ...
-
-
-def make_gcloud_ssh_factory(
-    project_id: str,
-    zone: str,
-) -> GcloudSshConnectionFactory:
-    """Create factory for GcloudSshConnection.
-
-    Returns a factory function that creates GcloudSshConnection instances
-    for TPU VM SSH access.
-    """
-
-    def factory(vm_id: str, worker_index: int = 0) -> SshConnection:
-        return GcloudSshConnection(
-            project_id=project_id,
-            _zone=zone,
-            vm_id=vm_id,
-            worker_index=worker_index,
-        )
-
-    return factory
 
 
 # ============================================================================

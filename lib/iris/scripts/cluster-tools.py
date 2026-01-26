@@ -880,7 +880,8 @@ def validate(
         uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate --controller-url http://localhost:10000
 
         # Use a different TPU type
-        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate --tpu-type v5litepod-8
+        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models \\
+            validate --tpu-type v5litepod-8
     """
     zone = ctx.obj["zone"]
     project = ctx.obj["project"]

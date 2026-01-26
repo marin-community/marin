@@ -90,8 +90,34 @@ class SliceInfo(_message.Message):
     vms: _containers.RepeatedCompositeFieldContainer[VmInfo]
     def __init__(self, slice_id: _Optional[str] = ..., scale_group: _Optional[str] = ..., created_at_ms: _Optional[int] = ..., vms: _Optional[_Iterable[_Union[VmInfo, _Mapping]]] = ...) -> None: ...
 
+class TpuProvider(_message.Message):
+    __slots__ = ("project_id",)
+    PROJECT_ID_FIELD_NUMBER: _ClassVar[int]
+    project_id: str
+    def __init__(self, project_id: _Optional[str] = ...) -> None: ...
+
+class ManualProvider(_message.Message):
+    __slots__ = ("hosts", "ssh_user", "ssh_key_file", "ssh_port")
+    HOSTS_FIELD_NUMBER: _ClassVar[int]
+    SSH_USER_FIELD_NUMBER: _ClassVar[int]
+    SSH_KEY_FILE_FIELD_NUMBER: _ClassVar[int]
+    SSH_PORT_FIELD_NUMBER: _ClassVar[int]
+    hosts: _containers.RepeatedScalarFieldContainer[str]
+    ssh_user: str
+    ssh_key_file: str
+    ssh_port: int
+    def __init__(self, hosts: _Optional[_Iterable[str]] = ..., ssh_user: _Optional[str] = ..., ssh_key_file: _Optional[str] = ..., ssh_port: _Optional[int] = ...) -> None: ...
+
+class ProviderConfig(_message.Message):
+    __slots__ = ("tpu", "manual")
+    TPU_FIELD_NUMBER: _ClassVar[int]
+    MANUAL_FIELD_NUMBER: _ClassVar[int]
+    tpu: TpuProvider
+    manual: ManualProvider
+    def __init__(self, tpu: _Optional[_Union[TpuProvider, _Mapping]] = ..., manual: _Optional[_Union[ManualProvider, _Mapping]] = ...) -> None: ...
+
 class ScaleGroupConfig(_message.Message):
-    __slots__ = ("name", "min_slices", "max_slices", "accelerator_type", "runtime_version", "preemptible", "zones", "priority")
+    __slots__ = ("name", "min_slices", "max_slices", "accelerator_type", "runtime_version", "preemptible", "zones", "priority", "provider")
     NAME_FIELD_NUMBER: _ClassVar[int]
     MIN_SLICES_FIELD_NUMBER: _ClassVar[int]
     MAX_SLICES_FIELD_NUMBER: _ClassVar[int]
@@ -100,6 +126,7 @@ class ScaleGroupConfig(_message.Message):
     PREEMPTIBLE_FIELD_NUMBER: _ClassVar[int]
     ZONES_FIELD_NUMBER: _ClassVar[int]
     PRIORITY_FIELD_NUMBER: _ClassVar[int]
+    PROVIDER_FIELD_NUMBER: _ClassVar[int]
     name: str
     min_slices: int
     max_slices: int
@@ -108,7 +135,8 @@ class ScaleGroupConfig(_message.Message):
     preemptible: bool
     zones: _containers.RepeatedScalarFieldContainer[str]
     priority: int
-    def __init__(self, name: _Optional[str] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[str] = ..., runtime_version: _Optional[str] = ..., preemptible: _Optional[bool] = ..., zones: _Optional[_Iterable[str]] = ..., priority: _Optional[int] = ...) -> None: ...
+    provider: ProviderConfig
+    def __init__(self, name: _Optional[str] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[str] = ..., runtime_version: _Optional[str] = ..., preemptible: _Optional[bool] = ..., zones: _Optional[_Iterable[str]] = ..., priority: _Optional[int] = ..., provider: _Optional[_Union[ProviderConfig, _Mapping]] = ...) -> None: ...
 
 class ScalingDecision(_message.Message):
     __slots__ = ("scale_group", "action", "slice_delta", "reason")
