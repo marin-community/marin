@@ -135,18 +135,12 @@ class vLLMInferenceContext(BaseInferenceContext):
 
             if "Qwen2ForCausalLM" not in model_loader._MODEL_REGISTRY:
                 logger.info("Patching tpu_inference to support Qwen2ForCausalLM")
-                try:
-                    from tpu_inference.models.jax.qwen2 import Qwen2ForCausalLM
-                except ImportError:
-                    logger.warning("Qwen2ForCausalLM not found in tpu_inference, aliasing Qwen3ForCausalLM")
-                    from tpu_inference.models.jax.qwen3 import (
-                        Qwen3ForCausalLM as Qwen2ForCausalLM,
-                    )
+                from tpu_inference.models.jax.qwen2 import Qwen2ForCausalLM
 
                 model_loader.register_model("Qwen2ForCausalLM", Qwen2ForCausalLM)
         except ImportError:
-            # tpu_inference might not be installed or structure changed
-            pass
+            logger.exception("Failed to patch tpu_inference registry")
+            raise
 
     @staticmethod
     def _get_llm_engine(inference_config: vLLMInferenceContextConfig):
