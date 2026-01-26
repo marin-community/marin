@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import dataclasses
+import glob
 import logging
 import os
 import shlex
@@ -33,6 +34,10 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 
 logger = logging.getLogger(__name__)
 DEFAULT_VLLM_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
+DEFAULT_VLLM_GPU_DOCKER_IMAGE: str = "vllm/vllm-openai:latest"
+MARIN_VLLM_DOCKER_IMAGE_ENV: str = "MARIN_VLLM_DOCKER_IMAGE"
+MARIN_VLLM_TPU_DOCKER_IMAGE_ENV: str = "MARIN_VLLM_TPU_DOCKER_IMAGE"
+MARIN_VLLM_GPU_DOCKER_IMAGE_ENV: str = "MARIN_VLLM_GPU_DOCKER_IMAGE"
 VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu",)
 
 _SENSITIVE_ENV_KEYS = frozenset(
@@ -291,6 +296,9 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     max_model_len = engine_kwargs.get("max_model_len")
     if isinstance(max_model_len, int) and max_model_len > 0:
         args.extend(["--max-model-len", str(max_model_len)])
+    gpu_memory_utilization = engine_kwargs.get("gpu_memory_utilization")
+    if isinstance(gpu_memory_utilization, (int, float)):
+        args.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
     return args
 
 
@@ -424,6 +432,121 @@ def _pick_free_port(host: str) -> int:
         return int(sock.getsockname()[1])
 
 
+def _env_has_value(value: str | None, *, ignore: set[str]) -> bool:
+    if value is None:
+        return False
+    stripped = value.strip()
+    if not stripped:
+        return False
+    if stripped.lower() in ignore:
+        return False
+    return True
+
+
+def _detect_tpu_environment() -> bool:
+    tpu_env_keys = (
+        "TPU_NAME",
+        "TPU_CHIPS_PER_HOST",
+        "TPU_WORKER_ID",
+        "TPU_VISIBLE_DEVICES",
+        "TPU_ACCELERATOR_TYPE",
+        "XRT_TPU_CONFIG",
+        "LIBTPU_INIT_ARGS",
+    )
+    for key in tpu_env_keys:
+        if _env_has_value(os.environ.get(key), ignore={"false", "none"}):
+            return True
+    return False
+
+
+def _detect_nvidia_gpu_environment() -> bool:
+    for key in ("NVIDIA_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
+        if _env_has_value(os.environ.get(key), ignore={"none", "void", "no", "false", "-1"}):
+            return True
+    if os.path.exists("/proc/driver/nvidia/version"):
+        return True
+    return bool(glob.glob("/dev/nvidia[0-9]*"))
+
+
+def _detect_resource_type() -> Literal["tpu", "gpu", "unknown"]:
+    if _detect_tpu_environment():
+        return "tpu"
+    if _detect_nvidia_gpu_environment():
+        return "gpu"
+    return "unknown"
+
+
+def _resolve_docker_gpu_arg() -> str | None:
+    raw_value = os.environ.get("NVIDIA_VISIBLE_DEVICES") or os.environ.get("CUDA_VISIBLE_DEVICES")
+    if raw_value is not None:
+        value = raw_value.strip()
+        if not value:
+            return None
+        lowered = value.lower()
+        if lowered in {"none", "void", "no", "false", "-1"}:
+            return None
+        if lowered == "all":
+            return "all"
+        devices = [device.strip() for device in value.split(",") if device.strip()]
+        if devices:
+            return f"device={','.join(devices)}"
+        return None
+
+    if _detect_nvidia_gpu_environment():
+        return "all"
+    return None
+
+
+def _resolve_vllm_docker_image(
+    *,
+    resource_type: Literal["tpu", "gpu", "unknown"],
+    docker_image: str | None,
+) -> tuple[str, bool]:
+    if docker_image is not None:
+        return docker_image, True
+
+    if resource_type == "tpu":
+        env_image = os.environ.get(MARIN_VLLM_TPU_DOCKER_IMAGE_ENV) or os.environ.get(MARIN_VLLM_DOCKER_IMAGE_ENV)
+        if env_image:
+            return env_image, True
+        return DEFAULT_VLLM_DOCKER_IMAGE, False
+
+    if resource_type == "gpu":
+        env_image = os.environ.get(MARIN_VLLM_GPU_DOCKER_IMAGE_ENV) or os.environ.get(MARIN_VLLM_DOCKER_IMAGE_ENV)
+        if env_image:
+            return env_image, True
+        return DEFAULT_VLLM_GPU_DOCKER_IMAGE, False
+
+    env_image = os.environ.get(MARIN_VLLM_DOCKER_IMAGE_ENV)
+    if env_image:
+        return env_image, True
+    return DEFAULT_VLLM_DOCKER_IMAGE, False
+
+
+def _docker_run_args_for_resource(
+    *,
+    resource_type: Literal["tpu", "gpu", "unknown"],
+    docker_run_args: list[str] | None,
+) -> list[str]:
+    docker_args: list[str] = []
+    existing_args = docker_run_args or []
+
+    has_privileged = any(arg == "--privileged" or arg.startswith("--privileged=") for arg in existing_args)
+    has_gpus = any(arg == "--gpus" or arg.startswith("--gpus=") for arg in existing_args)
+
+    if resource_type == "tpu" and not has_privileged:
+        docker_args.append("--privileged")
+    if resource_type == "gpu" and not has_gpus:
+        gpu_arg = _resolve_docker_gpu_arg()
+        if gpu_arg is not None:
+            docker_args.extend(["--gpus", gpu_arg])
+
+    if not any(arg.startswith("--shm-size") for arg in existing_args):
+        docker_args.append("--shm-size=200gb")
+    docker_args.extend(existing_args)
+    return docker_args
+
+
 def _build_docker_run_command(
     *,
     image: str,
@@ -517,9 +640,13 @@ def _start_vllm_docker_server(
 
     _require_docker_available()
 
-    resolved_image = docker_image or os.environ.get("MARIN_VLLM_DOCKER_IMAGE") or DEFAULT_VLLM_DOCKER_IMAGE
-    if "MARIN_VLLM_DOCKER_IMAGE" not in os.environ and docker_image is None:
-        print(f"MARIN_VLLM_DOCKER_IMAGE not set; defaulting to {resolved_image}")
+    resource_type = _detect_resource_type()
+    resolved_image, image_is_override = _resolve_vllm_docker_image(
+        resource_type=resource_type,
+        docker_image=docker_image,
+    )
+    if not image_is_override:
+        print(f"No MARIN_VLLM_*_DOCKER_IMAGE override set; defaulting to {resolved_image} for {resource_type}.")
 
     env: dict[str, str] = _vllm_jax_env()
     explain_cache_misses = os.environ.get("JAX_EXPLAIN_CACHE_MISSES")
@@ -532,17 +659,19 @@ def _start_vllm_docker_server(
         if value:
             env[key] = value
 
-    docker_args = ["--privileged"]
-    if not any(arg.startswith("--shm-size") for arg in docker_run_args or []):
-        docker_args.append("--shm-size=200gb")
-    if docker_run_args:
-        docker_args.extend(docker_run_args)
-
-    print(
-        "Starting vLLM Docker sidecar with "
-        f"TPU_MIN_LOG_LEVEL={env.get('TPU_MIN_LOG_LEVEL')} "
-        f"TPU_STDERR_LOG_LEVEL={env.get('TPU_STDERR_LOG_LEVEL')}"
+    docker_args = _docker_run_args_for_resource(
+        resource_type=resource_type,
+        docker_run_args=docker_run_args,
     )
+
+    if resource_type == "tpu":
+        print(
+            "Starting vLLM Docker sidecar with "
+            f"TPU_MIN_LOG_LEVEL={env.get('TPU_MIN_LOG_LEVEL')} "
+            f"TPU_STDERR_LOG_LEVEL={env.get('TPU_STDERR_LOG_LEVEL')}"
+        )
+    else:
+        print(f"Starting vLLM Docker sidecar for {resource_type} resources.")
 
     resolved_port = port if port is not None else _pick_free_port(host)
     resolved_name = container_name or f"marin-vllm-{uuid.uuid4().hex[:10]}-{resolved_port}"
