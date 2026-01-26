@@ -513,8 +513,14 @@ def default_sft(
     )
 
 
+_TOKENIZER_GCS_OVERRIDES = {
+    "meta-llama/Meta-Llama-3.1-8B": "gs://marin-us-central2/tokenizers/llama-3.1-8b",
+}
+
+
 @lru_cache
 def _cached_load_tokenizer(tokenizer_name: str):
+    tokenizer_name = _TOKENIZER_GCS_OVERRIDES.get(tokenizer_name, tokenizer_name)
     return load_tokenizer(tokenizer_name)
 
 

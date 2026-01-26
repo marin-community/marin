@@ -570,12 +570,17 @@ class LMTaskConfig(abc.ABC):
     attend to all previous tokens regardless of document boundaries.
     """
 
+    _TOKENIZER_GCS_OVERRIDES = {
+        "meta-llama/Meta-Llama-3.1-8B": "gs://marin-us-central2/tokenizers/llama-3.1-8b",
+    }
+
     @cached_property
     def the_tokenizer(self) -> HfTokenizer:
         if self.tokenizer == "passthrough":
             return PassthroughTokenizer(self.vocab_size)
         else:
-            return load_tokenizer(self.tokenizer)
+            tokenizer_path = self._TOKENIZER_GCS_OVERRIDES.get(self.tokenizer, self.tokenizer)
+            return load_tokenizer(tokenizer_path)
 
     @abc.abstractmethod
     def train_set(
