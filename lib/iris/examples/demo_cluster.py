@@ -70,7 +70,7 @@ from iris.cluster.vm.autoscaler import Autoscaler, AutoscalerConfig
 from iris.cluster.vm.managed_vm import ManagedVm, VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
-from iris.cluster.worker.worker import Worker, WorkerConfig
+from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import now_ms
@@ -241,12 +241,14 @@ class LocalVmManager:
         cache_path: Path,
         fake_bundle: Path,
         vm_registry: VmRegistry,
+        port_allocator: PortAllocator,
     ):
         self._config = scale_group_config
         self._controller_address = controller_address
         self._cache_path = cache_path
         self._fake_bundle = fake_bundle
         self._vm_registry = vm_registry
+        self._port_allocator = port_allocator
         self._slice_counter = 0
 
     def create_vm_group(self, tags: dict[str, str] | None = None) -> VmGroupProtocol:
@@ -311,6 +313,7 @@ class LocalVmManager:
                 image_provider=image_provider,
                 container_runtime=container_runtime,
                 environment_provider=environment_provider,
+                port_allocator=self._port_allocator,
             )
             worker.start()
             workers.append(worker)
@@ -404,7 +407,7 @@ class DemoCluster:
         cpu_config = config_pb2.ScaleGroupConfig(
             name="cpu",
             accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
-            min_slices=1,  # Always have at least one CPU worker for simple jobs
+            min_slices=0,
             max_slices=4,
         )
         tpu_config = config_pb2.ScaleGroupConfig(
@@ -417,6 +420,10 @@ class DemoCluster:
 
         controller_address = f"http://127.0.0.1:{self._controller_port}"
 
+        # Create a shared port allocator for all workers since they run in the same process
+        # and share the same network namespace
+        shared_port_allocator = PortAllocator(port_range=(30000, 40000))
+
         # Create VM managers for each scale group
         cpu_vm_manager = LocalVmManager(
             scale_group_config=cpu_config,
@@ -424,6 +431,7 @@ class DemoCluster:
             cache_path=self._cache_path,
             fake_bundle=self._fake_bundle,
             vm_registry=vm_registry,
+            port_allocator=shared_port_allocator,
         )
         tpu_vm_manager = LocalVmManager(
             scale_group_config=tpu_config,
@@ -431,6 +439,7 @@ class DemoCluster:
             cache_path=self._cache_path,
             fake_bundle=self._fake_bundle,
             vm_registry=vm_registry,
+            port_allocator=shared_port_allocator,
         )
 
         # Create scale groups
@@ -503,11 +512,6 @@ class DemoCluster:
             address=f"http://127.0.0.1:{self._controller_port}",
             timeout_ms=30000,
         )
-
-        # Wait for autoscaler to create initial workers (min_slices=1 for cpu)
-        # Workers send heartbeats every 0.1s, and registration happens on first heartbeat
-        logger.info("Waiting for autoscaler to create initial workers...")
-        time.sleep(3.0)
 
         return self
 

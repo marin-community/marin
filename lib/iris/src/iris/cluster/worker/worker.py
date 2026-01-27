@@ -119,6 +119,7 @@ class Worker:
         image_provider: ImageProvider | None = None,
         container_runtime: ContainerRuntime | None = None,
         environment_provider: EnvironmentProvider | None = None,
+        port_allocator: PortAllocator | None = None,
     ):
         self._config = config
 
@@ -144,7 +145,7 @@ class Worker:
         )
         self._runtime = container_runtime or DockerRuntime()
         self._environment_provider = environment_provider or DefaultEnvironmentProvider()
-        self._port_allocator = PortAllocator(config.port_range)
+        self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
         # Task state
         self._tasks: dict[str, Task] = {}
