@@ -239,6 +239,12 @@ class Controller:
         worker_stub_factory: WorkerStubFactory,
         autoscaler: "Autoscaler | None" = None,
     ):
+        if not config.bundle_prefix:
+            raise ValueError(
+                "bundle_prefix is required. Set via ControllerConfig.bundle_prefix. "
+                "Example: bundle_prefix='gs://my-bucket/iris/bundles'"
+            )
+
         self._config = config
         self._stub_factory = worker_stub_factory
 

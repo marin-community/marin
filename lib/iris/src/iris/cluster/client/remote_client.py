@@ -16,8 +16,6 @@
 
 import time
 
-import cloudpickle
-
 from iris.cluster.types import Entrypoint, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
@@ -74,9 +72,7 @@ class RemoteClusterClient:
         constraints: list[cluster_pb2.Constraint] | None = None,
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
     ) -> None:
-        # Serialize as tuple (callable, args, kwargs) - not the Entrypoint class.
-        # Job containers don't have iris installed, so they can't deserialize Entrypoint.
-        serialized = cloudpickle.dumps((entrypoint.callable, entrypoint.args, entrypoint.kwargs))
+        serialized = entrypoint.serialize()
 
         env_config = cluster_pb2.EnvironmentConfig(
             workspace=environment.workspace if environment else "/app",

@@ -106,6 +106,14 @@ from iris.cluster.vm.config import (
     load_config,
 )
 
+# Debug utilities
+from iris.cluster.vm.debug import (
+    cleanup_iris_resources,
+    collect_docker_logs,
+    discover_controller_vm,
+    list_iris_tpus,
+)
+
 __all__ = [
     "BOOTSTRAP_SCRIPT",
     "MAX_RECONCILE_WORKERS",
@@ -142,12 +150,16 @@ __all__ = [
     "VmRegistry",
     "VmSnapshot",
     "check_health",
+    "cleanup_iris_resources",
+    "collect_docker_logs",
     "config_to_dict",
     "connection_available",
     "create_autoscaler_from_config",
     "create_autoscaler_from_specs",
     "create_manual_autoscaler",
+    "discover_controller_vm",
     "get_ssh_config",
+    "list_iris_tpus",
     "load_config",
     "route_demand",
     "run_streaming_with_retry",

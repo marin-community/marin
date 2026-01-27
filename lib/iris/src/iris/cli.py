@@ -470,7 +470,9 @@ def controller_status(ctx):
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=10000, type=int, help="Bind port")
 @click.option(
-    "--bundle-prefix", default=None, help="URI prefix for job bundles (e.g., gs://bucket/path or file:///path)"
+    "--bundle-prefix",
+    default=None,
+    help="URI prefix for job bundles (e.g., gs://bucket/path or file:///path). Required.",
 )
 @click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
 @click.option("--worker-timeout", default=60.0, type=float, help="Worker heartbeat timeout (seconds)")
@@ -489,18 +491,31 @@ def controller_run_local(
     The autoscaler provisions/terminates VMs based on pending task demand.
 
     Examples:
-        # Run local controller with autoscaler
-        uv run iris cluster --config=examples/demo.yaml controller run-local
+        # Run local controller with autoscaler and bundle storage
+        uv run iris cluster --config=examples/demo.yaml controller run-local --bundle-prefix gs://my-bucket/iris/bundles
 
-        # Custom port
-        uv run iris cluster --config=examples/demo.yaml controller run-local --port 8080
+        # Custom port with file system storage
+        uv run iris cluster --config=examples/demo.yaml controller run-local --port 8080 --bundle-prefix file:///tmp/iris/bundles
     """
     cluster_config = ctx.obj["config"]
+
+    # Require bundle_prefix - check CLI option or config
+    effective_bundle_prefix = bundle_prefix or (
+        cluster_config.controller_vm.bundle_prefix if cluster_config.controller_vm else None
+    )
+
+    if not effective_bundle_prefix:
+        click.echo(
+            "Error: bundle_prefix is required. Set via --bundle-prefix or controller_vm.bundle_prefix in config.\n"
+            "Example: --bundle-prefix gs://my-bucket/iris/bundles",
+            err=True,
+        )
+        raise SystemExit(1)
 
     controller_config = ControllerConfig(
         host=host,
         port=port,
-        bundle_prefix=bundle_prefix,
+        bundle_prefix=effective_bundle_prefix,
         scheduler_interval_seconds=scheduler_interval,
         worker_timeout_seconds=worker_timeout,
     )
@@ -518,7 +533,7 @@ def controller_run_local(
     )
 
     click.echo(f"Starting Iris controller on {host}:{port}")
-    click.echo(f"  Bundle prefix: {controller_config.bundle_prefix}")
+    click.echo(f"  Bundle prefix: {effective_bundle_prefix}")
     click.echo(f"  Scheduler interval: {scheduler_interval}s")
     click.echo(f"  Worker timeout: {worker_timeout}s")
     if autoscaler:

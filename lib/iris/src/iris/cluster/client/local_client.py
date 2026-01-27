@@ -31,8 +31,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Self
 
-import cloudpickle
-
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import Entrypoint
@@ -131,8 +129,7 @@ class _LocalContainer:
             )
             set_job_info(job_info)
 
-            # Deserialize the entrypoint tuple (callable, args, kwargs)
-            fn, args, kwargs = cloudpickle.loads(self.config.serialized_entrypoint)
+            fn, args, kwargs = Entrypoint.deserialize(self.config.serialized_entrypoint)
 
             # Check if killed before executing
             if self._killed.is_set():

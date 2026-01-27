@@ -73,6 +73,17 @@ Worker Process (on each VM):
 | **Slice** | Atomic scaling unit - a complete TPU pod that succeeds or fails as a whole |
 | **VmManager** | Abstraction for VM lifecycle (GCP, Manual, or Fake for testing) |
 
+### Network Architecture
+
+#### Controller Addresses
+
+| Client Type | Address Type | Notes |
+|-------------|--------------|-------|
+| Workers | Internal IP | Workers on VPC connect via internal IP (automatic with autoscaler) |
+| External Clients | SSH Tunnel | Use `gcloud compute ssh` with port forwarding |
+
+Workers communicate with the controller using internal VPC IPs. External clients (your laptop, CI) should use SSH tunneling to access the controller.
+
 ## Worker Lifecycle
 
 ### Registration and Reconciliation
@@ -103,6 +114,24 @@ Task containers are labeled for discoverability:
 - `iris.managed=true` - All iris-managed containers
 - `iris.task_id=<id>` - Task identifier
 - `iris.job_id=<id>` - Job identifier
+
+## Bundle Storage (Required)
+
+Jobs can include a `bundle_blob` containing workspace files. The controller stores these in a shared location accessible to all workers.
+
+**Configuration** (required):
+
+```yaml
+controller_vm:
+  bundle_prefix: gs://my-bucket/iris/bundles  # GCS for distributed workers
+```
+
+The controller will **fail at startup** if `bundle_prefix` is not configured.
+
+For local development:
+```bash
+uv run iris cluster controller run-local --bundle-prefix file:///var/cache/iris/bundles
+```
 
 ## CLI Reference
 
@@ -170,6 +199,31 @@ validate
 # Cleanup all iris resources (dry-run by default)
 cleanup {--no-dry-run}
 ```
+
+## Smoke Test
+
+The smoke test validates end-to-end cluster functionality including autoscaling.
+
+```bash
+# Full smoke test (builds images, starts cluster, runs TPU jobs)
+uv run python lib/iris/scripts/smoke-test.py --config lib/iris/examples/eu-west4.yaml
+
+# Skip image builds (use existing images)
+uv run python lib/iris/scripts/smoke-test.py --config ... --no-build-images
+
+# Keep cluster on failure for debugging
+uv run python lib/iris/scripts/smoke-test.py --config ... --no-cleanup-on-failure
+
+# Custom job timeout
+uv run python lib/iris/scripts/smoke-test.py --config ... --job-timeout 900
+```
+
+The smoke test:
+1. Builds and pushes controller + worker images
+2. Starts controller VM with autoscaler
+3. Submits TPU jobs to exercise autoscaling
+4. Collects logs on failure for debugging
+5. Cleans up all resources
 
 ## Configuration
 

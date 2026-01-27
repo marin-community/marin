@@ -507,3 +507,20 @@ class Entrypoint:
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
         return cls(callable=fn, args=args, kwargs=kwargs)
+
+    def serialize(self) -> bytes:
+        """Serialize for transmission to workers.
+
+        Serializes as tuple (callable, args, kwargs) rather than the Entrypoint class
+        because job containers don't have iris installed.
+        """
+        import cloudpickle
+
+        return cloudpickle.dumps((self.callable, self.args, self.kwargs))
+
+    @staticmethod
+    def deserialize(serialized: bytes) -> tuple[Callable[..., Any], tuple, dict[str, Any]]:
+        """Deserialize entrypoint bytes to (callable, args, kwargs) tuple."""
+        import cloudpickle
+
+        return cloudpickle.loads(serialized)

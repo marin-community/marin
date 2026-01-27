@@ -80,15 +80,33 @@ echo "[iris-init] Probing TPU metadata..."
 METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
 METADATA_HEADER="Metadata-Flavor: Google"
 
-# Fetch instance-id as TPU_NAME (the TPU slice name, shared across workers for coscheduling)
-export TPU_NAME=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/instance-id" 2>/dev/null || echo "")
-# Fetch accelerator-type as TPU_TYPE (e.g., v5litepod-16, used for topology/chip count lookup)
+# Derive TPU slice name from instance name by stripping -w{N} suffix.
+# Example: "iris-v5litepod_16-abc123-w0" -> "iris-v5litepod_16-abc123"
+INSTANCE_NAME=$(curl -sf -H "$METADATA_HEADER" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/name" 2>/dev/null || echo "")
+if [ -n "$INSTANCE_NAME" ]; then
+    export TPU_NAME=$(echo "$INSTANCE_NAME" | sed 's/-w[0-9]*$//')
+fi
+
+# Fetch accelerator-type as TPU_TYPE (e.g., v5litepod-16)
 export TPU_TYPE=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/accelerator-type" 2>/dev/null || echo "")
+
 # Fetch agent-worker-number as TPU_WORKER_ID
 export TPU_WORKER_ID=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/agent-worker-number" 2>/dev/null || echo "")
-# XXX: SET THESE APPROPRIATELY
-export TPU_WORKER_HOSTNAMES=""
-export TPU_CHIPS_PER_HOST_BOUNDS=""
+
+# Fetch worker hostnames for multi-host slices (JSON array of network endpoints)
+TPU_HOSTNAMES_RAW=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/worker-network-endpoints" 2>/dev/null || echo "")
+if [ -n "$TPU_HOSTNAMES_RAW" ]; then
+    export TPU_WORKER_HOSTNAMES=$(echo "$TPU_HOSTNAMES_RAW" | \
+        python3 -c "import sys,json; print(','.join(e.get('address','') for e in json.load(sys.stdin)))" \
+        2>/dev/null || echo "")
+fi
+
+# Fetch chips per host bounds for topology info
+TOPO_RAW=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/tpu-chips-per-host-bounds" 2>/dev/null || echo "")
+if [ -n "$TOPO_RAW" ]; then
+    export TPU_CHIPS_PER_HOST_BOUNDS="$TOPO_RAW"
+fi
 
 if [ -n "$TPU_NAME" ]; then
     echo "[iris-init] TPU detected: name=$TPU_NAME type=$TPU_TYPE worker_id=$TPU_WORKER_ID"
@@ -206,7 +224,7 @@ def _build_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str
 
     # Pass through TPU environment variables from host if they exist.
     # These are fetched from GCE metadata by the bootstrap script preamble.
-    # TPU_NAME = instance-id (TPU slice name) for coscheduling group_by
+    # TPU_NAME = instance name with -w{N} suffix stripped (TPU slice name) for coscheduling group_by
     # TPU_TYPE = accelerator-type (e.g., v5litepod-16) for topology lookup
     tpu_env_vars = [
         "TPU_NAME",

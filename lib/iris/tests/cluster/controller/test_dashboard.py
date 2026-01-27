@@ -93,7 +93,7 @@ def service(state, scheduler):
     controller_mock.wake = Mock()
     controller_mock.task_schedule_status = scheduler.task_schedule_status
     controller_mock.autoscaler = None  # No autoscaler by default
-    return ControllerServiceImpl(state, controller_mock)
+    return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
 
 
 @pytest.fixture
@@ -109,7 +109,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler):
     controller_mock.wake = Mock()
     controller_mock.task_schedule_status = scheduler.task_schedule_status
     controller_mock.autoscaler = mock_autoscaler  # Enable autoscaler
-    return ControllerServiceImpl(state, controller_mock)
+    return ControllerServiceImpl(state, controller_mock, bundle_prefix="file:///tmp/iris-test-bundles")
 
 
 def rpc_post(client: TestClient, method: str, body: dict | None = None):

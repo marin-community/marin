@@ -133,7 +133,7 @@ def mock_scheduler():
 @pytest.fixture
 def service(state, mock_scheduler):
     """Create a ControllerServiceImpl for testing."""
-    return ControllerServiceImpl(state, mock_scheduler)
+    return ControllerServiceImpl(state, mock_scheduler, bundle_prefix="file:///tmp/iris-test-bundles")
 
 
 # =============================================================================

@@ -24,11 +24,10 @@ import logging
 import uuid
 from typing import Any, Protocol
 
-import fsspec
-
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
+from iris.cluster.controller.bundle_store import BundleStore
 from iris.cluster.controller.events import (
     JobCancelledEvent,
     JobSubmittedEvent,
@@ -90,18 +89,18 @@ class ControllerServiceImpl:
         state: Controller state containing jobs, tasks, and workers
         scheduler: Background scheduler for task dispatch (any object with wake() method)
         bundle_prefix: URI prefix for storing bundles (e.g., gs://bucket/path or file:///path).
-                      Uses fsspec for storage.
+                      Required for job submission with bundles.
     """
 
     def __init__(
         self,
         state: ControllerState,
         scheduler: SchedulerProtocol,
-        bundle_prefix: str | None = None,
+        bundle_prefix: str,
     ):
         self._state = state
         self._scheduler = scheduler
-        self._bundle_prefix = bundle_prefix
+        self._bundle_store = BundleStore(bundle_prefix)
 
     def launch_job(
         self,
@@ -122,12 +121,9 @@ class ControllerServiceImpl:
             if self._state.get_job(JobId(job_id)):
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists")
 
-            # Handle bundle_blob: upload to bundle_prefix if provided
-            if request.bundle_blob and self._bundle_prefix:
-                bundle_path = f"{self._bundle_prefix.rstrip('/')}/{job_id}/bundle.zip"
-                with fsspec.open(bundle_path, "wb") as f:
-                    f.write(request.bundle_blob)
-                logger.info("Uploaded bundle for job %s to %s", job_id, bundle_path)
+            # Handle bundle_blob: upload to bundle store if provided
+            if request.bundle_blob:
+                bundle_path = self._bundle_store.write_bundle(job_id, request.bundle_blob)
 
                 request = cluster_pb2.Controller.LaunchJobRequest(
                     name=request.name,

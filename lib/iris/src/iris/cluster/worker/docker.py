@@ -167,6 +167,11 @@ class DockerRuntime:
         The bytes contain a cloudpickle-serialized (callable, args, kwargs) tuple.
         We serialize as a tuple (not an Entrypoint class) because job containers
         don't have iris installed.
+
+        Entrypoint format: The serialized bytes decode to (callable, args, kwargs) tuple.
+        This format is produced by Entrypoint.serialize() in iris.cluster.types.
+        We deserialize directly here rather than using Entrypoint.deserialize() because
+        job containers don't have iris installed.
         """
         encoded = base64.b64encode(serialized_entrypoint).decode()
 
