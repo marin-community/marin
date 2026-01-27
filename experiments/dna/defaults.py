@@ -45,6 +45,7 @@ PROMOTERS_DATASET_V1 = "gonzalobenegas/genomes-v3-genome_set-animals-intervals-v
 MRNA_PLUS_PROMOTERS_DATASET_V1 = "gonzalobenegas/genomes-v3-genome_set-animals-intervals-v2_512_256"
 CDS_DATASET_V1 = "gonzalobenegas/genomes-v3-genome_set-animals-intervals-v3_512_256"
 PROMOTERS_MRNA_DATASET_V1 = "bolinas-dna/genomes-v4-genome_set-animals-intervals-v1_512_256"
+PROMOTERS_MRNA_256_DATASET_V1 = "bolinas-dna/genomes-v4-genome_set-animals-intervals-v1_256_128"
 PROMOTERS_MRNA_NCRNA_DATASET_V1 = "bolinas-dna/genomes-v4-genome_set-animals-intervals-v4_512_256"
 
 # =============================================================================
@@ -54,6 +55,7 @@ PROMOTERS_MRNA_NCRNA_DATASET_V1 = "bolinas-dna/genomes-v4-genome_set-animals-int
 dna_qwen3_0_6b_v1 = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=DNA_SEQ_LEN_V1)
 dna_qwen3_1_7b_v1 = dataclasses.replace(qwen3_1_7b, max_seq_len=DNA_SEQ_LEN_V1)
 dna_llama_50m_v1 = dataclasses.replace(llama_50m, max_seq_len=DNA_SEQ_LEN_V1)
+dna_llama_50m_256_v1 = dataclasses.replace(llama_50m, max_seq_len=256)
 
 # =============================================================================
 # Preset train configs (V1)
