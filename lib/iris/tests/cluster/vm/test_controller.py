@@ -27,6 +27,7 @@ from iris.cluster.vm.controller import (
     ManualController,
     create_controller,
 )
+from iris.cluster.vm.ssh import HealthCheckResult
 from iris.rpc import config_pb2
 
 
@@ -95,7 +96,7 @@ def test_manual_controller_start_runs_bootstrap(
     mock_conn = MagicMock()
     mock_conn_cls.return_value = mock_conn
     mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-    mock_health.return_value = True
+    mock_health.return_value = HealthCheckResult(healthy=True)
 
     controller = ManualController(ssh_bootstrap_config)
     result = controller.start()
@@ -129,7 +130,7 @@ def test_manual_controller_stop_runs_stop_script(
     mock_conn.run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
     mock_conn_cls.return_value = mock_conn
     mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-    mock_health.return_value = True
+    mock_health.return_value = HealthCheckResult(healthy=True)
 
     controller = ManualController(ssh_bootstrap_config)
     controller.start()
@@ -170,7 +171,7 @@ def test_manual_controller_reload_calls_start(
     mock_conn = MagicMock()
     mock_conn_cls.return_value = mock_conn
     mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-    mock_health.return_value = True
+    mock_health.return_value = HealthCheckResult(healthy=True)
 
     controller = ManualController(ssh_bootstrap_config)
     result = controller.reload()

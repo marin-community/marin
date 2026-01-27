@@ -33,6 +33,7 @@ from iris.cluster.vm.controller import (
     ManualController,
     create_controller,
 )
+from iris.cluster.vm.ssh import HealthCheckResult
 from iris.rpc import config_pb2
 
 
@@ -152,7 +153,7 @@ def test_cli_controller_start_with_ssh(
     mock_conn = MagicMock()
     mock_conn_cls.return_value = mock_conn
     mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-    mock_health.return_value = True
+    mock_health.return_value = HealthCheckResult(healthy=True)
 
     result = cli_runner.invoke(
         iris,

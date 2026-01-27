@@ -291,7 +291,7 @@ echo "[iris-init] Using static controller at $CONTROLLER_ADDRESS"
         """Check if a worker is healthy on the given host."""
         conn = self._create_ssh_connection(host)
         port = self._bootstrap_config.worker_port or 10001
-        return check_health(conn, port)
+        return check_health(conn, port).healthy
 
     def _adopt_running_host(self, host: str) -> ManualVmGroup:
         """Create a ManualVmGroup for a host that already has a running worker."""

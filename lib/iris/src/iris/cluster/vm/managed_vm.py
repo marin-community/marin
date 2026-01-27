@@ -400,7 +400,7 @@ class ManagedVm:
     def _check_worker_healthy(self) -> bool:
         """Check if worker container is already running and healthy."""
         port = self._bootstrap_config.worker_port or 10001
-        return check_health(self._conn, port)
+        return check_health(self._conn, port).healthy
 
     def _transition(self, new_state: vm_pb2.VmState) -> None:
         """Update state with timestamp and log the transition."""
@@ -419,7 +419,7 @@ class ManagedVm:
     def check_health(self) -> bool:
         """Check if worker is healthy via health endpoint."""
         port = self._bootstrap_config.worker_port or 10001
-        return check_health(self._conn, port)
+        return check_health(self._conn, port).healthy
 
     def shutdown(self, graceful: bool = True) -> bool:
         """Shutdown worker container."""

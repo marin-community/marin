@@ -259,17 +259,79 @@ def wait_for_connection(
     return False
 
 
-def check_health(conn: SshConnection, port: int = 10001) -> bool:
-    """Check if worker is healthy via health endpoint.
+@dataclass
+class HealthCheckResult:
+    """Result of a health check with diagnostic info."""
 
-    Returns False on any failure - this is a safe helper that never raises.
+    healthy: bool
+    curl_output: str = ""
+    curl_error: str = ""
+    container_status: str = ""
+    container_logs: str = ""
+
+    def __bool__(self) -> bool:
+        """Allow using result directly as a boolean."""
+        return self.healthy
+
+    def summary(self) -> str:
+        """Return a one-line summary of the health check result."""
+        if self.healthy:
+            return "healthy"
+        parts = []
+        if self.container_status:
+            parts.append(f"container={self.container_status}")
+        if self.curl_error:
+            parts.append(f"curl_error={self.curl_error[:50]}")
+        return ", ".join(parts) if parts else "unknown failure"
+
+
+def check_health(
+    conn: SshConnection,
+    port: int = 10001,
+    container_name: str = "iris-worker",
+) -> HealthCheckResult:
+    """Check if worker/controller is healthy via health endpoint.
+
+    Returns HealthCheckResult with diagnostic info. The result can be used
+    directly as a boolean (via __bool__), or inspected for details on failure.
+
+    Args:
+        conn: SSH connection to the host
+        port: Port to check health on
+        container_name: Container name for gathering diagnostics on failure
     """
+    result = HealthCheckResult(healthy=False)
+
+    # Try curl health check
     try:
-        result = conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
-        return result.returncode == 0
+        curl_result = conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
+        if curl_result.returncode == 0:
+            result.healthy = True
+            result.curl_output = curl_result.stdout.strip()
+            return result
+        result.curl_error = curl_result.stderr.strip() or f"exit code {curl_result.returncode}"
     except Exception as e:
-        logger.debug("Health check failed for %s: %s", conn.address, e)
-        return False
+        result.curl_error = str(e)
+
+    # Health check failed, gather diagnostics
+    try:
+        status_result = conn.run(
+            f"sudo docker inspect --format='{{{{.State.Status}}}}' {container_name} 2>/dev/null || echo 'not_found'",
+            timeout=10,
+        )
+        result.container_status = status_result.stdout.strip()
+    except Exception as e:
+        result.container_status = f"error: {e}"
+
+    # If container is not running, get recent logs
+    if result.container_status in ("restarting", "exited", "dead"):
+        try:
+            logs_result = conn.run(f"sudo docker logs {container_name} --tail 20 2>&1", timeout=15)
+            result.container_logs = logs_result.stdout.strip()
+        except Exception as e:
+            result.container_logs = f"error fetching logs: {e}"
+
+    return result
 
 
 def shutdown_worker(conn: SshConnection, graceful: bool = True) -> bool:

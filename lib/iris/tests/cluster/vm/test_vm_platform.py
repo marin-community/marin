@@ -33,6 +33,7 @@ import pytest
 from iris.cluster.vm.gcp_tpu_platform import TpuVmGroup, TpuVmManager
 from iris.cluster.vm.managed_vm import PoolExhaustedError, TrackedVmFactory, VmRegistry
 from iris.cluster.vm.manual_platform import ManualVmGroup, ManualVmManager
+from iris.cluster.vm.ssh import HealthCheckResult
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
 from iris.rpc import config_pb2, vm_pb2
 
@@ -753,8 +754,9 @@ def test_manual_manager_discovers_hosts_with_running_workers(
         vm_factory=mock_factory,
     )
 
-    def health_check_side_effect(executor, port):
-        return executor.host in ["10.0.0.1", "10.0.0.3"]
+    def health_check_side_effect(executor, port, container_name="iris-worker"):
+        healthy = executor.host in ["10.0.0.1", "10.0.0.3"]
+        return HealthCheckResult(healthy=healthy)
 
     mock_check_health.side_effect = health_check_side_effect
 

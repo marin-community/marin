@@ -72,36 +72,47 @@ def wait_healthy_via_ssh(
     conn: SshConnection,
     port: int,
     timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
+    container_name: str = CONTROLLER_CONTAINER_NAME,
 ) -> bool:
     """Poll health endpoint via SSH until healthy or timeout.
 
     Uses SSH to run curl on the remote host, avoiding firewall issues
     that can block external HTTP access to the controller port.
+
+    On failure, logs diagnostic info including container status and logs.
     """
     logger.info("Starting SSH-based health check (port=%d, timeout=%ds)", port, int(timeout))
-    start_time = time.time()
-    attempt = 0
-
+    start_time = time.monotonic()
     backoff = ExponentialBackoff(
         initial=HEALTH_CHECK_BACKOFF_INITIAL,
         maximum=HEALTH_CHECK_BACKOFF_MAX,
     )
 
-    def check_with_logging() -> bool:
-        nonlocal attempt
-        attempt += 1
-        result = check_health(conn, port)
-        elapsed = time.time() - start_time
-        if result:
-            logger.info("SSH health check succeeded after %d attempts (%.1fs)", attempt, elapsed)
-        else:
-            logger.info("SSH health check attempt %d failed (%.1fs)", attempt, elapsed)
-        return result
+    attempt = 0
+    last_result = None
 
-    success = backoff.wait_until(check_with_logging, timeout=timeout)
-    if not success:
-        logger.warning("SSH health check failed after %d attempts", attempt)
-    return success
+    while True:
+        attempt += 1
+        last_result = check_health(conn, port, container_name)
+        elapsed = time.monotonic() - start_time
+
+        if last_result.healthy:
+            logger.info("SSH health check succeeded after %d attempts (%.1fs)", attempt, elapsed)
+            return True
+
+        logger.info("SSH health check attempt %d failed (%.1fs): %s", attempt, elapsed, last_result.summary())
+
+        if elapsed >= timeout:
+            break
+
+        interval = backoff.next_interval()
+        remaining = timeout - elapsed
+        time.sleep(min(interval, remaining))
+
+    logger.warning("SSH health check failed after %d attempts: %s", attempt, last_result.summary())
+    if last_result.container_logs:
+        logger.warning("Container logs:\n%s", last_result.container_logs)
+    return False
 
 
 class RetryableError(Exception):
@@ -342,7 +353,13 @@ class GcpController:
         existing = self.discover()
         if existing:
             logger.info("Found existing controller at %s, checking health...", existing)
-            if self._wait_healthy(existing):
+            conn = GceSshConnection(
+                project_id=self.project_id,
+                zone=self.zone,
+                vm_name=self._vm_name,
+            )
+            port = self._gcp_config.port or DEFAULT_CONTROLLER_PORT
+            if wait_healthy_via_ssh(conn, port):
                 logger.info("Existing controller at %s is healthy", existing)
                 return existing
             logger.info("Existing controller at %s is unhealthy, cleaning up", existing)
@@ -622,37 +639,6 @@ class GcpController:
             if "not found" not in error.lower():
                 logger.warning("Failed to delete controller VM: %s", error)
 
-    def _wait_healthy(self, address: str, timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS) -> bool:
-        """Poll health endpoint until healthy or timeout with verbose logging."""
-        logger.info("Starting health check polling for %s (timeout=%ds)", address, int(timeout))
-        start_time = time.time()
-        attempt = 0
-
-        backoff = ExponentialBackoff(
-            initial=HEALTH_CHECK_BACKOFF_INITIAL,
-            maximum=HEALTH_CHECK_BACKOFF_MAX,
-        )
-
-        def check_with_logging() -> bool:
-            nonlocal attempt
-            attempt += 1
-            elapsed = time.time() - start_time
-            result = _check_health_rpc(address, log_result=True)
-            if result:
-                logger.info("Health check succeeded after %d attempts (%.1fs elapsed)", attempt, elapsed)
-            return result
-
-        success = backoff.wait_until(check_with_logging, timeout=timeout)
-        if not success:
-            elapsed = time.time() - start_time
-            logger.warning(
-                "Health check failed after %d attempts (%.1fs elapsed, timeout=%ds)",
-                attempt,
-                elapsed,
-                int(timeout),
-            )
-        return success
-
     def _tag_metadata(self, address: str) -> None:
         """Tag VM with controller address metadata for worker discovery."""
         cmd = [
@@ -828,11 +814,11 @@ class ManualController:
         host = self._manual_config.host
         port = self._manual_config.port or DEFAULT_CONTROLLER_PORT
         conn = self._create_ssh_connection(host)
-        healthy = check_health(conn, port)
+        result = check_health(conn, port, CONTROLLER_CONTAINER_NAME)
         return ControllerStatus(
-            running=healthy,
+            running=result.healthy,
             address=self.address,
-            healthy=healthy,
+            healthy=result.healthy,
         )
 
     def _create_ssh_connection(self, host: str) -> DirectSshConnection:

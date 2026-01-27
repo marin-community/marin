@@ -103,29 +103,35 @@ def test_wait_for_connection_respects_stop_event(mock_time, mock_conn_avail, _mo
     assert wait_for_connection(conn, timeout_seconds=60, poll_interval=5, stop_event=stop_event) is False
 
 
-def test_check_health_returns_true_on_success():
-    """check_health returns True when curl succeeds."""
+def test_check_health_returns_healthy_on_success():
+    """check_health returns healthy result when curl succeeds."""
     conn = MagicMock()
-    conn.run.return_value = MagicMock(returncode=0)
-    assert check_health(conn, port=10001) is True
+    conn.run.return_value = MagicMock(returncode=0, stdout="OK")
+    result = check_health(conn, port=10001)
+    assert result.healthy is True
+    assert bool(result) is True  # __bool__ works
     # Verify curl command was issued
     call_args = conn.run.call_args[0][0]
     assert "curl" in call_args
     assert "10001" in call_args
 
 
-def test_check_health_returns_false_on_failure():
-    """check_health returns False when curl fails."""
+def test_check_health_returns_unhealthy_on_failure():
+    """check_health returns unhealthy result when curl fails."""
     conn = MagicMock()
-    conn.run.return_value = MagicMock(returncode=1)
-    assert check_health(conn, port=10001) is False
+    conn.run.return_value = MagicMock(returncode=1, stderr="Connection refused", stdout="")
+    result = check_health(conn, port=10001)
+    assert result.healthy is False
+    assert "exit code 1" in result.curl_error or "Connection refused" in result.curl_error
 
 
-def test_check_health_returns_false_on_exception():
-    """check_health returns False on exception (safe helper)."""
+def test_check_health_returns_unhealthy_on_exception():
+    """check_health returns unhealthy result on exception."""
     conn = MagicMock()
     conn.run.side_effect = Exception("Network error")
-    assert check_health(conn, port=10001) is False
+    result = check_health(conn, port=10001)
+    assert result.healthy is False
+    assert "Network error" in result.curl_error
 
 
 def test_shutdown_worker_graceful():
