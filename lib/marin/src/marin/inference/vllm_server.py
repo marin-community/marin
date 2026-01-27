@@ -34,7 +34,7 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 
 logger = logging.getLogger(__name__)
 DEFAULT_VLLM_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
-DEFAULT_VLLM_GPU_DOCKER_IMAGE: str = "vllm/vllm-openai:latest"
+DEFAULT_VLLM_GPU_DOCKER_IMAGE: str = "nvcr.io/nvidia/vllm:25.12.post1-py3"
 MARIN_VLLM_DOCKER_IMAGE_ENV: str = "MARIN_VLLM_DOCKER_IMAGE"
 MARIN_VLLM_TPU_DOCKER_IMAGE_ENV: str = "MARIN_VLLM_TPU_DOCKER_IMAGE"
 MARIN_VLLM_GPU_DOCKER_IMAGE_ENV: str = "MARIN_VLLM_GPU_DOCKER_IMAGE"
@@ -687,7 +687,18 @@ def _start_vllm_docker_server(
         extra_vllm_args=list(extra_cli_args or []),
         docker_run_args=docker_args,
     )
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        raise RuntimeError(
+            "Failed to start vLLM Docker sidecar.\n"
+            f"Image: {resolved_image}\n"
+            f"Command: {_redact_docker_run_command(cmd)}\n"
+            f"Exit code: {result.returncode}\n"
+            f"--- stdout ---\n{stdout}\n"
+            f"--- stderr ---\n{stderr}"
+        )
 
     server_url = f"http://{host}:{resolved_port}/v1"
     handle = VllmServerHandle(
