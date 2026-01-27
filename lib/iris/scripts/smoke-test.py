@@ -517,11 +517,27 @@ class SmokeTestRunner:
                 state_name = cluster_pb2.JobState.Name(status.state)
                 self.logger.log(f"  [FAIL] Job ended with state {state_name}", level="ERROR")
                 self._print_task_logs_on_failure(job)
+                # Collect logs immediately on failure
+                if self._zone and self._project:
+                    self.logger.log("  Collecting logs due to test failure...")
+                    try:
+                        self._collect_controller_logs(self._zone, self._project)
+                        self._collect_worker_logs(self._zone, self._project)
+                    except Exception as e:
+                        self.logger.log(f"  Error collecting logs: {e}", level="WARN")
                 return TestResult(test_name, False, f"State: {state_name}, error: {status.error}", duration)
 
         except TimeoutError:
             duration = time.monotonic() - start
             self.logger.log(f"  [FAIL] Timed out after {self.config.job_timeout_seconds}s", level="ERROR")
+            # Collect logs on timeout
+            if self._zone and self._project:
+                self.logger.log("  Collecting logs due to timeout...")
+                try:
+                    self._collect_controller_logs(self._zone, self._project)
+                    self._collect_worker_logs(self._zone, self._project)
+                except Exception as e:
+                    self.logger.log(f"  Error collecting logs: {e}", level="WARN")
             return TestResult(test_name, False, f"Timed out after {self.config.job_timeout_seconds}s", duration)
 
     def _submit_and_wait_multiple(
@@ -555,6 +571,32 @@ class SmokeTestRunner:
                 failed_jobs.append(f"{job.job_id}: {state_name}")
 
         return time.monotonic() - start, failed_jobs
+
+    def _collect_controller_logs(self, zone: str, project: str):
+        """Collect docker logs from controller VM."""
+        self.logger.log("Collecting controller logs...")
+
+        logs_dir = IRIS_ROOT / "logs"
+        logs_dir.mkdir(exist_ok=True)
+
+        controller_name = discover_controller_vm(zone, project)
+        if not controller_name:
+            self.logger.log("  No controller VM found")
+            return
+
+        self.logger.log(f"  Collecting logs from {controller_name}...")
+        log_file = collect_docker_logs(
+            vm_name=controller_name,
+            container_name="iris-controller",
+            zone=zone,
+            project=project,
+            output_dir=logs_dir,
+            is_tpu=False,
+        )
+        if log_file:
+            self.logger.log(f"    Saved to {log_file}")
+        else:
+            self.logger.log("    Failed to collect logs", level="WARN")
 
     def _collect_worker_logs(self, zone: str, project: str):
         """Collect docker logs from all TPU workers for post-mortem debugging."""
@@ -683,13 +725,14 @@ class SmokeTestRunner:
         """Clean up cluster resources."""
         self.logger.section("CLEANUP")
 
-        # Collect worker logs before cleanup for post-mortem debugging
+        # Collect logs before cleanup for post-mortem debugging
         any_failed = any(not r.passed for r in self._results)
         if any_failed and self._zone and self._project:
             try:
+                self._collect_controller_logs(self._zone, self._project)
                 self._collect_worker_logs(self._zone, self._project)
             except Exception as e:
-                self.logger.log(f"Error collecting worker logs: {e}", level="WARN")
+                self.logger.log(f"Error collecting logs: {e}", level="WARN")
 
         should_cleanup = self.config.cleanup_on_failure or all(r.passed for r in self._results)
 

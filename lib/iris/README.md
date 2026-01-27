@@ -63,6 +63,48 @@ Worker Process (on each VM):
 └── Heartbeat reporter (health monitoring)
 ```
 
+## Actor System
+
+Iris includes a lightweight actor RPC system for service-style workloads. Actor
+servers run inside worker containers (or standalone VMs), and clients resolve
+actor endpoints via a resolver implementation:
+
+```
+Actor Client
+  │
+  │ resolve(actor_name)
+  v
+Resolver (ClusterResolver / GcsResolver / FixedResolver)
+  │
+  │ endpoints (url + actor_id)
+  v
+Worker VM
+  └─ Job Container (iris-managed)
+       └─ Actor Server
+            └─ Actor instance (registered methods)
+```
+
+Resolver options:
+- **ClusterResolver** (in `iris.client.resolver`): query the controller for
+  namespace-aware actor endpoints (best for Iris clusters).
+- **GcsResolver**: discover endpoints via GCP VM metadata tags
+  (`iris_actor_<name>`).
+- **FixedResolver**: static endpoint mapping (tests or fixed deployments).
+
+The actor system also provides `ActorPool` for round-robin calls and broadcast
+RPCs across all resolved endpoints.
+
+Example:
+
+```python
+from iris.actor import ActorClient
+from iris.client.resolver import ClusterResolver
+
+resolver = ClusterResolver("http://controller:10000", namespace="default")
+client = ActorClient(resolver, "inference")
+result = client.predict({"text": "hello"})
+```
+
 ### Key Concepts
 
 | Concept | Description |

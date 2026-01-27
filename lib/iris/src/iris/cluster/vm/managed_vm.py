@@ -80,7 +80,7 @@ echo "[iris-init] Probing TPU metadata..."
 METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
 METADATA_HEADER="Metadata-Flavor: Google"
 
-# Derive TPU slice name from instance name by stripping -w{N} suffix.
+# Derive TPU slice name from instance name by stripping -w{{N}} suffix.
 # Example: "iris-v5litepod_16-abc123-w0" -> "iris-v5litepod_16-abc123"
 INSTANCE_NAME=$(curl -sf -H "$METADATA_HEADER" \
     "http://metadata.google.internal/computeMetadata/v1/instance/name" 2>/dev/null || echo "")
@@ -224,7 +224,7 @@ def _build_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str
 
     # Pass through TPU environment variables from host if they exist.
     # These are fetched from GCE metadata by the bootstrap script preamble.
-    # TPU_NAME = instance name with -w{N} suffix stripped (TPU slice name) for coscheduling group_by
+    # TPU_NAME = instance name with -w{{N}} suffix stripped (TPU slice name) for coscheduling group_by
     # TPU_TYPE = accelerator-type (e.g., v5litepod-16) for topology lookup
     tpu_env_vars = [
         "TPU_NAME",

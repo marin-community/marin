@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from iris.cluster.worker.docker import ContainerConfig, ContainerStats, DockerRuntime
+from iris.cluster.worker.docker import ContainerConfig, DockerRuntime
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 
 TEST_IMAGE = "iris-test-runtime:latest"
