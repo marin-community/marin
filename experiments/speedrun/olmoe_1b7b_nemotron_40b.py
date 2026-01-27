@@ -35,6 +35,7 @@ import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 
 import fsspec
 import jmp
@@ -47,8 +48,12 @@ from experiments.evals.task_configs import (
     convert_to_levanter_task_config,
 )
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
-from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
-from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
+from experiments.pretraining_datasets.dclm import (
+    DCLM_MIXTURE_WEIGHTS,
+    dclm_baseline_only_mixture_config_llama3,
+    dclm_components_llama3,
+    dclm_mixture_config_llama3,
+)
 from experiments.llama import llama3_tokenizer, llama_1_4b
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from experiments.speedrun.custom_mixtral import MixtralConfig
@@ -273,6 +278,7 @@ nemotron_dclm_fineweb_mixture = lm_mixture_data_config(
 DATASET_OPTIONS = {
     "nemotron_cc": nemotron_cc_mixture,
     "dclm": dclm_mixture_config_llama3,
+    "dclm_baseline_only": dclm_baseline_only_mixture_config_llama3,
     "fineweb_edu_10b": fineweb_edu_subcache_10B,
     "nemotron_dclm_fineweb_10b": nemotron_dclm_fineweb_mixture,
 }
@@ -289,6 +295,8 @@ def nemotron_only_speedrun(
     append_async_collective_permute_flag: bool = False,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
+    single_checkpoint: bool = False,
+    checkpoint_save_minutes: int = 60,
     use_default_validation: bool = False,
     eval_suite: str = "none",
     eval_suite_mode: str = "post_train",
@@ -336,6 +344,8 @@ def nemotron_only_speedrun(
         wandb_group=wandb_group,
         override_output_path=override_output_path,
         use_default_validation=use_default_validation,
+        checkpointer_save_interval=timedelta(minutes=checkpoint_save_minutes),
+        checkpointer_keep=[] if single_checkpoint else None,
     )
 
     if append_ici_ag_pipelining_flags or append_async_collective_permute_flag:
@@ -556,6 +566,20 @@ def _parse_args():
         help=f"Which tokenized dataset to train on (default: {DEFAULT_DATASET}).",
     )
     parser.add_argument(
+        "--single-checkpoint",
+        action="store_true",
+        help=(
+            "Only keep one (temporary) checkpoint at a time to reduce disk pressure. "
+            "This disables permanent step-based checkpoints."
+        ),
+    )
+    parser.add_argument(
+        "--checkpoint-save-minutes",
+        type=int,
+        default=60,
+        help="How often to save temporary checkpoints when --single-checkpoint is set (default: 60).",
+    )
+    parser.add_argument(
         "--run-suffix",
         type=str,
         default=None,
@@ -584,6 +608,20 @@ def _parse_args():
         type=int,
         default=None,
         help="Optional cap on max eval instances per task (default: no cap).",
+    )
+    parser.add_argument(
+        "--use-default-validation",
+        action="store_true",
+        help=(
+            "Enable Levanter-native validation losses (e.g. Paloma + uncheatable) during training. "
+            "By default this launcher skips them."
+        ),
+    )
+    parser.add_argument(
+        "--wandb-group",
+        type=str,
+        default=None,
+        help="Optional W&B group name (overrides WANDB_GROUP env var when set).",
     )
     parser.add_argument(
         "--append-ici-ag-pipelining-flags",
@@ -680,5 +718,9 @@ if __name__ == "__main__":
             eval_suite_mode=args.eval_suite_mode,
             eval_tpu_type=args.eval_tpu_type,
             max_eval_instances=args.max_eval_instances,
+            single_checkpoint=args.single_checkpoint,
+            checkpoint_save_minutes=args.checkpoint_save_minutes,
+            use_default_validation=args.use_default_validation,
+            wandb_group=args.wandb_group if args.wandb_group is not None else os.environ.get("WANDB_GROUP"),
         )
     )

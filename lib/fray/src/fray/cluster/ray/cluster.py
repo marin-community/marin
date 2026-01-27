@@ -27,6 +27,7 @@ import humanfriendly
 import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
+from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from fray.cluster.base import (
     Cluster,
@@ -241,7 +242,14 @@ class RayCluster(Cluster):
         else:
             remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(callable_ep.callable)
 
-        object_ref = run_on_pod_ray.remote(
+        # The TPU slice actors will often be on preemptible nodes; if the top-level TPU watcher task
+        # also lands on a preemptible node, the entire step can repeatedly die and fail to relaunch
+        # sub-steps. Pin the watcher to the current node (typically the head node) so it can keep
+        # retrying when slices/hosts get preempted.
+        head_node_id = ray.get_runtime_context().get_node_id()
+        object_ref = run_on_pod_ray.options(
+            scheduling_strategy=NodeAffinitySchedulingStrategy(head_node_id, soft=False),
+        ).remote(
             remote_fn,
             tpu_type=device.variant,
             num_slices=request.resources.replicas,
@@ -270,11 +278,17 @@ class RayCluster(Cluster):
         elif isinstance(request.resources.device, TpuConfig):
             if "tpu" not in environment.extras:
                 environment.extras.append("tpu")
-            env_vars["JAX_PLATFORMS"] = ""
+            # Ensure JAX is allowed to initialize the TPU backend. Setting this to an empty
+            # string can still be interpreted as "set" by downstream code, and has led to
+            # TPU workers failing to detect accelerators.
+            if not env_vars.get("JAX_PLATFORMS") or env_vars.get("JAX_PLATFORMS") == "cpu":
+                env_vars["JAX_PLATFORMS"] = "tpu,cpu"
         elif isinstance(request.resources.device, GpuConfig):
             if "gpu" not in environment.extras:
                 environment.extras.append("gpu")
-            env_vars["JAX_PLATFORMS"] = ""
+            # Ensure JAX is allowed to initialize the GPU backend.
+            if not env_vars.get("JAX_PLATFORMS") or env_vars.get("JAX_PLATFORMS") == "cpu":
+                env_vars["JAX_PLATFORMS"] = "cuda,cpu"
 
         logger.info(
             "Building environment for device: %s/%s", request.resources.device.kind, request.resources.device.variant

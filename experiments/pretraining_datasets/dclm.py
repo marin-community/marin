@@ -52,6 +52,10 @@ dclm_mixture_config_llama3 = lm_mixture_data_config(
     components=dclm_components_llama3, weights=DCLM_MIXTURE_WEIGHTS, permutation_type="feistel"
 )
 
+dclm_baseline_only_mixture_config_llama3 = lm_mixture_data_config(
+    components=dclm_components_llama3, weights=DCLM_BASELINE_ONLY_MIXTURE, permutation_type="feistel"
+)
+
 
 ## NOTE: on 20250211, we discovered that the DCLM baseline data in us-central2 was corrupted/partial.
 # These are preserved for reproducibility, but future runs should use the correct data.

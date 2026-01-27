@@ -19,6 +19,7 @@
 
 import logging
 import os
+import random
 import socket
 import time
 from abc import ABC, abstractmethod
@@ -61,6 +62,17 @@ START_ACTOR_TIMEOUT = 7 * 24 * 60 * 60  # 1 week
 # Intervals (in seconds)
 SCALE_UP_MULTISLICE_CHECK_INTERVAL = 3 * 60 * 60  # 3 hours
 SCALE_UP_MULTISLICE_INTERVAL = 12 * 60 * 60  # 12 hours
+
+
+def _retry_backoff_seconds(attempt: int, *, base_seconds: float = 5.0, max_seconds: float = 300.0) -> float:
+    """Return an exponential backoff (with jitter) for retry loops.
+
+    This prevents tight retry loops when slice actors are repeatedly preempted or fail health checks,
+    giving Ray/Autoscaler time to recover capacity without spamming logs.
+    """
+    capped = min(max(attempt, 0), 8)  # cap exponent growth
+    delay = min(base_seconds * (2**capped), max_seconds)
+    return delay + random.random() * min(3.0, delay * 0.1)
 
 
 def _get_current_tpu_pod_type() -> str:
@@ -233,6 +245,26 @@ def _handle_ray_error(e: RayError):
         # to try to sniff out the TPU's status.
         if get_current_tpu_is_preempted():
             logger.exception("Preempted", exc_info=e)
+            return TpuPreempted(e)
+
+        error_text = str(e)
+        # These failures are almost always transient TPU/node issues rather than user code bugs.
+        # Treat them as preemptions so we retry on a different host/slice.
+        if (
+            "No accelerator found" in error_text
+            or "TPU initialization failed" in error_text
+            or "Unable to initialize backend 'tpu'" in error_text
+            or "/dev/vfio" in error_text
+            or "iommu group" in error_text
+        ):
+            logger.exception("TPU runtime unavailable; treating as preempted", exc_info=e)
+            return TpuPreempted(e)
+
+        # Some Ray TPU workers come up with a broken Python environment (often due to partial/old system packages),
+        # leading to numpy/pandas binary mismatches during import. In practice this is transient and re-running on a
+        # different host/slice resolves it, so treat as preempted.
+        if "numpy.dtype size changed" in error_text or "may indicate binary incompatibility" in error_text:
+            logger.exception("Worker env binary mismatch; treating as preempted", exc_info=e)
             return TpuPreempted(e)
 
         logger.exception(f"Task error {e}", exc_info=e)
@@ -813,6 +845,9 @@ def run_on_pod_ray(
                 logger.exception("Failed to prune dead slices or create new actors", exc_info=e)
                 problems.append(e)
                 num_preemptions += 1
+                sleep_s = _retry_backoff_seconds(num_preemptions)
+                logger.warning("Retrying after slice pool setup failure in %.1fs", sleep_s)
+                time.sleep(sleep_s)
                 continue
 
             # If we're doing multislice, we need to get the slice info from the first actor
@@ -959,18 +994,28 @@ def run_on_pod_ray(
                     )
                 else:
                     logger.warning(f"Preempted {num_preemptions} times. Continuing to retry.", exc_info=problem)
+                sleep_s = _retry_backoff_seconds(num_preemptions)
+                logger.warning("Retrying after preemption in %.1fs", sleep_s)
+                time.sleep(sleep_s)
                 continue
             elif any_failed:
                 problem = problems[0] if problems else RuntimeError("TPU job failed")
                 num_failures += 1
                 logger.warning(f"Failed {num_failures} times. Continuing to retry.", exc_info=problem)
+                sleep_s = _retry_backoff_seconds(num_failures, base_seconds=10.0, max_seconds=600.0)
+                logger.warning("Retrying after failure in %.1fs", sleep_s)
+                time.sleep(sleep_s)
                 continue
             elif any_cancelled:
                 logger.info("A slice's task was cancelled, probably due to another slice's failure. Retrying.")
+                time.sleep(5.0)
                 continue
             elif should_scale_up_multislice:
                 logger.info("Additional slices are available. Increasing the number of slices and retrying.")
                 num_preemptions += 1
+                sleep_s = _retry_backoff_seconds(num_preemptions)
+                logger.info("Retrying after multislice scale-up check in %.1fs", sleep_s)
+                time.sleep(sleep_s)
                 continue
             else:
                 logger.info("All slices succeeded. Returning results.")

@@ -59,3 +59,16 @@ Copy/paste this block for new experiments:
 - Status: active
 - Purpose: Head-to-head comparison between Hackable Transformer and Grugformer (no sinks).
 
+### grugformer-moe
+- Path: `experiments/speedrun/grugformer_moe/grugformer_moe.py`
+- Introduced: TBD
+- Last known-good: TBD
+- Status: active
+- Purpose: Experiment-only MoE block for Grugformer using Mixtral-style routing + ragged dispatch.
+
+### grugformer-smoke-v5p16
+- Path: `experiments/speedrun/grugformer_smoke_v5p16/grugformer_smoke_v5p16.py`
+- Introduced: TBD
+- Last known-good: TBD
+- Status: active
+- Purpose: Short central1 TPU smoke test for canonical Grugformer (v5p-16, bs=64, seq=2048).

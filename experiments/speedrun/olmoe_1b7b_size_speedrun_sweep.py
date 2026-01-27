@@ -41,6 +41,7 @@ import logging
 import os
 
 import numpy as np
+import wandb
 from fray.cluster import ResourceConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.optim import MuonConfig
@@ -318,6 +319,7 @@ def build_run(
     bilinear_mlp: bool = False,
     use_qk_norm: bool = False,
     router_topk_then_softmax: bool = False,
+    router_fp32: bool = False,
     alf_lb_loss_scale: float = 0.0,
     dense_first_n_layers: int = 0,
     run_suffix: str | None = None,
@@ -329,11 +331,12 @@ def build_run(
     if bilinear_mlp:
         model_cfg = dataclasses.replace(model_cfg, activation_function=ActivationFunctionEnum.linear)
 
-    if use_qk_norm or router_topk_then_softmax or alf_lb_loss_scale > 0 or dense_first_n_layers > 0:
+    if use_qk_norm or router_topk_then_softmax or router_fp32 or alf_lb_loss_scale > 0 or dense_first_n_layers > 0:
         model_cfg = dataclasses.replace(
             model_cfg,
             use_qk_norm=use_qk_norm,
             router_topk_then_softmax=router_topk_then_softmax,
+            router_fp32=router_fp32,
             alf_lb_loss_scale=alf_lb_loss_scale,
             dense_first_n_layers=dense_first_n_layers,
         )
@@ -369,13 +372,13 @@ def build_run(
     # executor step naming / status tracking).
     lr_tag = _format_multiplier_label(lr_multiplier) if lr_multiplier is not None else ""
     bilinear_tag = "bi" if bilinear_mlp else ""
-    moe_stab_tag = (
-        "ms" if (use_qk_norm or router_topk_then_softmax or alf_lb_loss_scale > 0 or dense_first_n_layers > 0) else ""
-    )
+    moe_stab_enabled = use_qk_norm or router_topk_then_softmax or alf_lb_loss_scale > 0 or dense_first_n_layers > 0
+    moe_stab_tag = "ms" if moe_stab_enabled else ""
+    router_fp32_tag = "r32" if router_fp32 else ""
     params_m = max(1, round(effective_params / 1_000_000))
     run_name = (
         f"osz{_dataset_tag(dataset)}{_size_tag(size)}p{params_m}q{seq_len}b{batch}"
-        f"{lr_tag}{bilinear_tag}{moe_stab_tag}"
+        f"{lr_tag}{bilinear_tag}{moe_stab_tag}{router_fp32_tag}"
     )
     if run_suffix:
         # Use '-' so experiments.defaults.default_train can preserve the suffix if it truncates the name to fit W&B.
@@ -393,6 +396,204 @@ def build_run(
         tokenized_dataset=tokenized_dataset,
     )
     return run_name, cfg
+
+
+def _canonicalize_wandb_base_name(
+    *,
+    raw_name: str,
+    expected_base_names: set[str],
+) -> str | None:
+    """Map historical run naming schemes to the current sweep's base-name format.
+
+    We want a stable key that matches `build_run(..., run_suffix=None)` so that we can resume older
+    runs even if their W&B display name (or `trainer.tracker.name`) uses a previous format.
+    """
+    candidate = raw_name.split("-", 1)[0]
+    if candidate in expected_base_names:
+        return candidate
+
+    # Older scheme (examples):
+    #   osz_ncfw10b_mp338m_s2048_b64_em
+    #   osz_ncfw10b_1b7bp1534m_s2048_b64_e1
+    # The sweep key we want is:
+    #   osz{dataset_tag}{size_tag}p{params_m}q{seq_len}b{batch}{lr_tag}{...}
+    if not candidate.startswith("osz_"):
+        return None
+
+    # Parse the old-style token stream. We only use it to recover (dataset,size,params,lr),
+    # and then match against `expected_base_names` to avoid accidental collisions.
+    parts = candidate.split("_")
+    if len(parts) < 5:
+        return None
+
+    # parts[0] == "osz"
+    dataset_token = parts[1]
+    size_token = parts[2]
+    seq_token = parts[3]
+    batch_token = parts[4]
+    lr_token = parts[5] if len(parts) > 5 else ""
+
+    dataset_map = {
+        "nemotron_cc": "nemo",
+        "fineweb_edu_10b": "fw10",
+        # historical
+        "ncfw10b": "ncfw",
+        "nemotron_dclm_fineweb_10b": "ncfw",
+    }
+    dataset_tag = dataset_map.get(dataset_token)
+    if not dataset_tag:
+        return None
+
+    # size_token encodes both the size family and the approx active params in millions.
+    size_tag = None
+    params_m = None
+    if size_token.startswith("sp"):
+        size_tag = "s"
+        params_m = int(size_token.removeprefix("sp").removesuffix("m"))
+    elif size_token.startswith("mp"):
+        size_tag = "m"
+        params_m = int(size_token.removeprefix("mp").removesuffix("m"))
+    elif size_token.startswith("lp"):
+        size_tag = "l"
+        params_m = int(size_token.removeprefix("lp").removesuffix("m"))
+    elif size_token.startswith("1b7bp") and size_token.endswith("m"):
+        size_tag = "1b7b"
+        params_m = int(size_token.removeprefix("1b7bp").removesuffix("m"))
+
+    if size_tag is None or params_m is None:
+        return None
+
+    # seq_token like s2048; batch_token like b64 (may have been truncated in some older runs)
+    seq = None
+    if seq_token.startswith("s"):
+        try:
+            seq = int(seq_token.removeprefix("s"))
+        except ValueError:
+            seq = None
+    batch = None
+    if batch_token.startswith("b"):
+        try:
+            batch = int(batch_token.removeprefix("b"))
+        except ValueError:
+            batch = None
+
+    # Normalize LR tag: older runs sometimes used "em" to mean 2^-2 (=0.25).
+    lr_tag = lr_token
+    if lr_tag == "em":
+        lr_tag = "em2"
+
+    # Build a minimal candidate and see if it matches any expected base name exactly.
+    # If seq/batch were truncated, we fall back to matching any expected base name that shares
+    # (dataset_tag, size_tag, params_m, lr_tag) and differs only in q/b fields.
+    if seq is not None and batch is not None:
+        guess = f"osz{dataset_tag}{size_tag}p{params_m}q{seq}b{batch}{lr_tag}"
+        if guess in expected_base_names:
+            return guess
+
+    prefix = f"osz{dataset_tag}{size_tag}p{params_m}"
+    suffix = lr_tag
+    for exp in expected_base_names:
+        if exp.startswith(prefix) and exp.endswith(suffix):
+            return exp
+
+    return None
+
+
+def _has_checkpoint_metadata_gcs(run_id: str) -> bool:
+    """Return True if the run's checkpoint directory contains any metadata.json.
+
+    This lets us prefer resume targets that can actually load a checkpoint.
+    """
+    try:
+        import fsspec
+
+        ckpt_root = f"gs://marin-us-central1/checkpoints/speedrun/{run_id}/checkpoints"
+        fs, _, (path,) = fsspec.get_fs_token_paths(ckpt_root)
+        if not fs.exists(path):
+            return False
+        return bool(fs.glob(path + "/**/metadata.json"))
+    except Exception:
+        # Best-effort: if GCS isn't available for some reason, fall back to W&B `_step` only.
+        return False
+
+
+def _load_resume_run_ids_by_base_name(*, wandb_group: str, expected_base_names: set[str]) -> dict[str, str]:
+    """Return a mapping {base_run_name: trainer.id} for the given W&B group.
+
+    When multiple runs map to the same base name, prefer runs with checkpoint metadata, then choose the
+    largest logged `_step` among those.
+    """
+    entity = os.environ.get("WANDB_ENTITY")
+    project = os.environ.get("WANDB_PROJECT")
+    if not entity or not project:
+        raise RuntimeError("WANDB_ENTITY and WANDB_PROJECT must be set when using --resume-from-wandb.")
+
+    api = wandb.Api(timeout=120)
+    runs = list(api.runs(f"{entity}/{project}", filters={"group": wandb_group}, per_page=500))
+    if not runs:
+        raise RuntimeError(f"No W&B runs found for group={wandb_group!r} in {entity}/{project}.")
+
+    def _get_config_value(config: dict, dotted_key: str):
+        cur = config
+        for part in dotted_key.split("."):
+            if not isinstance(cur, dict) or part not in cur:
+                return None
+            cur = cur[part]
+        return cur
+
+    def _unwrap_wandb_value(value):
+        # W&B sometimes stores config values as {"value": ...}. Normalize to the underlying value.
+        if isinstance(value, dict) and "value" in value and len(value) <= 2:
+            return value.get("value")
+        return value
+
+    best: dict[str, tuple[int, str]] = {}
+    for run in runs:
+        cfg = run.config or {}
+        trainer = cfg.get("trainer") or {}
+        run_id = cfg.get("trainer.id") or trainer.get("id") or getattr(run, "id", None)
+        if not run_id:
+            continue
+
+        # Base key must match the value returned by build_run(..., run_suffix=None), i.e. before appending any
+        # -<suffix>. We cannot reliably derive this from `trainer.id` because:
+        # - older runs used `osz_...` ids (which can be parsed)
+        # - newer runs use hashed/truncated ids that don't match the base-name scheme
+        # So prefer the *configured* tracker name (stored in W&B config), which remains stable even if the run is
+        # manually renamed in the UI.
+        raw_base = None
+        for key in (
+            "trainer.tracker.name",
+            "trainer.tracker.run_name",
+            "trainer.tracker.wandb_name",
+            "tracker.name",
+        ):
+            raw_base = _unwrap_wandb_value(_get_config_value(cfg, key))
+            if raw_base:
+                break
+        if not raw_base:
+            raw_base = getattr(run, "name", None)
+
+        base_name = None
+        if raw_base:
+            base_name = _canonicalize_wandb_base_name(raw_name=str(raw_base), expected_base_names=expected_base_names)
+        if not base_name:
+            # Fallback for older runs: parse the trainer id (output directory) format.
+            base_name = _canonicalize_wandb_base_name(raw_name=str(run_id), expected_base_names=expected_base_names)
+        if not base_name:
+            continue
+
+        step = int(run.summary.get("_step") or 0)
+        has_ckpt = _has_checkpoint_metadata_gcs(run_id)
+
+        # Encode the preference (checkpoint presence first, then step) into a sortable score.
+        # Any checkpoint beats any non-checkpoint, even if the latter has a larger _step due to buffering.
+        score = (1_000_000_000 if has_ckpt else 0) + step
+
+        if base_name not in best or score > best[base_name][0]:
+            best[base_name] = (score, run_id)
+
+    return {base: run_id for base, (_step, run_id) in best.items()}
 
 
 def main() -> None:
@@ -458,6 +659,11 @@ def main() -> None:
         help="Route by selecting top-k logits first, then softmax over the selected experts only.",
     )
     parser.add_argument(
+        "--router-fp32",
+        action="store_true",
+        help="Compute router/gating math (logits/top-k/softmax/aux terms) in fp32 for MoE stability.",
+    )
+    parser.add_argument(
         "--alf-lb-loss-scale",
         type=float,
         default=0.0,
@@ -483,6 +689,14 @@ def main() -> None:
         type=str,
         default=None,
         help="Optional W&B group for all runs in the sweep (recommended for comparisons).",
+    )
+    parser.add_argument(
+        "--resume-from-wandb",
+        action="store_true",
+        help=(
+            "Resume previously-started runs in --wandb-group by mapping each run name prefix back to the original "
+            "trainer.id/output directory. This lets you restart the sweep without reusing the exact --run-suffix."
+        ),
     )
     # Executor controls (so this script can be run under ray_run without draccus CLI conflicts).
     parser.add_argument("--prefix", default=os.getenv("MARIN_PREFIX"))
@@ -521,10 +735,10 @@ def main() -> None:
         "nemotron_dclm_fineweb_10b": nemotron_dclm_fineweb_mixture,
     }
 
-    steps: list[ExecutorStep] = []
+    expected_base_names: set[str] = set()
     for size in args.sizes:
         for mult in _lr_multipliers():
-            name, cfg = build_run(
+            base_name, _ = build_run(
                 size,
                 dataset=args.dataset,
                 tokenized_dataset=dataset_presets[args.dataset],
@@ -537,10 +751,52 @@ def main() -> None:
                 bilinear_mlp=args.bilinear_mlp,
                 use_qk_norm=args.use_qk_norm,
                 router_topk_then_softmax=args.router_topk_then_softmax,
+                router_fp32=args.router_fp32,
                 alf_lb_loss_scale=args.alf_lb_loss_scale,
                 dense_first_n_layers=args.dense_first_n_layers,
-                run_suffix=args.run_suffix,
+                run_suffix=None,
             )
+            expected_base_names.add(base_name)
+
+    resume_run_ids: dict[str, str] = {}
+    if args.resume_from_wandb:
+        if not args.wandb_group:
+            raise ValueError("--resume-from-wandb requires --wandb-group.")
+        resume_run_ids = _load_resume_run_ids_by_base_name(
+            wandb_group=args.wandb_group,
+            expected_base_names=expected_base_names,
+        )
+        logger.info("Loaded %d resume targets from W&B group=%s", len(resume_run_ids), args.wandb_group)
+
+    steps: list[ExecutorStep] = []
+    for size in args.sizes:
+        for mult in _lr_multipliers():
+            base_name, cfg = build_run(
+                size,
+                dataset=args.dataset,
+                tokenized_dataset=dataset_presets[args.dataset],
+                seq_len=args.seq_len,
+                tpu_type=args.tpu_type,
+                lr_multiplier=mult,
+                global_batch_size=args.global_batch_size,
+                steps_per_eval=args.steps_per_eval,
+                steps_per_task_eval=args.steps_per_task_eval,
+                bilinear_mlp=args.bilinear_mlp,
+                use_qk_norm=args.use_qk_norm,
+                router_topk_then_softmax=args.router_topk_then_softmax,
+                router_fp32=args.router_fp32,
+                alf_lb_loss_scale=args.alf_lb_loss_scale,
+                dense_first_n_layers=args.dense_first_n_layers,
+                run_suffix=None,
+            )
+
+            override_output_path = None
+            name = base_name
+            if args.resume_from_wandb and base_name in resume_run_ids:
+                override_output_path = f"checkpoints/speedrun/{resume_run_ids[base_name]}"
+            elif args.run_suffix:
+                name = f"{base_name}-{args.run_suffix}"
+
             steps.extend(
                 nemotron_only_speedrun(
                     name,
@@ -551,6 +807,7 @@ def main() -> None:
                     eval_tpu_type=args.eval_tpu_type,
                     max_eval_instances=args.max_eval_instances,
                     wandb_group=args.wandb_group,
+                    override_output_path=override_output_path,
                 )
             )
 

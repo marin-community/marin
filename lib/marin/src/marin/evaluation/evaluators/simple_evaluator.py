@@ -193,6 +193,8 @@ class SimpleEvaluator(Evaluator):
         resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        wandb_name: str | None = None,
+        wandb_group: str | None = None,
     ) -> None:
         """Launch the evaluation run with Fray."""
 
@@ -207,6 +209,8 @@ class SimpleEvaluator(Evaluator):
             resource_config=resource_config,
             max_eval_instances=max_eval_instances,
             wandb_tags=wandb_tags,
+            wandb_name=wandb_name,
+            wandb_group=wandb_group,
             extras=("eval", "tpu"),
             pip_packages=pip_packages,
         )

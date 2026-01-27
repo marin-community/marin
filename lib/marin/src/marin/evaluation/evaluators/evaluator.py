@@ -122,6 +122,8 @@ def launch_evaluate_with_ray(
     resource_config: ResourceConfig,
     max_eval_instances: int | None = None,
     wandb_tags: list[str] | None = None,
+    wandb_name: str | None = None,
+    wandb_group: str | None = None,
     extras: Sequence[str] = (),
     pip_packages: Sequence[str] = (),
     env_vars: dict[str, str] | None = None,
@@ -135,16 +137,18 @@ def launch_evaluate_with_ray(
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        wandb_name: str | None = None,
+        wandb_group: str | None = None,
     ) -> None:
         if configure_logging:
             import logging
 
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-        evaluator.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
+        evaluator.evaluate(model, evals, output_path, max_eval_instances, wandb_tags, wandb_name, wandb_group)
 
     def _run() -> None:
         with remove_tpu_lockfile_on_exit():
-            launch(model, evals, output_path, max_eval_instances, wandb_tags)
+            launch(model, evals, output_path, max_eval_instances, wandb_tags, wandb_name, wandb_group)
 
     if resource_config is None:
         resource_config = ResourceConfig()

@@ -119,6 +119,9 @@ class CustomMixtralConfig(MistralConfig):
     # If False (default): compute full softmax(router_logits) and renormalize top-k probs.
     # If True: select top-k experts, then compute a softmax over the selected logits only.
     router_topk_then_softmax: bool = False
+    # If True: compute router/gating math (logits, selection logits, top-k, softmax, aux terms) in fp32.
+    # This is intended as a stability knob for MoE sweeps; the rest of the model stays in its normal dtype.
+    router_fp32: bool = False
 
     # DeepSeek-style "auxiliary-free load balancing" (ALF-LB).
     #
@@ -526,7 +529,12 @@ class MixtralSparseMoeBlock(eqx.Module):
         x_flat = hax.flatten_axes(x, old_axes=squash_axes, new_axis="token")  # [Batch, Pos, Embed] -> [Token, Embed]
         Token = x_flat.resolve_axis("token")
 
-        router_logits = self.gate(x_flat, key=k_gate)
+        # Optionally compute router math in fp32 for numerical stability.
+        router_fp32 = getattr(self.config, "router_fp32", False)
+        x_for_gate = x_flat.astype(jnp.float32) if router_fp32 else x_flat
+        router_logits = self.gate(x_for_gate, key=k_gate)
+        if router_fp32 and router_logits.array.dtype != jnp.float32:
+            router_logits = router_logits.astype(jnp.float32)
         router_probs = hnn.softmax(router_logits, axis=Experts)
 
         selection_logits = router_logits
@@ -534,6 +542,8 @@ class MixtralSparseMoeBlock(eqx.Module):
             bias = self.router_bias
             if getattr(self.config, "alf_lb_center_bias", True):
                 bias = bias - hax.mean(bias, axis=Experts)
+            if router_fp32 and bias.array.dtype != jnp.float32:
+                bias = bias.astype(jnp.float32)
             selection_logits = selection_logits + bias
 
         topk_weights, topk_idx = self._route(
@@ -543,6 +553,10 @@ class MixtralSparseMoeBlock(eqx.Module):
             TopExperts,
             topk_then_softmax=getattr(self.config, "router_topk_then_softmax", False),
         )
+        if router_fp32 and topk_weights.array.dtype != x_flat.array.dtype:
+            # Keep routing decisions in fp32, but cast weights back to the model activation dtype to
+            # avoid upcasting the expert weighted-sum (bandwidth/memory).
+            topk_weights = topk_weights.astype(x_flat.array.dtype)
 
         if force_dense is not None:
 
@@ -614,12 +628,18 @@ class MixtralSparseMoeBlock(eqx.Module):
             "expert_loads": expert_loads,
         }
         if self.config.lbl_coef is not None and getattr(self.config, "alf_lb_loss_scale", 0.0) <= 0:
+            # Shapes:
+            # - expert_loads: [Experts] where Experts.size == n_routed_experts
+            # - router_probs: [Token, Experts] where Token is the flattened token axis (T = B*S)
             f = expert_loads * self.config.n_routed_experts / self.config.num_experts_per_tok
-            p = hax.mean(router_probs, axis=Token)
-            extras["load_balancing_loss"] = self.config.lbl_coef * hax.sum(f * p, axis=Experts)
+            # - f: [Experts]
+            p = hax.mean(router_probs, axis=Token)  # [Token, Experts] -> [Experts]
+            extras["load_balancing_loss"] = self.config.lbl_coef * hax.sum(f * p, axis=Experts)  # [] (scalar)
         if self.config.rzl_coef is not None:
             extras["router_z_loss"] = self.config.rzl_coef * hax.mean(
-                hnn.logsumexp(router_logits, axis=Experts) ** 2, axis=Token
+                # router_logits: [Token, Experts] -> logsumexp: [Token] -> mean over Token: [] (scalar)
+                hnn.logsumexp(router_logits, axis=Experts) ** 2,
+                axis=Token,
             )
 
         alf_scale = float(getattr(self.config, "alf_lb_loss_scale", 0.0))
@@ -730,12 +750,21 @@ class MixtralTransformer(eqx.Module):
         # moe logging
         expert_loads = extras["expert_loads"]
         entropy = -hax.sum(expert_loads * hax.log(expert_loads + 1e-6), axis=self.config.Experts)
+        # Load-violation diagnostic: max over experts of (empirical - theoretical) / theoretical per layer.
+        # Here, `expert_loads` is the empirical fraction of expert assignments (sums to 1 over Experts).
+        # For uniform routing, the theoretical fraction is 1 / n_routed_experts, so:
+        # (emp - 1/n) / (1/n) = emp * n - 1
+        load_violation = expert_loads * self.config.n_routed_experts - 1.0
+        load_violation_max = hax.max(load_violation, axis=self.config.Experts)
+        global_load_violation_max = hax.max(load_violation_max, axis=self.config.Layers)
 
         stats = {}
         for i in range(self.config.num_layers):
             stats[f"moe/layer{i}/routing_entropy"] = jax.lax.stop_gradient(entropy.array[i])
+            stats[f"moe/layer{i}/load_violation_max"] = jax.lax.stop_gradient(load_violation_max.array[i])
             for j in range(self.config.n_routed_experts):
                 stats[f"moe/layer{i}/expert{j}_load"] = jax.lax.stop_gradient(expert_loads.array[i, j])
+        stats["moe/load_violation_max"] = jax.lax.stop_gradient(global_load_violation_max.array)
 
         if "load_balancing_loss" in extras:
             extras["load_balancing_loss"] = hax.sum(extras["load_balancing_loss"], axis=self.config.Layers)

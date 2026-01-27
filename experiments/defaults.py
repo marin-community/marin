@@ -251,7 +251,11 @@ def default_train(
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
+    wandb_project: str | None = None,
     override_output_path: str | None = None,
+    checkpointer_save_interval: timedelta = timedelta(minutes=10),
+    checkpointer_keep: Sequence[dict] | None = None,
+    checkpointer_delete_old_temp_checkpoints: bool = True,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -266,6 +270,11 @@ def default_train(
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
         wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
         wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
+        wandb_project: Optional W&B project. If unset, defaults to $WANDB_PROJECT, falling back to "marin".
+        checkpointer_save_interval: How often to save temporary checkpoints (time-based).
+        checkpointer_keep: Step-based checkpoint retention policy. If unset, defaults to keeping one checkpoint every
+            `train_config.steps_per_export` steps. Set to [] to disable permanent (step-based) checkpoints entirely.
+        checkpointer_delete_old_temp_checkpoints: If True, delete old temporary checkpoints when saving a new one.
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -276,35 +285,29 @@ def default_train(
 
     if wandb_group is None:
         wandb_group = os.environ.get("WANDB_GROUP")
+    if not wandb_group:
+        wandb_group = None
+    if wandb_project is None:
+        wandb_project = os.environ.get("WANDB_PROJECT", "marin")
 
-    # Max length of 64 characters for WANDB run is 64 characters
-    # we don't want to use the first 64 because the UID bit goes at the end. instead, grab the trailing -XXX
-    # and add whatever we can fit in the remaining space.
-    if len(name) > 64:
-        old_name = name
-        if "-" not in name:
-            name = name[:64]
-        else:
-            prefix, suffix = name.rsplit("-", 1)
-            if len(suffix) >= 64:
-                suffix = suffix[:64]
-                name = suffix
-            else:
-                name = prefix[: 63 - len(suffix)] + "-" + suffix
-        logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
+    def _truncate_wandb_display_name(s: str, *, max_len: int = 64, keep_end: int = 20) -> str:
+        """Truncate a W&B display name while preserving the (usually-unique) suffix.
+
+        W&B display names have a 64 character limit. We preserve the final characters so suffixes like timestamps or git
+        SHAs remain visible and (crucially) unique.
+        """
+
+        if len(s) <= max_len:
+            return s
+
+        keep_end = min(keep_end, max_len - 2)
+        prefix_len = max_len - keep_end - 1
+        return f"{s[:prefix_len]}~{s[-keep_end:]}"
 
     resolved_wandb_name = wandb_name
     if resolved_wandb_name is not None and len(resolved_wandb_name) > 64:
         old_wandb_name = resolved_wandb_name
-        if "-" not in resolved_wandb_name:
-            resolved_wandb_name = resolved_wandb_name[:64]
-        else:
-            prefix, suffix = resolved_wandb_name.rsplit("-", 1)
-            if len(suffix) >= 64:
-                suffix = suffix[:64]
-                resolved_wandb_name = suffix
-            else:
-                resolved_wandb_name = prefix[: 63 - len(suffix)] + "-" + suffix
+        resolved_wandb_name = _truncate_wandb_display_name(resolved_wandb_name)
         logger.warning(
             f"Truncated wandb_name from {old_wandb_name} to {resolved_wandb_name} to fit within WANDB limits."
         )
@@ -351,7 +354,7 @@ def default_train(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                project="marin",
+                project=wandb_project,
                 name=resolved_wandb_name,
                 tags=[*tags],
                 group=wandb_group,
@@ -361,8 +364,9 @@ def default_train(
             num_train_steps=train_config.num_train_steps,
             steps_per_eval=train_config.steps_per_eval if train_config.steps_per_eval is not None else 1000,
             checkpointer=CheckpointerConfig(
-                save_interval=timedelta(minutes=10),
-                keep=[dict(every=steps_per_export)],
+                save_interval=checkpointer_save_interval,
+                keep=([dict(every=steps_per_export)] if checkpointer_keep is None else list(checkpointer_keep)),
+                delete_old_temp_checkpoints=checkpointer_delete_old_temp_checkpoints,
             ),
             model_averaging=model_averaging,
             mesh=MeshConfig(

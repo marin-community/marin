@@ -53,6 +53,8 @@ class LevanterTpuEvaluator(Evaluator, ABC):
             resource_config=resource_config,
             max_eval_instances=max_eval_instances,
             wandb_tags=wandb_tags,
+            wandb_name=wandb_name,
+            wandb_group=wandb_group,
             extras=("eval", "tpu"),
             configure_logging=False,
         )
