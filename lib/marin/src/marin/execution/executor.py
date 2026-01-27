@@ -309,6 +309,10 @@ class ExecutorStep(Generic[ConfigT]):
     resources: ResourceConfig | None = None
     """Resource requirements for this step (GPU, TPU, CPU). If None, defaults to CPU."""
 
+    max_retries_failure: int = 0
+    """Maximum number of retries on failure. Default is 0 (no retries).
+    Set to a higher value for jobs that should tolerate individual task failures."""
+
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
         return InputName(self, name=name)
@@ -852,6 +856,7 @@ class Executor:
             entrypoint=Entrypoint.from_callable(step_fn, args=[config]),
             resources=step_resources,
             environment=EnvironmentConfig.create(extras=step.pip_dependency_groups or []),
+            max_retries_failure=step.max_retries_failure,
         )
 
         runner = StepRunner(self.cluster, status_file)

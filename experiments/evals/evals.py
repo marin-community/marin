@@ -58,6 +58,7 @@ def evaluate_lm_evaluation_harness(
     discover_latest_checkpoint: bool = True,
     generation_params: dict | None = None,
     seed: int | None = None,
+    max_retries_failure: int = 0,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
@@ -94,6 +95,7 @@ def evaluate_lm_evaluation_harness(
             wandb_tags=wandb_tags,
             generation_params=generation_params,
         ),
+        max_retries_failure=max_retries_failure,
     )
 
 
