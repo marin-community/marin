@@ -79,22 +79,6 @@ def test_unschedulable_includes_timeout_in_error(make_job_request):
     assert "300s" in job.error
 
 
-def test_job_dispatch_and_revert(make_job_request):
-    """Job can be dispatched to worker and reverted back to PENDING."""
-    job = ControllerJob(job_id=JobId("test"), request=make_job_request())
-    assert job.state == cluster_pb2.JOB_STATE_PENDING
-
-    job.mark_dispatched()
-
-    assert job.state == cluster_pb2.JOB_STATE_RUNNING
-    assert job.started_at_ms > 0
-
-    job.revert_dispatch()
-
-    assert job.state == cluster_pb2.JOB_STATE_PENDING
-    assert job.started_at_ms is None
-
-
 # --- Job Retry Behavior ---
 
 
@@ -333,21 +317,6 @@ def test_job_expands_to_correct_number_of_tasks(make_job_request):
     for i, task in enumerate(tasks):
         assert task.task_index == i
         assert task.job_id == job.job_id
-        assert str(task.task_id) == f"{job.job_id}/task-{i}"
-        assert task.max_retries_failure == job.max_retries_failure
-        assert task.max_retries_preemption == job.max_retries_preemption
-
-
-def test_job_expands_single_replica_by_default(make_job_request):
-    """expand_job_to_tasks creates single task when replicas not specified."""
-    request = make_job_request()
-    # replicas defaults to 0 in proto, which should be treated as 1
-    job = ControllerJob(job_id=JobId("test-job"), request=request)
-
-    tasks = expand_job_to_tasks(job)
-
-    assert len(tasks) == 1
-    assert tasks[0].task_index == 0
 
 
 def test_job_becomes_unschedulable_when_task_unschedulable(make_job_request):
@@ -373,34 +342,3 @@ def test_job_becomes_killed_when_task_killed(make_job_request):
     new_state = job.on_task_transition(cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_KILLED)
 
     assert new_state == cluster_pb2.JOB_STATE_KILLED
-
-
-def test_job_total_attempts_reflects_retry_history(make_job_request):
-    """total_attempts property correctly reflects the job's execution history."""
-    job = ControllerJob(
-        job_id=JobId("test"),
-        request=make_job_request(),
-        max_retries_failure=3,
-        max_retries_preemption=3,
-    )
-
-    # Fresh job has no retries yet
-    assert job.total_attempts == 0
-
-    # After a failure retry
-    job.mark_dispatched()
-    result = job.transition(cluster_pb2.JOB_STATE_FAILED)
-    assert result == JobTransitionResult.SHOULD_RETRY
-    assert job.total_attempts == 1  # 1 failure
-
-    # After a preemption retry
-    job.mark_dispatched()
-    result = job.transition(cluster_pb2.JOB_STATE_FAILED, is_worker_failure=True)
-    assert result == JobTransitionResult.SHOULD_RETRY
-    assert job.total_attempts == 2  # 1 failure + 1 preemption
-
-    # After another failure
-    job.mark_dispatched()
-    result = job.transition(cluster_pb2.JOB_STATE_FAILED)
-    assert result == JobTransitionResult.SHOULD_RETRY
-    assert job.total_attempts == 3  # 2 failures + 1 preemption

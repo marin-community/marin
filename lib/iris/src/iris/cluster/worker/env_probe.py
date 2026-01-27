@@ -275,6 +275,9 @@ class DefaultEnvironmentProvider:
         # Build worker attributes for constraint-based scheduling
         attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device, extra_attributes)
 
+        # VM address from environment (injected by ManagedVm bootstrap)
+        vm_address = os.environ.get("IRIS_VM_ADDRESS", "")
+
         return cluster_pb2.WorkerMetadata(
             hostname=hostname,
             ip_address=ip_address,
@@ -292,4 +295,5 @@ class DefaultEnvironmentProvider:
             gce_zone=gce_zone,
             device=device,
             attributes=attributes,
+            vm_address=vm_address,
         )

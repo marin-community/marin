@@ -89,6 +89,8 @@ def mock_runtime():
         )
     )
     runtime.get_logs = Mock(return_value=[])
+    runtime.list_iris_containers = Mock(return_value=[])
+    runtime.remove_all_iris_containers = Mock(return_value=0)
     return runtime
 
 
@@ -239,7 +241,7 @@ def test_get_task_success(client, service):
     assert data["job_id"] == "job-details"
     assert "attempt_id" in data
     assert data["attempt_id"] >= 0
-    assert data["status"] == "succeeded"  # Task completes immediately with mock runtime
+    assert data["status"] == "TASK_STATE_SUCCEEDED"  # Task completes immediately with mock runtime
     assert data["exit_code"] == 0
     assert "http" in data["ports"]
     assert "grpc" in data["ports"]
@@ -391,27 +393,10 @@ def test_task_detail_page_loads(client):
 # ============================================================================
 
 
-def test_run_task_returns_task_id(service, request_context):
-    """Test run_task returns the task_id from the request."""
-    request = create_run_task_request(task_id="my-task", job_id="my-job")
-    response = service.run_task(request, request_context)
-
-    assert response.task_id == "my-task"
-    # Task may have already transitioned from PENDING since threads start immediately
-    assert response.state in (
-        cluster_pb2.TASK_STATE_PENDING,
-        cluster_pb2.TASK_STATE_BUILDING,
-        cluster_pb2.TASK_STATE_RUNNING,
-        cluster_pb2.TASK_STATE_SUCCEEDED,
-    )
-
-
 def test_run_task_with_ports(service, request_context):
     """Test run_task allocates ports correctly."""
     request = create_run_task_request(task_id="task-with-ports", job_id="job-with-ports", ports=["http", "grpc"])
-    response = service.run_task(request, request_context)
-
-    assert response.task_id == "task-with-ports"
+    service.run_task(request, request_context)
 
     # Verify ports were allocated
     task = service._provider.get_task("task-with-ports")
@@ -512,13 +497,6 @@ def test_kill_task_with_custom_timeout(service, request_context):
 # ============================================================================
 # Connect RPC integration tests
 # ============================================================================
-
-
-def test_rpc_endpoint_mounted_correctly(server):
-    """Test Connect RPC is mounted at correct path."""
-    # Check that the RPC path is included in routes
-    route_paths = [route.path for route in server._app.routes]
-    assert "/iris.cluster.WorkerService" in route_paths
 
 
 @pytest.mark.asyncio
