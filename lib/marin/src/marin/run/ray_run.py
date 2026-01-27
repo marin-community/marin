@@ -275,6 +275,10 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to parse {marin_yaml}: {e}")
 
+    for key in ("HF_TOKEN", "WANDB_API_KEY"):
+        if key not in env_vars and os.environ.get(key) is not None:
+            env_vars[key] = os.environ[key]
+
     if args.env_vars:
         for item in args.env_vars:
             if len(item) > 2:
