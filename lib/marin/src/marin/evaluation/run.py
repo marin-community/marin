@@ -22,6 +22,7 @@ python3 run.py <Name of evaluator> --model <Path to model or Hugging Face model 
 """
 
 import logging
+import os
 import time
 
 import draccus
@@ -32,6 +33,7 @@ from marin.evaluation.evaluators.levanter_lm_eval_evaluator import LevanterLmEva
 from marin.evaluation.evaluators.lm_evaluation_harness_evaluator import LMEvaluationHarnessEvaluator
 from marin.evaluation.evaluators.simple_evaluator import SimpleEvaluator
 from marin.evaluation.utils import discover_hf_checkpoints
+from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +84,10 @@ def evaluate(config: EvaluationConfig) -> None:
 
 
 def _impute_model_config(config):
-    model_path = config.model_path
-
     if config.model_path is None:
         raise ValueError("model_name or model_path must be provided")
+
+    model_path = _normalize_model_path(config.model_path)
 
     if config.discover_latest_checkpoint:
         model_path = discover_hf_checkpoints(model_path)[-1]
@@ -135,6 +137,30 @@ def _impute_model_config(config):
         generation_params=generation_params,
         apply_chat_template=config.apply_chat_template,
     )
+
+
+def _normalize_model_path(model_path: str) -> str:
+    """
+    Choose the HF checkpoint root when callers pass either `<path>` or `<path>/hf`.
+    """
+    model_path = model_path.rstrip("/")
+
+    def has_hf_files(path: str) -> bool:
+        return fsspec_exists(os.path.join(path, "config.json"))
+
+    if has_hf_files(model_path):
+        return model_path
+
+    if model_path.endswith("/hf"):
+        parent_path = model_path[: -len("/hf")]
+        if parent_path and has_hf_files(parent_path):
+            return parent_path
+
+    hf_candidate = os.path.join(model_path, "hf")
+    if has_hf_files(hf_candidate):
+        return hf_candidate
+
+    return model_path
 
 
 @draccus.wrap()

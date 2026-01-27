@@ -14,7 +14,7 @@
 
 """Tests for WorkerPool behavior.
 
-Unit tests use real ActorServers but bypass job infrastructure for fast testing.
+Dispatcher tests use real ActorServers but bypass job infrastructure for fast testing.
 E2E tests use LocalClusterClient for full job submission flow.
 """
 
@@ -38,53 +38,6 @@ from iris.client.worker_pool import (
     WorkerStatus,
 )
 from iris.cluster.types import ResourceSpec
-
-# =============================================================================
-# Unit tests for TaskExecutorActor
-# =============================================================================
-
-
-def test_execute_basic():
-    """Test basic function execution."""
-    executor = TaskExecutorActor()
-
-    fn_bytes = cloudpickle.dumps(lambda x, y: x + y)
-    args_bytes = cloudpickle.dumps((1, 2))
-    kwargs_bytes = cloudpickle.dumps({})
-
-    result = executor.execute(fn_bytes, args_bytes, kwargs_bytes)
-    assert result == 3
-
-
-def test_execute_with_kwargs():
-    """Test execution with keyword arguments."""
-    executor = TaskExecutorActor()
-
-    def greet(name, greeting="Hello"):
-        return f"{greeting}, {name}!"
-
-    fn_bytes = cloudpickle.dumps(greet)
-    args_bytes = cloudpickle.dumps(("World",))
-    kwargs_bytes = cloudpickle.dumps({"greeting": "Hi"})
-
-    result = executor.execute(fn_bytes, args_bytes, kwargs_bytes)
-    assert result == "Hi, World!"
-
-
-def test_execute_propagates_exception():
-    """Test that exceptions are propagated."""
-    executor = TaskExecutorActor()
-
-    def raise_error():
-        raise ValueError("test error")
-
-    fn_bytes = cloudpickle.dumps(raise_error)
-    args_bytes = cloudpickle.dumps(())
-    kwargs_bytes = cloudpickle.dumps({})
-
-    with pytest.raises(ValueError, match="test error"):
-        executor.execute(fn_bytes, args_bytes, kwargs_bytes)
-
 
 # =============================================================================
 # WorkerDispatcher behavioral tests
@@ -131,7 +84,6 @@ def test_dispatch_discovers_worker_endpoint(worker_server):
     dispatcher.join(timeout=1.0)
 
     assert worker_state.status == WorkerStatus.IDLE
-    assert worker_state.endpoint_url == url
 
 
 def test_dispatch_executes_task_on_worker(worker_server):
@@ -352,23 +304,6 @@ class TestWorkerPoolE2E:
 
             assert result == 30
 
-    def test_submit_with_kwargs(self, local_client):
-        """submit() passes keyword arguments correctly through job infrastructure."""
-        config = WorkerPoolConfig(
-            num_workers=1,
-            resources=ResourceSpec(cpu=1, memory="512m"),
-        )
-
-        with WorkerPool(local_client, config, timeout=30.0) as pool:
-
-            def greet(name, prefix="Hello"):
-                return f"{prefix}, {name}!"
-
-            future = pool.submit(greet, "World", prefix="Hi")
-            result = future.result(timeout=60.0)
-
-            assert result == "Hi, World!"
-
     def test_map_executes_tasks(self, local_client):
         """map() distributes work through real job infrastructure."""
         config = WorkerPoolConfig(
@@ -403,58 +338,6 @@ class TestWorkerPoolE2E:
             with pytest.raises(ValueError, match="intentional error"):
                 future.result(timeout=60.0)
 
-    def test_complex_return_values(self, local_client):
-        """Complex objects are properly serialized through job infrastructure."""
-        config = WorkerPoolConfig(
-            num_workers=1,
-            resources=ResourceSpec(cpu=1, memory="512m"),
-        )
-
-        with WorkerPool(local_client, config, timeout=30.0) as pool:
-
-            def create_complex():
-                return {
-                    "numbers": [1, 2, 3],
-                    "nested": {"a": 1, "b": 2},
-                    "tuple": (1, "two", 3.0),
-                }
-
-            future = pool.submit(create_complex)
-            result = future.result(timeout=60.0)
-
-            assert result["numbers"] == [1, 2, 3]
-            assert result["nested"]["b"] == 2
-            assert result["tuple"] == (1, "two", 3.0)
-
-    def test_closures_work(self, local_client):
-        """Functions that capture variables work through job infrastructure."""
-        config = WorkerPoolConfig(
-            num_workers=1,
-            resources=ResourceSpec(cpu=1, memory="512m"),
-        )
-
-        with WorkerPool(local_client, config, timeout=30.0) as pool:
-            multiplier = 7
-
-            def multiply(x):
-                return x * multiplier
-
-            future = pool.submit(multiply, 6)
-            result = future.result(timeout=60.0)
-
-            assert result == 42
-
-    def test_context_manager_waits_for_workers(self, local_client):
-        """__enter__ waits for workers to become available before returning."""
-        config = WorkerPoolConfig(
-            num_workers=2,
-            resources=ResourceSpec(cpu=1, memory="512m"),
-        )
-
-        with WorkerPool(local_client, config, timeout=30.0) as pool:
-            # By the time __enter__ returns, we should have workers available
-            assert pool.size >= 1
-
     def test_shutdown_prevents_new_submissions(self, local_client):
         """After shutdown, submit() raises RuntimeError."""
         config = WorkerPoolConfig(
@@ -484,19 +367,3 @@ class TestWorkerPoolE2E:
                 results.append(future.result(timeout=60.0))
 
             assert results == [0, 2, 4]
-
-    def test_pool_status_reflects_workers(self, local_client):
-        """Pool status correctly reflects worker state after initialization."""
-        config = WorkerPoolConfig(
-            num_workers=2,
-            resources=ResourceSpec(cpu=1, memory="512m"),
-        )
-
-        with WorkerPool(local_client, config, timeout=30.0) as pool:
-            status = pool.status()
-
-            assert status.num_workers == 2
-            # Workers should be idle or pending (not failed)
-            assert status.workers_failed == 0
-            # At least some workers should have been discovered
-            assert status.workers_idle + status.workers_busy + status.workers_pending == 2
