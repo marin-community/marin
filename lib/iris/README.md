@@ -157,31 +157,18 @@ iris build controller-image -t iris-controller:v1 --push --region us-central1
 The `scripts/cluster-tools.py` script provides debugging and validation commands:
 
 ```bash
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models --help
+
 # Discover and show controller VM status
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models discover
-
-# Check controller health
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models health
-
-# Show autoscaler status
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models autoscaler-status
-
-# List workers
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models list-workers
-
-# View controller logs
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models logs
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models logs --follow
-
-# View bootstrap logs (startup script output)
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models bootstrap-logs
-
-# Run validation jobs
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate
-
+discover
+autoscaler-status
+list-workers
+# controller logs
+logs {--follow}
+bootstrap-logs
+validate
 # Cleanup all iris resources (dry-run by default)
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models cleanup
-uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models cleanup --no-dry-run
+cleanup {--no-dry-run}
 ```
 
 ## Configuration

@@ -469,7 +469,9 @@ def controller_status(ctx):
 @controller.command("run-local")
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=10000, type=int, help="Bind port")
-@click.option("--bundle-dir", default="/var/cache/iris/bundles", help="Directory for job bundles")
+@click.option(
+    "--bundle-prefix", default=None, help="URI prefix for job bundles (e.g., gs://bucket/path or file:///path)"
+)
 @click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
 @click.option("--worker-timeout", default=60.0, type=float, help="Worker heartbeat timeout (seconds)")
 @click.pass_context
@@ -477,7 +479,7 @@ def controller_run_local(
     ctx,
     host: str,
     port: int,
-    bundle_dir: str,
+    bundle_prefix: str | None,
     scheduler_interval: float,
     worker_timeout: float,
 ):
@@ -498,7 +500,7 @@ def controller_run_local(
     controller_config = ControllerConfig(
         host=host,
         port=port,
-        bundle_dir=Path(bundle_dir),
+        bundle_prefix=bundle_prefix,
         scheduler_interval_seconds=scheduler_interval,
         worker_timeout_seconds=worker_timeout,
     )
@@ -516,7 +518,7 @@ def controller_run_local(
     )
 
     click.echo(f"Starting Iris controller on {host}:{port}")
-    click.echo(f"  Bundle dir: {controller_config.bundle_dir}")
+    click.echo(f"  Bundle prefix: {controller_config.bundle_prefix}")
     click.echo(f"  Scheduler interval: {scheduler_interval}s")
     click.echo(f"  Worker timeout: {worker_timeout}s")
     if autoscaler:
@@ -1258,6 +1260,7 @@ def build():
 @click.option("--platform", default="linux/amd64", help="Target platform (e.g., linux/amd64, linux/arm64)")
 @click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to (can be repeated)")
 @click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
+@click.option("--no-cache", is_flag=True, help="Build without using cache")
 def build_worker_image(
     tag: str,
     push: bool,
@@ -1266,6 +1269,7 @@ def build_worker_image(
     platform: str,
     region: tuple[str, ...],
     project: str,
+    no_cache: bool,
 ):
     """Build Docker image for Iris worker.
 
@@ -1283,7 +1287,7 @@ def build_worker_image(
         uv run iris build worker-image -t iris-worker:v1 \\
             --push --region us-central1 --region europe-west4
     """
-    build_image("worker", tag, push, dockerfile, context, platform, region, project)
+    build_image("worker", tag, push, dockerfile, context, platform, region, project, no_cache)
 
 
 @build.command("controller-image")
@@ -1300,6 +1304,7 @@ def build_worker_image(
 @click.option("--platform", default="linux/amd64", help="Target platform (e.g., linux/amd64, linux/arm64)")
 @click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to (can be repeated)")
 @click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
+@click.option("--no-cache", is_flag=True, help="Build without using cache")
 def build_controller_image(
     tag: str,
     push: bool,
@@ -1308,6 +1313,7 @@ def build_controller_image(
     platform: str,
     region: tuple[str, ...],
     project: str,
+    no_cache: bool,
 ):
     """Build Docker image for Iris controller.
 
@@ -1325,7 +1331,7 @@ def build_controller_image(
         uv run iris build controller-image -t iris-controller:v1 \\
             --push --region us-central1 --region europe-west4
     """
-    build_image("controller", tag, push, dockerfile, context, platform, region, project)
+    build_image("controller", tag, push, dockerfile, context, platform, region, project, no_cache)
 
 
 @build.command("push")

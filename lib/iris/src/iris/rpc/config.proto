@@ -125,6 +125,7 @@ message ManualControllerConfig {
 // Controller configuration using oneof for type-safe dispatch
 message ControllerVmConfig {
   string image = 10;            // Controller docker image (shared by all controller types)
+  string bundle_prefix = 11;    // URI prefix for job bundles (e.g., gs://bucket/path)
   oneof controller {
     GcpControllerConfig gcp = 1;
     ManualControllerConfig manual = 2;

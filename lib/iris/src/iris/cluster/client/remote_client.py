@@ -74,7 +74,9 @@ class RemoteClusterClient:
         constraints: list[cluster_pb2.Constraint] | None = None,
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
     ) -> None:
-        serialized = cloudpickle.dumps(entrypoint)
+        # Serialize as tuple (callable, args, kwargs) - not the Entrypoint class.
+        # Job containers don't have iris installed, so they can't deserialize Entrypoint.
+        serialized = cloudpickle.dumps((entrypoint.callable, entrypoint.args, entrypoint.kwargs))
 
         env_config = cluster_pb2.EnvironmentConfig(
             workspace=environment.workspace if environment else "/app",

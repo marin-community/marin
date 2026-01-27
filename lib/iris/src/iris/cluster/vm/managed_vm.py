@@ -73,6 +73,29 @@ BOOTSTRAP_SCRIPT = """
 set -e
 
 echo "[iris-init] Starting Iris worker bootstrap"
+
+# Fetch TPU metadata from GCE and export as environment variables.
+# GCP TPU VMs expose TPU info via instance metadata, not environment variables.
+echo "[iris-init] Probing TPU metadata..."
+METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
+METADATA_HEADER="Metadata-Flavor: Google"
+
+# Fetch instance-id as TPU_NAME (the TPU slice name, shared across workers for coscheduling)
+export TPU_NAME=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/instance-id" 2>/dev/null || echo "")
+# Fetch accelerator-type as TPU_TYPE (e.g., v5litepod-16, used for topology/chip count lookup)
+export TPU_TYPE=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/accelerator-type" 2>/dev/null || echo "")
+# Fetch agent-worker-number as TPU_WORKER_ID
+export TPU_WORKER_ID=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/agent-worker-number" 2>/dev/null || echo "")
+# XXX: SET THESE APPROPRIATELY
+export TPU_WORKER_HOSTNAMES=""
+export TPU_CHIPS_PER_HOST_BOUNDS=""
+
+if [ -n "$TPU_NAME" ]; then
+    echo "[iris-init] TPU detected: name=$TPU_NAME type=$TPU_TYPE worker_id=$TPU_WORKER_ID"
+else
+    echo "[iris-init] No TPU metadata found (this may be a non-TPU VM)"
+fi
+
 echo "[iris-init] Phase: prerequisites"
 
 # Install Docker if missing
@@ -166,6 +189,11 @@ def _build_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str
 
     Note: IRIS_CONTROLLER_ADDRESS is set from the shell variable $CONTROLLER_ADDRESS
     which is populated by the discovery preamble.
+
+    TPU environment variables (TPU_NAME, TPU_WORKER_ID, etc.) are passed through
+    from the host if they exist. These are set by GCP on TPU VMs and are required
+    for the worker to register with tpu-name and tpu-worker-id attributes needed
+    for coscheduled job scheduling.
     """
     flags = []
     for k, v in config.env_vars.items():
@@ -175,6 +203,22 @@ def _build_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str
     # Inject VM address so worker can include it in registration for autoscaler tracking
     if vm_address:
         flags.append(f"-e IRIS_VM_ADDRESS={shlex.quote(vm_address)}")
+
+    # Pass through TPU environment variables from host if they exist.
+    # These are fetched from GCE metadata by the bootstrap script preamble.
+    # TPU_NAME = instance-id (TPU slice name) for coscheduling group_by
+    # TPU_TYPE = accelerator-type (e.g., v5litepod-16) for topology lookup
+    tpu_env_vars = [
+        "TPU_NAME",
+        "TPU_TYPE",
+        "TPU_WORKER_ID",
+        "TPU_WORKER_HOSTNAMES",
+        "TPU_CHIPS_PER_HOST_BOUNDS",
+    ]
+    for var in tpu_env_vars:
+        # Use shell syntax to pass through only if set on host
+        flags.append(f'-e {var}="${{{var}:-}}"')
+
     return " ".join(flags)
 
 

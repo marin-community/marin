@@ -84,7 +84,10 @@ def test_wait_for_connection_returns_true_immediately(mock_conn_avail, _mock_sle
 def test_wait_for_connection_returns_false_on_timeout(mock_time, mock_conn_avail, _mock_sleep):
     """wait_for_connection returns False when timeout expires."""
     mock_conn_avail.return_value = False
-    mock_time.side_effect = [0, 5, 11]  # Simulates time passing past 10s timeout
+    # Provide enough time values for all calls - the function now also logs which triggers
+    # additional time.time() calls from the logging module, so use a callable
+    times = iter([0, 0, 5, 11])
+    mock_time.side_effect = lambda: next(times, 100)  # Return 100 for any extra calls (logging)
     conn = MagicMock()
     assert wait_for_connection(conn, timeout_seconds=10, poll_interval=5) is False
 

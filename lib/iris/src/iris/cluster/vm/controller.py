@@ -43,9 +43,8 @@ from iris.cluster.vm.ssh import (
     SshConnection,
     run_streaming_with_retry,
 )
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.rpc import config_pb2
 from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -56,7 +55,7 @@ DEFAULT_CONTROLLER_PORT = 10000
 DEFAULT_MACHINE_TYPE = "n2-standard-4"
 DEFAULT_BOOT_DISK_SIZE_GB = 50
 HEALTH_CHECK_TIMEOUT_SECONDS = 120
-MAX_RETRIES = 3
+MAX_RETRIES = 5
 
 # Backoff parameters for health check polling: start at 2s, cap at 10s
 HEALTH_CHECK_BACKOFF_INITIAL = 2.0
@@ -652,18 +651,21 @@ class GcpController:
             vm_data: dict = parsed[0] if isinstance(parsed, list) else parsed
             network_interfaces = vm_data.get("networkInterfaces", [])
             if network_interfaces:
-                access_configs = network_interfaces[0].get("accessConfigs", [])
-                if access_configs:
-                    ip = access_configs[0].get("natIP")
-                    if ip:
-                        return f"http://{ip}:{port}"
+                # Use internal IP for worker communication (external IPs may be blocked by firewall)
+                ip = network_interfaces[0].get("networkIP")
+                if ip:
+                    return f"http://{ip}:{port}"
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
             logger.warning("Failed to parse VM creation output: %s", e)
 
         return self._get_vm_address()
 
     def _get_vm_address(self) -> str:
-        """Get the external IP address of the controller VM."""
+        """Get the internal IP address of the controller VM.
+
+        Uses internal IP for worker communication since external IPs may be blocked
+        by firewall rules. GCP's default-allow-internal rule permits internal traffic.
+        """
         port = self._gcp_config.port or DEFAULT_CONTROLLER_PORT
         cmd = [
             "gcloud",
@@ -673,7 +675,7 @@ class GcpController:
             self._vm_name,
             f"--project={self.project_id}",
             f"--zone={self.zone}",
-            "--format=value(networkInterfaces[0].accessConfigs[0].natIP)",
+            "--format=value(networkInterfaces[0].networkIP)",
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -681,7 +683,7 @@ class GcpController:
 
         ip = result.stdout.strip()
         if not ip:
-            raise RuntimeError("Controller VM has no external IP")
+            raise RuntimeError("Controller VM has no internal IP")
 
         return f"http://{ip}:{port}"
 

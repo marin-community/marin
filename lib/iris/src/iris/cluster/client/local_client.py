@@ -31,6 +31,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Self
 
+import cloudpickle
+
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import Entrypoint
@@ -129,8 +131,8 @@ class _LocalContainer:
             )
             set_job_info(job_info)
 
-            # Use entrypoint directly - no command parsing needed
-            fn, args, kwargs = self.config.entrypoint
+            # Deserialize the entrypoint tuple (callable, args, kwargs)
+            fn, args, kwargs = cloudpickle.loads(self.config.serialized_entrypoint)
 
             # Check if killed before executing
             if self._killed.is_set():
@@ -296,8 +298,8 @@ class LocalClusterClient:
         """
         temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_")
         temp_path = Path(temp_dir.name)
-        bundle_dir = temp_path / "bundles"
-        bundle_dir.mkdir()
+        bundle_path = temp_path / "bundles"
+        bundle_path.mkdir()
         cache_path = temp_path / "cache"
         cache_path.mkdir()
 
@@ -311,7 +313,7 @@ class LocalClusterClient:
         controller_config = ControllerConfig(
             host="127.0.0.1",
             port=controller_port,
-            bundle_dir=bundle_dir,
+            bundle_prefix=f"file://{bundle_path}",
         )
         controller = Controller(
             config=controller_config,

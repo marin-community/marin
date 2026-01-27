@@ -30,8 +30,8 @@ import subprocess
 
 from iris.cluster.types import get_tpu_topology
 from iris.cluster.vm.managed_vm import ManagedVm, VmFactory, VmRegistry
-from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
 from iris.cluster.vm.ssh import GcloudSshConnection
+from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import now_ms
 

@@ -132,14 +132,16 @@ class ManualControllerConfig(_message.Message):
     def __init__(self, host: _Optional[str] = ..., port: _Optional[int] = ...) -> None: ...
 
 class ControllerVmConfig(_message.Message):
-    __slots__ = ("image", "gcp", "manual")
+    __slots__ = ("image", "bundle_prefix", "gcp", "manual")
     IMAGE_FIELD_NUMBER: _ClassVar[int]
+    BUNDLE_PREFIX_FIELD_NUMBER: _ClassVar[int]
     GCP_FIELD_NUMBER: _ClassVar[int]
     MANUAL_FIELD_NUMBER: _ClassVar[int]
     image: str
+    bundle_prefix: str
     gcp: GcpControllerConfig
     manual: ManualControllerConfig
-    def __init__(self, image: _Optional[str] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, image: _Optional[str] = ..., bundle_prefix: _Optional[str] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
     __slots__ = ("provider_type", "project_id", "region", "zone", "controller_vm", "scale_groups", "label_prefix", "bootstrap", "timeouts", "ssh")

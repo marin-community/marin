@@ -255,6 +255,8 @@ class WorkerDashboard:
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         routes = [
+            # Health check (for bootstrap and load balancers)
+            Route("/health", self._health),
             # Web dashboard
             Route("/", self._dashboard),
             Route("/task/{task_id:path}", self._task_detail_page),
@@ -268,6 +270,10 @@ class WorkerDashboard:
             Mount(rpc_wsgi_app.path, app=rpc_app),
         ]
         return Starlette(routes=routes)
+
+    def _health(self, _request: Request) -> JSONResponse:
+        """Simple health check endpoint for bootstrap and load balancers."""
+        return JSONResponse({"status": "healthy"})
 
     def _dashboard(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(DASHBOARD_HTML)

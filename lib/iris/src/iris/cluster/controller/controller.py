@@ -20,7 +20,6 @@ import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Protocol
 
 import grpc
@@ -171,8 +170,10 @@ class ControllerConfig:
     port: int = 0
     """Port to bind the HTTP server to. Use 0 for auto-assign."""
 
-    bundle_dir: Path | None = None
-    """Directory for storing uploaded job bundles."""
+    bundle_prefix: str | None = None
+    """URI prefix for storing job bundles (e.g., gs://bucket/path or file:///var/cache/iris/bundles).
+    Uses fsspec for storage, so supports both GCS and local filesystems. For distributed deployments,
+    use a GCS path so workers can download bundles."""
 
     scheduler_interval_seconds: float = 0.5
     """How often to run the scheduling loop (in seconds)."""
@@ -243,7 +244,11 @@ class Controller:
 
         self._state = ControllerState()
         self._scheduler = Scheduler(self._state)
-        self._service = ControllerServiceImpl(self._state, self, bundle_dir=config.bundle_dir)
+        self._service = ControllerServiceImpl(
+            self._state,
+            self,
+            bundle_prefix=config.bundle_prefix,
+        )
         self._dashboard = ControllerDashboard(
             self._service,
             host=config.host,

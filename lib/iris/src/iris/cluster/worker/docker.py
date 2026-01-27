@@ -25,10 +25,7 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
-from collections.abc import Callable
-
-import cloudpickle
+from typing import Protocol
 
 from iris.rpc import cluster_pb2
 from iris.cluster.worker.worker_types import TaskLogs, LogLine
@@ -38,13 +35,12 @@ from iris.cluster.worker.worker_types import TaskLogs, LogLine
 class ContainerConfig:
     """Configuration for running a container.
 
-    The entrypoint is the primary data - it specifies what to run.
-    Each ContainerRuntime implementation decides how to execute it
-    (Docker builds a command, local runtime calls it directly).
+    The serialized_entrypoint contains cloudpickle-serialized (callable, args, kwargs).
+    We pass the bytes through to avoid re-serialization issues with cloudpickle.
     """
 
     image: str
-    entrypoint: tuple[Callable[..., Any], tuple[Any, ...], dict[str, Any]]
+    serialized_entrypoint: bytes
     env: dict[str, str]
     workdir: str = "/app"
     resources: cluster_pb2.ResourceSpecProto | None = None
@@ -164,11 +160,15 @@ class DockerRuntime:
     Uses subprocess for lifecycle, Docker Python SDK for stats/logs.
     """
 
-    def _build_command(self, entrypoint: tuple[Callable[..., Any], tuple[Any, ...], dict[str, Any]]) -> list[str]:
-        """Build the Python command that executes the entrypoint in a container."""
-        fn, args, kwargs = entrypoint
-        serialized = cloudpickle.dumps((fn, args, kwargs))
-        encoded = base64.b64encode(serialized).decode()
+    def _build_command(self, serialized_entrypoint: bytes) -> list[str]:
+        """Build the Python command that executes the entrypoint in a container.
+
+        Takes already-serialized bytes to avoid re-serialization issues with cloudpickle.
+        The bytes contain a cloudpickle-serialized (callable, args, kwargs) tuple.
+        We serialize as a tuple (not an Entrypoint class) because job containers
+        don't have iris installed.
+        """
+        encoded = base64.b64encode(serialized_entrypoint).decode()
 
         thunk = f"""
 import cloudpickle
@@ -230,7 +230,7 @@ except Exception:
             cmd.extend(["-p", f"{host_port}:{host_port}"])
 
         cmd.append(config.image)
-        cmd.extend(self._build_command(config.entrypoint))
+        cmd.extend(self._build_command(config.serialized_entrypoint))
 
         result = subprocess.run(
             cmd,
