@@ -39,7 +39,6 @@ from fray.cluster.base import (
     JobStatus,
     TpuConfig,
 )
-from fray.cluster.ray.config import find_config_by_region
 from fray.cluster.ray.deps import build_python_path, build_runtime_env_for_packages
 from fray.cluster.ray.tpu import run_on_pod_ray
 from fray.job.context import RayContext, fray_default_job_ctx
@@ -125,7 +124,7 @@ class RayCluster(Cluster):
             namespace = query_params["namespace"][0]
 
         if "cluster" in query_params:
-            config_path = find_config_by_region(query_params["cluster"][0])
+            config_path = query_params["cluster"][0]
 
         return cls(address=address, config_path=config_path, namespace=namespace)
 
