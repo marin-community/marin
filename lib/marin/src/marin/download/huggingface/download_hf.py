@@ -65,7 +65,7 @@ class DownloadConfig:
         # spaces/ for spaces, and models do not need a prefix in the URL.
     )
 
-    zephyr_max_parallelism: int = 512
+    zephyr_max_parallelism: int = 32
     """Maximum parallelism of the Zephyr download job"""
 
 
@@ -117,11 +117,11 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
                         dest_file.write(chunk)
                         bytes_written += len(chunk)
 
-            # Validate file size if expected_size is provided
-            if expected_size is not None and bytes_written != expected_size:
-                raise ValueError(
-                    f"Size mismatch for {file_path}: expected {expected_size} bytes, got {bytes_written} bytes"
-                )
+                # Validate file size BEFORE atomic_rename commits the file
+                if expected_size is not None and bytes_written != expected_size:
+                    raise ValueError(
+                        f"Size mismatch for {file_path}: expected {expected_size} bytes, got {bytes_written} bytes"
+                    )
 
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path} ({bytes_written} bytes)")
             return {"file_path": file_path, "status": "success", "size": bytes_written}
@@ -132,9 +132,10 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
 
             error_type = type(e).__name__
             error_msg = str(e)
+            status_code = -1
 
             if isinstance(e, HfHubHTTPError):
-                status_code = getattr(e.response, "status_code", None)
+                status_code = e.response.status_code
                 TOO_MANY_REQUESTS = 429
                 if status_code == TOO_MANY_REQUESTS:
                     # NOTE: RateLimit "api\|pages\|resolvers";r=[remaining];t=[seconds remaining until reset]
@@ -143,14 +144,11 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
                         wait_base = max(wait_base, rate_limit_wait + 10)  # Add buffer to rate limit wait
                     except Exception:
                         logger.warning("Failed to parse rate limit header, using default wait period")
-                logger.warning(
-                    f"Attempt {attempt + 1}/{max_retries} failed for {file_path}: "
-                    f"HfHubHTTPError (status={status_code}): {error_msg}"
-                )
-            else:
-                logger.warning(
-                    f"Attempt {attempt + 1}/{max_retries} failed for {file_path}: " f"{error_type}: {error_msg}"
-                )
+
+            logger.warning(
+                f"Attempt {attempt + 1}/{max_retries} failed for {file_path}: "
+                f"{error_type} (status={status_code}): {error_msg}"
+            )
 
             jitter = random.uniform(0, min(wait_base * 0.25, 30))  # Up to 25% jitter, max 30s
             wait_time = min(wait_base + jitter, max_sleep)
@@ -198,14 +196,14 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     # Get file sizes for validation
     logger.info("Getting file sizes for validation...")
-    file_sizes: dict[str, int] = {}
+    file_sizes: dict[str, int | None] = {}
     for file in files:
         try:
             info = hf_fs.info(file, revision=cfg.revision)
-            file_sizes[file] = info.get("size", 0)
+            file_sizes[file] = info.get("size") or None
         except Exception as e:
             logger.warning(f"Could not get size for {file}: {e}")
-            file_sizes[file] = 0  # Will skip validation for this file
+            file_sizes[file] = None  # Will skip validation for this file
 
     download_tasks = []
 
@@ -213,13 +211,13 @@ def download_hf(cfg: DownloadConfig) -> None:
         try:
             fsspec_file_path = os.path.join(output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
             # Hf file paths are always of format : hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
-            expected_size = file_sizes.get(file) or None  # Convert 0 to None to skip validation
+            expected_size = file_sizes.get(file)
             download_tasks.append((output_path, file, fsspec_file_path, expected_size))
         except Exception as e:
             logging.exception(f"Error preparing task for {file}: {e}")
 
     total_files = len(download_tasks)
-    total_size_gb = sum(file_sizes.values()) / (1024**3)
+    total_size_gb = sum(s for s in file_sizes.values() if s is not None) / (1024**3)
     logger.info(f"Total number of files to process: {total_files} ({total_size_gb:.2f} GB)")
 
     pipeline = (
