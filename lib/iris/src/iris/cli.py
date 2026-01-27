@@ -26,7 +26,9 @@ import signal
 import threading
 import time
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import click
 from connectrpc.errors import ConnectError
@@ -159,61 +161,101 @@ def _parse_artifact_registry_tag(image_tag: str) -> tuple[str, str, str, str] | 
     return region, project, image_name, version
 
 
-def _build_and_push_controller_image(config) -> None:
-    """Build and push the controller image specified in config.
+@dataclass
+class ImageBuildParams:
+    """Parameters extracted from config for building an image."""
 
-    Extracts the image tag from config.controller_vm.gcp.image, builds the
-    controller image locally, and pushes it to the appropriate registry.
+    image_type: Literal["worker", "controller"]
+    region: str
+    project: str
+    image_name: str
+    version: str
 
-    Args:
-        config: IrisClusterConfig proto with controller_vm.gcp.image set.
+    @property
+    def local_tag(self) -> str:
+        return f"{self.image_name}:{self.version}"
 
-    Raises:
-        click.ClickException: If image tag is invalid or build fails.
-    """
-    controller_vm = config.controller_vm
-    if controller_vm.WhichOneof("controller") != "gcp":
-        raise click.ClickException("--build only supported for GCP controller (controller_vm.gcp)")
 
-    image_tag = controller_vm.gcp.image
-    if not image_tag:
-        raise click.ClickException("controller_vm.gcp.image not set in config")
+def _extract_worker_image_params(config) -> ImageBuildParams | None:
+    """Extract worker image build params from config.bootstrap.docker_image."""
+    if not config.bootstrap.docker_image:
+        return None
 
-    parsed = _parse_artifact_registry_tag(image_tag)
+    parsed = _parse_artifact_registry_tag(config.bootstrap.docker_image)
     if not parsed:
-        raise click.ClickException(
-            f"Cannot parse image tag: {image_tag}\n" "Expected format: REGION-docker.pkg.dev/PROJECT/REPO/IMAGE:VERSION"
-        )
+        return None
 
     region, project, image_name, version = parsed
-    local_tag = f"{image_name}:{version}"
+    return ImageBuildParams(
+        image_type="worker",
+        region=region,
+        project=project,
+        image_name=image_name,
+        version=version,
+    )
 
-    click.echo(f"Building controller image: {local_tag}")
-    click.echo(f"  Region: {region}")
-    click.echo(f"  Project: {project}")
+
+def _extract_controller_image_params(config) -> ImageBuildParams | None:
+    """Extract controller image build params from config.controller_vm.gcp.image."""
+    if config.controller_vm.WhichOneof("controller") != "gcp":
+        return None
+
+    if not config.controller_vm.gcp.image:
+        return None
+
+    parsed = _parse_artifact_registry_tag(config.controller_vm.gcp.image)
+    if not parsed:
+        return None
+
+    region, project, image_name, version = parsed
+    return ImageBuildParams(
+        image_type="controller",
+        region=region,
+        project=project,
+        image_name=image_name,
+        version=version,
+    )
+
+
+def _build_and_push_image(params: ImageBuildParams) -> None:
+    """Build and push a single image using params."""
+    click.echo(f"Building {params.image_type} image: {params.local_tag}")
+    click.echo(f"  Region: {params.region}")
+    click.echo(f"  Project: {params.project}")
     click.echo()
 
-    # Build the image
     build_image(
-        image_type="controller",
-        tag=local_tag,
+        image_type=params.image_type,
+        tag=params.local_tag,
         push=False,
         dockerfile=None,
         context=None,
         platform="linux/amd64",
         region=(),
-        project=project,
+        project=params.project,
     )
 
-    # Push to registry
     click.echo()
     push_to_registries(
-        source_tag=local_tag,
-        regions=(region,),
-        project=project,
-        image_name=image_name,
-        version=version,
+        source_tag=params.local_tag,
+        regions=(params.region,),
+        project=params.project,
+        image_name=params.image_name,
+        version=params.version,
     )
+
+
+def _build_cluster_images(config, skip_build: bool = False) -> None:
+    """Build and push all cluster images (worker and controller)."""
+    if skip_build:
+        click.echo("Skipping image builds (--skip-build)")
+        return
+
+    for extract_fn in [_extract_worker_image_params, _extract_controller_image_params]:
+        params = extract_fn(config)
+        if params:
+            _build_and_push_image(params)
+            click.echo()
 
 
 def _wait_for_slice_obj(slice_obj, poll_interval: float = 5.0) -> bool:
@@ -318,16 +360,23 @@ def controller(ctx):
 
 
 @controller.command("start")
+@click.option("--skip-build", is_flag=True, help="Skip building controller image (use existing)")
 @click.pass_context
-def controller_start(ctx):
+def controller_start(ctx, skip_build: bool):
     """Boot controller GCE VM and wait for health.
 
     Automatically builds and pushes the controller image before starting.
+    Use --skip-build to skip image building if the image is already pushed.
     """
     config = ctx.obj["config"]
 
-    _build_and_push_controller_image(config)
-    click.echo()
+    if not skip_build:
+        params = _extract_controller_image_params(config)
+        if params:
+            _build_and_push_image(params)
+            click.echo()
+        else:
+            raise click.ClickException("Cannot extract controller image params from config")
 
     ctrl = create_controller(config)
 
@@ -370,18 +419,26 @@ def controller_restart(ctx):
 
 
 @controller.command("reload")
+@click.option("--skip-build", is_flag=True, help="Skip building controller image (use existing)")
 @click.pass_context
-def controller_reload(ctx):
+def controller_reload(ctx, skip_build: bool):
     """Reload controller by re-running bootstrap on existing VM.
 
     Automatically builds and pushes the controller image, then SSHs into
     the existing VM and re-runs the bootstrap script to pull the latest
     image and restart the container. Faster than a full restart.
+
+    Use --skip-build to skip image building if the image is already pushed.
     """
     config = ctx.obj["config"]
 
-    _build_and_push_controller_image(config)
-    click.echo()
+    if not skip_build:
+        params = _extract_controller_image_params(config)
+        if params:
+            _build_and_push_image(params)
+            click.echo()
+        else:
+            raise click.ClickException("Cannot extract controller image params from config")
 
     ctrl = create_controller(config)
 
@@ -1027,21 +1084,23 @@ def cluster_init(
 
 
 @cluster.command("start")
+@click.option("--skip-build", is_flag=True, help="Skip building images (use existing)")
 @click.pass_context
-def cluster_start(ctx):
+def cluster_start(ctx, skip_build: bool):
     """Start controller VM and wait for health.
 
-    Automatically builds and pushes the controller image, then boots the
-    controller GCE VM which runs the autoscaler internally.
+    Automatically builds and pushes both worker and controller images, then
+    boots the controller GCE VM which runs the autoscaler internally.
     The autoscaler provisions/terminates worker VMs based on task demand.
+
+    Use --skip-build to skip image building if images are already pushed.
     """
     config = ctx.obj.get("config")
     if not config:
         click.echo("Error: --config is required", err=True)
         raise SystemExit(1)
 
-    _build_and_push_controller_image(config)
-    click.echo()
+    _build_cluster_images(config, skip_build=skip_build)
 
     ctrl = create_controller(config)
     click.echo("Starting controller...")

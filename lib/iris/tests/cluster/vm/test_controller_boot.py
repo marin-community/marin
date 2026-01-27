@@ -66,7 +66,8 @@ controller_vm:
 
 scale_groups:
   test_group:
-    accelerator_type: v5litepod-4
+    accelerator_type: ACCELERATOR_TYPE_TPU
+    accelerator_variant: v5litepod-4
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 0
     max_slices: 10
@@ -139,7 +140,6 @@ def test_creates_manual_controller_for_manual_provider():
     assert isinstance(controller, ManualController)
 
 
-@patch("iris.cli._build_and_push_controller_image")
 @patch("iris.cluster.vm.controller.check_health")
 @patch("iris.cluster.vm.controller.run_streaming_with_retry")
 @patch("iris.cluster.vm.controller.DirectSshConnection")
@@ -147,7 +147,6 @@ def test_cli_controller_start_with_ssh(
     mock_conn_cls: MagicMock,
     mock_run_streaming: MagicMock,
     mock_health: MagicMock,
-    mock_build: MagicMock,
     cli_runner: CliRunner,
     manual_config: Path,
 ):
@@ -159,16 +158,14 @@ def test_cli_controller_start_with_ssh(
 
     result = cli_runner.invoke(
         iris,
-        ["cluster", "--config", str(manual_config), "controller", "start"],
+        ["cluster", "--config", str(manual_config), "controller", "start", "--skip-build"],
     )
 
     assert result.exit_code == 0, f"CLI failed: {result.output}"
     assert "Controller started successfully at http://10.0.0.100:10000" in result.output
 
 
-@patch("iris.cli._build_and_push_controller_image")
 def test_cli_start_failure_shows_error(
-    mock_build: MagicMock,
     cli_runner: CliRunner,
     gcp_config: Path,
 ):
@@ -191,7 +188,7 @@ def test_cli_start_failure_shows_error(
             with patch("iris.cluster.vm.controller.time.sleep"):
                 result = cli_runner.invoke(
                     iris,
-                    ["cluster", "--config", str(gcp_config), "controller", "start"],
+                    ["cluster", "--config", str(gcp_config), "controller", "start", "--skip-build"],
                 )
 
     assert result.exit_code == 1
@@ -215,7 +212,6 @@ def test_cli_stop_failure_shows_error(
     assert "Failed to stop controller: VM not found" in result.output
 
 
-@patch("iris.cli._build_and_push_controller_image")
 @patch("iris.cluster.vm.controller.check_health")
 @patch("iris.cluster.vm.controller.run_streaming_with_retry")
 @patch("iris.cluster.vm.controller.DirectSshConnection")
@@ -223,7 +219,6 @@ def test_manual_start_timeout_shows_error(
     mock_conn_cls: MagicMock,
     mock_run_streaming: MagicMock,
     mock_health: MagicMock,
-    mock_build: MagicMock,
     cli_runner: CliRunner,
     manual_config: Path,
 ):
@@ -245,7 +240,7 @@ def test_manual_start_timeout_shows_error(
         with patch("time.monotonic", side_effect=mock_monotonic):
             result = cli_runner.invoke(
                 iris,
-                ["cluster", "--config", str(manual_config), "controller", "start"],
+                ["cluster", "--config", str(manual_config), "controller", "start", "--skip-build"],
             )
 
     assert result.exit_code == 1
