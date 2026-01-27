@@ -347,12 +347,11 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     tokenizer1 = unwrap_versioned_value(tokenizer1)
     tokenizer2 = unwrap_versioned_value(tokenizer2)
 
-    from experiments.llama import llama3_tokenizer
-    from experiments.marin_models import marin_tokenizer
+    from marin.processing.tokenize.known_tokenizers import are_tokenizers_known_equivalent
 
-    # special case, i'm sorry
-    if tokenizer1 in {llama3_tokenizer, marin_tokenizer} and tokenizer2 in {llama3_tokenizer, marin_tokenizer}:
-        return True
+    known_result = are_tokenizers_known_equivalent(tokenizer1, tokenizer2)
+    if known_result is not None:
+        return known_result
 
     t1 = _load_tokenizer(tokenizer1)
     t2 = _load_tokenizer(tokenizer2)

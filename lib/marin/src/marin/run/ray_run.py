@@ -85,6 +85,34 @@ def generate_submission_id(command: str) -> str:
     return "-".join(parts)
 
 
+def load_marin_config() -> dict:
+    """Load .marin.yaml configuration."""
+    marin_yaml = Path(".marin.yaml")
+    if not marin_yaml.exists():
+        return {}
+
+    try:
+        with open(marin_yaml, "r") as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return {}
+
+
+def resolve_infra_dir(cli_infra_dir: str | None = None) -> str:
+    """Resolve infra directory from CLI > env > .marin.yaml > default."""
+    if cli_infra_dir:
+        return cli_infra_dir
+
+    if "MARIN_INFRA_DIR" in os.environ:
+        return os.environ["MARIN_INFRA_DIR"]
+
+    config = load_marin_config()
+    if "infra" in config:
+        return config["infra"]
+
+    return "infra"
+
+
 def tpus_per_node(tpu_type: str) -> int:
     """Return the number of TPU chips per node for a given TPU type."""
     if tpu_type in {"v4-8", "v5p-8"}:
@@ -260,6 +288,12 @@ def main():
         help="Cluster name or config file path to submit job to",
     )
     parser.add_argument(
+        "--infra-dir",
+        type=str,
+        default=None,
+        help="Path to infra directory containing cluster YAML configs",
+    )
+    parser.add_argument(
         "--submission-id",
         type=str,
         default=None,
@@ -336,7 +370,8 @@ def main():
         if args.cluster.endswith(".yaml") or os.path.exists(args.cluster):
             cluster_config = args.cluster
         else:
-            cluster_config = find_config_by_region(args.cluster)
+            infra_dir = resolve_infra_dir(args.infra_dir)
+            cluster_config = find_config_by_region(args.cluster, infra_dir=infra_dir)
 
     _maybe_enable_ray_token_auth(require_token=cluster_config is None)
 

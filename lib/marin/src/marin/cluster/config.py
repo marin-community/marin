@@ -58,14 +58,24 @@ class RayClusterConfig:
         )
 
 
-def get_default_config_path(region: str) -> str:
+def get_default_config_path(region: str, infra_dir: str = "infra") -> str:
     """Get default config path for a region."""
-    return f"infra/marin-{region}.yaml"
+    return f"{infra_dir}/marin-{region}.yaml"
 
 
-def find_config_by_region(region: str) -> str:
-    """Find cluster config file by region."""
-    config_path = get_default_config_path(region)
+def find_config_by_region(region: str, infra_dir: str | None = None) -> str:
+    """Find cluster config file by region.
+
+    Args:
+        region: Cluster region name (e.g., "us-central2")
+        infra_dir: Path to infra directory. If None, uses default resolution:
+                   1. MARIN_INFRA_DIR env var
+                   2. "infra/" in CWD
+    """
+    if infra_dir is None:
+        infra_dir = os.environ.get("MARIN_INFRA_DIR", "infra")
+
+    config_path = get_default_config_path(region, infra_dir)
     if os.path.exists(config_path):
         return config_path
 
@@ -74,17 +84,17 @@ def find_config_by_region(region: str) -> str:
 
     # Try with common region variations
     variations = [
-        f"infra/marin-{region}.yaml",
-        f"infra/marin-{region}-a.yaml",
-        f"infra/marin-{region}-b.yaml",
-        f"infra/marin-{region}-vllm.yaml",
+        f"{infra_dir}/marin-{region}.yaml",
+        f"{infra_dir}/marin-{region}-a.yaml",
+        f"{infra_dir}/marin-{region}-b.yaml",
+        f"{infra_dir}/marin-{region}-vllm.yaml",
     ]
 
     for path in variations:
         if os.path.exists(path):
             return path
 
-    raise FileNotFoundError(f"No cluster config found for region {region}")
+    raise FileNotFoundError(f"No cluster config found for region {region} in {infra_dir}")
 
 
 def list_available_configs() -> list[str]:
