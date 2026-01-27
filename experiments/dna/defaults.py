@@ -14,15 +14,13 @@
 
 """
 Shared constants, configs, and helper functions for DNA experiments.
-
-V1 = first generation of DNA experiments (2024-2025).
 """
 
 import dataclasses
 from collections.abc import Sequence
 
 from fray.cluster import ResourceConfig
-from levanter.data.text import LmDatasetFormatBase
+from levanter.data.text import DNALmDatasetFormat, TextLmDatasetFormat
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.qwen3 import qwen3_0_6b_hd128, qwen3_1_7b
@@ -87,24 +85,29 @@ YOLO_RUN_CONFIG_V1 = SimpleTrainConfig(
 
 
 # =============================================================================
-# Helper functions (generic, not versioned)
+# Helper functions (V1)
 # =============================================================================
 
 
-def dna_tokenize(
-    name: str,
-    dataset: str,
-    tokenizer: str,
-    data_format: LmDatasetFormatBase,
-    window_size_bytes: int,
-) -> ExecutorStep:
-    """Tokenize a DNA dataset."""
+def dna_tokenize_std_v1(name: str, dataset: str) -> ExecutorStep:
+    """Standard tokenization (no repeat weighting) using V1 defaults."""
     return default_tokenize(
         name=name,
         dataset=dataset,
-        tokenizer=tokenizer,
-        format=data_format,
-        window_size_bytes=window_size_bytes,
+        tokenizer=DNA_TOKENIZER_V1,
+        format=TextLmDatasetFormat(text_key="seq"),
+        window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
+    )
+
+
+def dna_tokenize_rw_v1(name: str, dataset: str, soft_mask_weight: float = 0.01) -> ExecutorStep:
+    """Repeat-weighted tokenization using V1 defaults."""
+    return default_tokenize(
+        name=name,
+        dataset=dataset,
+        tokenizer=DNA_TOKENIZER_V1,
+        format=DNALmDatasetFormat(soft_mask_weight=soft_mask_weight),
+        window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
     )
 
 

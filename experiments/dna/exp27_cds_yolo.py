@@ -18,15 +18,11 @@ YOLO experiment for animal CDS regions with loss downweighting on repetitive DNA
 https://github.com/Open-Athena/bolinas-dna/issues/27
 """
 
-from levanter.data.text import DNALmDatasetFormat
-
 from experiments.dna.defaults import (
     CDS_DATASET_V1,
-    DNA_TOKENIZER_V1,
-    DNA_WINDOW_SIZE_BYTES_V1,
     YOLO_RUN_CONFIG_V1,
     dna_qwen3_1_7b_v1,
-    dna_tokenize,
+    dna_tokenize_rw_v1,
     dna_train,
 )
 from marin.execution.executor import executor_main
@@ -35,13 +31,7 @@ from marin.execution.executor import executor_main
 # CDS with repeat downweight (0.01)
 # =============================================================================
 
-data_tokenized = dna_tokenize(
-    name="animal-cds-repeat-weight-0.01",
-    dataset=CDS_DATASET_V1,
-    tokenizer=DNA_TOKENIZER_V1,
-    data_format=DNALmDatasetFormat(soft_mask_weight=0.01),
-    window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
-)
+data_tokenized = dna_tokenize_rw_v1("animal-cds-repeat-weight-0.01", CDS_DATASET_V1)
 
 training_step = dna_train(
     name="animal-cds-yolo-repeat-weight-0.01-r01",

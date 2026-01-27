@@ -18,15 +18,12 @@ YOLO experiment for animal mRNA + promoters - comparing standard vs repeat downw
 https://github.com/Open-Athena/bolinas-dna/issues/22
 """
 
-from levanter.data.text import DNALmDatasetFormat, TextLmDatasetFormat
-
 from experiments.dna.defaults import (
-    DNA_TOKENIZER_V1,
-    DNA_WINDOW_SIZE_BYTES_V1,
     MRNA_PLUS_PROMOTERS_DATASET_V1,
     YOLO_RUN_CONFIG_V1,
     dna_qwen3_1_7b_v1,
-    dna_tokenize,
+    dna_tokenize_rw_v1,
+    dna_tokenize_std_v1,
     dna_train,
 )
 from marin.execution.executor import executor_main
@@ -35,13 +32,7 @@ from marin.execution.executor import executor_main
 # Standard (no repeat weighting)
 # =============================================================================
 
-data_standard = dna_tokenize(
-    name="animal-mRNA-plus-promoters",
-    dataset=MRNA_PLUS_PROMOTERS_DATASET_V1,
-    tokenizer=DNA_TOKENIZER_V1,
-    data_format=TextLmDatasetFormat(text_key="seq"),
-    window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
-)
+data_standard = dna_tokenize_std_v1("animal-mRNA-plus-promoters", MRNA_PLUS_PROMOTERS_DATASET_V1)
 
 train_standard = dna_train(
     name="animal-mRNA-plus-promoters-yolo-r01",
@@ -55,13 +46,7 @@ train_standard = dna_train(
 # Repeat downweight (0.01)
 # =============================================================================
 
-data_downweight = dna_tokenize(
-    name="animal-mRNA-plus-promoters-repeat-weight-0.01",
-    dataset=MRNA_PLUS_PROMOTERS_DATASET_V1,
-    tokenizer=DNA_TOKENIZER_V1,
-    data_format=DNALmDatasetFormat(soft_mask_weight=0.01),
-    window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
-)
+data_downweight = dna_tokenize_rw_v1("animal-mRNA-plus-promoters-repeat-weight-0.01", MRNA_PLUS_PROMOTERS_DATASET_V1)
 
 train_downweight = dna_train(
     name="animal-mRNA-plus-promoters-yolo-repeat-weight-0.01-r01",

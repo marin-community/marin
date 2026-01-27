@@ -21,15 +21,12 @@ This experiment compares three loss weighting approaches on animal promoter sequ
 3. Repeat weight 0.01: DNALmDatasetFormat with 0.01 loss weight on soft-masked positions
 """
 
-from levanter.data.text import DNALmDatasetFormat, TextLmDatasetFormat
-
 from experiments.dna.defaults import (
-    DNA_TOKENIZER_V1,
-    DNA_WINDOW_SIZE_BYTES_V1,
     PROMOTERS_DATASET_V1,
     SHORT_RUN_CONFIG_V1,
     dna_qwen3_0_6b_v1,
-    dna_tokenize,
+    dna_tokenize_rw_v1,
+    dna_tokenize_std_v1,
     dna_train,
 )
 from marin.execution.executor import executor_main
@@ -38,13 +35,7 @@ from marin.execution.executor import executor_main
 # Standard (no repeat weighting) - uses TextLmDatasetFormat
 # =============================================================================
 
-data_standard = dna_tokenize(
-    name="animal-promoters-standard",
-    dataset=PROMOTERS_DATASET_V1,
-    tokenizer=DNA_TOKENIZER_V1,
-    data_format=TextLmDatasetFormat(text_key="seq"),
-    window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
-)
+data_standard = dna_tokenize_std_v1("animal-promoters-standard", PROMOTERS_DATASET_V1)
 
 train_standard = dna_train(
     name="animal-promoters-standard-r08",
@@ -58,13 +49,7 @@ train_standard = dna_train(
 # Repeat weight 1.0 (control - uniform weighting via DNALmDatasetFormat)
 # =============================================================================
 
-data_rw_1_0 = dna_tokenize(
-    name="animal-promoters-repeat-weight-1.0",
-    dataset=PROMOTERS_DATASET_V1,
-    tokenizer=DNA_TOKENIZER_V1,
-    data_format=DNALmDatasetFormat(soft_mask_weight=1.0),
-    window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
-)
+data_rw_1_0 = dna_tokenize_rw_v1("animal-promoters-repeat-weight-1.0", PROMOTERS_DATASET_V1, soft_mask_weight=1.0)
 
 train_rw_1_0 = dna_train(
     name="animal-promoters-repeat-weight-1.0-r01",
@@ -78,13 +63,7 @@ train_rw_1_0 = dna_train(
 # Repeat weight 0.01 (strong downweighting)
 # =============================================================================
 
-data_rw_0_01 = dna_tokenize(
-    name="animal-promoters-repeat-weight-0.01",
-    dataset=PROMOTERS_DATASET_V1,
-    tokenizer=DNA_TOKENIZER_V1,
-    data_format=DNALmDatasetFormat(soft_mask_weight=0.01),
-    window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
-)
+data_rw_0_01 = dna_tokenize_rw_v1("animal-promoters-repeat-weight-0.01", PROMOTERS_DATASET_V1)
 
 train_rw_0_01 = dna_train(
     name="animal-promoters-repeat-weight-0.01-r01",

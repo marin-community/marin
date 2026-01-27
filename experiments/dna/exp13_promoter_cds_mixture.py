@@ -29,17 +29,13 @@ different weighting schemes to study the effect of data composition:
 https://github.com/Open-Athena/bolinas-dna/issues/13
 """
 
-from levanter.data.text import DNALmDatasetFormat
-
 from experiments.defaults import default_train
 from experiments.dna.defaults import (
     CDS_DATASET_V1,
-    DNA_TOKENIZER_V1,
-    DNA_WINDOW_SIZE_BYTES_V1,
     PROMOTERS_DATASET_V1,
     YOLO_RUN_CONFIG_V1,
     dna_qwen3_1_7b_v1,
-    dna_tokenize,
+    dna_tokenize_rw_v1,
 )
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
@@ -72,20 +68,8 @@ WEIGHT_CONFIGS = {
 # =============================================================================
 
 tokenized_datasets = {
-    "promoters": dna_tokenize(
-        name="animal-promoters-repeat-weight-0.01",
-        dataset=PROMOTERS_DATASET_V1,
-        tokenizer=DNA_TOKENIZER_V1,
-        data_format=DNALmDatasetFormat(soft_mask_weight=0.01),
-        window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
-    ),
-    "cds": dna_tokenize(
-        name="animal-cds-repeat-weight-0.01",
-        dataset=CDS_DATASET_V1,
-        tokenizer=DNA_TOKENIZER_V1,
-        data_format=DNALmDatasetFormat(soft_mask_weight=0.01),
-        window_size_bytes=DNA_WINDOW_SIZE_BYTES_V1,
-    ),
+    "promoters": dna_tokenize_rw_v1("animal-promoters-repeat-weight-0.01", PROMOTERS_DATASET_V1),
+    "cds": dna_tokenize_rw_v1("animal-cds-repeat-weight-0.01", CDS_DATASET_V1),
 }
 
 # =============================================================================
