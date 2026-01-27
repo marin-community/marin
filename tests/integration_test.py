@@ -18,11 +18,8 @@ import os
 import sys
 
 import draccus
-from fray.cluster import ResourceConfig, create_cluster, set_current_cluster
+from fray.cluster import create_cluster, set_current_cluster
 import humanfriendly
-from levanter.main.train_lm import TrainLmConfig
-from levanter.models.gpt2 import Gpt2Config
-from levanter.trainer import TrainerConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -30,165 +27,111 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate, ConsolidateConfig
+from marin.execution_v2.executor_step_adapter import deferred_steps_to_executor_steps
+from marin.execution_v2.step import Step
+from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate_fn
 from marin.processing.classification.dataset_utils import DatasetConfig
-from marin.processing.classification.deduplication.dedup_commons import DedupConfig, DedupMode, deduplicate
+from marin.processing.classification.deduplication.dedup_commons import DedupMode, deduplicate_fn
 from marin.processing.classification.fasttext.train_fasttext import (
-    TrainFasttextClassifierConfig,
     train,
 )
-from marin.processing.classification.inference import InferenceConfig, run_inference
-from marin.processing.tokenize import lm_data_config
-from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
+from marin.processing.tokenize.tokenize import tokenize_fn
 from marin.schemas.web.convert import ResiliparseConfig
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
+from marin.transform.simple_html_to_md.process import html_to_md
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
+def create_steps(*, experiment_prefix: str, bucket_prefix: str, synth_data: str) -> list[ExecutorStep]:
     # ############################################################
     # Transform HTML to text
 
-    transform_hq_data_step = ExecutorStep(
-        name=os.path.join(prefix, "hq-transformed"),
-        fn=html_to_md,
-        config=SimpleHtmlToMdConfig(
-            input_path=os.path.join(synth_data, "pos"),
-            output_path=this_output_path(),
-            extract_method=versioned("resiliparse"),
-            config=ResiliparseConfig(),
-        ),
+    hq_ds = Step(html_to_md).defer(
+        input_path=os.path.join(synth_data, "pos"),
+        output_path=this_output_path(),
+        extract_method="resiliparse",
+        config=ResiliparseConfig(),
     )
-
-    transform_lq_data_step = ExecutorStep(
-        name=os.path.join(prefix, "lq-transformed"),
-        fn=html_to_md,
-        config=SimpleHtmlToMdConfig(
-            input_path=os.path.join(synth_data, "neg"),
-            output_path=this_output_path(),
-            extract_method=versioned("resiliparse"),
-            config=ResiliparseConfig(),
-        ),
+    lq_ds = Step(html_to_md).defer(
+        input_path=os.path.join(synth_data, "neg"),
+        output_path=this_output_path(),
+        extract_method="resiliparse",
+        config=ResiliparseConfig(),
     )
 
     # ############################################################
     # Train quality classifier
 
-    train_quality_step = ExecutorStep(
-        name=os.path.join(prefix, "quality-classifier"),
-        fn=train,
-        config=TrainFasttextClassifierConfig(
-            datasets=[
-                DatasetConfig(
-                    input_doc_path=transform_hq_data_step,
-                    label="hq",
-                    sampling_rate=1.0,
-                ),
-                DatasetConfig(
-                    input_doc_path=transform_lq_data_step,
-                    label="lq",
-                    sampling_rate=1.0,
-                ),
-            ],
-            output_path=this_output_path(),
-            fasttext_args={
-                "lr": 0.001,
-                "minCount": 1,
-                "epoch": 25,
-                "wordNgrams": 2,
-                "dim": 50,
-                "thread": 1,
-            },
-        ),
-    )
-
-    ############################################################
-    # Run inference with quality classifier
-
-    inference_hq_step = ExecutorStep(
-        name=os.path.join(prefix, "hq-inference"),
-        fn=run_inference,
-        config=InferenceConfig(
-            input_path=transform_hq_data_step,
-            output_path=this_output_path(),
-            model_name=train_quality_step,
-            model_type="fasttext",
-            attribute_name="quickstart-fasttext-quality-hq",
-        ),
-    )
-
-    inference_lq_step = ExecutorStep(
-        name=os.path.join(prefix, "lq-inference"),
-        fn=run_inference,
-        config=InferenceConfig(
-            input_path=transform_lq_data_step,
-            output_path=this_output_path(),
-            model_name=train_quality_step,
-            model_type="fasttext",
-            attribute_name="quickstart-fasttext-quality-lq",
-        ),
+    train_quality_step = Step(train).defer(
+        datasets=[
+            DatasetConfig(
+                input_doc_path=hq_ds,
+                label="hq",
+                sampling_rate=1.0,
+            ),
+            DatasetConfig(
+                input_doc_path=lq_ds,
+                label="lq",
+                sampling_rate=1.0,
+            ),
+        ],
+        output_path=this_output_path(),
+        fasttext_args={
+            "lr": 0.001,
+            "minCount": 1,
+            "epoch": 25,
+            "wordNgrams": 2,
+            "dim": 50,
+            "thread": 1,
+        },
     )
 
     ############################################################
     # Deduplicate
 
-    dedup_exact_paragraph_step = ExecutorStep(
-        name=os.path.join(prefix, "dedup_exact_paragraph"),
-        fn=deduplicate,
-        config=DedupConfig(
-            input_paths=transform_hq_data_step,
-            output_path=this_output_path(),
-            mode=DedupMode.EXACT_PARAGRAPH,
-            ray_memory=humanfriendly.parse_size("1GB", binary=True),
-            ray_num_cpus=1,
-        ),
+    deduped_exact_paragraph = Step(deduplicate_fn).defer(
+        input_paths=hq_ds,
+        output_path=this_output_path(),
+        mode=versioned(DedupMode.EXACT_PARAGRAPH),
+        ray_memory=humanfriendly.parse_size("1GB", binary=True),
+        ray_num_cpus=1,
     )
-    dedup_fuzzy_document_step = ExecutorStep(
-        name=os.path.join(prefix, "dedup_fuzzy_document"),
-        fn=deduplicate,
-        config=DedupConfig(
-            input_paths=transform_hq_data_step,
-            output_path=this_output_path(),
-            mode=DedupMode.FUZZY_DOCUMENT,
-            ray_memory=humanfriendly.parse_size("1GB", binary=True),
-            ray_num_cpus=1,
-        ),
+    deduped_fuzzy_document = Step(deduplicate_fn).defer(
+        input_paths=hq_ds,
+        output_path=this_output_path(),
+        mode=versioned(DedupMode.FUZZY_DOCUMENT),
+        ray_memory=humanfriendly.parse_size("1GB", binary=True),
+        ray_num_cpus=1,
     )
 
     ############################################################
     # Consolidate
 
-    consolidate_step = ExecutorStep(
-        name=os.path.join(prefix, "cleaned"),
-        fn=consolidate,
-        config=ConsolidateConfig(
-            input_path=transform_hq_data_step,
-            output_path=this_output_path(),
-            # TODO (rav): add quality filters
-            filters=[
-                FilterConfig(
-                    type=FilterType.REMOVE_SPANS,
-                    attribute_path=dedup_exact_paragraph_step.cd("data"),
-                    name=str(DedupMode.EXACT_PARAGRAPH),
-                ),
-                FilterConfig(
-                    type=FilterType.REMOVE_DOC,
-                    attribute_path=dedup_fuzzy_document_step.cd("data"),
-                    name=str(DedupMode.FUZZY_DOCUMENT),
-                ),
-            ],
-        ),
+    consolidated_ds = Step(consolidate_fn).defer(
+        input_path=hq_ds,
+        output_path=this_output_path(),
+        # TODO (rav): add quality filters
+        filters=[
+            FilterConfig(
+                type=FilterType.REMOVE_SPANS,
+                attribute_path=deduped_exact_paragraph,
+                name=str(DedupMode.EXACT_PARAGRAPH),
+            ),
+            FilterConfig(
+                type=FilterType.REMOVE_DOC,
+                attribute_path=deduped_fuzzy_document,
+                name=str(DedupMode.FUZZY_DOCUMENT),
+            ),
+        ],
     )
 
     ############################################################
     # Tokenize
     tokenizer = "gpt2"
 
-    tokenize_config = TokenizeConfig(
-        train_paths=[consolidate_step],
+    tokenize_step = Step(tokenize_fn).defer(
+        train_paths=[consolidated_ds],
         validation_paths=[],
         cache_path=this_output_path(),
         tokenizer=tokenizer,
@@ -196,63 +139,56 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         zephyr_memory=humanfriendly.parse_size("1MB", binary=True),
     )
 
-    tokenize_step = ExecutorStep(
-        name=os.path.join(prefix, "tokenized"),
-        description=f"Tokenize raw text using the {tokenizer} tokenizer.",
-        fn=tokenize,
-        config=tokenize_config,
-    )
-
     # ############################################################
     # Training
-    train_env_vars = {
-        "WANDB_API_KEY": "",
-        "WANDB_MODE": "disabled",
-        "JAX_TRACEBACK_FILTERING": "off",
-    }
+    # train_env_vars = {
+    #     "WANDB_API_KEY": "",
+    #     "WANDB_MODE": "disabled",
+    #     "JAX_TRACEBACK_FILTERING": "off",
+    # }
 
-    pod_config = ResourceConfig.with_cpu()
+    # pod_config = ResourceConfig.with_cpu()
 
-    train_step = ExecutorStep(
-        name=os.path.join(prefix, "train"),
-        fn=run_levanter_train_lm,
-        config=TrainLmOnPodConfig(
-            output_path=this_output_path(),
-            resources=pod_config,
-            env_vars=train_env_vars,
-            train_config=TrainLmConfig(
-                data=lm_data_config(tokenize_step, permutation_type="linear"),
-                hf_save_steps=1,
-                model=Gpt2Config(
-                    num_layers=2,
-                    num_heads=2,
-                    max_seq_len=64,
-                    hidden_dim=32,
-                ),
-                trainer=TrainerConfig(
-                    train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False
-                ),
-            ),
-        ),
-    )
+    # train_step = ExecutorStep(
+    #     name=os.path.join(prefix, "train"),
+    #     fn=run_levanter_train_lm,
+    #     config=TrainLmOnPodConfig(
+    #         output_path=this_output_path(),
+    #         resources=pod_config,
+    #         env_vars=train_env_vars,
+    #         train_config=TrainLmConfig(
+    #             data=lm_data_config(tokenize_step, permutation_type="linear"),
+    #             hf_save_steps=1,
+    #             model=Gpt2Config(
+    #                 num_layers=2,
+    #                 num_heads=2,
+    #                 max_seq_len=64,
+    #                 hidden_dim=32,
+    #             ),
+    #             trainer=TrainerConfig(
+    #                 train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False
+    #             ),
+    #         ),
+    #     ),
+    # )
 
     ##### Evaluate
 
     # evaluate_step = evaluate_helm_on_step(train_step, ["mmlu"], max_eval_instances=10)
 
-    return [
-        transform_hq_data_step,
-        transform_lq_data_step,
+    return deferred_steps_to_executor_steps(
+        hq_ds,
+        lq_ds,
         train_quality_step,
-        inference_hq_step,
-        inference_lq_step,
-        dedup_exact_paragraph_step,
-        dedup_fuzzy_document_step,
-        consolidate_step,
+        # inference_hq_step,
+        # inference_lq_step,
+        deduped_exact_paragraph,
+        deduped_fuzzy_document,
+        consolidated_ds,
         tokenize_step,
-        train_step,
+        # train_step,
         # evaluate_step,
-    ]
+    )
 
 
 @draccus.wrap()
@@ -263,7 +199,7 @@ def main(config: ExecutorMainConfig):
         else:
             bucket_prefix = "/tmp"  # Default to a temporary directory
 
-        experiment_prefix = "quickstart-tests"
+        experiment_prefix = f"{bucket_prefix}/quickstart-tests"
         config = dataclasses.replace(
             config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
         )
@@ -283,10 +219,10 @@ def main(config: ExecutorMainConfig):
         # delete all previous runs
         if os.path.exists(os.path.join(bucket_prefix, experiment_prefix)):
             os.system(f"rm -rf {os.path.join(bucket_prefix, experiment_prefix)}")
-        steps = create_steps(experiment_prefix, synth_data)
+        steps = create_steps(experiment_prefix=experiment_prefix, bucket_prefix=bucket_prefix, synth_data=synth_data)
         config = dataclasses.replace(config)
         executor_main(config, steps=steps)
-        logger.info(f"Execution completed successfully. All outputs are in {bucket_prefix}/{experiment_prefix}")
+        logger.info(f"Execution completed successfully. All outputs are in {experiment_prefix}")
     except Exception as e:
         logger.error(f"Error in main execution: {e}")
         raise e
