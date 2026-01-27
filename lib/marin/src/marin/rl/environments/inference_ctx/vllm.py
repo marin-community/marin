@@ -225,6 +225,15 @@ class vLLMInferenceContext(BaseInferenceContext):
         """
         return np.array(choice.prompt_token_ids, dtype=np.int32)
 
+    def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
+        """Extract response token IDs directly from the choice.
+
+        Uses the response_token_ids attached during vLLM-to-OpenAI conversion,
+        avoiding the lossy convert_ids_to_tokens/convert_tokens_to_ids round-trip
+        that fails for padding token IDs not in the tokenizer vocabulary.
+        """
+        return np.array(choice.response_token_ids, dtype=np.int32)
+
     def _convert_vllm_to_openai(self, request_output: RequestOutput) -> ChatCompletion:
         """Convert vLLM RequestOutput to OpenAI ChatCompletion format."""
         choices = []
@@ -232,8 +241,10 @@ class vLLMInferenceContext(BaseInferenceContext):
             # Convert logprobs
             logprobs_content = []
             for token_id, logprob_dict in zip(output.token_ids, output.logprobs, strict=False):
-                # Get the token string
+                # Get the token string (may be None for padding token IDs)
                 token = self.tokenizer.convert_ids_to_tokens(token_id)
+                if token is None:
+                    token = f"<id_{token_id}>"
 
                 # Get the logprob for the selected token
                 selected_logprob = None
@@ -243,9 +254,12 @@ class vLLMInferenceContext(BaseInferenceContext):
                     if logprob_obj.rank == 1:
                         selected_logprob = logprob_obj.logprob
 
+                    token_str = self.tokenizer.convert_ids_to_tokens(tid)
+                    if token_str is None:
+                        token_str = f"<id_{tid}>"
                     top_logprobs.append(
                         TopLogprob(
-                            token=self.tokenizer.convert_ids_to_tokens(tid),
+                            token=token_str,
                             logprob=logprob_obj.logprob,
                             bytes=None,
                         )
@@ -269,10 +283,11 @@ class vLLMInferenceContext(BaseInferenceContext):
                 ),
             )
 
-            # Attach the prompt token IDs as a custom attribute to the choice since
-            # we need this since vLLM is injecting an extra BOS token at the start
-            # of the prompt.
+            # Attach token IDs as custom attributes to the choice.
+            # prompt_token_ids: needed since vLLM injects an extra BOS token at the start.
+            # response_token_ids: avoids lossy convert_ids_to_tokens/convert_tokens_to_ids round-trip.
             choice.prompt_token_ids = request_output.prompt_token_ids
+            choice.response_token_ids = list(output.token_ids)
             choices.append(choice)
 
         # Create usage information
