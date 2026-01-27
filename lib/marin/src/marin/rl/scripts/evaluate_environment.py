@@ -103,6 +103,10 @@ class EnvironmentEvalConfig:
     n_generations: int = 1
     """Number of generations per prompt."""
 
+    vocab_size: int | None = None
+    """Vocab size for model construction. Should match the checkpoint's vocab dimension.
+    If None, falls back to len(tokenizer)."""
+
 
 def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     """Run environment evaluation."""
@@ -158,7 +162,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
             logger.info(f"Model config: {model_config}")
 
             key = jrandom.PRNGKey(42)
-            vocab_size = tokenizer.vocab_size
+            vocab_size = config.vocab_size if config.vocab_size is not None else len(tokenizer)
             Vocab = hax.Axis("vocab", vocab_size)
             logger.info(f"Vocab size: {vocab_size}")
 

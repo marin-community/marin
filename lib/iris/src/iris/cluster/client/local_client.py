@@ -59,14 +59,19 @@ class LocalEnvironmentProvider:
         cpu: int = 1000,
         memory_gb: int = 1000,
         attributes: dict[str, str | int | float] | None = None,
+        device: cluster_pb2.DeviceConfig | None = None,
     ):
         self._cpu = cpu
         self._memory_gb = memory_gb
         self._attributes = attributes or {}
+        self._device = device
 
     def probe(self) -> cluster_pb2.WorkerMetadata:
-        device = cluster_pb2.DeviceConfig()
-        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+        if self._device is not None:
+            device = self._device
+        else:
+            device = cluster_pb2.DeviceConfig()
+            device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
 
         proto_attrs = {}
         for key, value in self._attributes.items():
@@ -206,6 +211,15 @@ class _LocalContainerRuntime(ContainerRuntime):
         del container_id
         return ContainerStats(memory_mb=100, cpu_percent=10, process_count=1, available=True)
 
+    def list_iris_containers(self, all_states: bool = True) -> list[str]:
+        del all_states
+        return list(self._containers.keys())
+
+    def remove_all_iris_containers(self) -> int:
+        count = len(self._containers)
+        self._containers.clear()
+        return count
+
 
 class _LocalBundleProvider:
     def __init__(self, bundle_path: Path):
@@ -223,13 +237,11 @@ class _LocalImageProvider:
         base_image: str,
         extras: list[str],
         job_id: str,
-        deps_hash: str,
         task_logs=None,
     ) -> BuildResult:
         del bundle_path, base_image, extras, job_id, task_logs
         return BuildResult(
             image_tag="local:latest",
-            deps_hash=deps_hash,
             build_time_ms=0,
             from_cache=True,
         )
@@ -310,13 +322,14 @@ class LocalClusterClient:
         controller_address = f"http://127.0.0.1:{controller_port}"
 
         # Start Worker with local providers
+        # Worker identity = vm_address = host:port (consistent with cloud workers)
         worker_port = _find_free_port()
         worker_config = WorkerConfig(
             host="127.0.0.1",
             port=worker_port,
             cache_dir=cache_path,
             controller_address=controller_address,
-            worker_id=f"local-worker-{uuid.uuid4().hex[:8]}",
+            worker_id=f"127.0.0.1:{worker_port}",
             poll_interval_seconds=0.1,  # Fast polling for local
             port_range=port_range,
         )
