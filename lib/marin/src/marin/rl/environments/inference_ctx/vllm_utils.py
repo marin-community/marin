@@ -66,6 +66,18 @@ def levanter_qwen_to_vllm_mapping():
         {
             "model.layers.*.self_attn.q_norm": ("model.layers.*.self_attn.q_norm.scale", (None,)),
             "model.layers.*.self_attn.k_norm": ("model.layers.*.self_attn.k_norm.scale", (None,)),
+            "model.layers.*.self_attn.q_proj_bias": (
+                "model.layers.*.self_attn.q_proj.bias",
+                ("model", None),
+            ),
+            "model.layers.*.self_attn.k_proj_bias": (
+                "model.layers.*.self_attn.k_proj.bias",
+                ("model", None),
+            ),
+            "model.layers.*.self_attn.v_proj_bias": (
+                "model.layers.*.self_attn.v_proj.bias",
+                ("model", None),
+            ),
         }
     )
     return mapping
@@ -80,9 +92,12 @@ llama_transpose_keys = {
     "k_proj": (2, 0, 1),
     "v_proj": (2, 0, 1),
     "o_proj": (1, 2, 0),
+    "q_proj_bias": (0, 1),
+    "k_proj_bias": (0, 1),
+    "v_proj_bias": (0, 1),
 }
 
-MODEL_MAPPINGS = {
+_MODEL_MAPPINGS = {
     "meta-llama/Llama-3.2-1B-Instruct": levanter_llama_to_vllm_mapping(),
     "meta-llama/Llama-3.2-3B-Instruct": levanter_llama_to_vllm_mapping(),
     "Qwen/Qwen3-0.6B": levanter_qwen_to_vllm_mapping(),
@@ -92,7 +107,7 @@ MODEL_MAPPINGS = {
     "marin-community/marin-8b-instruct": levanter_llama_to_vllm_mapping(),
 }
 
-MODEL_TRANSPOSE_KEYS = {
+_MODEL_TRANSPOSE_KEYS = {
     "meta-llama/Llama-3.2-1B-Instruct": llama_transpose_keys,
     "meta-llama/Llama-3.2-3B-Instruct": llama_transpose_keys,
     "Qwen/Qwen3-0.6B": llama_transpose_keys,
@@ -101,3 +116,42 @@ MODEL_TRANSPOSE_KEYS = {
     "Qwen/Qwen3-8B": llama_transpose_keys,
     "marin-community/marin-8b-instruct": llama_transpose_keys,
 }
+
+
+def _infer_mapping(model_name: str) -> dict:
+    """Infer the vLLM mapping for a model name, falling back to substring matching."""
+    if model_name in _MODEL_MAPPINGS:
+        return _MODEL_MAPPINGS[model_name]
+    if "Qwen2.5" in model_name:
+        return levanter_qwen_to_vllm_mapping()
+    raise KeyError(f"No MODEL_MAPPING registered for model: {model_name}")
+
+
+def _infer_transpose_keys(model_name: str) -> dict:
+    """Infer the transpose keys for a model name, falling back to substring matching."""
+    if model_name in _MODEL_TRANSPOSE_KEYS:
+        return _MODEL_TRANSPOSE_KEYS[model_name]
+    if "Qwen2.5" in model_name:
+        return llama_transpose_keys
+    raise KeyError(f"No MODEL_TRANSPOSE_KEYS registered for model: {model_name}")
+
+
+class _FallbackDict:
+    """Dict-like object that supports fallback lookup by substring matching."""
+
+    def __init__(self, fallback):
+        self._fallback = fallback
+
+    def __getitem__(self, key):
+        return self._fallback(key)
+
+    def __contains__(self, key):
+        try:
+            self._fallback(key)
+            return True
+        except KeyError:
+            return False
+
+
+MODEL_MAPPINGS = _FallbackDict(_infer_mapping)
+MODEL_TRANSPOSE_KEYS = _FallbackDict(_infer_transpose_keys)

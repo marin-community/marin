@@ -18,6 +18,18 @@ import jax.numpy as jnp
 from levanter.models.lm_model import LmHeadModel
 
 
+def _get_nnx_key_name(split_key: list[str]) -> str:
+    """
+    Determine the NNX key name from the split Levanter key.
+    If the key ends in 'bias', append '_bias' to the parameter name.
+    Otherwise (e.g. 'weight'), use the parameter name directly.
+    """
+    key_name = split_key[-2]
+    if split_key[-1] == "bias":
+        key_name = f"{key_name}_bias"
+    return key_name
+
+
 def levanter_to_nnx_state(levanter_model: LmHeadModel) -> dict:
     # The format of this state dict is flat like:
     # model.layers.0.self_attn.q_proj.weight -> jax array
@@ -46,7 +58,7 @@ def levanter_to_nnx_state(levanter_model: LmHeadModel) -> dict:
         # vLLM expects the weights to be padded to the next multiple of 128. I assume this is
         # because they want to use Pallas kernels which have this requirement.
         if "self_attn" in split_key_without_weight:
-            if "q_proj" in split_key_without_weight:
+            if "q_proj" in split_key_without_weight and len(value.shape) == 4:
                 kv_heads, q_heads_per_group, head_size, embed = value.shape
                 value = value.reshape(kv_heads * q_heads_per_group, head_size, embed)
 
@@ -67,7 +79,7 @@ def levanter_to_nnx_state(levanter_model: LmHeadModel) -> dict:
                     # pad 3rd dimension to 128 (e.g., (8, 2048, 64) -> (8, 2048, 128))
                     value = jnp.pad(value, ((0, 0), (0, 0), (0, next_multiple_of_128 - head_size)))
 
-        current[split_key_without_weight[-1]] = nnx.Param(value)
+        current[_get_nnx_key_name(split_key)] = nnx.Param(value)
     return nnx.State(nested_state_dict)
 
 
@@ -89,31 +101,46 @@ def levanter_state_dict_to_nnx_state_on_cpu(state_dict: dict) -> dict:
                     current[part] = {}
                 current = current[part]
 
-            # for q, k, v projections, we need to pad the 2nd dimension to next multiple of 128
-            # vLLM expects the weights to be padded to the next multiple of 128. I assume this is
-            # because they want to use Pallas kernels which have this requirement.
+            # vLLM requires weights/biases to be padded to the nearest multiple of 128 for Pallas kernels.
             if "self_attn" in split_key_without_weight:
-                if "q_proj" in split_key_without_weight:
-                    kv_heads, q_heads_per_group, head_size, embed = value.shape
-                    value = value.reshape(kv_heads * q_heads_per_group, head_size, embed)
+                is_bias = split_key[-1] == "bias"
 
+                # Flatten grouped query heads -> (Total Heads, Head Dim, [Embed]) for vLLM
+                if "q_proj" in split_key_without_weight:
+                    if len(value.shape) == 4:
+                        # Weight: (KV, Group, HeadSize, Embed) -> (Heads, HeadSize, Embed)
+                        kv_heads, q_heads_per_group, head_size, embed = value.shape
+                        value = value.reshape(kv_heads * q_heads_per_group, head_size, embed)
+                    elif len(value.shape) == 3 and is_bias:
+                        # Bias: (KV, Group, HeadSize) -> (Heads, HeadSize)
+                        kv_heads, q_heads_per_group, head_size = value.shape
+                        value = value.reshape(kv_heads * q_heads_per_group, head_size)
+
+                # Pad the head dimension (dim 1) for Q/K/V projections
                 if (
                     "q_proj" in split_key_without_weight
                     or "k_proj" in split_key_without_weight
                     or "v_proj" in split_key_without_weight
                 ):
-                    _heads, head_size, embed = value.shape
-                    next_multiple_of_128 = ((head_size + 127) // 128) * 128
-                    if head_size < next_multiple_of_128:
-                        # pad 2nd dimension to 128 (e.g., (8, 64, 2048) -> (8, 128, 2048))
-                        value = jnp.pad(value, ((0, 0), (0, next_multiple_of_128 - head_size), (0, 0)))
-                elif "o_proj" in split_key_without_weight:
-                    embed, _heads, head_size = value.shape
-                    next_multiple_of_128 = ((head_size + 127) // 128) * 128
-                    if head_size < next_multiple_of_128:
-                        # pad 3rd dimension to 128 (e.g., (8, 2048, 64) -> (8, 2048, 128))
-                        value = jnp.pad(value, ((0, 0), (0, 0), (0, next_multiple_of_128 - head_size)))
+                    pad_axis = 1
+                    if len(value.shape) >= 2:
+                        head_size = value.shape[pad_axis]
+                        next_multiple_of_128 = ((head_size + 127) // 128) * 128
 
-            current[split_key_without_weight[-1]] = nnx.Param(value)
+                        if head_size < next_multiple_of_128:
+                            padding = [(0, 0)] * len(value.shape)
+                            padding[pad_axis] = (0, next_multiple_of_128 - head_size)
+                            value = jnp.pad(value, padding)
+
+                # Pad o_proj weights along the head dimension (dim 2)
+                elif "o_proj" in split_key_without_weight:
+                    # Weight: (Embed, Heads, HeadSize). Skip bias as it is 1D (Embed,) or handled differently.
+                    if not is_bias and len(value.shape) == 3:
+                        embed, _heads, head_size = value.shape
+                        next_multiple_of_128 = ((head_size + 127) // 128) * 128
+                        if head_size < next_multiple_of_128:
+                            value = jnp.pad(value, ((0, 0), (0, 0), (0, next_multiple_of_128 - head_size)))
+
+            current[_get_nnx_key_name(split_key)] = nnx.Param(value)
 
         return nnx.State(nested_state_dict)
