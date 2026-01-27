@@ -77,6 +77,37 @@ DEFAULT_CONTROLLER_PORT = 10000
 DEFAULT_JOB_TIMEOUT = 600  # 10 minutes for TPU provisioning
 
 
+# =============================================================================
+# Test Job Definitions
+# =============================================================================
+
+
+def _hello_tpu_job():
+    """Simple job that prints and returns."""
+    print("Hello from TPU!")
+    return 42
+
+
+def _quick_task_job(task_id: int):
+    """Quick job that sleeps and returns."""
+    import time as time_module
+
+    time_module.sleep(2.0)
+    print(f"Task {task_id} completed")
+    return task_id
+
+
+def _distributed_work_job():
+    """Coscheduled job that uses job context."""
+    from iris.cluster.client import get_job_info
+
+    info = get_job_info()
+    if info is None:
+        raise RuntimeError("Not running in an Iris job context")
+    print(f"Task {info.task_index} of {info.num_tasks} on worker {info.worker_id}")
+    return f"Task {info.task_index} done"
+
+
 def _configure_logging():
     """Configure logging to show all iris module output."""
     logging.basicConfig(
@@ -455,6 +486,76 @@ class SmokeTestRunner:
         except Exception as e:
             self.logger.log(f"  Failed to fetch task logs: {e}", level="WARN")
 
+    def _run_job_test(
+        self,
+        client: IrisClient,
+        test_name: str,
+        entrypoint: Entrypoint,
+        job_name: str,
+        resources: ResourceSpec,
+        coscheduling: CoschedulingConfig | None = None,
+    ) -> TestResult:
+        """Generic job runner that handles submission, waiting, and result collection."""
+        start = time.monotonic()
+        try:
+            job = client.submit(
+                entrypoint=entrypoint,
+                name=job_name,
+                resources=resources,
+                environment=EnvironmentSpec(workspace="/app"),
+                coscheduling=coscheduling,
+            )
+            self.logger.log(f"  Job submitted: {job.job_id}")
+
+            status = job.wait(timeout=self.config.job_timeout_seconds, raise_on_failure=False)
+            duration = time.monotonic() - start
+
+            if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
+                self.logger.log(f"  [PASS] Completed in {duration:.1f}s")
+                return TestResult(test_name, True, f"Completed in {duration:.1f}s", duration)
+            else:
+                state_name = cluster_pb2.JobState.Name(status.state)
+                self.logger.log(f"  [FAIL] Job ended with state {state_name}", level="ERROR")
+                self._print_task_logs_on_failure(job)
+                return TestResult(test_name, False, f"State: {state_name}, error: {status.error}", duration)
+
+        except TimeoutError:
+            duration = time.monotonic() - start
+            self.logger.log(f"  [FAIL] Timed out after {self.config.job_timeout_seconds}s", level="ERROR")
+            return TestResult(test_name, False, f"Timed out after {self.config.job_timeout_seconds}s", duration)
+
+    def _submit_and_wait_multiple(
+        self,
+        client: IrisClient,
+        jobs_config: list[tuple[Entrypoint, str, ResourceSpec]],
+    ) -> tuple[float, list[str]]:
+        """Submit multiple jobs and wait for all to complete.
+
+        Returns:
+            (duration, failed_job_descriptions)
+        """
+        start = time.monotonic()
+        jobs = []
+
+        for entrypoint, name, resources in jobs_config:
+            job = client.submit(
+                entrypoint=entrypoint,
+                name=name,
+                resources=resources,
+                environment=EnvironmentSpec(workspace="/app"),
+            )
+            jobs.append(job)
+            self.logger.log(f"  Job submitted: {job.job_id}")
+
+        failed_jobs = []
+        for job in jobs:
+            status = job.wait(timeout=self.config.job_timeout_seconds, raise_on_failure=False)
+            if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
+                state_name = cluster_pb2.JobState.Name(status.state)
+                failed_jobs.append(f"{job.job_id}: {state_name}")
+
+        return time.monotonic() - start, failed_jobs
+
     def _collect_worker_logs(self, zone: str, project: str):
         """Collect docker logs from all TPU workers for post-mortem debugging."""
         self.logger.log("Collecting worker logs for debugging...")
@@ -484,82 +585,24 @@ class SmokeTestRunner:
 
     def _run_simple_tpu_job(self, client: IrisClient) -> TestResult:
         """Run a simple TPU job that just prints and returns."""
-
-        def hello_tpu():
-            print("Hello from TPU!")
-            return 42
-
-        start = time.monotonic()
-        try:
-            job = client.submit(
-                entrypoint=Entrypoint.from_callable(hello_tpu),
-                name=f"smoke-simple-{self._run_id}",
-                resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
-                environment=EnvironmentSpec(workspace="/app"),
-            )
-            self.logger.log(f"  Job submitted: {job.job_id}")
-
-            status = job.wait(timeout=self.config.job_timeout_seconds, raise_on_failure=False)
-            duration = time.monotonic() - start
-
-            if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
-                self.logger.log(f"  [PASS] Completed in {duration:.1f}s")
-                return TestResult(
-                    f"Simple TPU job ({self.config.tpu_type})", True, f"Completed in {duration:.1f}s", duration
-                )
-            else:
-                state_name = cluster_pb2.JobState.Name(status.state)
-                self.logger.log(f"  [FAIL] Job ended with state {state_name}", level="ERROR")
-                self._print_task_logs_on_failure(job)
-                return TestResult(
-                    f"Simple TPU job ({self.config.tpu_type})",
-                    False,
-                    f"State: {state_name}, error: {status.error}",
-                    duration,
-                )
-
-        except TimeoutError:
-            duration = time.monotonic() - start
-            self.logger.log(f"  [FAIL] Timed out after {self.config.job_timeout_seconds}s", level="ERROR")
-            return TestResult(
-                f"Simple TPU job ({self.config.tpu_type})",
-                False,
-                f"Timed out after {self.config.job_timeout_seconds}s",
-                duration,
-            )
+        return self._run_job_test(
+            client=client,
+            test_name=f"Simple TPU job ({self.config.tpu_type})",
+            entrypoint=Entrypoint.from_callable(_hello_tpu_job),
+            job_name=f"smoke-simple-{self._run_id}",
+            resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
+        )
 
     def _run_concurrent_tpu_jobs(self, client: IrisClient) -> TestResult:
         """Submit 3 concurrent TPU jobs to test parallel provisioning and queueing."""
+        resources = ResourceSpec(device=tpu_device(self.config.tpu_type))
+        jobs_config = [
+            (Entrypoint.from_callable(_quick_task_job, i), f"smoke-concurrent-{self._run_id}-{i}", resources)
+            for i in range(3)
+        ]
 
-        def quick_task(task_id: int):
-            import time as time_module
-
-            time_module.sleep(2.0)
-            print(f"Task {task_id} completed")
-            return task_id
-
-        start = time.monotonic()
         try:
-            jobs = []
-            for i in range(3):
-                job = client.submit(
-                    entrypoint=Entrypoint.from_callable(quick_task, i),
-                    name=f"smoke-concurrent-{self._run_id}-{i}",
-                    resources=ResourceSpec(device=tpu_device(self.config.tpu_type)),
-                    environment=EnvironmentSpec(workspace="/app"),
-                )
-                jobs.append(job)
-                self.logger.log(f"  Job submitted: {job.job_id}")
-
-            # Wait for all jobs
-            failed_jobs = []
-            for job in jobs:
-                status = job.wait(timeout=self.config.job_timeout_seconds, raise_on_failure=False)
-                if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
-                    state_name = cluster_pb2.JobState.Name(status.state)
-                    failed_jobs.append(f"{job.job_id}: {state_name}")
-
-            duration = time.monotonic() - start
+            duration, failed_jobs = self._submit_and_wait_multiple(client, jobs_config)
 
             if not failed_jobs:
                 self.logger.log(f"  [PASS] All 3 jobs completed in {duration:.1f}s")
@@ -569,59 +612,24 @@ class SmokeTestRunner:
                 return TestResult("Concurrent TPU jobs (3x)", False, f"Failed: {', '.join(failed_jobs)}", duration)
 
         except TimeoutError:
-            duration = time.monotonic() - start
             self.logger.log("  [FAIL] Timed out waiting for jobs", level="ERROR")
             return TestResult(
-                "Concurrent TPU jobs (3x)", False, f"Timed out after {self.config.job_timeout_seconds}s", duration
+                "Concurrent TPU jobs (3x)", False, f"Timed out after {self.config.job_timeout_seconds}s", 0.0
             )
 
     def _run_coscheduled_job(self, client: IrisClient) -> TestResult:
         """Run a coscheduled multi-task job on TPU workers."""
-
-        def distributed_work():
-            from iris.cluster.client import get_job_info
-
-            info = get_job_info()
-            if info is None:
-                raise RuntimeError("Not running in an Iris job context")
-            print(f"Task {info.task_index} of {info.num_tasks} on worker {info.worker_id}")
-            return f"Task {info.task_index} done"
-
-        start = time.monotonic()
-        try:
-            job = client.submit(
-                entrypoint=Entrypoint.from_callable(distributed_work),
-                name=f"smoke-coscheduled-{self._run_id}",
-                resources=ResourceSpec(
-                    replicas=4,
-                    device=tpu_device(self.config.tpu_type),
-                ),
-                environment=EnvironmentSpec(workspace="/app"),
-                coscheduling=CoschedulingConfig(group_by="tpu-name"),
-            )
-            self.logger.log(f"  Job submitted: {job.job_id} (4 tasks)")
-
-            status = job.wait(timeout=self.config.job_timeout_seconds, raise_on_failure=False)
-            duration = time.monotonic() - start
-
-            if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
-                self.logger.log(f"  [PASS] All 4 tasks completed in {duration:.1f}s")
-                return TestResult(
-                    "Coscheduled multi-task job", True, f"All 4 tasks completed in {duration:.1f}s", duration
-                )
-            else:
-                state_name = cluster_pb2.JobState.Name(status.state)
-                self.logger.log(f"  [FAIL] Job ended with state {state_name}", level="ERROR")
-                return TestResult(
-                    "Coscheduled multi-task job", False, f"State: {state_name}, error: {status.error}", duration
-                )
-
-        except TimeoutError:
-            duration = time.monotonic() - start
-            self.logger.log(f"  [FAIL] Timed out after {self.config.job_timeout_seconds}s", level="ERROR")
-            return TestResult(
-                "Coscheduled multi-task job", False, f"Timed out after {self.config.job_timeout_seconds}s", duration
-            )
+        return self._run_job_test(
+            client=client,
+            test_name="Coscheduled multi-task job",
+            entrypoint=Entrypoint.from_callable(_distributed_work_job),
+            job_name=f"smoke-coscheduled-{self._run_id}",
+            resources=ResourceSpec(
+                replicas=4,
+                device=tpu_device(self.config.tpu_type),
+            ),
+            coscheduling=CoschedulingConfig(group_by="tpu-name"),
+        )
 
     def _log_autoscaler_status(self, controller_url: str):
         """Log current autoscaler state for observability."""
