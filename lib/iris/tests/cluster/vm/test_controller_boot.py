@@ -58,8 +58,8 @@ bootstrap:
   worker_port: 10001
 
 controller_vm:
+  image: gcr.io/test-project/iris-controller:latest
   gcp:
-    image: gcr.io/test-project/iris-controller:latest
     machine_type: n2-standard-4
     boot_disk_size_gb: 50
     port: 10000
@@ -89,9 +89,9 @@ bootstrap:
   worker_port: 10001
 
 controller_vm:
+  image: gcr.io/test-project/iris-controller:latest
   manual:
     host: 10.0.0.100
-    image: gcr.io/test-project/iris-controller:latest
     port: 10000
 
 ssh:
@@ -117,9 +117,8 @@ def test_creates_gcp_controller_for_gcp_provider_with_vm_enabled():
         project_id="test-project",
         zone="us-central1-a",
         controller_vm=config_pb2.ControllerVmConfig(
-            gcp=config_pb2.GcpControllerConfig(
-                image="gcr.io/test/controller:latest",
-            ),
+            image="gcr.io/test/controller:latest",
+            gcp=config_pb2.GcpControllerConfig(),
         ),
     )
     controller = create_controller(config)
@@ -131,9 +130,9 @@ def test_creates_manual_controller_for_manual_provider():
     config = config_pb2.IrisClusterConfig(
         provider_type="manual",
         controller_vm=config_pb2.ControllerVmConfig(
+            image="gcr.io/test/controller:latest",
             manual=config_pb2.ManualControllerConfig(
                 host="10.0.0.100",
-                image="gcr.io/test/controller:latest",
             ),
         ),
     )

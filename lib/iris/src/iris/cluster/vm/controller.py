@@ -474,7 +474,7 @@ class GcpController:
         )
 
         config_yaml = self._serialize_config()
-        bootstrap_script = _build_controller_bootstrap_script(self._gcp_config.image, port, config_yaml)
+        bootstrap_script = _build_controller_bootstrap_script(self.config.controller_vm.image, port, config_yaml)
 
         def on_line(line: str) -> None:
             logger.info("[%s] %s", self._vm_name, line)
@@ -525,7 +525,7 @@ class GcpController:
         )
 
         config_yaml = self._serialize_config()
-        bootstrap_script = _build_controller_bootstrap_script(self._gcp_config.image, port, config_yaml)
+        bootstrap_script = _build_controller_bootstrap_script(self.config.controller_vm.image, port, config_yaml)
 
         def on_line(line: str) -> None:
             logger.info("[%s] %s", vm_name, line)
@@ -801,7 +801,7 @@ class ManualController:
 
     def start(self) -> str:
         """Start controller via SSH bootstrap."""
-        if not self._manual_config.image:
+        if not self.config.controller_vm.image:
             raise RuntimeError("controller_vm.image required for SSH bootstrap")
 
         host = self._manual_config.host
@@ -811,7 +811,7 @@ class ManualController:
 
         conn = self._create_ssh_connection(host)
         config_yaml = self._serialize_config()
-        bootstrap_script = _build_controller_bootstrap_script(self._manual_config.image, port, config_yaml)
+        bootstrap_script = _build_controller_bootstrap_script(self.config.controller_vm.image, port, config_yaml)
 
         def on_line(line: str) -> None:
             logger.info("[%s] %s", host, line)

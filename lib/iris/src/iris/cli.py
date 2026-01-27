@@ -196,14 +196,11 @@ def _extract_worker_image_params(config) -> ImageBuildParams | None:
 
 
 def _extract_controller_image_params(config) -> ImageBuildParams | None:
-    """Extract controller image build params from config.controller_vm.gcp.image."""
-    if config.controller_vm.WhichOneof("controller") != "gcp":
+    """Extract controller image build params from config.controller_vm.image."""
+    if not config.controller_vm.image:
         return None
 
-    if not config.controller_vm.gcp.image:
-        return None
-
-    parsed = _parse_artifact_registry_tag(config.controller_vm.gcp.image)
+    parsed = _parse_artifact_registry_tag(config.controller_vm.image)
     if not parsed:
         return None
 

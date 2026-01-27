@@ -114,34 +114,32 @@ class SshConfig(_message.Message):
     def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[int] = ...) -> None: ...
 
 class GcpControllerConfig(_message.Message):
-    __slots__ = ("image", "machine_type", "boot_disk_size_gb", "port")
-    IMAGE_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("machine_type", "boot_disk_size_gb", "port")
     MACHINE_TYPE_FIELD_NUMBER: _ClassVar[int]
     BOOT_DISK_SIZE_GB_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
-    image: str
     machine_type: str
     boot_disk_size_gb: int
     port: int
-    def __init__(self, image: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., port: _Optional[int] = ...) -> None: ...
+    def __init__(self, machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., port: _Optional[int] = ...) -> None: ...
 
 class ManualControllerConfig(_message.Message):
-    __slots__ = ("host", "image", "port")
+    __slots__ = ("host", "port")
     HOST_FIELD_NUMBER: _ClassVar[int]
-    IMAGE_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
     host: str
-    image: str
     port: int
-    def __init__(self, host: _Optional[str] = ..., image: _Optional[str] = ..., port: _Optional[int] = ...) -> None: ...
+    def __init__(self, host: _Optional[str] = ..., port: _Optional[int] = ...) -> None: ...
 
 class ControllerVmConfig(_message.Message):
-    __slots__ = ("gcp", "manual")
+    __slots__ = ("image", "gcp", "manual")
+    IMAGE_FIELD_NUMBER: _ClassVar[int]
     GCP_FIELD_NUMBER: _ClassVar[int]
     MANUAL_FIELD_NUMBER: _ClassVar[int]
+    image: str
     gcp: GcpControllerConfig
     manual: ManualControllerConfig
-    def __init__(self, gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, image: _Optional[str] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
     __slots__ = ("provider_type", "project_id", "region", "zone", "controller_vm", "scale_groups", "label_prefix", "bootstrap", "timeouts", "ssh")

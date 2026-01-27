@@ -37,9 +37,9 @@ def ssh_bootstrap_config() -> config_pb2.IrisClusterConfig:
     return config_pb2.IrisClusterConfig(
         provider_type="manual",
         controller_vm=config_pb2.ControllerVmConfig(
+            image="gcr.io/project/iris-controller:latest",
             manual=config_pb2.ManualControllerConfig(
                 host="10.0.0.100",
-                image="gcr.io/project/iris-controller:latest",
                 port=10000,
             ),
         ),
@@ -59,8 +59,8 @@ def gcp_config() -> config_pb2.IrisClusterConfig:
         project_id="my-project",
         zone="us-central1-a",
         controller_vm=config_pb2.ControllerVmConfig(
+            image="gcr.io/project/iris-controller:latest",
             gcp=config_pb2.GcpControllerConfig(
-                image="gcr.io/project/iris-controller:latest",
                 port=10000,
             ),
         ),
@@ -72,9 +72,9 @@ def test_manual_controller_start_requires_image():
     config = config_pb2.IrisClusterConfig(
         provider_type="manual",
         controller_vm=config_pb2.ControllerVmConfig(
+            image="",
             manual=config_pb2.ManualControllerConfig(
                 host="10.0.0.100",
-                image="",
             ),
         ),
     )
@@ -218,9 +218,9 @@ bootstrap:
   worker_port: 10001
 
 controller_vm:
+  image: gcr.io/project/iris-controller:latest
   manual:
     host: 10.0.0.100
-    image: gcr.io/project/iris-controller:latest
     port: 10000
 
 ssh:
@@ -240,7 +240,7 @@ scale_groups:
         config = load_config(config_path)
 
         assert config.controller_vm.manual.host == "10.0.0.100"
-        assert config.controller_vm.manual.image == "gcr.io/project/iris-controller:latest"
+        assert config.controller_vm.image == "gcr.io/project/iris-controller:latest"
         assert config.controller_vm.manual.port == 10000
         assert config.ssh.user == "ubuntu"
 
@@ -384,9 +384,9 @@ class TestHealthCheckIntegration:
         config = config_pb2.IrisClusterConfig(
             provider_type="manual",
             controller_vm=config_pb2.ControllerVmConfig(
+                image="gcr.io/project/iris-controller:latest",
                 manual=config_pb2.ManualControllerConfig(
                     host="10.0.0.100",
-                    image="gcr.io/project/iris-controller:latest",
                     port=10000,
                 ),
             ),
@@ -421,9 +421,9 @@ class TestHealthCheckIntegration:
         config = config_pb2.IrisClusterConfig(
             provider_type="manual",
             controller_vm=config_pb2.ControllerVmConfig(
+                image="gcr.io/project/iris-controller:latest",
                 manual=config_pb2.ManualControllerConfig(
                     host="10.0.0.100",
-                    image="gcr.io/project/iris-controller:latest",
                     port=10000,
                 ),
             ),
@@ -455,8 +455,8 @@ class TestHealthCheckIntegration:
             project_id="my-project",
             zone="us-central1-a",
             controller_vm=config_pb2.ControllerVmConfig(
+                image="gcr.io/project/iris-controller:latest",
                 gcp=config_pb2.GcpControllerConfig(
-                    image="gcr.io/project/iris-controller:latest",
                     port=10000,
                     machine_type="n2-standard-4",
                 ),
@@ -495,8 +495,8 @@ class TestHealthCheckIntegration:
             project_id="my-project",
             zone="us-central1-a",
             controller_vm=config_pb2.ControllerVmConfig(
+                image="gcr.io/project/iris-controller:latest",
                 gcp=config_pb2.GcpControllerConfig(
-                    image="gcr.io/project/iris-controller:latest",
                     port=10000,
                     machine_type="n2-standard-4",
                 ),

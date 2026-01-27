@@ -15,8 +15,8 @@ timeouts:
   ssh_poll_interval_seconds: 5
 
 controller_vm:
+  image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest
   gcp:
-    image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest
     machine_type: n2-standard-4
     port: 10000
 

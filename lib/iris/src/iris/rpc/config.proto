@@ -111,7 +111,6 @@ message SshConfig {
 
 // GCP-managed controller configuration
 message GcpControllerConfig {
-  string image = 1;
   string machine_type = 2;      // Default: "n2-standard-4"
   int32 boot_disk_size_gb = 3;  // Default: 50
   int32 port = 4;               // Default: 10000
@@ -120,12 +119,12 @@ message GcpControllerConfig {
 // Manually-managed controller configuration (SSH bootstrap)
 message ManualControllerConfig {
   string host = 1;
-  string image = 2;
   int32 port = 3;               // Default: 10000
 }
 
 // Controller configuration using oneof for type-safe dispatch
 message ControllerVmConfig {
+  string image = 10;            // Controller docker image (shared by all controller types)
   oneof controller {
     GcpControllerConfig gcp = 1;
     ManualControllerConfig manual = 2;
