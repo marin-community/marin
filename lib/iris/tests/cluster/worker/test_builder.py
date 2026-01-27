@@ -12,12 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for VenvCache and ImageCache."""
-
 import subprocess
 
 import pytest
-from iris.cluster.worker.builder import ImageCache, VenvCache
+from iris.cluster.worker.builder import ImageCache
 
 
 @pytest.fixture
@@ -97,24 +95,6 @@ packages = ["src/test_package"]
     return bundle_dir
 
 
-def test_compute_deps_hash(test_bundle):
-    """Test that deps hash is computed from pyproject.toml and uv.lock."""
-    cache = VenvCache()
-
-    hash1 = cache.compute_deps_hash(test_bundle)
-
-    # Should be consistent
-    hash2 = cache.compute_deps_hash(test_bundle)
-    assert hash1 == hash2
-
-    # Modify pyproject.toml
-    (test_bundle / "pyproject.toml").write_text("[project]\nname = 'changed'\n")
-    hash3 = cache.compute_deps_hash(test_bundle)
-
-    # Hash should change
-    assert hash3 != hash1
-
-
 # ImageCache Tests
 
 
@@ -177,17 +157,8 @@ def check_docker_available():
 
 
 @pytest.mark.slow
-def test_image_cache_initialization(tmp_path):
-    """Test ImageCache initialization creates cache directory."""
-    cache_dir = tmp_path / "cache"
-    ImageCache(cache_dir, registry="localhost:5000", max_images=10)
-
-    assert (cache_dir / "images").exists()
-
-
-@pytest.mark.slow
-def test_image_caching(tmp_path, docker_bundle):
-    """Test that subsequent builds with same deps_hash use cached image."""
+def test_image_caching(tmp_path, docker_bundle, docker_cleanup_scope):
+    """Test that subsequent builds use the cache."""
     if not check_docker_available():
         pytest.skip("Docker not available")
 
@@ -195,7 +166,6 @@ def test_image_caching(tmp_path, docker_bundle):
     builder = ImageCache(cache_dir, registry="localhost:5000")
 
     job_id = "cache-test-456"
-    deps_hash = "cachedep1234567890"
     base_image = "python:3.11-slim"
 
     # First build - not from cache
@@ -204,11 +174,9 @@ def test_image_caching(tmp_path, docker_bundle):
         base_image=base_image,
         extras=[],
         job_id=job_id,
-        deps_hash=deps_hash,
     )
 
     assert result1.from_cache is False
-    assert result1.build_time_ms > 0
 
     # Second build - should be from cache
     result2 = builder.build(
@@ -216,103 +184,14 @@ def test_image_caching(tmp_path, docker_bundle):
         base_image=base_image,
         extras=[],
         job_id=job_id,
-        deps_hash=deps_hash,
     )
 
     assert result2.from_cache is True
-    assert result2.build_time_ms == 0
     assert result2.image_tag == result1.image_tag
 
-    # Cleanup
-    subprocess.run(["docker", "rmi", result1.image_tag], stdout=subprocess.DEVNULL, check=False)
-
 
 @pytest.mark.slow
-def test_deps_hash_change_triggers_rebuild(tmp_path, docker_bundle):
-    """Test that changing deps_hash triggers a rebuild."""
-    if not check_docker_available():
-        pytest.skip("Docker not available")
-
-    cache_dir = tmp_path / "cache"
-    builder = ImageCache(cache_dir, registry="localhost:5000")
-
-    job_id = "rebuild-test-789"
-    base_image = "python:3.11-slim"
-
-    # Build with first deps_hash
-    deps_hash1 = "oldhash1234567890"
-    result1 = builder.build(
-        bundle_path=docker_bundle,
-        base_image=base_image,
-        extras=[],
-        job_id=job_id,
-        deps_hash=deps_hash1,
-    )
-
-    assert result1.from_cache is False
-    expected_tag1 = f"localhost:5000/iris-job-{job_id}:{deps_hash1[:8]}"
-    assert result1.image_tag == expected_tag1
-
-    # Build with different deps_hash - should rebuild
-    deps_hash2 = "newhash0987654321"
-    result2 = builder.build(
-        bundle_path=docker_bundle,
-        base_image=base_image,
-        extras=[],
-        job_id=job_id,
-        deps_hash=deps_hash2,
-    )
-
-    assert result2.from_cache is False
-    expected_tag2 = f"localhost:5000/iris-job-{job_id}:{deps_hash2[:8]}"
-    assert result2.image_tag == expected_tag2
-    assert result2.image_tag != result1.image_tag
-
-    # Both images should exist
-    exists1 = builder._docker.exists(expected_tag1)
-    exists2 = builder._docker.exists(expected_tag2)
-    assert exists1 is True
-    assert exists2 is True
-
-    # Cleanup
-    subprocess.run(["docker", "rmi", expected_tag1], stdout=subprocess.DEVNULL, check=False)
-    subprocess.run(["docker", "rmi", expected_tag2], stdout=subprocess.DEVNULL, check=False)
-
-
-@pytest.mark.slow
-def test_buildkit_cache_mounts(tmp_path, docker_bundle):
-    """Test that BuildKit cache mounts are used for UV cache."""
-    if not check_docker_available():
-        pytest.skip("Docker not available")
-
-    cache_dir = tmp_path / "cache"
-    builder = ImageCache(cache_dir, registry="localhost:5000")
-
-    # Verify DOCKER_BUILDKIT is set in environment during build
-    job_id = "buildkit-test-abc"
-    deps_hash = "buildkit1234567890"
-    base_image = "python:3.11-slim"
-
-    # Build image - BuildKit should be enabled
-    result = builder.build(
-        bundle_path=docker_bundle,
-        base_image=base_image,
-        extras=[],
-        job_id=job_id,
-        deps_hash=deps_hash,
-    )
-
-    # Verify image was built (BuildKit enabled by default in _docker_build)
-    assert result.from_cache is False
-    exists = builder._docker.exists(result.image_tag)
-    assert exists is True
-
-    # Cleanup
-    subprocess.run(["docker", "rmi", result.image_tag], stdout=subprocess.DEVNULL, check=False)
-
-
-@pytest.mark.slow
-def test_image_build_with_extras(tmp_path):
+def test_image_build_with_extras(tmp_path, docker_cleanup_scope):
     """Test building image with extras."""
     if not check_docker_available():
         pytest.skip("Docker not available")
@@ -364,63 +243,6 @@ packages = ["src/test_app"]
         base_image="python:3.11-slim",
         extras=["dev", "test"],
         job_id="extras-test",
-        deps_hash="extrahash123",
     )
 
     assert result.from_cache is False
-
-    # Cleanup
-    subprocess.run(["docker", "rmi", result.image_tag], stdout=subprocess.DEVNULL, check=False)
-
-
-@pytest.mark.slow
-def test_lru_eviction_of_images(tmp_path, docker_bundle):
-    """Test LRU eviction removes old images when over limit."""
-    import uuid
-
-    if not check_docker_available():
-        pytest.skip("Docker not available")
-
-    # Use a unique registry prefix to isolate this test's images from other runs.
-    # The eviction pattern matches {registry}/iris-job-*, so unique registry = isolation.
-    test_id = uuid.uuid4().hex[:8]
-    test_registry = f"lru-test-{test_id}"
-
-    cache_dir = tmp_path / "cache"
-    builder = ImageCache(cache_dir, registry=test_registry, max_images=2)
-
-    base_image = "python:3.11-slim"
-    images_built = []
-
-    # Build 3 images to trigger eviction.
-    # Eviction sorts by (created_at, tag). When timestamps are identical
-    # (common with shared layers), tag is the tiebreaker: job-0 < job-1 < job-2
-    for i in range(3):
-        result = builder.build(
-            bundle_path=docker_bundle,
-            base_image=base_image,
-            extras=[],
-            job_id=f"job-{i}",
-            deps_hash=f"deps{i:016d}",
-        )
-        images_built.append(result.image_tag)
-
-    # After building 3 images with max_images=2, oldest should be evicted
-    # Note: _evict_old_images is called after each build, but only when count > max_images
-
-    # The oldest image (image 0) should have been evicted
-    exists_0 = builder._docker.exists(images_built[0])
-    assert exists_0 is False, "Oldest image should have been evicted"
-
-    # The newest images should exist
-    exists_1 = builder._docker.exists(images_built[1])
-    exists_2 = builder._docker.exists(images_built[2])
-    assert exists_1 is True, "Second image should exist"
-    assert exists_2 is True, "Newest image should exist"
-
-    # Cleanup remaining images
-    for tag in images_built:
-        try:
-            subprocess.run(["docker", "rmi", tag], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        except Exception:
-            pass  # Image may already be evicted
