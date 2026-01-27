@@ -125,7 +125,24 @@ class vLLMInferenceContext(BaseInferenceContext):
         return self.renderer.build_generation_prompt(messages)
 
     @staticmethod
+    def _patch_tpu_inference_registry():
+        """Register Qwen2ForCausalLM in tpu_inference if not present."""
+        try:
+            from tpu_inference.models.common import model_loader
+
+            if "Qwen2ForCausalLM" not in model_loader._MODEL_REGISTRY:
+                logger.info("Patching tpu_inference to support Qwen2ForCausalLM")
+                from tpu_inference.models.jax.qwen2 import Qwen2ForCausalLM
+
+                model_loader.register_model("Qwen2ForCausalLM", Qwen2ForCausalLM)
+        except ImportError:
+            logger.exception("Failed to patch tpu_inference registry")
+            raise
+
+    @staticmethod
     def _get_llm_engine(inference_config: vLLMInferenceContextConfig):
+        vLLMInferenceContext._patch_tpu_inference_registry()
+
         if inference_config.mode == InferenceMode.SYNC:
             if LLM is None:
                 raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
