@@ -117,11 +117,11 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
                         dest_file.write(chunk)
                         bytes_written += len(chunk)
 
-            # Validate file size if expected_size is provided
-            if expected_size is not None and bytes_written != expected_size:
-                raise ValueError(
-                    f"Size mismatch for {file_path}: expected {expected_size} bytes, got {bytes_written} bytes"
-                )
+                # Validate file size BEFORE atomic_rename commits the file
+                if expected_size is not None and bytes_written != expected_size:
+                    raise ValueError(
+                        f"Size mismatch for {file_path}: expected {expected_size} bytes, got {bytes_written} bytes"
+                    )
 
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path} ({bytes_written} bytes)")
             return {"file_path": file_path, "status": "success", "size": bytes_written}
@@ -135,13 +135,12 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
             status_code = -1
 
             if isinstance(e, HfHubHTTPError):
-                hf_err: HfHubHTTPError = e
-                status_code = getattr(hf_err.response, "status_code", None) or -1
+                status_code = e.response.status_code
                 TOO_MANY_REQUESTS = 429
                 if status_code == TOO_MANY_REQUESTS:
                     # NOTE: RateLimit "api\|pages\|resolvers";r=[remaining];t=[seconds remaining until reset]
                     try:
-                        rate_limit_wait = int(hf_err.response.headers["RateLimit"].split(";")[-1].split("=")[-1])
+                        rate_limit_wait = int(e.response.headers["RateLimit"].split(";")[-1].split("=")[-1])
                         wait_base = max(wait_base, rate_limit_wait + 10)  # Add buffer to rate limit wait
                     except Exception:
                         logger.warning("Failed to parse rate limit header, using default wait period")
