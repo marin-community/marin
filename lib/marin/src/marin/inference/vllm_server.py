@@ -49,9 +49,6 @@ _SENSITIVE_ENV_KEYS = frozenset(
     }
 )
 
-_VLLM_SIDECAR_LABEL_KEY = "marin.vllm_sidecar"
-_VLLM_SIDECAR_LABEL_VALUE = "1"
-
 
 @dataclass(frozen=True)
 class VllmServerHandle:
@@ -118,144 +115,6 @@ def _docker_container_running(container_name: str) -> bool:
     if output == "false":
         return False
     raise RuntimeError(f"Unexpected output from docker inspect: {output!r}")
-
-
-def _docker_container_status(container_name: str) -> str | None:
-    result = subprocess.run(
-        ["docker", "inspect", "-f", "{{.State.Status}}", container_name],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
-
-
-def _docker_image_present(image: str) -> bool:
-    result = subprocess.run(
-        ["docker", "image", "inspect", image],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
-
-
-def _ensure_docker_image_present(image: str) -> None:
-    if _docker_image_present(image):
-        return
-    print(f"vLLM sidecar: Docker image {image!r} not present locally; pulling...")
-    subprocess.run(["docker", "pull", image], check=True)
-
-
-def _disk_usage_line(path: str) -> str | None:
-    try:
-        usage = shutil.disk_usage(path)
-    except FileNotFoundError:
-        return None
-    except OSError:
-        return f"{path}: <failed to stat>"
-
-    total_gib = usage.total / (1024**3)
-    used_gib = usage.used / (1024**3)
-    free_gib = usage.free / (1024**3)
-    used_pct = (usage.used / usage.total * 100.0) if usage.total else 0.0
-    return f"{path}: total={total_gib:.1f}GiB used={used_gib:.1f}GiB free={free_gib:.1f}GiB used_pct={used_pct:.1f}%"
-
-
-def _disk_diagnostics() -> str:
-    tmpdir = os.environ.get("TMPDIR") or "/tmp"
-    paths = ["/", tmpdir, "/tmp/ray", "/dev/shm", "/var/lib/docker"]
-    session_latest = os.path.join("/tmp/ray", "session_latest")
-    if os.path.exists(session_latest):
-        paths.append(session_latest)
-        real_session = os.path.realpath(session_latest)
-        if real_session != session_latest:
-            paths.append(real_session)
-
-    lines = ["Disk diagnostics:"]
-    lines.append(f"  TMPDIR={tmpdir!r} RAY_TMPDIR={os.environ.get('RAY_TMPDIR')!r}")
-    for path in paths:
-        line = _disk_usage_line(path)
-        if line is not None:
-            lines.append(f"  {line}")
-    return "\n".join(lines)
-
-
-def _docker_list_sidecar_containers() -> list[str]:
-    result = subprocess.run(
-        [
-            "docker",
-            "ps",
-            "-a",
-            "--filter",
-            f"label={_VLLM_SIDECAR_LABEL_KEY}={_VLLM_SIDECAR_LABEL_VALUE}",
-            "--format",
-            "{{.Names}}",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return []
-    return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-
-
-def _docker_list_marin_vllm_containers_by_prefix() -> list[str]:
-    result = subprocess.run(
-        ["docker", "ps", "-a", "--format", "{{.Names}}"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return []
-    return [line.strip() for line in (result.stdout or "").splitlines() if line.strip().startswith("marin-vllm-")]
-
-
-def _stop_docker_container_by_name(container_name: str) -> None:
-    """Force-remove a container and wait until it is actually gone."""
-    try:
-        subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True, text=True, timeout=30)
-    except subprocess.TimeoutExpired:
-        pass
-
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        if _docker_container_status(container_name) is None:
-            return
-        subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True, text=True)
-        time.sleep(1)
-
-    status = _docker_container_status(container_name)
-    if status is not None:
-        print(
-            f"vLLM sidecar: failed to fully remove container {container_name!r} "
-            f"(status={status!r}); TPU may remain busy"
-        )
-
-
-def _cleanup_stale_sidecar_containers(*, kill_running: bool) -> None:
-    # Best-effort cleanup; never fails the job.
-    sidecars = sorted(set(_docker_list_sidecar_containers() + _docker_list_marin_vllm_containers_by_prefix()))
-    if not sidecars:
-        return
-
-    removed: list[str] = []
-    for name in sidecars:
-        status = _docker_container_status(name)
-        if status is None:
-            continue
-        if status == "running" and not kill_running:
-            continue
-        if status in {"running", "exited", "dead", "created", "removing"}:
-            _stop_docker_container_by_name(name)
-            removed.append(name)
-
-    if removed:
-        print(f"vLLM sidecar: cleaned up {len(removed)} prior sidecar container(s): {', '.join(removed)}")
 
 
 def _docker_logs_tail(container_name: str, *, max_lines: int = 200) -> str:
@@ -346,7 +205,8 @@ class DockerVllmServerBackend(VllmServerBackend):
         return diagnostics
 
     def stop(self, handle: VllmServerHandle) -> None:
-        _stop_docker_container_by_name(handle.docker_container_name)
+        container_name = handle.docker_container_name
+        subprocess.run(["docker", "rm", "-f", container_name], check=False, capture_output=True, text=True)
 
 
 class NativeVllmServerBackend(VllmServerBackend):
@@ -584,8 +444,6 @@ def _build_docker_run_command(
     # Avoid `--rm` so that if the container exits immediately we can still collect logs/inspect output.
     # We explicitly clean up with `docker rm -f` via `VllmServerHandle.stop()`.
     cmd: list[str] = ["docker", "run", "-d", "--net=host", "--name", container_name]
-    cmd.extend(["--label", f"{_VLLM_SIDECAR_LABEL_KEY}={_VLLM_SIDECAR_LABEL_VALUE}"])
-    cmd.extend(["--label", f"marin.vllm_port={port}"])
 
     cmd.extend(docker_run_args)
 
@@ -658,17 +516,10 @@ def _start_vllm_docker_server(
     """
 
     _require_docker_available()
-    # Use print so this always shows up in Ray logs even if Python logging isn't configured.
-    print(_disk_diagnostics())
 
     resolved_image = docker_image or os.environ.get("MARIN_VLLM_DOCKER_IMAGE") or DEFAULT_VLLM_DOCKER_IMAGE
     if "MARIN_VLLM_DOCKER_IMAGE" not in os.environ and docker_image is None:
         print(f"MARIN_VLLM_DOCKER_IMAGE not set; defaulting to {resolved_image}")
-
-    # Fray is expected to schedule TPU jobs with exclusive access per TPU VM. If we find
-    # a prior sidecar, it's almost certainly a leak from a crashed worker.
-    _cleanup_stale_sidecar_containers(kill_running=True)
-    _ensure_docker_image_present(resolved_image)
 
     env: dict[str, str] = _vllm_jax_env()
     explain_cache_misses = os.environ.get("JAX_EXPLAIN_CACHE_MISSES")
@@ -707,22 +558,7 @@ def _start_vllm_docker_server(
         extra_vllm_args=list(extra_cli_args or []),
         docker_run_args=docker_args,
     )
-    print(f"vLLM sidecar: starting container {resolved_name!r}")
-    print(f"vLLM sidecar: docker command: {_redact_docker_run_command(cmd)}")
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as e:
-        # Best-effort cleanup in case `docker run` partially created the container.
-        _stop_docker_container_by_name(resolved_name)
-        raise RuntimeError(
-            "Failed to start vLLM Docker sidecar.\n"
-            f"Image: {resolved_image}\n"
-            f"Command: {_redact_docker_run_command(cmd)}\n"
-            f"Exit code: {e.returncode}\n"
-            f"--- stdout ---\n{(e.stdout or '').strip()}\n"
-            f"--- stderr ---\n{(e.stderr or '').strip()}\n"
-            f"--- diagnostics ---\n{_disk_diagnostics()}"
-        ) from e
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
 
     server_url = f"http://{host}:{resolved_port}/v1"
     handle = VllmServerHandle(
@@ -735,12 +571,11 @@ def _start_vllm_docker_server(
 
     server_models_url = f"{handle.server_url}/models"
     start_time = time.time()
-    last_progress_log_time = 0.0
 
     try:
         while True:
-            status = _docker_container_status(resolved_name)
-            if status is None or status in {"exited", "dead"}:
+            running = _docker_container_running(resolved_name)
+            if not running:
                 logs = _docker_logs_tail(resolved_name)
                 inspect = _docker_inspect(resolved_name)
                 raise RuntimeError(
@@ -748,17 +583,9 @@ def _start_vllm_docker_server(
                     f"Container: {resolved_name}\n"
                     f"Image: {resolved_image}\n"
                     f"Command: {_redact_docker_run_command(cmd)}\n"
-                    f"Status: {status}\n"
-                    f"--- diagnostics ---\n{_disk_diagnostics()}\n"
                     f"--- docker logs (tail) ---\n{logs}\n"
                     f"--- docker inspect ---\n{inspect[:8000]}"
                 )
-
-            elapsed_time = time.time() - start_time
-            if elapsed_time - last_progress_log_time >= 30:
-                print("vLLM sidecar: waiting for readiness:")
-                print(f"  status={status!r} elapsed={elapsed_time:.1f}s url={server_models_url}")
-                last_progress_log_time = elapsed_time
 
             try:
                 response = requests.get(server_models_url, timeout=5)
@@ -771,22 +598,22 @@ def _start_vllm_docker_server(
                 # Server not ready yet.
                 pass
 
+            elapsed_time = time.time() - start_time
             if elapsed_time > timeout_seconds:
                 logs = _docker_logs_tail(resolved_name)
-                _stop_docker_container_by_name(resolved_name)
+                subprocess.run(["docker", "rm", "-f", resolved_name], check=False, capture_output=True, text=True)
                 raise TimeoutError(
                     "Failed to start vLLM Docker sidecar within timeout period.\n"
                     f"Container: {resolved_name}\n"
                     f"Image: {resolved_image}\n"
                     f"Endpoint: {server_models_url}\n"
                     f"Elapsed seconds: {elapsed_time:.1f}\n"
-                    f"--- diagnostics ---\n{_disk_diagnostics()}\n"
                     f"--- docker logs (tail) ---\n{logs}"
                 )
 
             time.sleep(poll_interval_seconds)
-    except BaseException:
-        _stop_docker_container_by_name(resolved_name)
+    except Exception:
+        subprocess.run(["docker", "rm", "-f", resolved_name], check=False, capture_output=True, text=True)
         raise
 
 

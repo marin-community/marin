@@ -123,9 +123,8 @@ def main(argv: list[str] | None = None) -> int:
         "--local-cache-dir",
         default=None,
         help=(
-            "Optional compilation cache dir to export into the job. "
-            "When set, exports JAX_COMPILATION_CACHE_DIR and VLLM_XLA_CACHE_PATH. "
-            "For docker mode, consider a container-local path like /dev/shm/marin-vllm-xla-cache to avoid filling /tmp."
+            "Optional stable local compilation cache dir (e.g. /tmp/marin-jax-compilation-cache). "
+            "When set, exports JAX_COMPILATION_CACHE_DIR and VLLM_XLA_CACHE_PATH."
         ),
     )
     parser.add_argument("--prompt", default="Write a short haiku about TPUs.", help="Prompt to send.")

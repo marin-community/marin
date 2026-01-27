@@ -35,6 +35,7 @@ theme:
 
 repo_url: https://github.com/marin-community/marin
 repo_name: marin-community/marin
+edit_uri: edit/main/docs/
 
 # Include extra JS to setup Read the Docs addons integrations
 extra_javascript:
@@ -66,17 +67,12 @@ nav:
       - Setting up a TPU Cluster: tutorials/tpu-cluster-setup.md
       - Executor 101: tutorials/executor-101.md
       - Data Browser: tutorials/data-browser.md
-      - Using Data Shop: tutorials/datashop.md
       - Training an LM: tutorials/train-an-lm.md
       - Submitting a Speedrun: tutorials/submitting-speedrun.md
-      - Filtering Data: tutorials/filtering-data.md
-      - Running an Annealing Experiment: tutorials/annealing-experiment.md
-      - Co-Developing with Marin and Levanter: tutorials/co-develop.md
       - Adding an Optimizer for Speedrun: tutorials/add-optimizer.md
       - Running HELMET Evals: tutorials/run-helmet.md
   - Explanations:
       - The Language Modeling Pipeline: explanations/lm-pipeline.md
-      - Datashop: explanations/datashop.md
       - Evaluation: explanations/evaluation.md
       - Experiments: explanations/experiments.md
       - Executor: explanations/executor.md

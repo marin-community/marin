@@ -19,9 +19,7 @@ instead of Docker containers, ensuring local execution follows the same code pat
 as production cluster execution.
 """
 
-import base64
 import io
-import re
 import socket
 import tempfile
 import threading
@@ -33,10 +31,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Self
 
-import cloudpickle
-
 from iris.cluster.client.remote_client import RemoteClusterClient
-from iris.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
+from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
@@ -58,13 +54,28 @@ def _find_free_port() -> int:
 
 
 class LocalEnvironmentProvider:
-    def __init__(self, cpu: int = 1000, memory_gb: int = 1000):
+    def __init__(
+        self,
+        cpu: int = 1000,
+        memory_gb: int = 1000,
+        attributes: dict[str, str | int | float] | None = None,
+    ):
         self._cpu = cpu
         self._memory_gb = memory_gb
+        self._attributes = attributes or {}
 
     def probe(self) -> cluster_pb2.WorkerMetadata:
         device = cluster_pb2.DeviceConfig()
         device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+
+        proto_attrs = {}
+        for key, value in self._attributes.items():
+            if isinstance(value, str):
+                proto_attrs[key] = cluster_pb2.AttributeValue(string_value=value)
+            elif isinstance(value, int):
+                proto_attrs[key] = cluster_pb2.AttributeValue(int_value=value)
+            elif isinstance(value, float):
+                proto_attrs[key] = cluster_pb2.AttributeValue(float_value=value)
 
         return cluster_pb2.WorkerMetadata(
             hostname="local",
@@ -73,6 +84,7 @@ class LocalEnvironmentProvider:
             memory_bytes=self._memory_gb * 1024**3,
             disk_bytes=100 * 1024**3,  # Default 100GB for local
             device=device,
+            attributes=proto_attrs,
         )
 
 
@@ -102,6 +114,9 @@ class _LocalContainer:
             env = self.config.env
             job_info = JobInfo(
                 job_id=env.get("IRIS_JOB_ID", ""),
+                task_id=env.get("IRIS_TASK_ID"),
+                task_index=int(env.get("IRIS_TASK_INDEX", "0")),
+                num_tasks=int(env.get("IRIS_NUM_TASKS", "1")),
                 attempt_id=int(env.get("IRIS_ATTEMPT_ID", "0")),
                 worker_id=env.get("IRIS_WORKER_ID"),
                 controller_address=env.get("IRIS_CONTROLLER_ADDRESS"),
@@ -109,9 +124,8 @@ class _LocalContainer:
             )
             set_job_info(job_info)
 
-            # Extract encoded data from command (command is ['python', '-c', script])
-            script = self.config.command[2]
-            fn, args, kwargs = self._extract_entrypoint(script)
+            # Use entrypoint directly - no command parsing needed
+            fn, args, kwargs = self.config.entrypoint
 
             # Check if killed before executing
             if self._killed.is_set():
@@ -143,13 +157,6 @@ class _LocalContainer:
                         data=line,
                     )
                 )
-
-    def _extract_entrypoint(self, script: str):
-        match = re.search(r"base64\.b64decode\('([^']+)'\)\)", script)
-        if match:
-            encoded = match.group(1)
-            return cloudpickle.loads(base64.b64decode(encoded))
-        raise ValueError("Could not extract entrypoint from command")
 
     def kill(self):
         self._killed.set()
@@ -216,13 +223,11 @@ class _LocalImageProvider:
         base_image: str,
         extras: list[str],
         job_id: str,
-        deps_hash: str,
-        job_logs=None,
+        task_logs=None,
     ) -> BuildResult:
-        del bundle_path, base_image, extras, job_id, job_logs
+        del bundle_path, base_image, extras, job_id, task_logs
         return BuildResult(
             image_tag="local:latest",
-            deps_hash=deps_hash,
             build_time_ms=0,
             from_cache=True,
         )
@@ -234,11 +239,6 @@ class _LocalImageProvider:
     def unprotect(self, tag: str) -> None:
         """No-op for local provider (no eviction)."""
         del tag
-
-
-# =============================================================================
-# LocalClusterClient
-# =============================================================================
 
 
 class LocalClusterClient:
@@ -301,7 +301,7 @@ class LocalClusterClient:
         )
         controller = Controller(
             config=controller_config,
-            worker_stub_factory=DefaultWorkerStubFactory(),
+            worker_stub_factory=RpcWorkerStubFactory(),
         )
         controller.start()
 
@@ -371,6 +371,8 @@ class LocalClusterClient:
         environment: cluster_pb2.EnvironmentConfig | None = None,
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,
+        constraints: list[cluster_pb2.Constraint] | None = None,
+        coscheduling: cluster_pb2.CoschedulingConfig | None = None,
     ) -> None:
         self._remote_client.submit_job(
             job_id=job_id,
@@ -379,6 +381,8 @@ class LocalClusterClient:
             environment=environment,
             ports=ports,
             scheduling_timeout_seconds=scheduling_timeout_seconds,
+            constraints=constraints,
+            coscheduling=coscheduling,
         )
 
     def get_job_status(self, job_id: str) -> cluster_pb2.JobStatus:
@@ -413,11 +417,16 @@ class LocalClusterClient:
     def list_jobs(self) -> list[cluster_pb2.JobStatus]:
         return self._remote_client.list_jobs()
 
-    def fetch_logs(
+    def get_task_status(self, job_id: str, task_index: int) -> cluster_pb2.TaskStatus:
+        return self._remote_client.get_task_status(job_id, task_index)
+
+    def list_tasks(self, job_id: str) -> list[cluster_pb2.TaskStatus]:
+        return self._remote_client.list_tasks(job_id)
+
+    def fetch_task_logs(
         self,
-        job_id: str,
-        *,
+        task_id: str,
         start_ms: int = 0,
         max_lines: int = 0,
     ) -> list[cluster_pb2.Worker.LogEntry]:
-        return self._remote_client.fetch_logs(job_id, start_ms=start_ms, max_lines=max_lines)
+        return self._remote_client.fetch_task_logs(task_id, start_ms, max_lines)
