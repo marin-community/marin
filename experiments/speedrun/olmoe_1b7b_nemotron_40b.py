@@ -23,13 +23,17 @@ from collections.abc import Sequence
 
 from experiments.defaults import default_train
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
+from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
-from experiments.llama import llama3_tokenizer
+from experiments.llama import llama3_tokenizer, llama_1_4b
+from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from fray.cluster import ResourceConfig
+from levanter.utils.activation import ActivationFunctionEnum
 from levanter.infra.cli_helpers import load_config
 from marin.execution.executor import ExecutorStep, InputName, executor_main, output_path_of
+from marin.processing.tokenize.download_pretokenized import download_pretokenized_cache
 from marin.processing.tokenize import lm_data_config, lm_mixture_data_config
 from marin.speedrun.speedrun import Author, SpeedrunConfig, SpeedrunResultsConfig, speedrun_results
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
@@ -41,8 +45,8 @@ logger = logging.getLogger("ray")
 # ---------------------------------------------------------------------------
 SEQ_LEN = 2048
 DEFAULT_GLOBAL_BATCH_SIZE = 64
-TOKEN_TARGET = 40_000_000_000  # 40B tokens
-NUM_TRAIN_STEPS = math.ceil(TOKEN_TARGET / (DEFAULT_GLOBAL_BATCH_SIZE * SEQ_LEN))
+DEFAULT_TOKEN_TARGET = 40_000_000_000  # 40B tokens
+COMPOSITE_TOKEN_TARGET = 100_000_000_000  # 100B tokens
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.1
 STEPS_PER_EVAL = 5000
@@ -53,7 +57,9 @@ DEFAULT_PROFILER_NUM_STEPS = 20
 
 MODEL_OLMOE_1B7B = "olmoe_1b7b"
 MODEL_MIXTRAL_8X7B = "mixtral_8x7b"
-MODEL_OPTIONS = (MODEL_OLMOE_1B7B, MODEL_MIXTRAL_8X7B)
+MODEL_LLAMA_1_4B = "llama_1_4b"
+MODEL_LLAMA_1_4B_BILINEAR = "llama_1_4b_bilinear"
+MODEL_OPTIONS = (MODEL_OLMOE_1B7B, MODEL_MIXTRAL_8X7B, MODEL_LLAMA_1_4B, MODEL_LLAMA_1_4B_BILINEAR)
 DEFAULT_MODEL = MODEL_OLMOE_1B7B
 
 OLMOE_1B7B_REFERENCE_CHECKPOINT = "allenai/OLMoE-1B-7B-0125"
@@ -103,11 +109,17 @@ def _build_mixtral_8x7b_config(seq_len: int) -> MixtralConfig:
     )
 
 
-def build_model_config(*, model: str, seq_len: int) -> MixtralConfig:
+def build_model_config(*, model: str, seq_len: int):
     if model == MODEL_OLMOE_1B7B:
         return _build_olmoe_1b7b_config(seq_len)
     if model == MODEL_MIXTRAL_8X7B:
         return _build_mixtral_8x7b_config(seq_len)
+    if model == MODEL_LLAMA_1_4B:
+        return dataclasses.replace(llama_1_4b, max_seq_len=seq_len)
+    if model == MODEL_LLAMA_1_4B_BILINEAR:
+        # Bilinear MLP variant: remove the gate nonlinearity (SwiGLU -> (W1 x) * (W3 x)).
+        # Note: HF export isn't supported for this activation, so we disable exports below.
+        return dataclasses.replace(llama_1_4b, max_seq_len=seq_len, activation_function=ActivationFunctionEnum.linear)
     raise ValueError(f"Unknown model preset {model!r}. Options: {MODEL_OPTIONS}.")
 
 
@@ -118,9 +130,49 @@ nemotron_cc_mixture = lm_mixture_data_config(
     permutation_type="linear",
 )
 
+fineweb_edu_subcache_10B_llama3 = download_pretokenized_cache(
+    "fineweb-edu-10B-llama3",
+    "marin-community/fineweb-edu-pretokenized-10B",
+    llama3_tokenizer,
+)
+
+
+def _normalize_weights(weights: dict[str, float]) -> dict[str, float]:
+    total = sum(weights.values())
+    if total <= 0:
+        raise ValueError("Weights must sum to a positive value.")
+    return {k: v / total for k, v in weights.items()}
+
+
+# Composite mixture ratios (approx token targets):
+# - Nemotron-CC: 40B tokens  -> 0.4
+# - FineWeb-Edu: 10B tokens  -> 0.1
+# - DCLM mix:    50B tokens  -> 0.5
+_NEMOTRON_SHARE = 0.4
+_FINEWEB_SHARE = 0.1
+_DCLM_SHARE = 0.5
+
+nemotron_dclm_fineweb_components = {
+    **nemotron_cc_steps,
+    **dclm_components_llama3,
+    "fineweb_edu_10b": fineweb_edu_subcache_10B_llama3,
+}
+nemotron_dclm_fineweb_weights = {
+    **{k: v * _NEMOTRON_SHARE for k, v in _normalize_weights(NEMOTRON_WEIGHTS).items()},
+    **{k: v * _DCLM_SHARE for k, v in _normalize_weights(DCLM_MIXTURE_WEIGHTS).items()},
+    "fineweb_edu_10b": _FINEWEB_SHARE,
+}
+nemotron_dclm_fineweb_mixture = lm_mixture_data_config(
+    components=nemotron_dclm_fineweb_components,
+    weights=nemotron_dclm_fineweb_weights,
+    permutation_type="linear",
+)
+
 DATASET_OPTIONS = {
     "nemotron_cc": nemotron_cc_mixture,
     "dclm": dclm_mixture_config_llama3,
+    "fineweb_edu_10b": fineweb_edu_subcache_10B,
+    "nemotron_dclm_fineweb_10b": nemotron_dclm_fineweb_mixture,
 }
 DEFAULT_DATASET = "nemotron_cc"
 
@@ -145,7 +197,7 @@ def nemotron_only_speedrun(
     if isinstance(config.tokenized_dataset, (InputName, ExecutorStep)):
         pretraining_data = lm_data_config(
             training_set=config.tokenized_dataset,
-            validation_sets=[],
+            validation_sets=None,
             permutation_type="linear",
         )
     else:
@@ -233,6 +285,10 @@ def make_speedrun_config(
 ) -> SpeedrunConfig:
     tokenized_dataset = DATASET_OPTIONS[dataset_name]
     model_config = build_model_config(model=model, seq_len=seq_len)
+    steps_per_export = STEPS_PER_EXPORT
+    if isinstance(getattr(model_config, "activation_function", None), ActivationFunctionEnum):
+        if model_config.activation_function == ActivationFunctionEnum.linear:
+            steps_per_export = -1
     return SpeedrunConfig(
         author=Author(
             name="Marin Team",
@@ -248,7 +304,7 @@ def make_speedrun_config(
             learning_rate=LEARNING_RATE,
             weight_decay=WEIGHT_DECAY,
             steps_per_eval=STEPS_PER_EVAL,
-            steps_per_export=STEPS_PER_EXPORT,
+            steps_per_export=steps_per_export,
             profiler=profiler,
             profiler_start_step=profiler_start_step,
             profiler_num_steps=profiler_num_steps,
@@ -268,8 +324,18 @@ def _parse_args():
     parser.add_argument(
         "--num-train-steps",
         type=int,
-        default=NUM_TRAIN_STEPS,
-        help=f"Number of training steps to run (default {NUM_TRAIN_STEPS}, i.e. ~40B tokens).",
+        default=None,
+        help="Number of training steps to run (default: computed from --token-target, --global-batch-size, --seq-len).",
+    )
+    parser.add_argument(
+        "--token-target",
+        type=int,
+        default=None,
+        help=(
+            "Total token budget used to compute a default --num-train-steps when that flag is omitted. "
+            f"Defaults to {DEFAULT_TOKEN_TARGET} for single-corpus runs and {COMPOSITE_TOKEN_TARGET} for the composite "
+            "mixture."
+        ),
     )
     parser.add_argument(
         "--global-batch-size",
@@ -310,7 +376,7 @@ def _parse_args():
         "--dataset",
         choices=DATASET_OPTIONS.keys(),
         default=DEFAULT_DATASET,
-        help="Which tokenized dataset to train on (default: dclm).",
+        help=f"Which tokenized dataset to train on (default: {DEFAULT_DATASET}).",
     )
     parser.add_argument(
         "--run-suffix",
@@ -337,11 +403,15 @@ def _parse_args():
     return parser.parse_known_args()
 
 
+def _steps_for_token_target(token_target: int, global_batch_size: int, seq_len: int) -> int:
+    return math.ceil(token_target / (global_batch_size * seq_len))
+
+
 # Keep a default config available for scripts that import this module.
 speedrun_config = make_speedrun_config(
     model=DEFAULT_MODEL,
     global_batch_size=DEFAULT_GLOBAL_BATCH_SIZE,
-    num_train_steps=NUM_TRAIN_STEPS,
+    num_train_steps=_steps_for_token_target(DEFAULT_TOKEN_TARGET, DEFAULT_GLOBAL_BATCH_SIZE, SEQ_LEN),
     profiler=False,
     profiler_start_step=DEFAULT_PROFILER_START_STEP,
     profiler_num_steps=DEFAULT_PROFILER_NUM_STEPS,
@@ -354,12 +424,14 @@ speedrun_config = make_speedrun_config(
 if __name__ == "__main__":
     args, remaining = _parse_args()
     sys.argv = [sys.argv[0], *remaining]
-    if args.num_train_steps == NUM_TRAIN_STEPS and (
-        args.global_batch_size != DEFAULT_GLOBAL_BATCH_SIZE or args.seq_len != SEQ_LEN
-    ):
-        num_train_steps = math.ceil(TOKEN_TARGET / (args.global_batch_size * args.seq_len))
-    else:
-        num_train_steps = args.num_train_steps
+    token_target = args.token_target
+    if token_target is None:
+        token_target = COMPOSITE_TOKEN_TARGET if args.dataset == "nemotron_dclm_fineweb_10b" else DEFAULT_TOKEN_TARGET
+    num_train_steps = (
+        args.num_train_steps
+        if args.num_train_steps is not None
+        else _steps_for_token_target(token_target, args.global_batch_size, args.seq_len)
+    )
     run_config = make_speedrun_config(
         model=args.model,
         global_batch_size=args.global_batch_size,
@@ -371,17 +443,19 @@ if __name__ == "__main__":
         seq_len=args.seq_len,
         tpu_type=args.tpu_type,
     )
-    logger.info("Launching MoE Nemotron speedrun.")
+    logger.info("Launching Nemotron speedrun.")
+    effective_tokens = run_config.train_config.train_batch_size * args.seq_len * run_config.train_config.num_train_steps
     logger.info(
         "Settings: dataset=%s, batch=%s, seq_len=%s, steps=%s (~%.2fB tokens)",
         args.dataset,
         run_config.train_config.train_batch_size,
-        run_config.model_config.seq_len,
+        args.seq_len,
         run_config.train_config.num_train_steps,
-        TOKEN_TARGET / 1e9,
+        effective_tokens / 1e9,
     )
     logger.info("Model preset: %s", args.model)
-    logger.info("Model config flags: use_gmm=%s", run_config.model_config.use_gmm)
+    if hasattr(run_config.model_config, "use_gmm"):
+        logger.info("Model config flags: use_gmm=%s", run_config.model_config.use_gmm)
     if args.profile:
         logger.info(
             "Profiler enabled: start_step=%s num_steps=%s",
