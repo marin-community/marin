@@ -63,10 +63,6 @@ MAX_RETRIES = 3
 HEALTH_CHECK_BACKOFF_INITIAL = 2.0
 HEALTH_CHECK_BACKOFF_MAX = 10.0
 
-# Backoff parameters for retry loops: start at 10s, cap at 60s
-RETRY_BACKOFF_INITIAL = 10.0
-RETRY_BACKOFF_MAX = 60.0
-
 
 def wait_healthy_via_ssh(
     conn: SshConnection,
@@ -113,10 +109,6 @@ def wait_healthy_via_ssh(
     if last_result.container_logs:
         logger.warning("Container logs:\n%s", last_result.container_logs)
     return False
-
-
-class RetryableError(Exception):
-    """Error that should trigger a retry."""
 
 
 @dataclass
@@ -343,10 +335,12 @@ class GcpController:
         return yaml.dump(config_to_dict(self.config), default_flow_style=False)
 
     def start(self) -> str:
-        """Start controller GCE VM with retry logic.
+        """Start controller GCE VM.
 
         Idempotent: returns existing controller address if healthy.
         Otherwise cleans up stale controller and creates a new one.
+
+        Bootstrap is done via SSH with streamed logs for visibility.
         """
         logger.info("Starting controller (project=%s, zone=%s)", self.project_id, self.zone)
 
@@ -367,51 +361,48 @@ class GcpController:
         else:
             logger.info("No existing controller found, creating new VM")
 
-        backoff = ExponentialBackoff(
-            initial=RETRY_BACKOFF_INITIAL,
-            maximum=RETRY_BACKOFF_MAX,
-            factor=2.0,
+        # Create VM (without startup script - we bootstrap via SSH)
+        address = self._create_vm()
+        port = self._gcp_config.port or DEFAULT_CONTROLLER_PORT
+
+        # Print SSH command for user inspection
+        logger.info(
+            "To inspect the VM manually:\n  gcloud compute ssh %s --project=%s --zone=%s",
+            self._vm_name,
+            self.project_id,
+            self.zone,
         )
 
-        for attempt in range(MAX_RETRIES):
-            logger.info("Starting controller VM creation (attempt %d/%d)", attempt + 1, MAX_RETRIES)
-            try:
-                address = self._create_vm()
+        # Bootstrap via SSH with streamed logs
+        conn = GceSshConnection(
+            project_id=self.project_id,
+            zone=self.zone,
+            vm_name=self._vm_name,
+        )
 
-                # Use SSH-based health check since firewall may block external port access
-                port = self._gcp_config.port or DEFAULT_CONTROLLER_PORT
-                conn = GceSshConnection(
-                    project_id=self.project_id,
-                    zone=self.zone,
-                    vm_name=self._vm_name,
-                )
-                if wait_healthy_via_ssh(conn, port):
-                    self._tag_metadata(address)
-                    logger.info("Controller started successfully at %s", address)
-                    return address
+        config_yaml = self._serialize_config()
+        bootstrap_script = _build_controller_bootstrap_script(self._gcp_config.image, port, config_yaml)
 
-                # Health check failed - try to get logs for debugging
-                logger.warning("Controller health check failed after VM creation")
-                logs = self.fetch_startup_logs(tail_lines=30)
-                if logs:
-                    logger.warning("Startup script output:\n%s", logs)
-                self._delete_vm()
-                raise RetryableError("Health check failed after VM creation")
-            except RetryableError as e:
-                if attempt < MAX_RETRIES - 1:
-                    wait_time = backoff.next_interval()
-                    logger.info(
-                        "Retrying controller start in %.1fs (attempt %d/%d)", wait_time, attempt + 1, MAX_RETRIES
-                    )
-                    time.sleep(wait_time)
-                else:
-                    # Final failure - try to get logs one more time
-                    logs = self.fetch_startup_logs(tail_lines=50)
-                    if logs:
-                        logger.error("Final startup script output:\n%s", logs)
-                    raise RuntimeError(f"Failed to start controller after {MAX_RETRIES} attempts") from e
+        def on_line(line: str) -> None:
+            logger.info("[%s] %s", self._vm_name, line)
 
-        raise RuntimeError("Controller start failed unexpectedly")
+        run_streaming_with_retry(
+            conn,
+            f"bash -c {shlex.quote(bootstrap_script)}",
+            max_retries=MAX_RETRIES,
+            on_line=on_line,
+        )
+
+        # Final health check
+        if not wait_healthy_via_ssh(conn, port):
+            docker_logs = self._fetch_docker_logs(tail_lines=100)
+            if docker_logs:
+                logger.error("=== Docker Container Logs ===\n%s", docker_logs)
+            raise RuntimeError(f"Controller at {address} failed health check after bootstrap")
+
+        self._tag_metadata(address)
+        logger.info("Controller started successfully at %s", address)
+        return address
 
     def stop(self) -> None:
         """Terminate controller GCE VM."""
@@ -523,21 +514,13 @@ class GcpController:
         return None
 
     def _create_vm(self) -> str:
-        """Create GCE VM and run bootstrap, return controller address."""
+        """Create GCE VM, return controller address.
+
+        This only creates the VM - bootstrap is done via SSH in start().
+        """
         machine_type = self._gcp_config.machine_type or DEFAULT_MACHINE_TYPE
         boot_disk_size = self._gcp_config.boot_disk_size_gb or DEFAULT_BOOT_DISK_SIZE_GB
         port = self._gcp_config.port or DEFAULT_CONTROLLER_PORT
-
-        config_yaml = self._serialize_config()
-        bootstrap_script = _build_controller_bootstrap_script(self._gcp_config.image, port, config_yaml)
-
-        # Log bootstrap script summary for visibility
-        script_lines = bootstrap_script.strip().split("\n")
-        logger.info(
-            "Bootstrap script prepared (%d lines). Key steps: Docker install, image pull (%s), container start",
-            len(script_lines),
-            self._gcp_config.image,
-        )
 
         cmd = [
             "gcloud",
@@ -553,16 +536,14 @@ class GcpController:
             "--image-project=debian-cloud",
             "--scopes=cloud-platform",
             f"--metadata={CONTROLLER_METADATA_KEY}=true",
-            "--metadata-from-file=startup-script=/dev/stdin",
             "--format=json",
         ]
 
         logger.info("Creating controller VM: %s (zone=%s, type=%s)", self._vm_name, self.zone, machine_type)
-        logger.info("VM creation in progress... (this may take 30-60 seconds)")
         logger.debug("Running: %s", " ".join(cmd))
 
         start_time = time.time()
-        result = subprocess.run(cmd, input=bootstrap_script, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True)
         elapsed = time.time() - start_time
 
         if result.returncode != 0:
@@ -570,10 +551,9 @@ class GcpController:
             if "already exists" in error_msg.lower():
                 logger.info("Controller VM already exists (detected in %.1fs), getting its IP", elapsed)
                 return self._get_vm_address()
-            logger.error("VM creation failed after %.1fs: %s", elapsed, error_msg)
-            raise RetryableError(f"Failed to create controller VM: {error_msg}")
+            raise RuntimeError(f"Failed to create controller VM: {error_msg}")
 
-        logger.info("VM created successfully in %.1fs, extracting IP address...", elapsed)
+        logger.info("VM created in %.1fs", elapsed)
 
         try:
             parsed = json.loads(result.stdout)
@@ -585,13 +565,7 @@ class GcpController:
                 if access_configs:
                     ip = access_configs[0].get("natIP")
                     if ip:
-                        address = f"http://{ip}:{port}"
-                        logger.info("Controller VM address: %s", address)
-                        logger.info(
-                            "Startup script is now running on the VM. "
-                            "Use 'iris cluster logs' or check serial console for progress."
-                        )
-                        return address
+                        return f"http://{ip}:{port}"
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
             logger.warning("Failed to parse VM creation output: %s", e)
 
@@ -612,11 +586,11 @@ class GcpController:
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            raise RetryableError(f"Failed to get controller VM address: {result.stderr.strip()}")
+            raise RuntimeError(f"Failed to get controller VM address: {result.stderr.strip()}")
 
         ip = result.stdout.strip()
         if not ip:
-            raise RetryableError("Controller VM has no external IP")
+            raise RuntimeError("Controller VM has no external IP")
 
         return f"http://{ip}:{port}"
 
@@ -699,6 +673,32 @@ class GcpController:
         # If no iris-controller lines, return the raw tail
         logger.info("No [iris-controller] lines found, returning raw serial output tail")
         return "\n".join(all_lines[-tail_lines:])
+
+    def _fetch_docker_logs(self, tail_lines: int = 100) -> str | None:
+        """Fetch docker logs from controller container via SSH.
+
+        This gets the actual container output (Python tracebacks, etc.)
+        unlike fetch_startup_logs which gets serial console output.
+        """
+        vm_name = self._find_controller_vm_name()
+        if not vm_name:
+            return None
+
+        conn = GceSshConnection(
+            project_id=self.project_id,
+            zone=self.zone,
+            vm_name=vm_name,
+        )
+
+        try:
+            result = conn.run(
+                f"sudo docker logs {CONTROLLER_CONTAINER_NAME} --tail {tail_lines} 2>&1",
+                timeout=30,
+            )
+            return result.stdout.strip() if result.returncode == 0 else None
+        except Exception as e:
+            logger.warning("Failed to fetch docker logs: %s", e)
+            return None
 
 
 CONTROLLER_STOP_SCRIPT = """
