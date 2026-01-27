@@ -105,9 +105,32 @@ def wait_healthy_via_ssh(
         remaining = timeout - elapsed
         time.sleep(min(interval, remaining))
 
-    logger.warning("SSH health check failed after %d attempts: %s", attempt, last_result.summary())
-    if last_result.container_logs:
-        logger.warning("Container logs:\n%s", last_result.container_logs)
+    # Health check failed - log detailed diagnostics
+    logger.error("=" * 60)
+    logger.error("SSH health check FAILED after %d attempts (%.1fs)", attempt, timeout)
+    logger.error("=" * 60)
+    logger.error("Final status: %s", last_result.summary())
+    if last_result.container_status:
+        logger.error("Container status: %s", last_result.container_status)
+    if last_result.curl_error:
+        logger.error("Health endpoint error: %s", last_result.curl_error)
+
+    # Try to get more detailed container logs (more lines than check_health fetches)
+    try:
+        logs_result = conn.run(f"sudo docker logs {container_name} --tail 50 2>&1", timeout=15)
+        if logs_result.returncode == 0 and logs_result.stdout.strip():
+            logger.error("Container logs (last 50 lines):\n%s", logs_result.stdout.strip())
+        elif last_result.container_logs:
+            logger.error("Container logs:\n%s", last_result.container_logs)
+        else:
+            logger.error("No container logs available (container may not exist)")
+    except Exception:
+        if last_result.container_logs:
+            logger.error("Container logs:\n%s", last_result.container_logs)
+        else:
+            logger.error("No container logs available (container may not exist)")
+
+    logger.error("=" * 60)
     return False
 
 
@@ -393,11 +416,8 @@ class GcpController:
             on_line=on_line,
         )
 
-        # Final health check
+        # Final health check (logs diagnostics on failure)
         if not wait_healthy_via_ssh(conn, port):
-            docker_logs = self._fetch_docker_logs(tail_lines=100)
-            if docker_logs:
-                logger.error("=== Docker Container Logs ===\n%s", docker_logs)
             raise RuntimeError(f"Controller at {address} failed health check after bootstrap")
 
         self._tag_metadata(address)
@@ -449,6 +469,7 @@ class GcpController:
 
         address = self._get_vm_address()
 
+        # Health check (logs diagnostics on failure)
         if not wait_healthy_via_ssh(conn, port):
             raise RuntimeError(f"Controller at {address} failed health check after reload")
 
@@ -673,32 +694,6 @@ class GcpController:
         # If no iris-controller lines, return the raw tail
         logger.info("No [iris-controller] lines found, returning raw serial output tail")
         return "\n".join(all_lines[-tail_lines:])
-
-    def _fetch_docker_logs(self, tail_lines: int = 100) -> str | None:
-        """Fetch docker logs from controller container via SSH.
-
-        This gets the actual container output (Python tracebacks, etc.)
-        unlike fetch_startup_logs which gets serial console output.
-        """
-        vm_name = self._find_controller_vm_name()
-        if not vm_name:
-            return None
-
-        conn = GceSshConnection(
-            project_id=self.project_id,
-            zone=self.zone,
-            vm_name=vm_name,
-        )
-
-        try:
-            result = conn.run(
-                f"sudo docker logs {CONTROLLER_CONTAINER_NAME} --tail {tail_lines} 2>&1",
-                timeout=30,
-            )
-            return result.stdout.strip() if result.returncode == 0 else None
-        except Exception as e:
-            logger.warning("Failed to fetch docker logs: %s", e)
-            return None
 
 
 CONTROLLER_STOP_SCRIPT = """

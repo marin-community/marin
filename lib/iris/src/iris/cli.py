@@ -123,6 +123,99 @@ def _require_config(ctx: click.Context) -> str:
     return config_file
 
 
+def _parse_artifact_registry_tag(image_tag: str) -> tuple[str, str, str, str] | None:
+    """Parse a GCP Artifact Registry image tag into components.
+
+    Args:
+        image_tag: Full image tag like "europe-west4-docker.pkg.dev/project/repo/image:version"
+
+    Returns:
+        Tuple of (region, project, image_name, version) or None if not a valid AR tag.
+    """
+    if "-docker.pkg.dev/" not in image_tag:
+        return None
+
+    # Parse: region-docker.pkg.dev/project/repo/image:version
+    parts = image_tag.split("/")
+    if len(parts) < 4:
+        return None
+
+    # Extract region from "region-docker.pkg.dev"
+    registry = parts[0]
+    if not registry.endswith("-docker.pkg.dev"):
+        return None
+    region = registry.replace("-docker.pkg.dev", "")
+
+    project = parts[1]
+    # repo is parts[2] (e.g., "marin")
+    image_and_version = parts[3]
+
+    if ":" in image_and_version:
+        image_name, version = image_and_version.split(":", 1)
+    else:
+        image_name = image_and_version
+        version = "latest"
+
+    return region, project, image_name, version
+
+
+def _build_and_push_controller_image(config) -> None:
+    """Build and push the controller image specified in config.
+
+    Extracts the image tag from config.controller_vm.gcp.image, builds the
+    controller image locally, and pushes it to the appropriate registry.
+
+    Args:
+        config: IrisClusterConfig proto with controller_vm.gcp.image set.
+
+    Raises:
+        click.ClickException: If image tag is invalid or build fails.
+    """
+    controller_vm = config.controller_vm
+    if controller_vm.WhichOneof("controller") != "gcp":
+        raise click.ClickException("--build only supported for GCP controller (controller_vm.gcp)")
+
+    image_tag = controller_vm.gcp.image
+    if not image_tag:
+        raise click.ClickException("controller_vm.gcp.image not set in config")
+
+    parsed = _parse_artifact_registry_tag(image_tag)
+    if not parsed:
+        raise click.ClickException(
+            f"Cannot parse image tag: {image_tag}\n" "Expected format: REGION-docker.pkg.dev/PROJECT/REPO/IMAGE:VERSION"
+        )
+
+    region, project, image_name, version = parsed
+    local_tag = f"{image_name}:{version}"
+
+    click.echo(f"Building controller image: {local_tag}")
+    click.echo(f"  Region: {region}")
+    click.echo(f"  Project: {project}")
+    click.echo()
+
+    # Build the image
+    build_image(
+        image_type="controller",
+        tag=local_tag,
+        push=False,
+        dockerfile=None,
+        context=None,
+        platform="linux/amd64",
+        region=(),
+        project=project,
+    )
+
+    # Push to registry
+    click.echo()
+    push_to_registries(
+        source_tag=local_tag,
+        regions=(region,),
+        project=project,
+        image_name=image_name,
+        version=version,
+    )
+
+
 def _wait_for_slice_obj(slice_obj, poll_interval: float = 5.0) -> bool:
     """Poll until slice reaches terminal state (all READY or any FAILED).
 
@@ -227,8 +320,15 @@ def controller(ctx):
 @controller.command("start")
 @click.pass_context
 def controller_start(ctx):
-    """Boot controller GCE VM and wait for health."""
+    """Boot controller GCE VM and wait for health.
+
+    Automatically builds and pushes the controller image before starting.
+    """
     config = ctx.obj["config"]
+
+    _build_and_push_controller_image(config)
+    click.echo()
+
     ctrl = create_controller(config)
 
     click.echo("Starting controller...")
@@ -274,11 +374,15 @@ def controller_restart(ctx):
 def controller_reload(ctx):
     """Reload controller by re-running bootstrap on existing VM.
 
-    Unlike restart, this does not delete/recreate the VM - it SSHs into
+    Automatically builds and pushes the controller image, then SSHs into
     the existing VM and re-runs the bootstrap script to pull the latest
     image and restart the container. Faster than a full restart.
     """
     config = ctx.obj["config"]
+
+    _build_and_push_controller_image(config)
+    click.echo()
+
     ctrl = create_controller(config)
 
     click.echo("Reloading controller...")
@@ -927,16 +1031,17 @@ def cluster_init(
 def cluster_start(ctx):
     """Start controller VM and wait for health.
 
-    Boots the controller GCE VM which runs the autoscaler internally.
+    Automatically builds and pushes the controller image, then boots the
+    controller GCE VM which runs the autoscaler internally.
     The autoscaler provisions/terminates worker VMs based on task demand.
-
-    Examples:
-        uv run iris cluster --config=examples/demo.yaml start
     """
     config = ctx.obj.get("config")
     if not config:
         click.echo("Error: --config is required", err=True)
         raise SystemExit(1)
+
+    _build_and_push_controller_image(config)
+    click.echo()
 
     ctrl = create_controller(config)
     click.echo("Starting controller...")

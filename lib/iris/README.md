@@ -8,13 +8,16 @@ Distributed job orchestration replacing Ray with simpler primitives.
 
 ```bash
 # Start controller VM (runs autoscaler internally)
-uv run iris cluster --config=cluster.yaml start
+uv run iris cluster --config=examples/eu-west4.yaml start
 
 # Check cluster status
-uv run iris cluster --config=cluster.yaml status
+uv run iris cluster --config=examples/eu-west4.yaml status
+
+# Validate cluster with test jobs (establishes SSH tunnel automatically)
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate
 
 # Stop cluster (controller + all worker slices)
-uv run iris cluster --config=cluster.yaml stop
+uv run iris cluster --config=examples/eu-west4.yaml stop
 ```
 
 ### Development: Local Controller
@@ -147,6 +150,38 @@ iris cluster --config=... vm get VM_ID
 # Build and push Docker images
 iris build worker-image -t iris-worker:v1 --push --region us-central1
 iris build controller-image -t iris-controller:v1 --push --region us-central1
+```
+
+### Cluster Tools (Debugging & Validation)
+
+The `scripts/cluster-tools.py` script provides debugging and validation commands:
+
+```bash
+# Discover and show controller VM status
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models discover
+
+# Check controller health
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models health
+
+# Show autoscaler status
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models autoscaler-status
+
+# List workers
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models list-workers
+
+# View controller logs
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models logs
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models logs --follow
+
+# View bootstrap logs (startup script output)
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models bootstrap-logs
+
+# Run validation jobs
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate
+
+# Cleanup all iris resources (dry-run by default)
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models cleanup
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models cleanup --no-dry-run
 ```
 
 ## Configuration

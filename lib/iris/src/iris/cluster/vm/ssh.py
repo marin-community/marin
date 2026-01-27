@@ -323,11 +323,13 @@ def check_health(
     except Exception as e:
         result.container_status = f"error: {e}"
 
-    # If container is not running, get recent logs
-    if result.container_status in ("restarting", "exited", "dead"):
+    # If container is in a failed state, get recent logs
+    # Include "not_found" to catch cases where container crashed and was removed
+    if result.container_status in ("restarting", "exited", "dead", "not_found"):
         try:
             logs_result = conn.run(f"sudo docker logs {container_name} --tail 20 2>&1", timeout=15)
-            result.container_logs = logs_result.stdout.strip()
+            if logs_result.returncode == 0 and logs_result.stdout.strip():
+                result.container_logs = logs_result.stdout.strip()
         except Exception as e:
             result.container_logs = f"error fetching logs: {e}"
 
