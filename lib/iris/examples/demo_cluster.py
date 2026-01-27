@@ -498,7 +498,7 @@ class DemoCluster:
         controller_config = ControllerConfig(
             host="127.0.0.1",
             port=self._controller_port,
-            bundle_dir=bundle_dir,
+            bundle_prefix=f"file://{bundle_dir}",
         )
         self._controller = Controller(
             config=controller_config,

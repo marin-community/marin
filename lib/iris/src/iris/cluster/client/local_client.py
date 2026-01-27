@@ -42,6 +42,30 @@ from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
 
+class _StreamingCapture(io.StringIO):
+    """StringIO subclass that immediately writes lines to container logs."""
+
+    def __init__(self, container: "_LocalContainer", source: str):
+        super().__init__()
+        self._container = container
+        self._source = source
+        self._buffer = ""
+
+    def write(self, s: str) -> int:
+        result = super().write(s)
+        self._buffer += s
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._container._logs.append(
+                LogLine(
+                    timestamp=datetime.now(timezone.utc),
+                    source=self._source,
+                    data=line,
+                )
+            )
+        return result
+
+
 def _find_free_port() -> int:
     with socket.socket() as s:
         s.bind(("", 0))
@@ -111,8 +135,8 @@ class _LocalContainer:
     def _execute(self):
         from iris.cluster.client.job_info import JobInfo, _parse_ports_from_env, set_job_info
 
-        stdout_capture = io.StringIO()
-        stderr_capture = io.StringIO()
+        stdout_capture = _StreamingCapture(self, "stdout")
+        stderr_capture = _StreamingCapture(self, "stderr")
 
         try:
             # Build JobInfo from container config env vars
@@ -136,7 +160,7 @@ class _LocalContainer:
                 self._exit_code = 137
                 return
 
-            # Execute the function with captured output
+            # Execute the function with streaming output capture
             with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
                 fn(*args, **kwargs)
             self._exit_code = 0
@@ -146,21 +170,6 @@ class _LocalContainer:
             self._exit_code = 1
         finally:
             self._running = False
-            self._capture_output(stdout_capture, "stdout")
-            self._capture_output(stderr_capture, "stderr")
-
-    def _capture_output(self, capture: io.StringIO, source: str) -> None:
-        capture.seek(0)
-        for line in capture:
-            line = line.rstrip("\n")
-            if line:
-                self._logs.append(
-                    LogLine(
-                        timestamp=datetime.now(timezone.utc),
-                        source=source,
-                        data=line,
-                    )
-                )
 
     def kill(self):
         self._killed.set()

@@ -20,9 +20,11 @@ organized into subcommand groups for cluster operations and image builds.
 
 import concurrent.futures
 import datetime
+import importlib.util
 import json
 import logging
 import signal
+import sys
 import threading
 import time
 import traceback
@@ -34,16 +36,19 @@ import click
 from connectrpc.errors import ConnectError
 
 from iris.build import build_image, push_to_registries
+from iris.client import IrisClient
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.types import Entrypoint
 from iris.cluster.vm.config import (
     create_autoscaler_from_config,
     create_manual_autoscaler,
     load_config,
 )
 from iris.cluster.vm.controller import create_controller
+from iris.cluster.vm.debug import controller_tunnel
 from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
-from iris.rpc.proto_utils import vm_state_name, format_accelerator_display
+from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.rpc_cli import ServiceCommands
 
 # =============================================================================
@@ -1372,6 +1377,179 @@ def build_push(source_tag: str, region: tuple[str, ...], project: str, image_nam
         image_name=image_name,
         version=version,
     )
+
+
+# =============================================================================
+# Submit Command
+# =============================================================================
+
+
+@iris.command("submit")
+@click.argument("script_path", type=click.Path(exists=True))
+@click.option("--controller-url", help="Direct controller URL (e.g., http://localhost:10000)")
+@click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config file for auto-tunneling")
+@click.option("--name", help="Job name (defaults to script filename)")
+@click.option("--timeout", default=600, type=int, help="Job timeout in seconds")
+@click.option("--workspace", type=click.Path(exists=True), help="Workspace directory (defaults to script parent)")
+@click.argument("script_args", nargs=-1)
+@click.pass_context
+def submit(
+    ctx,
+    script_path: str,
+    controller_url: str | None,
+    config_file: str | None,
+    name: str | None,
+    timeout: int,
+    workspace: str | None,
+    script_args: tuple[str, ...],
+):
+    """Submit a Python script as a job to the Iris cluster.
+
+    The script must define a main() function that will be executed as the job entrypoint.
+    Additional arguments after the script path will be passed to main() as positional arguments.
+
+    Examples:
+        # Submit to local controller
+        iris submit script.py --controller-url http://localhost:10000
+
+        # Submit via SSH tunnel from config
+        iris submit script.py --config examples/eu-west4.yaml
+
+        # Pass arguments to script's main function
+        iris submit scripts/test-actor.py --controller-url http://localhost:10000 -- 10
+    """
+    # Validate mutually exclusive options
+    if controller_url and config_file:
+        click.echo("Error: --controller-url and --config are mutually exclusive", err=True)
+        raise SystemExit(1)
+    if not controller_url and not config_file:
+        click.echo("Error: Either --controller-url or --config is required", err=True)
+        raise SystemExit(1)
+
+    # Load script as module and find main function
+    script_path_obj = Path(script_path).resolve()
+    script_name = script_path_obj.stem
+
+    spec = importlib.util.spec_from_file_location(script_name, script_path_obj)
+    if not spec or not spec.loader:
+        click.echo(f"Error: Failed to load script: {script_path}", err=True)
+        raise SystemExit(1)
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[script_name] = module
+
+    try:
+        spec.loader.exec_module(module)
+    except Exception as e:
+        click.echo(f"Error loading script: {e}", err=True)
+        if ctx.obj and ctx.obj.get("traceback"):
+            traceback.print_exc()
+        raise SystemExit(1)  # noqa: B904
+
+    if not hasattr(module, "main"):
+        click.echo(f"Error: Script {script_path} must define a main() function", err=True)
+        raise SystemExit(1)
+
+    main_func = module.main
+
+    # Default workspace to script's parent directory
+    if workspace:
+        workspace_path = Path(workspace).resolve()
+    else:
+        workspace_path = script_path_obj.parent
+
+    # Default job name to script filename
+    job_name = name or script_name
+
+    # Convert script args to appropriate types
+    # For now, just pass as strings - scripts can parse them
+    args_list = list(script_args)
+
+    def _submit_and_wait(url: str):
+        """Helper to submit job and wait for completion."""
+        click.echo(f"Connecting to controller at {url}")
+        click.echo(f"Workspace: {workspace_path}")
+        click.echo(f"Job name: {job_name}")
+        if args_list:
+            click.echo(f"Arguments: {args_list}")
+        click.echo()
+
+        try:
+            client = IrisClient.remote(url, workspace=workspace_path)
+        except Exception as e:
+            click.echo(f"Error connecting to controller: {e}", err=True)
+            if ctx.obj and ctx.obj.get("traceback"):
+                traceback.print_exc()
+            raise SystemExit(1)  # noqa: B904
+
+        # Create entrypoint from main function with args
+        try:
+            entrypoint = Entrypoint.from_callable(main_func, *args_list)
+        except Exception as e:
+            click.echo(f"Error creating entrypoint: {e}", err=True)
+            if ctx.obj and ctx.obj.get("traceback"):
+                traceback.print_exc()
+            raise SystemExit(1)  # noqa: B904
+
+        # Submit job
+        click.echo("Submitting job...")
+        try:
+            job = client.submit(entrypoint=entrypoint, name=job_name)
+            click.echo(f"Job submitted: {job.job_id}")
+            click.echo()
+        except Exception as e:
+            click.echo(f"Error submitting job: {e}", err=True)
+            if ctx.obj and ctx.obj.get("traceback"):
+                traceback.print_exc()
+            raise SystemExit(1)  # noqa: B904
+
+        # Wait for job with log streaming
+        click.echo("Streaming logs...")
+        click.echo("-" * 80)
+        try:
+            status = job.wait(timeout=timeout, stream_logs=True, raise_on_failure=False)
+        except TimeoutError:
+            click.echo(f"\nError: Job timed out after {timeout} seconds", err=True)
+            raise SystemExit(1)  # noqa: B904
+        except Exception as e:
+            click.echo(f"\nError waiting for job: {e}", err=True)
+            if ctx.obj and ctx.obj.get("traceback"):
+                traceback.print_exc()
+            raise SystemExit(1)  # noqa: B904
+
+        # Print final status
+        click.echo("-" * 80)
+        state_name = cluster_pb2.JobState.Name(status.state)
+        click.echo(f"Job {job.job_id}: {state_name}")
+
+        if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
+            click.echo("Job completed successfully")
+        else:
+            click.echo(f"Job failed: {status.error}", err=True)
+            raise SystemExit(1)
+
+    # Execute with appropriate connection method
+    if controller_url:
+        _submit_and_wait(controller_url)
+    else:
+        # Load config and establish tunnel
+        assert config_file is not None
+        config = load_config(Path(config_file))
+
+        zone = config.zone or "us-central1-a"
+        project = config.project_id or ""
+
+        if not project:
+            click.echo("Error: Config file must specify project_id", err=True)
+            raise SystemExit(1)
+
+        click.echo(f"Establishing SSH tunnel to controller in {zone}...")
+        try:
+            with controller_tunnel(zone, project) as url:
+                _submit_and_wait(url)
+        except RuntimeError as e:
+            click.echo(f"Error: {e}", err=True)
+            raise SystemExit(1)  # noqa: B904
 
 
 if __name__ == "__main__":
