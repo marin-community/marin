@@ -17,21 +17,24 @@ import os
 import shutil
 import tempfile
 import traceback
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+from fray.cluster import ResourceConfig
+from fray.cluster.ray.deps import build_runtime_env_for_packages
 
 import fsspec
-import requests
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
-from fray.cluster.ray.deps import build_runtime_env_for_packages
+from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
 
 logger = logging.getLogger(__name__)
 
 
 # TODO: Multiple choice tasks currently don't work on TPUs: https://github.com/vllm-project/vllm/issues/8499
-class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
+class LMEvaluationHarnessEvaluator(Evaluator):
     """
     Evaluator that runs lm-eval: https://github.com/EleutherAI/lm-evaluation-harness
     """
@@ -50,10 +53,11 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
     )
 
     @classmethod
-    def _stage_remote_tokenizer_dir(cls, remote_dir: str) -> str | None:
-        local_dir = tempfile.mkdtemp(prefix="marin-tokenizer-")
-        copied_any = False
-        try:
+    @contextmanager
+    def _stage_remote_tokenizer_dir(cls, remote_dir: str) -> Iterator[str | None]:
+        # context manager so this deletes even with ray's process pooling
+        with tempfile.TemporaryDirectory(prefix="marin-tokenizer-") as local_dir:
+            copied_any = False
             for filename in cls.TOKENIZER_FILENAMES:
                 remote_path = f"{remote_dir.rstrip('/')}/{filename}"
                 if not is_remote_path(remote_path):
@@ -67,14 +71,10 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 with open(local_path, "wb") as dst:
                     dst.write(data)
                 copied_any = True
-        except Exception:
-            shutil.rmtree(local_dir, ignore_errors=True)
-            raise
-
-        if not copied_any:
-            shutil.rmtree(local_dir, ignore_errors=True)
-            return None
-        return local_dir
+            if not copied_any:
+                yield None
+                return
+            yield local_dir
 
     def get_runtime_env(self) -> dict:
         """
@@ -82,9 +82,35 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         """
         return build_runtime_env_for_packages(
             extra=["eval"],
-            env_vars={
-                "HF_ALLOW_CODE_EVAL": "1"
-            },  # Human eval tests code from the model which requires permission to run
+            env_vars={"HF_ALLOW_CODE_EVAL": "1"},
+            # Human eval tests code from the model which requires permission to run.
+        )
+
+    def launch_evaluate_with_ray(
+        self,
+        model: ModelConfig,
+        evals: list[EvalTaskConfig],
+        output_path: str,
+        resource_config: ResourceConfig,
+        max_eval_instances: int | None = None,
+        wandb_tags: list[str] | None = None,
+    ) -> None:
+        """Launch the evaluation run with Fray."""
+
+        mode_str = resolve_vllm_mode(None)
+        pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
+        launch_evaluate_with_ray(
+            evaluator=self,
+            job_name="lm-eval",
+            model=model,
+            evals=evals,
+            output_path=output_path,
+            resource_config=resource_config,
+            max_eval_instances=max_eval_instances,
+            wandb_tags=wandb_tags,
+            extras=("eval", "tpu"),
+            pip_packages=pip_packages,
+            env_vars={"HF_ALLOW_CODE_EVAL": "1"},
         )
 
     def evaluate(
@@ -106,128 +132,114 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         """
         # From https://github.com/EleutherAI/lm-evaluation-harness?tab=readme-ov-file#model-apis-and-inference-servers
         # Run lm_eval with the model and the specified evals
-        vllm_server = None
-        staged_tokenizer_dir = None
+        env: VllmEnvironment | None = None
+        resolved_model = model
         try:
-            model_name_or_path, model = self.resolve_model_name_or_path(model)
+            with VllmEnvironment(model) as env:
+                resolved_model = env.model
 
-            mode_str = os.environ.get("MARIN_VLLM_MODE", "docker").lower()
-            if mode_str == "docker":
-                vllm_server = self.start_vllm_server_in_background(
-                    model=model,
-                    mode="docker",
-                )
-                response = requests.get(f"{vllm_server.server_url}/models", timeout=30)
-                response.raise_for_status()
-                model_list = response.json().get("data", [])
-                if not model_list:
-                    raise RuntimeError(
-                        f"No models returned from {vllm_server.server_url}/models: {response.text[:2000]}"
-                    )
-                model_id = model_list[0].get("id")
-                if not model_id:
-                    raise RuntimeError(
-                        f"Missing model id in {vllm_server.server_url}/models response: {response.text[:2000]}"
-                    )
+                def _run_lm_eval(lm_eval_model_local: str, pretrained_args_local: str) -> None:
+                    from lm_eval.evaluator import simple_evaluate
+                    from lm_eval.loggers import EvaluationTracker, WandbLogger
+                    from lm_eval.utils import simple_parse_args_string
 
-                tokenizer = None
-                if isinstance(model.engine_kwargs.get("tokenizer"), str):
-                    tokenizer = model.engine_kwargs.get("tokenizer")
-                elif is_remote_path(model_name_or_path):
-                    staged_tokenizer_dir = self._stage_remote_tokenizer_dir(model_name_or_path)
-                    if staged_tokenizer_dir is None:
-                        raise ValueError(
-                            "lm-eval's `local-completions` model requires a Hugging Face tokenizer name/path, but "
-                            f"the served model id is a remote object-store URI: {model_id!r}, and no tokenizer files "
-                            f"were found under {model_name_or_path!r}. "
-                            "Set `engine_kwargs['tokenizer']` to an HF tokenizer id (e.g. "
-                            "'meta-llama/Llama-3.1-8B-Instruct') or a local tokenizer path."
+                    for eval_task in evals:
+                        result_filepath = os.path.join(
+                            self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot"
                         )
-                    tokenizer = staged_tokenizer_dir
 
-                # Use lm-eval's API model wrapper to talk to the sidecar's OpenAI-compatible endpoint.
-                if model.apply_chat_template:
-                    lm_eval_model = "local-chat-completions"
-                    pretrained_args = (
-                        f"model={model_id},"
-                        f"base_url={vllm_server.server_url}/chat/completions,"
-                        "tokenizer_backend=huggingface,"
-                        "tokenized_requests=False"
-                    )
+                        # Create the output directory
+                        output_dir = os.path.dirname(result_filepath)
+                        os.makedirs(output_dir, exist_ok=True)
+
+                        evaluation_tracker_args = simple_parse_args_string(f",output_path={result_filepath}")
+                        evaluation_tracker = EvaluationTracker(**evaluation_tracker_args)
+
+                        wandb_args_dict = {
+                            "project": "marin",
+                            "job_type": "eval",
+                            "name": resolved_model.name,
+                            "tags": wandb_tags,
+                        }
+                        # wandb_config_args_dict = simple_parse_args_string("")
+                        wandb_logger = WandbLogger(init_args=wandb_args_dict)
+
+                        results = simple_evaluate(
+                            model=lm_eval_model_local,
+                            tasks=[eval_task.name],
+                            num_fewshot=eval_task.num_fewshot,
+                            model_args=pretrained_args_local,
+                            apply_chat_template=resolved_model.apply_chat_template,
+                            batch_size="auto",
+                            confirm_run_unsafe_code=True,
+                            limit=max_eval_instances if max_eval_instances is not None else None,
+                            evaluation_tracker=evaluation_tracker,
+                            log_samples=True,
+                        )
+                        if results is not None:
+                            samples = results.pop("samples")
+                            evaluation_tracker.save_results_aggregated(results=results, samples=samples)
+
+                            try:
+                                wandb_logger.post_init(results)
+                                wandb_logger.log_eval_result()
+                                wandb_logger.log_eval_samples(samples)
+                                wandb_logger.run.finish()
+                            except Exception as e:
+                                print(f"Logging to Weights and Biases failed due to {e}")
+
+                            for task_name in results["configs"].keys():
+                                evaluation_tracker.save_results_samples(task_name=task_name, samples=samples[task_name])
+
+                        assert os.path.exists(result_filepath), f"Results file {result_filepath} does not exist."
+
+                if env.model_id is None:
+                    raise RuntimeError("vLLM server did not report a model id.")
+
+                def _run_with_tokenizer(tokenizer: str | None) -> None:
+                    if resolved_model.apply_chat_template:
+                        lm_eval_model_local = "local-chat-completions"
+                        pretrained_args_local = (
+                            f"model={env.model_id},"
+                            f"base_url={env.server_url}/chat/completions,"
+                            "tokenizer_backend=huggingface,"
+                            "tokenized_requests=False"
+                        )
+                    else:
+                        lm_eval_model_local = "local-completions"
+                        pretrained_args_local = (
+                            f"model={env.model_id},"
+                            f"base_url={env.server_url}/completions,"
+                            "tokenizer_backend=huggingface,"
+                            "tokenized_requests=False"
+                        )
+                    if tokenizer is not None:
+                        pretrained_args_local += f",tokenizer={tokenizer}"
+                    if resolved_model.engine_kwargs:
+                        for key, value in resolved_model.engine_kwargs.items():
+                            if key == "tokenizer":
+                                continue
+                            pretrained_args_local += f",{key}={value}"
+
+                    _run_lm_eval(lm_eval_model_local, pretrained_args_local)
+
+                if isinstance(resolved_model.engine_kwargs.get("tokenizer"), str):
+                    _run_with_tokenizer(resolved_model.engine_kwargs.get("tokenizer"))
+                elif is_remote_path(env.model_name_or_path):
+                    with self._stage_remote_tokenizer_dir(env.model_name_or_path) as staged_tokenizer_dir:
+                        if staged_tokenizer_dir is None:
+                            raise ValueError(
+                                "lm-eval's `local-completions` model requires a Hugging Face tokenizer name/path, "
+                                f"but the served model id is a remote object-store URI: {env.model_id!r}, and no "
+                                f"tokenizer files were found under {env.model_name_or_path!r}. "
+                                "Set `engine_kwargs['tokenizer']` to an HF tokenizer id (e.g. "
+                                "'meta-llama/Llama-3.1-8B-Instruct') or a local tokenizer path."
+                            )
+                        _run_with_tokenizer(staged_tokenizer_dir)
                 else:
-                    lm_eval_model = "local-completions"
-                    pretrained_args = (
-                        f"model={model_id},"
-                        f"base_url={vllm_server.server_url}/completions,"
-                        "tokenizer_backend=huggingface,"
-                        "tokenized_requests=False"
-                    )
-                if tokenizer is not None:
-                    pretrained_args += f",tokenizer={tokenizer}"
-                if model.engine_kwargs:
-                    for key, value in model.engine_kwargs.items():
-                        if key == "tokenizer":
-                            continue
-                        pretrained_args += f",{key}={value}"
-            else:
-                lm_eval_model = "vllm"
-                pretrained_args = f"pretrained={model_name_or_path}"
-                if model.engine_kwargs:
-                    for key, value in model.engine_kwargs.items():
-                        pretrained_args += f",{key}={value}"
+                    _run_with_tokenizer(None)
 
-            from lm_eval.evaluator import simple_evaluate
-            from lm_eval.loggers import EvaluationTracker, WandbLogger
-            from lm_eval.utils import simple_parse_args_string
-
-            for eval_task in evals:
-
-                result_filepath = os.path.join(self.RESULTS_PATH, f"{eval_task.name}_{eval_task.num_fewshot}shot")
-
-                # Create the output directory
-                output_dir = os.path.dirname(result_filepath)
-                os.makedirs(output_dir, exist_ok=True)
-
-                evaluation_tracker_args = simple_parse_args_string(f",output_path={result_filepath}")
-                evaluation_tracker = EvaluationTracker(**evaluation_tracker_args)
-
-                wandb_args_dict = {
-                    "project": "marin",
-                    "job_type": "eval",
-                    "name": model.name,
-                    "tags": wandb_tags,
-                }
-                # wandb_config_args_dict = simple_parse_args_string("")
-                wandb_logger = WandbLogger(init_args=wandb_args_dict)
-
-                results = simple_evaluate(
-                    model=lm_eval_model,
-                    tasks=[eval_task.name],
-                    num_fewshot=eval_task.num_fewshot,
-                    model_args=pretrained_args,
-                    apply_chat_template=model.apply_chat_template,
-                    batch_size="auto",
-                    confirm_run_unsafe_code=True,
-                    limit=max_eval_instances if max_eval_instances is not None else None,
-                    evaluation_tracker=evaluation_tracker,
-                    log_samples=True,
-                )
-                if results is not None:
-                    samples = results.pop("samples")
-                    evaluation_tracker.save_results_aggregated(results=results, samples=samples)
-
-                    try:
-                        wandb_logger.post_init(results)
-                        wandb_logger.log_eval_result()
-                        wandb_logger.log_eval_samples(samples)
-                        wandb_logger.run.finish()
-                    except Exception as e:
-                        print(f"Logging to Weights and Biases failed due to {e}")
-
-                    for task_name in results["configs"].keys():
-                        evaluation_tracker.save_results_samples(task_name=task_name, samples=samples[task_name])
-
-                assert os.path.exists(result_filepath), f"Results file {result_filepath} does not exist."
+                return
 
         except Exception as e:
             traceback.print_exc()
@@ -245,8 +257,5 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 except Exception as upload_error:
                     logger.info(f"Failed to upload results to GCS: {upload_error}")
 
-            self.cleanup(model, vllm_server=vllm_server)
             if os.path.exists(self.RESULTS_PATH):
                 shutil.rmtree(self.RESULTS_PATH)
-            if staged_tokenizer_dir and os.path.exists(staged_tokenizer_dir):
-                shutil.rmtree(staged_tokenizer_dir, ignore_errors=True)

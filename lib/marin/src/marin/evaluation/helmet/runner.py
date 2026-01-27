@@ -27,7 +27,7 @@ import yaml
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
+from marin.inference.vllm_server import VllmEnvironment, resolve_model_name_or_path
 from marin.evaluation.helmet.config import HelmetEvalName
 from marin.evaluation.utils import is_remote_path
 from marin.utils import fsspec_copy_path_into_dir, fsspec_exists
@@ -637,28 +637,31 @@ def _run_on_tpu(config: HelmetRunConfig) -> None:
                 shutil.rmtree(data_dst)
         os.symlink(data_src, data_dst)
 
-        model = _model_config_for_vllm(run_name=config.run_name, model_name_or_path=config.model_name_or_path)
-        model_name_or_path = VllmTpuEvaluator.download_model(model)
+        model_cfg = _model_config_for_vllm(run_name=config.run_name, model_name_or_path=config.model_name_or_path)
+        model_name_or_path, model_cfg = resolve_model_name_or_path(model_cfg)
 
         print("HELMET: starting vLLM server...")
-        vllm_server = VllmTpuEvaluator.start_vllm_server_in_background(
-            model=model,
+        vllm_env = VllmEnvironment(
+            model=model_cfg,
+            mode="docker",
             host="127.0.0.1",
             port=None,
             timeout_seconds=3600,
+            docker_image=os.environ.get("MARIN_VLLM_DOCKER_IMAGE"),
+            docker_run_args=None,
             extra_args=list(config.vllm_serve_args) if config.vllm_serve_args else None,
         )
-        endpoint_url = f"{vllm_server.server_url}/"
-        print(f"HELMET: vLLM ready at {endpoint_url}")
+        with vllm_env:
+            endpoint_url = f"{vllm_env.server_url}/"
+            print(f"HELMET: vLLM ready at {endpoint_url}")
 
-        local_output_dir = os.path.join(tmpdir, "output")
+            local_output_dir = os.path.join(tmpdir, "output")
 
-        def config_path(eval_name: HelmetEvalName) -> str:
-            suffix = "" if config.config_variant == "full" else "_short"
-            return os.path.join(repo_dir, "configs", f"{eval_name}{suffix}.yaml")
+            def config_path(eval_name: HelmetEvalName) -> str:
+                suffix = "" if config.config_variant == "full" else "_short"
+                return os.path.join(repo_dir, "configs", f"{eval_name}{suffix}.yaml")
 
-        ran = []
-        try:
+            ran = []
             for eval_name in config.evals:
                 print(f"HELMET: running {eval_name}...")
                 cfg = config_path(eval_name)
@@ -712,8 +715,6 @@ def _run_on_tpu(config: HelmetRunConfig) -> None:
                     cwd=repo_dir,
                 )
                 ran.append(eval_name)
-        finally:
-            VllmTpuEvaluator.cleanup(model, vllm_server=vllm_server)
 
         os.makedirs(local_output_dir, exist_ok=True)
         with open(os.path.join(local_output_dir, "marin_metadata.json"), "w") as f:
