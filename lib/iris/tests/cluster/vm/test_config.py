@@ -219,9 +219,17 @@ scale_groups:
             provider_after.WhichOneof("provider") == "tpu"
         ), f"Expected provider to be 'tpu' after round-trip, got '{provider_after.WhichOneof('provider')}'"
 
-    def test_lowercase_accelerator_types_work(self, tmp_path: Path):
+    @pytest.mark.parametrize(
+        "accelerator_type,expected_enum",
+        [
+            ("tpu", config_pb2.ACCELERATOR_TYPE_TPU),
+            ("cpu", config_pb2.ACCELERATOR_TYPE_CPU),
+            ("gpu", config_pb2.ACCELERATOR_TYPE_GPU),
+        ],
+    )
+    def test_lowercase_accelerator_types_work(self, tmp_path: Path, accelerator_type: str, expected_enum):
         """Config accepts lowercase accelerator types and converts them to enum values."""
-        config_content = """\
+        config_content = f"""\
 provider_type: tpu
 project_id: my-project
 zone: us-central1-a
@@ -232,27 +240,11 @@ bootstrap:
   controller_address: "http://10.0.0.1:10000"
 
 scale_groups:
-  tpu_group:
-    provider:
-      tpu:
-        project_id: my-project
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-8
-    runtime_version: v2-alpha-tpuv5-lite
-    min_slices: 1
-    max_slices: 10
-    zones: [us-central1-a]
-  cpu_group:
+  test_group:
     provider:
       manual:
         hosts: [10.0.0.1]
-    accelerator_type: cpu
-    zones: [local]
-  gpu_group:
-    provider:
-      manual:
-        hosts: [10.0.0.2]
-    accelerator_type: gpu
+    accelerator_type: {accelerator_type}
     zones: [local]
 """
         config_path = tmp_path / "config.yaml"
@@ -260,9 +252,7 @@ scale_groups:
 
         config = load_config(config_path)
 
-        assert config.scale_groups["tpu_group"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
-        assert config.scale_groups["cpu_group"].accelerator_type == config_pb2.ACCELERATOR_TYPE_CPU
-        assert config.scale_groups["gpu_group"].accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU
+        assert config.scale_groups["test_group"].accelerator_type == expected_enum
 
     def test_uppercase_accelerator_types_still_work(self, tmp_path: Path):
         """Config still accepts uppercase accelerator types for backwards compatibility."""
@@ -299,67 +289,65 @@ scale_groups:
 class TestGetProviderInfo:
     """Tests for _get_provider_info helper function."""
 
-    def test_extracts_tpu_provider_info(self):
-        """_get_provider_info correctly identifies TPU provider."""
+    @pytest.mark.parametrize(
+        "provider_config,expected_type,expected_project_id,expected_hosts",
+        [
+            (
+                config_pb2.ProviderConfig(tpu=config_pb2.TpuProvider(project_id="my-project")),
+                "tpu",
+                "my-project",
+                None,
+            ),
+            (
+                config_pb2.ProviderConfig(manual=config_pb2.ManualProvider(hosts=["10.0.0.1", "10.0.0.2"])),
+                "manual",
+                None,
+                ["10.0.0.1", "10.0.0.2"],
+            ),
+        ],
+        ids=["tpu", "manual"],
+    )
+    def test_extracts_provider_info(self, provider_config, expected_type, expected_project_id, expected_hosts):
+        """_get_provider_info correctly identifies provider types."""
         from iris.cluster.vm.config import _get_provider_info
 
         group_config = config_pb2.ScaleGroupConfig(
-            name="test-tpu",
-            provider=config_pb2.ProviderConfig(tpu=config_pb2.TpuProvider(project_id="my-project")),
+            name="test-group",
+            provider=provider_config,
         )
 
         provider_type, project_id, hosts = _get_provider_info(group_config)
 
-        assert provider_type == "tpu"
-        assert project_id == "my-project"
-        assert hosts is None
+        assert provider_type == expected_type
+        assert project_id == expected_project_id
+        assert hosts == expected_hosts
 
-    def test_extracts_manual_provider_info(self):
-        """_get_provider_info correctly identifies manual provider."""
+    @pytest.mark.parametrize(
+        "group_config,error_match",
+        [
+            (config_pb2.ScaleGroupConfig(name="test-group"), "missing provider config"),
+            (
+                config_pb2.ScaleGroupConfig(
+                    name="test-tpu",
+                    provider=config_pb2.ProviderConfig(tpu=config_pb2.TpuProvider(project_id="")),
+                ),
+                "missing project_id",
+            ),
+            (
+                config_pb2.ScaleGroupConfig(
+                    name="test-manual",
+                    provider=config_pb2.ProviderConfig(manual=config_pb2.ManualProvider(hosts=[])),
+                ),
+                "missing hosts",
+            ),
+        ],
+        ids=["no_provider", "tpu_missing_project_id", "manual_missing_hosts"],
+    )
+    def test_raises_on_invalid_config(self, group_config, error_match):
+        """_get_provider_info raises on various invalid configurations."""
         from iris.cluster.vm.config import _get_provider_info
 
-        group_config = config_pb2.ScaleGroupConfig(
-            name="test-manual",
-            provider=config_pb2.ProviderConfig(manual=config_pb2.ManualProvider(hosts=["10.0.0.1", "10.0.0.2"])),
-        )
-
-        provider_type, project_id, hosts = _get_provider_info(group_config)
-
-        assert provider_type == "manual"
-        assert project_id is None
-        assert hosts == ["10.0.0.1", "10.0.0.2"]
-
-    def test_raises_on_missing_provider(self):
-        """_get_provider_info raises when provider field not set."""
-        from iris.cluster.vm.config import _get_provider_info
-
-        group_config = config_pb2.ScaleGroupConfig(name="test-group")
-
-        with pytest.raises(ValueError, match="missing provider config"):
-            _get_provider_info(group_config)
-
-    def test_raises_on_tpu_missing_project_id(self):
-        """_get_provider_info raises when TPU provider missing project_id."""
-        from iris.cluster.vm.config import _get_provider_info
-
-        group_config = config_pb2.ScaleGroupConfig(
-            name="test-tpu",
-            provider=config_pb2.ProviderConfig(tpu=config_pb2.TpuProvider(project_id="")),
-        )
-
-        with pytest.raises(ValueError, match="missing project_id"):
-            _get_provider_info(group_config)
-
-    def test_raises_on_manual_missing_hosts(self):
-        """_get_provider_info raises when manual provider missing hosts."""
-        from iris.cluster.vm.config import _get_provider_info
-
-        group_config = config_pb2.ScaleGroupConfig(
-            name="test-manual",
-            provider=config_pb2.ProviderConfig(manual=config_pb2.ManualProvider(hosts=[])),
-        )
-
-        with pytest.raises(ValueError, match="missing hosts"):
+        with pytest.raises(ValueError, match=error_match):
             _get_provider_info(group_config)
 
 

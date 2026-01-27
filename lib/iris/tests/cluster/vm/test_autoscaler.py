@@ -133,6 +133,27 @@ def scale_group_config() -> config_pb2.ScaleGroupConfig:
     )
 
 
+@pytest.fixture
+def empty_autoscaler(scale_group_config):
+    """Empty autoscaler ready for scale-up tests."""
+    manager = make_mock_vm_manager()
+    group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0)
+    return make_autoscaler({"test-group": group})
+
+
+@pytest.fixture
+def autoscaler_with_ready_slices(scale_group_config):
+    """Autoscaler with 2 ready slices for scale-down tests."""
+    discovered = [
+        make_mock_slice("slice-001", all_ready=True),
+        make_mock_slice("slice-002", all_ready=True),
+    ]
+    manager = make_mock_vm_manager(slices_to_discover=discovered)
+    group = ScalingGroup(scale_group_config, manager, scale_down_cooldown_ms=0, idle_threshold_ms=0)
+    group.reconcile()
+    return make_autoscaler({"test-group": group}), group, manager
+
+
 def make_autoscaler(
     scale_groups: dict[str, ScalingGroup],
     vm_registry: VmRegistry | None = None,
@@ -152,45 +173,46 @@ def make_autoscaler(
 class TestAutoscalerScaleUp:
     """Tests for scale-up decisions."""
 
-    def test_scales_up_when_demand_exceeds_capacity(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_scales_up_when_demand_exceeds_capacity(self, empty_autoscaler: Autoscaler):
         """Evaluates scale-up when demand > capacity."""
-        manager = make_mock_vm_manager()
-        group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0)
-        autoscaler = make_autoscaler({"test-group": group})
-
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
-        decisions = autoscaler.evaluate(demand)
+        decisions = empty_autoscaler.evaluate(demand)
 
         assert len(decisions) == 1
         assert decisions[0].action == ScalingAction.SCALE_UP
         assert decisions[0].scale_group == "test-group"
         assert "demand=2 > capacity=0" in decisions[0].reason
 
-    def test_no_scale_up_when_at_max_slices(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """Does not scale up when already at max_slices."""
-        discovered = [make_mock_slice(f"slice-{i}") for i in range(5)]
+    @pytest.mark.parametrize(
+        "discovered,demand_count,reason",
+        [
+            ([make_mock_slice(f"slice-{i}") for i in range(5)], 10, "at_max_slices"),
+            (
+                [make_mock_slice("slice-001", all_ready=True), make_mock_slice("slice-002", all_ready=True)],
+                2,
+                "capacity_meets_demand",
+            ),
+            (
+                [
+                    make_mock_slice("slice-001", vm_states=[vm_pb2.VM_STATE_BOOTING]),
+                    make_mock_slice("slice-002", vm_states=[vm_pb2.VM_STATE_INITIALIZING]),
+                ],
+                2,
+                "pending_slices_count",
+            ),
+        ],
+        ids=["at_max_slices", "capacity_meets_demand", "pending_slices_count"],
+    )
+    def test_no_scale_up_when_condition_met(
+        self, scale_group_config: config_pb2.ScaleGroupConfig, discovered: list, demand_count: int, reason: str
+    ):
+        """Does not scale up when various conditions are met (max slices, sufficient capacity, pending slices)."""
         manager = make_mock_vm_manager(slices_to_discover=discovered)
         group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0)
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
 
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=10)]
-        decisions = autoscaler.evaluate(demand)
-
-        assert len(decisions) == 0
-
-    def test_no_scale_up_when_capacity_meets_demand(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """Does not scale up when capacity >= demand."""
-        discovered = [
-            make_mock_slice("slice-001", all_ready=True),
-            make_mock_slice("slice-002", all_ready=True),
-        ]
-        manager = make_mock_vm_manager(slices_to_discover=discovered)
-        group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0)
-        group.reconcile()
-        autoscaler = make_autoscaler({"test-group": group})
-
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
+        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=demand_count)]
         decisions = autoscaler.evaluate(demand)
 
         assert len(decisions) == 0
@@ -279,23 +301,6 @@ class TestAutoscalerScaleUp:
         # No demand and already at min_slices=2
         decisions = autoscaler.evaluate([])
 
-        assert len(decisions) == 0
-
-    def test_pending_slices_count_toward_capacity(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """Booting/initializing slices count toward capacity."""
-        discovered = [
-            make_mock_slice("slice-001", vm_states=[vm_pb2.VM_STATE_BOOTING]),
-            make_mock_slice("slice-002", vm_states=[vm_pb2.VM_STATE_INITIALIZING]),
-        ]
-        manager = make_mock_vm_manager(slices_to_discover=discovered)
-        group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0)
-        group.reconcile()
-        autoscaler = make_autoscaler({"test-group": group})
-
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
-        decisions = autoscaler.evaluate(demand)
-
-        # capacity = 2 (pending), demand = 2, so no scale up
         assert len(decisions) == 0
 
 
@@ -474,20 +479,17 @@ class TestAutoscalerScaleDown:
 class TestAutoscalerExecution:
     """Tests for decision execution."""
 
-    def test_execute_scale_up_creates_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_execute_scale_up_creates_slice(self, empty_autoscaler: Autoscaler):
         """execute() creates a slice via ScalingGroup."""
-        manager = make_mock_vm_manager()
-        group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0)
-        autoscaler = make_autoscaler({"test-group": group})
-
         decision = ScalingDecision(
             scale_group="test-group",
             action=ScalingAction.SCALE_UP,
             reason="test",
         )
 
-        autoscaler.execute([decision], timestamp_ms=1000)
+        empty_autoscaler.execute([decision], timestamp_ms=1000)
 
+        group = empty_autoscaler.groups["test-group"]
         assert group.slice_count() == 1
 
     def test_run_once_cleans_up_failed_slice(self, scale_group_config: config_pb2.ScaleGroupConfig):
@@ -520,19 +522,16 @@ class TestAutoscalerExecution:
         assert group.consecutive_failures == 1
         assert group.backoff_until_ms > 0
 
-    def test_run_once_evaluates_and_executes(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_run_once_evaluates_and_executes(self, empty_autoscaler: Autoscaler):
         """run_once() performs evaluate then execute."""
-        manager = make_mock_vm_manager()
-        group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0)
-        autoscaler = make_autoscaler({"test-group": group})
-
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
         vm_status_map = {}  # Empty - no workers yet
-        decisions = autoscaler.run_once(demand, vm_status_map)
+        decisions = empty_autoscaler.run_once(demand, vm_status_map)
 
         assert len(decisions) == 1
         assert decisions[0].action == ScalingAction.SCALE_UP
         # Slice was created
+        group = empty_autoscaler.groups["test-group"]
         assert group.slice_count() == 1
 
     def test_execute_skips_unknown_scale_group(self):
@@ -1371,17 +1370,13 @@ class TestAutoscalerQuotaHandling:
 class TestAutoscalerActionLogging:
     """Tests for autoscaler action logging."""
 
-    def test_action_log_records_scale_up(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_action_log_records_scale_up(self, empty_autoscaler: Autoscaler):
         """Verify scale-up actions are logged."""
-        manager = make_mock_vm_manager()
-        group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0)
-        autoscaler = make_autoscaler({"test-group": group})
-
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
-        autoscaler.run_once(demand, {})
+        empty_autoscaler.run_once(demand, {})
 
         # Check that the action log contains a scale_up action
-        status = autoscaler.get_status()
+        status = empty_autoscaler.get_status()
         assert len(status.recent_actions) == 1
         action = status.recent_actions[0]
         assert action.action_type == "scale_up"
@@ -1450,33 +1445,25 @@ class TestAutoscalerActionLogging:
         assert action.slice_id == "slice-001"
         assert vm_address in action.reason
 
-    def test_action_log_bounded_to_100_entries(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_action_log_bounded_to_100_entries(self, empty_autoscaler: Autoscaler):
         """Verify action log is bounded to 100 entries."""
-        manager = make_mock_vm_manager()
-        group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0)
-        autoscaler = make_autoscaler({"test-group": group})
-
         # Directly add 150 actions to the log (bypassing actual scaling)
         for i in range(150):
-            autoscaler._log_action("test_action", "test-group", reason=f"action {i}")
+            empty_autoscaler._log_action("test_action", "test-group", reason=f"action {i}")
 
-        status = autoscaler.get_status()
+        status = empty_autoscaler.get_status()
         assert len(status.recent_actions) == 100
         # Oldest entries should be dropped (first 50)
         assert status.recent_actions[0].reason == "action 50"
         assert status.recent_actions[99].reason == "action 149"
 
-    def test_get_status_includes_actions(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_get_status_includes_actions(self, empty_autoscaler: Autoscaler):
         """Verify get_status returns recent actions."""
-        manager = make_mock_vm_manager()
-        group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0)
-        autoscaler = make_autoscaler({"test-group": group})
-
         # Run a scale-up to generate an action
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
-        autoscaler.run_once(demand, {})
+        empty_autoscaler.run_once(demand, {})
 
-        status = autoscaler.get_status()
+        status = empty_autoscaler.get_status()
 
         # Status should include groups, demand, and actions
         assert len(status.groups) == 1
@@ -1484,19 +1471,15 @@ class TestAutoscalerActionLogging:
         assert len(status.recent_actions) >= 1
         assert status.recent_actions[0].action_type == "scale_up"
 
-    def test_action_log_includes_timestamp(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_action_log_includes_timestamp(self, empty_autoscaler: Autoscaler):
         """Verify actions include valid timestamps."""
         from iris.time_utils import now_ms
 
-        manager = make_mock_vm_manager()
-        group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0)
-        autoscaler = make_autoscaler({"test-group": group})
-
         before = now_ms()
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
-        autoscaler.run_once(demand, {})
+        empty_autoscaler.run_once(demand, {})
         after = now_ms()
 
-        status = autoscaler.get_status()
+        status = empty_autoscaler.get_status()
         action = status.recent_actions[0]
         assert before <= action.timestamp_ms <= after
