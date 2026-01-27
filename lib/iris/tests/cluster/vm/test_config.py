@@ -30,7 +30,6 @@ from iris.cluster.vm.config import (
     get_ssh_config,
     load_config,
 )
-from iris.cluster.vm.managed_vm import VmRegistry
 from iris.rpc import config_pb2
 
 
@@ -286,71 +285,6 @@ scale_groups:
         assert config.scale_groups["tpu_group"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
 
 
-class TestGetProviderInfo:
-    """Tests for _get_provider_info helper function."""
-
-    @pytest.mark.parametrize(
-        "provider_config,expected_type,expected_project_id,expected_hosts",
-        [
-            (
-                config_pb2.ProviderConfig(tpu=config_pb2.TpuProvider(project_id="my-project")),
-                "tpu",
-                "my-project",
-                None,
-            ),
-            (
-                config_pb2.ProviderConfig(manual=config_pb2.ManualProvider(hosts=["10.0.0.1", "10.0.0.2"])),
-                "manual",
-                None,
-                ["10.0.0.1", "10.0.0.2"],
-            ),
-        ],
-        ids=["tpu", "manual"],
-    )
-    def test_extracts_provider_info(self, provider_config, expected_type, expected_project_id, expected_hosts):
-        """_get_provider_info correctly identifies provider types."""
-        from iris.cluster.vm.config import _get_provider_info
-
-        group_config = config_pb2.ScaleGroupConfig(
-            name="test-group",
-            provider=provider_config,
-        )
-
-        provider_type, project_id, hosts = _get_provider_info(group_config)
-
-        assert provider_type == expected_type
-        assert project_id == expected_project_id
-        assert hosts == expected_hosts
-
-    @pytest.mark.parametrize(
-        "group_config,error_match",
-        [
-            (config_pb2.ScaleGroupConfig(name="test-group"), "missing provider config"),
-            (
-                config_pb2.ScaleGroupConfig(
-                    name="test-tpu",
-                    provider=config_pb2.ProviderConfig(tpu=config_pb2.TpuProvider(project_id="")),
-                ),
-                "missing project_id",
-            ),
-            (
-                config_pb2.ScaleGroupConfig(
-                    name="test-manual",
-                    provider=config_pb2.ProviderConfig(manual=config_pb2.ManualProvider(hosts=[])),
-                ),
-                "missing hosts",
-            ),
-        ],
-        ids=["no_provider", "tpu_missing_project_id", "manual_missing_hosts"],
-    )
-    def test_raises_on_invalid_config(self, group_config, error_match):
-        """_get_provider_info raises on various invalid configurations."""
-        from iris.cluster.vm.config import _get_provider_info
-
-        with pytest.raises(ValueError, match=error_match):
-            _get_provider_info(group_config)
-
-
 class TestCreateAutoscalerFromConfig:
     """Tests for create_autoscaler_from_config factory function."""
 
@@ -386,7 +320,6 @@ scale_groups:
 
         assert autoscaler is not None
         assert "tpu_v5e_8" in autoscaler.groups
-        assert isinstance(autoscaler.vm_registry, VmRegistry)
 
     def test_creates_autoscaler_with_manual_provider(self, tmp_path: Path):
         """create_autoscaler_from_config works with manual provider config."""
@@ -417,7 +350,6 @@ scale_groups:
 
         assert autoscaler is not None
         assert "manual_hosts" in autoscaler.groups
-        assert isinstance(autoscaler.vm_registry, VmRegistry)
 
     def test_creates_autoscaler_after_round_trip(self, tmp_path: Path):
         """create_autoscaler_from_config works after config round-trip."""

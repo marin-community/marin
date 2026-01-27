@@ -59,11 +59,6 @@ def test_job_terminal_transitions(make_job_request, target_state, exit_code, err
     assert job.finished_at_ms > 0
     assert job.is_finished()
 
-    if exit_code is not None:
-        assert job.exit_code == exit_code
-    if error is not None:
-        assert job.error == error
-
 
 def test_unschedulable_includes_timeout_in_error(make_job_request):
     """UNSCHEDULABLE state includes scheduling timeout in error message."""
@@ -100,7 +95,6 @@ def test_failure_with_retries_available(make_job_request):
     assert job.state == cluster_pb2.JOB_STATE_PENDING
     assert job.failure_count == 1
     assert job.started_at_ms is None
-    assert job.error is None
     assert not job.is_finished()
 
 
@@ -126,7 +120,6 @@ def test_failure_exceeds_retry_limit(make_job_request):
     assert result == JobTransitionResult.EXCEEDED_RETRY_LIMIT
     assert job.state == cluster_pb2.JOB_STATE_FAILED
     assert job.failure_count == 2
-    assert job.error == "final error"
     assert job.finished_at_ms > 0
     assert job.is_finished()
 

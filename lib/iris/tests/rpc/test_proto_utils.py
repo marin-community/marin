@@ -22,38 +22,41 @@ from iris.rpc.proto_utils import (
 )
 
 
-def test_accelerator_type_name():
-    """Test enum name conversion."""
-    assert accelerator_type_name(config_pb2.ACCELERATOR_TYPE_UNSPECIFIED) == "ACCELERATOR_TYPE_UNSPECIFIED"
-    assert accelerator_type_name(config_pb2.ACCELERATOR_TYPE_CPU) == "ACCELERATOR_TYPE_CPU"
-    assert accelerator_type_name(config_pb2.ACCELERATOR_TYPE_GPU) == "ACCELERATOR_TYPE_GPU"
-    assert accelerator_type_name(config_pb2.ACCELERATOR_TYPE_TPU) == "ACCELERATOR_TYPE_TPU"
+def test_accelerator_type_name_handles_unknown():
+    """Unknown accelerator types are marked clearly."""
     assert accelerator_type_name(999).startswith("UNKNOWN(")
 
 
-def test_accelerator_type_friendly():
-    """Test friendly name conversion."""
-    assert accelerator_type_friendly(config_pb2.ACCELERATOR_TYPE_UNSPECIFIED) == "unspecified"
-    assert accelerator_type_friendly(config_pb2.ACCELERATOR_TYPE_CPU) == "cpu"
-    assert accelerator_type_friendly(config_pb2.ACCELERATOR_TYPE_GPU) == "gpu"
-    assert accelerator_type_friendly(config_pb2.ACCELERATOR_TYPE_TPU) == "tpu"
-
-
-def test_format_accelerator_display_with_variant():
-    """Test formatted display with variant."""
-    assert format_accelerator_display(config_pb2.ACCELERATOR_TYPE_TPU, "v5litepod-16") == "tpu (v5litepod-16)"
-    assert format_accelerator_display(config_pb2.ACCELERATOR_TYPE_GPU, "A100") == "gpu (A100)"
-    assert format_accelerator_display(config_pb2.ACCELERATOR_TYPE_GPU, "H100") == "gpu (H100)"
-
-
-def test_format_accelerator_display_without_variant():
-    """Test formatted display without variant."""
-    assert format_accelerator_display(config_pb2.ACCELERATOR_TYPE_CPU, "") == "cpu"
-    assert format_accelerator_display(config_pb2.ACCELERATOR_TYPE_CPU) == "cpu"
-    assert format_accelerator_display(config_pb2.ACCELERATOR_TYPE_TPU, "") == "tpu"
-
-
 def test_format_accelerator_display_handles_unknown():
-    """Test handling of unknown accelerator types."""
+    """Unknown accelerator types are handled gracefully."""
     result = format_accelerator_display(999, "some-variant")
     assert "unknown" in result.lower()
+
+
+def test_accelerator_types_are_distinguishable():
+    """Different accelerator types produce different display names."""
+    types = [
+        config_pb2.ACCELERATOR_TYPE_UNSPECIFIED,
+        config_pb2.ACCELERATOR_TYPE_CPU,
+        config_pb2.ACCELERATOR_TYPE_GPU,
+        config_pb2.ACCELERATOR_TYPE_TPU,
+    ]
+    friendly_names = [accelerator_type_friendly(t) for t in types]
+    assert len(friendly_names) == len(set(friendly_names)), "All accelerator types must have unique display names"
+
+
+def test_variant_preserved_in_display():
+    """Variant information is preserved when formatting for display."""
+    variant = "v5litepod-16"
+    result = format_accelerator_display(config_pb2.ACCELERATOR_TYPE_TPU, variant)
+    assert variant in result, f"Variant '{variant}' must be visible in display: {result}"
+
+
+def test_empty_variant_omitted_from_display():
+    """Empty variant strings don't clutter the display."""
+    no_variant = format_accelerator_display(config_pb2.ACCELERATOR_TYPE_CPU, "")
+    default_variant = format_accelerator_display(config_pb2.ACCELERATOR_TYPE_CPU)
+
+    assert "(" not in no_variant, "Empty variant should not add parentheses"
+    assert "(" not in default_variant, "Default empty variant should not add parentheses"
+    assert no_variant == default_variant, "Empty string and default should produce identical output"

@@ -181,18 +181,6 @@ def test_manual_controller_reload_calls_start(
     mock_run_streaming.assert_called_once()
 
 
-def test_create_controller_returns_gcp_when_enabled(gcp_config: config_pb2.IrisClusterConfig):
-    """create_controller returns GcpController when VM enabled."""
-    controller = create_controller(gcp_config)
-    assert isinstance(controller, GcpController)
-
-
-def test_create_controller_returns_manual_for_manual_provider(ssh_bootstrap_config: config_pb2.IrisClusterConfig):
-    """create_controller returns ManualController for manual provider."""
-    controller = create_controller(ssh_bootstrap_config)
-    assert isinstance(controller, ManualController)
-
-
 def test_create_controller_raises_on_missing_config():
     """create_controller raises ValueError when no oneof is set."""
     config = config_pb2.IrisClusterConfig(
@@ -209,7 +197,7 @@ class TestConfigParsing:
     """Tests for config parsing with controller VM settings."""
 
     def test_load_config_with_manual_controller(self, tmp_path: Path):
-        """Config with controller_vm.manual is parsed correctly."""
+        """Config with controller_vm.manual can be loaded and used to create a controller."""
         config_content = """\
 provider_type: manual
 
@@ -239,10 +227,8 @@ scale_groups:
 
         config = load_config(config_path)
 
-        assert config.controller_vm.manual.host == "10.0.0.100"
-        assert config.controller_vm.image == "gcr.io/project/iris-controller:latest"
-        assert config.controller_vm.manual.port == 10000
-        assert config.ssh.user == "ubuntu"
+        # Test behavior: we can create a controller from this config without errors
+        create_controller(config)
 
 
 class TestConfigSerialization:

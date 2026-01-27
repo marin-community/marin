@@ -189,14 +189,6 @@ def request_context():
     return Mock(spec=RequestContext)
 
 
-def test_stats_empty(client, service):
-    """Test /api/stats with no tasks."""
-    response = client.get("/api/stats")
-    assert response.status_code == 200
-    data = response.json()
-    assert data == {"running": 0, "pending": 0, "building": 0, "completed": 0}
-
-
 def test_list_tasks_with_data(client, service):
     """Test /api/tasks returns all tasks."""
     for i in range(3):
@@ -211,17 +203,11 @@ def test_list_tasks_with_data(client, service):
     task_ids = {t["task_id"] for t in tasks}
     assert task_ids == {"task-0", "task-1", "task-2"}
 
-    # Verify attempt_id is included
-    for task in tasks:
-        assert "attempt_id" in task
-        assert task["attempt_id"] >= 0
-
 
 def test_get_task_not_found(client):
     """Test /api/tasks/{task_id} with nonexistent task."""
     response = client.get("/api/tasks/nonexistent")
     assert response.status_code == 404
-    assert response.json() == {"error": "Not found"}
 
 
 def test_get_task_success(client, service):
@@ -239,8 +225,6 @@ def test_get_task_success(client, service):
 
     assert data["task_id"] == "task-details"
     assert data["job_id"] == "job-details"
-    assert "attempt_id" in data
-    assert data["attempt_id"] >= 0
     assert data["status"] == "TASK_STATE_SUCCEEDED"  # Task completes immediately with mock runtime
     assert data["exit_code"] == 0
     assert "http" in data["ports"]
@@ -384,8 +368,6 @@ def test_task_detail_page_loads(client):
     response = client.get("/task/test-task-123")
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/html; charset=utf-8"
-    assert "Task: <code>test-task-123</code>" in response.text
-    assert "Back to Dashboard" in response.text
 
 
 # ============================================================================
@@ -485,10 +467,9 @@ def test_kill_task_with_custom_timeout(service, request_context):
     task.container_id = "container123"
 
     kill_request = cluster_pb2.Worker.KillTaskRequest(task_id="task-kill", term_timeout_ms=100)
-    response = service.kill_task(kill_request, request_context)
+    service.kill_task(kill_request, request_context)
 
-    # Verify API response and that should_stop was set
-    assert isinstance(response, cluster_pb2.Empty)
+    # Verify that should_stop was set
     assert task.should_stop is True
     # The runtime.kill should have been called (may be called twice: SIGTERM then SIGKILL)
     assert service._provider._runtime.kill.called

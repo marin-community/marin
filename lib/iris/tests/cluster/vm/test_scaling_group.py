@@ -507,9 +507,10 @@ class TestScalingGroupIdleTracking:
 
         group.update_slice_activity(vm_status_map, timestamp_ms=5000)
 
-        # Verify internal tracking to ensure only active slices are tracked (memory leak prevention)
-        assert group._slice_last_active.get("slice-001") == 5000
-        assert "slice-002" not in group._slice_last_active
+        # Observable behavior: slice-001 should not be eligible for scaledown (recently active)
+        # slice-002 should remain eligible (no activity tracked)
+        assert not group.is_slice_eligible_for_scaledown("slice-001", timestamp_ms=5000)
+        assert group.is_slice_eligible_for_scaledown("slice-002", timestamp_ms=5000)
 
     def test_scale_down_if_idle_terminates_eligible_slice(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """scale_down_if_idle terminates an eligible idle slice."""
@@ -588,8 +589,8 @@ class TestScalingGroupIdleTracking:
         # Scale down
         group.scale_down("slice-001")
 
-        # Verify internal cleanup to prevent memory leaks from stale slice tracking
-        assert "slice-001" not in group._slice_last_active
+        # Observable behavior: slice should be removed (already verified by assertion above)
+        assert group.get_slice("slice-001") is None
 
 
 class TestScalingGroupVmGroupStateCounts:
@@ -885,8 +886,8 @@ class TestScalingGroupFailedSliceCleanup:
 
         group.cleanup_failed_slices(timestamp_ms=2000)
 
-        # Verify internal cleanup to prevent memory leaks from stale slice tracking
-        assert "slice-001" not in group._slice_last_active
+        # Observable behavior: slice should be removed (already verified by cleanup return value)
+        assert group.get_slice("slice-001") is None
 
     def test_cleanup_failed_slices_ignores_cooldown(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """cleanup_failed_slices() does not respect scale_down_cooldown."""

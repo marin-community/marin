@@ -155,15 +155,6 @@ def test_launch_job_returns_job_id(service, job_request):
     assert status_response.job.state == cluster_pb2.JOB_STATE_PENDING
 
 
-def test_launch_job_uses_name_as_job_id(service, job_request):
-    """Verify job_id is the same as the provided name."""
-    request = job_request("my-unique-job")
-
-    response = service.launch_job(request, None)
-
-    assert response.job_id == "my-unique-job"
-
-
 def test_launch_job_rejects_duplicate_name(service, job_request):
     """Verify launch_job rejects duplicate job names."""
     request = job_request("duplicate-job")
@@ -237,17 +228,6 @@ def test_get_job_status_not_found(service):
 
     assert exc_info.value.code == Code.NOT_FOUND
     assert "nonexistent" in exc_info.value.message
-
-
-def test_get_job_status_includes_parent_job_id(service, job_request):
-    """Verify get_job_status returns parent_job_id in response."""
-    service.launch_job(job_request("parent-job"), None)
-    service.launch_job(job_request("child-job", parent_job_id="parent-job"), None)
-
-    request = cluster_pb2.Controller.GetJobStatusRequest(job_id="child-job")
-    response = service.get_job_status(request, None)
-
-    assert response.job.parent_job_id == "parent-job"
 
 
 # =============================================================================

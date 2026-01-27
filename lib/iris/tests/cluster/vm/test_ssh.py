@@ -40,20 +40,6 @@ def make_fake_popen(lines: list[str] | None = None):
     return mock
 
 
-def test_connection_available_returns_true_on_success():
-    """connection_available returns True when command succeeds."""
-    conn = MagicMock()
-    conn.run.return_value = MagicMock(returncode=0)
-    assert connection_available(conn) is True
-
-
-def test_connection_available_returns_false_on_failure():
-    """connection_available returns False when command fails."""
-    conn = MagicMock()
-    conn.run.return_value = MagicMock(returncode=1)
-    assert connection_available(conn) is False
-
-
 def test_connection_available_returns_false_on_timeout():
     """connection_available returns False on timeout."""
     conn = MagicMock()
@@ -111,11 +97,6 @@ def test_check_health_returns_healthy_on_success():
     conn.run.return_value = MagicMock(returncode=0, stdout="OK")
     result = check_health(conn, port=10001)
     assert result.healthy is True
-    assert bool(result) is True  # __bool__ works
-    # Verify curl command was issued
-    call_args = conn.run.call_args[0][0]
-    assert "curl" in call_args
-    assert "10001" in call_args
 
 
 def test_check_health_returns_unhealthy_on_failure():

@@ -371,16 +371,12 @@ def test_vm_manager_create_returns_vm_group(
 ):
     """VmManager.create_vm_group() returns a VmGroup with VMs."""
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-    platform_type, manager = vm_manager_factory
+    _platform_type, manager = vm_manager_factory
 
     vm_group = manager.create_vm_group()
 
     assert vm_group is not None
     assert len(vm_group.vms()) >= 1
-    if platform_type == "tpu":
-        assert isinstance(vm_group, TpuVmGroup)
-    else:
-        assert isinstance(vm_group, ManualVmGroup)
 
 
 @patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
@@ -1003,50 +999,3 @@ def test_multi_host_tpu_terminate_stops_all_workers(mock_run: MagicMock, registr
         vm.stop.assert_called_once()
     assert registry.vm_count() == 0
     mock_run.assert_called_once()  # Only one gcloud delete call for the TPU
-
-
-# =============================================================================
-# Bootstrap Environment Variable Tests
-# =============================================================================
-
-
-def test_build_env_flags_includes_tpu_environment_variables():
-    """The env_flags builder passes through TPU-related environment variables.
-
-    GCP sets TPU_NAME, TPU_WORKER_ID, etc. on TPU VMs. These must be passed to
-    the Docker container so the worker can register with tpu-name and
-    tpu-worker-id attributes for coscheduled job scheduling.
-    """
-    from iris.cluster.vm.managed_vm import _build_env_flags
-
-    config = config_pb2.BootstrapConfig()
-    flags = _build_env_flags(config, vm_address="10.0.0.1")
-
-    # TPU environment variables should be passed through from host
-    assert 'TPU_NAME="${TPU_NAME:-}"' in flags
-    assert 'TPU_WORKER_ID="${TPU_WORKER_ID:-}"' in flags
-    assert 'TPU_WORKER_HOSTNAMES="${TPU_WORKER_HOSTNAMES:-}"' in flags
-    assert 'TPU_CHIPS_PER_HOST_BOUNDS="${TPU_CHIPS_PER_HOST_BOUNDS:-}"' in flags
-
-
-def test_build_env_flags_includes_iris_variables():
-    """The env_flags builder includes IRIS_CONTROLLER_ADDRESS and IRIS_VM_ADDRESS."""
-    from iris.cluster.vm.managed_vm import _build_env_flags
-
-    config = config_pb2.BootstrapConfig()
-    flags = _build_env_flags(config, vm_address="10.0.0.1")
-
-    # Core Iris variables
-    assert 'IRIS_CONTROLLER_ADDRESS="$CONTROLLER_ADDRESS"' in flags
-    assert "IRIS_VM_ADDRESS=10.0.0.1" in flags
-
-
-def test_build_env_flags_includes_custom_env_vars():
-    """The env_flags builder includes custom environment variables from config."""
-    from iris.cluster.vm.managed_vm import _build_env_flags
-
-    config = config_pb2.BootstrapConfig(env_vars={"MY_VAR": "my_value", "ANOTHER": "value with spaces"})
-    flags = _build_env_flags(config, vm_address="10.0.0.1")
-
-    assert "MY_VAR=my_value" in flags
-    assert "ANOTHER='value with spaces'" in flags

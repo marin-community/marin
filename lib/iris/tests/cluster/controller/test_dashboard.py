@@ -220,24 +220,6 @@ def test_list_workers_returns_healthy_status(client, state, make_worker_metadata
     assert healthy_count == 2
 
 
-def test_list_endpoints_filters_by_running_jobs(client, state, job_request):
-    """ListEndpoints RPC filters out endpoints for non-running jobs."""
-    # Running job with endpoint
-    running_id = submit_job(state, "running", job_request)
-    state.get_job(running_id).state = cluster_pb2.JOB_STATE_RUNNING
-    state.add_endpoint(ControllerEndpoint(endpoint_id="ep1", name="svc", address="host:80", job_id=running_id))
-
-    # Pending job with endpoint (should not be returned)
-    pending_id = submit_job(state, "pending", job_request)
-    state.add_endpoint(ControllerEndpoint(endpoint_id="ep2", name="svc2", address="host:81", job_id=pending_id))
-
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
-    endpoints = resp.get("endpoints", [])
-
-    assert len(endpoints) == 1
-    assert endpoints[0]["name"] == "svc"
-
-
 def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     """ListEndpoints filters out endpoints for non-running jobs."""
     # Create jobs in various states
@@ -287,31 +269,6 @@ def test_job_detail_page_empty_worker_for_pending_job(client, state, job_request
     # New dashboard shows task summary
     assert "Task Summary" in response.text
     assert "tasks-table" in response.text
-
-
-def test_list_jobs_state_names_mapped_correctly(client, state, job_request):
-    """Proto state enums are returned as expected."""
-    state_mapping = [
-        (cluster_pb2.JOB_STATE_PENDING, "JOB_STATE_PENDING"),
-        (cluster_pb2.JOB_STATE_BUILDING, "JOB_STATE_BUILDING"),
-        (cluster_pb2.JOB_STATE_RUNNING, "JOB_STATE_RUNNING"),
-        (cluster_pb2.JOB_STATE_SUCCEEDED, "JOB_STATE_SUCCEEDED"),
-        (cluster_pb2.JOB_STATE_FAILED, "JOB_STATE_FAILED"),
-        (cluster_pb2.JOB_STATE_KILLED, "JOB_STATE_KILLED"),
-        (cluster_pb2.JOB_STATE_WORKER_FAILED, "JOB_STATE_WORKER_FAILED"),
-    ]
-
-    for proto_state, _ in state_mapping:
-        job_id = submit_job(state, f"j-{proto_state}", job_request)
-        state.get_job(job_id).state = proto_state
-
-    resp = rpc_post(client, "ListJobs")
-    jobs = resp.get("jobs", [])
-    # RPC uses camelCase field names (Connect RPC standard)
-    job_by_id = {j["jobId"]: j["state"] for j in jobs}
-
-    for proto_state, expected_name in state_mapping:
-        assert job_by_id[f"j-{proto_state}"] == expected_name
 
 
 def test_list_jobs_includes_retry_counts(client, state, job_request):

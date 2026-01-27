@@ -271,7 +271,6 @@ def test_get_stats_invalid_container(docker_runtime):
 
     stats = docker_runtime.get_stats(invalid_container_id)
 
-    assert isinstance(stats, ContainerStats)
     assert stats.available is False
 
 
