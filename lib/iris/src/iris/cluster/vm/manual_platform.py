@@ -43,7 +43,7 @@ from iris.cluster.vm.vm_platform import (
     VmGroupStatus,
     VmSnapshot,
 )
-from iris.cluster.vm.ssh import DirectSshConnection, check_health
+from iris.cluster.vm.ssh import DirectSshConnection
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import now_ms
 
@@ -291,7 +291,11 @@ echo "[iris-init] Using static controller at $CONTROLLER_ADDRESS"
         """Check if a worker is healthy on the given host."""
         conn = self._create_ssh_connection(host)
         port = self._bootstrap_config.worker_port or 10001
-        return check_health(conn, port).healthy
+        try:
+            result = conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def _adopt_running_host(self, host: str) -> ManualVmGroup:
         """Create a ManualVmGroup for a host that already has a running worker."""

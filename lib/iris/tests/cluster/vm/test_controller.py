@@ -27,7 +27,7 @@ from iris.cluster.vm.controller import (
     ManualController,
     create_controller,
 )
-from iris.cluster.vm.ssh import HealthCheckResult
+from iris.cluster.vm.controller import HealthCheckResult
 from iris.rpc import config_pb2
 
 

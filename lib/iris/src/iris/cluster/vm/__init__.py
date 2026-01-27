@@ -31,11 +31,15 @@ from iris.cluster.vm.ssh import (
     GceSshConnection,
     GcloudSshConnection,
     SshConnection,
-    check_health,
     connection_available,
     run_streaming_with_retry,
-    shutdown_worker,
     wait_for_connection,
+)
+
+# Health checking (from controller module where diagnostics matter)
+from iris.cluster.vm.controller import (
+    HealthCheckResult,
+    check_health,
 )
 
 # Platform protocols and status types
@@ -115,6 +119,7 @@ __all__ = [
     "GceSshConnection",
     "GcloudSshConnection",
     "GroupAvailability",
+    "HealthCheckResult",
     "ManagedVm",
     "ManualVmGroup",
     "ManualVmManager",
@@ -146,6 +151,5 @@ __all__ = [
     "load_config",
     "route_demand",
     "run_streaming_with_retry",
-    "shutdown_worker",
     "wait_for_connection",
 ]

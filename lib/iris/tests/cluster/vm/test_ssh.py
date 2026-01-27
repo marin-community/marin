@@ -20,11 +20,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from iris.cluster.vm.controller import check_health
 from iris.cluster.vm.ssh import (
-    check_health,
     connection_available,
     run_streaming_with_retry,
-    shutdown_worker,
     wait_for_connection,
 )
 
@@ -132,31 +131,6 @@ def test_check_health_returns_unhealthy_on_exception():
     result = check_health(conn, port=10001)
     assert result.healthy is False
     assert "Network error" in result.curl_error
-
-
-def test_shutdown_worker_graceful():
-    """shutdown_worker with graceful=True runs docker stop."""
-    conn = MagicMock()
-    conn.run.return_value = MagicMock(returncode=0)
-    assert shutdown_worker(conn, graceful=True) is True
-    call_args = conn.run.call_args[0][0]
-    assert "docker stop iris-worker" in call_args
-
-
-def test_shutdown_worker_forceful():
-    """shutdown_worker with graceful=False runs docker kill."""
-    conn = MagicMock()
-    conn.run.return_value = MagicMock(returncode=0)
-    assert shutdown_worker(conn, graceful=False) is True
-    call_args = conn.run.call_args[0][0]
-    assert "docker kill iris-worker" in call_args
-
-
-def test_shutdown_worker_returns_false_on_exception():
-    """shutdown_worker returns False on exception (safe helper)."""
-    conn = MagicMock()
-    conn.run.side_effect = Exception("Docker error")
-    assert shutdown_worker(conn, graceful=True) is False
 
 
 def test_run_streaming_with_retry_success_first_attempt():

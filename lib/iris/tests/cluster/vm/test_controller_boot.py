@@ -33,7 +33,7 @@ from iris.cluster.vm.controller import (
     ManualController,
     create_controller,
 )
-from iris.cluster.vm.ssh import HealthCheckResult
+from iris.cluster.vm.controller import HealthCheckResult
 from iris.rpc import config_pb2
 
 
@@ -139,6 +139,7 @@ def test_creates_manual_controller_for_manual_provider():
     assert isinstance(controller, ManualController)
 
 
+@patch("iris.cli._build_and_push_controller_image")
 @patch("iris.cluster.vm.controller.check_health")
 @patch("iris.cluster.vm.controller.run_streaming_with_retry")
 @patch("iris.cluster.vm.controller.DirectSshConnection")
@@ -146,6 +147,7 @@ def test_cli_controller_start_with_ssh(
     mock_conn_cls: MagicMock,
     mock_run_streaming: MagicMock,
     mock_health: MagicMock,
+    mock_build: MagicMock,
     cli_runner: CliRunner,
     manual_config: Path,
 ):
@@ -164,7 +166,9 @@ def test_cli_controller_start_with_ssh(
     assert "Controller started successfully at http://10.0.0.100:10000" in result.output
 
 
+@patch("iris.cli._build_and_push_controller_image")
 def test_cli_start_failure_shows_error(
+    mock_build: MagicMock,
     cli_runner: CliRunner,
     gcp_config: Path,
 ):
@@ -211,6 +215,7 @@ def test_cli_stop_failure_shows_error(
     assert "Failed to stop controller: VM not found" in result.output
 
 
+@patch("iris.cli._build_and_push_controller_image")
 @patch("iris.cluster.vm.controller.check_health")
 @patch("iris.cluster.vm.controller.run_streaming_with_retry")
 @patch("iris.cluster.vm.controller.DirectSshConnection")
@@ -218,6 +223,7 @@ def test_manual_start_timeout_shows_error(
     mock_conn_cls: MagicMock,
     mock_run_streaming: MagicMock,
     mock_health: MagicMock,
+    mock_build: MagicMock,
     cli_runner: CliRunner,
     manual_config: Path,
 ):

@@ -19,8 +19,7 @@ This module provides:
 - GcloudSshConnection for TPU VM SSH via gcloud
 - GceSshConnection for standard GCE VMs via gcloud compute ssh
 - DirectSshConnection for raw SSH connections
-- InMemorySshConnection for dry-run and testing
-- Utility functions for connection testing, health checks, and streaming commands
+- Utility functions for connection testing and streaming commands
 """
 
 from __future__ import annotations
@@ -257,97 +256,6 @@ def wait_for_connection(
             return True
         time.sleep(poll_interval)
     return False
-
-
-@dataclass
-class HealthCheckResult:
-    """Result of a health check with diagnostic info."""
-
-    healthy: bool
-    curl_output: str = ""
-    curl_error: str = ""
-    container_status: str = ""
-    container_logs: str = ""
-
-    def __bool__(self) -> bool:
-        """Allow using result directly as a boolean."""
-        return self.healthy
-
-    def summary(self) -> str:
-        """Return a one-line summary of the health check result."""
-        if self.healthy:
-            return "healthy"
-        parts = []
-        if self.container_status:
-            parts.append(f"container={self.container_status}")
-        if self.curl_error:
-            parts.append(f"curl_error={self.curl_error[:50]}")
-        return ", ".join(parts) if parts else "unknown failure"
-
-
-def check_health(
-    conn: SshConnection,
-    port: int = 10001,
-    container_name: str = "iris-worker",
-) -> HealthCheckResult:
-    """Check if worker/controller is healthy via health endpoint.
-
-    Returns HealthCheckResult with diagnostic info. The result can be used
-    directly as a boolean (via __bool__), or inspected for details on failure.
-
-    Args:
-        conn: SSH connection to the host
-        port: Port to check health on
-        container_name: Container name for gathering diagnostics on failure
-    """
-    result = HealthCheckResult(healthy=False)
-
-    # Try curl health check
-    try:
-        curl_result = conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
-        if curl_result.returncode == 0:
-            result.healthy = True
-            result.curl_output = curl_result.stdout.strip()
-            return result
-        result.curl_error = curl_result.stderr.strip() or f"exit code {curl_result.returncode}"
-    except Exception as e:
-        result.curl_error = str(e)
-
-    # Health check failed, gather diagnostics
-    try:
-        status_result = conn.run(
-            f"sudo docker inspect --format='{{{{.State.Status}}}}' {container_name} 2>/dev/null || echo 'not_found'",
-            timeout=10,
-        )
-        result.container_status = status_result.stdout.strip()
-    except Exception as e:
-        result.container_status = f"error: {e}"
-
-    # If container is in a failed state, get recent logs
-    # Include "not_found" to catch cases where container crashed and was removed
-    if result.container_status in ("restarting", "exited", "dead", "not_found"):
-        try:
-            logs_result = conn.run(f"sudo docker logs {container_name} --tail 20 2>&1", timeout=15)
-            if logs_result.returncode == 0 and logs_result.stdout.strip():
-                result.container_logs = logs_result.stdout.strip()
-        except Exception as e:
-            result.container_logs = f"error fetching logs: {e}"
-
-    return result
-
-
-def shutdown_worker(conn: SshConnection, graceful: bool = True) -> bool:
-    """Shutdown worker container via docker stop/kill.
-
-    Returns False on any failure - this is a safe helper that never raises.
-    """
-    cmd = "docker stop iris-worker" if graceful else "docker kill iris-worker"
-    try:
-        conn.run(cmd, timeout=30)
-        return True
-    except Exception as e:
-        logger.debug("Shutdown worker failed for %s: %s", conn.address, e)
-        return False
 
 
 SSH_MAX_RETRIES = 3

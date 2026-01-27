@@ -41,7 +41,6 @@ from iris.cluster.vm.ssh import (
     DirectSshConnection,
     GceSshConnection,
     SshConnection,
-    check_health,
     run_streaming_with_retry,
 )
 from iris.rpc import cluster_pb2
@@ -62,6 +61,77 @@ MAX_RETRIES = 3
 # Backoff parameters for health check polling: start at 2s, cap at 10s
 HEALTH_CHECK_BACKOFF_INITIAL = 2.0
 HEALTH_CHECK_BACKOFF_MAX = 10.0
+
+
+# ============================================================================
+# Health Checking
+# ============================================================================
+
+
+@dataclass
+class HealthCheckResult:
+    """Result of a health check with diagnostic info."""
+
+    healthy: bool
+    curl_output: str = ""
+    curl_error: str = ""
+    container_status: str = ""
+    container_logs: str = ""
+
+    def __bool__(self) -> bool:
+        return self.healthy
+
+    def summary(self) -> str:
+        if self.healthy:
+            return "healthy"
+        parts = []
+        if self.container_status:
+            parts.append(f"container={self.container_status}")
+        if self.curl_error:
+            parts.append(f"curl_error={self.curl_error[:50]}")
+        return ", ".join(parts) if parts else "unknown failure"
+
+
+def check_health(
+    conn: SshConnection,
+    port: int = 10001,
+    container_name: str = "iris-worker",
+) -> HealthCheckResult:
+    """Check if worker/controller is healthy via health endpoint.
+
+    Returns HealthCheckResult with diagnostic info on failure.
+    """
+    result = HealthCheckResult(healthy=False)
+
+    try:
+        curl_result = conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
+        if curl_result.returncode == 0:
+            result.healthy = True
+            result.curl_output = curl_result.stdout.strip()
+            return result
+        result.curl_error = curl_result.stderr.strip() or f"exit code {curl_result.returncode}"
+    except Exception as e:
+        result.curl_error = str(e)
+
+    # Gather diagnostics on failure
+    try:
+        status_result = conn.run(
+            f"sudo docker inspect --format='{{{{.State.Status}}}}' {container_name} 2>/dev/null || echo 'not_found'",
+            timeout=10,
+        )
+        result.container_status = status_result.stdout.strip()
+    except Exception as e:
+        result.container_status = f"error: {e}"
+
+    if result.container_status in ("restarting", "exited", "dead", "not_found"):
+        try:
+            logs_result = conn.run(f"sudo docker logs {container_name} --tail 20 2>&1", timeout=15)
+            if logs_result.returncode == 0 and logs_result.stdout.strip():
+                result.container_logs = logs_result.stdout.strip()
+        except Exception as e:
+            result.container_logs = f"error fetching logs: {e}"
+
+    return result
 
 
 def wait_healthy_via_ssh(

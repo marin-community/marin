@@ -33,9 +33,7 @@ from typing import Protocol
 
 from iris.cluster.vm.ssh import (
     SshConnection,
-    check_health,
     run_streaming_with_retry,
-    shutdown_worker,
     wait_for_connection,
 )
 from iris.rpc import config_pb2, vm_pb2
@@ -400,7 +398,11 @@ class ManagedVm:
     def _check_worker_healthy(self) -> bool:
         """Check if worker container is already running and healthy."""
         port = self._bootstrap_config.worker_port or 10001
-        return check_health(self._conn, port).healthy
+        try:
+            result = self._conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def _transition(self, new_state: vm_pb2.VmState) -> None:
         """Update state with timestamp and log the transition."""
@@ -419,11 +421,20 @@ class ManagedVm:
     def check_health(self) -> bool:
         """Check if worker is healthy via health endpoint."""
         port = self._bootstrap_config.worker_port or 10001
-        return check_health(self._conn, port).healthy
+        try:
+            result = self._conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def shutdown(self, graceful: bool = True) -> bool:
         """Shutdown worker container."""
-        return shutdown_worker(self._conn, graceful)
+        cmd = "docker stop iris-worker" if graceful else "docker kill iris-worker"
+        try:
+            self._conn.run(cmd, timeout=30)
+            return True
+        except Exception:
+            return False
 
     @property
     def is_terminal(self) -> bool:

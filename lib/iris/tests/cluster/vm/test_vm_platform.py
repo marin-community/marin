@@ -33,7 +33,6 @@ import pytest
 from iris.cluster.vm.gcp_tpu_platform import TpuVmGroup, TpuVmManager
 from iris.cluster.vm.managed_vm import PoolExhaustedError, TrackedVmFactory, VmRegistry
 from iris.cluster.vm.manual_platform import ManualVmGroup, ManualVmManager
-from iris.cluster.vm.ssh import HealthCheckResult
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
 from iris.rpc import config_pb2, vm_pb2
 
@@ -736,9 +735,9 @@ def test_manual_vm_group_terminate_calls_on_terminate_callback(registry: VmRegis
     assert callback_hosts == ["10.0.0.1"]
 
 
-@patch("iris.cluster.vm.manual_platform.check_health")
+@patch("iris.cluster.vm.manual_platform.DirectSshConnection")
 def test_manual_manager_discovers_hosts_with_running_workers(
-    mock_check_health: MagicMock,
+    mock_ssh_conn_class: MagicMock,
     mock_factory: MagicMock,
     manual_scale_group: config_pb2.ScaleGroupConfig,
     bootstrap_config: config_pb2.BootstrapConfig,
@@ -754,11 +753,18 @@ def test_manual_manager_discovers_hosts_with_running_workers(
         vm_factory=mock_factory,
     )
 
-    def health_check_side_effect(executor, port, container_name="iris-worker"):
-        healthy = executor.host in ["10.0.0.1", "10.0.0.3"]
-        return HealthCheckResult(healthy=healthy)
+    # Track which host each connection is for and return appropriate health check result
+    def make_mock_connection(host, **kwargs):
+        mock_conn = MagicMock()
+        mock_conn.host = host
+        # Simulate healthy for 10.0.0.1 and 10.0.0.3, unhealthy for 10.0.0.2
+        if host in ["10.0.0.1", "10.0.0.3"]:
+            mock_conn.run.return_value = MagicMock(returncode=0)
+        else:
+            mock_conn.run.return_value = MagicMock(returncode=1)
+        return mock_conn
 
-    mock_check_health.side_effect = health_check_side_effect
+    mock_ssh_conn_class.side_effect = make_mock_connection
 
     vm_groups = manager.discover_vm_groups()
 
