@@ -17,7 +17,11 @@
 from __future__ import annotations
 
 import logging
+import socket
 import subprocess
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -241,3 +245,102 @@ def discover_controller_vm(zone: str, project: str) -> str | None:
             names[0],
         )
     return names[0] if names else None
+
+
+def wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> bool:
+    """Wait for a port to become available.
+
+    Args:
+        port: Port number to check
+        host: Host to connect to (default: localhost)
+        timeout: Maximum time to wait in seconds (default: 30.0)
+
+    Returns:
+        True if port is ready, False if timeout
+    """
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                return True
+        except (ConnectionRefusedError, OSError, TimeoutError):
+            time.sleep(0.5)
+    return False
+
+
+@contextmanager
+def controller_tunnel(
+    zone: str,
+    project: str,
+    local_port: int = 10000,
+    tunnel_logger: logging.Logger | None = None,
+    timeout: float = 60.0,
+) -> Iterator[str]:
+    """Establish SSH tunnel to controller and yield the local URL.
+
+    Args:
+        zone: GCP zone
+        project: GCP project
+        local_port: Local port to forward to (default: 10000)
+        tunnel_logger: Optional logger for progress messages
+        timeout: Timeout in seconds for tunnel establishment (default: 60.0)
+
+    Yields:
+        Local controller URL (e.g., "http://localhost:10000")
+
+    Raises:
+        RuntimeError: If no controller VM found or tunnel fails to establish
+
+    Example:
+        with controller_tunnel("europe-west4-b", "hai-gcp-models") as url:
+            client = IrisClient.remote(url)
+            job = client.submit(...)
+    """
+    vm_name = discover_controller_vm(zone, project)
+    if not vm_name:
+        raise RuntimeError(f"No controller VM found in zone {zone}")
+
+    if tunnel_logger:
+        tunnel_logger.info("Establishing SSH tunnel to %s...", vm_name)
+
+    proc = subprocess.Popen(
+        [
+            "gcloud",
+            "compute",
+            "ssh",
+            vm_name,
+            f"--project={project}",
+            f"--zone={zone}",
+            "--",
+            "-L",
+            f"{local_port}:localhost:10000",
+            "-N",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+
+    try:
+        if not wait_for_port(local_port, timeout=timeout):
+            stderr = proc.stderr.read().decode() if proc.stderr else ""
+            proc.terminate()
+            proc.wait()
+            raise RuntimeError(f"SSH tunnel failed to establish: {stderr}")
+
+        if tunnel_logger:
+            tunnel_logger.info("Tunnel ready: localhost:%d -> %s:10000", local_port, vm_name)
+
+        yield f"http://localhost:{local_port}"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()

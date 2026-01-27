@@ -39,12 +39,9 @@ Usage:
 
 import logging
 import signal
-import socket
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -65,6 +62,7 @@ from iris.cluster.vm.controller import ControllerProtocol, create_controller
 from iris.cluster.vm.debug import (
     cleanup_iris_resources,
     collect_docker_logs,
+    controller_tunnel,
     discover_controller_vm,
     list_iris_tpus,
 )
@@ -179,23 +177,6 @@ class SmokeTestConfig:
 
 
 # =============================================================================
-# SSH Tunnel (reuses pattern from cluster-tools.py)
-# =============================================================================
-
-
-def _wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> bool:
-    """Wait for a port to become available."""
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            with socket.create_connection((host, port), timeout=1.0):
-                return True
-        except (ConnectionRefusedError, OSError, TimeoutError):
-            time.sleep(0.5)
-    return False
-
-
-# =============================================================================
 # Image Building
 # TODO: Refactor to use iris.build module directly instead of shelling out to CLI
 # =============================================================================
@@ -228,61 +209,6 @@ def _build_and_push_image(image_type: str, region: str, project: str) -> bool:
     ]
     result = subprocess.run(cmd, capture_output=False)
     return result.returncode == 0
-
-
-@contextmanager
-def _controller_tunnel(
-    zone: str,
-    project: str,
-    logger: SmokeTestLogger,
-    local_port: int = DEFAULT_CONTROLLER_PORT,
-) -> Iterator[str]:
-    """Establish SSH tunnel to controller and yield the local URL."""
-    vm_name = discover_controller_vm(zone, project)
-    if not vm_name:
-        raise RuntimeError(f"No controller VM found in {zone}")
-
-    logger.log(f"Establishing SSH tunnel to {vm_name}...")
-
-    proc = subprocess.Popen(
-        [
-            "gcloud",
-            "compute",
-            "ssh",
-            vm_name,
-            f"--project={project}",
-            f"--zone={zone}",
-            "--",
-            "-L",
-            f"{local_port}:localhost:{DEFAULT_CONTROLLER_PORT}",
-            "-N",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-
-    try:
-        if not _wait_for_port(local_port, timeout=60):
-            stderr = proc.stderr.read().decode() if proc.stderr else ""
-            proc.terminate()
-            proc.wait()
-            raise RuntimeError(f"Tunnel failed to establish: {stderr}")
-
-        logger.log(f"Tunnel ready: localhost:{local_port} -> {vm_name}:{DEFAULT_CONTROLLER_PORT}")
-        yield f"http://localhost:{local_port}"
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
 
 
 # =============================================================================
@@ -363,7 +289,12 @@ class SmokeTestRunner:
             # Phase 2: SSH tunnel
             self.logger.section("PHASE 2: SSH Tunnel Setup")
 
-            with _controller_tunnel(zone, project, self.logger) as tunnel_url:
+            with controller_tunnel(
+                zone,
+                project,
+                local_port=DEFAULT_CONTROLLER_PORT,
+                tunnel_logger=logging.getLogger("iris.cluster.vm.debug"),
+            ) as tunnel_url:
                 if self._interrupted:
                     return False
 

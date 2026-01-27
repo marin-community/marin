@@ -35,13 +35,11 @@ Usage:
 
 import json
 import signal
-import socket
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import TypeVar
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,6 +48,7 @@ from google.protobuf import json_format
 
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
+from iris.cluster.vm.debug import controller_tunnel, wait_for_port
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import format_accelerator_display
@@ -122,77 +121,6 @@ def get_vm_status(vm_name: str, zone: str, project: str) -> dict | None:
     if result.returncode != 0:
         return None
     return json.loads(result.stdout)
-
-
-def wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> bool:
-    """Wait for a port to become available.
-
-    Returns True if port is ready, False if timeout.
-    """
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            with socket.create_connection((host, port), timeout=1.0):
-                return True
-        except (ConnectionRefusedError, OSError, TimeoutError):
-            time.sleep(0.5)
-    return False
-
-
-@contextmanager
-def controller_tunnel(zone: str, project: str, local_port: int = DEFAULT_CONTROLLER_PORT) -> Iterator[str]:
-    """Establish SSH tunnel to controller and yield the local URL.
-
-    Usage:
-        with controller_tunnel("europe-west4-b", "hai-gcp-models") as url:
-            client = ControllerServiceClientSync(url)
-            client.list_jobs(cluster_pb2.Controller.ListJobsRequest())
-    """
-    vm_name = discover_controller_vm(zone, project)
-    if not vm_name:
-        raise click.ClickException(f"No controller VM found in {zone}")
-
-    click.echo(f"Establishing SSH tunnel to {vm_name}...")
-
-    proc = subprocess.Popen(
-        [
-            "gcloud",
-            "compute",
-            "ssh",
-            vm_name,
-            f"--project={project}",
-            f"--zone={zone}",
-            "--",
-            "-L",
-            f"{local_port}:localhost:{DEFAULT_CONTROLLER_PORT}",
-            "-N",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-
-    try:
-        if not wait_for_port(local_port, timeout=30):
-            stderr = proc.stderr.read().decode() if proc.stderr else ""
-            proc.terminate()
-            proc.wait()
-            raise click.ClickException(f"Tunnel failed to establish: {stderr}")
-
-        click.echo(f"Tunnel established: localhost:{local_port} -> {vm_name}:{DEFAULT_CONTROLLER_PORT}")
-        yield f"http://localhost:{local_port}"
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
 
 
 # -----------------------------------------------------------------------------
