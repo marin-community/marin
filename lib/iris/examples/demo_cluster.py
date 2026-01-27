@@ -16,7 +16,7 @@
 
 This script boots an iris cluster (in-process by default, no Docker required),
 seeds it with quick demo jobs, and optionally launches a Jupyter notebook for
-interactive exploration.
+interactive exploration. It can also connect to a remote controller via SSH tunnel.
 
 Workers are created on-demand by the autoscaler when jobs are submitted. The
 autoscaler manages two scale groups:
@@ -30,6 +30,12 @@ Usage:
 
     # Launch interactive demo with Jupyter
     uv run python examples/demo_cluster.py
+
+    # Connect to remote controller via SSH tunnel
+    uv run python examples/demo_cluster.py --controller-url http://localhost:10000
+
+    # Remote validation only
+    uv run python examples/demo_cluster.py --controller-url http://localhost:10000 --validate-only
 """
 
 import logging
@@ -341,6 +347,7 @@ class DemoCluster:
     Supports two execution modes:
     - In-process (default): Fast, no Docker required, jobs run in threads
     - Docker: Real containers, matches production behavior
+    - Remote: Connect to an existing controller (e.g., via SSH tunnel)
 
     Workers are created on-demand by the autoscaler. The autoscaler manages:
     - cpu: For jobs without device requirements (min_slices=1)
@@ -352,14 +359,22 @@ class DemoCluster:
             if demo.validate_seed_results(results):
                 demo.launch_jupyter()
                 demo.wait_for_interrupt()
+
+        # Remote mode - connect to existing controller
+        with DemoCluster(controller_url="http://localhost:10000") as demo:
+            results = demo.seed_cluster()
     """
 
     def __init__(
         self,
         use_docker: bool = False,
+        controller_url: str | None = None,
+        workspace: Path | None = None,
     ):
         self._use_docker = use_docker
-        self._controller_port = find_free_port()
+        self._remote_url = controller_url
+        self._workspace = workspace or IRIS_ROOT
+        self._controller_port = find_free_port() if not controller_url else 0
 
         # Will be initialized in __enter__
         self._temp_dir: tempfile.TemporaryDirectory | None = None
@@ -448,7 +463,12 @@ class DemoCluster:
         return autoscaler
 
     def __enter__(self):
-        """Start controller with autoscaler."""
+        """Start controller with autoscaler (or connect to remote)."""
+        if self._remote_url:
+            # Remote mode: no local infrastructure needed
+            return self
+
+        # Local mode: create temp dir, controller, autoscaler, etc.
         self._temp_dir = tempfile.TemporaryDirectory(prefix="demo_cluster_")
         temp_path = Path(self._temp_dir.name)
         bundle_dir = temp_path / "bundles"
@@ -504,6 +524,12 @@ class DemoCluster:
 
         if self._rpc_client:
             self._rpc_client = None
+
+        if self._remote_url:
+            # Remote mode: nothing else to clean up
+            return
+
+        # Local mode: stop controller, clean temp dir, etc.
         if self._controller_client:
             self._controller_client.close()
         if self._controller:
@@ -513,6 +539,8 @@ class DemoCluster:
 
     @property
     def controller_url(self) -> str:
+        if self._remote_url:
+            return self._remote_url
         return f"http://127.0.0.1:{self._controller_port}"
 
     @property
@@ -521,7 +549,7 @@ class DemoCluster:
         if self._rpc_client is None:
             self._rpc_client = IrisClient.remote(
                 self.controller_url,
-                workspace=IRIS_ROOT,
+                workspace=self._workspace,
             )
         return self._rpc_client
 
@@ -590,8 +618,11 @@ class DemoCluster:
             results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
             print(f"  {name}: {cluster_pb2.JobState.Name(status.state)}")
 
-        # Coscheduled TPU job - triggers autoscaler to create TPU workers
-        if not self._use_docker:
+        # Coscheduled TPU job
+        # - Local mode: Works with fake TPU workers from LocalVmManager
+        # - Remote mode: Has real TPU workers
+        # - Docker mode: Not supported
+        if self._remote_url or not self._use_docker:
             job = self.client.submit(
                 entrypoint=Entrypoint.from_callable(distributed_work),
                 name="demo-coscheduled",
@@ -629,9 +660,9 @@ class DemoCluster:
         """
         env = os.environ.copy()
         env["IRIS_CONTROLLER_ADDRESS"] = self.controller_url
-        env["IRIS_WORKSPACE"] = str(IRIS_ROOT)
+        env["IRIS_WORKSPACE"] = str(self._workspace)
 
-        # Find the demo notebook
+        # Find the demo notebook (always in IRIS_ROOT, not workspace)
         notebook_dir = IRIS_ROOT / "examples"
         notebook_path = notebook_dir / "demo.ipynb"
 
@@ -711,7 +742,7 @@ class DemoCluster:
 
         # Set environment for the kernel (inherited by subprocess)
         os.environ["IRIS_CONTROLLER_ADDRESS"] = self.controller_url
-        os.environ["IRIS_WORKSPACE"] = str(IRIS_ROOT)
+        os.environ["IRIS_WORKSPACE"] = str(self._workspace)
 
         # Create executor
         ep = ExecutePreprocessor(
@@ -734,15 +765,28 @@ class DemoCluster:
 @click.option("--validate-only", is_flag=True, help="Run seed jobs and exit (for CI)")
 @click.option("--test-notebook", is_flag=True, help="Run notebook programmatically and validate (for CI)")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
+@click.option(
+    "--controller-url",
+    help="Connect to remote controller (e.g., http://localhost:10000). Skips local cluster creation.",
+)
+@click.option(
+    "--workspace",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Workspace directory (default: lib/iris)",
+)
 def main(
     no_browser: bool,
     validate_only: bool,
     test_notebook: bool,
     verbose: bool,
+    controller_url: str | None,
+    workspace: Path | None,
 ):
     """Launch demo cluster with Jupyter notebook.
 
     Runs in-process (no Docker required), with jobs running in threads.
+    Can also connect to a remote controller via SSH tunnel.
 
     Examples:
         # Validate that the cluster works (for CI)
@@ -750,6 +794,12 @@ def main(
 
         # Launch interactive demo with Jupyter
         uv run python examples/demo_cluster.py
+
+        # Connect to remote controller via SSH tunnel
+        uv run python examples/demo_cluster.py --controller-url http://localhost:10000
+
+        # Remote validation only
+        uv run python examples/demo_cluster.py --controller-url http://localhost:10000 --validate-only
     """
     if verbose:
         logging.basicConfig(
@@ -762,9 +812,12 @@ def main(
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
 
-    print("Starting demo cluster with autoscaler...")
+    if controller_url:
+        print(f"Connecting to remote controller: {controller_url}")
+    else:
+        print("Starting demo cluster with autoscaler...")
 
-    with DemoCluster() as demo:
+    with DemoCluster(controller_url=controller_url, workspace=workspace) as demo:
         print(f"Controller: {demo.controller_url}")
         print()
         print("Seeding cluster with demo jobs...")
