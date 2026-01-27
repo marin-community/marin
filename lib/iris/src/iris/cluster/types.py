@@ -26,7 +26,7 @@ Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.pr
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from enum import IntEnum
+from enum import Enum, IntEnum
 from typing import Any, NewType
 
 import humanfriendly
@@ -34,6 +34,16 @@ import humanfriendly
 from iris.rpc import cluster_pb2
 
 JobId = NewType("JobId", str)
+
+
+class DeviceType(Enum):
+    """Device type for demand routing."""
+
+    CPU = "cpu"
+    GPU = "gpu"
+    TPU = "tpu"
+
+
 TaskId = NewType("TaskId", str)
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)

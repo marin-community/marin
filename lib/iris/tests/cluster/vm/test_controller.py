@@ -232,6 +232,7 @@ scale_groups:
     provider:
       manual:
         hosts: [10.0.0.1]
+    accelerator_type: cpu
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -261,7 +262,8 @@ bootstrap:
 
 scale_groups:
   tpu_v5e_8:
-    accelerator_type: v5litepod-8
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 1
     max_slices: 10
@@ -279,7 +281,7 @@ scale_groups:
         assert d["bootstrap"]["docker_image"] == "gcr.io/project/iris-worker:latest"
         assert "tpu_v5e_8" in d["scale_groups"]
         sg = d["scale_groups"]["tpu_v5e_8"]
-        assert sg["accelerator_type"] == "v5litepod-8"
+        assert sg["accelerator_variant"] == "v5litepod-8"
         assert sg["min_slices"] == 1
         assert sg["max_slices"] == 10
         assert sg["preemptible"] is True
@@ -300,7 +302,8 @@ bootstrap:
 
 scale_groups:
   tpu_v5e_8:
-    accelerator_type: v5litepod-8
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 1
     max_slices: 10

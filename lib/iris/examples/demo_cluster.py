@@ -255,9 +255,9 @@ class LocalVmManager:
         self._slice_counter += 1
 
         # Determine worker count based on accelerator type
-        if self._config.accelerator_type:
+        if self._config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
             try:
-                topo = get_tpu_topology(self._config.accelerator_type)
+                topo = get_tpu_topology(self._config.accelerator_variant)
                 worker_count = topo.vm_count
             except ValueError:
                 worker_count = 1
@@ -278,16 +278,16 @@ class LocalVmManager:
 
             # Set up worker attributes
             attributes: dict[str, str | int | float] = {}
-            if self._config.accelerator_type:
+            if self._config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
                 attributes["tpu-name"] = slice_id
                 attributes["tpu-worker-id"] = tpu_worker_id
-                attributes["tpu-topology"] = self._config.accelerator_type
+                attributes["tpu-topology"] = self._config.accelerator_variant
 
             # Create device config if accelerator is specified
             device = None
-            if self._config.accelerator_type:
-                topo = get_tpu_topology(self._config.accelerator_type)
-                device = tpu_device(self._config.accelerator_type, count=topo.chips_per_vm)
+            if self._config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
+                topo = get_tpu_topology(self._config.accelerator_variant)
+                device = tpu_device(self._config.accelerator_variant, count=topo.chips_per_vm)
 
             environment_provider = LocalEnvironmentProvider(
                 cpu=1000,
@@ -403,13 +403,14 @@ class DemoCluster:
         # Scale group configs
         cpu_config = config_pb2.ScaleGroupConfig(
             name="cpu",
-            accelerator_type="",  # Empty = matches jobs without device requirements
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
             min_slices=1,  # Always have at least one CPU worker for simple jobs
             max_slices=4,
         )
         tpu_config = config_pb2.ScaleGroupConfig(
             name="tpu_v5e_16",
-            accelerator_type="v5litepod-16",  # 4 VMs per slice to match original 4 workers/slice
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5litepod-16",  # 4 VMs per slice to match original 4 workers/slice
             min_slices=0,
             max_slices=4,
         )

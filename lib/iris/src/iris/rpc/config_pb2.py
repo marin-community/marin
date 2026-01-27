@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0c\x63onfig.proto\x12\x0biris.config\",\n\x0bTpuProvider\x12\x1d\n\nproject_id\x18\x01 \x01(\tR\tprojectId\"~\n\x0eManualProvider\x12\x14\n\x05hosts\x18\x01 \x03(\tR\x05hosts\x12\x19\n\x08ssh_user\x18\x02 \x01(\tR\x07sshUser\x12 \n\x0cssh_key_file\x18\x03 \x01(\tR\nsshKeyFile\x12\x19\n\x08ssh_port\x18\x04 \x01(\x05R\x07sshPort\"\x81\x01\n\x0eProviderConfig\x12,\n\x03tpu\x18\x01 \x01(\x0b\x32\x18.iris.config.TpuProviderH\x00R\x03tpu\x12\x35\n\x06manual\x18\x02 \x01(\x0b\x32\x1b.iris.config.ManualProviderH\x00R\x06manualB\n\n\x08provider\"\xc5\x02\n\x10ScaleGroupConfig\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n\nmin_slices\x18\x02 \x01(\x05R\tminSlices\x12\x1d\n\nmax_slices\x18\x03 \x01(\x05R\tmaxSlices\x12)\n\x10\x61\x63\x63\x65lerator_type\x18\n \x01(\tR\x0f\x61\x63\x63\x65leratorType\x12\'\n\x0fruntime_version\x18\x0b \x01(\tR\x0eruntimeVersion\x12 \n\x0bpreemptible\x18\x0c \x01(\x08R\x0bpreemptible\x12\x14\n\x05zones\x18\x14 \x03(\tR\x05zones\x12\x1a\n\x08priority\x18\x1e \x01(\x05R\x08priority\x12\x37\n\x08provider\x18Z \x01(\x0b\x32\x1b.iris.config.ProviderConfigR\x08provider\"\xc0\x02\n\x0f\x42ootstrapConfig\x12-\n\x12\x63ontroller_address\x18\x01 \x01(\tR\x11\x63ontrollerAddress\x12\x1b\n\tworker_id\x18\x02 \x01(\tR\x08workerId\x12\x1f\n\x0bworker_port\x18\x03 \x01(\x05R\nworkerPort\x12!\n\x0c\x64ocker_image\x18\x04 \x01(\tR\x0b\x64ockerImage\x12\x1b\n\tcache_dir\x18\x05 \x01(\tR\x08\x63\x61\x63heDir\x12\x44\n\x08\x65nv_vars\x18\x06 \x03(\x0b\x32).iris.config.BootstrapConfig.EnvVarsEntryR\x07\x65nvVars\x1a:\n\x0c\x45nvVarsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\xb4\x01\n\rTimeoutConfig\x12\x30\n\x14\x62oot_timeout_seconds\x18\x01 \x01(\x05R\x12\x62ootTimeoutSeconds\x12\x30\n\x14init_timeout_seconds\x18\x02 \x01(\x05R\x12initTimeoutSeconds\x12\x39\n\x19ssh_poll_interval_seconds\x18\x04 \x01(\x05R\x16sshPollIntervalSecondsJ\x04\x08\x03\x10\x04\"w\n\tSshConfig\x12\x12\n\x04user\x18\x01 \x01(\tR\x04user\x12\x19\n\x08key_file\x18\x02 \x01(\tR\x07keyFile\x12\x12\n\x04port\x18\x03 \x01(\x05R\x04port\x12\'\n\x0f\x63onnect_timeout\x18\x04 \x01(\x05R\x0e\x63onnectTimeout\"\x8d\x01\n\x13GcpControllerConfig\x12\x14\n\x05image\x18\x01 \x01(\tR\x05image\x12!\n\x0cmachine_type\x18\x02 \x01(\tR\x0bmachineType\x12)\n\x11\x62oot_disk_size_gb\x18\x03 \x01(\x05R\x0e\x62ootDiskSizeGb\x12\x12\n\x04port\x18\x04 \x01(\x05R\x04port\"V\n\x16ManualControllerConfig\x12\x12\n\x04host\x18\x01 \x01(\tR\x04host\x12\x14\n\x05image\x18\x02 \x01(\tR\x05image\x12\x12\n\x04port\x18\x03 \x01(\x05R\x04port\"\x97\x01\n\x12\x43ontrollerVmConfig\x12\x34\n\x03gcp\x18\x01 \x01(\x0b\x32 .iris.config.GcpControllerConfigH\x00R\x03gcp\x12=\n\x06manual\x18\x02 \x01(\x0b\x32#.iris.config.ManualControllerConfigH\x00R\x06manualB\x0c\n\ncontroller\"\xc3\x04\n\x11IrisClusterConfig\x12#\n\rprovider_type\x18\x01 \x01(\tR\x0cproviderType\x12\x1d\n\nproject_id\x18\x02 \x01(\tR\tprojectId\x12\x16\n\x06region\x18\x03 \x01(\tR\x06region\x12\x12\n\x04zone\x18\x04 \x01(\tR\x04zone\x12\x44\n\rcontroller_vm\x18\x1f \x01(\x0b\x32\x1f.iris.config.ControllerVmConfigR\x0c\x63ontrollerVm\x12R\n\x0cscale_groups\x18\x32 \x03(\x0b\x32/.iris.config.IrisClusterConfig.ScaleGroupsEntryR\x0bscaleGroups\x12!\n\x0clabel_prefix\x18\x46 \x01(\tR\x0blabelPrefix\x12:\n\tbootstrap\x18P \x01(\x0b\x32\x1c.iris.config.BootstrapConfigR\tbootstrap\x12\x36\n\x08timeouts\x18Q \x01(\x0b\x32\x1a.iris.config.TimeoutConfigR\x08timeouts\x12(\n\x03ssh\x18R \x01(\x0b\x32\x16.iris.config.SshConfigR\x03ssh\x1a]\n\x10ScaleGroupsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x33\n\x05value\x18\x02 \x01(\x0b\x32\x1d.iris.config.ScaleGroupConfigR\x05value:\x02\x38\x01J\x04\x08(\x10)Bk\n\x0f\x63om.iris.configB\x0b\x43onfigProtoP\x01\xa2\x02\x03ICX\xaa\x02\x0bIris.Config\xca\x02\x0bIris\\Config\xe2\x02\x17Iris\\Config\\GPBMetadata\xea\x02\x0cIris::Configb\x08\x65\x64itionsp\xe8\x07')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0c\x63onfig.proto\x12\x0biris.config\",\n\x0bTpuProvider\x12\x1d\n\nproject_id\x18\x01 \x01(\tR\tprojectId\"~\n\x0eManualProvider\x12\x14\n\x05hosts\x18\x01 \x03(\tR\x05hosts\x12\x19\n\x08ssh_user\x18\x02 \x01(\tR\x07sshUser\x12 \n\x0cssh_key_file\x18\x03 \x01(\tR\nsshKeyFile\x12\x19\n\x08ssh_port\x18\x04 \x01(\x05R\x07sshPort\"\x81\x01\n\x0eProviderConfig\x12,\n\x03tpu\x18\x01 \x01(\x0b\x32\x18.iris.config.TpuProviderH\x00R\x03tpu\x12\x35\n\x06manual\x18\x02 \x01(\x0b\x32\x1b.iris.config.ManualProviderH\x00R\x06manualB\n\n\x08provider\"\x94\x03\n\x10ScaleGroupConfig\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n\nmin_slices\x18\x02 \x01(\x05R\tminSlices\x12\x1d\n\nmax_slices\x18\x03 \x01(\x05R\tmaxSlices\x12G\n\x10\x61\x63\x63\x65lerator_type\x18\t \x01(\x0e\x32\x1c.iris.config.AcceleratorTypeR\x0f\x61\x63\x63\x65leratorType\x12/\n\x13\x61\x63\x63\x65lerator_variant\x18\n \x01(\tR\x12\x61\x63\x63\x65leratorVariant\x12\'\n\x0fruntime_version\x18\x0b \x01(\tR\x0eruntimeVersion\x12 \n\x0bpreemptible\x18\x0c \x01(\x08R\x0bpreemptible\x12\x14\n\x05zones\x18\x14 \x03(\tR\x05zones\x12\x1a\n\x08priority\x18\x1e \x01(\x05R\x08priority\x12\x37\n\x08provider\x18Z \x01(\x0b\x32\x1b.iris.config.ProviderConfigR\x08provider\"\xc0\x02\n\x0f\x42ootstrapConfig\x12-\n\x12\x63ontroller_address\x18\x01 \x01(\tR\x11\x63ontrollerAddress\x12\x1b\n\tworker_id\x18\x02 \x01(\tR\x08workerId\x12\x1f\n\x0bworker_port\x18\x03 \x01(\x05R\nworkerPort\x12!\n\x0c\x64ocker_image\x18\x04 \x01(\tR\x0b\x64ockerImage\x12\x1b\n\tcache_dir\x18\x05 \x01(\tR\x08\x63\x61\x63heDir\x12\x44\n\x08\x65nv_vars\x18\x06 \x03(\x0b\x32).iris.config.BootstrapConfig.EnvVarsEntryR\x07\x65nvVars\x1a:\n\x0c\x45nvVarsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\xb4\x01\n\rTimeoutConfig\x12\x30\n\x14\x62oot_timeout_seconds\x18\x01 \x01(\x05R\x12\x62ootTimeoutSeconds\x12\x30\n\x14init_timeout_seconds\x18\x02 \x01(\x05R\x12initTimeoutSeconds\x12\x39\n\x19ssh_poll_interval_seconds\x18\x04 \x01(\x05R\x16sshPollIntervalSecondsJ\x04\x08\x03\x10\x04\"w\n\tSshConfig\x12\x12\n\x04user\x18\x01 \x01(\tR\x04user\x12\x19\n\x08key_file\x18\x02 \x01(\tR\x07keyFile\x12\x12\n\x04port\x18\x03 \x01(\x05R\x04port\x12\'\n\x0f\x63onnect_timeout\x18\x04 \x01(\x05R\x0e\x63onnectTimeout\"\x8d\x01\n\x13GcpControllerConfig\x12\x14\n\x05image\x18\x01 \x01(\tR\x05image\x12!\n\x0cmachine_type\x18\x02 \x01(\tR\x0bmachineType\x12)\n\x11\x62oot_disk_size_gb\x18\x03 \x01(\x05R\x0e\x62ootDiskSizeGb\x12\x12\n\x04port\x18\x04 \x01(\x05R\x04port\"V\n\x16ManualControllerConfig\x12\x12\n\x04host\x18\x01 \x01(\tR\x04host\x12\x14\n\x05image\x18\x02 \x01(\tR\x05image\x12\x12\n\x04port\x18\x03 \x01(\x05R\x04port\"\x97\x01\n\x12\x43ontrollerVmConfig\x12\x34\n\x03gcp\x18\x01 \x01(\x0b\x32 .iris.config.GcpControllerConfigH\x00R\x03gcp\x12=\n\x06manual\x18\x02 \x01(\x0b\x32#.iris.config.ManualControllerConfigH\x00R\x06manualB\x0c\n\ncontroller\"\xc3\x04\n\x11IrisClusterConfig\x12#\n\rprovider_type\x18\x01 \x01(\tR\x0cproviderType\x12\x1d\n\nproject_id\x18\x02 \x01(\tR\tprojectId\x12\x16\n\x06region\x18\x03 \x01(\tR\x06region\x12\x12\n\x04zone\x18\x04 \x01(\tR\x04zone\x12\x44\n\rcontroller_vm\x18\x1f \x01(\x0b\x32\x1f.iris.config.ControllerVmConfigR\x0c\x63ontrollerVm\x12R\n\x0cscale_groups\x18\x32 \x03(\x0b\x32/.iris.config.IrisClusterConfig.ScaleGroupsEntryR\x0bscaleGroups\x12!\n\x0clabel_prefix\x18\x46 \x01(\tR\x0blabelPrefix\x12:\n\tbootstrap\x18P \x01(\x0b\x32\x1c.iris.config.BootstrapConfigR\tbootstrap\x12\x36\n\x08timeouts\x18Q \x01(\x0b\x32\x1a.iris.config.TimeoutConfigR\x08timeouts\x12(\n\x03ssh\x18R \x01(\x0b\x32\x16.iris.config.SshConfigR\x03ssh\x1a]\n\x10ScaleGroupsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x33\n\x05value\x18\x02 \x01(\x0b\x32\x1d.iris.config.ScaleGroupConfigR\x05value:\x02\x38\x01J\x04\x08(\x10)*\x81\x01\n\x0f\x41\x63\x63\x65leratorType\x12 \n\x1c\x41\x43\x43\x45LERATOR_TYPE_UNSPECIFIED\x10\x00\x12\x18\n\x14\x41\x43\x43\x45LERATOR_TYPE_CPU\x10\x01\x12\x18\n\x14\x41\x43\x43\x45LERATOR_TYPE_GPU\x10\x02\x12\x18\n\x14\x41\x43\x43\x45LERATOR_TYPE_TPU\x10\x03\x42k\n\x0f\x63om.iris.configB\x0b\x43onfigProtoP\x01\xa2\x02\x03ICX\xaa\x02\x0bIris.Config\xca\x02\x0bIris\\Config\xe2\x02\x17Iris\\Config\\GPBMetadata\xea\x02\x0cIris::Configb\x08\x65\x64itionsp\xe8\x07')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -36,6 +36,8 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_BOOTSTRAPCONFIG_ENVVARSENTRY']._serialized_options = b'8\001'
   _globals['_IRISCLUSTERCONFIG_SCALEGROUPSENTRY']._loaded_options = None
   _globals['_IRISCLUSTERCONFIG_SCALEGROUPSENTRY']._serialized_options = b'8\001'
+  _globals['_ACCELERATORTYPE']._serialized_start=2338
+  _globals['_ACCELERATORTYPE']._serialized_end=2467
   _globals['_TPUPROVIDER']._serialized_start=29
   _globals['_TPUPROVIDER']._serialized_end=73
   _globals['_MANUALPROVIDER']._serialized_start=75
@@ -43,23 +45,23 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_PROVIDERCONFIG']._serialized_start=204
   _globals['_PROVIDERCONFIG']._serialized_end=333
   _globals['_SCALEGROUPCONFIG']._serialized_start=336
-  _globals['_SCALEGROUPCONFIG']._serialized_end=661
-  _globals['_BOOTSTRAPCONFIG']._serialized_start=664
-  _globals['_BOOTSTRAPCONFIG']._serialized_end=984
-  _globals['_BOOTSTRAPCONFIG_ENVVARSENTRY']._serialized_start=926
-  _globals['_BOOTSTRAPCONFIG_ENVVARSENTRY']._serialized_end=984
-  _globals['_TIMEOUTCONFIG']._serialized_start=987
-  _globals['_TIMEOUTCONFIG']._serialized_end=1167
-  _globals['_SSHCONFIG']._serialized_start=1169
-  _globals['_SSHCONFIG']._serialized_end=1288
-  _globals['_GCPCONTROLLERCONFIG']._serialized_start=1291
-  _globals['_GCPCONTROLLERCONFIG']._serialized_end=1432
-  _globals['_MANUALCONTROLLERCONFIG']._serialized_start=1434
-  _globals['_MANUALCONTROLLERCONFIG']._serialized_end=1520
-  _globals['_CONTROLLERVMCONFIG']._serialized_start=1523
-  _globals['_CONTROLLERVMCONFIG']._serialized_end=1674
-  _globals['_IRISCLUSTERCONFIG']._serialized_start=1677
-  _globals['_IRISCLUSTERCONFIG']._serialized_end=2256
-  _globals['_IRISCLUSTERCONFIG_SCALEGROUPSENTRY']._serialized_start=2157
-  _globals['_IRISCLUSTERCONFIG_SCALEGROUPSENTRY']._serialized_end=2250
+  _globals['_SCALEGROUPCONFIG']._serialized_end=740
+  _globals['_BOOTSTRAPCONFIG']._serialized_start=743
+  _globals['_BOOTSTRAPCONFIG']._serialized_end=1063
+  _globals['_BOOTSTRAPCONFIG_ENVVARSENTRY']._serialized_start=1005
+  _globals['_BOOTSTRAPCONFIG_ENVVARSENTRY']._serialized_end=1063
+  _globals['_TIMEOUTCONFIG']._serialized_start=1066
+  _globals['_TIMEOUTCONFIG']._serialized_end=1246
+  _globals['_SSHCONFIG']._serialized_start=1248
+  _globals['_SSHCONFIG']._serialized_end=1367
+  _globals['_GCPCONTROLLERCONFIG']._serialized_start=1370
+  _globals['_GCPCONTROLLERCONFIG']._serialized_end=1511
+  _globals['_MANUALCONTROLLERCONFIG']._serialized_start=1513
+  _globals['_MANUALCONTROLLERCONFIG']._serialized_end=1599
+  _globals['_CONTROLLERVMCONFIG']._serialized_start=1602
+  _globals['_CONTROLLERVMCONFIG']._serialized_end=1753
+  _globals['_IRISCLUSTERCONFIG']._serialized_start=1756
+  _globals['_IRISCLUSTERCONFIG']._serialized_end=2335
+  _globals['_IRISCLUSTERCONFIG_SCALEGROUPSENTRY']._serialized_start=2236
+  _globals['_IRISCLUSTERCONFIG_SCALEGROUPSENTRY']._serialized_end=2329
 # @@protoc_insertion_point(module_scope)

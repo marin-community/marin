@@ -43,7 +43,7 @@ from iris.cluster.vm.config import (
 from iris.cluster.vm.controller import create_controller
 from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
-from iris.rpc.proto_utils import vm_state_name
+from iris.rpc.proto_utils import vm_state_name, format_accelerator_display
 from iris.rpc_cli import ServiceCommands
 
 # =============================================================================
@@ -581,7 +581,9 @@ def autoscaler_status_cmd(ctx, controller_url: str):
         counts = compute_slice_state_counts(group.slices)
         total = sum(counts.values())
         click.echo(f"\n  {group.name}:")
-        click.echo(f"    Type: {group.config.accelerator_type}")
+        click.echo(
+            f"    Type: {format_accelerator_display(group.config.accelerator_type, group.config.accelerator_variant)}"
+        )
         click.echo(f"    Min/Max slices: {group.config.min_slices}/{group.config.max_slices}")
         click.echo(
             f"    Current slices: {total} "
@@ -851,7 +853,8 @@ def _status_via_controller(controller_url: str, scale_group: str | None):
         counts = compute_slice_state_counts(group.slices)
         total = sum(counts.values())
         click.echo(f"\nScale Group: {group.name}")
-        click.echo(f"  Accelerator: {group.config.accelerator_type}")
+        accel_display = format_accelerator_display(group.config.accelerator_type, group.config.accelerator_variant)
+        click.echo(f"  Accelerator: {accel_display}")
         click.echo(f"  Slices: {counts.get('ready', 0)}/{total} ready")
         click.echo(f"    Booting: {counts.get('booting', 0)}")
         click.echo(f"    Initializing: {counts.get('initializing', 0)}")
@@ -893,7 +896,8 @@ def _status_via_autoscaler(config_file: str, scale_group: str | None):
     for name, group in groups.items():
         vm_groups = group.vm_groups()
         click.echo(f"\nScale Group: {name}")
-        click.echo(f"  Accelerator: {group.config.accelerator_type}")
+        accel_display = format_accelerator_display(group.config.accelerator_type, group.config.accelerator_variant)
+        click.echo(f"  Accelerator: {accel_display}")
         click.echo(f"  Slices: {len(vm_groups)}")
 
         for vm_group in vm_groups:

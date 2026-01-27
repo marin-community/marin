@@ -121,7 +121,8 @@ def v5p8_scale_group() -> config_pb2.ScaleGroupConfig:
         name="tpu-v5p-8",
         min_slices=0,
         max_slices=10,
-        accelerator_type="v5p-8",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5p-8",
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )
@@ -134,7 +135,8 @@ def v5p16_scale_group() -> config_pb2.ScaleGroupConfig:
         name="tpu-v5p-16",
         min_slices=0,
         max_slices=5,
-        accelerator_type="v5p-16",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5p-16",
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )
@@ -147,7 +149,7 @@ def manual_scale_group() -> config_pb2.ScaleGroupConfig:
         name="manual-hosts",
         min_slices=0,
         max_slices=3,
-        accelerator_type="cpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         runtime_version="manual",
         zones=["manual"],
     )
@@ -438,7 +440,7 @@ def test_tpu_manager_create_raises_on_gcloud_failure(
 
 
 @pytest.mark.parametrize(
-    "accelerator_type,expected_vm_count",
+    "accelerator_variant,expected_vm_count",
     [
         ("v5p-8", 1),  # Single host
         ("v5p-16", 2),  # Multi-host (2 VMs)
@@ -447,7 +449,7 @@ def test_tpu_manager_create_raises_on_gcloud_failure(
 @patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
 def test_tpu_manager_creates_correct_vm_count_for_topology(
     mock_run: MagicMock,
-    accelerator_type: str,
+    accelerator_variant: str,
     expected_vm_count: int,
     mock_factory: MagicMock,
     bootstrap_config: config_pb2.BootstrapConfig,
@@ -457,10 +459,11 @@ def test_tpu_manager_creates_correct_vm_count_for_topology(
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
     config = config_pb2.ScaleGroupConfig(
-        name=f"tpu-{accelerator_type}",
+        name=f"tpu-{accelerator_variant}",
         min_slices=0,
         max_slices=10,
-        accelerator_type=accelerator_type,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant=accelerator_variant,
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )

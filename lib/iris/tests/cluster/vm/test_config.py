@@ -54,7 +54,8 @@ scale_groups:
     provider:
       tpu:
         project_id: my-project
-    accelerator_type: v5litepod-8
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 1
     max_slices: 10
@@ -108,6 +109,7 @@ scale_groups:
       manual:
         hosts: [10.0.0.1, 10.0.0.2]
         ssh_user: ubuntu
+    accelerator_type: cpu
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)
@@ -158,7 +160,8 @@ scale_groups:
     provider:
       tpu:
         project_id: my-project
-    accelerator_type: v5litepod-8
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 1
     max_slices: 10
@@ -168,6 +171,7 @@ scale_groups:
       manual:
         hosts: [10.0.0.1]
         ssh_user: ubuntu
+    accelerator_type: cpu
 """
         config_path = tmp_path / "original.yaml"
         config_path.write_text(config_content)
@@ -214,6 +218,82 @@ scale_groups:
         assert (
             provider_after.WhichOneof("provider") == "tpu"
         ), f"Expected provider to be 'tpu' after round-trip, got '{provider_after.WhichOneof('provider')}'"
+
+    def test_lowercase_accelerator_types_work(self, tmp_path: Path):
+        """Config accepts lowercase accelerator types and converts them to enum values."""
+        config_content = """\
+provider_type: tpu
+project_id: my-project
+zone: us-central1-a
+
+bootstrap:
+  docker_image: gcr.io/project/iris-worker:latest
+  worker_port: 10001
+  controller_address: "http://10.0.0.1:10000"
+
+scale_groups:
+  tpu_group:
+    provider:
+      tpu:
+        project_id: my-project
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
+    runtime_version: v2-alpha-tpuv5-lite
+    min_slices: 1
+    max_slices: 10
+    zones: [us-central1-a]
+  cpu_group:
+    provider:
+      manual:
+        hosts: [10.0.0.1]
+    accelerator_type: cpu
+    zones: [local]
+  gpu_group:
+    provider:
+      manual:
+        hosts: [10.0.0.2]
+    accelerator_type: gpu
+    zones: [local]
+"""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(config_content)
+
+        config = load_config(config_path)
+
+        assert config.scale_groups["tpu_group"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert config.scale_groups["cpu_group"].accelerator_type == config_pb2.ACCELERATOR_TYPE_CPU
+        assert config.scale_groups["gpu_group"].accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU
+
+    def test_uppercase_accelerator_types_still_work(self, tmp_path: Path):
+        """Config still accepts uppercase accelerator types for backwards compatibility."""
+        config_content = """\
+provider_type: tpu
+project_id: my-project
+zone: us-central1-a
+
+bootstrap:
+  docker_image: gcr.io/project/iris-worker:latest
+  worker_port: 10001
+  controller_address: "http://10.0.0.1:10000"
+
+scale_groups:
+  tpu_group:
+    provider:
+      tpu:
+        project_id: my-project
+    accelerator_type: TPU
+    accelerator_variant: v5litepod-8
+    runtime_version: v2-alpha-tpuv5-lite
+    min_slices: 1
+    max_slices: 10
+    zones: [us-central1-a]
+"""
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(config_content)
+
+        config = load_config(config_path)
+
+        assert config.scale_groups["tpu_group"].accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
 
 
 class TestGetProviderInfo:
@@ -303,7 +383,8 @@ scale_groups:
     provider:
       tpu:
         project_id: my-project
-    accelerator_type: v5litepod-8
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 0
     max_slices: 2
@@ -338,6 +419,7 @@ scale_groups:
     provider:
       manual:
         hosts: [10.0.0.1, 10.0.0.2]
+    accelerator_type: cpu
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
@@ -366,7 +448,8 @@ scale_groups:
     provider:
       tpu:
         project_id: my-project
-    accelerator_type: v5litepod-8
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 0
     max_slices: 2

@@ -226,7 +226,8 @@ scale_groups:
     provider:
       tpu:
         project_id: my-project
-    accelerator_type: v5litepod-4
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-4
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 0
     max_slices: 10

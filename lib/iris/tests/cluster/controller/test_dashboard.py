@@ -431,7 +431,8 @@ def mock_autoscaler():
                 name="test-group",
                 config=config_pb2.ScaleGroupConfig(
                     name="test-group",
-                    accelerator_type="v4-8",
+                    accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+                    accelerator_variant="v4-8",
                     min_slices=1,
                     max_slices=5,
                 ),
@@ -515,7 +516,7 @@ def test_get_autoscaler_status_includes_slice_details(client_with_autoscaler):
         assert "sliceId" in slice_info
         assert "vms" in slice_info
         assert len(slice_info["vms"]) == 1
-    assert group["config"]["acceleratorType"] == "v4-8"
+    assert group["config"]["acceleratorVariant"] == "v4-8"
 
 
 # =============================================================================

@@ -45,14 +45,23 @@ message ProviderConfig {
 // SCALE GROUP CONFIGURATION
 // ============================================================================
 
+// Device/accelerator type for scale groups
+enum AcceleratorType {
+  ACCELERATOR_TYPE_UNSPECIFIED = 0;
+  ACCELERATOR_TYPE_CPU = 1;
+  ACCELERATOR_TYPE_GPU = 2;
+  ACCELERATOR_TYPE_TPU = 3;
+}
+
 // Configuration for a scale group
 message ScaleGroupConfig {
   string name = 1;
   int32 min_slices = 2;
   int32 max_slices = 3;
 
-  // TPU configuration
-  string accelerator_type = 10;
+  // Device configuration
+  AcceleratorType accelerator_type = 9;  // Device type: cpu, gpu, or tpu
+  string accelerator_variant = 10;       // Device variant: e.g., "v5litepod-16", "A100"
   string runtime_version = 11;
   bool preemptible = 12;
 

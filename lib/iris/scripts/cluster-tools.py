@@ -52,6 +52,7 @@ from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.proto_utils import format_accelerator_display
 
 IRIS_ROOT = Path(__file__).parent.parent
 CONTROLLER_CONTAINER_NAME = "iris-controller"
@@ -603,7 +604,9 @@ def autoscaler_status(ctx: click.Context, local_port: int, json_output: bool) ->
             for group in status.groups:
                 cfg = group.config
                 click.echo(f"  {group.name}:")
-                click.echo(f"    Accelerator: {cfg.accelerator_type}")
+                click.echo(
+                    f"    Accelerator: {format_accelerator_display(cfg.accelerator_type, cfg.accelerator_variant)}"
+                )
                 click.echo(f"    Min/Max slices: {cfg.min_slices}/{cfg.max_slices}")
                 click.echo(f"    Current demand: {group.current_demand}")
                 click.echo(f"    Peak demand: {group.peak_demand}")

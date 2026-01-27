@@ -38,14 +38,25 @@ from iris.cluster.controller.state import (
     ControllerEndpoint,
     ControllerState,
     ControllerTask,
+    get_device_type_enum,
 )
-from iris.cluster.types import JobId, TaskId, WorkerId
+from iris.cluster.types import DeviceType, JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import now_ms
 
 # =============================================================================
 # Test Helpers
 # =============================================================================
+
+
+def test_cpu_is_default_for_empty_device():
+    device = cluster_pb2.DeviceConfig()
+    assert get_device_type_enum(device) == DeviceType.CPU
+
+
+def test_tpu_device_returns_tpu():
+    device = cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16"))
+    assert get_device_type_enum(device) == DeviceType.TPU
 
 
 def dispatch_task(state: ControllerState, task: ControllerTask, worker_id: WorkerId) -> None:

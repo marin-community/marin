@@ -186,7 +186,7 @@ class TpuVmManager:
         logger.info(
             "Creating TPU VM group %s (type=%s, zone=%s, dry_run=%s)",
             group_id,
-            self._config.accelerator_type,
+            self._config.accelerator_variant,
             self._zone,
             self._dry_run,
         )
@@ -259,7 +259,7 @@ echo "[iris-init] Discovered controller at $CONTROLLER_ADDRESS"
     ) -> TpuVmGroup:
         """Create a TpuVmGroup with ManagedVm instances for each worker."""
         zone = zone or self._zone
-        vm_count = get_tpu_topology(self._config.accelerator_type).vm_count
+        vm_count = get_tpu_topology(self._config.accelerator_variant).vm_count
 
         # GCP workers discover controller via GCP instance metadata
         discovery_preamble = self._get_discovery_preamble()
@@ -308,7 +308,7 @@ echo "[iris-init] Discovered controller at $CONTROLLER_ADDRESS"
             group_id,
             f"--zone={self._zone}",
             f"--project={self._project_id}",
-            f"--accelerator-type={self._config.accelerator_type}",
+            f"--accelerator-type={self._config.accelerator_variant}",
             f"--version={self._config.runtime_version}",
             "--labels",
             ",".join(f"{k}={v}" for k, v in labels.items()),

@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 
-from iris.cluster.types import VmWorkerStatusMap
+from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmManagerProtocol
 from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import now_ms
@@ -454,15 +454,35 @@ class ScalingGroup:
                 counts["booting"] += 1
         return counts
 
-    def matches_requirements(self, accelerator_type: str | None) -> bool:
-        """Check if this group can satisfy the given requirements.
+    def matches_device_requirement(self, device_type: DeviceType, device_variant: str | None) -> bool:
+        """Check if this group can satisfy the given device requirements.
 
-        Args:
-            accelerator_type: Required accelerator type, or None for any.
+        Matching rules:
+        - CPU demand: matches ANY group (all VMs have CPUs)
+        - GPU/TPU with variant=None: matches any group of the same device type
+        - GPU/TPU with specific variant: requires exact variant match
         """
-        if accelerator_type is not None:
-            return self._config.accelerator_type == accelerator_type
-        return True
+        if device_type == DeviceType.CPU:
+            return True  # CPU jobs can run on ANY group
+
+        # Check device type matches
+        group_type = self._get_device_type()
+        if group_type != device_type:
+            return False
+
+        # None variant = any group of this type; specific variant = exact match
+        if device_variant is None:
+            return True
+        return self._config.accelerator_variant == device_variant
+
+    def _get_device_type(self) -> DeviceType:
+        """Get device type from config."""
+        accel = self._config.accelerator_type
+        if accel == config_pb2.ACCELERATOR_TYPE_GPU:
+            return DeviceType.GPU
+        elif accel == config_pb2.ACCELERATOR_TYPE_TPU:
+            return DeviceType.TPU
+        return DeviceType.CPU
 
     def availability(self, timestamp_ms: int | None = None) -> AvailabilityState:
         """Compute current availability state for waterfall routing.

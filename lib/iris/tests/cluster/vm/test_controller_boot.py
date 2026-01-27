@@ -66,7 +66,7 @@ controller_vm:
 
 scale_groups:
   test_group:
-    accelerator_type: ACCELERATOR_TYPE_TPU
+    accelerator_type: tpu
     accelerator_variant: v5litepod-4
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 0
@@ -104,6 +104,7 @@ scale_groups:
     provider:
       manual:
         hosts: [10.0.0.1]
+    accelerator_type: cpu
 """
     config_path.write_text(config_content)
     return config_path
