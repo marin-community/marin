@@ -9,7 +9,7 @@ import warnings
 from dataclasses import dataclass
 from enum import StrEnum
 from numbers import Integral
-from typing import Optional, Union, cast, overload
+from typing import Literal, Optional, Union, cast, overload
 
 import equinox as eqx
 import jax
@@ -1574,7 +1574,7 @@ class AttentionConfig:
     scaling_factor: Optional[float] = None
     logits_soft_cap: Optional[float] = None
     qk_norm: Optional[LayerNormConfigBase] = None
-    """Configuration for QK normalization. If None, no normalization is applied."""
+    gated: Literal["none", "headwise", "elementwise"] = "none"
 
     def __post_init__(self):
         assert (
@@ -1615,6 +1615,20 @@ class AttentionConfig:
             return default_attention_type() != AttentionBackend.VANILLA
         return self.attn_backend != AttentionBackend.VANILLA
 
+    @property
+    def GateSize(self) -> Axis:
+        """Axis for the gate output size based on gating mode.
+
+        For headwise gating, returns an axis of size 1 (one scalar per head).
+        For elementwise gating, returns an axis of size head_size (one value per element).
+
+        The axis is always named "gate_size" for consistency.
+        """
+        if self.gated == "headwise":
+            return Axis("gate_size", 1)
+        else:  # elementwise
+            return Axis("gate_size", self.head_size)
+
 
 class Attention(eqx.Module):
     """A multi-head attention layer that uses dot product attention.
@@ -1622,7 +1636,7 @@ class Attention(eqx.Module):
     This is a general-purpose attention layer that can be used in various transformer architectures.
     It supports multi-head attention (MHA), multi-query attention (MQA), and grouped-query attention (GQA).
 
-    Supports ROPE and QK normalization. We should probably not add much more stuff.
+    Supports ROPE, QK normalization, and gated attention (headwise or elementwise).
     """
 
     config: AttentionConfig = eqx.field(static=True)
@@ -1633,12 +1647,14 @@ class Attention(eqx.Module):
     q_norm: Optional[LayerNormBase] = None
     k_norm: Optional[LayerNormBase] = None
     rot_embs: Optional[RotaryEmbeddings] = None
+    gate_proj: Optional[hnn.Linear] = None
 
     @staticmethod
     def init(config: AttentionConfig, *, key) -> "Attention":
         use_bias = config.use_bias
         use_output_bias = config.use_output_bias if config.use_output_bias is not None else use_bias
-        k_q, k_k, k_v, k_o = jrandom.split(key, 4)
+        k_q, k_k, k_v, k_o, k_g = jrandom.split(key, 5)
+
         q_proj = hnn.Linear.init(
             In=config.Embed,
             Out=(config.KVHeads, config.QHeadsPerGroup, config.HeadSize),
@@ -1668,6 +1684,19 @@ class Attention(eqx.Module):
             out_first=True,
         )
 
+        # For gated attention, create a separate gate projection.
+        # For headwise gating: GateSize = 1 (one scalar per head)
+        # For elementwise gating: GateSize = HeadSize (one value per element)
+        gate_proj = None
+        if config.gated != "none":
+            gate_proj = hnn.Linear.init(
+                In=config.Embed,
+                Out=(config.KVHeads, config.QHeadsPerGroup, config.GateSize),
+                key=k_g,
+                use_bias=use_bias,
+                out_first=True,
+            )
+
         q_norm = None
         k_norm = None
         if config.qk_norm is not None:
@@ -1677,7 +1706,7 @@ class Attention(eqx.Module):
         # Build rotary embeddings once during initialization if configured
         rot_embs = config.rope.build(config.HeadSize) if config.rope is not None else None
 
-        return Attention(config, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, rot_embs)
+        return Attention(config, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, rot_embs, gate_proj)
 
     def empty_page_cache(self, spec: PageTableSpec, *, dtype) -> "KvPageCache":
         return KvPageCache.init(spec, self.config.KVHeads, self.config.HeadSize, dtype=dtype)
@@ -1693,8 +1722,8 @@ class Attention(eqx.Module):
     ) -> NamedArray:
         key_proj, key_o = maybe_rng_split(key, 2)
 
-        # Shared computation of q, k, v
-        q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
+        # Shared computation of q, k, v (and gate if gated)
+        q, k, v, gate = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
 
         # Reshape for attention kernels (convert embed → heads/head_size)
         q = q.rearrange((..., "kv_head", "q_heads_per_group", "position", "head_size"))
@@ -1726,6 +1755,12 @@ class Attention(eqx.Module):
             prng=key,
         )
 
+        if gate is not None:
+            gate = gate.rearrange((..., "kv_head", "q_heads_per_group", "position", "gate_size"))
+            gate = hax.nn.sigmoid(gate)
+            gate = gate.rename({"gate_size": "head_size"})
+            attn_output = attn_output * gate
+
         # Flatten heads and apply output projection
         attn_output = attn_output.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
         attn_output = attn_output.astype(x.dtype)
@@ -1752,10 +1787,9 @@ class Attention(eqx.Module):
         describes where the new keys and values should be written in ``kv_cache``.
         Currently only causal masks are supported.
         """
-
         key_proj, key_o = maybe_rng_split(key, 2)
 
-        q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
+        q, k, v, gate = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
 
         kv_cache = kv_cache.update(batch_info, k, v)
 
@@ -1776,6 +1810,12 @@ class Attention(eqx.Module):
             soft_cap=self.config.logits_soft_cap,
         )
 
+        if gate is not None:
+            gate = gate.rearrange((..., "kv_head", "q_heads_per_group", "position", "gate_size"))
+            gate = hax.nn.sigmoid(gate)
+            gate = gate.rename({"gate_size": "head_size"})
+            attn_tokens = attn_tokens * gate
+
         attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
         attn_output = attn_output.astype(x.dtype)
         attn_output = self.o_proj(attn_output, key=key_o)
@@ -1789,30 +1829,39 @@ class Attention(eqx.Module):
         *,
         key,
         pos_ids: NamedArray | None = None,
-    ) -> tuple[NamedArray, NamedArray, NamedArray]:
-        """Project *x* to Q, K and V and apply all per-head processing."""
+    ) -> tuple[NamedArray, NamedArray, NamedArray, NamedArray | None]:
+        """Project *x* to Q, K and V (and gate if gated) and apply all per-head processing.
 
-        # Split the projection key into three – one for each of Q, K, V
-        key_q, key_k, key_v = maybe_rng_split(key, 3)
+        Returns:
+            A tuple of (q, k, v, gate) where gate is None if gating is disabled.
+        """
+
+        # Split the projection key into four – one for each of Q, K, V, and gate
+        key_q, key_k, key_v, key_g = maybe_rng_split(key, 4)
 
         # Linear projections
         q = self.q_proj(x, key=key_q)
         k = self.k_proj(x, key=key_k)
         v = self.v_proj(x, key=key_v)
 
-        # Optional QK layer-norm
+        # Compute gate if gated attention is enabled
+        gate = None
+        if self.gate_proj is not None:
+            gate = self.gate_proj(x, key=key_g)
+
+        # Optional QK layer-norm (applied only to Q, not gate)
         if self.config.qk_norm is not None:
             q = self.q_norm(q)  # type: ignore[misc]
             k = self.k_norm(k)  # type: ignore[misc]
 
-        # Apply rotary embeddings if configured
+        # Apply rotary embeddings if configured (applied only to Q, not gate)
         if self.rot_embs is not None:
             if pos_ids is None:
                 pos_ids = hax.arange(x.resolve_axis("position"))
             q = self.rot_embs(q, pos_ids).astype(q.dtype)
             k = self.rot_embs(k, pos_ids).astype(k.dtype)
 
-        return q, k, v
+        return q, k, v, gate
 
 
 @named_call
@@ -2351,6 +2400,7 @@ class AttentionWithSink(Attention):
             base.q_norm,
             base.k_norm,
             base.rot_embs,
+            base.gate_proj,
             sinks,
         )
 
@@ -2363,28 +2413,14 @@ class AttentionWithSink(Attention):
         key=None,
         pos_ids: NamedArray | None = None,
     ) -> NamedArray:
-        key_q, key_k, key_v, key_o = maybe_rng_split(key, 4)
+        key_proj, key_o = maybe_rng_split(key, 2)
 
-        q_proj = self.q_proj(x, key=key_q)
-        k_proj = self.k_proj(x, key=key_k)
-        v = self.v_proj(x, key=key_v)
-
-        if self.config.qk_norm is not None:
-            q = self.q_norm(q_proj)  # type: ignore[misc]
-            k = self.k_norm(k_proj)  # type: ignore[misc]
-        else:
-            q = q_proj
-            k = k_proj
+        # Compute q, k, v (and gate if gated)
+        q, k, v, gate = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
 
         q = q.rearrange((..., "kv_head", "q_heads_per_group", "position", "head_size"))
         k = k.rearrange((..., "kv_head", "position", "head_size"))
         v = v.rearrange((..., "kv_head", "position", "head_size"))
-
-        if self.rot_embs is not None:
-            if pos_ids is None:
-                pos_ids = hax.arange(x.resolve_axis("position"), dtype=jnp.int32)
-            q = self.rot_embs(q, pos_ids)
-            k = self.rot_embs(k, pos_ids)
 
         k = k.rename({"position": "key_position"})
         v = v.rename({"position": "key_position"})
@@ -2410,6 +2446,13 @@ class AttentionWithSink(Attention):
             prng=key,
             attn_sink=self.sinks,
         )
+
+        if gate is not None:
+            gate = gate.rearrange((..., "kv_head", "q_heads_per_group", "position", "gate_size"))
+            gate = hax.nn.sigmoid(gate)
+            # Rename gate_size to head_size for proper broadcasting/multiplication
+            gate = gate.rename({"gate_size": "head_size"})
+            attn_output = attn_output * gate
 
         attn_output = attn_output.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
         attn_output = attn_output.astype(x.dtype)
