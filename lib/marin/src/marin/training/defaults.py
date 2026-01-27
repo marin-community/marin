@@ -329,7 +329,7 @@ def default_train(
         model=model_config,
         optimizer=(
             train_config.optimizer_config
-            if getattr(train_config, "optimizer_config", None) is not None
+            if train_config.optimizer_config is not None
             else AdamConfig(
                 learning_rate=train_config.learning_rate,
                 weight_decay=(
