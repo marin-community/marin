@@ -56,9 +56,5 @@ train_downweight = dna_train(
     tags=["dna", "animal-mRNA-plus-promoters", "yolo"],
 )
 
-# =============================================================================
-# Main
-# =============================================================================
-
 if __name__ == "__main__":
     executor_main(steps=[train_standard, train_downweight])

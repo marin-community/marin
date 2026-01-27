@@ -94,9 +94,5 @@ for config_name, weights in WEIGHT_CONFIGS.items():
     )
     training_steps.append(training_step)
 
-# =============================================================================
-# Main
-# =============================================================================
-
 if __name__ == "__main__":
     executor_main(steps=[*training_steps])
