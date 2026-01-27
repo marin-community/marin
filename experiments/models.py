@@ -29,6 +29,7 @@ executor_main([download_step])
 
 from dataclasses import dataclass
 
+from levanter.main import export_hf_to_lm as export_hf
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
@@ -38,9 +39,11 @@ from marin.utils import get_directory_friendly_name
 class ModelConfig:
     hf_repo_id: str
     hf_revision: str
+    config_class: type = None
 
 
 MODEL_OUTPUT_SUBDIR = "models"
+LEVANTER_MODEL_OUTPUT_SUBDIR = "levanter_models"
 
 
 def download_model_step(model_config: ModelConfig) -> ExecutorStep:
@@ -62,6 +65,35 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
     )
 
     return download_step
+
+
+def convert_to_levanter_step(model_config: ModelConfig, download_step: ExecutorStep) -> ExecutorStep:
+    model_name = get_directory_friendly_name(model_config.hf_repo_id)
+    model_revision = get_directory_friendly_name(model_config.hf_revision)
+
+    if model_config.config_class is None:
+        raise ValueError(f"ModelConfig for {model_config.hf_repo_id} must have config_class set for conversion")
+
+    convert_step = ExecutorStep(
+        name=f"{LEVANTER_MODEL_OUTPUT_SUBDIR}/{model_name}--{model_revision}",
+        fn=export_hf.main,
+        config=export_hf.ImportHfConfig(
+            hf_checkpoint=download_step.as_input_name(),
+            output_path=this_output_path(),
+            model=model_config.config_class(),
+            use_hf_model_config=True,
+            tokenizer=model_config.hf_repo_id,
+        ),
+        override_output_path=f"{LEVANTER_MODEL_OUTPUT_SUBDIR}/{model_name}--{model_revision}",
+    )
+
+    return convert_step
+
+
+def levanter_model_step(model_config: ModelConfig) -> ExecutorStep:
+    download_step = download_model_step(model_config)
+    convert_step = convert_to_levanter_step(model_config, download_step)
+    return convert_step
 
 
 smollm2_1_7b_instruct = download_model_step(
@@ -191,6 +223,7 @@ llama_3_2_1b = download_model_step(
         hf_revision="4e20de3",
     )
 )
+
 
 qwen3_0_6b = download_model_step(
     ModelConfig(
