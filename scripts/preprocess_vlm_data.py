@@ -12,10 +12,10 @@ The output parquet files contain:
 
 Usage:
     python scripts/preprocess_vlm_data.py \
-        --input-pattern "gs://marin-vlm/raw_data/*.parquet" \
-        --output-dir "gs://marin-vlm/preprocessed/" \
-        --tokenizer "Qwen/Qwen3-1.7B" \
-        --processor "llava-hf/llava-onevision-qwen2-0.5b-ov-hf" \
+         --input-pattern "gs://marin-vlm/stage2_sharded/*.parquet" \
+        --output-dir "gs://marin-vlm/stage2_packed/" \
+        --tokenizer "gs://marin-vlm/tokenizers/Qwen3-1.7B" \
+        --processor "gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf" \
         --max-length 2048 \
         --features-per-patch 576 \
         --num-workers 50 \

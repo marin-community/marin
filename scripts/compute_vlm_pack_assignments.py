@@ -14,7 +14,7 @@ Usage:
         --processor "llava-hf/llava-onevision-qwen2-0.5b-ov-hf" \
         --max-length 2048 \
         --max-patches 10 \
-        --num-workers 50 \
+        --num-workers 10 \
         --checkpoint-dir "gs://marin-vlm/checkpoints_packing"
 
 Requirements:
