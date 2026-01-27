@@ -60,6 +60,7 @@ def mock_hf_fs():
             ]
         )
         fs.ls = Mock(return_value=list(files.keys()))
+        fs.info = Mock(side_effect=lambda path, revision=None: {"size": len(files.get(path, b""))})
 
         return fs
 
