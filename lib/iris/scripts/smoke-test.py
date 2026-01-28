@@ -931,7 +931,6 @@ class SmokeTestRunner:
         self.logger.log(f"Found controller VM: {controller_name}")
 
         # Create tunnel (blocking - returns local URL)
-        from iris.cluster.vm.debug import controller_tunnel
 
         # Start tunnel in background
         import subprocess
