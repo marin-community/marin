@@ -243,7 +243,7 @@ def lora_trainable_params_filter(model: M) -> M:
     # Equinox's primitives don't really have a "match all tree nodes matching a predicate" function (just
     # a "match all tree leaves matching a predicate" function), so we need to be just a bit careful.
     # Basically, we want to halt recursion in the tree whenever we hit a node that is a lora param.
-    return jax.tree_util.tree_map(is_lora_param, model, is_leaf=is_lora_param)
+    return haliax.tree_util.tree_map(is_lora_param, model, is_leaf=is_lora_param)
 
 
 def _loraize(model: M, config: LoraConfig, key: jax.random.PRNGKey, prefix: str, batch_dims: Tuple[Axis, ...]) -> M:

@@ -290,7 +290,7 @@ def pspec_for(
 
     def partition_spec(node: typing.Any):
         if isinstance(node, NamedArray):
-            return pspec_for_axis(node.axes, resource_mapping)
+            return pspec_for_axis(node.axis_names, resource_mapping)
         elif isinstance(node, eqx.Module):
             # handle eqx.Module explicitly so that we can look at axis_names metadata
             updates: dict[str, typing.Any] = {}
