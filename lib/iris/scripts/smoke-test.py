@@ -74,6 +74,8 @@ from iris.rpc.proto_utils import format_accelerator_display
 IRIS_ROOT = Path(__file__).parent.parent
 DEFAULT_CONTROLLER_PORT = 10000
 DEFAULT_JOB_TIMEOUT = 600  # 10 minutes for TPU provisioning
+SCHEDULING_POLL_INTERVAL_SECONDS = 5.0
+WORKER_DISCOVERY_INTERVAL_SECONDS = 10.0
 
 
 # =============================================================================
@@ -245,7 +247,7 @@ class DockerLogStreamer:
                         args=(tpu_name, log_file, True),
                         daemon=True,
                     ).start()
-            self._stop_event.wait(10.0)
+            self._stop_event.wait(WORKER_DISCOVERY_INTERVAL_SECONDS)
 
     def _stream_vm_logs(self, vm_name: str, log_file: Path, is_tpu: bool):
         """Stream docker logs from a specific VM to file."""
@@ -327,7 +329,7 @@ class TaskSchedulingMonitor:
                     self._poll_job_tasks(job_id)
                 except Exception as e:
                     self._logger.log(f"Error polling job {job_id}: {e}", level="WARN")
-            self._stop_event.wait(5.0)
+            self._stop_event.wait(SCHEDULING_POLL_INTERVAL_SECONDS)
 
     def _poll_job_tasks(self, job_id: str):
         """Poll tasks for a specific job and log scheduling info."""

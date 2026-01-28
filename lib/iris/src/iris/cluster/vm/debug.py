@@ -15,6 +15,7 @@
 """Debug utilities for log collection and VM cleanup."""
 
 import logging
+import re
 import socket
 import subprocess
 import time
@@ -111,22 +112,8 @@ def cleanup_iris_resources(
     deleted = []
 
     # Controller VMs are named "iris-controller-{label_prefix}"
-    controller_filter = f"name~^iris-controller-{label_prefix}$"
-    result = subprocess.run(
-        [
-            "gcloud",
-            "compute",
-            "instances",
-            "list",
-            f"--filter={controller_filter}",
-            f"--zones={zone}",
-            f"--project={project}",
-            "--format=value(name)",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    vms = [v.strip() for v in result.stdout.strip().split("\n") if v.strip()]
+    controller_vm = discover_controller_vm(zone, project, label_prefix)
+    vms = [controller_vm] if controller_vm else []
 
     # TPU slices are named "{label_prefix}-{scale_group}-{timestamp}"
     # and are labeled with "{label_prefix}-managed=true"
@@ -238,7 +225,7 @@ def discover_controller_vm(zone: str, project: str, label_prefix: str = "iris") 
         Controller VM name, or None if not found
     """
     # Controller VMs are named "iris-controller-{label_prefix}"
-    name_filter = f"name~^iris-controller-{label_prefix}$"
+    name_filter = f"name~^iris-controller-{re.escape(label_prefix)}$"
     result = subprocess.run(
         [
             "gcloud",
@@ -257,10 +244,9 @@ def discover_controller_vm(zone: str, project: str, label_prefix: str = "iris") 
         return None
     names = [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
     if len(names) > 1:
-        logger.warning(
-            "Multiple controller VMs found: %s. Using first: %s",
-            ", ".join(names),
-            names[0],
+        raise RuntimeError(
+            f"Multiple controller VMs found for prefix '{label_prefix}': {', '.join(names)}. "
+            "This indicates a resource leak or configuration error."
         )
     return names[0] if names else None
 
