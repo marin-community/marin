@@ -59,13 +59,13 @@ from iris.cluster.types import (
     ResourceSpec,
     tpu_device,
 )
+from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.config import load_config
-from iris.cluster.vm.controller import ControllerProtocol, create_controller
 from iris.cluster.vm.debug import (
     cleanup_iris_resources,
-    controller_tunnel,
     discover_controller_vm,
     list_iris_tpus,
+    stream_docker_logs,
 )
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -276,7 +276,15 @@ class DockerLogStreamer:
         if not vm_name:
             return
         log_file = self._log_tree.get_writer("controller-logs.txt", "Controller docker logs")
-        self._stream_vm_logs(vm_name, log_file, is_tpu=False)
+        stream_docker_logs(
+            vm_name,
+            self._container_name,
+            self._zone,
+            self._project,
+            log_file,
+            is_tpu=False,
+            stop_event=self._stop_event,
+        )
 
     def _discover_and_stream_workers(self):
         """Discovery loop: find workers and stream logs."""
@@ -287,53 +295,12 @@ class DockerLogStreamer:
                     self._discovered_vms.add(tpu_name)
                     log_file = self._log_tree.get_writer(f"workers/{tpu_name}.txt", f"Worker logs: {tpu_name}")
                     threading.Thread(
-                        target=self._stream_vm_logs,
-                        args=(tpu_name, log_file, True),
+                        target=stream_docker_logs,
+                        args=(tpu_name, self._container_name, self._zone, self._project, log_file),
+                        kwargs={"is_tpu": True, "stop_event": self._stop_event},
                         daemon=True,
                     ).start()
             self._stop_event.wait(WORKER_DISCOVERY_INTERVAL_SECONDS)
-
-    def _stream_vm_logs(self, vm_name: str, log_file: Path, is_tpu: bool):
-        """Stream docker logs from a specific VM to file."""
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-
-        if is_tpu:
-            cmd = [
-                "gcloud",
-                "compute",
-                "tpus",
-                "tpu-vm",
-                "ssh",
-                vm_name,
-                f"--zone={self._zone}",
-                f"--project={self._project}",
-                "--command",
-                f"sudo docker logs -f {self._container_name} 2>&1",
-            ]
-        else:
-            cmd = [
-                "gcloud",
-                "compute",
-                "ssh",
-                vm_name,
-                f"--zone={self._zone}",
-                f"--project={self._project}",
-                "--command",
-                f"sudo docker logs -f {self._container_name} 2>&1",
-            ]
-
-        with open(log_file, "w") as f:
-            proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
-            while not self._stop_event.is_set():
-                if proc.poll() is not None:
-                    break
-                self._stop_event.wait(1.0)
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
 
 
 class TaskSchedulingMonitor:
@@ -409,6 +376,7 @@ class SmokeTestConfig:
     cleanup_on_failure: bool = True
     clean_start: bool = True  # Delete existing resources before starting
     prefix: str | None = None  # Unique prefix for controller VM name (sets label_prefix in config)
+    local: bool = False  # Run locally without GCP
 
     @property
     def label_prefix(self) -> str:
@@ -477,8 +445,7 @@ class SmokeTestRunner:
         self.config = config
         self.log_tree = LogTree(config.log_dir)
         self.logger = SmokeTestLogger(self.log_tree)
-        self._controller: ControllerProtocol | None = None
-        self._tunnel_proc: subprocess.Popen | None = None
+        self._manager: ClusterManager | None = None
         self._interrupted = False
         self._deadline: float | None = None
         self._results: list[TestResult] = []
@@ -508,9 +475,16 @@ class SmokeTestRunner:
             self._print_header()
             cluster_config = load_config(self.config.config_path)
 
+            # Apply --local override if requested
+            if self.config.local:
+                cluster_config = make_local_config(cluster_config)
+
             # Apply prefix to cluster config for unique controller VM name
             if self.config.prefix:
                 cluster_config.label_prefix = self.config.prefix
+
+            manager = ClusterManager(cluster_config)
+            self._manager = manager
 
             zone = cluster_config.zone
             project = cluster_config.project_id
@@ -518,84 +492,74 @@ class SmokeTestRunner:
             self._zone = zone
             self._project = project
 
-            # Extract region/project for image building
-            self._image_region = zone.rsplit("-", 1)[0]  # "europe-west4-b" -> "europe-west4"
-            self._image_project = project
+            # GCP-only setup phases
+            if not manager.is_local:
+                # Extract region/project for image building
+                self._image_region = zone.rsplit("-", 1)[0]  # "europe-west4-b" -> "europe-west4"
+                self._image_project = project
 
-            # Phase 0a: Build and push images
-            self.logger.section("PHASE 0a: Building Images")
-            if not self._build_images():
-                self.logger.log("Image build failed!", level="ERROR")
-                return False
-            if self._interrupted or self._check_deadline():
-                return False
-
-            # Phase 0b: Clean start (delete existing resources)
-            if self.config.clean_start:
-                self.logger.section("PHASE 0b: Clean Start")
-                self._cleanup_existing(zone, project)
+                # Phase 0a: Build and push images
+                self.logger.section("PHASE 0a: Building Images")
+                if not self._build_images():
+                    self.logger.log("Image build failed!", level="ERROR")
+                    return False
                 if self._interrupted or self._check_deadline():
                     return False
 
-            # Phase 1: Start cluster
-            self.logger.section("PHASE 1: Starting Cluster")
-            self._start_cluster(cluster_config)  # Address logged, but we connect via SSH tunnel
-            if self._interrupted or self._check_deadline():
-                return False
+                # Phase 0b: Clean start (delete existing resources)
+                if self.config.clean_start:
+                    self.logger.section("PHASE 0b: Clean Start")
+                    self._cleanup_existing(zone, project)
+                    if self._interrupted or self._check_deadline():
+                        return False
 
-            # Start controller log streaming
-            label_prefix = self.config.label_prefix
-            self._controller_streamer = DockerLogStreamer(
-                mode="controller",
-                zone=zone,
-                project=project,
-                log_tree=self.log_tree,
-                container_name="iris-controller",
-                label_prefix=label_prefix,
-            )
-            self._controller_streamer.start()
-            self.logger.log("Started controller log streaming")
-
-            # Phase 2: SSH tunnel
-            self.logger.section("PHASE 2: SSH Tunnel Setup")
-
-            with controller_tunnel(
-                zone,
-                project,
-                local_port=DEFAULT_CONTROLLER_PORT,
-                tunnel_logger=logging.getLogger("iris.cluster.vm.debug"),
-                label_prefix=label_prefix,
-            ) as tunnel_url:
+            # Start cluster and run tests via connect() (handles tunnel for GCP, direct for local)
+            self.logger.section("Starting Cluster")
+            with manager.connect() as url:
                 if self._interrupted or self._check_deadline():
                     return False
+                self.logger.log(f"Connected to controller at {url}")
 
-                # Start worker log streaming
-                self._worker_streamer = DockerLogStreamer(
-                    mode="workers",
-                    zone=zone,
-                    project=project,
-                    log_tree=self.log_tree,
-                    container_name="iris-worker",
-                    label_prefix=label_prefix,
-                )
-                self._worker_streamer.start()
-                self.logger.log("Started worker log streaming")
+                # GCP-only: start log streaming
+                if not manager.is_local:
+                    label_prefix = self.config.label_prefix
+                    self._controller_streamer = DockerLogStreamer(
+                        mode="controller",
+                        zone=zone,
+                        project=project,
+                        log_tree=self.log_tree,
+                        container_name="iris-controller",
+                        label_prefix=label_prefix,
+                    )
+                    self._controller_streamer.start()
+                    self.logger.log("Started controller log streaming")
+
+                    self._worker_streamer = DockerLogStreamer(
+                        mode="workers",
+                        zone=zone,
+                        project=project,
+                        log_tree=self.log_tree,
+                        container_name="iris-worker",
+                        label_prefix=label_prefix,
+                    )
+                    self._worker_streamer.start()
+                    self.logger.log("Started worker log streaming")
 
                 # Start task scheduling monitor
                 self._scheduling_monitor = TaskSchedulingMonitor(
-                    controller_url=tunnel_url,
+                    controller_url=url,
                     log_tree=self.log_tree,
                     logger=self.logger,
                 )
                 self._scheduling_monitor.start()
                 self.logger.log("Started task scheduling monitor")
 
-                # Phase 3: Run tests
-                self.logger.section("PHASE 3: Running Tests")
-                self._run_tests(tunnel_url)
+                # Run tests
+                self.logger.section("Running Tests")
+                self._run_tests(url)
 
-                # Phase 4: Results
-                self.logger.section("PHASE 4: Results Summary")
+                # Results
+                self.logger.section("Results Summary")
                 success = self._print_results()
 
             return success
@@ -673,20 +637,6 @@ class SmokeTestRunner:
         self.logger.log("Worker image built and pushed")
 
         return True
-
-    def _start_cluster(self, cluster_config) -> str:
-        """Start the cluster using create_controller from controller.py."""
-        self.logger.log("Creating controller from config...")
-        controller = create_controller(cluster_config)
-        self._controller = controller
-
-        self.logger.log("Starting controller VM (this may take a few minutes)...")
-        start = time.monotonic()
-        address = controller.start()
-        elapsed = time.monotonic() - start
-
-        self.logger.log(f"Controller started at {address} in {elapsed:.1f}s")
-        return address
 
     def _run_tests(self, controller_url: str):
         """Run test jobs against the cluster."""
@@ -921,16 +871,16 @@ class SmokeTestRunner:
             self.logger.log("Controller VM left running for debugging")
             return
 
-        if self._controller:
-            self.logger.log("Stopping controller VM...")
+        if self._manager:
+            self.logger.log("Stopping cluster...")
             try:
-                self._controller.stop()
-                self.logger.log("Controller stopped")
+                self._manager.stop()
+                self.logger.log("Cluster stopped")
             except Exception as e:
-                self.logger.log(f"Error stopping controller: {e}", level="WARN")
+                self.logger.log(f"Error stopping cluster: {e}", level="WARN")
 
-        # Delete any remaining TPU slices and controller VM
-        if self._zone and self._project:
+        # Delete any remaining TPU slices and controller VM (GCP only)
+        if self._zone and self._project and (not self._manager or not self._manager.is_local):
             label_prefix = self.config.label_prefix
             deleted = cleanup_iris_resources(self._zone, self._project, label_prefix=label_prefix, dry_run=False)
             for resource in deleted:
@@ -990,6 +940,11 @@ class SmokeTestRunner:
     default=None,
     help="Unique prefix for controller VM name (e.g., 'smoke-123' creates 'iris-controller-smoke-123')",
 )
+@click.option(
+    "--local",
+    is_flag=True,
+    help="Run locally without GCP (in-process controller and workers)",
+)
 def main(
     config_path: Path,
     timeout_seconds: int,
@@ -999,6 +954,7 @@ def main(
     no_cleanup_on_failure: bool,
     no_clean_start: bool,
     prefix: str | None,
+    local: bool,
 ):
     """Run Iris cluster autoscaling smoke test.
 
@@ -1035,6 +991,7 @@ def main(
         cleanup_on_failure=not no_cleanup_on_failure,
         clean_start=not no_clean_start,
         prefix=prefix,
+        local=local,
     )
 
     runner = SmokeTestRunner(config)
