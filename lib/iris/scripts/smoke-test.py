@@ -64,6 +64,7 @@ from iris.cluster.vm.config import load_config
 from iris.cluster.vm.debug import (
     cleanup_iris_resources,
     discover_controller_vm,
+    list_docker_containers,
     list_iris_tpus,
     stream_docker_logs,
 )
@@ -299,7 +300,7 @@ class DockerLogStreamer:
         self._label_prefix = label_prefix
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._discovered_vms: set[str] = set()
+        self._streaming: set[tuple[str, str]] = set()  # (vm_name, container_name) pairs
 
     def start(self):
         """Start background streaming thread."""
@@ -332,20 +333,44 @@ class DockerLogStreamer:
             stop_event=self._stop_event,
         )
 
+    def _start_stream(self, vm_name: str, container_name: str, is_tpu: bool):
+        """Start streaming a container's logs if not already streaming."""
+        key = (vm_name, container_name)
+        if key in self._streaming:
+            return
+        self._streaming.add(key)
+        log_file = self._log_tree.get_writer(
+            f"workers/{vm_name}/{container_name}.txt",
+            f"Worker logs: {vm_name}/{container_name}",
+        )
+        threading.Thread(
+            target=stream_docker_logs,
+            args=(vm_name, container_name, self._zone, self._project, log_file),
+            kwargs={"is_tpu": is_tpu, "stop_event": self._stop_event},
+            daemon=True,
+        ).start()
+
     def _discover_and_stream_workers(self):
-        """Discovery loop: find workers and stream logs."""
+        """Discovery loop: find workers and stream logs from service + per-task containers."""
         while not self._stop_event.is_set():
             tpu_names = list_iris_tpus(self._zone, self._project, self._label_prefix)
             for tpu_name in tpu_names:
-                if tpu_name not in self._discovered_vms:
-                    self._discovered_vms.add(tpu_name)
-                    log_file = self._log_tree.get_writer(f"workers/{tpu_name}.txt", f"Worker logs: {tpu_name}")
-                    threading.Thread(
-                        target=stream_docker_logs,
-                        args=(tpu_name, self._container_name, self._zone, self._project, log_file),
-                        kwargs={"is_tpu": True, "stop_event": self._stop_event},
-                        daemon=True,
-                    ).start()
+                # Stream the main worker service container
+                self._start_stream(tpu_name, self._container_name, is_tpu=True)
+
+                # Discover and stream per-task containers (labeled iris.managed=true)
+                try:
+                    task_containers = list_docker_containers(
+                        tpu_name,
+                        self._zone,
+                        self._project,
+                        label_filter="iris.managed=true",
+                        is_tpu=True,
+                    )
+                    for container in task_containers:
+                        self._start_stream(tpu_name, container, is_tpu=True)
+                except Exception:
+                    logging.debug("Failed to discover containers on %s", tpu_name, exc_info=True)
             self._stop_event.wait(WORKER_DISCOVERY_INTERVAL_SECONDS)
 
 
@@ -769,18 +794,12 @@ class SmokeTestRunner:
             else:
                 state_name = cluster_pb2.JobState.Name(status.state)
                 self.logger.log(f"  [FAIL] Job ended with state {state_name}", level="ERROR")
-                # Collect docker logs from TPU VMs FIRST (before RPC-based log
-                # fetch which can time out and give autoscaler time to delete slices).
-                if self._zone and self._project:
-                    self._collect_all_worker_docker_logs()
                 self._print_task_logs_on_failure(job)
                 return TestResult(test_name, False, f"State: {state_name}, error: {status.error}", duration)
 
         except TimeoutError:
             duration = time.monotonic() - start
             self.logger.log(f"  [FAIL] Timed out after {job_timeout}s", level="ERROR")
-            if self._zone and self._project:
-                self._collect_all_worker_docker_logs()
             return TestResult(test_name, False, f"Timed out after {job_timeout}s", duration)
 
     def _submit_and_wait_multiple(
@@ -817,60 +836,6 @@ class SmokeTestRunner:
                 failed_jobs.append(f"{job.job_id}: {state_name}")
 
         return time.monotonic() - start, failed_jobs
-
-    def _collect_all_worker_docker_logs(self):
-        """SSH into each TPU VM and dump logs from all iris-managed containers.
-
-        This prints directly to the smoke test output so job failures are visible
-        in CI even if the RPC-based log retrieval times out or slices are deleted.
-        """
-        assert self._zone and self._project
-        self.logger.log("  Collecting docker container logs from TPU VMs...")
-        try:
-            tpu_names = list_iris_tpus(self._zone, self._project)
-        except Exception as e:
-            self.logger.log(f"  Failed to list TPUs: {e}", level="WARN")
-            return
-
-        if not tpu_names:
-            self.logger.log("  No TPU slices found")
-            return
-
-        collect_cmd = (
-            "for cid in $(sudo docker ps -a --filter label=iris.managed=true -q); do "
-            "name=$(sudo docker inspect --format '{{.Name}}' $cid | sed 's|^/||'); "
-            "echo '=== Container:' $name '==='; "
-            "sudo docker logs $cid 2>&1 | tail -100; "
-            "echo; done"
-        )
-        for tpu_name in tpu_names:
-            self.logger.log(f"  --- Docker logs from {tpu_name} ---")
-            cmd = [
-                "gcloud",
-                "compute",
-                "tpus",
-                "tpu-vm",
-                "ssh",
-                tpu_name,
-                f"--zone={self._zone}",
-                f"--project={self._project}",
-                "--command",
-                collect_cmd,
-            ]
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-                if result.returncode == 0 and result.stdout.strip():
-                    for line in result.stdout.strip().splitlines():
-                        self.logger.log(f"    {line}")
-                else:
-                    self.logger.log("    (no output or no managed containers)", level="WARN")
-                    if result.stderr.strip():
-                        self.logger.log(f"    stderr: {result.stderr.strip()[:300]}", level="WARN")
-            except subprocess.TimeoutExpired:
-                self.logger.log(f"    SSH timed out for {tpu_name}", level="WARN")
-            except Exception as e:
-                self.logger.log(f"    Failed: {e}", level="WARN")
-
 
     def _run_simple_tpu_job(self, client: IrisClient) -> TestResult:
         """Run a simple TPU job that just prints and returns."""

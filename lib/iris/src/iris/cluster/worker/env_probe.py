@@ -56,7 +56,6 @@ def _probe_gpu_info() -> tuple[int, str, int]:
         return 0, "", 0
 
 
-
 def _get_memory_total_bytes() -> int:
     try:
         with open("/proc/meminfo") as f:

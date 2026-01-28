@@ -22,7 +22,6 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -48,46 +47,6 @@ def _docker_log_ssh_command(
     return [*base, "ssh", vm_name, f"--zone={zone}", f"--project={project}", "--command", docker_cmd]
 
 
-def collect_docker_logs(
-    vm_name: str,
-    container_name: str,
-    zone: str,
-    project: str,
-    output_dir: Path,
-    is_tpu: bool = False,
-) -> Path | None:
-    """SSH to VM and collect docker logs (one-shot).
-
-    Args:
-        vm_name: GCE VM or TPU name
-        container_name: Docker container name (e.g., "iris-worker", "iris-controller")
-        zone: GCP zone
-        project: GCP project
-        output_dir: Directory to write logs
-        is_tpu: If True, use `gcloud compute tpus tpu-vm ssh`
-
-    Returns:
-        Path to log file, or None if collection failed
-    """
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    output_file = output_dir / f"{vm_name}-{container_name}-{timestamp}.log"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    cmd = _docker_log_ssh_command(vm_name, container_name, zone, project, is_tpu)
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        output_file.write_text(result.stdout + result.stderr)
-        logger.info("Collected logs from %s:%s to %s", vm_name, container_name, output_file)
-        return output_file
-    except subprocess.TimeoutExpired:
-        logger.warning("Timeout collecting logs from %s:%s", vm_name, container_name)
-        return None
-    except Exception as e:
-        logger.warning("Failed to collect logs from %s: %s", vm_name, e)
-        return None
-
-
 def stream_docker_logs(
     vm_name: str,
     container_name: str,
@@ -100,7 +59,6 @@ def stream_docker_logs(
     """Stream docker logs from a VM to a file until stop_event is set.
 
     Blocking call. Uses `docker logs -f` via gcloud SSH.
-    Streaming counterpart to collect_docker_logs().
     """
     output_file.parent.mkdir(parents=True, exist_ok=True)
     cmd = _docker_log_ssh_command(vm_name, container_name, zone, project, is_tpu, follow=True)
@@ -123,6 +81,39 @@ def stream_docker_logs(
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait()
+
+
+def list_docker_containers(
+    vm_name: str,
+    zone: str,
+    project: str,
+    label_filter: str,
+    is_tpu: bool = False,
+) -> list[str]:
+    """List docker container names on a VM matching a label filter.
+
+    Args:
+        vm_name: VM or TPU name to SSH into
+        zone: GCP zone
+        project: GCP project
+        label_filter: Docker label filter (e.g., "iris.managed=true")
+        is_tpu: Whether the target is a TPU VM
+
+    Returns:
+        List of container names matching the filter
+    """
+    docker_cmd = f"sudo docker ps -a --filter label={label_filter} --format '{{{{.Names}}}}'"
+
+    base = ["gcloud", "compute"]
+    if is_tpu:
+        base += ["tpus", "tpu-vm"]
+    cmd = [*base, "ssh", vm_name, f"--zone={zone}", f"--project={project}", "--command", docker_cmd]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        logger.debug("Failed to list containers on %s: %s", vm_name, result.stderr.strip()[:200])
+        return []
+    return [name.strip() for name in result.stdout.strip().split("\n") if name.strip()]
 
 
 def cleanup_iris_resources(

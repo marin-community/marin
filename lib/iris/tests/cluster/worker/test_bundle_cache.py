@@ -145,7 +145,7 @@ def test_lru_eviction(temp_cache_dir, tmp_path):
     # Download bundles one at a time. Set distinct mtimes before the third
     # download so eviction (triggered inside get_bundle) sees deterministic order.
     paths = []
-    for i, bundle in enumerate(bundles):
+    for _i, bundle in enumerate(bundles):
         # Backdate earlier bundles so eviction picks the oldest
         for j, p in enumerate(paths):
             os.utime(p, (j, j))

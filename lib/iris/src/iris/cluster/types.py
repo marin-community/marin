@@ -26,7 +26,7 @@ Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.pr
 import os
 import sys
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, IntEnum
 from typing import Any, NewType
 
