@@ -53,7 +53,7 @@ milestone_2025_12_basic_ingredients:
     - fluster_design_doc
     - speedrun_polish
     - marin_paper
-    - ferry_muhonh_feistel_comparison
+    - ferry_muonh_feistel_comparison
     - rl_math_llama_qwen_8b
     - release_multilingual_8b
 
@@ -153,7 +153,7 @@ moe_scaling_laws_issue:
   labels: [timeline, scaling_laws, moe, agent_friendly]
 
 
-ferry_muhonh_feistel_comparison:
+ferry_muonh_feistel_comparison:
   title: "Ferry: comparison between 8B baseline and MuonH+feistel"
   type: task
   status: done
@@ -798,6 +798,99 @@ agent_driven_parameter_sweep_demo:
   status: planned
   target_date: "2026-03-31"
   labels: [timeline, infra, agent_friendly]
+
+
+pallas_kernel_agent_workflow:
+  title: "Agent-driven Pallas kernel development workflow"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, performance, kernels, agent_friendly]
+  description: |
+    Establish a repeatable workflow for agents to develop and land Pallas (TPU) kernels safely:
+    1) start from a reference implementation (pseudocode, PyTorch, or a slow JAX baseline)
+    2) produce a “vanilla JAX” implementation with clear shapes/dtypes and reference numerics
+    3) implement a Pallas kernel + wrapper API
+    4) build a test harness that checks correctness *and* speed (microbench) across a grid of shapes/dtypes
+    5) iterate using profiling evidence (xprof) and a clear edit surface
+
+    This should pair with:
+    - `agent_driven_profiling` (so agents can “see” profile evidence)
+    - `aot_compilation` (so compilation failures happen early)
+  definition_of_done: |
+    - We add a recipe + starter template for “add a Pallas kernel” that agents can follow.
+    - We land at least one kernel end-to-end using this workflow (starting with fused softmax loss).
+    - The test harness catches numeric regressions and reports speed regressions.
+  dependencies:
+    - add_pallas_kernel_recipe
+    - pallas_kernel_starter_template
+    - pallas_fused_softmax_loss_kernel
+    - agent_driven_profiling
+    - aot_compilation
+
+
+pallas_fused_softmax_loss_kernel:
+  title: "Pallas fused softmax cross-entropy (z-loss, optional unreduced)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [kernels, performance, levanter, agent_friendly]
+  description: |
+    Implement a fused softmax cross-entropy kernel (TPU/Pallas) that supports:
+    - optional z-loss (logsumexp penalty / stabilization)
+    - optional unreduced output (per-token/per-example loss) as well as reduced loss
+
+    Reference implementations to start from:
+    - existing blockwise/logsumexp-friendly cross entropy in Levanter/Grug (e.g. `levanter.grug.loss` and
+      `levanter.models.loss`)
+    - optax cross-entropy for correctness reference on small logits
+
+    The “agent workflow” should explicitly include:
+    - vanilla JAX baseline (clear, readable, correct)
+    - Pallas kernel wrapper with a stable API
+    - correctness tests (value + grad) and speed microbench
+  definition_of_done: |
+    - Correctness: matches baseline within tolerance across a representative grid of shapes/dtypes, including z-loss on/off.
+    - Gradients: gradient matches baseline on small shapes (or a reference autograd path).
+    - Flexibility: supports both reduced and unreduced loss output.
+    - Performance: measurable speedup vs baseline on at least one realistic shape.
+  dependencies:
+    - benchmark_smoke_suite
+    - agent_driven_profiling
+
+
+add_pallas_kernel_recipe:
+  title: "Recipe: add a Pallas kernel (agent-oriented)"
+  type: task
+  status: planned
+  issue: null
+  labels: [process, docs, kernels, agent_friendly, newbie_friendly]
+  description: |
+    Write and maintain the canonical workflow for adding Pallas kernels:
+    `docs/recipes/add_pallas_kernel.md`.
+
+    This should explicitly cover:
+    - reference impl -> vanilla JAX -> Pallas kernel
+    - value + grad tests
+    - microbench + profiling hooks
+  definition_of_done: |
+    The recipe exists at `docs/recipes/add_pallas_kernel.md` and is followed successfully for at least one kernel
+    addition (starting with fused softmax loss).
+
+
+pallas_kernel_starter_template:
+  title: "Starter template for new Pallas kernels (baseline + kernel + tests)"
+  type: task
+  status: planned
+  issue: null
+  labels: [kernels, testing, agent_friendly, newbie_friendly]
+  description: |
+    Provide a minimal, copy/paste-friendly starter for new kernels:
+    - `lib/levanter/src/levanter/kernels/pallas/template_kernel.py`
+    - `lib/levanter/tests/kernels/test_pallas_template_kernel.py`
+  definition_of_done: |
+    - Template code exists and passes unit tests.
+    - Template demonstrates the expected structure (baseline, kernel wrapper, value+grad tests).
 
 
 train_100b_moe:
@@ -1919,6 +2012,8 @@ grug_attention:
     labels: [grug, kernels]
     description: |
       We need to wire up attention kernels for grugformer.
+
+      We need to wire up a GPU kernel.
     dependencies:
         - grugformer
 
@@ -3286,17 +3381,17 @@ rl_curriculum:
     - rl_multi_env_and_curriculum
 
 
-rl_soft_sft:
-  title: "RL + soft SFT: mix token loss on successful rollouts"
-  type: task
-  status: planned
-  labels: [rl, posttraining, infra2026]
-  description: |
-    Mix RL loss with a token-level next-token loss on successful samples to speed up learning for tasks with
-    binary success criteria, while preserving diversity.
-  dependencies:
-    - rl
-    - rl_curriculum
+#rl_soft_sft:
+#  title: "RL + soft SFT: mix token loss on successful rollouts"
+#  type: task
+#  status: planned
+#  labels: [rl, posttraining, infra2026]
+#  description: |
+#    Mix RL loss with a token-level next-token loss on successful samples to speed up learning for tasks with
+#    binary success criteria, while preserving diversity.
+#  dependencies:
+#    - rl
+#    - rl_curriculum
 
 
 model_pipeline:
@@ -3308,10 +3403,11 @@ model_pipeline:
     End-to-end pipeline where the user defines model + data, and the system runs pretraining + posttraining,
     providing programmatic status, resumability, and failure visibility.
   dependencies:
-    - rl
-    - sft
+    - scalable_rl_framework
+    - sft_big_model
     - cluster_manager
     - region_caching_fs
+    - experiment_updates_bot
 
 
 model_pipeline_v0:
@@ -3325,9 +3421,10 @@ model_pipeline_v0:
 
     Reference: Marino-chat (#1775).
   dependencies:
-    - sft
-    - rl
+    - sft_big_model
+    - scalable_rl_framework
     - continuous_eval
+    - experiment_updates_bot
 
 
 model_pipeline_v1:
