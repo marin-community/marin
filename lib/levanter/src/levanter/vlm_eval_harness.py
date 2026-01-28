@@ -316,6 +316,9 @@ class LevanterVLMHarnessLM(TemplateLM):
         unpad_indices = processed.get("unpad_indices")
         num_unpadded_features = processed.get("num_unpadded_features")
 
+        # Convert input_ids to list for prompt_tokens
+        input_ids_list = input_ids.tolist() if hasattr(input_ids, 'tolist') else list(input_ids)
+
         # Create sequence decoding parameters
         max_gen_toks = gen_kwargs.get("max_gen_toks", 256)
         temperature = gen_kwargs.get("temperature", 0.0)
@@ -323,7 +326,7 @@ class LevanterVLMHarnessLM(TemplateLM):
 
         base_key = jrandom.PRNGKey(42 if seed is None else seed)
         seq_params = SeqDecodingParams(
-            max_num_tokens=jnp.array(len(input_ids) + max_gen_toks, dtype=jnp.int32),
+            max_num_tokens=jnp.array(len(input_ids_list) + max_gen_toks, dtype=jnp.int32),
             stop_tokens=None,  # Will be set later if needed
             temperature=jnp.array(temperature, dtype=jnp.float32),
             key=base_key,
@@ -335,6 +338,7 @@ class LevanterVLMHarnessLM(TemplateLM):
         pixel_values_na = None
         grid_mask_na = None
         unpad_indices_na = None
+        input_ids_na = None
 
         if pixel_values is not None:
             # pixel_values shape: (TOTAL_PATCHES, C, H, W)
@@ -351,14 +355,21 @@ class LevanterVLMHarnessLM(TemplateLM):
             UnpadFeatures = hax.Axis("UnpadFeatures", len(unpad_indices))
             unpad_indices_na = hax.named(jnp.array(unpad_indices), (UnpadFeatures,))
 
+        # Convert input_ids to NamedArray with shape (batch, position)
+        # LlavaInferenceEngine.generate() calls set_request_data(input_ids=...) which expects NamedArray
+        Batch = hax.Axis("batch", 1)
+        Position = hax.Axis("position", len(input_ids_list))
+        input_ids_array = jnp.array(input_ids_list, dtype=jnp.int32).reshape(1, -1)
+        input_ids_na = hax.named(input_ids_array, (Batch, Position))
+
         return VLMRequest(
-            prompt_tokens=input_ids.tolist(),
+            prompt_tokens=input_ids_list,
             request_id=0,
             decode_params=seq_params,
             n_generations=1,
             pixel_values=pixel_values_na,
             grid_mask=grid_mask_na,
-            input_ids=None,  # Will be set from prompt_tokens
+            input_ids=input_ids_na,
             unpad_indices=unpad_indices_na,
             num_unpadded_features=num_unpadded_features,
         )
