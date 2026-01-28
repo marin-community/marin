@@ -760,7 +760,6 @@ class DemoCluster:
 
 @click.command()
 @click.option("--no-browser", is_flag=True, help="Don't auto-open browser for Jupyter")
-@click.option("--test-notebook", is_flag=True, help="Run notebook programmatically and validate (for CI)")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
 @click.option(
     "--controller-url",
@@ -774,7 +773,6 @@ class DemoCluster:
 )
 def main(
     no_browser: bool,
-    test_notebook: bool,
     verbose: bool,
     controller_url: str | None,
     workspace: Path | None,
@@ -824,15 +822,12 @@ def main(
         print()
         print("All seed jobs succeeded!")
 
-        if test_notebook:
-            print()
-            print("Testing notebook execution...")
-            if demo.run_notebook():
-                print("Notebook test passed!")
-            else:
-                print("Notebook test FAILED!")
-                sys.exit(1)
-            return
+        print()
+        print("Testing notebook execution...")
+        if not demo.run_notebook():
+            print("Notebook test FAILED!")
+            sys.exit(1)
+        print("Notebook test passed!")
 
         print()
         print("Launching Jupyter notebook...")
