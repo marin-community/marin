@@ -92,6 +92,7 @@ class LocalVmGroup(VmGroupProtocol):
         scale_group: str,
         workers: list[Worker],
         worker_ids: list[str],
+        worker_ports: list[int],
         vm_registry: VmRegistry,
     ):
         self._group_id = group_id
@@ -104,7 +105,7 @@ class LocalVmGroup(VmGroupProtocol):
 
         # Create mock ManagedVm instances for each worker (for autoscaler compatibility)
         self._managed_vms: list[ManagedVm] = []
-        for i, worker_id in enumerate(worker_ids):
+        for i, (worker_id, port) in enumerate(zip(worker_ids, worker_ports, strict=True)):
             # Create a minimal ManagedVm that's immediately ready
             # We don't use ManagedVm's lifecycle thread since workers are in-process
             vm_info = vm_pb2.VmInfo(
@@ -112,7 +113,7 @@ class LocalVmGroup(VmGroupProtocol):
                 slice_id=group_id,
                 scale_group=scale_group,
                 state=vm_pb2.VM_STATE_READY,
-                address="127.0.0.1",
+                address=f"127.0.0.1:{port}",
                 zone="local",
                 worker_id=worker_id,
                 created_at_ms=self._created_at_ms,
@@ -158,7 +159,7 @@ class LocalVmGroup(VmGroupProtocol):
                 VmSnapshot(
                     vm_id=vm.info.vm_id,
                     state=vm_pb2.VM_STATE_READY,
-                    address="127.0.0.1",
+                    address=vm.info.address,
                     init_phase="ready",
                     init_error="",
                 )
@@ -230,6 +231,7 @@ class LocalVmManager:
         # Create workers
         workers: list[Worker] = []
         worker_ids: list[str] = []
+        worker_ports: list[int] = []
 
         bundle_provider = _LocalBundleProvider(self._fake_bundle)
         image_provider = _LocalImageProvider()
@@ -279,6 +281,7 @@ class LocalVmManager:
             worker.start()
             workers.append(worker)
             worker_ids.append(worker_id)
+            worker_ports.append(worker_port)
 
         logger.info(
             "LocalVmManager created VM group %s with %d workers for scale group %s",
@@ -292,6 +295,7 @@ class LocalVmManager:
             scale_group=self._config.name,
             workers=workers,
             worker_ids=worker_ids,
+            worker_ports=worker_ports,
             vm_registry=self._vm_registry,
         )
 

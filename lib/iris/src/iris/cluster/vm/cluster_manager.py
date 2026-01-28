@@ -112,9 +112,7 @@ class ClusterManager:
                 zone = self._config.zone
                 project = self._config.project_id
                 label_prefix = self._config.label_prefix or "iris"
-                with controller_tunnel(
-                    zone, project, label_prefix=label_prefix
-                ) as tunnel_url:
+                with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
                     yield tunnel_url
         finally:
             self.stop()
