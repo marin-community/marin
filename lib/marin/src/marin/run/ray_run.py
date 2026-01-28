@@ -107,6 +107,26 @@ def tpus_per_node(tpu_type: str) -> int:
     return chips
 
 
+def tpu_type_from_cluster_config(cluster_config: str) -> str:
+    """Infer the TPU accelerator type for a single TPU worker from the cluster config."""
+    with open(cluster_config, "r") as f:
+        data = yaml.safe_load(f) or {}
+
+    node_types = data.get("available_node_types", {})
+    tpu_worker = node_types.get("tpu_worker", {})
+    accelerator_type = tpu_worker.get("node_config", {}).get("acceleratorType")
+    if accelerator_type:
+        return accelerator_type
+
+    for node_type in node_types.values():
+        accelerator_type = node_type.get("node_config", {}).get("acceleratorType")
+        resources = node_type.get("resources", {})
+        if accelerator_type and "TPU" in resources:
+            return accelerator_type
+
+    raise ValueError("Unable to infer TPU worker type from cluster config.")
+
+
 def make_client() -> JobSubmissionClient:
     """Create a JobSubmissionClient based on environment variables."""
     address = os.environ.get("RAY_ADDRESS", REMOTE_DASHBOARD_URL)
@@ -230,9 +250,11 @@ def main():
     )
     parser.add_argument(
         "--tpu",
-        type=str,
+        nargs="?",
+        const="auto",
         default=None,
-        help="TPU type to reserve for the entrypoint (e.g. v4-8)",
+        help="TPU type to reserve for the entrypoint (e.g. v4-8). If provided without a value, "
+        "use the TPU worker type from the cluster config.",
     )
     parser.add_argument(
         "--cluster",
@@ -308,16 +330,6 @@ def main():
                     exit(1)
                 env_vars[item[0]] = item[1]
 
-    entrypoint_resources = args.entrypoint_resources
-    if args.tpu:
-        try:
-            chips = tpus_per_node(args.tpu)
-        except ValueError as e:
-            logger.error(str(e))
-            exit(1)
-        tpu_res = {f"TPU-{args.tpu}-head": 1, "TPU": chips}
-        entrypoint_resources = (entrypoint_resources or {}) | tpu_res
-
     # Resolve cluster config (required)
     cluster_config = None
     if args.cluster:
@@ -327,6 +339,26 @@ def main():
             cluster_config = find_config_by_region(args.cluster)
 
     _maybe_enable_ray_token_auth(require_token=cluster_config is None)
+
+    entrypoint_resources = args.entrypoint_resources
+    if args.tpu:
+        tpu_type = args.tpu
+        if args.tpu == "auto":
+            if not cluster_config:
+                logger.error("TPU auto-detection requires --cluster to be set.")
+                exit(1)
+            try:
+                tpu_type = tpu_type_from_cluster_config(cluster_config)
+            except ValueError as e:
+                logger.error(str(e))
+                exit(1)
+        try:
+            chips = tpus_per_node(tpu_type)
+        except ValueError as e:
+            logger.error(str(e))
+            exit(1)
+        tpu_res = {f"TPU-{tpu_type}-head": 1, "TPU": chips}
+        entrypoint_resources = (entrypoint_resources or {}) | tpu_res
 
     # Submit the job and track it asynchronously
     if args.submission_id:
