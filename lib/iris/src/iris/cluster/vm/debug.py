@@ -14,9 +14,8 @@
 
 """Debug utilities for log collection and VM cleanup."""
 
-from __future__ import annotations
-
 import logging
+import re
 import socket
 import subprocess
 import time
@@ -91,12 +90,20 @@ def collect_docker_logs(
         return None
 
 
-def cleanup_iris_resources(zone: str, project: str, dry_run: bool = True) -> list[str]:
-    """Delete all iris-* VMs and TPU slices in a zone.
+def cleanup_iris_resources(
+    zone: str,
+    project: str,
+    label_prefix: str = "iris",
+    dry_run: bool = True,
+) -> list[str]:
+    """Delete VMs and TPU slices matching the label prefix in a zone.
 
     Args:
         zone: GCP zone
         project: GCP project
+        label_prefix: Prefix used for resource naming (default: "iris").
+                     Controller VMs are named "iris-controller-{prefix}",
+                     TPU slices are named "{prefix}-{scale_group}-{timestamp}".
         dry_run: If True, only list resources without deleting
 
     Returns:
@@ -104,22 +111,13 @@ def cleanup_iris_resources(zone: str, project: str, dry_run: bool = True) -> lis
     """
     deleted = []
 
-    result = subprocess.run(
-        [
-            "gcloud",
-            "compute",
-            "instances",
-            "list",
-            "--filter=name~^iris-",
-            f"--zones={zone}",
-            f"--project={project}",
-            "--format=value(name)",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    vms = [v.strip() for v in result.stdout.strip().split("\n") if v.strip()]
+    # Controller VMs are named "iris-controller-{label_prefix}"
+    controller_vm = discover_controller_vm(zone, project, label_prefix)
+    vms = [controller_vm] if controller_vm else []
 
+    # TPU slices are named "{label_prefix}-{scale_group}-{timestamp}"
+    # and are labeled with "{label_prefix}-managed=true"
+    tpu_label_filter = f"labels.{label_prefix}-managed=true"
     result = subprocess.run(
         [
             "gcloud",
@@ -127,7 +125,7 @@ def cleanup_iris_resources(zone: str, project: str, dry_run: bool = True) -> lis
             "tpus",
             "tpu-vm",
             "list",
-            "--filter=name~^iris-",
+            f"--filter={tpu_label_filter}",
             f"--zone={zone}",
             f"--project={project}",
             "--format=value(name)",
@@ -181,16 +179,19 @@ def cleanup_iris_resources(zone: str, project: str, dry_run: bool = True) -> lis
     return deleted
 
 
-def list_iris_tpus(zone: str, project: str) -> list[str]:
-    """List all iris TPU VMs in the zone.
+def list_iris_tpus(zone: str, project: str, label_prefix: str = "iris") -> list[str]:
+    """List all TPU VMs matching the label prefix in the zone.
 
     Args:
         zone: GCP zone
         project: GCP project
+        label_prefix: Prefix used for resource naming (default: "iris").
+                     TPUs are filtered by the label "{label_prefix}-managed=true".
 
     Returns:
-        List of TPU names matching iris-* pattern
+        List of TPU names matching the label filter
     """
+    label_filter = f"labels.{label_prefix}-managed=true"
     result = subprocess.run(
         [
             "gcloud",
@@ -200,7 +201,7 @@ def list_iris_tpus(zone: str, project: str) -> list[str]:
             "list",
             f"--project={project}",
             f"--zone={zone}",
-            "--filter=name~^iris-",
+            f"--filter={label_filter}",
             "--format=value(name)",
         ],
         capture_output=True,
@@ -211,16 +212,20 @@ def list_iris_tpus(zone: str, project: str) -> list[str]:
     return [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
 
 
-def discover_controller_vm(zone: str, project: str) -> str | None:
-    """Find iris controller VM by name pattern.
+def discover_controller_vm(zone: str, project: str, label_prefix: str = "iris") -> str | None:
+    """Find controller VM by name pattern for the given prefix.
 
     Args:
         zone: GCP zone
         project: GCP project
+        label_prefix: Prefix used for resource naming (default: "iris").
+                     Controller VMs are named "iris-controller-{label_prefix}".
 
     Returns:
         Controller VM name, or None if not found
     """
+    # Controller VMs are named "iris-controller-{label_prefix}"
+    name_filter = f"name~^iris-controller-{re.escape(label_prefix)}$"
     result = subprocess.run(
         [
             "gcloud",
@@ -229,7 +234,7 @@ def discover_controller_vm(zone: str, project: str) -> str | None:
             "list",
             f"--project={project}",
             f"--zones={zone}",
-            "--filter=name~^iris-controller",
+            f"--filter={name_filter}",
             "--format=value(name)",
         ],
         capture_output=True,
@@ -239,10 +244,9 @@ def discover_controller_vm(zone: str, project: str) -> str | None:
         return None
     names = [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
     if len(names) > 1:
-        logger.warning(
-            "Multiple controller VMs found: %s. Using first: %s",
-            ", ".join(names),
-            names[0],
+        raise RuntimeError(
+            f"Multiple controller VMs found for prefix '{label_prefix}': {', '.join(names)}. "
+            "This indicates a resource leak or configuration error."
         )
     return names[0] if names else None
 
@@ -275,6 +279,7 @@ def controller_tunnel(
     local_port: int = 10000,
     tunnel_logger: logging.Logger | None = None,
     timeout: float = 60.0,
+    label_prefix: str = "iris",
 ) -> Iterator[str]:
     """Establish SSH tunnel to controller and yield the local URL.
 
@@ -284,6 +289,7 @@ def controller_tunnel(
         local_port: Local port to forward to (default: 10000)
         tunnel_logger: Optional logger for progress messages
         timeout: Timeout in seconds for tunnel establishment (default: 60.0)
+        label_prefix: Prefix used for resource naming (default: "iris").
 
     Yields:
         Local controller URL (e.g., "http://localhost:10000")
@@ -296,7 +302,7 @@ def controller_tunnel(
             client = IrisClient.remote(url)
             job = client.submit(...)
     """
-    vm_name = discover_controller_vm(zone, project)
+    vm_name = discover_controller_vm(zone, project, label_prefix)
     if not vm_name:
         raise RuntimeError(f"No controller VM found in zone {zone}")
 

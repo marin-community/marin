@@ -37,9 +37,15 @@ from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
 
-# Metadata keys for controller discovery (used by workers to find controller)
-CONTROLLER_METADATA_KEY = "iris-controller"
-CONTROLLER_ADDRESS_METADATA_KEY = "iris-controller-address"
+
+def controller_metadata_key(label_prefix: str) -> str:
+    """Metadata key to mark a VM as the controller for a given prefix."""
+    return f"iris-controller-{label_prefix}"
+
+
+def controller_address_metadata_key(label_prefix: str) -> str:
+    """Metadata key for the controller address for a given prefix."""
+    return f"iris-controller-address-{label_prefix}"
 
 
 class TpuVmGroup:
@@ -234,17 +240,21 @@ class TpuVmManager:
         """Generate GCP metadata-based discovery script for worker bootstrap.
 
         Workers query GCP instance metadata to find a running controller.
+        Uses prefix-scoped metadata keys to ensure workers connect to the correct
+        controller when multiple controllers exist with different prefixes.
         """
+        meta_key = controller_metadata_key(self._label_prefix)
+        addr_key = controller_address_metadata_key(self._label_prefix)
         return f"""
-# Discover controller from GCP instance metadata
+# Discover controller from GCP instance metadata (prefix: {self._label_prefix})
 CONTROLLER_ADDRESS=$(gcloud compute instances list \\
     --project={self._project_id} \\
-    --filter="metadata.items.{CONTROLLER_METADATA_KEY}=true AND status=RUNNING" \\
-    --format="value(metadata.items.filter(key:{CONTROLLER_ADDRESS_METADATA_KEY}).firstof(value))" \\
+    --filter="metadata.items.{meta_key}=true AND status=RUNNING" \\
+    --format="value(metadata.items.filter(key:{addr_key}).firstof(value))" \\
     --limit=1)
 
 if [ -z "$CONTROLLER_ADDRESS" ]; then
-    echo "[iris-init] ERROR: Could not discover controller via GCP metadata"
+    echo "[iris-init] ERROR: Could not discover controller via GCP metadata (prefix: {self._label_prefix})"
     exit 1
 fi
 echo "[iris-init] Discovered controller at $CONTROLLER_ADDRESS"

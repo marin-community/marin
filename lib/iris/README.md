@@ -258,6 +258,12 @@ uv run python lib/iris/scripts/smoke-test.py --config ... --no-cleanup-on-failur
 
 # Custom job timeout
 uv run python lib/iris/scripts/smoke-test.py --config ... --job-timeout 900
+
+# Save logs to a custom directory
+uv run python lib/iris/scripts/smoke-test.py --config ... --log-dir /path/to/logs
+
+# Use a unique prefix (isolates resources from other smoke tests)
+uv run python lib/iris/scripts/smoke-test.py --config ... --prefix my-test
 ```
 
 The smoke test:
