@@ -133,14 +133,33 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     errors: list[Exception] = []
     for impl in impls:
         if callable(impl):
-            loss, lse = impl(
-                x,
-                labels,
-                w,
-                block_sizes=block_sizes,
-                dtype=dtype,
-                logit_soft_cap=logit_soft_cap,
-            )
+            try:
+                loss, lse = impl(
+                    x,
+                    labels,
+                    w,
+                    block_sizes=block_sizes,
+                    dtype=dtype,
+                    logit_soft_cap=logit_soft_cap,
+                )
+            except PallasUnsupportedError as e:
+                if explicit:
+                    raise
+                warnings.warn(
+                    f"Pallas fused cross-entropy unavailable, falling back to XLA: {e}",
+                    RuntimeWarning,
+                )
+                errors.append(e)
+                continue
+            except NotImplementedError as e:
+                if explicit:
+                    raise
+                warnings.warn(
+                    f"Pallas fused cross-entropy unavailable, falling back to XLA: {e}",
+                    RuntimeWarning,
+                )
+                errors.append(e)
+                continue
         else:
             fn = IMPLEMENTATIONS.get(impl)
             if fn is None:

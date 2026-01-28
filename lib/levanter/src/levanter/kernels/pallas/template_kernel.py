@@ -81,6 +81,7 @@ try:
     IMPLEMENTATIONS["pallas_tpu"] = pallas_tpu_impl_batched
     _DEFAULT_IMPLEMENTATION = ("pallas_tpu",) + _DEFAULT_IMPLEMENTATION
 except ImportError:
+    # TPU/Pallas backend is not available; keep the XLA-only implementations.
     pass
 
 
@@ -113,8 +114,12 @@ def template_op(
     errors: list[Exception] = []
     for impl in impls:
         if callable(impl):
-            y = impl(x_batched)
-            return y[0] if added_batch_dim else y
+            try:
+                y = impl(x_batched)
+                return y[0] if added_batch_dim else y
+            except NotImplementedError as e:
+                errors.append(e)
+                continue
         fn = IMPLEMENTATIONS.get(impl)
         if fn is None:
             raise ValueError(f"Unsupported implementation: {impl}")

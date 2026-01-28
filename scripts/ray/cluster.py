@@ -78,7 +78,10 @@ def _select_job(jobs: list[dict], job_id: str, match: bool) -> dict | None:
         ]
         if not matches:
             return None
-        return max(matches, key=lambda job: job.get("start_time") or job.get("submission_id") or "")
+        return max(
+            matches,
+            key=lambda job: (job.get("start_time") or 0, job.get("submission_id") or ""),
+        )
 
     for job in jobs:
         if job_id == job.get("submission_id") or job_id == job.get("job_id"):
@@ -88,24 +91,48 @@ def _select_job(jobs: list[dict], job_id: str, match: bool) -> dict | None:
 
 def _print_job_logs(job_id: str, tail: int | None = None, grep: str | None = None) -> None:
     cmd = ["ray", "job", "logs", job_id]
+    ray_proc = None
+    grep_proc = None
     if tail is not None or grep is not None:
-        ray_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            ray_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-        if grep is not None:
-            grep_proc = subprocess.Popen(["grep", grep], stdin=ray_proc.stdout, stdout=subprocess.PIPE, text=True)
-            ray_proc.stdout.close()
-            prev_proc = grep_proc
-        else:
-            prev_proc = ray_proc
+            if grep is not None:
+                grep_proc = subprocess.Popen(
+                    ["grep", grep],
+                    stdin=ray_proc.stdout,
+                    stdout=subprocess.PIPE,
+                    text=True,
+                )
+                ray_proc.stdout.close()
+                prev_proc = grep_proc
+            else:
+                prev_proc = ray_proc
 
-        if tail is not None:
-            tail_proc = subprocess.Popen(["tail", f"-{tail}"], stdin=prev_proc.stdout, stdout=subprocess.PIPE, text=True)
-            prev_proc.stdout.close()
-            output, _ = tail_proc.communicate(timeout=120)
-        else:
-            output, _ = prev_proc.communicate(timeout=120)
+            if tail is not None:
+                tail_proc = subprocess.Popen(
+                    ["tail", f"-{tail}"],
+                    stdin=prev_proc.stdout,
+                    stdout=subprocess.PIPE,
+                    text=True,
+                )
+                prev_proc.stdout.close()
+                output, _ = tail_proc.communicate(timeout=120)
+            else:
+                output, _ = prev_proc.communicate(timeout=120)
 
-        print(output, end="")
+            print(output, end="")
+        finally:
+            if grep_proc is not None:
+                try:
+                    grep_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    grep_proc.kill()
+            if ray_proc is not None:
+                try:
+                    ray_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    ray_proc.kill()
     else:
         subprocess.run(cmd, check=False)
 
