@@ -15,8 +15,9 @@ timeouts:
   ssh_poll_interval_seconds: 5
 
 controller_vm:
+  image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest
+  bundle_prefix: gs://marin-us-central2/tmp/iris/bundles
   gcp:
-    image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest
     machine_type: n2-standard-4
     port: 10000
 
@@ -25,7 +26,8 @@ scale_groups:
     provider:
       tpu:
         project_id: hai-gcp-models
-    accelerator_type: v5litepod-16
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-16
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 0
     max_slices: 2

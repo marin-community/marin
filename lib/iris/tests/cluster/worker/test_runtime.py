@@ -27,7 +27,8 @@ from pathlib import Path
 
 import pytest
 
-from iris.cluster.worker.docker import ContainerConfig, ContainerStats, DockerRuntime
+from iris.cluster.types import Entrypoint
+from iris.cluster.worker.docker import ContainerConfig, DockerRuntime
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 
 TEST_IMAGE = "iris-test-runtime:latest"
@@ -85,7 +86,27 @@ def test_create_and_start_container(docker_runtime, test_image):
 
     config = ContainerConfig(
         image=test_image,
-        entrypoint=(noop, (), {}),
+        entrypoint=Entrypoint.from_callable(noop),
+        env={},
+    )
+
+    container_id = docker_runtime.create_container(config)
+    docker_runtime.start_container(container_id)
+    status = wait_for_container_exit(docker_runtime, container_id)
+
+    assert not status.running
+    assert status.exit_code == 0
+    assert status.error is None
+
+    docker_runtime.remove(container_id)
+
+
+@pytest.mark.slow
+def test_command_entrypoint(docker_runtime, test_image):
+    """Test that command entrypoints execute correctly."""
+    config = ContainerConfig(
+        image=test_image,
+        entrypoint=Entrypoint.from_command("python", "-c", "print('hello from command')"),
         env={},
     )
 
@@ -109,7 +130,7 @@ def test_container_with_failure_exit_code(docker_runtime, test_image):
 
     config = ContainerConfig(
         image=test_image,
-        entrypoint=(exit_with_code, (42,), {}),
+        entrypoint=Entrypoint.from_callable(exit_with_code, 42),
         env={},
     )
 
@@ -145,7 +166,7 @@ def test_kill_with_sigterm(docker_runtime, test_image):
 
     config = ContainerConfig(
         image=test_image,
-        entrypoint=(sleep_and_handle_sigterm, (), {}),
+        entrypoint=Entrypoint.from_callable(sleep_and_handle_sigterm),
         env={},
     )
 
@@ -173,7 +194,7 @@ def test_kill_with_sigkill(docker_runtime, test_image):
 
     config = ContainerConfig(
         image=test_image,
-        entrypoint=(sleep_forever, (), {}),
+        entrypoint=Entrypoint.from_callable(sleep_forever),
         env={},
     )
 
@@ -200,7 +221,7 @@ def test_container_cleanup_with_remove(docker_runtime, test_image):
 
     config = ContainerConfig(
         image=test_image,
-        entrypoint=(noop, (), {}),
+        entrypoint=Entrypoint.from_callable(noop),
         env={},
     )
 
@@ -230,7 +251,7 @@ def test_inspect_running_container(docker_runtime, test_image):
 
     config = ContainerConfig(
         image=test_image,
-        entrypoint=(sleep_forever, (), {}),
+        entrypoint=Entrypoint.from_callable(sleep_forever),
         env={},
     )
 
@@ -271,7 +292,6 @@ def test_get_stats_invalid_container(docker_runtime):
 
     stats = docker_runtime.get_stats(invalid_container_id)
 
-    assert isinstance(stats, ContainerStats)
     assert stats.available is False
 
 
@@ -284,7 +304,7 @@ def test_get_stats_from_running_container(docker_runtime, test_image):
 
     config = ContainerConfig(
         image=test_image,
-        entrypoint=(sleep_seconds, (5,), {}),
+        entrypoint=Entrypoint.from_callable(sleep_seconds, 5),
         env={},
     )
 
@@ -316,7 +336,7 @@ def test_get_stats_from_busy_container(docker_runtime, test_image):
 
     config = ContainerConfig(
         image=test_image,
-        entrypoint=(busy_loop, (), {}),
+        entrypoint=Entrypoint.from_callable(busy_loop),
         env={},
     )
 

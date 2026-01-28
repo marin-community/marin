@@ -1,10 +1,22 @@
 from google.protobuf.internal import containers as _containers
+from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from collections.abc import Iterable as _Iterable, Mapping as _Mapping
 from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
+
+class AcceleratorType(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    ACCELERATOR_TYPE_UNSPECIFIED: _ClassVar[AcceleratorType]
+    ACCELERATOR_TYPE_CPU: _ClassVar[AcceleratorType]
+    ACCELERATOR_TYPE_GPU: _ClassVar[AcceleratorType]
+    ACCELERATOR_TYPE_TPU: _ClassVar[AcceleratorType]
+ACCELERATOR_TYPE_UNSPECIFIED: AcceleratorType
+ACCELERATOR_TYPE_CPU: AcceleratorType
+ACCELERATOR_TYPE_GPU: AcceleratorType
+ACCELERATOR_TYPE_TPU: AcceleratorType
 
 class TpuProvider(_message.Message):
     __slots__ = ("project_id",)
@@ -33,11 +45,12 @@ class ProviderConfig(_message.Message):
     def __init__(self, tpu: _Optional[_Union[TpuProvider, _Mapping]] = ..., manual: _Optional[_Union[ManualProvider, _Mapping]] = ...) -> None: ...
 
 class ScaleGroupConfig(_message.Message):
-    __slots__ = ("name", "min_slices", "max_slices", "accelerator_type", "runtime_version", "preemptible", "zones", "priority", "provider")
+    __slots__ = ("name", "min_slices", "max_slices", "accelerator_type", "accelerator_variant", "runtime_version", "preemptible", "zones", "priority", "provider")
     NAME_FIELD_NUMBER: _ClassVar[int]
     MIN_SLICES_FIELD_NUMBER: _ClassVar[int]
     MAX_SLICES_FIELD_NUMBER: _ClassVar[int]
     ACCELERATOR_TYPE_FIELD_NUMBER: _ClassVar[int]
+    ACCELERATOR_VARIANT_FIELD_NUMBER: _ClassVar[int]
     RUNTIME_VERSION_FIELD_NUMBER: _ClassVar[int]
     PREEMPTIBLE_FIELD_NUMBER: _ClassVar[int]
     ZONES_FIELD_NUMBER: _ClassVar[int]
@@ -46,13 +59,14 @@ class ScaleGroupConfig(_message.Message):
     name: str
     min_slices: int
     max_slices: int
-    accelerator_type: str
+    accelerator_type: AcceleratorType
+    accelerator_variant: str
     runtime_version: str
     preemptible: bool
     zones: _containers.RepeatedScalarFieldContainer[str]
     priority: int
     provider: ProviderConfig
-    def __init__(self, name: _Optional[str] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[str] = ..., runtime_version: _Optional[str] = ..., preemptible: _Optional[bool] = ..., zones: _Optional[_Iterable[str]] = ..., priority: _Optional[int] = ..., provider: _Optional[_Union[ProviderConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, name: _Optional[str] = ..., min_slices: _Optional[int] = ..., max_slices: _Optional[int] = ..., accelerator_type: _Optional[_Union[AcceleratorType, str]] = ..., accelerator_variant: _Optional[str] = ..., runtime_version: _Optional[str] = ..., preemptible: _Optional[bool] = ..., zones: _Optional[_Iterable[str]] = ..., priority: _Optional[int] = ..., provider: _Optional[_Union[ProviderConfig, _Mapping]] = ...) -> None: ...
 
 class BootstrapConfig(_message.Message):
     __slots__ = ("controller_address", "worker_id", "worker_port", "docker_image", "cache_dir", "env_vars")
@@ -100,34 +114,34 @@ class SshConfig(_message.Message):
     def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[int] = ...) -> None: ...
 
 class GcpControllerConfig(_message.Message):
-    __slots__ = ("image", "machine_type", "boot_disk_size_gb", "port")
-    IMAGE_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("machine_type", "boot_disk_size_gb", "port")
     MACHINE_TYPE_FIELD_NUMBER: _ClassVar[int]
     BOOT_DISK_SIZE_GB_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
-    image: str
     machine_type: str
     boot_disk_size_gb: int
     port: int
-    def __init__(self, image: _Optional[str] = ..., machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., port: _Optional[int] = ...) -> None: ...
+    def __init__(self, machine_type: _Optional[str] = ..., boot_disk_size_gb: _Optional[int] = ..., port: _Optional[int] = ...) -> None: ...
 
 class ManualControllerConfig(_message.Message):
-    __slots__ = ("host", "image", "port")
+    __slots__ = ("host", "port")
     HOST_FIELD_NUMBER: _ClassVar[int]
-    IMAGE_FIELD_NUMBER: _ClassVar[int]
     PORT_FIELD_NUMBER: _ClassVar[int]
     host: str
-    image: str
     port: int
-    def __init__(self, host: _Optional[str] = ..., image: _Optional[str] = ..., port: _Optional[int] = ...) -> None: ...
+    def __init__(self, host: _Optional[str] = ..., port: _Optional[int] = ...) -> None: ...
 
 class ControllerVmConfig(_message.Message):
-    __slots__ = ("gcp", "manual")
+    __slots__ = ("image", "bundle_prefix", "gcp", "manual")
+    IMAGE_FIELD_NUMBER: _ClassVar[int]
+    BUNDLE_PREFIX_FIELD_NUMBER: _ClassVar[int]
     GCP_FIELD_NUMBER: _ClassVar[int]
     MANUAL_FIELD_NUMBER: _ClassVar[int]
+    image: str
+    bundle_prefix: str
     gcp: GcpControllerConfig
     manual: ManualControllerConfig
-    def __init__(self, gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ...) -> None: ...
+    def __init__(self, image: _Optional[str] = ..., bundle_prefix: _Optional[str] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
     __slots__ = ("provider_type", "project_id", "region", "zone", "controller_vm", "scale_groups", "label_prefix", "bootstrap", "timeouts", "ssh")

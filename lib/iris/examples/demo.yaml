@@ -20,7 +20,8 @@ scale_groups:
   #   provider:
   #     tpu:
   #       project_id: hai-gcp-models
-  #   accelerator_type: v5litepod-4
+  #   accelerator_type: tpu
+  #   accelerator_variant: v5litepod-4
   #   runtime_version: v2-alpha-tpuv5-lite
   #   min_slices: 4
   #   max_slices: 1024
@@ -31,7 +32,8 @@ scale_groups:
   #   provider:
   #     tpu:
   #       project_id: hai-gcp-models
-  #   accelerator_type: v5litepod-8
+  #   accelerator_type: tpu
+  #   accelerator_variant: v5litepod-8
   #   runtime_version: v2-alpha-tpuv5-lite
   #   min_slices: 0
   #   max_slices: 1024
@@ -42,7 +44,8 @@ scale_groups:
     provider:
       tpu:
         project_id: hai-gcp-models
-    accelerator_type: v5litepod-16
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-16
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 1
     max_slices: 2

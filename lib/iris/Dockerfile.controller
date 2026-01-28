@@ -3,14 +3,15 @@
 # Build from the iris directory:
 #   docker build -f Dockerfile.controller -t iris-controller:latest .
 #
-FROM python:3.11-slim
+FROM python:3.12-slim
 
-# Install system dependencies
+# Install system dependencies (openssh-client required for gcloud TPU SSH)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     gnupg \
     apt-transport-https \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Google Cloud SDK (required for TPU management via gcloud)

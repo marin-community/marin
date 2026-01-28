@@ -43,7 +43,7 @@ from iris.cluster.controller.events import (
     WorkerHeartbeatEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.types import AttributeValue, JobId, TaskId, WorkerId
+from iris.cluster.types import AttributeValue, DeviceType, JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import now_ms
 
@@ -54,6 +54,23 @@ MAX_REPLICAS_PER_JOB = 10000
 
 DEFAULT_MAX_RETRIES_PREEMPTION = 100
 """Default preemption retries. High because worker failures are typically transient."""
+
+
+def get_device_type_enum(device: cluster_pb2.DeviceConfig) -> DeviceType:
+    """Extract device type as enum from DeviceConfig.
+
+    Args:
+        device: DeviceConfig proto from job request
+
+    Returns:
+        DeviceType enum value
+    """
+    if device.HasField("gpu"):
+        return DeviceType.GPU
+    elif device.HasField("tpu"):
+        return DeviceType.TPU
+    return DeviceType.CPU
+
 
 # =============================================================================
 # Device Helper Functions

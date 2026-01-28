@@ -23,13 +23,13 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import cloudpickle
 import uvicorn
 
 from iris.rpc import cluster_pb2
 from iris.time_utils import ExponentialBackoff, now_ms
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.errors import format_exception_with_traceback
+from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import ImageCache, ImageProvider
 from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
@@ -119,6 +119,7 @@ class Worker:
         image_provider: ImageProvider | None = None,
         container_runtime: ContainerRuntime | None = None,
         environment_provider: EnvironmentProvider | None = None,
+        port_allocator: PortAllocator | None = None,
     ):
         self._config = config
 
@@ -144,7 +145,7 @@ class Worker:
         )
         self._runtime = container_runtime or DockerRuntime()
         self._environment_provider = environment_provider or DefaultEnvironmentProvider()
-        self._port_allocator = PortAllocator(config.port_range)
+        self._port_allocator = port_allocator or PortAllocator(config.port_range)
 
         # Task state
         self._tasks: dict[str, Task] = {}
@@ -205,6 +206,11 @@ class Worker:
         removed = self._runtime.remove_all_iris_containers()
         if removed > 0:
             logger.info("Startup cleanup: removed %d iris containers", removed)
+
+    def wait(self) -> None:
+        """Block until the server thread exits."""
+        if self._server_thread:
+            self._server_thread.join()
 
     def stop(self) -> None:
         self._stop_heartbeat.set()
@@ -465,10 +471,6 @@ class Worker:
             # Phase 3: Create and start container
             task.transition_to(cluster_pb2.TASK_STATE_RUNNING)
 
-            # Deserialize entrypoint
-            entrypoint = cloudpickle.loads(task.request.serialized_entrypoint)
-            entrypoint_tuple = (entrypoint.callable, entrypoint.args, entrypoint.kwargs)
-
             # Build environment from user-provided vars + EnvironmentConfig
             env = dict(env_config.env_vars)
 
@@ -476,9 +478,12 @@ class Worker:
             iris_env = self._build_iris_env(task)
             env.update(iris_env)
 
+            # Convert proto entrypoint to typed Entrypoint
+            entrypoint = Entrypoint.from_proto(task.request.entrypoint)
+
             config = ContainerConfig(
                 image=build_result.image_tag,
-                entrypoint=entrypoint_tuple,
+                entrypoint=entrypoint,
                 env=env,
                 resources=task.request.resources if task.request.HasField("resources") else None,
                 timeout_seconds=task.request.timeout_seconds or None,

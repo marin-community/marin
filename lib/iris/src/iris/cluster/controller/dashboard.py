@@ -524,6 +524,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return protoState.replace(/^(JOB_STATE_|TASK_STATE_)/, '').toLowerCase();
     }
 
+    // Convert accelerator type enum to friendly name
+    function acceleratorTypeFriendly(accelType) {
+      if (typeof accelType === 'string') {
+        // Already a string like "ACCELERATOR_TYPE_TPU"
+        if (accelType.startsWith('ACCELERATOR_TYPE_')) {
+          return accelType.replace('ACCELERATOR_TYPE_', '').toLowerCase();
+        }
+        return accelType.toLowerCase();
+      }
+      // Numeric enum value
+      const typeMap = {
+        0: 'unspecified',
+        1: 'cpu',
+        2: 'gpu',
+        3: 'tpu'
+      };
+      return typeMap[accelType] || `unknown(${accelType})`;
+    }
+
+    // Format accelerator type and variant for display
+    function formatAcceleratorDisplay(accelType, variant) {
+      const friendly = acceleratorTypeFriendly(accelType);
+      if (variant) {
+        return `${friendly} (${variant})`;
+      }
+      return friendly;
+    }
+
     // Cache for task data to avoid refetching on expand
     const jobTasksCache = {};
 
@@ -756,11 +784,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           .map(([k, v]) => `${k}: ${v}`)
           .join(', ') || 'no slices';
 
+        const accelDisplay = formatAcceleratorDisplay(
+          config.accelerator_type,
+          config.accelerator_variant || ''
+        );
         return `<div class="scale-group">
           <div class="scale-group-header">
             <h3>${escapeHtml(group.name)}</h3>
             <div class="scale-group-meta">
-              Accelerator: ${escapeHtml(config.accelerator_type || '-')} |
+              Accelerator: ${escapeHtml(accelDisplay)} |
               Min: ${config.min_slices || 0} Max: ${config.max_slices || 0} |
               Demand: ${group.current_demand || 0} |
               ${statesSummary}

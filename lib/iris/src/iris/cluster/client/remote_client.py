@@ -16,8 +16,6 @@
 
 import time
 
-import cloudpickle
-
 from iris.cluster.types import Entrypoint, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
@@ -74,10 +72,9 @@ class RemoteClusterClient:
         constraints: list[cluster_pb2.Constraint] | None = None,
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
     ) -> None:
-        serialized = cloudpickle.dumps(entrypoint)
+        entrypoint_proto = entrypoint.to_proto()
 
         env_config = cluster_pb2.EnvironmentConfig(
-            workspace=environment.workspace if environment else "/app",
             pip_packages=list(environment.pip_packages) if environment else [],
             env_vars=dict(environment.env_vars) if environment else {},
             extras=list(environment.extras) if environment else [],
@@ -91,7 +88,7 @@ class RemoteClusterClient:
         if self._bundle_gcs_path:
             request = cluster_pb2.Controller.LaunchJobRequest(
                 name=job_id,
-                serialized_entrypoint=serialized,
+                entrypoint=entrypoint_proto,
                 resources=resources,
                 environment=env_config,
                 bundle_gcs_path=self._bundle_gcs_path,
@@ -105,7 +102,7 @@ class RemoteClusterClient:
         else:
             request = cluster_pb2.Controller.LaunchJobRequest(
                 name=job_id,
-                serialized_entrypoint=serialized,
+                entrypoint=entrypoint_proto,
                 resources=resources,
                 environment=env_config,
                 bundle_blob=self._bundle_blob or b"",

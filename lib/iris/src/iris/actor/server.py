@@ -20,6 +20,7 @@ Example:
     port = server.serve_background()
 """
 
+import asyncio
 import inspect
 import logging
 import socket
@@ -117,7 +118,9 @@ class ActorServer:
             args = cloudpickle.loads(request.serialized_args) if request.serialized_args else ()
             kwargs = cloudpickle.loads(request.serialized_kwargs) if request.serialized_kwargs else {}
 
-            result = method(*args, **kwargs)
+            # Run the method in a thread pool to avoid blocking the event loop.
+            # This allows actors to make outgoing RPC calls without deadlocking.
+            result = await asyncio.to_thread(method, *args, **kwargs)
 
             return actor_pb2.ActorResponse(serialized_value=cloudpickle.dumps(result))
 

@@ -26,7 +26,7 @@ Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.pr
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from enum import IntEnum
+from enum import Enum, IntEnum
 from typing import Any, NewType
 
 import humanfriendly
@@ -34,6 +34,16 @@ import humanfriendly
 from iris.rpc import cluster_pb2
 
 JobId = NewType("JobId", str)
+
+
+class DeviceType(Enum):
+    """Device type for demand routing."""
+
+    CPU = "cpu"
+    GPU = "gpu"
+    TPU = "tpu"
+
+
 TaskId = NewType("TaskId", str)
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
@@ -287,17 +297,16 @@ class EnvironmentSpec:
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
+
+    Note: To specify workspace for bundle creation, use IrisClient.remote(workspace=...).
     """
 
-    workspace: str | None = None
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
 
     def to_proto(self) -> cluster_pb2.EnvironmentConfig:
         """Convert to wire format with sensible defaults applied."""
-        workspace = self.workspace if self.workspace is not None else os.getcwd()
-
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
@@ -308,7 +317,6 @@ class EnvironmentSpec:
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
         return cluster_pb2.EnvironmentConfig(
-            workspace=workspace,
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
@@ -483,17 +491,79 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
 class Entrypoint:
     """Job entrypoint specification.
 
-    A callable with args/kwargs that will be executed by the worker.
-    The callable must be picklable (via cloudpickle).
+    Supports two execution modes:
+    1. Callable: A Python function with args/kwargs (cloudpickled)
+    2. Command: A command-line invocation (e.g., ["python", "train.py", "--epochs", "10"])
 
-    Example:
+    Examples:
+        # Callable entrypoint
         entrypoint = Entrypoint.from_callable(my_func, arg1, arg2, key=val)
+
+        # Command entrypoint
+        entrypoint = Entrypoint.from_command("python", "train.py", "--epochs", "10")
     """
 
-    callable: Callable[..., Any]
+    # Callable entrypoint (mutually exclusive with command)
+    callable: Callable[..., Any] | None = None
     args: tuple = ()
     kwargs: dict[str, Any] = field(default_factory=dict)
+
+    # Command entrypoint (mutually exclusive with callable)
+    command: list[str] | None = None
+
+    def __post_init__(self):
+        has_callable = self.callable is not None
+        has_command = self.command is not None
+        if has_callable == has_command:
+            raise ValueError("Exactly one of 'callable' or 'command' must be set")
+
+    @property
+    def is_callable(self) -> bool:
+        return self.callable is not None
+
+    @property
+    def is_command(self) -> bool:
+        return self.command is not None
 
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
         return cls(callable=fn, args=args, kwargs=kwargs)
+
+    @classmethod
+    def from_command(cls, *argv: str) -> "Entrypoint":
+        """Create a command-line entrypoint.
+
+        Args:
+            *argv: Command and arguments (e.g., "python", "train.py", "--epochs", "10")
+
+        Returns:
+            Entrypoint configured for command execution
+        """
+        if not argv:
+            raise ValueError("Command must have at least one argument")
+        return cls(command=list(argv))
+
+    def to_proto(self) -> cluster_pb2.Entrypoint:
+        """Convert to protobuf representation."""
+        proto = cluster_pb2.Entrypoint()
+        if self.callable is not None:
+            import cloudpickle
+
+            proto.callable = cloudpickle.dumps((self.callable, self.args, self.kwargs))
+        elif self.command is not None:
+            proto.command.argv[:] = self.command
+        return proto
+
+    @classmethod
+    def from_proto(cls, proto: cluster_pb2.Entrypoint) -> "Entrypoint":
+        """Create from protobuf representation."""
+        kind = proto.WhichOneof("kind")
+        if kind == "callable":
+            import cloudpickle
+
+            fn, args, kwargs = cloudpickle.loads(proto.callable)
+            return cls(callable=fn, args=args, kwargs=kwargs)
+        elif kind == "command":
+            return cls(command=list(proto.command.argv))
+        else:
+            raise ValueError(f"Unknown entrypoint kind: {kind}")

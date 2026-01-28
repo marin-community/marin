@@ -239,7 +239,7 @@ class FakeVmManager:
             slice_id = f"fake-slice-{self._config.config.name}-{self._slice_counter}"
             ts = now_ms()
 
-            topology = get_tpu_topology(self._config.config.accelerator_type)
+            topology = get_tpu_topology(self._config.config.accelerator_variant)
             vm_count = topology.vm_count
             zone = self._config.config.zones[0] if self._config.config.zones else "us-central1-a"
 

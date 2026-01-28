@@ -59,7 +59,9 @@ def cli():
 @cli.command()
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=10000, type=int, help="Bind port")
-@click.option("--bundle-dir", default="/var/cache/iris/bundles", help="Directory for job bundles")
+@click.option(
+    "--bundle-prefix", default=None, help="URI prefix for job bundles (e.g., gs://bucket/path or file:///path)"
+)
 @click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
 @click.option("--worker-timeout", default=60.0, type=float, help="Worker heartbeat timeout (seconds)")
 @click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config for autoscaling")
@@ -67,7 +69,7 @@ def cli():
 def serve(
     host: str,
     port: int,
-    bundle_dir: str,
+    bundle_prefix: str | None,
     scheduler_interval: float,
     worker_timeout: float,
     config_file: str | None,
@@ -84,17 +86,8 @@ def serve(
     configure_logging(level=getattr(logging, log_level))
 
     logger.info("Initializing Iris controller")
-    logger.info("Configuration: host=%s port=%d bundle_dir=%s", host, port, bundle_dir)
-    logger.info("Configuration: scheduler_interval=%.2fs worker_timeout=%.2fs", scheduler_interval, worker_timeout)
 
-    config = ControllerConfig(
-        host=host,
-        port=port,
-        bundle_dir=Path(bundle_dir),
-        scheduler_interval_seconds=scheduler_interval,
-        worker_timeout_seconds=worker_timeout,
-    )
-
+    # Load cluster config first to extract bundle_prefix if not provided via CLI
     autoscaler: Autoscaler | None = None
     if config_file:
         logger.info("Loading cluster config from %s", config_file)
@@ -104,6 +97,11 @@ def serve(
         except Exception as e:
             logger.exception("Failed to load cluster config from %s", config_file)
             raise click.ClickException(f"Failed to load cluster config: {e}") from e
+
+        # Extract bundle_prefix from config if not provided via CLI
+        if bundle_prefix is None and cluster_config.controller_vm.bundle_prefix:
+            bundle_prefix = cluster_config.controller_vm.bundle_prefix
+            logger.info("Using bundle_prefix from config: %s", bundle_prefix)
 
         try:
             autoscaler = create_autoscaler_from_config(cluster_config)
@@ -120,6 +118,17 @@ def serve(
             raise click.ClickException(f"Autoscaler reconcile failed: {e}") from e
     else:
         logger.info("No cluster config provided, autoscaler disabled")
+
+    logger.info("Configuration: host=%s port=%d bundle_prefix=%s", host, port, bundle_prefix)
+    logger.info("Configuration: scheduler_interval=%.2fs worker_timeout=%.2fs", scheduler_interval, worker_timeout)
+
+    config = ControllerConfig(
+        host=host,
+        port=port,
+        bundle_prefix=bundle_prefix,
+        scheduler_interval_seconds=scheduler_interval,
+        worker_timeout_seconds=worker_timeout,
+    )
 
     try:
         controller = Controller(

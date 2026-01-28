@@ -22,12 +22,12 @@ aggregated from task states.
 import json
 import logging
 import uuid
-from pathlib import Path
 from typing import Any, Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
+from iris.cluster.controller.bundle_store import BundleStore
 from iris.cluster.controller.events import (
     JobCancelledEvent,
     JobSubmittedEvent,
@@ -88,18 +88,19 @@ class ControllerServiceImpl:
     Args:
         state: Controller state containing jobs, tasks, and workers
         scheduler: Background scheduler for task dispatch (any object with wake() method)
-        bundle_dir: Directory for storing uploaded bundles (optional)
+        bundle_prefix: URI prefix for storing bundles (e.g., gs://bucket/path or file:///path).
+                      Required for job submission with bundles.
     """
 
     def __init__(
         self,
         state: ControllerState,
         scheduler: SchedulerProtocol,
-        bundle_dir: str | Path | None = None,
+        bundle_prefix: str,
     ):
         self._state = state
         self._scheduler = scheduler
-        self._bundle_dir = Path(bundle_dir) if bundle_dir else None
+        self._bundle_store = BundleStore(bundle_prefix)
 
     def launch_job(
         self,
@@ -120,18 +121,16 @@ class ControllerServiceImpl:
             if self._state.get_job(JobId(job_id)):
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists")
 
-            # Handle bundle_blob: write to bundle_dir if provided
-            if request.bundle_blob and self._bundle_dir:
-                bundle_path = self._bundle_dir / job_id / "bundle.zip"
-                bundle_path.parent.mkdir(parents=True, exist_ok=True)
-                bundle_path.write_bytes(request.bundle_blob)
+            # Handle bundle_blob: upload to bundle store if provided
+            if request.bundle_blob:
+                bundle_path = self._bundle_store.write_bundle(job_id, request.bundle_blob)
 
                 request = cluster_pb2.Controller.LaunchJobRequest(
                     name=request.name,
-                    serialized_entrypoint=request.serialized_entrypoint,
+                    entrypoint=request.entrypoint,
                     resources=request.resources,
                     environment=request.environment,
-                    bundle_gcs_path=f"file://{bundle_path}",
+                    bundle_gcs_path=bundle_path,
                     bundle_hash=request.bundle_hash,
                     ports=list(request.ports),
                     scheduling_timeout_seconds=request.scheduling_timeout_seconds,

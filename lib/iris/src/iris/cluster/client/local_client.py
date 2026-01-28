@@ -42,6 +42,42 @@ from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
 
+class _StreamingCapture(io.StringIO):
+    """StringIO subclass that immediately writes lines to container logs."""
+
+    def __init__(self, container: "_LocalContainer", source: str):
+        super().__init__()
+        self._container = container
+        self._source = source
+        self._buffer = ""
+
+    def write(self, s: str) -> int:
+        result = super().write(s)
+        self._buffer += s
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._container._logs.append(
+                LogLine(
+                    timestamp=datetime.now(timezone.utc),
+                    source=self._source,
+                    data=line,
+                )
+            )
+        return result
+
+    def flush_remaining(self):
+        """Flush any remaining buffered content as a final log line."""
+        if self._buffer:
+            self._container._logs.append(
+                LogLine(
+                    timestamp=datetime.now(timezone.utc),
+                    source=self._source,
+                    data=self._buffer,
+                )
+            )
+            self._buffer = ""
+
+
 def _find_free_port() -> int:
     with socket.socket() as s:
         s.bind(("", 0))
@@ -111,8 +147,8 @@ class _LocalContainer:
     def _execute(self):
         from iris.cluster.client.job_info import JobInfo, _parse_ports_from_env, set_job_info
 
-        stdout_capture = io.StringIO()
-        stderr_capture = io.StringIO()
+        stdout_capture = _StreamingCapture(self, "stdout")
+        stderr_capture = _StreamingCapture(self, "stderr")
 
         try:
             # Build JobInfo from container config env vars
@@ -129,39 +165,44 @@ class _LocalContainer:
             )
             set_job_info(job_info)
 
-            # Use entrypoint directly - no command parsing needed
-            fn, args, kwargs = self.config.entrypoint
+            entrypoint = self.config.entrypoint
 
             # Check if killed before executing
             if self._killed.is_set():
                 self._exit_code = 137
                 return
 
-            # Execute the function with captured output
+            # Execute based on entrypoint type
             with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                fn(*args, **kwargs)
+                if entrypoint.is_callable:
+                    assert entrypoint.callable is not None
+                    entrypoint.callable(*entrypoint.args, **entrypoint.kwargs)
+                else:
+                    # Command entrypoint: run subprocess with output capture
+                    assert entrypoint.command is not None
+                    import subprocess
+
+                    result = subprocess.run(
+                        entrypoint.command,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        env=self.config.env,
+                    )
+                    stdout_capture.write(result.stdout)
+                    stderr_capture.write(result.stderr)
+                    if result.returncode != 0:
+                        raise RuntimeError(f"Command failed with exit code {result.returncode}")
             self._exit_code = 0
 
         except Exception as e:
             self._error = str(e)
             self._exit_code = 1
         finally:
+            # Flush any remaining buffered output
+            stdout_capture.flush_remaining()
+            stderr_capture.flush_remaining()
             self._running = False
-            self._capture_output(stdout_capture, "stdout")
-            self._capture_output(stderr_capture, "stderr")
-
-    def _capture_output(self, capture: io.StringIO, source: str) -> None:
-        capture.seek(0)
-        for line in capture:
-            line = line.rstrip("\n")
-            if line:
-                self._logs.append(
-                    LogLine(
-                        timestamp=datetime.now(timezone.utc),
-                        source=source,
-                        data=line,
-                    )
-                )
 
     def kill(self):
         self._killed.set()
@@ -296,8 +337,8 @@ class LocalClusterClient:
         """
         temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_")
         temp_path = Path(temp_dir.name)
-        bundle_dir = temp_path / "bundles"
-        bundle_dir.mkdir()
+        bundle_path = temp_path / "bundles"
+        bundle_path.mkdir()
         cache_path = temp_path / "cache"
         cache_path.mkdir()
 
@@ -311,7 +352,7 @@ class LocalClusterClient:
         controller_config = ControllerConfig(
             host="127.0.0.1",
             port=controller_port,
-            bundle_dir=bundle_dir,
+            bundle_prefix=f"file://{bundle_path}",
         )
         controller = Controller(
             config=controller_config,

@@ -68,7 +68,8 @@ def _create_test_autoscaler(scale_group_name: str = "test-group"):
 
     sg_config = config_pb2.ScaleGroupConfig(
         name=scale_group_name,
-        accelerator_type="v5p-8",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5p-8",
         min_slices=0,
         max_slices=10,
         zones=["us-central1-a"],
@@ -128,7 +129,13 @@ def config_file(tmp_path: Path) -> Path:
             "user": "root",
         },
         "scale_groups": {
-            "test-group": {"accelerator_type": "v5p-8", "min_slices": 0, "max_slices": 10, "zones": ["us-central1-a"]},
+            "test-group": {
+                "accelerator_type": "ACCELERATOR_TYPE_TPU",
+                "accelerator_variant": "v5p-8",
+                "min_slices": 0,
+                "max_slices": 10,
+                "zones": ["us-central1-a"],
+            },
         },
     }
     config_path = tmp_path / "vm-config.yaml"
