@@ -1,3 +1,8 @@
+experiments/curriculum/*
+experiments/data_efficiency/*
+experiments/two_stage/cache/*
+experiments/two_stage/plotting/*
+
 # redundant, but Ray looks for this otherwise.
 .git
 
