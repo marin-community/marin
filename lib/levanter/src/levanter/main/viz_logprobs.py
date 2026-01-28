@@ -18,7 +18,7 @@ import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data import DataLoader
-from levanter.data.text import LMMixtureDatasetConfig, SingleDatasetLMConfigBase
+from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.loss import next_token_loss
@@ -36,7 +36,7 @@ class VizLmConfig:
     checkpoint_path: str
     path: str = "logprobs.html"
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
-    data: SingleDatasetLMConfigBase | LMMixtureDatasetConfig = field(default_factory=SingleDatasetLMConfigBase)
+    data: LmDataConfig = field(default_factory=LmDataConfig)
     model: LmConfig = field(default_factory=LlamaConfig)
 
     max_eval_length: int = 4096

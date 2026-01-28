@@ -34,7 +34,7 @@ import jmp
 from fray.cluster import ResourceConfig
 from haliax.partitioning import ResourceAxis
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
+from levanter.data.text import DatasetComponent, LMMixtureDatasetConfig
 from levanter.main import train_lm
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -88,7 +88,7 @@ class OptimalTrainingConfig:
     tokenized: LMMixtureDatasetConfig
     """Tokenized dataset for training. Executor will resolve InputName and unwrap VersionedValue."""
 
-    validation_configs: dict[str, LMDatasetSourceConfig] | None = None
+    validation_configs: dict[str, DatasetComponent] | None = None
     """Validation set configs. Passed through config so executor resolves InputName paths."""
 
 
@@ -169,10 +169,10 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
     # config.tokenized is already processed by executor's instantiate_config
     data = config.tokenized
     if config.validation_configs:
-        # Merge validation configs into the data mixture with weight 0
-        new_configs = {
-            **data.configs,
-            **{k: v for k, v in config.validation_configs.items() if k not in data.configs},
+        # Merge validation components into the data mixture with weight 0
+        new_components = {
+            **data.components,
+            **{k: v for k, v in config.validation_configs.items() if k not in data.components},
         }
         if isinstance(data.train_weights, dict):
             new_weights = {
@@ -185,7 +185,7 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
                 (step_idx, {**weights, **{name: 0.0 for name in config.validation_configs if name not in weights}})
                 for step_idx, weights in data.train_weights
             ]
-        data = replace(data, configs=new_configs, train_weights=new_weights)
+        data = replace(data, components=new_components, train_weights=new_weights)
 
     inner_config = train_lm.TrainLmConfig(
         data=data,
@@ -244,7 +244,7 @@ analysis_step = ExecutorStep(
 )
 
 # --- Create validation configs ---
-# Convert validation TokenizerSteps to LMDatasetSourceConfig at module import time.
+# Convert validation TokenizerSteps to DatasetComponent at module import time.
 # This way instantiate_config resolves InputName paths before run_optimal_training runs.
 validation_steps = default_validation_sets(tokenizer=llama3_tokenizer)
 validation_configs = {

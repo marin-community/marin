@@ -40,8 +40,10 @@ source allows you to have multiple evaluation sets or have fine-grained control 
 ### Data Sources
 
 In Levanter, a data source can either be a list of training and validation URLs pointing to
-(possibly compressed) JSONL files, or a Huggingface Dataset. In either case,
-we assume there is a single field, by default called `"text"`, that contains the text of the example.
+(possibly compressed) JSONL files, or a Huggingface Dataset. Each dataset is configured as a
+*component* under `data.components`, and the component's `source` declares whether it is a URL-backed
+dataset (`type: url`) or an HF dataset (`type: hf`). In either case, we assume there is a single field,
+by default called `"text"`, that contains the text of the example.
 
 See the [Training Data Guide](./guides/Training-Data-Guide.md) and the [Data Formats Reference](./reference/Data-Formats.md) for more details.
 
@@ -55,11 +57,16 @@ Other keys are ignored, but you can use them to store metadata about your data.
 Once you have done so, you can create the `data` section of your training configuration:
 
 ```yaml
-    train_urls:
-      - "gs://path/to/train_web_{1..32}.jsonl.gz"
-      - "gs://path/to/train_web_crawl2.jsonl.gz"
-    validation_urls:
-      - "gs://path/to/valid_web.jsonl.gz"
+data:
+  components:
+    web:
+      source:
+        type: url
+        train_urls:
+          - "gs://path/to/train_web_{1..32}.jsonl.gz"
+          - "gs://path/to/train_web_crawl2.jsonl.gz"
+        validation_urls:
+          - "gs://path/to/valid_web.jsonl.gz"
 ```
 
 Levanter uses [fsspec](https://filesystem-spec.readthedocs.io/en/latest/) to read data from files,
@@ -72,6 +79,29 @@ You can also use more than one entry if you have urls that don't follow a naming
     Levanter's preprocessing pipeline works best if you split your data into at least 1 shard for every machine
     (i.e. every 8 TPUs or GPUs). This isn't a big deal, but it helps.
 
+#### Prebuilt Token Sequences
+
+If you already have tokenized data, you can use the `prebuilt` format. Each JSONL record should provide
+`input_ids` (a list of integers) and can optionally provide `loss_weights` (a list of floats).
+
+```yaml
+data:
+  components:
+    prebuilt:
+      source:
+        type: url
+        train_urls:
+          - "gs://path/to/prebuilt_train.{1..32}.jsonl.gz"
+        validation_urls:
+          - "gs://path/to/prebuilt_valid.{1..4}.jsonl.gz"
+      format:
+        type: prebuilt
+        input_ids_key: input_ids
+        loss_weights_key: loss_weights  # optional
+  cache_dir: "gs://path/to/cache"
+  tokenizer: "gpt2"
+```
+
 #### Data Format: Huggingface Datasets
 
 If you have a Huggingface Dataset, such as [The Pile](https://huggingface.co/datasets/EleutherAI/pile), you can use it directly in Levanter. It must
@@ -80,9 +110,15 @@ you can specify the dataset name in the `data` section of your training configur
 
 ```yaml
 data:
-    id: "EleutherAI/pile"
-    # if needed:
-    # name: "subset"
+  components:
+    pile:
+      source:
+        type: hf
+        id: "EleutherAI/pile"
+        # if needed:
+        # name: "subset"
+  cache_dir: "gs://path/to/cache"
+  tokenizer: "gpt2"
 ```
 
 This will be passed to `datasets.load_dataset`. By default, we use `stream: true` to stream the data, which
@@ -95,12 +131,16 @@ If you have a single source of data, you can use the `data` section of your trai
 
 ```yaml
 data:
-    train_urls:
-      - "gs://path/to/train.{1..32}.jsonl.gz"
-    validation_urls:
-      - "gs://path/to/valid.{1..4}.jsonl.gz"
-    cache_dir: "gs://path/to/cache"
-    tokenizer: "gpt2"  # any HF tokenizer path, or GCS path to an HF tokenizer
+  components:
+    web:
+      source:
+        type: url
+        train_urls:
+          - "gs://path/to/train.{1..32}.jsonl.gz"
+        validation_urls:
+          - "gs://path/to/valid.{1..4}.jsonl.gz"
+  cache_dir: "gs://path/to/cache"
+  tokenizer: "gpt2"  # any HF tokenizer path, or GCS path to an HF tokenizer
 ```
 
 ### Mixture of Sources
@@ -109,14 +149,18 @@ If you have multiple sources of data (e.g., multiple domains, or distinct subset
 
 ```yaml
 data:
-  configs:
+  components:
     wikitext:
-      id: dlwh/wikitext_103_detokenized
+      source:
+        type: hf
+        id: dlwh/wikitext_103_detokenized
     web:
-      train_urls:
-        - "gs://path/to/train_web_{1..32}.jsonl.gz"
-      validation_urls:
-        - "gs://path/to/valid_web.jsonl.gz"
+      source:
+        type: url
+        train_urls:
+          - "gs://path/to/train_web_{1..32}.jsonl.gz"
+        validation_urls:
+          - "gs://path/to/valid_web.jsonl.gz"
   train_weights:
     wikitext: 0.1
     web: 0.9

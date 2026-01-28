@@ -80,7 +80,7 @@ python levanter/src/levanter/main/train_lm.py \
 Use `trainer.load_checkpoint_path` to specify where the model checkpoint you moved is located. `trainer.wandb.resume true` will resume all your learning curves where the stopped training run left off, and `trainer.id` is the trainer ID used by WandB to identify your stopped training run.
 
 ## Picking Up Where You Left Off
-When your training run resumes, the trainer will first fast-forward through your training data to continue from the exact point in the epoch where your checkpoint was saved. You should see a progress bar tracking the fast-forward through your data.
+When your training run resumes, the trainer will first fast-forward through your training data to continue from the exact point in the data stream where your checkpoint was saved.
 
 Resuming your training run restores your checkpoint's optimizer states, so your WandB learning curves should resume smoothly from where they left off.
 

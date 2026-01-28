@@ -16,9 +16,13 @@ import haliax as hax
 from levanter.data.text import (
     BatchTokenizer,
     ChatLmDatasetFormat,
-    MultiturnChatDataset,
-    UrlSingleDatasetLMConfig,
+    ChatDataset,
+    DatasetComponent,
+    LmDataConfig,
+    PrebuiltLmDatasetFormat,
+    UrlDatasetSourceConfig,
     build_lm_dataset_cache,
+    dataset_for_component,
     preprocessor_for_format,
 )
 from levanter.models.lm_model import LmExample
@@ -28,17 +32,19 @@ from tests.test_utils import skip_if_hf_model_not_accessible
 
 def test_dont_blow_up_without_validation_set():
     with tempfile.TemporaryDirectory() as tmpdir:
-        config = UrlSingleDatasetLMConfig(
-            train_urls=["kaa"],
-            validation_urls=[],
+        component = DatasetComponent(
+            source=UrlDatasetSourceConfig(train_urls=["kaa"], validation_urls=[]),
             cache_dir=tmpdir,
+        )
+        config = LmDataConfig(
+            components={"tiny": component},
             tokenizer="passthrough",
             vocab_size=64,
         )
 
         Pos = hax.Axis("position", 10)
         # mostly just making sure this doesn't blow up
-        assert config.validation_set(Pos) is None
+        assert config.validation_sets(Pos) == {}
 
 
 def test_lm_example_handles_ignore_id():
@@ -92,6 +98,79 @@ def test_llama_tokenizer_needs_long_sequence_workaround():
     tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
     batch_tokenizer = BatchTokenizer(tokenizer)
     assert batch_tokenizer._needs_long_sequence_workaround
+
+
+def test_prebuilt_cache_with_loss_weights(tmp_path):
+    records = [
+        {"input_ids": [1, 2, 3, 4], "loss_weights": [1.0, 0.5, 0.0, 1.0]},
+        {"input_ids": [5, 6, 7, 8], "loss_weights": [0.0, 1.0, 1.0, 1.0]},
+    ]
+    data_path = tmp_path / "prebuilt.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
+        format=PrebuiltLmDatasetFormat(
+            loss_weights_key="loss_weights",
+            loss_weight_transform=lambda weights: weights * 2.0,
+        ),
+        cache_dir=str(tmp_path),
+    )
+    config = LmDataConfig(
+        components={"prebuilt": component},
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+
+    cache = config.build_caches("train")["prebuilt"]
+    Pos = hax.Axis("position", 4)
+    ds = dataset_for_component(
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=config.block_cross_document_attention,
+    ).as_sync_dataset()
+
+    example = ds[0]
+    np.testing.assert_array_equal(example.tokens.array, np.array(records[0]["input_ids"], dtype=np.int32))
+    expected_loss_weight = np.array([2.0, 1.0, 0.0, 0.0], dtype=example.loss_weight.array.dtype)
+    np.testing.assert_array_equal(example.loss_weight.array, expected_loss_weight)
+
+
+def test_prebuilt_cache_without_loss_weights(tmp_path):
+    records = [{"input_ids": [1, 2, 3, 4]}]
+    data_path = tmp_path / "prebuilt_no_weights.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
+        format=PrebuiltLmDatasetFormat(),
+        cache_dir=str(tmp_path),
+    )
+    config = LmDataConfig(
+        components={"prebuilt": component},
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+
+    cache = config.build_caches("train")["prebuilt"]
+    Pos = hax.Axis("position", 4)
+    ds = dataset_for_component(
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=config.block_cross_document_attention,
+    ).as_sync_dataset()
+
+    example = ds[0]
+    expected_loss_weight = np.array([1.0, 1.0, 1.0, 0.0], dtype=example.loss_weight.array.dtype)
+    np.testing.assert_array_equal(example.loss_weight.array, expected_loss_weight)
 
 
 @pytest.fixture
@@ -197,14 +276,16 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
             "stanford-crfm/marin-tokenizer", revision="49a09e626c220e9daae74124ea41be1bf5cd331d"
         )
 
-        config = UrlSingleDatasetLMConfig(
-            train_urls=[dummy_chat_data], format=ChatLmDatasetFormat(messages_field="messages")
+        component = DatasetComponent(
+            source=UrlDatasetSourceConfig(train_urls=[dummy_chat_data]),
+            format=ChatLmDatasetFormat(messages_field="messages"),
+            cache_dir=cache_dir,
         )
 
-        processor = preprocessor_for_format(config.format, tokenizer)
+        processor = preprocessor_for_format(component.format, tokenizer)
 
         # test the processor
-        source = config.get_shard_source("train")
+        source = component.source.get_shard_source("train")  # type: ignore
         processed = []
         for doc in source.open_shard(source.shard_names[0]):
             processed += processor([doc])
@@ -212,7 +293,7 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
         assert len(processed) == 2
 
         # test the caching
-        ds = build_lm_dataset_cache(cache_dir, source, config.format, tokenizer)
+        ds = build_lm_dataset_cache(cache_dir, source, component.format, tokenizer)
         ds_sync = ds.as_sync_dataset()
         assert len(ds_sync) == 2
         sample = next(iter(ds))
@@ -229,7 +310,7 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
 
         # now test packing
         Pos = hax.Axis("position", 100)
-        packed_ds = MultiturnChatDataset(ds, Pos, max_segments_per_example=2)
+        packed_ds = ChatDataset(ds, Pos, max_segments_per_example=2)
         packed_ds = packed_ds.as_sync_dataset()
 
         assert len(packed_ds) == 1
@@ -242,7 +323,7 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
         assert_loss_weight_matches_all_assistants(ex, tokenizer)
 
         # test no packing
-        packed_ds = MultiturnChatDataset(ds, Pos, max_segments_per_example=1).as_sync_dataset()
+        packed_ds = ChatDataset(ds, Pos, max_segments_per_example=1).as_sync_dataset()
 
         # we supplied two conversations, so we should still have two examples
         assert len(packed_ds) == 2

@@ -100,8 +100,6 @@ nav:
       - "guides/Direct-Cache-Construction.md"
       - "guides/Training-On-Audio-Data.md"
   - 'Tutorials':
-      - "Fine-Tuning.md"
-      - "LoRA.md"
       - "tutorials/Fine-Tuning-Semantic-Parsing.md"
       - "Hardware-Agnostic-Training.md"
   - 'Explanation':

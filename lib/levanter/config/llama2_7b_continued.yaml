@@ -1,6 +1,10 @@
 data:
-  id: EleutherAI/pile
   tokenizer: NousResearch/Llama-2-7b-hf
+  components:
+    main:
+      source:
+        type: hf
+        id: EleutherAI/pile
 model:
   type: llama
 initialize_from_hf: true

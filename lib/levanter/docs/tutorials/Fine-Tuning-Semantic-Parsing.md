@@ -16,7 +16,7 @@ It translates conversational English queries on the topic of video games into a 
 Each example features a plain English input and a structured output that adheres to predefined rules for function naming conventions and attributes.
 
 The dataset has 5,103 training examples and 714 examples for evaluation.
-Although smaller than [the Alpaca dataset](../Fine-Tuning.md#overview-of-alpaca), it provides a decent amount of data to effectively adapt the model to the task.
+Although smaller than the Alpaca dataset used in many instruction-tuning recipes, it provides a decent amount of data to effectively adapt the model to the task.
 
 Below are some examples from the dataset:
 
@@ -109,7 +109,7 @@ While helpful, including a prompt is optional for fine-tuning.
 
 Now, let's proceed to fine-tune the model with Levanter.
 
-For this example, we've explored both comprehensive full-weight fine-tuning, similar to the approach used in Alpaca, and the more resource-efficient LoRA fine-tuning. Detailed descriptions of both methods are available in the documentation: [Fine-Tuning](../Fine-Tuning.md) and [LoRA](../LoRA.md).
+For this example, we've explored both comprehensive full-weight fine-tuning, similar to the approach used in Alpaca, and the more resource-efficient LoRA fine-tuning. See the [Training Data Guide](../guides/Training-Data-Guide.md) for dataset configuration details.
 
 Here's a brief comparison of the two:
 
@@ -140,7 +140,7 @@ optimizer:
   learning_rate: 2E-5
 ```
 
-The detailed instruction to run the training job can be found in the [Fine-Tuning documentation](../Fine-Tuning.md).
+The detailed instructions to run the training job can be found in [Getting Started Training](../Getting-Started-Training.md).
 Here is the command to run the training job on TPU:
 
 ```bash

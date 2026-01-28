@@ -11,7 +11,7 @@ Levanter supports three canonical formats:
 |--------------|------------------------------------|-----------------------------------------------|--------------------|
 | `text`       | Language modeling pretraining      | `"text"` → string                             | `type: text`       |
 | `chat`       | Conversational fine-tuning (SFT)   | `"messages"` → list of turns in OpenAI format | `type: chat`       |
-| `supervised` | Instruction tuning / seq2seq tasks | two string fields (e.g. `prompt`, `answer`)   | `type: supervised` |
+| `prebuilt`   | Pre-tokenized cache inputs         | `"input_ids"` → list of ints                  | `type: prebuilt`   |
 
 !!! tip
 
@@ -128,33 +128,53 @@ for predicting. Jinja's handling of white space is confusing to me, so you'll wa
 
 ---
 
-## `supervised` Format
+## `prebuilt` Format
 
-Used for single-turn instruction following or sequence-to-sequence tasks.
+Used when your dataset already contains tokenized (pretokenized) sequences and optional loss weights.
+The primary use case is when you have some custom logic for creating a dataset consisting of token IDs
+and optionally loss weights, and you want to skip tokenization in Levanter.
+
+`prebuilt` supports being created from jsonl/parquet, similarly to other formats, though
+it is primarily intended to be used with [Direct Cache Construction](../guides/Direct-Cache-Construction.md).
 
 **Expected Input:**
 ```jsonl
-{"prompt": "Translate to French: Hello", "answer": "Bonjour"}
+{"input_ids": [101, 2023, 2003, 1037, 7099], "loss_weights": [1, 1, 1, 1, 1]}
 ```
+
+`loss_weights` is optional. When provided, it is multiplied by the standard causal mask.
 
 #### Configuration:
 ```yaml
 format:
-  type: supervised
-  input_field: prompt
-  output_field: answer
-  separate_with: "\n"  # optional separator between input and output
-  pack: true  # optional, default is true
-  mask_inputs: true  # optional, default is true
+  type: prebuilt
+  input_ids_key: input_ids  # optional, default is "input_ids"
+  loss_weights_key: loss_weights  # optional
 ```
 
-* `pack: true` will pack multiple examples into a single example if they fit within the context length.
-* `pack: false` will produce a single example per conversation. This is very inefficient.
+Note that when being used programmatically, `prebuilt` also supports a `loss_weight_transform` `Callable` that
+can be used to modify the loss weights on-the-fly. Primarily this is intended for thresholding or scaling loss weights
+without needing to rebuild the cache.
 
 #### Processing:
-- Tokenizes `prompt`, then tokenizes `answer` (with optional separator)
-- Produces a single `input_ids` sequence
-- Computes `sources_len` so that loss is masked on prompt tokens (assuming `mask_inputs: true`)
+- Reads `input_ids` directly (no tokenization).
+- Optional `loss_weights` are applied and multiplied by the causal mask.
+
+---
+
+## Programmatic direct datasets
+
+Used when you construct an `AsyncDataset[LmExample]` directly in code and want to plug it into the
+component/mixture plumbing without cache build/load.
+
+```python
+from levanter.data.text import DirectDatasetComponent, LmDataConfig
+
+component = DirectDatasetComponent(datasets={"train": train_ds, "validation": val_ds})
+config = LmDataConfig(components={"special": component})
+```
+
+Direct datasets are expected to yield `LmExample` instances that already include any masking/packing behavior.
 
 ---
 
@@ -164,23 +184,25 @@ format:
 
 ## Overall Configs
 
-::: levanter.data.text.LMMixtureDatasetConfig
-::: levanter.data.text.SingleDatasetLMConfigBase
-
-::: levanter.data.text.HfSingleDatasetLMConfig
-::: levanter.data.text.UrlSingleDatasetLMConfig
+::: levanter.data.text.LmDataConfig
+::: levanter.data.text.DatasetComponent
+::: levanter.data.text.DatasetComponentBase
+::: levanter.data.text.DirectDatasetComponent
+::: levanter.data.text.LmDatasetSourceConfigBase
+::: levanter.data.text.HfDatasetSourceConfig
+::: levanter.data.text.UrlDatasetSourceConfig
 
 ## Formats
 
 ::: levanter.data.text.LmDatasetFormatBase
 
 ::: levanter.data.text.ChatLmDatasetFormat
-::: levanter.data.text.SupervisedLmDatasetFormat
+::: levanter.data.text.PrebuiltLmDatasetFormat
 ::: levanter.data.text.TextLmDatasetFormat
 
 ## Datasets
 
 
+::: levanter.data.text.TokenSeqDataset
 ::: levanter.data.text.CausalLmDataset
-::: levanter.data.text.MultiturnChatDataset
-::: levanter.data.text.SupervisedDataset
+::: levanter.data.text.ChatDataset
