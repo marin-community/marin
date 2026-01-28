@@ -75,7 +75,6 @@ class RemoteClusterClient:
         entrypoint_proto = entrypoint.to_proto()
 
         env_config = cluster_pb2.EnvironmentConfig(
-            workspace=environment.workspace if environment else "/app",
             pip_packages=list(environment.pip_packages) if environment else [],
             env_vars=dict(environment.env_vars) if environment else {},
             extras=list(environment.extras) if environment else [],

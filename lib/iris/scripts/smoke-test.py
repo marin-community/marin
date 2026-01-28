@@ -433,7 +433,7 @@ class SmokeTestRunner:
                 entrypoint=entrypoint,
                 name=job_name,
                 resources=resources,
-                environment=EnvironmentSpec(workspace="/app"),
+                environment=EnvironmentSpec(),
                 coscheduling=coscheduling,
             )
             self.logger.log(f"  Job submitted: {job.job_id}")
@@ -489,7 +489,7 @@ class SmokeTestRunner:
                 entrypoint=entrypoint,
                 name=name,
                 resources=resources,
-                environment=EnvironmentSpec(workspace="/app"),
+                environment=EnvironmentSpec(),
             )
             jobs.append(job)
             self.logger.log(f"  Job submitted: {job.job_id}")

@@ -431,7 +431,6 @@ class Controller:
                     num_tasks=len(self._state.get_job_tasks(task.job_id)),
                     entrypoint=job.request.entrypoint,
                     environment=cluster_pb2.EnvironmentConfig(
-                        workspace=job.request.environment.workspace,
                         env_vars=dict(job.request.environment.env_vars),
                     ),
                     bundle_gcs_path=job.request.bundle_gcs_path,

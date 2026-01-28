@@ -191,7 +191,7 @@ class E2ECluster:
     ):
         """Submit a job and return a Job handle."""
         entrypoint = Entrypoint.from_callable(fn, *args, **kwargs)
-        environment = EnvironmentSpec(workspace="/app")
+        environment = EnvironmentSpec()
         resources = ResourceSpec(cpu=cpu, memory=memory)
         return self.get_client().submit(
             entrypoint=entrypoint,

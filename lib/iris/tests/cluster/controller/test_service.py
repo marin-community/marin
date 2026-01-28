@@ -85,7 +85,7 @@ def job_request():
             name=name,
             entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=replicas),
-            environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+            environment=cluster_pb2.EnvironmentConfig(),
             parent_job_id=parent_job_id or "",
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
@@ -183,7 +183,7 @@ def test_launch_job_rejects_empty_name(service, state):
         name="",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
     )
 
     with pytest.raises(ConnectError) as exc_info:
@@ -815,7 +815,7 @@ def test_task_failure_causing_job_failure_sends_kill_rpcs(service, state, mock_s
         name="kill-rpc-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
     )
     service.launch_job(request, None)
@@ -908,7 +908,7 @@ def test_no_kill_rpcs_for_pending_tasks(service, state, mock_scheduler, job_requ
         name="partial-dispatch-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
     )
     service.launch_job(request, None)

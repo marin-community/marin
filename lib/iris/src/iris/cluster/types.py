@@ -297,17 +297,16 @@ class EnvironmentSpec:
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
+
+    Note: To specify workspace for bundle creation, use IrisClient.remote(workspace=...).
     """
 
-    workspace: str | None = None
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
 
     def to_proto(self) -> cluster_pb2.EnvironmentConfig:
         """Convert to wire format with sensible defaults applied."""
-        workspace = self.workspace if self.workspace is not None else os.getcwd()
-
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
@@ -318,7 +317,6 @@ class EnvironmentSpec:
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
         return cluster_pb2.EnvironmentConfig(
-            workspace=workspace,
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),

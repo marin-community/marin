@@ -157,7 +157,7 @@ def _submit_simple_job(client: IrisClient, tpu_type: str) -> cluster_pb2.JobStat
         entrypoint=Entrypoint.from_callable(hello),
         name="validate-hello",
         resources=ResourceSpec(device=tpu_device(tpu_type)),
-        environment=EnvironmentSpec(workspace="/app"),
+        environment=EnvironmentSpec(),
     )
     return job.wait(timeout=DEFAULT_VALIDATION_TIMEOUT, raise_on_failure=False)
 
@@ -174,7 +174,7 @@ def _submit_compute_job(client: IrisClient, tpu_type: str) -> cluster_pb2.JobSta
         entrypoint=Entrypoint.from_callable(compute, 10, 32),
         name="validate-compute",
         resources=ResourceSpec(device=tpu_device(tpu_type)),
-        environment=EnvironmentSpec(workspace="/app"),
+        environment=EnvironmentSpec(),
     )
     return job.wait(timeout=DEFAULT_VALIDATION_TIMEOUT, raise_on_failure=False)
 
@@ -195,7 +195,7 @@ def _submit_scheduler_jobs(client: IrisClient, tpu_type: str) -> list[tuple[str,
             entrypoint=Entrypoint.from_callable(quick_task, i),
             name=f"validate-scheduler-{i}",
             resources=ResourceSpec(device=tpu_device(tpu_type)),
-            environment=EnvironmentSpec(workspace="/app"),
+            environment=EnvironmentSpec(),
         )
         jobs.append(job)
 

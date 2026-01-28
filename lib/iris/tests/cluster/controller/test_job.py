@@ -37,7 +37,7 @@ def make_job_request():
             name=name,
             entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
-            environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+            environment=cluster_pb2.EnvironmentConfig(),
         )
 
     return _make

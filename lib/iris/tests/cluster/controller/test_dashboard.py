@@ -161,7 +161,7 @@ def job_request():
         name="test-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
     )
 
 
@@ -306,7 +306,7 @@ def test_list_jobs_includes_task_counts(client, state):
         name="multi-replica-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
     )
     job_id = submit_job(state, "multi", request)
     job = state.get_job(job_id)

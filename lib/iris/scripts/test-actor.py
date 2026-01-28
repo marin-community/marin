@@ -245,7 +245,7 @@ def run_local(rounds: int = 5, delay: float = 0.5) -> bool:
             entrypoint=entrypoint,
             name="test-actor",
             resources=ResourceSpec(cpu=1, memory="512m"),
-            environment=EnvironmentSpec(workspace="/app"),
+            environment=EnvironmentSpec(),
         )
 
         print(f"Submitted job: {job.job_id}")

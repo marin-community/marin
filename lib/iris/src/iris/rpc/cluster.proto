@@ -205,15 +205,10 @@ message ResourceSpecProto {
 // ============================================================================
 
 // Job environment configuration
-// Exactly one of workspace or docker_image must be set (enforced in client)
 message EnvironmentConfig {
-  oneof source {
-    string workspace = 1;        // Path to workspace root for uv-based execution
-  }
-
-  repeated string pip_packages = 2;  // Additional pip packages to install
-  map<string, string> env_vars = 3;  // Environment variables to set
-  repeated string extras = 4;         // Extra dependency groups for uv (e.g., ["tpu", "eval"])
+  repeated string pip_packages = 1;  // Additional pip packages to install
+  map<string, string> env_vars = 2;  // Environment variables to set
+  repeated string extras = 3;         // Extra dependency groups for uv (e.g., ["tpu", "eval"])
 }
 
 // ============================================================================

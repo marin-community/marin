@@ -225,7 +225,6 @@ def create_run_task_request(
     entrypoint_proto = Entrypoint.from_callable(test_fn).to_proto()
 
     env_config = cluster_pb2.EnvironmentConfig(
-        workspace="/workspace",
         env_vars={
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",
@@ -565,9 +564,7 @@ def create_integration_run_task_request(bundle_path: str, task_id: str):
         num_tasks=1,
         entrypoint=entrypoint.to_proto(),
         bundle_gcs_path=bundle_path,
-        environment=cluster_pb2.EnvironmentConfig(
-            workspace="/app",
-        ),
+        environment=cluster_pb2.EnvironmentConfig(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=512 * 1024**2),
     )
 

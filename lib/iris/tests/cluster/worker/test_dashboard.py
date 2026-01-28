@@ -144,7 +144,6 @@ def create_run_task_request(
     entrypoint_proto = Entrypoint.from_callable(test_fn).to_proto()
 
     env_config = cluster_pb2.EnvironmentConfig(
-        workspace="/workspace",
         env_vars={
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",

@@ -99,7 +99,7 @@ def job_request():
             name=name,
             entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
-            environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+            environment=cluster_pb2.EnvironmentConfig(),
         )
 
     return _make
@@ -378,7 +378,7 @@ def test_failure_domain_kills_remaining_tasks(worker_metadata):
         name="multi-task-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
     )
     tasks = submit_job(state, "j1", req)
@@ -408,7 +408,7 @@ def test_max_task_failures_tolerance(worker_metadata):
         name="tolerant-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=1,
     )
     tasks = submit_job(state, "j1", req)
@@ -440,7 +440,7 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
         name="preemption-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=2),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
         max_retries_preemption=1,
     )
@@ -685,7 +685,7 @@ def make_job_request():
             name=name,
             entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
-            environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+            environment=cluster_pb2.EnvironmentConfig(),
         )
 
     return _make
@@ -815,7 +815,7 @@ def test_coscheduled_task_failure_kills_siblings(worker_metadata):
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = "tpu-name"
     tasks = submit_job(state, "j1", req)
@@ -858,7 +858,7 @@ def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
         max_retries_preemption=1,  # Allow one retry, so second failure is terminal
     )
     req.coscheduling.group_by = "tpu-name"
@@ -916,7 +916,7 @@ def test_coscheduled_task_success_does_not_affect_siblings(worker_metadata):
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = "tpu-name"
     tasks = submit_job(state, "j1", req)
@@ -951,7 +951,7 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(worker_metadata):
         name="regular-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=3,  # Allow failures without killing the job
     )
     tasks = submit_job(state, "j1", req)
@@ -994,7 +994,7 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
         max_retries_failure=1,  # Allow one retry
         max_task_failures=4,  # Don't fail job on task failure
     )
@@ -1046,7 +1046,7 @@ def test_compute_demand_entries_counts_coscheduled_job_once():
             replicas=4,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = "tpu-name"
     submit_job(state, "j1", req)
@@ -1073,7 +1073,7 @@ def test_compute_demand_entries_counts_non_coscheduled_tasks_individually():
             replicas=4,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
     )
     # No coscheduling set
     submit_job(state, "j1", req)
@@ -1102,7 +1102,7 @@ def test_compute_demand_entries_mixed_coscheduled_and_regular():
             replicas=4,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
     )
     coscheduled_req.coscheduling.group_by = "tpu-name"
     submit_job(state, "j1", coscheduled_req)
@@ -1117,7 +1117,7 @@ def test_compute_demand_entries_mixed_coscheduled_and_regular():
             replicas=2,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
     )
     submit_job(state, "j2", regular_req)
 

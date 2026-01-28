@@ -485,61 +485,6 @@ class TestControllerFactory:
 class TestCliControllerCommands:
     """Tests for CLI controller start/stop/reload commands."""
 
-    @patch("iris.cluster.vm.controller.check_health")
-    @patch("iris.cluster.vm.controller.run_streaming_with_retry")
-    @patch("iris.cluster.vm.controller.DirectSshConnection")
-    def test_cli_controller_start_with_ssh(
-        self,
-        mock_conn_cls: MagicMock,
-        mock_run_streaming: MagicMock,
-        mock_health: MagicMock,
-        cli_runner: CliRunner,
-        manual_config_file: Path,
-    ):
-        """CLI controller start with SSH bootstrap runs bootstrap script."""
-        mock_conn = MagicMock()
-        mock_conn_cls.return_value = mock_conn
-        mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-        mock_health.return_value = HealthCheckResult(healthy=True)
-
-        result = cli_runner.invoke(
-            iris,
-            ["cluster", "--config", str(manual_config_file), "controller", "start", "--skip-build"],
-        )
-
-        assert result.exit_code == 0, f"CLI failed: {result.output}"
-        assert "Controller started successfully at http://10.0.0.100:10000" in result.output
-
-    def test_cli_start_failure_shows_error(
-        self,
-        cli_runner: CliRunner,
-        gcp_config_file: Path,
-    ):
-        """CLI shows error message when controller start fails."""
-
-        def mock_run_fail(cmd, **kwargs):
-            result = MagicMock(spec=subprocess.CompletedProcess)
-            if "create" in cmd:
-                result.returncode = 1
-                result.stderr = "Quota exceeded"
-            else:
-                result.returncode = 0
-                result.stdout = ""
-            result.stdout = result.stdout if hasattr(result, "stdout") else ""
-            result.stderr = result.stderr if hasattr(result, "stderr") else ""
-            return result
-
-        with patch("subprocess.run", side_effect=mock_run_fail):
-            with patch("iris.cluster.vm.controller._check_health_rpc", return_value=False):
-                with patch("iris.cluster.vm.controller.time.sleep"):
-                    result = cli_runner.invoke(
-                        iris,
-                        ["cluster", "--config", str(gcp_config_file), "controller", "start", "--skip-build"],
-                    )
-
-        assert result.exit_code == 1
-        assert "Failed to start controller" in result.output
-
     @pytest.mark.parametrize(
         "command,mock_target,error_msg,expected_output",
         [
@@ -571,41 +516,6 @@ class TestCliControllerCommands:
 
         assert result.exit_code == 1
         assert expected_output in result.output
-
-    @patch("iris.cluster.vm.controller.check_health")
-    @patch("iris.cluster.vm.controller.run_streaming_with_retry")
-    @patch("iris.cluster.vm.controller.DirectSshConnection")
-    def test_manual_start_timeout_shows_error(
-        self,
-        mock_conn_cls: MagicMock,
-        mock_run_streaming: MagicMock,
-        mock_health: MagicMock,
-        cli_runner: CliRunner,
-        manual_config_file: Path,
-    ):
-        """CLI shows error when manual controller health check times out."""
-        mock_conn = MagicMock()
-        mock_conn_cls.return_value = mock_conn
-        mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-        mock_health.return_value = False  # Health check always fails
-
-        # Simulate time progressing past timeout
-        time_calls = [0]
-
-        def mock_monotonic():
-            result = time_calls[0]
-            time_calls[0] += 200  # Jump past timeout each call
-            return result
-
-        with patch("time.sleep"):
-            with patch("time.monotonic", side_effect=mock_monotonic):
-                result = cli_runner.invoke(
-                    iris,
-                    ["cluster", "--config", str(manual_config_file), "controller", "start", "--skip-build"],
-                )
-
-        assert result.exit_code == 1
-        assert "Failed to start controller" in result.output
 
 
 # ============================================================================

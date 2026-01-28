@@ -24,18 +24,11 @@ autoscaler manages two scale groups:
 - tpu_v5e_4: For TPU jobs (v5litepod-4 topology)
 
 Usage:
-    # Validate that the cluster works (for CI)
-    cd lib/iris
-    uv run python examples/demo_cluster.py --validate-only
-
     # Launch interactive demo with Jupyter
     uv run python examples/demo_cluster.py
 
     # Connect to remote controller via SSH tunnel
     uv run python examples/demo_cluster.py --controller-url http://localhost:10000
-
-    # Remote validation only
-    uv run python examples/demo_cluster.py --controller-url http://localhost:10000 --validate-only
 """
 
 import logging
@@ -569,7 +562,7 @@ class DemoCluster:
     ):
         """Submit a job to the cluster and return Job handle."""
         entrypoint = Entrypoint.from_callable(fn, *args, **kwargs)
-        environment = EnvironmentSpec(workspace="/app")
+        environment = EnvironmentSpec()
         resources = ResourceSpec(cpu=cpu, memory=memory)
         return self.client.submit(
             entrypoint=entrypoint,
@@ -637,7 +630,7 @@ class DemoCluster:
                     replicas=4,
                     device=tpu_device("v5litepod-16"),  # 4 VMs per slice for coscheduling
                 ),
-                environment=EnvironmentSpec(workspace="/app"),
+                environment=EnvironmentSpec(),
                 coscheduling=CoschedulingConfig(group_by="tpu-name"),
             )
             status = job.wait()
@@ -767,7 +760,6 @@ class DemoCluster:
 
 @click.command()
 @click.option("--no-browser", is_flag=True, help="Don't auto-open browser for Jupyter")
-@click.option("--validate-only", is_flag=True, help="Run seed jobs and exit (for CI)")
 @click.option("--test-notebook", is_flag=True, help="Run notebook programmatically and validate (for CI)")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
 @click.option(
@@ -782,7 +774,6 @@ class DemoCluster:
 )
 def main(
     no_browser: bool,
-    validate_only: bool,
     test_notebook: bool,
     verbose: bool,
     controller_url: str | None,
@@ -794,17 +785,11 @@ def main(
     Can also connect to a remote controller via SSH tunnel.
 
     Examples:
-        # Validate that the cluster works (for CI)
-        uv run python examples/demo_cluster.py --validate-only
-
         # Launch interactive demo with Jupyter
         uv run python examples/demo_cluster.py
 
         # Connect to remote controller via SSH tunnel
         uv run python examples/demo_cluster.py --controller-url http://localhost:10000
-
-        # Remote validation only
-        uv run python examples/demo_cluster.py --controller-url http://localhost:10000 --validate-only
     """
     if verbose:
         logging.basicConfig(
@@ -838,10 +823,6 @@ def main(
 
         print()
         print("All seed jobs succeeded!")
-
-        if validate_only:
-            print("Validation passed!")
-            return
 
         if test_notebook:
             print()

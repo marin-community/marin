@@ -279,7 +279,7 @@ class ResourceSpecProto(_message.Message):
     def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., preemptible: _Optional[bool] = ..., regions: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
-    __slots__ = ("workspace", "pip_packages", "env_vars", "extras")
+    __slots__ = ("pip_packages", "env_vars", "extras")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -287,15 +287,13 @@ class EnvironmentConfig(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
-    WORKSPACE_FIELD_NUMBER: _ClassVar[int]
     PIP_PACKAGES_FIELD_NUMBER: _ClassVar[int]
     ENV_VARS_FIELD_NUMBER: _ClassVar[int]
     EXTRAS_FIELD_NUMBER: _ClassVar[int]
-    workspace: str
     pip_packages: _containers.RepeatedScalarFieldContainer[str]
     env_vars: _containers.ScalarMap[str, str]
     extras: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, workspace: _Optional[str] = ..., pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class Entrypoint(_message.Message):
     __slots__ = ("callable", "command")

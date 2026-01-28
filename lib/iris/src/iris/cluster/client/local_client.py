@@ -182,19 +182,12 @@ class _LocalContainer:
                     assert entrypoint.command is not None
                     import subprocess
 
-                    # Use IRIS_WORKSPACE if set (for local mode), otherwise fall back to workdir
-                    # Only set cwd if the directory exists (local execution doesn't use Docker's workdir)
-                    cwd = self.config.env.get("IRIS_WORKSPACE") or self.config.workdir
-                    if cwd and not Path(cwd).exists():
-                        cwd = None
-
                     result = subprocess.run(
                         entrypoint.command,
                         capture_output=True,
                         text=True,
                         check=False,
                         env=self.config.env,
-                        cwd=cwd,
                     )
                     stdout_capture.write(result.stdout)
                     stderr_capture.write(result.stderr)
