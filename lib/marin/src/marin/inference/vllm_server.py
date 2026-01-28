@@ -291,10 +291,10 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     if isinstance(load_format, str):
         args.extend(["--load-format", load_format])
     max_model_len = engine_kwargs.get("max_model_len")
-    if isinstance(max_model_len, int) and max_model_len > 0:
+    if max_model_len is not None:
         args.extend(["--max-model-len", str(max_model_len)])
     gpu_memory_utilization = engine_kwargs.get("gpu_memory_utilization")
-    if isinstance(gpu_memory_utilization, (int, float)):
+    if gpu_memory_utilization is not None:
         args.extend(["--gpu-memory-utilization", str(gpu_memory_utilization)])
     return args
 
@@ -771,7 +771,7 @@ def _start_vllm_native_server(
 
     vllm_bin = shutil.which("vllm") or "vllm"
     cmd: list[str] = [
-        vllm_bin,
+        vsllm_bin,
         "serve",
         model_name_or_path,
         "--trust-remote-code",
