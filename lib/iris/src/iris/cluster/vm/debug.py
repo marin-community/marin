@@ -244,7 +244,8 @@ def list_iris_tpus(zone: str, project: str, label_prefix: str = "iris") -> list[
     )
     if result.returncode != 0:
         return []
-    return [n.strip() for n in result.stdout.strip().split("\n") if n.strip()]
+    # Filter client-side: gcloud TPU --filter with regex is unreliable
+    return [n.strip() for n in result.stdout.strip().split("\n") if n.strip() and n.strip().startswith("iris-")]
 
 
 def discover_controller_vm(zone: str, project: str, label_prefix: str = "iris") -> str | None:

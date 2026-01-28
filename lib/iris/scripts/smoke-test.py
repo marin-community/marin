@@ -73,7 +73,7 @@ from iris.rpc.proto_utils import format_accelerator_display
 
 IRIS_ROOT = Path(__file__).parent.parent
 DEFAULT_CONTROLLER_PORT = 10000
-DEFAULT_JOB_TIMEOUT = 600  # 10 minutes for TPU provisioning
+DEFAULT_JOB_TIMEOUT = 300  # 5 minutes; TPU slices are pre-warmed by earlier tests
 SCHEDULING_POLL_INTERVAL_SECONDS = 5.0
 WORKER_DISCOVERY_INTERVAL_SECONDS = 10.0
 
@@ -154,6 +154,52 @@ def _distributed_work_job():
         raise RuntimeError("Not running in an Iris job context")
     print(f"Task {info.task_index} of {info.num_tasks} on worker {info.worker_id}")
     return f"Task {info.task_index} done"
+
+
+def _jax_tpu_job():
+    """Initialize JAX on TPU and run simple computation."""
+    import os
+    import sys
+
+    print(f"Python: {sys.executable} {sys.version}", flush=True)
+    print(f"JAX_PLATFORMS={os.environ.get('JAX_PLATFORMS', '<unset>')}", flush=True)
+    print(f"PJRT_DEVICE={os.environ.get('PJRT_DEVICE', '<unset>')}", flush=True)
+    print(f"TPU_NAME={os.environ.get('TPU_NAME', '<unset>')}", flush=True)
+    print(f"TPU_WORKER_ID={os.environ.get('TPU_WORKER_ID', '<unset>')}", flush=True)
+    print(f"TPU_WORKER_HOSTNAMES={os.environ.get('TPU_WORKER_HOSTNAMES', '<unset>')}", flush=True)
+    print(f"TPU_CHIPS_PER_HOST_BOUNDS={os.environ.get('TPU_CHIPS_PER_HOST_BOUNDS', '<unset>')}", flush=True)
+
+    # Check /dev/vfio exists
+    vfio_path = "/dev/vfio"
+    if os.path.exists(vfio_path):
+        print(f"/dev/vfio exists, contents: {os.listdir(vfio_path)}", flush=True)
+    else:
+        print("/dev/vfio does NOT exist", flush=True)
+
+    # Check jax is importable
+    print("Importing jax...", flush=True)
+    import jax
+
+    print(f"JAX version: {jax.__version__}", flush=True)
+
+    import jax.numpy as jnp
+
+    # Verify TPU is available
+    print("Calling jax.devices()...", flush=True)
+    devices = jax.devices()
+    tpu_devices = [d for d in devices if d.platform == "tpu"]
+    if not tpu_devices:
+        raise RuntimeError(f"No TPU devices found. Available: {[d.platform for d in devices]}")
+
+    print(f"Found {len(tpu_devices)} TPU device(s): {tpu_devices}")
+
+    # Simple computation to exercise TPU
+    x = jnp.ones((1000, 1000))
+    y = jnp.dot(x, x)
+    result = float(y[0, 0])
+
+    print(f"JAX TPU computation successful: {result}")
+    return result
 
 
 def _configure_logging():
@@ -643,7 +689,7 @@ class SmokeTestRunner:
         client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
 
         # Test 1: Simple TPU job
-        self.logger.log(f"[Test 1/3] Simple TPU job ({self.config.tpu_type})")
+        self.logger.log(f"[Test 1/4] Simple TPU job ({self.config.tpu_type})")
         result = self._run_simple_tpu_job(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
@@ -652,7 +698,7 @@ class SmokeTestRunner:
             return
 
         # Test 2: Concurrent TPU jobs
-        self.logger.log(f"[Test 2/3] Concurrent TPU jobs (3x {self.config.tpu_type})")
+        self.logger.log(f"[Test 2/4] Concurrent TPU jobs (3x {self.config.tpu_type})")
         result = self._run_concurrent_tpu_jobs(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
@@ -661,8 +707,17 @@ class SmokeTestRunner:
             return
 
         # Test 3: Coscheduled multi-task job
-        self.logger.log(f"[Test 3/3] Coscheduled multi-task job ({self.config.tpu_type})")
+        self.logger.log(f"[Test 3/4] Coscheduled multi-task job ({self.config.tpu_type})")
         result = self._run_coscheduled_job(client)
+        self._results.append(result)
+        self._log_autoscaler_status(controller_url)
+
+        if self._interrupted:
+            return
+
+        # Test 4: JAX TPU job - validates JAX can initialize and use TPU
+        self.logger.log(f"[Test 4/4] JAX TPU job ({self.config.tpu_type})")
+        result = self._run_jax_tpu_job(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
 
@@ -686,15 +741,18 @@ class SmokeTestRunner:
         job_name: str,
         resources: ResourceSpec,
         coscheduling: CoschedulingConfig | None = None,
+        environment: EnvironmentSpec | None = None,
+        timeout: int | None = None,
     ) -> TestResult:
         """Generic job runner that handles submission, waiting, and result collection."""
+        job_timeout = timeout or self.config.job_timeout_seconds
         start = time.monotonic()
         try:
             job = client.submit(
                 entrypoint=entrypoint,
                 name=job_name,
                 resources=resources,
-                environment=EnvironmentSpec(),
+                environment=environment or EnvironmentSpec(),
                 coscheduling=coscheduling,
             )
             self.logger.log(f"  Job submitted: {job.job_id}")
@@ -702,7 +760,7 @@ class SmokeTestRunner:
             if self._scheduling_monitor:
                 self._scheduling_monitor.track_job(job.job_id)
 
-            status = job.wait(timeout=self.config.job_timeout_seconds, raise_on_failure=False)
+            status = job.wait(timeout=job_timeout, raise_on_failure=False)
             duration = time.monotonic() - start
 
             if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
@@ -711,13 +769,19 @@ class SmokeTestRunner:
             else:
                 state_name = cluster_pb2.JobState.Name(status.state)
                 self.logger.log(f"  [FAIL] Job ended with state {state_name}", level="ERROR")
+                # Collect docker logs from TPU VMs FIRST (before RPC-based log
+                # fetch which can time out and give autoscaler time to delete slices).
+                if self._zone and self._project:
+                    self._collect_all_worker_docker_logs()
                 self._print_task_logs_on_failure(job)
                 return TestResult(test_name, False, f"State: {state_name}, error: {status.error}", duration)
 
         except TimeoutError:
             duration = time.monotonic() - start
-            self.logger.log(f"  [FAIL] Timed out after {self.config.job_timeout_seconds}s", level="ERROR")
-            return TestResult(test_name, False, f"Timed out after {self.config.job_timeout_seconds}s", duration)
+            self.logger.log(f"  [FAIL] Timed out after {job_timeout}s", level="ERROR")
+            if self._zone and self._project:
+                self._collect_all_worker_docker_logs()
+            return TestResult(test_name, False, f"Timed out after {job_timeout}s", duration)
 
     def _submit_and_wait_multiple(
         self,
@@ -753,6 +817,60 @@ class SmokeTestRunner:
                 failed_jobs.append(f"{job.job_id}: {state_name}")
 
         return time.monotonic() - start, failed_jobs
+
+    def _collect_all_worker_docker_logs(self):
+        """SSH into each TPU VM and dump logs from all iris-managed containers.
+
+        This prints directly to the smoke test output so job failures are visible
+        in CI even if the RPC-based log retrieval times out or slices are deleted.
+        """
+        assert self._zone and self._project
+        self.logger.log("  Collecting docker container logs from TPU VMs...")
+        try:
+            tpu_names = list_iris_tpus(self._zone, self._project)
+        except Exception as e:
+            self.logger.log(f"  Failed to list TPUs: {e}", level="WARN")
+            return
+
+        if not tpu_names:
+            self.logger.log("  No TPU slices found")
+            return
+
+        collect_cmd = (
+            "for cid in $(sudo docker ps -a --filter label=iris.managed=true -q); do "
+            "name=$(sudo docker inspect --format '{{.Name}}' $cid | sed 's|^/||'); "
+            "echo '=== Container:' $name '==='; "
+            "sudo docker logs $cid 2>&1 | tail -100; "
+            "echo; done"
+        )
+        for tpu_name in tpu_names:
+            self.logger.log(f"  --- Docker logs from {tpu_name} ---")
+            cmd = [
+                "gcloud",
+                "compute",
+                "tpus",
+                "tpu-vm",
+                "ssh",
+                tpu_name,
+                f"--zone={self._zone}",
+                f"--project={self._project}",
+                "--command",
+                collect_cmd,
+            ]
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if result.returncode == 0 and result.stdout.strip():
+                    for line in result.stdout.strip().splitlines():
+                        self.logger.log(f"    {line}")
+                else:
+                    self.logger.log("    (no output or no managed containers)", level="WARN")
+                    if result.stderr.strip():
+                        self.logger.log(f"    stderr: {result.stderr.strip()[:300]}", level="WARN")
+            except subprocess.TimeoutExpired:
+                self.logger.log(f"    SSH timed out for {tpu_name}", level="WARN")
+            except Exception as e:
+                self.logger.log(f"    Failed: {e}", level="WARN")
+
 
     def _run_simple_tpu_job(self, client: IrisClient) -> TestResult:
         """Run a simple TPU job that just prints and returns."""
@@ -800,6 +918,26 @@ class SmokeTestRunner:
                 device=tpu_device(self.config.tpu_type),
             ),
             coscheduling=CoschedulingConfig(group_by="tpu-name"),
+        )
+
+    def _run_jax_tpu_job(self, client: IrisClient) -> TestResult:
+        """Run a JAX TPU job that initializes JAX and exercises the TPU.
+
+        Uses coscheduling with replicas=4 because multi-host TPU pods (e.g. v5litepod-16)
+        require all hosts to run JAX simultaneously for collective initialization.
+        """
+        return self._run_job_test(
+            client=client,
+            test_name=f"JAX TPU job ({self.config.tpu_type})",
+            entrypoint=Entrypoint.from_callable(_jax_tpu_job),
+            job_name=f"smoke-jax-tpu-{self._run_id}",
+            resources=ResourceSpec(
+                replicas=4,
+                device=tpu_device(self.config.tpu_type),
+            ),
+            environment=EnvironmentSpec(pip_packages=["jax[tpu]"]),
+            coscheduling=CoschedulingConfig(group_by="tpu-name"),
+            timeout=300,
         )
 
     def _log_autoscaler_status(self, controller_url: str):

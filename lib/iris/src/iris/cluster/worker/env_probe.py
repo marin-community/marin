@@ -18,7 +18,6 @@ import logging
 import os
 import socket
 import subprocess
-import urllib.request
 from pathlib import Path
 from typing import Protocol
 
@@ -56,30 +55,6 @@ def _probe_gpu_info() -> tuple[int, str, int]:
         logger.debug("GPU probe failed (nvidia-smi not available or error): %s", type(e).__name__)
         return 0, "", 0
 
-
-def _probe_gce_metadata() -> tuple[str, str]:
-    """Query GCE metadata server.
-
-    Returns ("", "") if not on GCE.
-    """
-    try:
-        headers = {"Metadata-Flavor": "Google"}
-
-        def fetch(path: str) -> str:
-            req = urllib.request.Request(
-                f"http://169.254.169.254/computeMetadata/v1/{path}",
-                headers=headers,
-            )
-            with urllib.request.urlopen(req, timeout=1.0) as resp:
-                return resp.read().decode().strip()
-
-        instance_name = fetch("instance/name")
-        zone_full = fetch("instance/zone")
-        zone = zone_full.split("/")[-1] if zone_full else ""
-        return instance_name, zone
-    except Exception:
-        logger.debug("GCE metadata probe failed (not running on GCE or metadata server unavailable)")
-        return "", ""
 
 
 def _get_memory_total_bytes() -> int:
@@ -231,9 +206,6 @@ class DefaultEnvironmentProvider:
         # GPU info via nvidia-smi
         gpu_count, gpu_name, gpu_memory_mb = _probe_gpu_info()
 
-        # GCE metadata
-        gce_instance_name, gce_zone = _probe_gce_metadata()
-
         # Build device config using TPU_TYPE for topology lookup
         device = cluster_pb2.DeviceConfig()
         if tpu_type:
@@ -295,8 +267,6 @@ class DefaultEnvironmentProvider:
             gpu_count=gpu_count,
             gpu_name=gpu_name,
             gpu_memory_mb=gpu_memory_mb,
-            gce_instance_name=gce_instance_name,
-            gce_zone=gce_zone,
             device=device,
             attributes=attributes,
             vm_address=vm_address,

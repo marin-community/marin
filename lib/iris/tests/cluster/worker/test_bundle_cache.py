@@ -15,6 +15,7 @@
 """Tests for BundleCache."""
 
 import hashlib
+import os
 import zipfile
 
 import pytest
@@ -141,9 +142,13 @@ def test_lru_eviction(temp_cache_dir, tmp_path):
 
         bundles.append(zip_path)
 
-    # Download all 3 bundles
+    # Download bundles one at a time. Set distinct mtimes before the third
+    # download so eviction (triggered inside get_bundle) sees deterministic order.
     paths = []
-    for bundle in bundles:
+    for i, bundle in enumerate(bundles):
+        # Backdate earlier bundles so eviction picks the oldest
+        for j, p in enumerate(paths):
+            os.utime(p, (j, j))
         file_url = f"file://{bundle}"
         path = cache.get_bundle(file_url)
         paths.append(path)
