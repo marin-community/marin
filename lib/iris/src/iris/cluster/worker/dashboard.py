@@ -44,15 +44,48 @@ DASHBOARD_HTML = """
 <head>
   <title>Iris Worker</title>
   <style>
-    body { font-family: sans-serif; margin: 20px; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-    th { background-color: #4CAF50; color: white; }
-    tr:nth-child(even) { background-color: #f2f2f2; }
-    .status-running { color: blue; }
-    .status-succeeded { color: green; }
-    .status-failed { color: red; }
-    .task-link { color: #2196F3; text-decoration: none; font-weight: bold; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      max-width: 1400px;
+      margin: 40px auto;
+      padding: 0 20px;
+      color: #1f2328;
+      background: #f6f8fa;
+      font-size: 14px;
+    }
+    h1 { color: #1f2328; border-bottom: 2px solid #d1d9e0; padding-bottom: 10px; font-size: 24px; font-weight: 600; }
+    h2 { color: #1f2328; margin-top: 30px; font-size: 20px; font-weight: 600; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid #d1d9e0;
+    }
+    th {
+      background-color: #f6f8fa;
+      color: #1f2328;
+      padding: 10px 12px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 13px;
+      border-bottom: 1px solid #d1d9e0;
+    }
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #d1d9e0;
+      font-size: 13px;
+    }
+    tr:hover { background-color: #f6f8fa; }
+    .status-running { color: #0969da; }
+    .status-building { color: #8250df; }
+    .status-succeeded { color: #1a7f37; }
+    .status-failed { color: #cf222e; }
+    .status-killed { color: #57606a; }
+    .status-pending { color: #9a6700; }
+    .task-link { color: #0969da; text-decoration: none; font-weight: 500; }
     .task-link:hover { text-decoration: underline; }
   </style>
 </head>
@@ -112,23 +145,63 @@ TASK_DETAIL_HTML = """
 <head>
   <title>Task {{task_id}} - Iris Worker</title>
   <style>
-    body { font-family: sans-serif; margin: 20px; }
-    .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
-    .status-running { color: blue; font-weight: bold; }
-    .status-succeeded { color: green; font-weight: bold; }
-    .status-failed { color: red; font-weight: bold; }
-    .tabs { display: flex; border-bottom: 2px solid #4CAF50; }
-    .tab { padding: 10px 20px; cursor: pointer; background: #f0f0f0; margin-right: 2px;
-           border: 1px solid #ddd; border-bottom: none; border-radius: 5px 5px 0 0; }
-    .tab.active { background: #4CAF50; color: white; }
-    .tab-content { display: none; padding: 15px; border: 1px solid #ddd; max-height: 500px;
-                   overflow-y: auto; background: #f9f9f9; font-family: monospace;
-                   font-size: 12px; white-space: pre-wrap; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      max-width: 1400px;
+      margin: 40px auto;
+      padding: 0 20px;
+      color: #1f2328;
+      background: #f6f8fa;
+      font-size: 14px;
+    }
+    h1 { color: #1f2328; border-bottom: 2px solid #d1d9e0; padding-bottom: 10px; font-size: 24px; font-weight: 600; }
+    h2 { color: #1f2328; margin-top: 30px; font-size: 20px; font-weight: 600; }
+    a { color: #0969da; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .section {
+      margin: 20px 0;
+      padding: 15px 20px;
+      background: white;
+      border: 1px solid #d1d9e0;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    }
+    .status-running { color: #0969da; font-weight: bold; }
+    .status-building { color: #8250df; font-weight: bold; }
+    .status-succeeded { color: #1a7f37; font-weight: bold; }
+    .status-failed { color: #cf222e; font-weight: bold; }
+    .status-killed { color: #57606a; font-weight: bold; }
+    .status-pending { color: #9a6700; font-weight: bold; }
+    .tabs { display: flex; border-bottom: 2px solid #d1d9e0; }
+    .tab {
+      padding: 10px 20px;
+      cursor: pointer;
+      background: transparent;
+      margin-right: 2px;
+      border: 1px solid #d1d9e0;
+      border-bottom: none;
+      border-radius: 6px 6px 0 0;
+      font-size: 13px;
+      font-weight: 500;
+      color: #57606a;
+    }
+    .tab.active { background: #0969da; color: white; border-color: #0969da; }
+    .tab-content {
+      display: none;
+      padding: 15px;
+      border: 1px solid #d1d9e0;
+      max-height: 500px;
+      overflow-y: auto;
+      background: white;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
     .tab-content.active { display: block; }
     .metrics { display: flex; gap: 30px; flex-wrap: wrap; }
     .metric { text-align: center; padding: 10px; }
-    .metric-value { font-size: 24px; font-weight: bold; color: #4CAF50; }
-    .metric-label { font-size: 12px; color: #666; }
+    .metric-value { font-size: 24px; font-weight: bold; color: #0969da; }
+    .metric-label { font-size: 12px; color: #57606a; }
   </style>
 </head>
 <body>

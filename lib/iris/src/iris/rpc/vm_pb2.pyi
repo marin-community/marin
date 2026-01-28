@@ -19,6 +19,7 @@ class VmState(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     VM_STATE_TERMINATED: _ClassVar[VmState]
     VM_STATE_FAILED: _ClassVar[VmState]
     VM_STATE_PREEMPTED: _ClassVar[VmState]
+    VM_STATE_REQUESTING: _ClassVar[VmState]
 
 class ScalingAction(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -35,6 +36,7 @@ VM_STATE_STOPPING: VmState
 VM_STATE_TERMINATED: VmState
 VM_STATE_FAILED: VmState
 VM_STATE_PREEMPTED: VmState
+VM_STATE_REQUESTING: VmState
 SCALING_ACTION_UNSPECIFIED: ScalingAction
 SCALING_ACTION_SCALE_UP: ScalingAction
 SCALING_ACTION_SCALE_DOWN: ScalingAction
