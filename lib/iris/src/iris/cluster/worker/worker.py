@@ -20,7 +20,6 @@ import socket
 import tempfile
 import threading
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -168,6 +167,9 @@ class Worker:
         self._controller_client: ControllerServiceClientSync | None = None
 
     def start(self) -> None:
+        # Clean up any orphaned containers from previous runs
+        self._cleanup_all_iris_containers()
+
         self._server_thread = threading.Thread(
             target=self._run_server,
             daemon=True,
@@ -194,6 +196,15 @@ class Worker:
                 daemon=True,
             )
             self._heartbeat_thread.start()
+
+    def _cleanup_all_iris_containers(self) -> None:
+        """Remove all iris-managed containers at startup.
+
+        This handles crash recovery cleanly without tracking complexity.
+        """
+        removed = self._runtime.remove_all_iris_containers()
+        if removed > 0:
+            logger.info("Startup cleanup: removed %d iris containers", removed)
 
     def stop(self) -> None:
         self._stop_heartbeat.set()
@@ -243,10 +254,6 @@ class Worker:
     def _heartbeat_loop(self) -> None:
         metadata = self._environment_provider.probe()
 
-        # Generate worker ID if not provided
-        if not self._worker_id:
-            self._worker_id = f"worker-{uuid.uuid4().hex[:8]}"
-
         # Determine the address to advertise to the controller.
         # If host is 0.0.0.0 (bind to all interfaces), use the probed IP for external access.
         # Otherwise, use the configured host.
@@ -254,23 +261,49 @@ class Worker:
         if address_host == "0.0.0.0":
             address_host = metadata.ip_address
 
-        # Build registration request
-        request = cluster_pb2.Controller.RegisterWorkerRequest(
-            worker_id=self._worker_id,
-            address=f"{address_host}:{self._config.port}",
-            metadata=metadata,
-        )
+        # Get VM address from probe (injected by ManagedVm bootstrap via IRIS_VM_ADDRESS)
+        # For non-cloud workers, use host:port as both worker_id and vm_address
+        vm_address = metadata.vm_address
+        if not vm_address:
+            vm_address = f"{address_host}:{self._config.port}"
+            metadata.vm_address = vm_address
+
+        # Derive worker_id from vm_address (no UUID generation)
+        if not self._worker_id:
+            self._worker_id = vm_address
 
         # Controller client is created in start() before this thread starts
         assert self._controller_client is not None
 
-        # Retry registration until successful
+        # Retry registration until successful (or reset requested)
         attempt = 0
         while not self._stop_heartbeat.is_set():
             attempt += 1
+
+            # Get active task IDs for controller restart recovery (RUNNING or BUILDING)
+            with self._lock:
+                running_task_ids = [
+                    t.task_id
+                    for t in self._tasks.values()
+                    if t.status in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
+                ]
+
+            request = cluster_pb2.Controller.RegisterWorkerRequest(
+                worker_id=self._worker_id,
+                address=f"{address_host}:{self._config.port}",
+                metadata=metadata,
+                running_task_ids=running_task_ids,
+            )
+
             try:
                 logger.debug("Registration attempt %d for worker %s", attempt, self._worker_id)
                 response = self._controller_client.register_worker(request)
+
+                if response.should_reset:
+                    logger.warning("Controller signaled reset for worker %s, cleaning up", self._worker_id)
+                    self._reset_worker_state()
+                    continue  # Re-register with empty task list
+
                 if response.accepted:
                     logger.info("Registered with controller: %s", self._worker_id)
                     break
@@ -285,9 +318,43 @@ class Worker:
             if self._stop_heartbeat.is_set():
                 break
             try:
-                self._controller_client.register_worker(request)
+                # Update active task IDs for each heartbeat
+                with self._lock:
+                    running_task_ids = [
+                        t.task_id
+                        for t in self._tasks.values()
+                        if t.status in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
+                    ]
+                request = cluster_pb2.Controller.RegisterWorkerRequest(
+                    worker_id=self._worker_id,
+                    address=f"{address_host}:{self._config.port}",
+                    metadata=metadata,
+                    running_task_ids=running_task_ids,
+                )
+                response = self._controller_client.register_worker(request)
+
+                if response.should_reset:
+                    logger.warning("Controller signaled reset during heartbeat, cleaning up")
+                    self._reset_worker_state()
             except Exception as e:
                 logger.warning(f"Heartbeat failed: {e}")
+
+    def _reset_worker_state(self) -> None:
+        """Reset worker state: wipe all containers and clear tracking.
+
+        Called when controller signals should_reset (e.g., after controller restart
+        when worker claims tasks the controller doesn't know about).
+        """
+        logger.info("Resetting worker state")
+
+        # Clear task tracking
+        with self._lock:
+            self._tasks.clear()
+
+        # Wipe ALL iris containers (simple, no tracking needed)
+        self._cleanup_all_iris_containers()
+
+        logger.info("Worker state reset complete")
 
     def _report_task_state(self, task: Task) -> None:
         """Report task state to controller."""
@@ -417,6 +484,8 @@ class Worker:
                 timeout_seconds=task.request.timeout_seconds or None,
                 ports=task.ports,
                 mounts=[(str(task.workdir), "/workdir", "rw")],
+                task_id=task.task_id,
+                job_id=task.job_id,
             )
 
             # Create and start container with retry on port binding failures
@@ -577,8 +646,8 @@ class Worker:
         env["IRIS_NUM_TASKS"] = str(task.num_tasks)
         env["IRIS_ATTEMPT_ID"] = str(task.attempt_id)
 
-        if self._config.worker_id:
-            env["IRIS_WORKER_ID"] = self._config.worker_id
+        if self._worker_id:
+            env["IRIS_WORKER_ID"] = self._worker_id
 
         if self._config.controller_address:
             # Only rewrite localhost addresses for Docker containers

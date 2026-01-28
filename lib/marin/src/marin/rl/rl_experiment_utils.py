@@ -183,6 +183,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
     # Create RLJobConfig using the unified interface
     job_config = RLJobConfig(
         model=model_config,
+        vocab_size=hf_config.vocab_size,
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=opt_config,
@@ -211,6 +212,7 @@ def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumCo
                 logprobs=1,
                 top_k=config.inference_top_k,
             ),
+            load_format="dummy",
         ),
         initial_checkpoint=config.model_config.checkpoint,
         rollout_storage=rollout_storage,

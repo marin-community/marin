@@ -51,11 +51,6 @@ except ImportError:
 
 # Disable multiprocessing to have direct access to the model weights
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
-# Init vLLM model with random weights to speed up bootstrap time, because
-# model weights are synced from trainer later on
-os.environ["JAX_RANDOM_WEIGHTS"] = "True"
-# Skip jax precompile to speed up bootstrap time
-os.environ["SKIP_JAX_PRECOMPILE"] = "1"
 
 
 class InferenceMode(StrEnum):
@@ -73,6 +68,8 @@ class vLLMInferenceContextConfig:
     gpu_memory_utilization: float
     sampling_params: SamplingParams
     mode: InferenceMode = InferenceMode.SYNC
+    load_format: str = "auto"
+    enforce_eager: bool = True
 
 
 class vLLMInferenceContext(BaseInferenceContext):
@@ -128,7 +125,24 @@ class vLLMInferenceContext(BaseInferenceContext):
         return self.renderer.build_generation_prompt(messages)
 
     @staticmethod
+    def _patch_tpu_inference_registry():
+        """Register Qwen2ForCausalLM in tpu_inference if not present."""
+        try:
+            from tpu_inference.models.common import model_loader
+
+            if "Qwen2ForCausalLM" not in model_loader._MODEL_REGISTRY:
+                logger.info("Patching tpu_inference to support Qwen2ForCausalLM")
+                from tpu_inference.models.jax.qwen2 import Qwen2ForCausalLM
+
+                model_loader.register_model("Qwen2ForCausalLM", Qwen2ForCausalLM)
+        except ImportError:
+            logger.exception("Failed to patch tpu_inference registry")
+            raise
+
+    @staticmethod
     def _get_llm_engine(inference_config: vLLMInferenceContextConfig):
+        vLLMInferenceContext._patch_tpu_inference_registry()
+
         if inference_config.mode == InferenceMode.SYNC:
             if LLM is None:
                 raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
@@ -143,6 +157,8 @@ class vLLMInferenceContext(BaseInferenceContext):
             max_model_len=inference_config.max_model_len,
             tensor_parallel_size=inference_config.tensor_parallel_size,
             gpu_memory_utilization=inference_config.gpu_memory_utilization,
+            load_format=inference_config.load_format,
+            enforce_eager=inference_config.enforce_eager,
         )
 
     def _convert_vllm_state_dict_to_trainer_keys(
@@ -208,6 +224,15 @@ class vLLMInferenceContext(BaseInferenceContext):
         """
         return np.array(choice.prompt_token_ids, dtype=np.int32)
 
+    def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
+        """Extract response token IDs directly from the choice.
+
+        Uses the response_token_ids attached during vLLM-to-OpenAI conversion,
+        avoiding the lossy convert_ids_to_tokens/convert_tokens_to_ids round-trip
+        that fails for padding token IDs not in the tokenizer vocabulary.
+        """
+        return np.array(choice.response_token_ids, dtype=np.int32)
+
     def _convert_vllm_to_openai(self, request_output: RequestOutput) -> ChatCompletion:
         """Convert vLLM RequestOutput to OpenAI ChatCompletion format."""
         choices = []
@@ -215,8 +240,10 @@ class vLLMInferenceContext(BaseInferenceContext):
             # Convert logprobs
             logprobs_content = []
             for token_id, logprob_dict in zip(output.token_ids, output.logprobs, strict=False):
-                # Get the token string
+                # Get the token string (may be None for padding token IDs)
                 token = self.tokenizer.convert_ids_to_tokens(token_id)
+                if token is None:
+                    token = f"<id_{token_id}>"
 
                 # Get the logprob for the selected token
                 selected_logprob = None
@@ -226,9 +253,12 @@ class vLLMInferenceContext(BaseInferenceContext):
                     if logprob_obj.rank == 1:
                         selected_logprob = logprob_obj.logprob
 
+                    token_str = self.tokenizer.convert_ids_to_tokens(tid)
+                    if token_str is None:
+                        token_str = f"<id_{tid}>"
                     top_logprobs.append(
                         TopLogprob(
-                            token=self.tokenizer.convert_ids_to_tokens(tid),
+                            token=token_str,
                             logprob=logprob_obj.logprob,
                             bytes=None,
                         )
@@ -252,10 +282,11 @@ class vLLMInferenceContext(BaseInferenceContext):
                 ),
             )
 
-            # Attach the prompt token IDs as a custom attribute to the choice since
-            # we need this since vLLM is injecting an extra BOS token at the start
-            # of the prompt.
+            # Attach token IDs as custom attributes to the choice.
+            # prompt_token_ids: needed since vLLM injects an extra BOS token at the start.
+            # response_token_ids: avoids lossy convert_ids_to_tokens/convert_tokens_to_ids round-trip.
             choice.prompt_token_ids = request_output.prompt_token_ids
+            choice.response_token_ids = list(output.token_ids)
             choices.append(choice)
 
         # Create usage information
