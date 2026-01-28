@@ -217,6 +217,24 @@ message EnvironmentConfig {
 }
 
 // ============================================================================
+// ENTRYPOINT
+// ============================================================================
+
+// Job entrypoint - either a cloudpickled callable or a command line.
+// Exactly one must be set.
+message Entrypoint {
+  oneof kind {
+    bytes callable = 1;           // cloudpickle.dumps((fn, args, kwargs))
+    CommandEntrypoint command = 2; // Command-line execution
+  }
+}
+
+// Command-line entrypoint for script execution.
+message CommandEntrypoint {
+  repeated string argv = 1;  // e.g., ["python", "train.py", "--epochs", "10"]
+}
+
+// ============================================================================
 // WORKER ATTRIBUTES
 // ============================================================================
 
@@ -311,7 +329,7 @@ message Controller {
   // --- Job Lifecycle ---
   message LaunchJobRequest {
     string name = 1;
-    bytes serialized_entrypoint = 2;   // cloudpickle(Entrypoint)
+    Entrypoint entrypoint = 2;              // Job entrypoint (callable or command)
     ResourceSpecProto resources = 3;        // Full resource specification
     EnvironmentConfig environment = 4;  // Environment configuration
 
@@ -540,7 +558,7 @@ message Worker {
     int32 task_index = 3;           // 0-indexed task number
     int32 num_tasks = 4;            // Total tasks in job (for IRIS_NUM_TASKS)
 
-    bytes serialized_entrypoint = 5;
+    Entrypoint entrypoint = 5;      // Job entrypoint (callable or command)
     EnvironmentConfig environment = 6;
     string bundle_gcs_path = 7;
     ResourceSpecProto resources = 8;

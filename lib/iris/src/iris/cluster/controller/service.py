@@ -127,7 +127,7 @@ class ControllerServiceImpl:
 
                 request = cluster_pb2.Controller.LaunchJobRequest(
                     name=request.name,
-                    serialized_entrypoint=request.serialized_entrypoint,
+                    entrypoint=request.entrypoint,
                     resources=request.resources,
                     environment=request.environment,
                     bundle_gcs_path=bundle_path,

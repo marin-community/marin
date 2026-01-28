@@ -83,6 +83,13 @@ def transition_task(
     )
 
 
+def _make_test_entrypoint() -> cluster_pb2.Entrypoint:
+    """Create a minimal Entrypoint proto for testing."""
+    entrypoint = cluster_pb2.Entrypoint()
+    entrypoint.command.argv[:] = ["python", "-c", "pass"]
+    return entrypoint
+
+
 @pytest.fixture
 def job_request():
     """Create a minimal LaunchJobRequest for testing."""
@@ -90,7 +97,7 @@ def job_request():
     def _make(name: str = "test-job") -> cluster_pb2.Controller.LaunchJobRequest:
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
-            serialized_entrypoint=b"test",
+            entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         )
@@ -369,7 +376,7 @@ def test_failure_domain_kills_remaining_tasks(worker_metadata):
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-task-job",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         max_task_failures=0,
@@ -399,7 +406,7 @@ def test_max_task_failures_tolerance(worker_metadata):
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="tolerant-job",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         max_task_failures=1,
@@ -431,7 +438,7 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="preemption-job",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=2),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         max_task_failures=0,
@@ -676,7 +683,7 @@ def make_job_request():
     ) -> cluster_pb2.Controller.LaunchJobRequest:
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
-            serialized_entrypoint=b"test",
+            entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
             environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         )
@@ -806,7 +813,7 @@ def test_coscheduled_task_failure_kills_siblings(worker_metadata):
     # Create coscheduled job with 4 tasks
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
     )
@@ -849,7 +856,7 @@ def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
     # Use max_retries_preemption=1 (not 0 because 0 gets defaulted to 100)
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         max_retries_preemption=1,  # Allow one retry, so second failure is terminal
@@ -907,7 +914,7 @@ def test_coscheduled_task_success_does_not_affect_siblings(worker_metadata):
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
     )
@@ -942,7 +949,7 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(worker_metadata):
     # Regular job (no coscheduling)
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="regular-job",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         max_task_failures=3,  # Allow failures without killing the job
@@ -985,7 +992,7 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
         max_retries_failure=1,  # Allow one retry
@@ -1017,3 +1024,105 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
 
     # No tasks marked for kill
     assert len(txn.tasks_to_kill) == 0
+
+
+# =============================================================================
+# compute_demand_entries Tests
+# =============================================================================
+
+
+def test_compute_demand_entries_counts_coscheduled_job_once():
+    """Coscheduled job with 4 tasks should count as 1 slice demand, not 4."""
+    from iris.cluster.controller.controller import compute_demand_entries
+    from iris.cluster.types import DeviceType
+
+    state = ControllerState()
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            replicas=4,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    req.coscheduling.group_by = "tpu-name"
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    assert len(demand) == 1
+    assert demand[0].device_type == DeviceType.TPU
+    assert demand[0].device_variant == "v5litepod-16"
+    assert demand[0].count == 1  # Only 1 slice needed for coscheduled job
+
+
+def test_compute_demand_entries_counts_non_coscheduled_tasks_individually():
+    """Non-coscheduled job with 4 tasks should count as 4 slices demand."""
+    from iris.cluster.controller.controller import compute_demand_entries
+    from iris.cluster.types import DeviceType
+
+    state = ControllerState()
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="regular-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            replicas=4,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    # No coscheduling set
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    assert len(demand) == 1
+    assert demand[0].device_type == DeviceType.TPU
+    assert demand[0].device_variant == "v5litepod-16"
+    assert demand[0].count == 4  # 4 separate slices for non-coscheduled job
+
+
+def test_compute_demand_entries_mixed_coscheduled_and_regular():
+    """Mix of coscheduled and regular jobs should count correctly."""
+    from iris.cluster.controller.controller import compute_demand_entries
+    from iris.cluster.types import DeviceType
+
+    state = ControllerState()
+
+    # Coscheduled job with 4 tasks -> 1 slice
+    coscheduled_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            replicas=4,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    coscheduled_req.coscheduling.group_by = "tpu-name"
+    submit_job(state, "j1", coscheduled_req)
+
+    # Regular job with 2 tasks -> 2 slices
+    regular_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="regular-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            replicas=2,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+    )
+    submit_job(state, "j2", regular_req)
+
+    demand = compute_demand_entries(state)
+    assert len(demand) == 1
+    assert demand[0].device_type == DeviceType.TPU
+    assert demand[0].device_variant == "v5litepod-16"
+    assert demand[0].count == 3  # 1 (coscheduled) + 2 (regular) = 3 slices

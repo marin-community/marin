@@ -28,19 +28,16 @@ from pathlib import Path
 from typing import Protocol
 
 from iris.rpc import cluster_pb2
+from iris.cluster.types import Entrypoint
 from iris.cluster.worker.worker_types import TaskLogs, LogLine
 
 
 @dataclass
 class ContainerConfig:
-    """Configuration for running a container.
-
-    The serialized_entrypoint contains cloudpickle-serialized (callable, args, kwargs).
-    We pass the bytes through to avoid re-serialization issues with cloudpickle.
-    """
+    """Configuration for running a container."""
 
     image: str
-    serialized_entrypoint: bytes
+    entrypoint: Entrypoint
     env: dict[str, str]
     workdir: str = "/app"
     resources: cluster_pb2.ResourceSpecProto | None = None
@@ -160,20 +157,24 @@ class DockerRuntime:
     Uses subprocess for lifecycle, Docker Python SDK for stats/logs.
     """
 
-    def _build_command(self, serialized_entrypoint: bytes) -> list[str]:
-        """Build the Python command that executes the entrypoint in a container.
+    def _build_command(self, entrypoint: Entrypoint) -> list[str]:
+        """Build the container command from the entrypoint.
 
-        Takes already-serialized bytes to avoid re-serialization issues with cloudpickle.
-        The bytes contain a cloudpickle-serialized (callable, args, kwargs) tuple.
-        We serialize as a tuple (not an Entrypoint class) because job containers
-        don't have iris installed.
+        For callable entrypoints: generates a Python thunk that deserializes
+        and executes the cloudpickled function.
 
-        Entrypoint format: The serialized bytes decode to (callable, args, kwargs) tuple.
-        This format is produced by Entrypoint.serialize() in iris.cluster.types.
-        We deserialize directly here rather than using Entrypoint.deserialize() because
-        job containers don't have iris installed.
+        For command entrypoints: returns the command directly.
         """
-        encoded = base64.b64encode(serialized_entrypoint).decode()
+        if entrypoint.is_command:
+            assert entrypoint.command is not None
+            return entrypoint.command
+
+        # Callable entrypoint: build Python thunk
+        import cloudpickle
+
+        assert entrypoint.callable is not None
+        serialized = cloudpickle.dumps((entrypoint.callable, entrypoint.args, entrypoint.kwargs))
+        encoded = base64.b64encode(serialized).decode()
 
         thunk = f"""
 import cloudpickle
@@ -235,7 +236,7 @@ except Exception:
             cmd.extend(["-p", f"{host_port}:{host_port}"])
 
         cmd.append(config.image)
-        cmd.extend(self._build_command(config.serialized_entrypoint))
+        cmd.extend(self._build_command(config.entrypoint))
 
         result = subprocess.run(
             cmd,

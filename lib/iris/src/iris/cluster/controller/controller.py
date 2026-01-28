@@ -58,6 +58,10 @@ def compute_demand_entries(state: ControllerState) -> list:
     Groups pending tasks by device type and variant, returning DemandEntry objects.
     CPU-only tasks get DeviceType.CPU with variant=None.
 
+    For coscheduled jobs, all tasks in the job share a single slice, so we count
+    the job once (not each task). For non-coscheduled jobs, each task counts as
+    one slice of demand.
+
     Args:
         state: Controller state with pending tasks.
 
@@ -74,10 +78,18 @@ def compute_demand_entries(state: ControllerState) -> list:
         total_memory_bytes: int = 0
 
     demand_by_device: dict[tuple[DeviceType, str | None], DemandAccumulator] = {}
+    coscheduled_jobs_counted: set[str] = set()
+
     for task in state.peek_pending_tasks():
         job = state.get_job(task.job_id)
         if not job:
             continue
+
+        # For coscheduled jobs, only count once per job (all tasks share one slice)
+        if job.is_coscheduled:
+            if job.job_id in coscheduled_jobs_counted:
+                continue
+            coscheduled_jobs_counted.add(job.job_id)
 
         device = job.request.resources.device
         device_type = get_device_type_enum(device)
@@ -417,7 +429,7 @@ class Controller:
                     task_id=str(task.task_id),
                     task_index=task.task_index,
                     num_tasks=len(self._state.get_job_tasks(task.job_id)),
-                    serialized_entrypoint=job.request.serialized_entrypoint,
+                    entrypoint=job.request.entrypoint,
                     environment=cluster_pb2.EnvironmentConfig(
                         workspace=job.request.environment.workspace,
                         env_vars=dict(job.request.environment.env_vars),

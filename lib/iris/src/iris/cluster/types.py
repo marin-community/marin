@@ -493,34 +493,79 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
 class Entrypoint:
     """Job entrypoint specification.
 
-    A callable with args/kwargs that will be executed by the worker.
-    The callable must be picklable (via cloudpickle).
+    Supports two execution modes:
+    1. Callable: A Python function with args/kwargs (cloudpickled)
+    2. Command: A command-line invocation (e.g., ["python", "train.py", "--epochs", "10"])
 
-    Example:
+    Examples:
+        # Callable entrypoint
         entrypoint = Entrypoint.from_callable(my_func, arg1, arg2, key=val)
+
+        # Command entrypoint
+        entrypoint = Entrypoint.from_command("python", "train.py", "--epochs", "10")
     """
 
-    callable: Callable[..., Any]
+    # Callable entrypoint (mutually exclusive with command)
+    callable: Callable[..., Any] | None = None
     args: tuple = ()
     kwargs: dict[str, Any] = field(default_factory=dict)
+
+    # Command entrypoint (mutually exclusive with callable)
+    command: list[str] | None = None
+
+    def __post_init__(self):
+        has_callable = self.callable is not None
+        has_command = self.command is not None
+        if has_callable == has_command:
+            raise ValueError("Exactly one of 'callable' or 'command' must be set")
+
+    @property
+    def is_callable(self) -> bool:
+        return self.callable is not None
+
+    @property
+    def is_command(self) -> bool:
+        return self.command is not None
 
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
         return cls(callable=fn, args=args, kwargs=kwargs)
 
-    def serialize(self) -> bytes:
-        """Serialize for transmission to workers.
+    @classmethod
+    def from_command(cls, *argv: str) -> "Entrypoint":
+        """Create a command-line entrypoint.
 
-        Serializes as tuple (callable, args, kwargs) rather than the Entrypoint class
-        because job containers don't have iris installed.
+        Args:
+            *argv: Command and arguments (e.g., "python", "train.py", "--epochs", "10")
+
+        Returns:
+            Entrypoint configured for command execution
         """
-        import cloudpickle
+        if not argv:
+            raise ValueError("Command must have at least one argument")
+        return cls(command=list(argv))
 
-        return cloudpickle.dumps((self.callable, self.args, self.kwargs))
+    def to_proto(self) -> cluster_pb2.Entrypoint:
+        """Convert to protobuf representation."""
+        proto = cluster_pb2.Entrypoint()
+        if self.callable is not None:
+            import cloudpickle
 
-    @staticmethod
-    def deserialize(serialized: bytes) -> tuple[Callable[..., Any], tuple, dict[str, Any]]:
-        """Deserialize entrypoint bytes to (callable, args, kwargs) tuple."""
-        import cloudpickle
+            proto.callable = cloudpickle.dumps((self.callable, self.args, self.kwargs))
+        elif self.command is not None:
+            proto.command.argv[:] = self.command
+        return proto
 
-        return cloudpickle.loads(serialized)
+    @classmethod
+    def from_proto(cls, proto: cluster_pb2.Entrypoint) -> "Entrypoint":
+        """Create from protobuf representation."""
+        kind = proto.WhichOneof("kind")
+        if kind == "callable":
+            import cloudpickle
+
+            fn, args, kwargs = cloudpickle.loads(proto.callable)
+            return cls(callable=fn, args=args, kwargs=kwargs)
+        elif kind == "command":
+            return cls(command=list(proto.command.argv))
+        else:
+            raise ValueError(f"Unknown entrypoint kind: {kind}")

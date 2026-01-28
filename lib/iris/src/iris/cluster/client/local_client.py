@@ -153,16 +153,33 @@ class _LocalContainer:
             )
             set_job_info(job_info)
 
-            fn, args, kwargs = Entrypoint.deserialize(self.config.serialized_entrypoint)
+            entrypoint = self.config.entrypoint
 
             # Check if killed before executing
             if self._killed.is_set():
                 self._exit_code = 137
                 return
 
-            # Execute the function with streaming output capture
+            # Execute based on entrypoint type
             with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                fn(*args, **kwargs)
+                if entrypoint.is_callable:
+                    assert entrypoint.callable is not None
+                    entrypoint.callable(*entrypoint.args, **entrypoint.kwargs)
+                else:
+                    # Command entrypoint: run subprocess with output capture
+                    assert entrypoint.command is not None
+                    import subprocess
+
+                    result = subprocess.run(
+                        entrypoint.command,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    stdout_capture.write(result.stdout)
+                    stderr_capture.write(result.stderr)
+                    if result.returncode != 0:
+                        raise RuntimeError(f"Command failed with exit code {result.returncode}")
             self._exit_code = 0
 
         except Exception as e:

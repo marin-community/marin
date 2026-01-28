@@ -29,6 +29,7 @@ from iris.rpc import cluster_pb2
 from iris.time_utils import ExponentialBackoff, now_ms
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.rpc.errors import format_exception_with_traceback
+from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import ImageCache, ImageProvider
 from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
@@ -477,10 +478,12 @@ class Worker:
             iris_env = self._build_iris_env(task)
             env.update(iris_env)
 
-            # Pass serialized entrypoint bytes directly to avoid cloudpickle re-serialization issues
+            # Convert proto entrypoint to typed Entrypoint
+            entrypoint = Entrypoint.from_proto(task.request.entrypoint)
+
             config = ContainerConfig(
                 image=build_result.image_tag,
-                serialized_entrypoint=task.request.serialized_entrypoint,
+                entrypoint=entrypoint,
                 env=env,
                 resources=task.request.resources if task.request.HasField("resources") else None,
                 timeout_seconds=task.request.timeout_seconds or None,

@@ -32,6 +32,14 @@ from iris.cluster.types import JobId, WorkerId
 from iris.rpc import cluster_pb2
 from iris.time_utils import now_ms
 
+
+def _make_test_entrypoint() -> cluster_pb2.Entrypoint:
+    """Create a minimal Entrypoint proto for testing."""
+    entrypoint = cluster_pb2.Entrypoint()
+    entrypoint.command.argv[:] = ["python", "-c", "pass"]
+    return entrypoint
+
+
 # =============================================================================
 # Test Helpers
 # =============================================================================
@@ -151,7 +159,7 @@ def make_worker_metadata():
 def job_request():
     return cluster_pb2.Controller.LaunchJobRequest(
         name="test-job",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
     )
@@ -296,7 +304,7 @@ def test_list_jobs_includes_task_counts(client, state):
     # Submit a job with multiple replicas (replicas is on ResourceSpecProto)
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-replica-job",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
         environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
     )

@@ -72,7 +72,7 @@ class RemoteClusterClient:
         constraints: list[cluster_pb2.Constraint] | None = None,
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
     ) -> None:
-        serialized = entrypoint.serialize()
+        entrypoint_proto = entrypoint.to_proto()
 
         env_config = cluster_pb2.EnvironmentConfig(
             workspace=environment.workspace if environment else "/app",
@@ -89,7 +89,7 @@ class RemoteClusterClient:
         if self._bundle_gcs_path:
             request = cluster_pb2.Controller.LaunchJobRequest(
                 name=job_id,
-                serialized_entrypoint=serialized,
+                entrypoint=entrypoint_proto,
                 resources=resources,
                 environment=env_config,
                 bundle_gcs_path=self._bundle_gcs_path,
@@ -103,7 +103,7 @@ class RemoteClusterClient:
         else:
             request = cluster_pb2.Controller.LaunchJobRequest(
                 name=job_id,
-                serialized_entrypoint=serialized,
+                entrypoint=entrypoint_proto,
                 resources=resources,
                 environment=env_config,
                 bundle_blob=self._bundle_blob or b"",
