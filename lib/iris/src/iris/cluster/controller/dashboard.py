@@ -33,7 +33,8 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.logging import LogBuffer, logs_api_response, logs_page_response
+from iris.cluster.dashboard_common import logs_api_response, logs_page_response
+from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 
