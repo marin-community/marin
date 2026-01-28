@@ -91,6 +91,8 @@ class VLMEvalHarnessConfig:
     bootstrap_iters: int = 0
     apply_chat_template: bool = True
     confirm_run_unsafe_code: bool = True
+    custom_task_path: str | None = None
+    """Path to custom VLM task definitions (YAML files). If None, uses default configs/vlm_tasks/."""
     generation_kwargs: dict = field(
         default_factory=lambda: {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
     )
@@ -500,6 +502,25 @@ class LevanterVLMHarnessLM(TemplateLM):
         return kwargs
 
 
+def _get_default_vlm_tasks_path() -> str:
+    """Get the default path to VLM task configurations."""
+    import os
+    # Try to find configs/vlm_tasks relative to this file or the project root
+    # This file is at lib/levanter/src/levanter/vlm_eval_harness.py
+    # configs/vlm_tasks is at the project root
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    # Go up 4 levels: levanter -> src -> levanter -> lib -> project_root
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_dir))))
+    vlm_tasks_path = os.path.join(project_root, "configs", "vlm_tasks")
+    if os.path.exists(vlm_tasks_path):
+        return vlm_tasks_path
+    # Fallback: try relative to current working directory
+    cwd_path = os.path.join(os.getcwd(), "configs", "vlm_tasks")
+    if os.path.exists(cwd_path):
+        return cwd_path
+    return vlm_tasks_path  # Return default even if not found
+
+
 def run_vlm_eval_harness(
     model: LlavaOnevisionModel,
     tokenizer: HfTokenizer,
@@ -526,7 +547,19 @@ def run_vlm_eval_harness(
     Returns:
         Dictionary containing evaluation results
     """
+    import os
     from lm_eval import evaluator
+    from lm_eval.tasks import TaskManager
+
+    # Register custom VLM tasks
+    custom_task_path = config.custom_task_path or _get_default_vlm_tasks_path()
+    if os.path.exists(custom_task_path):
+        logger.info(f"Registering custom VLM tasks from: {custom_task_path}")
+        # Use TaskManager to include custom tasks
+        task_manager = TaskManager(include_path=custom_task_path)
+    else:
+        logger.warning(f"Custom task path not found: {custom_task_path}")
+        task_manager = None
 
     # Create the VLM harness adapter
     vlm_lm = LevanterVLMHarnessLM(
@@ -545,14 +578,19 @@ def run_vlm_eval_harness(
     task_spec = config.to_task_spec()
     logger.info(f"Running VLM evaluation on tasks: {task_spec}")
 
-    results = evaluator.simple_evaluate(
-        model=vlm_lm,
-        tasks=task_spec,
-        limit=config.max_examples,
-        bootstrap_iters=config.bootstrap_iters,
-        apply_chat_template=config.apply_chat_template,
-        confirm_run_unsafe_code=config.confirm_run_unsafe_code,
-    )
+    # Use task_manager if custom tasks are registered
+    eval_kwargs = {
+        "model": vlm_lm,
+        "tasks": task_spec,
+        "limit": config.max_examples,
+        "bootstrap_iters": config.bootstrap_iters,
+        "apply_chat_template": config.apply_chat_template,
+        "confirm_run_unsafe_code": config.confirm_run_unsafe_code,
+    }
+    if task_manager is not None:
+        eval_kwargs["task_manager"] = task_manager
+
+    results = evaluator.simple_evaluate(**eval_kwargs)
 
     # Log results
     if results and "results" in results:
@@ -566,9 +604,252 @@ def run_vlm_eval_harness(
     return results
 
 
+def run_vlm_benchmark_direct(
+    model: LlavaOnevisionModel,
+    tokenizer: HfTokenizer,
+    image_processor: BatchImageProcessor,
+    benchmark_name: str,
+    EvalBatch: Axis,
+    EvalPos: Axis,
+    axis_resources: ResourceMapping,
+    mp: jmp.Policy | None = None,
+    max_examples: int | None = None,
+    generation_kwargs: dict | None = None,
+) -> dict:
+    """
+    Run a single VLM benchmark directly without lm-eval-harness task definitions.
+
+    This is useful for benchmarks not included in lm-eval-harness (MME, GQA,
+    RealWorldQA, SEED, MMStar, AI2D, OCRBench).
+
+    Args:
+        model: The LlavaOnevision model
+        tokenizer: HuggingFace tokenizer
+        image_processor: BatchImageProcessor
+        benchmark_name: Name of the benchmark (e.g., "mme", "gqa")
+        EvalBatch: Batch axis
+        EvalPos: Position axis
+        axis_resources: Resource mapping
+        mp: Mixed precision policy
+        max_examples: Maximum examples to evaluate
+        generation_kwargs: Generation parameters
+
+    Returns:
+        Dictionary with evaluation results
+    """
+    from datasets import load_dataset
+    from tqdm import tqdm
+
+    # Benchmark configurations
+    BENCHMARK_CONFIGS = {
+        "mme": {
+            "dataset": "lmms-lab/MME",
+            "split": "test",
+            "image_key": "image",
+            "question_key": "question",
+            "answer_key": "answer",
+            "prompt_template": "<image>\n{question}\nPlease answer yes or no.",
+        },
+        "gqa": {
+            "dataset": "lmms-lab/GQA",
+            "split": "testdev_balanced",
+            "image_key": "image",
+            "question_key": "question",
+            "answer_key": "answer",
+            "prompt_template": "<image>\n{question}\nAnswer the question using a single word or phrase.",
+        },
+        "realworldqa": {
+            "dataset": "xai-org/RealworldQA",
+            "split": "test",
+            "image_key": "image",
+            "question_key": "question",
+            "answer_key": "answer",
+            "prompt_template": "<image>\n{question}\nAnswer with the option letter (A, B, C, or D).",
+            "has_choices": True,
+        },
+        "seed": {
+            "dataset": "AILab-CVC/SEED-Bench",
+            "split": "test",
+            "image_key": "image",
+            "question_key": "question",
+            "answer_key": "answer",
+            "prompt_template": "<image>\n{question}\nAnswer with the option letter from the given choices.",
+            "has_choices": True,
+        },
+        "mmstar": {
+            "dataset": "Lin-Chen/MMStar",
+            "split": "val",
+            "image_key": "image",
+            "question_key": "question",
+            "answer_key": "answer",
+            "prompt_template": "<image>\n{question}\nAnswer with the option letter (A, B, C, or D).",
+            "has_choices": True,
+        },
+        "ai2d": {
+            "dataset": "lmms-lab/ai2d",
+            "split": "test",
+            "image_key": "image",
+            "question_key": "question",
+            "answer_key": "answer",
+            "prompt_template": "<image>\n{question}\nAnswer with the option letter.",
+            "has_choices": True,
+        },
+        "ocrbench": {
+            "dataset": "echo840/OCRBench",
+            "split": "test",
+            "image_key": "image",
+            "question_key": "question",
+            "answer_key": "answer",
+            "prompt_template": "<image>\n{question}",
+        },
+    }
+
+    benchmark_name = benchmark_name.lower()
+    if benchmark_name not in BENCHMARK_CONFIGS:
+        raise ValueError(f"Unknown benchmark: {benchmark_name}. Available: {list(BENCHMARK_CONFIGS.keys())}")
+
+    config = BENCHMARK_CONFIGS[benchmark_name]
+    gen_kwargs = generation_kwargs or {"max_gen_toks": 64, "temperature": 0.0}
+
+    # Load dataset
+    logger.info(f"Loading dataset: {config['dataset']}")
+    try:
+        dataset = load_dataset(config["dataset"], split=config["split"], trust_remote_code=True)
+    except Exception as e:
+        logger.error(f"Failed to load dataset {config['dataset']}: {e}")
+        return {"error": str(e)}
+
+    if max_examples:
+        dataset = dataset.select(range(min(max_examples, len(dataset))))
+
+    # Create VLM adapter
+    vlm_lm = LevanterVLMHarnessLM(
+        model=model,
+        tokenizer=tokenizer,
+        image_processor=image_processor,
+        EvalBatch=EvalBatch,
+        EvalPos=EvalPos,
+        axis_resources=axis_resources,
+        mp=mp,
+        generation_kwargs=gen_kwargs,
+    )
+
+    # Run evaluation
+    correct = 0
+    total = 0
+    results_list = []
+
+    for example in tqdm(dataset, desc=f"Evaluating {benchmark_name}"):
+        # Get image
+        image = example.get(config["image_key"])
+        if image is None:
+            continue
+
+        # Format prompt
+        question = example.get(config["question_key"], "")
+        prompt = config["prompt_template"].format(question=question)
+
+        # Add choices if applicable
+        if config.get("has_choices"):
+            choices = example.get("choices", example.get("choice_list", []))
+            if choices:
+                choice_text = "\n".join([f"{chr(ord('A')+i)}. {c}" for i, c in enumerate(choices)])
+                prompt = prompt.replace("{question}", f"{question}\n\n{choice_text}")
+
+        # Get reference answer
+        reference = example.get(config["answer_key"], "")
+
+        # Generate
+        try:
+            # Create a mock Instance for generate_until
+            class MockInstance:
+                def __init__(self, args):
+                    self.args = args
+
+            instance = MockInstance((prompt, gen_kwargs, {"visual": [image]}))
+            outputs = vlm_lm.generate_until([instance], disable_tqdm=True)
+            prediction = outputs[0] if outputs else ""
+        except Exception as e:
+            logger.warning(f"Generation failed: {e}")
+            prediction = ""
+
+        # Evaluate
+        is_correct = _evaluate_answer(prediction, reference, benchmark_name)
+        if is_correct:
+            correct += 1
+        total += 1
+
+        results_list.append({
+            "prediction": prediction,
+            "reference": str(reference),
+            "correct": is_correct,
+        })
+
+    accuracy = correct / total if total > 0 else 0.0
+    logger.info(f"{benchmark_name} accuracy: {accuracy:.4f} ({correct}/{total})")
+
+    return {
+        "benchmark": benchmark_name,
+        "accuracy": accuracy,
+        "correct": correct,
+        "total": total,
+        "results": results_list[:100],  # Sample results
+    }
+
+
+def _evaluate_answer(prediction: str, reference: str, benchmark_name: str) -> bool:
+    """Evaluate if prediction matches reference for different benchmarks."""
+    import re
+    import string
+
+    pred = prediction.strip().lower()
+    ref = str(reference).strip().lower()
+
+    # For yes/no benchmarks (MME)
+    if benchmark_name == "mme":
+        pred_yn = "yes" if "yes" in pred else ("no" if "no" in pred else pred.split()[0] if pred else "")
+        return pred_yn == ref
+
+    # For multiple choice benchmarks
+    if benchmark_name in ["realworldqa", "seed", "mmstar", "ai2d"]:
+        # Extract letter from prediction
+        pred_letter = ""
+        if pred and pred[0] in "abcdefgh":
+            pred_letter = pred[0]
+        else:
+            for char in pred:
+                if char in "abcdefgh":
+                    pred_letter = char
+                    break
+
+        # Handle reference (could be letter or index)
+        if ref.isdigit():
+            ref_letter = chr(ord("a") + int(ref))
+        elif len(ref) == 1 and ref in "abcdefgh":
+            ref_letter = ref
+        else:
+            ref_letter = ref[0] if ref and ref[0] in "abcdefgh" else ref
+
+        return pred_letter == ref_letter
+
+    # For open-ended QA (GQA, OCRBench)
+    # Normalize and compare
+    def normalize(s):
+        s = s.lower()
+        s = s.translate(str.maketrans("", "", string.punctuation))
+        s = " ".join(s.split())
+        return s
+
+    pred_norm = normalize(pred)
+    ref_norm = normalize(ref)
+
+    return pred_norm == ref_norm or ref_norm in pred_norm
+
+
 __all__ = [
     "VLMTaskConfig",
     "VLMEvalHarnessConfig",
     "LevanterVLMHarnessLM",
     "run_vlm_eval_harness",
+    "run_vlm_benchmark_direct",
 ]

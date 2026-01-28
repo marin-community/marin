@@ -40,7 +40,14 @@ from levanter.models.llava_onevision import LlavaOnevisionConfig, LlavaOnevision
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
-from levanter.vlm_eval_harness import VLMEvalHarnessConfig, run_vlm_eval_harness
+from levanter.vlm_eval_harness import VLMEvalHarnessConfig, run_vlm_eval_harness, run_vlm_benchmark_direct
+
+
+# Benchmarks that are in lm-eval-harness
+LM_EVAL_HARNESS_TASKS = {"mmmu", "chartqa"}
+
+# Benchmarks that need direct evaluation
+DIRECT_EVAL_TASKS = {"mme", "gqa", "realworldqa", "seed", "mmstar", "ai2d", "ocrbench"}
 
 
 logger = logging.getLogger(__name__)
@@ -211,34 +218,93 @@ def main(config: EvalVLMConfig):
         logger.info("Starting VLM benchmark evaluation...")
         logger.info(f"Tasks: {config.eval_harness.task_spec}")
 
-        results = run_vlm_eval_harness(
-            model=model,
-            tokenizer=tokenizer,
-            image_processor=image_processor,
-            config=config.eval_harness,
-            EvalBatch=Batch,
-            EvalPos=Pos,
-            axis_resources=compute_axis_mapping,
-            mp=mp,
-        )
+        # Separate tasks into lm-eval-harness and direct evaluation
+        task_spec = config.eval_harness.task_spec
+        lm_eval_tasks = []
+        direct_tasks = []
+
+        for task in task_spec:
+            task_name = task.lower() if isinstance(task, str) else task.task.lower()
+            if task_name in LM_EVAL_HARNESS_TASKS:
+                lm_eval_tasks.append(task)
+            elif task_name in DIRECT_EVAL_TASKS:
+                direct_tasks.append(task_name)
+            else:
+                logger.warning(f"Unknown task: {task_name}, trying lm-eval-harness")
+                lm_eval_tasks.append(task)
+
+        all_results = {}
+
+        # Run lm-eval-harness tasks (MMMU, ChartQA)
+        if lm_eval_tasks:
+            logger.info(f"Running lm-eval-harness tasks: {lm_eval_tasks}")
+            harness_config = VLMEvalHarnessConfig(
+                task_spec=lm_eval_tasks,
+                max_examples=config.eval_harness.max_examples,
+                max_images=config.eval_harness.max_images,
+                generation_kwargs=config.eval_harness.generation_kwargs,
+                custom_task_path=config.eval_harness.custom_task_path,
+            )
+            harness_results = run_vlm_eval_harness(
+                model=model,
+                tokenizer=tokenizer,
+                image_processor=image_processor,
+                config=harness_config,
+                EvalBatch=Batch,
+                EvalPos=Pos,
+                axis_resources=compute_axis_mapping,
+                mp=mp,
+            )
+            if harness_results and "results" in harness_results:
+                all_results.update(harness_results["results"])
+
+        # Run direct evaluation tasks (MME, GQA, etc.)
+        if direct_tasks:
+            logger.info(f"Running direct evaluation tasks: {direct_tasks}")
+            for task_name in direct_tasks:
+                logger.info(f"Evaluating {task_name}...")
+                try:
+                    task_results = run_vlm_benchmark_direct(
+                        model=model,
+                        tokenizer=tokenizer,
+                        image_processor=image_processor,
+                        benchmark_name=task_name,
+                        EvalBatch=Batch,
+                        EvalPos=Pos,
+                        axis_resources=compute_axis_mapping,
+                        mp=mp,
+                        max_examples=config.eval_harness.max_examples,
+                        generation_kwargs=config.eval_harness.generation_kwargs,
+                    )
+                    all_results[task_name] = {
+                        "accuracy": task_results.get("accuracy", 0.0),
+                        "correct": task_results.get("correct", 0),
+                        "total": task_results.get("total", 0),
+                    }
+                    # Log to tracker
+                    levanter.tracker.log({
+                        f"vlm_eval/{task_name}/accuracy": task_results.get("accuracy", 0.0)
+                    })
+                except Exception as e:
+                    logger.error(f"Failed to evaluate {task_name}: {e}")
+                    all_results[task_name] = {"error": str(e)}
 
         # Print summary
         print("\n" + "=" * 60)
         print("VLM Benchmark Evaluation Results")
         print("=" * 60)
 
-        if results and "results" in results:
-            for task_name, metrics in results["results"].items():
-                print(f"\n{task_name}:")
-                for metric_name, value in metrics.items():
-                    if isinstance(value, (int, float)):
-                        print(f"  {metric_name}: {value:.4f}")
-        else:
-            print("No results available.")
+        for task_name, metrics in all_results.items():
+            print(f"\n{task_name}:")
+            for metric_name, value in metrics.items():
+                if isinstance(value, (int, float)):
+                    print(f"  {metric_name}: {value:.4f}" if isinstance(value, float) else f"  {metric_name}: {value}")
+                elif metric_name == "error":
+                    print(f"  ERROR: {value}")
 
         print("=" * 60)
 
-        return results
+        return {"results": all_results}
 
 
 if __name__ == "__main__":
