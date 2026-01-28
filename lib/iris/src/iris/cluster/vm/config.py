@@ -43,6 +43,43 @@ logger = logging.getLogger(__name__)
 # Re-export IrisClusterConfig from proto for public API
 IrisClusterConfig = config_pb2.IrisClusterConfig
 
+# Mapping from lowercase accelerator types to proto enum names
+_ACCELERATOR_TYPE_MAP = {
+    "cpu": "ACCELERATOR_TYPE_CPU",
+    "gpu": "ACCELERATOR_TYPE_GPU",
+    "tpu": "ACCELERATOR_TYPE_TPU",
+}
+
+
+def _normalize_accelerator_types(data: dict) -> None:
+    """Convert lowercase accelerator_type values to proto enum format.
+
+    Modifies data in-place, converting values like "tpu" to "ACCELERATOR_TYPE_TPU".
+    This allows YAML configs to use the simpler lowercase format while maintaining
+    compatibility with protobuf's enum parsing.
+    """
+    if "scale_groups" not in data:
+        return
+
+    for sg_data in data["scale_groups"].values():
+        if sg_data is None:
+            continue
+        if "accelerator_type" not in sg_data:
+            continue
+
+        accel_type = sg_data["accelerator_type"]
+        if isinstance(accel_type, str):
+            lower_type = accel_type.lower()
+            if lower_type in _ACCELERATOR_TYPE_MAP:
+                sg_data["accelerator_type"] = _ACCELERATOR_TYPE_MAP[lower_type]
+
+
+def _validate_accelerator_types(config: config_pb2.IrisClusterConfig) -> None:
+    """Validate that scale groups have explicit accelerator types."""
+    for name, sg_config in config.scale_groups.items():
+        if sg_config.accelerator_type == config_pb2.ACCELERATOR_TYPE_UNSPECIFIED:
+            raise ValueError(f"Scale group '{name}' must set accelerator_type to cpu, gpu, or tpu.")
+
 
 def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
     """Load cluster config from YAML file.
@@ -78,7 +115,8 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
         provider:
           tpu:
             project_id: my-project
-        accelerator_type: v5p-8
+        accelerator_type: tpu
+        accelerator_variant: v5p-8
         runtime_version: v2-alpha-tpuv5
         zones: [us-central1-a]
         min_slices: 0
@@ -136,7 +174,11 @@ def load_config(config_path: Path | str) -> config_pb2.IrisClusterConfig:
             elif "name" not in sg_data:
                 sg_data["name"] = name
 
+    # Convert lowercase accelerator types to enum format
+    _normalize_accelerator_types(data)
+
     config = ParseDict(data, config_pb2.IrisClusterConfig())
+    _validate_accelerator_types(config)
 
     logger.info(
         "Config loaded: provider=%s, scale_groups=%s",
@@ -417,7 +459,7 @@ def create_manual_autoscaler(
         name="manual",
         min_slices=0,
         max_slices=len(hosts),
-        accelerator_type="cpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         zones=["local"],
     )
 

@@ -37,7 +37,6 @@ def cli():
     default="localhost:5000",
     help="Docker registry for built images (optional for autoscaler-managed workers)",
 )
-@click.option("--max-concurrent-jobs", default=10, type=int, help="Max concurrent jobs")
 @click.option("--port-range", default="30000-40000", help="Port range for job ports (start-end)")
 @click.option(
     "--controller-address", default=None, help="Controller URL for auto-registration (e.g., http://controller:8080)"
@@ -72,7 +71,8 @@ def serve(
     click.echo(f"  Cache dir: {config.cache_dir}")
     if controller_address:
         click.echo(f"  Controller: {controller_address}")
-    worker._run_server()
+    worker.start()
+    worker.wait()  # Block until worker is stopped
 
 
 @cli.command()

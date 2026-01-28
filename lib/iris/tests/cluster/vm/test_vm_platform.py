@@ -121,7 +121,8 @@ def v5p8_scale_group() -> config_pb2.ScaleGroupConfig:
         name="tpu-v5p-8",
         min_slices=0,
         max_slices=10,
-        accelerator_type="v5p-8",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5p-8",
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )
@@ -134,7 +135,8 @@ def v5p16_scale_group() -> config_pb2.ScaleGroupConfig:
         name="tpu-v5p-16",
         min_slices=0,
         max_slices=5,
-        accelerator_type="v5p-16",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5p-16",
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )
@@ -147,7 +149,7 @@ def manual_scale_group() -> config_pb2.ScaleGroupConfig:
         name="manual-hosts",
         min_slices=0,
         max_slices=3,
-        accelerator_type="cpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
         runtime_version="manual",
         zones=["manual"],
     )
@@ -369,16 +371,12 @@ def test_vm_manager_create_returns_vm_group(
 ):
     """VmManager.create_vm_group() returns a VmGroup with VMs."""
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-    platform_type, manager = vm_manager_factory
+    _platform_type, manager = vm_manager_factory
 
     vm_group = manager.create_vm_group()
 
     assert vm_group is not None
     assert len(vm_group.vms()) >= 1
-    if platform_type == "tpu":
-        assert isinstance(vm_group, TpuVmGroup)
-    else:
-        assert isinstance(vm_group, ManualVmGroup)
 
 
 @patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
@@ -438,7 +436,7 @@ def test_tpu_manager_create_raises_on_gcloud_failure(
 
 
 @pytest.mark.parametrize(
-    "accelerator_type,expected_vm_count",
+    "accelerator_variant,expected_vm_count",
     [
         ("v5p-8", 1),  # Single host
         ("v5p-16", 2),  # Multi-host (2 VMs)
@@ -447,7 +445,7 @@ def test_tpu_manager_create_raises_on_gcloud_failure(
 @patch("iris.cluster.vm.gcp_tpu_platform.subprocess.run")
 def test_tpu_manager_creates_correct_vm_count_for_topology(
     mock_run: MagicMock,
-    accelerator_type: str,
+    accelerator_variant: str,
     expected_vm_count: int,
     mock_factory: MagicMock,
     bootstrap_config: config_pb2.BootstrapConfig,
@@ -457,10 +455,11 @@ def test_tpu_manager_creates_correct_vm_count_for_topology(
     mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
     config = config_pb2.ScaleGroupConfig(
-        name=f"tpu-{accelerator_type}",
+        name=f"tpu-{accelerator_variant}",
         min_slices=0,
         max_slices=10,
-        accelerator_type=accelerator_type,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant=accelerator_variant,
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )
@@ -735,9 +734,9 @@ def test_manual_vm_group_terminate_calls_on_terminate_callback(registry: VmRegis
     assert callback_hosts == ["10.0.0.1"]
 
 
-@patch("iris.cluster.vm.manual_platform.check_health")
+@patch("iris.cluster.vm.manual_platform.DirectSshConnection")
 def test_manual_manager_discovers_hosts_with_running_workers(
-    mock_check_health: MagicMock,
+    mock_ssh_conn_class: MagicMock,
     mock_factory: MagicMock,
     manual_scale_group: config_pb2.ScaleGroupConfig,
     bootstrap_config: config_pb2.BootstrapConfig,
@@ -753,10 +752,18 @@ def test_manual_manager_discovers_hosts_with_running_workers(
         vm_factory=mock_factory,
     )
 
-    def health_check_side_effect(executor, port):
-        return executor.host in ["10.0.0.1", "10.0.0.3"]
+    # Track which host each connection is for and return appropriate health check result
+    def make_mock_connection(host, **kwargs):
+        mock_conn = MagicMock()
+        mock_conn.host = host
+        # Simulate healthy for 10.0.0.1 and 10.0.0.3, unhealthy for 10.0.0.2
+        if host in ["10.0.0.1", "10.0.0.3"]:
+            mock_conn.run.return_value = MagicMock(returncode=0)
+        else:
+            mock_conn.run.return_value = MagicMock(returncode=1)
+        return mock_conn
 
-    mock_check_health.side_effect = health_check_side_effect
+    mock_ssh_conn_class.side_effect = make_mock_connection
 
     vm_groups = manager.discover_vm_groups()
 

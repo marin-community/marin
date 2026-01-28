@@ -87,8 +87,9 @@ COPY . .
 # Use the venv python
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Always install cloudpickle - required by iris to unpickle job entrypoints
-RUN uv pip install cloudpickle
+# Install the workspace project in editable mode (so imports work)
+# and ensure cloudpickle is available (required by iris to unpickle job entrypoints)
+RUN uv pip install -e . cloudpickle
 """
 
 
