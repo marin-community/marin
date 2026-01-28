@@ -771,7 +771,7 @@ def _start_vllm_native_server(
 
     vllm_bin = shutil.which("vllm") or "vllm"
     cmd: list[str] = [
-        vsllm_bin,
+        vllm_bin,
         "serve",
         model_name_or_path,
         "--trust-remote-code",
