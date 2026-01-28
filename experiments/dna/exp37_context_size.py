@@ -27,7 +27,7 @@ import dataclasses
 from experiments.dna.defaults import (
     FAST_RUN_CONFIG_V1,
     PROMOTERS_MRNA_256_DATASET_V1,
-    dna_llama_50m_256_v1,
+    dna_qwen3_0_6b_256_v1,
     dna_tokenize_rw_v1,
     dna_train,
 )
@@ -50,9 +50,9 @@ tokenized = dna_tokenize_rw_v1(
 )
 
 train_step = dna_train(
-    name=f"exp37-{name}-r01",
+    name=f"exp37-{name}-r02",
     tokenized=tokenized,
-    model_config=dna_llama_50m_256_v1,
+    model_config=dna_qwen3_0_6b_256_v1,
     train_config=train_config_256,
     tags=["dna", "exp37", "context-size", "fast"],
 )

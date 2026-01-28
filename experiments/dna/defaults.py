@@ -53,6 +53,7 @@ PROMOTERS_MRNA_NCRNA_DATASET_V1 = "bolinas-dna/genomes-v4-genome_set-animals-int
 # =============================================================================
 
 dna_qwen3_0_6b_v1 = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=DNA_SEQ_LEN_V1)
+dna_qwen3_0_6b_256_v1 = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=256)
 dna_qwen3_1_7b_v1 = dataclasses.replace(qwen3_1_7b, max_seq_len=DNA_SEQ_LEN_V1)
 dna_llama_50m_v1 = dataclasses.replace(llama_50m, max_seq_len=DNA_SEQ_LEN_V1)
 dna_llama_50m_256_v1 = dataclasses.replace(llama_50m, max_seq_len=256)
@@ -91,8 +92,8 @@ YOLO_RUN_CONFIG_V1 = SimpleTrainConfig(
 
 FAST_RUN_CONFIG_V1 = SimpleTrainConfig(
     resources=DNA_RESOURCES_V1,
-    train_batch_size=4096,
-    learning_rate=3e-3,
+    train_batch_size=2048,
+    learning_rate=1e-3,
     lr_schedule="inv",
     warmup=0.9,
     decay=0.1,

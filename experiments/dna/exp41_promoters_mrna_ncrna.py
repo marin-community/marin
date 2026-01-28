@@ -25,7 +25,7 @@ from experiments.dna.defaults import (
     FAST_RUN_CONFIG_V1,
     PROMOTERS_MRNA_DATASET_V1,
     PROMOTERS_MRNA_NCRNA_DATASET_V1,
-    dna_llama_50m_v1,
+    dna_qwen3_0_6b_v1,
     dna_tokenize_rw_v1,
     dna_train,
 )
@@ -52,9 +52,9 @@ for dataset in DATASETS:
     )
 
     train_step = dna_train(
-        name=f"exp41-{name}-r01",
+        name=f"exp41-{name}-r02",
         tokenized=tokenized,
-        model_config=dna_llama_50m_v1,
+        model_config=dna_qwen3_0_6b_v1,
         train_config=FAST_RUN_CONFIG_V1,
         tags=["dna", "exp41", "promoters", "fast"],
     )
