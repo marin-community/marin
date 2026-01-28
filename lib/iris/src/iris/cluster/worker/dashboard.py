@@ -21,10 +21,12 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
+from iris.cluster.worker.service import WorkerServiceImpl
+from iris.cluster.dashboard_common import logs_api_response, logs_page_response
+from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceWSGIApplication
 from iris.rpc.proto_utils import task_state_name
-from iris.cluster.worker.service import WorkerServiceImpl
 
 
 class FakeRequestContext:
@@ -239,10 +241,12 @@ class WorkerDashboard:
         service: WorkerServiceImpl,
         host: str = "0.0.0.0",
         port: int = 8080,
+        log_buffer: LogBuffer | None = None,
     ):
         self._service = service
         self._host = host
         self._port = port
+        self._log_buffer = log_buffer
         self._app = self._create_app()
         self._server: uvicorn.Server | None = None
 
@@ -260,16 +264,24 @@ class WorkerDashboard:
             # Web dashboard
             Route("/", self._dashboard),
             Route("/task/{task_id:path}", self._task_detail_page),
+            Route("/logs", self._logs_page),
             # REST API (for dashboard)
             # Note: logs route must come before get_task to avoid {task_id:path} matching "task-id/logs"
             Route("/api/stats", self._stats),
             Route("/api/tasks", self._list_tasks),
+            Route("/api/logs", self._api_logs),
             Route("/api/tasks/{task_id:path}/logs", self._get_logs),
             Route("/api/tasks/{task_id:path}", self._get_task),
             # Connect RPC - mount WSGI app wrapped for ASGI
             Mount(rpc_wsgi_app.path, app=rpc_app),
         ]
         return Starlette(routes=routes)
+
+    def _logs_page(self, request: Request) -> HTMLResponse:
+        return logs_page_response(request)
+
+    def _api_logs(self, request: Request):
+        return logs_api_response(request, self._log_buffer)
 
     def _health(self, _request: Request) -> JSONResponse:
         """Simple health check endpoint for bootstrap and load balancers."""

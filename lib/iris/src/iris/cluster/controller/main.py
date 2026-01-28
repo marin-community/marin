@@ -16,38 +16,15 @@
 
 import logging
 import signal
-import sys
 import threading
 from pathlib import Path
 
 import click
 
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.logging import configure_logging
 
 logger = logging.getLogger(__name__)
-
-
-def configure_logging(level: int = logging.INFO) -> None:
-    """Configure structured logging for the controller.
-
-    Sets up a consistent log format with timestamps and component names
-    that makes it easy to grep and analyze logs.
-    """
-    root = logging.getLogger()
-    root.setLevel(level)
-
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setLevel(level)
-
-    formatter = logging.Formatter(
-        fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    handler.setFormatter(formatter)
-
-    # Clear existing handlers to avoid duplicate logs
-    root.handlers.clear()
-    root.addHandler(handler)
 
 
 @click.group()
