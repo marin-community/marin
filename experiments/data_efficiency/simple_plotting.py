@@ -19,6 +19,7 @@ import argparse
 import pickle
 import numpy as np
 import json
+from pathlib import Path
 from scipy.optimize import curve_fit
 from sklearn.metrics import r2_score
 import matplotlib.colors as mcolors
@@ -134,10 +135,20 @@ def parse_run(run):
     run_dict = {}
     run_id = run.id
     run_dict["run_id"] = run_id
+
+    if "cda" in run_id:
+        print(f"\033[91mSkipping run {run_id} because it is a cda run\033[0m")
+        return None
+
     run_json_config = json.loads(run.json_config)
 
     num_steps = run_json_config["trainer"]["value"]["num_train_steps"]
     batch_size = run_json_config["trainer"]["value"]["train_batch_size"]
+
+    if "seq_len" not in run_json_config["model"]["value"]:
+        print(f"\033[91mSkipping run {run_id} because it does not have a seq_len\033[0m")
+        return None
+
     seq_len = run_json_config["model"]["value"]["seq_len"]
     base_tokens = None
 
@@ -357,6 +368,19 @@ def back_out_data(loss, law):
     # d = (A / (loss - C)) ** (1/B)
     A, B, C = law.params
     return (A / (loss - C)) ** (1 / B)
+
+
+def require_pickle(path, prerequisite_mode):
+    if not Path(path).exists():
+        raise FileNotFoundError(f"Missing cache {path}. Run '{prerequisite_mode}' first.")
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+def require_run_list(mode):
+    return require_pickle(
+        f"experiments/data_efficiency/cache/simple_{mode}_run_list.pkl", f"--mode {mode} --build_cache"
+    )
 
 
 def construct_best_run_dict(run_list):
@@ -613,7 +637,7 @@ def plot_ensemble_scaling(model_name, base_tokens):
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(
-        f"experiments/data_efficiency/plots/ensemble_hparams/ensemble_scaling_fits_{value_pretty_name_dict[base_tokens]}_{value_pretty_name_dict[model_name]}.png",
+        f"experiments/data_efficiency/simple_plots/ensemble_hparams/ensemble_scaling_fits_{value_pretty_name_dict[base_tokens]}_{value_pretty_name_dict[model_name]}.png",
         bbox_inches="tight",
     )
     plt.close()
@@ -641,7 +665,7 @@ def plot_ensemble_scaling(model_name, base_tokens):
     )
     plt.tight_layout()
     plt.savefig(
-        f"experiments/data_efficiency/plots/ensemble_hparams/ensemble_scaling_heatmaps_{value_pretty_name_dict[base_tokens]}_{value_pretty_name_dict[model_name]}.png",
+        f"experiments/data_efficiency/simple_plots/ensemble_hparams/ensemble_scaling_heatmaps_{value_pretty_name_dict[base_tokens]}_{value_pretty_name_dict[model_name]}.png",
         bbox_inches="tight",
     )
     plt.close()
@@ -658,7 +682,7 @@ def plot_ensemble_scaling(model_name, base_tokens):
 
         plt.tight_layout()
         plt.savefig(
-            "experiments/data_efficiency/plots/ensemble_hparams/example_200M_varying_hparams.png", bbox_inches="tight"
+            "experiments/data_efficiency/simple_plots/ensemble_hparams/example_200M_varying_hparams.png", bbox_inches="tight"
         )
         plt.close()
 
@@ -802,7 +826,7 @@ def plot_model_scaling(best_run_dict, fit_type="power_law"):
     # Automatic spacing adjustments
     plt.subplots_adjust(wspace=0.3)  # Horizontal spacing between subplots
     plt.tight_layout(rect=[0, 0.05, 1, 0.95])  # Leave space for tables at bottom
-    plt.savefig("experiments/data_efficiency/plots/model_scaling.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/model_scaling.png", bbox_inches="tight")
     plt.close()
 
     return power_laws, run_losses
@@ -854,7 +878,7 @@ def plot_seed_science(train_seed_losses, data_seed_losses, both_seed_losses):
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/seed_science.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/seed_science.png", bbox_inches="tight")
     plt.close()
 
 
@@ -975,7 +999,7 @@ def plot_token_scaling(best_run_dict, fit_type="power_law"):
     # Automatic spacing adjustments
     plt.subplots_adjust(hspace=0.4)
     plt.tight_layout(rect=[0, 0.05, 1, 0.95])
-    plt.savefig("experiments/data_efficiency/plots/token_scaling.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/token_scaling.png", bbox_inches="tight")
     plt.close()
 
     # Return asymptotes for reuse
@@ -1016,7 +1040,7 @@ def plot_asymptotes_vs_model_size(model_sizes, asymptotes):
         plt.text(x * 1.1, y, f"{y:.3f}", ha="center", va="bottom")
 
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/asymptotes_vs_model_size.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/asymptotes_vs_model_size.png", bbox_inches="tight")
     plt.close()
 
 
@@ -1185,7 +1209,7 @@ def plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fi
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/standard_seed_scaling_model_size.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/standard_seed_scaling_model_size.png", bbox_inches="tight")
     plt.close()
 
     """Plot 1b: Same but for standard tuning without regularization"""
@@ -1228,15 +1252,15 @@ def plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fi
     plt.xticks([], [], minor=True)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/baseline_seed_scaling.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/baseline_seed_scaling.png", bbox_inches="tight")
     plt.close()
 
     """Plot 2: Varying seed token count, infinite model size"""
 
     plt.figure(figsize=SEED_SCALING_FIGSIZE, dpi=300)
 
-    best_parameter_scaling_losses = pickle.load(
-        open("experiments/data_efficiency/cache/best_parameter_scaling_losses.pkl", "rb")
+    best_parameter_scaling_losses = require_pickle(
+        "experiments/data_efficiency/cache/simple_best_parameter_scaling_losses.pkl", "infinite-model-scaling"
     )
     epoched_losses = [min(losses) for losses in best_parameter_scaling_losses.values()]
     epoched_power_law = PowerScalingLaw(var_name="D")
@@ -1308,13 +1332,13 @@ def plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fi
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/standard_seed_scaling_token_count.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/standard_seed_scaling_token_count.png", bbox_inches="tight")
     plt.close()
 
     return asymptotes, seed_token_power_law, epoched_power_law
 
 
-def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
+def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law, best_ensembles):
     y_lower = 2.6
     y_upper = 3.85
     y_lower_200M = 3.1
@@ -1324,9 +1348,6 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     # Create plot
     plt.figure(figsize=SEED_SCALING_FIGSIZE, dpi=300)
 
-    best_ensembles = pickle.load(
-        open("experiments/data_efficiency/cache/varying-hparams-experiment_best_ensembles.pkl", "rb")
-    )
     token_counts = list(best_ensembles[next(iter(best_ensembles.keys()))].keys())
     token_counts_b = [token_count / 1_000_000_000 for token_count in token_counts]
 
@@ -1370,7 +1391,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/ensemble_seed_scaling_member_count.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/ensemble_seed_scaling_member_count.png", bbox_inches="tight")
     plt.close()
 
     """1b: 200M tokens"""
@@ -1403,7 +1424,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/ensemble_seed_scaling_member_count_200M.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/ensemble_seed_scaling_member_count_200M.png", bbox_inches="tight")
     plt.close()
 
     """Plot 2: Varying model size, infinite ensemble member count, fixed token count"""
@@ -1465,7 +1486,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/ensemble_seed_scaling_model_size.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/ensemble_seed_scaling_model_size.png", bbox_inches="tight")
     plt.close()
 
     """2b: 200M tokens"""
@@ -1526,15 +1547,15 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/ensemble_seed_scaling_model_size_200M.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/ensemble_seed_scaling_model_size_200M.png", bbox_inches="tight")
     plt.close()
 
     """Plot 3: Varying seed token count, infinite model size and infinite ensemble member count"""
 
     plt.figure(figsize=SEED_SCALING_FIGSIZE, dpi=300)
 
-    best_parameter_scaling_losses = pickle.load(
-        open("experiments/data_efficiency/cache/best_parameter_scaling_losses.pkl", "rb")
+    best_parameter_scaling_losses = require_pickle(
+        "experiments/data_efficiency/cache/simple_best_parameter_scaling_losses.pkl", "infinite-model-scaling"
     )
     epoched_losses = [min(losses) for losses in best_parameter_scaling_losses.values()]
     print("BEST EPOCHED LOSSES", epoched_losses)
@@ -1626,7 +1647,7 @@ def plot_ensemble_model_seed_scaling(standard_asymptotes, standard_power_law):
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/ensemble_seed_scaling_token_count.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/ensemble_seed_scaling_token_count.png", bbox_inches="tight")
     plt.close()
 
 
@@ -1758,7 +1779,7 @@ def plot_token_scaling_simple(best_run_dict, fit_type="power_law"):
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/token_scaling_simple.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/token_scaling_simple.png", bbox_inches="tight")
     plt.close()
 
 
@@ -1832,7 +1853,7 @@ def plot_benchmark_results():
     plt.ylabel("Average Error")
     plt.xlim(right=14.0)
     plt.title("Downstream benchmark error")
-    plt.savefig("experiments/data_efficiency/plots/benchmark_results.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/benchmark_results.png", bbox_inches="tight")
     plt.close()
 
 
@@ -1881,7 +1902,7 @@ def plot_simple_cross(best_asymptote_ensemble_200M, power_law_200M, run_losses_2
     plt.ylabel("DCLM Loss")
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     # plt.title("Distilling a 300M student (200M seed tokens)")
-    plt.savefig("experiments/data_efficiency/plots/simple_cross.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/simple_cross.png", bbox_inches="tight")
     plt.close()
 
 
@@ -1986,7 +2007,7 @@ def plot_distillation(best_asymptote_ensemble_200M, power_law_200M, run_losses_2
     plt.ylabel("DCLM Loss")
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     plt.title("Distilling a 300M student (200M seed tokens)")
-    plt.savefig("experiments/data_efficiency/plots/distillation.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/distillation.png", bbox_inches="tight")
     plt.close()
 
 
@@ -2072,7 +2093,7 @@ def plot_200M_sample(
         plt.ylabel("DCLM Loss")
         plt.xlim(right=14.0)
         plt.title("Validation loss")
-        plt.savefig("experiments/data_efficiency/plots/200M_sample.png", bbox_inches="tight")
+        plt.savefig("experiments/data_efficiency/simple_plots/200M_sample.png", bbox_inches="tight")
         plt.close()
 
     # Figure 2: Comparing parameter count and single model hparams ensemble
@@ -2117,7 +2138,7 @@ def plot_200M_sample(
     plt.ylabel("Loss")
     plt.title("Ensemble member scaling")
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
-    plt.savefig("experiments/data_efficiency/plots/200M_ensemble_vs_parameter_scaling.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/200M_ensemble_vs_parameter_scaling.png", bbox_inches="tight")
     plt.close()
 
     # Figure 3 (new figure 1 (8/22))
@@ -2208,7 +2229,7 @@ def plot_200M_sample(
     for tick, color in zip(secax.yaxis.get_ticklabels(), colors, strict=False):
         tick.set_color(color)
 
-    plt.savefig("experiments/data_efficiency/plots/figure_1_8_22.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/figure_1_8_22.png", bbox_inches="tight")
     plt.close()
 
     # Figure 3: Marginal returns
@@ -2238,7 +2259,7 @@ def plot_200M_sample(
     plt.xlabel("Total model parameters (billions)")
     plt.ylabel("Returns on excess log loss")
     plt.title("Returns on excess log loss for 200M tokens")
-    plt.savefig("experiments/data_efficiency/plots/200M_sample_AB_A_Ce_Bx.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/200M_sample_AB_A_Ce_Bx.png", bbox_inches="tight")
     plt.close()
 
 
@@ -2256,7 +2277,7 @@ def plot_batch_size_ablation(run_list):
     plt.title("Batch size")
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/ablation_batch_size.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/ablation_batch_size.png", bbox_inches="tight")
     plt.close()
 
 
@@ -2297,7 +2318,7 @@ def plot_wd_overfitting_ablation(run_list):
     plt.legend()
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/ablation_wd_overfitting_loss.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/ablation_wd_overfitting_loss.png", bbox_inches="tight")
 
     # benchmark figure
     with open("./experiments/data_efficiency/wd_overfitting_results.json", "r") as f:
@@ -2336,7 +2357,7 @@ def plot_wd_overfitting_ablation(run_list):
     plt.xticks(unique_epochs, [f"{x}" for x in unique_epochs])
     plt.xticks([], [], minor=True)
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/ablation_wd_overfitting_benchmark.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/ablation_wd_overfitting_benchmark.png", bbox_inches="tight")
 
 
 def plot_lr_tuned_epoch_ablation(run_list):
@@ -2372,13 +2393,13 @@ def plot_lr_tuned_epoch_ablation(run_list):
     plt.title("Increasing epoch count")
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/ablation_lr_tuned_epoch.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/ablation_lr_tuned_epoch.png", bbox_inches="tight")
 
     plt.plot(unique_epochs, train_losses, marker="o", color=GREEN, label="Train loss")
     plt.ylim(bottom=2.0)
     plt.title("Increasing epoch count train loss")
     plt.legend()
-    plt.savefig("experiments/data_efficiency/plots/train_loss_ablation_epoch_overfitting.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/train_loss_ablation_epoch_overfitting.png", bbox_inches="tight")
     plt.close()
 
 
@@ -2395,7 +2416,6 @@ def cache_parameter_scaling_losses(run_list):
                 and "seed" not in run["run_id"]
                 and "-ts" not in run["run_id"]
                 and run["data_name"] == "dclm"
-                and run["weight_decay"] == 0.1
                 and run["model_name"] == model_size
                 and run["base_tokens"] == base_token_count
             ]
@@ -2403,14 +2423,13 @@ def cache_parameter_scaling_losses(run_list):
             print(f"{model_size} {base_token_count} {curr_run_list[0]['run_id']}: {curr_run_list[0]['final_dclm_loss']}")
             parameter_scaling_losses[base_token_count].append(curr_run_list[0]["final_dclm_loss"])
     pickle.dump(
-        parameter_scaling_losses, open("experiments/data_efficiency/cache/best_parameter_scaling_losses.pkl", "wb")
+        parameter_scaling_losses, open("experiments/data_efficiency/cache/simple_best_parameter_scaling_losses.pkl", "wb")
     )
     return parameter_scaling_losses
 
 
-def sensitivity_analysis(run_list):
+def sensitivity_analysis_regularized(run_list, power_law_200M):
     """Plot 1: Sensitivity analysis for regularized parameter scaling"""
-    power_law_200M, _ = pickle.load(open("experiments/data_efficiency/cache/standard_asymptotes_200M.pkl", "rb"))
     seed1_losses = []
     seed2_losses = []
     for model_size in PARAM_STRS:
@@ -2482,13 +2501,13 @@ def sensitivity_analysis(run_list):
     plt.legend()
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/sensitivity_analysis_regularized.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/sensitivity_analysis_regularized.png", bbox_inches="tight")
     plt.close()
 
+
+def sensitivity_analysis_ensembling(best_asymptote_ensemble_200M):
     """Plot 2: Sensitivity analysis for ensembling"""
-    x_data, y_data, power_law = pickle.load(
-        open("experiments/data_efficiency/cache/varying-hparams-experiment_best_asymptote_ensemble_200M.pkl", "rb")
-    )
+    x_data, y_data, power_law = best_asymptote_ensemble_200M
     num_subsampled = 4
     half_x_data = x_data[:num_subsampled]
     half_y_data = y_data[:num_subsampled]
@@ -2525,15 +2544,11 @@ def sensitivity_analysis(run_list):
     plt.xticks([], [], minor=True)
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/sensitivity_analysis_ensembling.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/sensitivity_analysis_ensembling.png", bbox_inches="tight")
     plt.close()
 
 
-def no_convex_tuning_ablation(run_list):
-    parameter_scaling_losses = pickle.load(
-        open("experiments/data_efficiency/cache/best_parameter_scaling_losses.pkl", "rb")
-    )
-    _, run_losses_200M = pickle.load(open("experiments/data_efficiency/cache/standard_asymptotes_200M.pkl", "rb"))
+def no_convex_tuning_ablation(run_list, parameter_scaling_losses, run_losses_200M):
     valid_runs = [
         run
         for run in run_list
@@ -2602,7 +2617,7 @@ def no_convex_tuning_ablation(run_list):
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     plt.tight_layout()
     plt.savefig(
-        "experiments/data_efficiency/plots/no_convex_tuning_ablation_epochs_weight_decay.png", bbox_inches="tight"
+        "experiments/data_efficiency/simple_plots/no_convex_tuning_ablation_epochs_weight_decay.png", bbox_inches="tight"
     )
     plt.close()
 
@@ -2642,7 +2657,7 @@ def plot_parameter_count_vs_loss(run_list):
     plt.title("Increasing parameter count")
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/parameter_count_vs_loss.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/parameter_count_vs_loss.png", bbox_inches="tight")
 
     train_losses = [run["final_train_loss"] for run in best_tuned_epoch_runs]
     plt.plot(PARAM_COUNTS, train_losses, marker="o", color=GREEN, label="Tuned epochs train loss")
@@ -2654,7 +2669,7 @@ def plot_parameter_count_vs_loss(run_list):
     plt.legend()
     plt.ylim(3.0, 4.0)
     plt.title("Increasing parameter count train loss")
-    plt.savefig("experiments/data_efficiency/plots/train_loss_parameter_count_vs_loss.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/train_loss_parameter_count_vs_loss.png", bbox_inches="tight")
     plt.close()
 
 
@@ -2695,7 +2710,7 @@ def plot_weight_decay_ablation(run_list):
 
     plt.legend()
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/ablation_weight_decay.png", bbox_inches="tight")
+    plt.savefig("experiments/data_efficiency/simple_plots/ablation_weight_decay.png", bbox_inches="tight")
     plt.close()
 
 
@@ -2743,7 +2758,7 @@ def plot_chinchilla_scaling_law(run_list):
     plt.ylabel("Loss")
     plt.xscale("log")
     plt.tight_layout()
-    plt.savefig(f"experiments/data_efficiency/plots/chinchilla_scaling_law_{key}.png")
+    plt.savefig(f"experiments/data_efficiency/simple_plots/chinchilla_scaling_law_{key}.png")
     plt.close()
 
     return scaling_law
@@ -2808,7 +2823,7 @@ def plot_chinchilla_comparison_200M(run_list, power_law_200M, run_losses_200M):
     plt.xlabel("Parameter count")
     plt.ylabel("Loss")
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/chinchilla_comparison_200M.png")
+    plt.savefig("experiments/data_efficiency/simple_plots/chinchilla_comparison_200M.png")
     plt.close()
 
 
@@ -2929,7 +2944,7 @@ def plot_wrap(run_list, power_law_200M, run_losses_200M):
     plt.xlabel("Parameter count")
     plt.ylabel("Loss")
     plt.tight_layout()
-    plt.savefig("experiments/data_efficiency/plots/synthetic_data_ensembles.png")
+    plt.savefig("experiments/data_efficiency/simple_plots/synthetic_data_ensembles.png")
     plt.close()
 
 
@@ -2952,7 +2967,7 @@ def plot_loss_trajectories(runs, labels, colors, file_name):
     ax1.set_title("Train loss")
     ax2.set_title("Validation loss")
     fig.tight_layout()
-    plt.savefig(f"experiments/data_efficiency/plots/{file_name}.png")
+    plt.savefig(f"experiments/data_efficiency/simple_plots/{file_name}.png")
     plt.close()
 
 
@@ -3007,12 +3022,17 @@ if __name__ == "__main__":
     args = parser.parse_args()
     mode = args.mode
 
+    plot_root = Path("experiments/data_efficiency/simple_plots")
+    plot_root.mkdir(parents=True, exist_ok=True)
+    (plot_root / "ensemble_hparams").mkdir(parents=True, exist_ok=True)
+
     key, project_name = {
         "data-scaling-laws-6-10": ("data-scaling-laws-6-10", "stanford-mercury/suhas-data-efficiency"),
         "varying-hparams-experiment": ("none", "stanford-mercury/suhas-eval-data-efficiency"),
         "infinite-model-scaling": ("none", "stanford-mercury/suhas-data-efficiency"),
         "seed-science": ("seed-science-8-7", "stanford-mercury/suhas-eval-data-efficiency"),
         "benchmark-results": ("none", "none"),
+        "post-ensemble-analysis": ("none", "none"),
         "distillation": ("none", "stanford-mercury/suhas-eval-data-efficiency"),
         "standard-batch-size": ("batch-size-test-8-4", "stanford-mercury/suhas-data-efficiency"),
         "standard-epoch-overfitting": ("epoch-overfitting-8-4", "stanford-mercury/suhas-data-efficiency"),
@@ -3030,10 +3050,10 @@ if __name__ == "__main__":
             if run_dict is not None:
                 print(run_dict["run_id"])
                 run_list.append(run_dict)
-        pickle.dump(run_list, open(f"experiments/data_efficiency/cache/{mode}_run_list.pkl", "wb"))
+        pickle.dump(run_list, open(f"experiments/data_efficiency/cache/simple_{mode}_run_list.pkl", "wb"))
     else:
-        if mode != "benchmark-results":
-            run_list = pickle.load(open(f"experiments/data_efficiency/cache/{mode}_run_list.pkl", "rb"))
+        if mode not in {"benchmark-results", "post-ensemble-analysis"}:
+            run_list = require_run_list(mode)
 
     if mode == "varying-hparams-experiment":
         only_200M = False
@@ -3043,10 +3063,6 @@ if __name__ == "__main__":
 
         print("Unique models:", unique_models)
         print("Unique base tokens:", unique_base_tokens)
-
-        power_law_200M, run_losses_200M = pickle.load(
-            open("experiments/data_efficiency/cache/standard_asymptotes_200M.pkl", "rb")
-        )
 
         best_ensembles = {}
 
@@ -3066,67 +3082,62 @@ if __name__ == "__main__":
                     best_single_model_hparams_ensemble_200M = best_single_model_hparams_ensemble
                     best_asymptote_ensemble_200M = (x_data, y_data, power_law)
 
-        epoched_data_scaling_law = pickle.load(
-            open("experiments/data_efficiency/cache/epoched_data_scaling_law.pkl", "rb")
-        )
-
-        plot_200M_sample(
-            {model_size: best_ensembles[model_size][209715200] for model_size in unique_models},
-            power_law_200M,
-            run_losses_200M,
-            best_single_model_hparams_ensemble_200M,
-            epoched_data_scaling_law,
-        )
-        # plot_200M_sample(best_ensembles[min(unique_models)])
         print(best_ensembles)
         if not only_200M:
-            pickle.dump(best_ensembles, open(f"experiments/data_efficiency/cache/{mode}_best_ensembles.pkl", "wb"))
+            pickle.dump(best_ensembles, open(f"experiments/data_efficiency/cache/simple_{mode}_best_ensembles.pkl", "wb"))
 
         pickle.dump(
             best_asymptote_ensemble_200M,
-            open(f"experiments/data_efficiency/cache/{mode}_best_asymptote_ensemble_200M.pkl", "wb"),
+            open(f"experiments/data_efficiency/cache/simple_{mode}_best_asymptote_ensemble_200M.pkl", "wb"),
+        )
+        if best_single_model_hparams_ensemble_200M is None:
+            raise ValueError("Missing best single model hyperparams for 300m4k at 200M tokens.")
+        pickle.dump(
+            best_single_model_hparams_ensemble_200M,
+            open(f"experiments/data_efficiency/cache/simple_{mode}_best_single_model_hparams_ensemble_200M.pkl", "wb"),
         )
 
     elif mode == "infinite-model-scaling":
         run_list = [run for run in run_list if run["epochs"] != 13]
-        plot_wd_overfitting_ablation(run_list)
-        no_convex_tuning_ablation(run_list)
-        sensitivity_analysis(run_list)
-        run_to_run_variance(run_list)
-        with plt.rc_context({"font.size": 12}):
-            plot_lr_tuned_epoch_ablation(run_list)
-            plot_parameter_count_vs_loss(run_list)
-
         parameter_scaling_losses = cache_parameter_scaling_losses(run_list)
         best_run_dict = construct_best_run_dict(run_list)
-        weight_decay_loss_trajectories(run_list)
-
-        # # Also create token scaling plot
-        # valid_model_sizes, asymptotes = plot_token_scaling(best_run_dict, fit_type="power_law")
         with plt.rc_context({"font.size": 14}):
             power_laws, run_losses = plot_model_scaling(best_run_dict, fit_type="power_law")
 
         # Fit joint scaling law
         # fit_joint_scaling_law(best_run_dict)
 
-        # Create paper version of plots
-        with plt.rc_context({"font.size": 12}):
-            print(parameter_scaling_losses)
-            (
-                standard_seed_scaling_asymptotes,
-                standard_seed_scaling_power_law,
-                epoched_data_scaling_law,
-            ) = plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fit_type="power_law")
-            plot_ensemble_model_seed_scaling(standard_seed_scaling_asymptotes, standard_seed_scaling_power_law)
-        # plot_token_scaling_simple(best_run_dict, fit_type="power_law")
+        # # Create paper version of plots
+        # with plt.rc_context({"font.size": 12}):
+        #     print(parameter_scaling_losses)
+        #     (
+        #         standard_seed_scaling_asymptotes,
+        #         standard_seed_scaling_power_law,
+        #         epoched_data_scaling_law,
+        #     ) = plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fit_type="power_law")
 
-        print(power_laws[0], run_losses[0])
-        pickle.dump(
-            (power_laws[0], run_losses[0]), open("experiments/data_efficiency/cache/standard_asymptotes_200M.pkl", "wb")
-        )
-        pickle.dump(
-            epoched_data_scaling_law, open("experiments/data_efficiency/cache/epoched_data_scaling_law.pkl", "wb")
-        )
+        # print(power_laws[0], run_losses[0])
+        # pickle.dump(
+        #     (power_laws[0], run_losses[0]), open("experiments/data_efficiency/cache/simple_standard_asymptotes_200M.pkl", "wb")
+        # )
+        # pickle.dump(
+        #     epoched_data_scaling_law, open("experiments/data_efficiency/cache/simple_epoched_data_scaling_law.pkl", "wb")
+        # )
+        # pickle.dump(
+        #     (standard_seed_scaling_asymptotes, standard_seed_scaling_power_law),
+        #     open("experiments/data_efficiency/cache/simple_standard_seed_scaling.pkl", "wb"),
+        # )
+
+        # plot_wd_overfitting_ablation(run_list)
+        # no_convex_tuning_ablation(run_list, parameter_scaling_losses, run_losses[0])
+        # sensitivity_analysis_regularized(run_list, power_laws[0])
+
+        # run_to_run_variance(run_list)
+        # with plt.rc_context({"font.size": 12}):
+        #     plot_lr_tuned_epoch_ablation(run_list)
+        #     plot_parameter_count_vs_loss(run_list)
+        # weight_decay_loss_trajectories(run_list)
+        # # plot_token_scaling_simple(best_run_dict, fit_type="power_law")
 
     elif mode == "seed-science":
         run_list = sorted(run_list, key=lambda x: x["ensemble_member_count"])
@@ -3140,19 +3151,61 @@ if __name__ == "__main__":
         with plt.rc_context({"font.size": 12}):
             plot_benchmark_results()
 
+    elif mode == "post-ensemble-analysis":
+        best_ensembles = require_pickle(
+            "experiments/data_efficiency/cache/simple_varying-hparams-experiment_best_ensembles.pkl",
+            "varying-hparams-experiment",
+        )
+        best_asymptote_ensemble_200M = require_pickle(
+            "experiments/data_efficiency/cache/simple_varying-hparams-experiment_best_asymptote_ensemble_200M.pkl",
+            "varying-hparams-experiment",
+        )
+        best_single_model_hparams_ensemble_200M = require_pickle(
+            "experiments/data_efficiency/cache/simple_varying-hparams-experiment_best_single_model_hparams_ensemble_200M.pkl",
+            "varying-hparams-experiment",
+        )
+        power_law_200M, run_losses_200M = require_pickle(
+            "experiments/data_efficiency/cache/simple_standard_asymptotes_200M.pkl",
+            "infinite-model-scaling",
+        )
+        epoched_data_scaling_law = require_pickle(
+            "experiments/data_efficiency/cache/simple_epoched_data_scaling_law.pkl",
+            "infinite-model-scaling",
+        )
+        standard_seed_scaling_asymptotes, standard_seed_scaling_power_law = require_pickle(
+            "experiments/data_efficiency/cache/simple_standard_seed_scaling.pkl",
+            "infinite-model-scaling",
+        )
+
+        unique_models = sorted(list(best_ensembles.keys()), key=lambda x: param_str_to_count[x])
+        plot_200M_sample(
+            {model_size: best_ensembles[model_size][209715200] for model_size in unique_models},
+            power_law_200M,
+            run_losses_200M,
+            best_single_model_hparams_ensemble_200M,
+            epoched_data_scaling_law,
+        )
+        with plt.rc_context({"font.size": 12}):
+            plot_ensemble_model_seed_scaling(
+                standard_seed_scaling_asymptotes, standard_seed_scaling_power_law, best_ensembles
+            )
+        sensitivity_analysis_ensembling(best_asymptote_ensemble_200M)
+
     elif mode == "distillation":
         unique_models = ["300m4k"]
         unique_base_tokens = sorted(list(set([run["base_tokens"] for run in run_list])))
 
-        best_ensembles = pickle.load(
-            open("experiments/data_efficiency/cache/varying-hparams-experiment_best_ensembles.pkl", "rb")
+        best_ensembles = require_pickle(
+            "experiments/data_efficiency/cache/simple_varying-hparams-experiment_best_ensembles.pkl",
+            "varying-hparams-experiment",
         )
-        best_asymptote_ensemble_200M = pickle.load(
-            open("experiments/data_efficiency/cache/varying-hparams-experiment_best_asymptote_ensemble_200M.pkl", "rb")
+        best_asymptote_ensemble_200M = require_pickle(
+            "experiments/data_efficiency/cache/simple_varying-hparams-experiment_best_asymptote_ensemble_200M.pkl",
+            "varying-hparams-experiment",
         )
-
-        power_law_200M, run_losses_200M = pickle.load(
-            open("experiments/data_efficiency/cache/standard_asymptotes_200M.pkl", "rb")
+        power_law_200M, run_losses_200M = require_pickle(
+            "experiments/data_efficiency/cache/simple_standard_asymptotes_200M.pkl",
+            "infinite-model-scaling",
         )
 
         plot_distillation(best_asymptote_ensemble_200M, power_law_200M, run_losses_200M)
@@ -3169,12 +3222,13 @@ if __name__ == "__main__":
 
     elif mode == "dclm-chinchilla" or mode == "dclm-chinchilla-lr-tune":
         chinchilla_scaling_law = plot_chinchilla_scaling_law(run_list)
-        pickle.dump(chinchilla_scaling_law, open("experiments/data_efficiency/cache/chinchilla_scaling_law.pkl", "wb"))
+        pickle.dump(chinchilla_scaling_law, open("experiments/data_efficiency/cache/simple_chinchilla_scaling_law.pkl", "wb"))
 
     elif mode == "chinchilla-comparison":
-        # chinchilla_scaling_law = pickle.load(open("experiments/data_efficiency/cache/chinchilla_scaling_law.pkl", "rb"))
-        power_law_200M, run_losses_200M = pickle.load(
-            open("experiments/data_efficiency/cache/standard_asymptotes_200M.pkl", "rb")
+        # chinchilla_scaling_law = pickle.load(open("experiments/data_efficiency/cache/simple_chinchilla_scaling_law.pkl", "rb"))
+        power_law_200M, run_losses_200M = require_pickle(
+            "experiments/data_efficiency/cache/simple_standard_asymptotes_200M.pkl",
+            "infinite-model-scaling",
         )
         # plot_chinchilla_comparison_200M(run_list, power_law_200M, run_losses_200M)
         plot_wrap(run_list, power_law_200M, run_losses_200M)
