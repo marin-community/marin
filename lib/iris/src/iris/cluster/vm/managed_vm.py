@@ -502,6 +502,54 @@ class ManagedVm:
         except Exception:
             return False
 
+    def reload(self) -> None:
+        """Re-run bootstrap script to pull new image and restart container.
+
+        This is faster than recreating the VM - it SSHs into the existing VM
+        and re-runs the bootstrap sequence (pull image, stop old container,
+        start new one, health check).
+
+        Raises:
+            RuntimeError: If bootstrap fails or health check times out
+        """
+        logger.info("VM %s: Reloading (re-running bootstrap)", self.info.vm_id)
+
+        # Clear previous log and reset state
+        self._log_lines = []
+        self._phase = ""
+        self._transition(vm_pb2.VM_STATE_INITIALIZING)
+
+        # Build and run bootstrap script
+        script = _build_bootstrap_script(
+            self._bootstrap_config,
+            self.info.address,
+            self._discovery_preamble,
+        )
+
+        try:
+            result = run_streaming_with_retry(
+                self._conn,
+                script,
+                max_retries=3,
+                overall_timeout=600,
+                on_line=self._log,
+            )
+
+            if result.returncode != 0:
+                error_msg = f"Exit code {result.returncode}"
+                self._log(f"[iris-init] Reload failed: {error_msg}")
+                raise RuntimeError(f"Reload failed: {error_msg}")
+
+            logger.info("VM %s: Reload complete", self.info.vm_id)
+            self._transition(vm_pb2.VM_STATE_READY)
+
+        except Exception as e:
+            self.info.init_error = str(e)
+            logger.error("VM %s: Reload failed: %s", self.info.vm_id, e)
+            self._dump_log_on_failure()
+            self._transition(vm_pb2.VM_STATE_FAILED)
+            raise RuntimeError(f"VM {self.info.vm_id} reload failed: {e}") from e
+
     @property
     def is_terminal(self) -> bool:
         """True if VM is in a terminal state."""
