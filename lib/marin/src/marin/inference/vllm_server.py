@@ -288,7 +288,7 @@ def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
 def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     args: list[str] = []
     load_format = engine_kwargs.get("load_format")
-    if isinstance(load_format, str):
+    if load_format is not None:
         args.extend(["--load-format", load_format])
     max_model_len = engine_kwargs.get("max_model_len")
     if max_model_len is not None:
