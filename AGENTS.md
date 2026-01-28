@@ -42,6 +42,11 @@
 - Do not introduce ad-hoc compatibility hacks like `hasattr(m, "old_attr")`; update the code consistently instead.
 - Do not use `from future import ...` statements.
 - Document public APIs with concise Google-style docstrings.
+- Prefer small, concrete helpers over abstraction that adds indirection without reuse.
+- When defaults depend on environment/resource type, resolve them once and fail fast on unknown/ambiguous inputs rather than silently guessing.
+- Keep environment detection logic minimal and explicit; avoid multi-key heuristics unless they are clearly required.
+- Prefer single strong signals over sprawling defensive checks when detecting environment state (e.g., check the one variable that must be set rather than many optional ones).
+- In marin we generally prefer logging over `print` statements. `print` is fine for debugging and "scripts".
 
 ### Error Handling
 

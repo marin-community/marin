@@ -33,11 +33,8 @@ import requests
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
 logger = logging.getLogger(__name__)
-DEFAULT_VLLM_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
+DEFAULT_VLLM_TPU_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
 DEFAULT_VLLM_GPU_DOCKER_IMAGE: str = "nvcr.io/nvidia/vllm:25.12.post1-py3"
-MARIN_VLLM_DOCKER_IMAGE_ENV: str = "MARIN_VLLM_DOCKER_IMAGE"
-MARIN_VLLM_TPU_DOCKER_IMAGE_ENV: str = "MARIN_VLLM_TPU_DOCKER_IMAGE"
-MARIN_VLLM_GPU_DOCKER_IMAGE_ENV: str = "MARIN_VLLM_GPU_DOCKER_IMAGE"
 VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu",)
 
 _SENSITIVE_ENV_KEYS = frozenset(
@@ -432,39 +429,18 @@ def _pick_free_port(host: str) -> int:
         return int(sock.getsockname()[1])
 
 
-def _env_has_value(value: str | None, *, ignore: set[str]) -> bool:
-    if value is None:
-        return False
-    stripped = value.strip()
-    if not stripped:
-        return False
-    if stripped.lower() in ignore:
-        return False
-    return True
-
-
 def _detect_tpu_environment() -> bool:
-    tpu_env_keys = (
-        "TPU_NAME",
-        "TPU_CHIPS_PER_HOST",
-        "TPU_WORKER_ID",
-        "TPU_VISIBLE_DEVICES",
-        "TPU_ACCELERATOR_TYPE",
-        "XRT_TPU_CONFIG",
-        "LIBTPU_INIT_ARGS",
-    )
-    for key in tpu_env_keys:
-        if _env_has_value(os.environ.get(key), ignore={"false", "none"}):
-            return True
-    return False
+    """Detects whether the TPU environment variable TPU_NAME is set and non-empty."""
+    return bool(os.environ.get("TPU_NAME"))
 
 
 def _detect_nvidia_gpu_environment() -> bool:
     for key in ("NVIDIA_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
-        if _env_has_value(os.environ.get(key), ignore={"none", "void", "no", "false", "-1"}):
+        value = os.environ.get(key)
+        if not value:
+            continue
+        if value.lower():
             return True
-    if os.path.exists("/proc/driver/nvidia/version"):
-        return True
     return bool(glob.glob("/dev/nvidia[0-9]*"))
 
 
@@ -497,32 +473,6 @@ def _resolve_docker_gpu_arg() -> str | None:
     return None
 
 
-def _resolve_vllm_docker_image(
-    *,
-    resource_type: Literal["tpu", "gpu", "unknown"],
-    docker_image: str | None,
-) -> tuple[str, bool]:
-    if docker_image is not None:
-        return docker_image, True
-
-    if resource_type == "tpu":
-        env_image = os.environ.get(MARIN_VLLM_TPU_DOCKER_IMAGE_ENV) or os.environ.get(MARIN_VLLM_DOCKER_IMAGE_ENV)
-        if env_image:
-            return env_image, True
-        return DEFAULT_VLLM_DOCKER_IMAGE, False
-
-    if resource_type == "gpu":
-        env_image = os.environ.get(MARIN_VLLM_GPU_DOCKER_IMAGE_ENV) or os.environ.get(MARIN_VLLM_DOCKER_IMAGE_ENV)
-        if env_image:
-            return env_image, True
-        return DEFAULT_VLLM_GPU_DOCKER_IMAGE, False
-
-    env_image = os.environ.get(MARIN_VLLM_DOCKER_IMAGE_ENV)
-    if env_image:
-        return env_image, True
-    return DEFAULT_VLLM_DOCKER_IMAGE, False
-
-
 def _docker_run_args_for_resource(
     *,
     resource_type: Literal["tpu", "gpu", "unknown"],
@@ -542,7 +492,7 @@ def _docker_run_args_for_resource(
             docker_args.extend(["--gpus", gpu_arg])
 
     if not any(arg.startswith("--shm-size") for arg in existing_args):
-        docker_args.append("--shm-size=200gb")
+        docker_args.append("--shm-size=100gb")
     docker_args.extend(existing_args)
     return docker_args
 
@@ -641,12 +591,17 @@ def _start_vllm_docker_server(
     _require_docker_available()
 
     resource_type = _detect_resource_type()
-    resolved_image, image_is_override = _resolve_vllm_docker_image(
-        resource_type=resource_type,
-        docker_image=docker_image,
-    )
-    if not image_is_override:
-        print(f"No MARIN_VLLM_*_DOCKER_IMAGE override set; defaulting to {resolved_image} for {resource_type}.")
+    if docker_image is None:
+        if resource_type == "tpu":
+            docker_image = DEFAULT_VLLM_TPU_DOCKER_IMAGE
+        elif resource_type == "gpu":
+            docker_image = DEFAULT_VLLM_GPU_DOCKER_IMAGE
+        else:
+            raise RuntimeError(
+                f"Cannot determine default docker image for unknown resource type {resource_type!r}. "
+                "Please explicitly specify docker_image parameter."
+            )
+        logger.info(f"No docker_image specified; defaulting to {docker_image} for {resource_type}.")
 
     env: dict[str, str] = _vllm_jax_env()
     explain_cache_misses = os.environ.get("JAX_EXPLAIN_CACHE_MISSES")
@@ -665,19 +620,19 @@ def _start_vllm_docker_server(
     )
 
     if resource_type == "tpu":
-        print(
+        logger.info(
             "Starting vLLM Docker sidecar with "
             f"TPU_MIN_LOG_LEVEL={env.get('TPU_MIN_LOG_LEVEL')} "
             f"TPU_STDERR_LOG_LEVEL={env.get('TPU_STDERR_LOG_LEVEL')}"
         )
     else:
-        print(f"Starting vLLM Docker sidecar for {resource_type} resources.")
+        logger.info(f"Starting vLLM Docker sidecar for {resource_type} resources.")
 
     resolved_port = port if port is not None else _pick_free_port(host)
     resolved_name = container_name or f"marin-vllm-{uuid.uuid4().hex[:10]}-{resolved_port}"
 
     cmd = _build_docker_run_command(
-        image=resolved_image,
+        image=docker_image,
         model_name_or_path=model_name_or_path,
         host=host,
         port=resolved_port,
@@ -693,7 +648,7 @@ def _start_vllm_docker_server(
         stdout = (result.stdout or "").strip()
         raise RuntimeError(
             "Failed to start vLLM Docker sidecar.\n"
-            f"Image: {resolved_image}\n"
+            f"Image: {docker_image}\n"
             f"Command: {_redact_docker_run_command(cmd)}\n"
             f"Exit code: {result.returncode}\n"
             f"--- stdout ---\n{stdout}\n"
@@ -705,7 +660,7 @@ def _start_vllm_docker_server(
         server_url=server_url,
         port=resolved_port,
         docker_container_name=resolved_name,
-        docker_image=resolved_image,
+        docker_image=docker_image,
         docker_run_cmd=_redact_docker_run_command(cmd),
     )
 
@@ -721,7 +676,7 @@ def _start_vllm_docker_server(
                 raise RuntimeError(
                     "vLLM Docker sidecar exited before becoming ready.\n"
                     f"Container: {resolved_name}\n"
-                    f"Image: {resolved_image}\n"
+                    f"Image: {docker_image}\n"
                     f"Command: {_redact_docker_run_command(cmd)}\n"
                     f"--- docker logs (tail) ---\n{logs}\n"
                     f"--- docker inspect ---\n{inspect[:8000]}"
@@ -745,7 +700,7 @@ def _start_vllm_docker_server(
                 raise TimeoutError(
                     "Failed to start vLLM Docker sidecar within timeout period.\n"
                     f"Container: {resolved_name}\n"
-                    f"Image: {resolved_image}\n"
+                    f"Image: {docker_image}\n"
                     f"Endpoint: {server_models_url}\n"
                     f"Elapsed seconds: {elapsed_time:.1f}\n"
                     f"--- docker logs (tail) ---\n{logs}"
@@ -833,7 +788,7 @@ def _start_vllm_native_server(
     stdout_f = open(stdout_path, "w")
     stderr_f = open(stderr_path, "w")
     native_env = _vllm_env()
-    print(
+    logger.info(
         "Starting vLLM native server with "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
         f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
