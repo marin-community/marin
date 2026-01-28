@@ -63,6 +63,7 @@ from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.config import load_config
 from iris.cluster.vm.debug import (
     cleanup_iris_resources,
+    controller_tunnel,
     discover_controller_vm,
     list_docker_containers,
     list_iris_tpus,
@@ -533,7 +534,6 @@ class SmokeTestRunner:
         self._controller_streamer: DockerLogStreamer | None = None
         self._worker_streamer: DockerLogStreamer | None = None
         self._scheduling_monitor: TaskSchedulingMonitor | None = None
-        self._tunnel_proc: subprocess.Popen | None = None  # SSH tunnel for fast mode
 
     def run(self) -> bool:
         """Run the smoke test. Returns True if all tests pass."""
@@ -599,12 +599,8 @@ class SmokeTestRunner:
             if self.config.fast and not manager.is_local:
                 self.logger.section("Connecting to Cluster")
                 # For fast mode, we need to establish tunnel but not start/stop
-                url = self._connect_to_existing_cluster(zone, project)
-                try:
+                with controller_tunnel(zone, project, label_prefix=self.config.label_prefix) as url:
                     self._run_cluster_tests(url, manager, zone, project)
-                finally:
-                    # Don't call manager.stop() in fast mode - keep VMs running
-                    pass
             else:
                 # Normal mode: use connect() context manager
                 self.logger.section("Starting Cluster")
@@ -920,62 +916,6 @@ class SmokeTestRunner:
             self.logger.log(f"Cluster reload failed: {e}", level="ERROR")
             raise
 
-    def _connect_to_existing_cluster(self, zone: str, project: str) -> str:
-        """Establish SSH tunnel to existing cluster."""
-        label_prefix = self.config.label_prefix
-        # Discover controller and establish tunnel
-        controller_name = discover_controller_vm(zone, project, label_prefix)
-        if not controller_name:
-            raise RuntimeError("No controller VM found for fast mode")
-
-        self.logger.log(f"Found controller VM: {controller_name}")
-
-        # Create tunnel (blocking - returns local URL)
-
-        # Start tunnel in background
-        import subprocess
-
-        port = 10000
-        self.logger.log(f"Establishing SSH tunnel to {controller_name}...")
-
-        # Use gcloud SSH tunnel
-        proc = subprocess.Popen(
-            [
-                "gcloud",
-                "compute",
-                "ssh",
-                controller_name,
-                f"--project={project}",
-                f"--zone={zone}",
-                "--",
-                "-L",
-                f"{port}:localhost:10000",
-                "-N",
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "LogLevel=ERROR",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-
-        # Wait for tunnel to be ready
-        from iris.cluster.vm.debug import wait_for_port
-
-        if not wait_for_port(port, timeout=60):
-            proc.terminate()
-            proc.wait()
-            raise RuntimeError("SSH tunnel failed to establish")
-
-        # Store process to terminate later
-        self._tunnel_proc = proc
-        url = f"http://localhost:{port}"
-        self.logger.log(f"Tunnel ready: {url}")
-        return url
-
     def _run_cluster_tests(self, url: str, manager: ClusterManager, zone: str, project: str) -> None:
         """Run tests against the cluster."""
         if self._interrupted or self._check_deadline():
@@ -1057,16 +997,6 @@ class SmokeTestRunner:
         if self._scheduling_monitor:
             self._scheduling_monitor.stop()
         self.logger.log("Stopped background monitoring")
-
-        # Close SSH tunnel if in fast mode
-        if self._tunnel_proc:
-            self._tunnel_proc.terminate()
-            try:
-                self._tunnel_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._tunnel_proc.kill()
-                self._tunnel_proc.wait()
-            self.logger.log("Closed SSH tunnel")
 
         # In fast mode, skip VM cleanup to preserve VMs for next run
         if self.config.fast:
