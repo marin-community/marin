@@ -12,10 +12,10 @@ The output parquet files contain:
 
 Usage:
     python scripts/preprocess_vlm_data.py \
-         --input-pattern "gs://marin-vlm/stage2_sharded/*.parquet" \
-        --output-dir "gs://marin-vlm/stage2_packed/" \
-        --tokenizer "gs://marin-vlm/tokenizers/Qwen3-1.7B" \
-        --processor "gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf" \
+        --input-pattern "gs://marin-vlm/raw_data/*.parquet" \
+        --output-dir "gs://marin-vlm/preprocessed/" \
+        --tokenizer "Qwen/Qwen3-1.7B" \
+        --processor "llava-hf/llava-onevision-qwen2-0.5b-ov-hf" \
         --max-length 2048 \
         --features-per-patch 576 \
         --num-workers 50 \
@@ -394,14 +394,17 @@ def process_shard(
     # Download input parquet to local temp file using gcloud command (faster than gcsfs)
     if shard_path.startswith("gs://"):
         import subprocess
-        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp_input:
+        logger.info(f"Downloading {shard_path}...")
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False, dir="/dev/shm") as tmp_input:
             local_input_path = tmp_input.name
         subprocess.run(["gcloud", "storage", "cp", shard_path, local_input_path], check=True, capture_output=True)
+        logger.info(f"Downloaded to {local_input_path}")
         table = pq.read_table(local_input_path)
+        logger.info(f"Read table with {len(table)} rows")
         os.remove(local_input_path)
     elif shard_path.startswith("s3://"):
         fs, fs_path = fsspec.core.url_to_fs(shard_path)
-        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp_input:
+        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False, dir="/dev/shm") as tmp_input:
             fs.get(fs_path, tmp_input.name)
             local_input_path = tmp_input.name
         table = pq.read_table(local_input_path)
@@ -409,14 +412,20 @@ def process_shard(
     else:
         table = pq.read_table(shard_path)
 
+    # Keep original images column from pyarrow (avoid pandas conversion issues)
+    original_images_column = table.column("images")
+
     df = table.to_pandas()
     input_rows = len(df)
 
     # Process each row
     processed_rows = []
     num_errors = 0
+    logger.info(f"Processing {len(df)} rows from {shard_path}...")
 
     for idx in range(len(df)):
+        if idx % 100 == 0:
+            logger.info(f"  Processing row {idx}/{len(df)}...")
         try:
             row = df.iloc[idx].to_dict()
             row = _convert_numpy_to_python(row)
@@ -496,37 +505,50 @@ def process_shard(
             "num_images": [row["num_images"] for row in packed_rows],
         }
         output_rows = len(packed_rows)
+        logger.info("Creating parquet table...")
+        out_table = pa.table(columns, schema=schema)
+        logger.info(f"Table created, num_rows={out_table.num_rows}")
     else:
         # No packing - output preprocessed samples directly
-        schema = pa.schema([
-            ("input_ids", pa.list_(pa.int32())),
-            ("attention_mask", pa.list_(pa.int32())),
-            ("loss_mask", pa.list_(pa.float32())),
-            ("images", pa.list_(pa.string())),
-            ("num_images", pa.int32()),
-        ])
+        logger.info("Building output columns...")
 
-        columns = {
-            "input_ids": [row["input_ids"].tolist() for row in processed_rows],
-            "attention_mask": [row["attention_mask"].tolist() for row in processed_rows],
-            "loss_mask": [row["loss_mask"].tolist() for row in processed_rows],
-            "images": [serialize_images_list(row["images"]) for row in processed_rows],
-            "num_images": [row["num_images"] for row in processed_rows],
-        }
+        logger.info("  Converting input_ids...")
+        input_ids_col = pa.array([row["input_ids"].tolist() for row in processed_rows], type=pa.list_(pa.int32()))
+        logger.info("  Converting attention_mask...")
+        attention_mask_col = pa.array([row["attention_mask"].tolist() for row in processed_rows], type=pa.list_(pa.int32()))
+        logger.info("  Converting loss_mask...")
+        loss_mask_col = pa.array([row["loss_mask"].tolist() for row in processed_rows], type=pa.list_(pa.float32()))
+        logger.info("  Converting num_images...")
+        num_images_col = pa.array([row["num_images"] for row in processed_rows], type=pa.int32())
+
+        # Use original pyarrow images column directly (preserves binary format)
+        logger.info("  Using original images column...")
         output_rows = len(processed_rows)
 
-    # Write output parquet
-    out_table = pa.table(columns, schema=schema)
+        logger.info("Creating parquet table...")
+        out_table = pa.table({
+            "input_ids": input_ids_col,
+            "attention_mask": attention_mask_col,
+            "loss_mask": loss_mask_col,
+            "images": original_images_column,
+            "num_images": num_images_col,
+        })
+        logger.info(f"Table created, num_rows={out_table.num_rows}")
 
-    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-        pq.write_table(out_table, tmp.name)
+    logger.info("Writing to temp file...")
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False, dir="/dev/shm") as tmp:
         tmp_path = tmp.name
+    logger.info(f"Temp file: {tmp_path}")
+    pq.write_table(out_table, tmp_path)
+    logger.info("Write complete")
 
     try:
         # Upload to remote if needed
         if output_path.startswith("gs://"):
             import subprocess
+            logger.info(f"Uploading to {output_path}...")
             subprocess.run(["gcloud", "storage", "cp", tmp_path, output_path], check=True, capture_output=True)
+            logger.info("Upload complete")
         elif output_path.startswith("s3://"):
             out_fs, out_fs_path = fsspec.core.url_to_fs(output_path)
             out_fs.put(tmp_path, out_fs_path)

@@ -2472,7 +2472,7 @@ def main():
     parser.add_argument(
         "--download-timeout",
         type=float,
-        default=20.0,
+        default=30.0,
         help="Timeout for each file download in minutes (default: 3). Files exceeding this will be retried."
     )
     parser.add_argument(
