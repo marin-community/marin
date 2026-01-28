@@ -87,7 +87,9 @@ def logs_api_response(request: Request, buffer: LogBuffer | None) -> JSONRespons
     except (ValueError, TypeError):
         limit = 200
     records = buffer.query(prefix=prefix, limit=limit)
-    return JSONResponse([
-        {"timestamp": r.timestamp, "level": r.level, "logger_name": r.logger_name, "message": r.message}
-        for r in records
-    ])
+    return JSONResponse(
+        [
+            {"timestamp": r.timestamp, "level": r.level, "logger_name": r.logger_name, "message": r.message}
+            for r in records
+        ]
+    )
