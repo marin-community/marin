@@ -109,8 +109,8 @@ from iris.cluster.vm.config import (
 # Debug utilities
 from iris.cluster.vm.debug import (
     cleanup_iris_resources,
-    collect_docker_logs,
     discover_controller_vm,
+    list_docker_containers,
     list_iris_tpus,
 )
 
@@ -151,7 +151,6 @@ __all__ = [
     "VmSnapshot",
     "check_health",
     "cleanup_iris_resources",
-    "collect_docker_logs",
     "config_to_dict",
     "connection_available",
     "create_autoscaler_from_config",
@@ -159,6 +158,7 @@ __all__ = [
     "create_manual_autoscaler",
     "discover_controller_vm",
     "get_ssh_config",
+    "list_docker_containers",
     "list_iris_tpus",
     "load_config",
     "route_demand",

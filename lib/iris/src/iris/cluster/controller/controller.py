@@ -432,14 +432,9 @@ class Controller:
                     task_index=task.task_index,
                     num_tasks=len(self._state.get_job_tasks(task.job_id)),
                     entrypoint=job.request.entrypoint,
-                    environment=cluster_pb2.EnvironmentConfig(
-                        env_vars=dict(job.request.environment.env_vars),
-                    ),
+                    environment=job.request.environment,
                     bundle_gcs_path=job.request.bundle_gcs_path,
-                    resources=cluster_pb2.ResourceSpecProto(
-                        cpu=job.request.resources.cpu,
-                        memory_bytes=job.request.resources.memory_bytes,
-                    ),
+                    resources=job.request.resources,
                     ports=list(job.request.ports),
                     attempt_id=task.current_attempt_id,
                 )

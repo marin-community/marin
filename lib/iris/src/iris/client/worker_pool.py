@@ -462,10 +462,7 @@ class WorkerPool:
 
         # Submit ONE job with replicas=num_workers (co-scheduling)
         # Each replica becomes a task that reads its task_index from the environment
-        entrypoint = Entrypoint(
-            callable=worker_job_entrypoint,
-            args=(self._pool_id,),
-        )
+        entrypoint = Entrypoint.from_callable(worker_job_entrypoint, self._pool_id)
         resources_with_replicas = replace(self._config.resources, replicas=self._config.num_workers)
 
         job = self._client.submit(

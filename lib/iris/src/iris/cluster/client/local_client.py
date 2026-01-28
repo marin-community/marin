@@ -175,8 +175,8 @@ class _LocalContainer:
             # Execute based on entrypoint type
             with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
                 if entrypoint.is_callable:
-                    assert entrypoint.callable is not None
-                    entrypoint.callable(*entrypoint.args, **entrypoint.kwargs)
+                    fn, args, kwargs = entrypoint.resolve()
+                    fn(*args, **kwargs)
                 else:
                     # Command entrypoint: run subprocess with output capture
                     assert entrypoint.command is not None
@@ -279,8 +279,9 @@ class _LocalImageProvider:
         extras: list[str],
         job_id: str,
         task_logs=None,
+        pip_packages: list[str] | None = None,
     ) -> BuildResult:
-        del bundle_path, base_image, extras, job_id, task_logs
+        del bundle_path, base_image, extras, job_id, task_logs, pip_packages
         return BuildResult(
             image_tag="local:latest",
             build_time_ms=0,

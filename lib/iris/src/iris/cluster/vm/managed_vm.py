@@ -97,15 +97,19 @@ export TPU_WORKER_ID=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/agent-worke
 # Fetch worker hostnames for multi-host slices (JSON array of network endpoints)
 TPU_HOSTNAMES_RAW=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/worker-network-endpoints" 2>/dev/null || echo "")
 if [ -n "$TPU_HOSTNAMES_RAW" ]; then
+    # Format is "unknown:unknown:ip1,unknown:unknown:ip2,..." — extract IPs (fields with dots)
     export TPU_WORKER_HOSTNAMES=$(echo "$TPU_HOSTNAMES_RAW" | \
-        python3 -c "import sys,json; print(','.join(e.get('address','') for e in json.load(sys.stdin)))" \
-        2>/dev/null || echo "")
+        tr ',' '\\n' | while read -r entry; do echo "$entry" | tr ':' '\\n' | grep '[.]'; done | \\
+        paste -sd ',' - 2>/dev/null || echo "")
 fi
 
-# Fetch chips per host bounds for topology info
-TOPO_RAW=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/tpu-chips-per-host-bounds" 2>/dev/null || echo "")
-if [ -n "$TOPO_RAW" ]; then
-    export TPU_CHIPS_PER_HOST_BOUNDS="$TOPO_RAW"
+# Fetch chips per host bounds from tpu-env metadata (YAML-like key: value format)
+TPU_ENV_RAW=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/tpu-env" 2>/dev/null || echo "")
+if [ -n "$TPU_ENV_RAW" ]; then
+    TOPO_RAW=$(echo "$TPU_ENV_RAW" | grep "^CHIPS_PER_HOST_BOUNDS:" | sed "s/.*: *'\\(.*\\)'/\\1/" | tr -d "'")
+    if [ -n "$TOPO_RAW" ]; then
+        export TPU_CHIPS_PER_HOST_BOUNDS="$TOPO_RAW"
+    fi
 fi
 
 if [ -n "$TPU_NAME" ]; then
