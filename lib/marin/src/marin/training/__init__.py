@@ -12,6 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .training import TrainLmOnPodConfig, run_levanter_train_lm
+from .training import TrainDpoOnPodConfig, TrainLmOnPodConfig, run_levanter_train_dpo, run_levanter_train_lm
 
-__all__ = ["TrainLmOnPodConfig", "run_levanter_train_lm"]
+__all__ = ["TrainDpoOnPodConfig", "TrainLmOnPodConfig", "run_levanter_train_dpo", "run_levanter_train_lm"]

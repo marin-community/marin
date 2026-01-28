@@ -1,0 +1,57 @@
+# Tiny DPO sanity-check config for train_dpo.py.
+
+data:
+  train_urls:
+    - config/data/tiny_preference.jsonl
+  format:
+    type: preference_chat
+    chat_template: |
+      {% for message in messages %}
+      {% if message['role'] == 'user' %}
+      {{ message['content'] }}
+      {% elif message['role'] == 'assistant' %}
+      {% generation %}{{ message['content'] }}{% endgeneration %}
+      {% endif %}
+      {% endfor %}
+    pack: false
+    slice_strategy: raise
+  tokenizer: gpt2
+  cache_dir: cache/dpo_tiny
+  shuffle: true
+
+model:
+  type: gpt2
+
+train_seq_len: 64
+
+trainer:
+  seed: 0
+  mp: f32
+  train_batch_size: 16
+  num_train_steps: 20
+  steps_per_eval: 1
+  model_averaging: null
+  ray:
+    auto_start_cluster: false
+  require_accelerator: false
+  checkpointer:
+    save_interval: 1m
+    keep:
+      - every: 5
+
+optimizer:
+  learning_rate: 1e-3
+  weight_decay: 0.0
+  warmup: 0.0
+
+reference_model_path: hf-internal-testing/tiny-random-gpt2
+reference_is_hf: true
+beta: 0.1
+validation_split_fraction: 0.1
+
+# Repeat the tiny dataset enough times to hit ~20 steps with batch size 16
+# (1 train example after the 10% val split -> 320 epochs => 320/16 = 20 steps).
+epoch: 320
+
+initialize_from_hf: hf-internal-testing/tiny-random-gpt2
+use_hf_model_config: true
