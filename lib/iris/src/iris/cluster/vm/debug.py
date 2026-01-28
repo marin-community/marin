@@ -14,8 +14,6 @@
 
 """Debug utilities for log collection and VM cleanup."""
 
-from __future__ import annotations
-
 import logging
 import socket
 import subprocess
