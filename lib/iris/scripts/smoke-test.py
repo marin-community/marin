@@ -37,7 +37,6 @@ Usage:
     uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --no-cleanup-on-failure
 """
 
-import json
 import logging
 import signal
 import subprocess
@@ -50,6 +49,7 @@ from pathlib import Path
 from typing import Literal, TextIO
 
 import click
+from google.protobuf.json_format import MessageToJson
 
 from iris.client import IrisClient
 from iris.cluster.types import (
@@ -76,6 +76,53 @@ DEFAULT_CONTROLLER_PORT = 10000
 DEFAULT_JOB_TIMEOUT = 600  # 10 minutes for TPU provisioning
 SCHEDULING_POLL_INTERVAL_SECONDS = 5.0
 WORKER_DISCOVERY_INTERVAL_SECONDS = 10.0
+
+
+@dataclass
+class LogArtifact:
+    path: Path
+    description: str
+
+
+class LogTree:
+    """Tracks log artifacts created during a smoke test run."""
+
+    def __init__(self, root: Path):
+        self._root = root
+        self._root.mkdir(parents=True, exist_ok=True)
+        self._artifacts: list[LogArtifact] = []
+
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    def get_writer(self, name: str, description: str) -> Path:
+        """Register and return path for a log artifact. Creates parent dirs."""
+        path = self._root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._artifacts.append(LogArtifact(path=path, description=description))
+        return path
+
+    def get_dir(self, name: str, description: str) -> Path:
+        """Register and return path for a directory artifact."""
+        path = self._root / name
+        path.mkdir(parents=True, exist_ok=True)
+        self._artifacts.append(LogArtifact(path=path, description=description))
+        return path
+
+    def summary_lines(self) -> list[str]:
+        lines = ["## Artifacts", ""]
+        for artifact in self._artifacts:
+            rel = artifact.path.relative_to(self._root)
+            if artifact.path.is_dir():
+                count = sum(1 for _ in artifact.path.iterdir()) if artifact.path.exists() else 0
+                status = f"{count} files"
+            else:
+                exists = artifact.path.exists()
+                size = artifact.path.stat().st_size if exists else 0
+                status = f"{size:,} bytes" if exists else "not created"
+            lines.append(f"- **{artifact.description}:** `{rel}` ({status})")
+        return lines
 
 
 # =============================================================================
@@ -133,11 +180,12 @@ class SmokeTestLogger:
     structured sections for easy post-mortem analysis.
     """
 
-    def __init__(self, log_dir: Path):
+    def __init__(self, log_tree: LogTree):
         self._start_time = time.monotonic()
         self._start_datetime = datetime.now()
-        self._log_dir = log_dir
-        self._file: TextIO = open(log_dir / "summary.md", "w")
+        self._log_tree = log_tree
+        summary_path = log_tree.get_writer("summary.md", "Execution summary")
+        self._file: TextIO = open(summary_path, "w")
 
     def close(self):
         self._file.close()
@@ -154,15 +202,11 @@ class SmokeTestLogger:
         self._file.write("---\n\n")
         self._file.flush()
 
-    def write_artifacts(self):
-        """Write the artifacts section listing all generated files."""
+    def write_artifacts(self, log_tree: LogTree):
+        """Write the artifacts section from the log tree."""
         self._file.write("\n---\n\n")
-        self._file.write("## Artifacts\n\n")
-        self._file.write("- **Summary:** `summary.md`\n")
-        self._file.write("- **Controller logs:** `controller-logs.txt`\n")
-        self._file.write("- **Worker logs:** `workers/`\n")
-        self._file.write("- **Task scheduling:** `scheduling/`\n")
-        self._file.write("- **Autoscaler status:** `autoscaler/`\n")
+        for line in log_tree.summary_lines():
+            self._file.write(line + "\n")
         self._file.flush()
 
     def log(self, message: str, level: str = "INFO"):
@@ -197,14 +241,14 @@ class DockerLogStreamer:
         mode: Literal["controller", "workers"],
         zone: str,
         project: str,
-        log_dir: Path,
+        log_tree: LogTree,
         container_name: str = "iris-worker",
         label_prefix: str = "iris",
     ):
         self._mode = mode
         self._zone = zone
         self._project = project
-        self._log_dir = log_dir
+        self._log_tree = log_tree
         self._container_name = container_name
         self._label_prefix = label_prefix
         self._stop_event = threading.Event()
@@ -231,7 +275,7 @@ class DockerLogStreamer:
         vm_name = discover_controller_vm(self._zone, self._project, self._label_prefix)
         if not vm_name:
             return
-        log_file = self._log_dir / "controller-logs.txt"
+        log_file = self._log_tree.get_writer("controller-logs.txt", "Controller docker logs")
         self._stream_vm_logs(vm_name, log_file, is_tpu=False)
 
     def _discover_and_stream_workers(self):
@@ -241,7 +285,7 @@ class DockerLogStreamer:
             for tpu_name in tpu_names:
                 if tpu_name not in self._discovered_vms:
                     self._discovered_vms.add(tpu_name)
-                    log_file = self._log_dir / "workers" / f"{tpu_name}.txt"
+                    log_file = self._log_tree.get_writer(f"workers/{tpu_name}.txt", f"Worker logs: {tpu_name}")
                     threading.Thread(
                         target=self._stream_vm_logs,
                         args=(tpu_name, log_file, True),
@@ -295,9 +339,9 @@ class DockerLogStreamer:
 class TaskSchedulingMonitor:
     """Background thread that polls task status and logs scheduling info."""
 
-    def __init__(self, controller_url: str, log_dir: Path, logger: SmokeTestLogger):
+    def __init__(self, controller_url: str, log_tree: LogTree, logger: SmokeTestLogger):
         self._client = ControllerServiceClientSync(controller_url)
-        self._log_dir = log_dir / "scheduling"
+        self._scheduling_dir = log_tree.get_dir("scheduling", "Task scheduling snapshots")
         self._logger = logger
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -310,7 +354,6 @@ class TaskSchedulingMonitor:
     def start(self):
         """Start background polling thread."""
         self._stop_event.clear()
-        self._log_dir.mkdir(parents=True, exist_ok=True)
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
 
@@ -344,26 +387,9 @@ class TaskSchedulingMonitor:
                 if task.pending_reason:
                     self._logger.log(f"  Task {task.task_index} pending: {task.pending_reason}", level="DEBUG")
 
-        # Save snapshot to JSON for post-mortem
-        snapshot_file = self._log_dir / f"{job_id}-{int(time.time())}.json"
-
-        snapshot = {
-            "timestamp": time.time(),
-            "job_id": job_id,
-            "tasks": [
-                {
-                    "task_index": t.task_index,
-                    "state": cluster_pb2.TaskState.Name(t.state),
-                    "pending_reason": t.pending_reason,
-                    "can_be_scheduled": t.can_be_scheduled,
-                    "worker_id": t.worker_id,
-                }
-                for t in response.tasks
-            ],
-        }
-
+        snapshot_file = self._scheduling_dir / f"{job_id}-{int(time.time())}.json"
         with open(snapshot_file, "w") as f:
-            json.dump(snapshot, f, indent=2)
+            f.write(MessageToJson(response, preserving_proto_field_name=True))
 
 
 # =============================================================================
@@ -382,7 +408,6 @@ class SmokeTestConfig:
     tpu_type: str = "v5litepod-16"
     cleanup_on_failure: bool = True
     clean_start: bool = True  # Delete existing resources before starting
-    build_images: bool = True  # Build and push images before starting
     prefix: str | None = None  # Unique prefix for controller VM name (sets label_prefix in config)
 
     @property
@@ -450,14 +475,8 @@ class SmokeTestRunner:
 
     def __init__(self, config: SmokeTestConfig):
         self.config = config
-
-        # Create structured log directory
-        config.log_dir.mkdir(parents=True, exist_ok=True)
-        (config.log_dir / "workers").mkdir(exist_ok=True)
-        (config.log_dir / "scheduling").mkdir(exist_ok=True)
-        (config.log_dir / "autoscaler").mkdir(exist_ok=True)
-
-        self.logger = SmokeTestLogger(config.log_dir)
+        self.log_tree = LogTree(config.log_dir)
+        self.logger = SmokeTestLogger(self.log_tree)
         self._controller: ControllerProtocol | None = None
         self._tunnel_proc: subprocess.Popen | None = None
         self._interrupted = False
@@ -504,13 +523,12 @@ class SmokeTestRunner:
             self._image_project = project
 
             # Phase 0a: Build and push images
-            if self.config.build_images:
-                self.logger.section("PHASE 0a: Building Images")
-                if not self._build_images():
-                    self.logger.log("Image build failed!", level="ERROR")
-                    return False
-                if self._interrupted or self._check_deadline():
-                    return False
+            self.logger.section("PHASE 0a: Building Images")
+            if not self._build_images():
+                self.logger.log("Image build failed!", level="ERROR")
+                return False
+            if self._interrupted or self._check_deadline():
+                return False
 
             # Phase 0b: Clean start (delete existing resources)
             if self.config.clean_start:
@@ -531,7 +549,7 @@ class SmokeTestRunner:
                 mode="controller",
                 zone=zone,
                 project=project,
-                log_dir=self.config.log_dir,
+                log_tree=self.log_tree,
                 container_name="iris-controller",
                 label_prefix=label_prefix,
             )
@@ -556,7 +574,7 @@ class SmokeTestRunner:
                     mode="workers",
                     zone=zone,
                     project=project,
-                    log_dir=self.config.log_dir,
+                    log_tree=self.log_tree,
                     container_name="iris-worker",
                     label_prefix=label_prefix,
                 )
@@ -566,7 +584,7 @@ class SmokeTestRunner:
                 # Start task scheduling monitor
                 self._scheduling_monitor = TaskSchedulingMonitor(
                     controller_url=tunnel_url,
-                    log_dir=self.config.log_dir,
+                    log_tree=self.log_tree,
                     logger=self.logger,
                 )
                 self._scheduling_monitor.start()
@@ -880,7 +898,7 @@ class SmokeTestRunner:
         else:
             self.logger.log(f"Results: {passed_count}/{total_count} tests passed in {total_duration:.1f}s", level="WARN")
 
-        self.logger.write_artifacts()
+        self.logger.write_artifacts(self.log_tree)
         return all_passed
 
     def _cleanup(self):
@@ -911,32 +929,12 @@ class SmokeTestRunner:
             except Exception as e:
                 self.logger.log(f"Error stopping controller: {e}", level="WARN")
 
-        # Explicitly delete any remaining TPU slices
+        # Delete any remaining TPU slices and controller VM
         if self._zone and self._project:
             label_prefix = self.config.label_prefix
-            tpu_names = list_iris_tpus(self._zone, self._project, label_prefix)
-            if tpu_names:
-                self.logger.log(f"Cleaning up {len(tpu_names)} remaining TPU slices...")
-                for tpu_name in tpu_names:
-                    try:
-                        subprocess.run(
-                            [
-                                "gcloud",
-                                "compute",
-                                "tpus",
-                                "tpu-vm",
-                                "delete",
-                                tpu_name,
-                                f"--zone={self._zone}",
-                                f"--project={self._project}",
-                                "--quiet",
-                            ],
-                            capture_output=True,
-                            check=False,
-                        )
-                        self.logger.log(f"  Deleted TPU: {tpu_name}")
-                    except Exception as e:
-                        self.logger.log(f"  Error deleting TPU {tpu_name}: {e}", level="WARN")
+            deleted = cleanup_iris_resources(self._zone, self._project, label_prefix=label_prefix, dry_run=False)
+            for resource in deleted:
+                self.logger.log(f"  Deleted: {resource}")
 
         self.logger.log("Done")
 
@@ -987,11 +985,6 @@ class SmokeTestRunner:
     help="Skip deleting existing resources before starting",
 )
 @click.option(
-    "--no-build-images",
-    is_flag=True,
-    help="Skip building and pushing Docker images",
-)
-@click.option(
     "--prefix",
     type=str,
     default=None,
@@ -1005,7 +998,6 @@ def main(
     tpu_type: str,
     no_cleanup_on_failure: bool,
     no_clean_start: bool,
-    no_build_images: bool,
     prefix: str | None,
 ):
     """Run Iris cluster autoscaling smoke test.
@@ -1042,7 +1034,6 @@ def main(
         tpu_type=tpu_type,
         cleanup_on_failure=not no_cleanup_on_failure,
         clean_start=not no_clean_start,
-        build_images=not no_build_images,
         prefix=prefix,
     )
 
