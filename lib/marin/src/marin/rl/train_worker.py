@@ -70,6 +70,10 @@ class TrainWorkerConfig:
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
+    vocab_size: int | None = None
+    """Vocab size for model construction. Should match the checkpoint's vocab dimension.
+    If None, falls back to len(tokenizer)."""
+
     seed: int = 0
     """Random seed for replay buffer sampling and model construction."""
 
@@ -234,7 +238,8 @@ class TrainWorker:
         """Build reference and initial policy models."""
         config = self.config
         model_key = jrandom.PRNGKey(config.seed)
-        Vocab = hax.Axis("vocab", self.tokenizer.vocab_size)
+        vocab_size = config.vocab_size if config.vocab_size is not None else len(self.tokenizer)
+        Vocab = hax.Axis("vocab", vocab_size)
 
         if config.initial_checkpoint is not None:
             logger.info(f"Loading initial model from checkpoint: {config.initial_checkpoint}")
@@ -308,7 +313,8 @@ class TrainWorker:
             self.replay_buffer.set_current_step(-1)
 
             # Wait for initial rollouts to ensure we have baseline measurements
-            self._wait_for_initial_rollouts()
+            if not self._wait_for_initial_rollouts():
+                raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
 
             self._configure_training_hooks(trainer)
 
@@ -371,7 +377,7 @@ class TrainWorker:
         trainer.add_hook(_log_samples_hook, every=1)
 
         # Add MFU (Model FLOPs Utilization) logging
-        vocab_size = len(self.tokenizer)
+        vocab_size = self.config.vocab_size if self.config.vocab_size is not None else len(self.tokenizer)
         tokens_per_example = self.config.curriculum_config.max_seq_len
         flops_per_token = self.config.model.flops_per_token(vocab_size, tokens_per_example)
         flops_per_example = 3 * flops_per_token * tokens_per_example if flops_per_token is not None else None

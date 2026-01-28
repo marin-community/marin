@@ -14,6 +14,8 @@
 
 """Ray-based cluster implementation."""
 
+from typing import Any, cast
+
 import asyncio
 import logging
 import os
@@ -307,8 +309,8 @@ class RayCluster(Cluster):
         logger.info("Ray runtime env: %s", runtime_env)
         return runtime_env
 
-    def _get_entrypoint_params(self, request: JobRequest) -> dict:
-        params = {}
+    def _get_entrypoint_params(self, request: JobRequest) -> dict[str, Any]:
+        params: dict[str, Any] = {}
 
         if request.resources.cpu > 0:
             params["entrypoint_num_cpus"] = float(request.resources.cpu)
@@ -333,7 +335,7 @@ class RayCluster(Cluster):
         job = self._jobs[job_id]
         if job.submission_id is None:
             logger.info("Job is a remote ref, monitoring is automatic, waiting.")
-            return self.wait(job_id)
+            return cast(JobInfo, self.wait(job_id))
 
         async def stream_logs():
             async for line in self._job_client().tail_job_logs(job_id):

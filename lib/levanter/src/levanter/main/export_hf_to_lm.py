@@ -46,7 +46,7 @@ class ImportHfConfig:
     dtype: Optional[str] = "bfloat16"
     """Target dtype for the saved checkpoint (e.g., 'float32', 'bfloat16', 'float16')"""
 
-    resize_vocab_to_match_tokenizer: bool = True
+    resize_vocab_to_match_tokenizer: bool = False
     """If True, resize model vocab to match tokenizer vocab size"""
 
 

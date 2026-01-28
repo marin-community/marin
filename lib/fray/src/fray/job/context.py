@@ -21,7 +21,7 @@ import inspect
 import logging
 import os
 import threading
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -68,12 +68,13 @@ class JobContext(Protocol):
         """
         ...
 
-    def run(self, fn: Callable, *args) -> Any:
+    def run(self, fn: Callable, *args, name: str | None = None) -> Any:
         """Execute a function with arguments and return a future.
 
         Args:
             fn: Function to execute
             *args: Arguments to pass to function
+            name: Optional task name for debugging/monitoring (used by RayContext)
 
         Returns:
             Future representing the execution (type depends on context)
@@ -100,6 +101,7 @@ class JobContext(Protocol):
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         preemptible: bool = True,
+        num_cpus: float | None = None,
         **kwargs,
     ) -> Any:
         """Create an actor (stateful service) within the execution context.
@@ -124,7 +126,7 @@ class ActorHandle:
     Provides a unified interface for calling actor methods with .remote() and .call().
     """
 
-    def __getattr__(self, method_name: str):
+    def __getattr__(self, method_name: str) -> "ActorMethod":
         """Get a callable method wrapper for the actor."""
         raise NotImplementedError
 
@@ -148,7 +150,7 @@ class ThreadActorHandle(ActorHandle):
         self._lock = lock  # Serializes all method calls
         self._context = context
 
-    def __getattr__(self, method_name: str):
+    def __getattr__(self, method_name: str) -> "ThreadActorMethod":
         method = getattr(self._instance, method_name)
         return ThreadActorMethod(method, self._lock, self._context)
 
@@ -181,7 +183,7 @@ class _ImmediateFuture:
 
     def __init__(self, result: Any):
         self._result = result
-        self._iterator = None
+        self._iterator: Iterator[Any] | None = None
 
     def result(self) -> Any:
         return self._result
@@ -204,7 +206,7 @@ class GeneratorFuture:
 
     def __init__(self, future: Future):
         self._future = future
-        self._iterator = None
+        self._iterator: Iterator[Any] | None = None
 
     def result(self) -> Any:
         """Get the underlying result from the future."""
@@ -234,7 +236,9 @@ class SyncContext:
             return ref.result()
         return ref
 
-    def run(self, fn: Callable, *args) -> _ImmediateFuture | Generator[_ImmediateFuture, None, None]:
+    def run(
+        self, fn: Callable, *args, name: str | None = None
+    ) -> _ImmediateFuture | Generator[_ImmediateFuture, None, None]:
         """Execute function immediately and wrap result."""
         result = fn(*args)
         return _ImmediateFuture(result)
@@ -251,6 +255,7 @@ class SyncContext:
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         preemptible: bool = True,
+        num_cpus: float | None = None,
         **kwargs,
     ) -> ThreadActorHandle:
         if name is not None and name in self._actors:
@@ -295,7 +300,7 @@ class ThreadContext:
             return ref.result()
         return ref
 
-    def run(self, fn: Callable, *args) -> Future | GeneratorFuture:
+    def run(self, fn: Callable, *args, name: str | None = None) -> Future | GeneratorFuture:
         """Submit function to thread pool, returning GeneratorFuture for generator functions."""
         if inspect.isgeneratorfunction(fn):
             future = self.executor.submit(lambda: list(fn(*args)))
@@ -345,6 +350,7 @@ class ThreadContext:
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         preemptible: bool = True,
+        num_cpus: float | None = None,
         **kwargs,
     ) -> ThreadActorHandle:
         with self._actors_lock:
@@ -383,7 +389,7 @@ class RayContext:
         """Retrieve an object from Ray's object store."""
         return ray.get(ref)
 
-    def run(self, fn: Callable, *args):
+    def run(self, fn: Callable, *args, name: str | None = None):
         """Execute function remotely with configured Ray options.
 
         Uses SPREAD scheduling strategy to avoid running on head node.
@@ -391,9 +397,12 @@ class RayContext:
         if self.ray_options:
             remote_fn = ray.remote(**self.ray_options)(fn)
         else:
-            remote_fn = ray.remote(fn)
+            remote_fn = ray.remote(max_retries=100)(fn)
 
-        return remote_fn.options(scheduling_strategy="SPREAD").remote(*args)
+        options = {"scheduling_strategy": "SPREAD"}
+        if name:
+            options["name"] = name
+        return remote_fn.options(**options).remote(*args)
 
     def wait(self, futures: list, num_returns: int = 1) -> tuple[list, list]:
         """Wait for Ray futures to complete."""
@@ -410,9 +419,10 @@ class RayContext:
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         preemptible: bool = True,
+        num_cpus: float | None = None,
         **kwargs,
     ) -> ActorHandle:
-        options = {}
+        options: dict[str, Any] = {}
         if name is not None:
             options["name"] = name
         options["get_if_exists"] = get_if_exists
@@ -421,6 +431,9 @@ class RayContext:
         # run non-preemptible actors on the head node for persistence
         if not preemptible:
             options["resources"] = {"head_node": 0.0001}
+
+        if num_cpus is not None:
+            options["num_cpus"] = num_cpus
 
         remote_class = ray.remote(actor_class)
         ray_actor = remote_class.options(**options).remote(*args, **kwargs)
@@ -499,6 +512,7 @@ def create_job_ctx(
         >>> context = create_job_ctx("sync")
         >>> context = create_job_ctx("threadpool", max_workers=4)
         >>> context = create_job_ctx("ray")
+        >>> context = create_job_ctx("ray", num_cpus=2, memory=2**30)
     """
     if context_type == "auto":
         import ray

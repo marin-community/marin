@@ -7,13 +7,14 @@
 - Consult the subproject manuals when working in submodule trees:
   * `lib/levanter/AGENTS.md` for Levanter-specific conventions.
   * `lib/marin/AGENTS.md` for Marin-specific conventions
-- When a recipe exists, follow it—the agent-friendly playbooks live in `docs/recipes/`. Some live in the individual `lib/*/docs` directories.
+  * `lib/iris/AGENTS.md` for Iris-specific conventions
 
 ## Shared Workflow Playbooks
 
 - Begin with the agent-friendly recipes in `docs/recipes/`.
 - The first step for dataset addition is schema inspection. See the [add_dataset.md](docs/recipes/add_dataset.md) recipe for details.
 - You can help organize experiments using the [organize_experiments.md](docs/recipes/organize_experiments.md) recipe.
+- When making significant changes to Grug/Grugformer, follow [change_grug.md](docs/recipes/change_grug.md).
 - Follow the rules and examples in each recipe to ensure compatibility and automation-friendliness.
 
 ## Shared Coding Practices
@@ -22,8 +23,8 @@
 
 - Assume Python >=3.11.
 - Always use `uv run` for Python entry points. If that fails, try `.venv/bin/python` directly.
-- Run `uv run python infra/pre-commit.py --all-files` before sending changes; formatting and linting are enforced with `ruff`.
-- Keep type hints passing under `uv run mypy`; configuration lives in `pyproject.toml`.
+- Run `./infra/pre-commit.py --all-files` before sending changes; formatting and linting are enforced with `ruff`.
+- Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
 
 ### Communication & Commits
 
@@ -36,10 +37,10 @@
 - Put all imports at the top of the file. Avoid local imports unless technically necessary (for example, to break circular dependencies or guard optional dependencies).
 - Prefer top-level functions when code does not mutate shared state; use classes to encapsulate data when that improves clarity.
 - Prefer top-level Python tests and fixtures.
+- Separation of responsibilities: when a change introduces a new subsystem (e.g., serving/inference, data access, evaluation), encapsulate lifecycle/configuration in a dedicated module and have callers depend on the interface rather than re-implementing setup/teardown details.
 - Disprefer internal mutation of function arguments, especially config dataclasses; prefer returning a modified copy (e.g., via `dataclasses.replace`) so call sites remain predictable and side effects are explicit.
 - Use early returns (`if not x: return None`) when they reduce nesting.
 - Do not introduce ad-hoc compatibility hacks like `hasattr(m, "old_attr")`; update the code consistently instead.
-- Do not use `from future import ...` statements.
 - Document public APIs with concise Google-style docstrings.
 
 ### Error Handling
@@ -55,7 +56,7 @@
 
 ### Deprecation
 
-- Unless specifically requested, do not introduce deprecation or fallback paths—update all call sites instead.
+**NO BACKWARD COMPATIBILITY**: Do NOT add deprecation warnings, fallback paths, or compatibility shims. Update all call sites instead. Only add backward compatibility if the user explicitly requests it.
 
 ## Comments
 
@@ -86,8 +87,18 @@ You don't generate comments that merely restate the code, e.g.
 
 - Always fix tests if you broke them.
 - Do not fix tests by relaxing tolerances or hacking around them.
+- Avoid “tautological” tests that merely restate implementation logic as asserts; prefer tests that validate externally-observable behavior, integration points, or realistic failure modes.
 - Run the appropriate tests for your changes (for example, `uv run pytest` under the relevant directory); consult subproject guides for preferred markers.
 - Use pytest features like fixtures and parameterization to avoid duplication and write clean code.
+
+PREFER:
+
+- Integration style tests which exercise behavior and test the output
+
+DO NOT:
+
+- Create tests which validate obvious features: if a type exists, a constant has a value, etc.
+
 
 ## Environment
 
