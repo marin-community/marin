@@ -1,0 +1,574 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+VLM (Vision-Language Model) Evaluation Harness Adapter for Levanter.
+
+This module provides integration between Levanter VLM models and the lm-eval-harness
+framework for VLM benchmark evaluation. It supports multimodal tasks that involve
+both images and text.
+
+Key Features:
+- Supports generate_until tasks for VLM benchmarks
+- Handles image processing using BatchImageProcessor
+- Uses LlavaInferenceEngine for VLM generation
+
+Supported Benchmarks:
+- MMMU, ChartQA (already in lm-eval-harness)
+- MME, GQA, RealWorldQA, SEED, MMStar, AI2D, OCRBench (custom tasks)
+"""
+
+import dataclasses
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import haliax as hax
+import jax.numpy as jnp
+import jax.random as jrandom
+import jmp
+import numpy as np
+from haliax import Axis, NamedArray
+from haliax.partitioning import ResourceMapping
+from PIL import Image
+from tqdm_loggable.auto import tqdm
+
+import levanter.tracker
+from levanter.data.image import BatchImageProcessor
+from levanter.inference.engine import InferenceEngineConfig
+from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.models.llava_onevision import (
+    LlavaInferenceEngine,
+    LlavaOnevisionModel,
+    VLMRequest,
+)
+from levanter.utils.hf_utils import HfTokenizer
+
+try:
+    from lm_eval.api.instance import Instance
+    from lm_eval.api.model import TemplateLM
+    from lm_eval.models.utils import handle_stop_sequences
+except ImportError:
+    TemplateLM = object
+    Instance = object
+    handle_stop_sequences = None
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class VLMTaskConfig:
+    """Configuration for a VLM evaluation task."""
+
+    task: str
+    """The name of the task to run."""
+    task_alias: str | None = None
+    """An alias for the task. We log this name to wandb."""
+    num_fewshot: int | None = None
+
+    def to_dict(self):
+        """Convert the TaskConfig to a dictionary, excluding None values."""
+        base_dict = dataclasses.asdict(self)
+        return {k: v for k, v in base_dict.items() if v is not None}
+
+
+@dataclass(frozen=True)
+class VLMEvalHarnessConfig:
+    """Configuration for running VLM evaluation with lm-eval-harness."""
+
+    task_spec: list[VLMTaskConfig | str]
+    """List of tasks to evaluate."""
+    max_examples: int | None = None
+    """Maximum number of examples per task."""
+    max_length: int | None = None
+    """Maximum sequence length."""
+    max_images: int = 10
+    """Maximum number of images per sample."""
+    image_size: int = 384
+    """Image size for processing."""
+    vision_feature_height: int = 27
+    """Vision feature height (determines num_image_tokens = height * height)."""
+    bootstrap_iters: int = 0
+    apply_chat_template: bool = True
+    confirm_run_unsafe_code: bool = True
+    generation_kwargs: dict = field(
+        default_factory=lambda: {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
+    )
+
+    def to_task_spec(self) -> list[str | dict]:
+        """Convert task specifications to a list of dictionaries or strings."""
+        result = []
+        for task in self.task_spec:
+            if isinstance(task, str):
+                result.append(task)
+            else:
+                result.append(task.to_dict())
+        return result
+
+
+class LevanterVLMHarnessLM(TemplateLM):
+    """
+    Levanter VLM implementation of the lm-eval-harness TemplateLM interface.
+
+    This class provides the interface between Levanter VLM models and the lm-eval-harness
+    evaluation framework, handling multimodal inputs (images + text).
+    """
+
+    MULTIMODAL = True
+
+    def __init__(
+        self,
+        model: LlavaOnevisionModel,
+        tokenizer: HfTokenizer,
+        image_processor: BatchImageProcessor,
+        EvalBatch: Axis,
+        EvalPos: Axis,
+        axis_resources: ResourceMapping,
+        mp: jmp.Policy | None = None,
+        generation_kwargs: dict | None = None,
+        max_images: int = 10,
+    ):
+        """
+        Initialize the VLM harness adapter.
+
+        Args:
+            model: The LlavaOnevision model
+            tokenizer: HuggingFace tokenizer
+            image_processor: BatchImageProcessor for processing images
+            EvalBatch: Batch axis for evaluation
+            EvalPos: Position axis for evaluation
+            axis_resources: Resource mapping for sharding
+            mp: Mixed precision policy
+            generation_kwargs: Default generation parameters
+            max_images: Maximum number of images per sample
+        """
+        super().__init__()
+        self.model = model
+        self._tokenizer = tokenizer
+        self.image_processor = image_processor
+        self.EvalBatch = EvalBatch
+        self.EvalPos = EvalPos
+        self.axis_resources = axis_resources
+        self.mp = mp
+        self._generation_kwargs = generation_kwargs or {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
+        self.max_images = max_images
+
+        # Engine will be created lazily
+        self._engine: LlavaInferenceEngine | None = None
+        self._engine_config: InferenceEngineConfig | None = None
+
+        # Sample logging
+        self.sample_outputs: dict[str, list[dict]] = {}
+        self._current_task = "vlm_task"
+
+    @property
+    def tokenizer(self):
+        return self._tokenizer
+
+    @property
+    def tokenizer_name(self) -> str:
+        """Return a string identifier for the tokenizer."""
+        if hasattr(self.tokenizer, "name_or_path"):
+            return self.tokenizer.name_or_path
+        return "unknown_tokenizer"
+
+    @property
+    def eot_token_id(self) -> int:
+        """Return the end-of-text token ID."""
+        return self.tokenizer.eos_token_id
+
+    @property
+    def max_gen_toks(self) -> int:
+        """Backward compatibility property for max_gen_toks."""
+        return self._generation_kwargs.get("max_gen_toks", 256)
+
+    @property
+    def generation_kwargs(self):
+        """Get the generation kwargs."""
+        return self._generation_kwargs
+
+    def chat_template(self, chat_template: str | None = None) -> str | None:
+        """Return the chat template for this model."""
+        if chat_template is not None:
+            return chat_template
+        if hasattr(self.tokenizer, "chat_template") and self.tokenizer.chat_template is not None:
+            return self.tokenizer.chat_template
+        return None
+
+    def apply_chat_template(self, chat_history: list[dict], **kwargs) -> str:
+        """Apply chat template to format a conversation history."""
+        return self.tokenizer.apply_chat_template(
+            chat_history,
+            tokenize=False,
+            add_generation_prompt=kwargs.get("add_generation_prompt", True),
+            **{k: v for k, v in kwargs.items() if k != "add_generation_prompt"},
+        )
+
+    def set_current_task(self, task_name: str):
+        """Set the current task for sample logging."""
+        self._current_task = task_name
+        if task_name not in self.sample_outputs:
+            self.sample_outputs[task_name] = []
+
+    def get_sample_outputs(self) -> dict[str, list[dict]]:
+        """Get all stored sample outputs."""
+        return self.sample_outputs
+
+    def clear_sample_outputs(self):
+        """Clear all stored sample outputs."""
+        self.sample_outputs.clear()
+
+    def _get_engine(self) -> LlavaInferenceEngine:
+        """Lazily create and return the inference engine."""
+        if self._engine is None:
+            max_length = self.EvalPos.size
+            self._engine_config = InferenceEngineConfig(
+                max_stop_seqs=4,
+                max_stop_tokens=16,
+                max_seq_len=max_length,
+                max_seqs=1,  # VLM currently supports single request
+                page_size=8,
+                compute_dtype=jnp.bfloat16,
+                hbm_utilization=0.5,
+            )
+            self._engine = LlavaInferenceEngine.from_model_with_config(
+                model=self.model,
+                tokenizer=self.tokenizer,
+                config=self._engine_config,
+                Vocab=self.model.Vocab,
+            )
+        return self._engine
+
+    def tok_encode(
+        self,
+        string: Union[str, List[str]],
+        left_truncate_len: int | None = None,
+        add_special_tokens: bool = False,
+        truncation: bool = False,
+    ) -> Union[List[int], List[List[int]]]:
+        """Tokenize a string or list of strings."""
+        encoding = self.tokenizer(
+            string,
+            add_special_tokens=add_special_tokens,
+            truncation=truncation,
+            return_attention_mask=False,
+        ).input_ids
+
+        if left_truncate_len:
+            if not isinstance(string, str):
+                encoding = [enc[-left_truncate_len:] for enc in encoding]
+            else:
+                encoding = encoding[-left_truncate_len:]
+
+        return encoding
+
+    def _process_image(self, image: Any) -> Image.Image:
+        """Convert various image formats to PIL Image."""
+        if isinstance(image, Image.Image):
+            return image.convert("RGB")
+        elif isinstance(image, str):
+            # URL or file path
+            if image.startswith(("http://", "https://")):
+                import requests
+                from io import BytesIO
+                response = requests.get(image)
+                return Image.open(BytesIO(response.content)).convert("RGB")
+            else:
+                return Image.open(image).convert("RGB")
+        elif isinstance(image, dict) and "bytes" in image:
+            # HuggingFace bytes format
+            from io import BytesIO
+            return Image.open(BytesIO(image["bytes"])).convert("RGB")
+        elif isinstance(image, bytes):
+            from io import BytesIO
+            return Image.open(BytesIO(image)).convert("RGB")
+        else:
+            raise ValueError(f"Unsupported image format: {type(image)}")
+
+    def _create_vlm_request(
+        self,
+        prompt: str,
+        images: List[Image.Image],
+        gen_kwargs: dict,
+    ) -> VLMRequest:
+        """Create a VLMRequest from prompt and images."""
+        # Process images and text using BatchImageProcessor
+        # Create a conversation format that the processor expects
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image"}] * len(images) + [{"type": "text", "text": prompt}]
+            }
+        ]
+
+        # Use the image processor to process the example
+        example = {"messages": messages, "images": images}
+        processed = self.image_processor(example)
+
+        # Extract processed data
+        input_ids = processed["input_ids"]
+        pixel_values = processed.get("pixel_values")
+        grid_mask = processed.get("grid_mask")
+        unpad_indices = processed.get("unpad_indices")
+        num_unpadded_features = processed.get("num_unpadded_features")
+
+        # Create sequence decoding parameters
+        max_gen_toks = gen_kwargs.get("max_gen_toks", 256)
+        temperature = gen_kwargs.get("temperature", 0.0)
+        seed = gen_kwargs.get("seed")
+
+        base_key = jrandom.PRNGKey(42 if seed is None else seed)
+        seq_params = SeqDecodingParams(
+            max_num_tokens=jnp.array(len(input_ids) + max_gen_toks, dtype=jnp.int32),
+            stop_tokens=None,  # Will be set later if needed
+            temperature=jnp.array(temperature, dtype=jnp.float32),
+            key=base_key,
+        )
+
+        # Convert to NamedArray format
+        TotalPatches = hax.Axis("TotalPatches", pixel_values.shape[0]) if pixel_values is not None else None
+
+        pixel_values_na = None
+        grid_mask_na = None
+        unpad_indices_na = None
+
+        if pixel_values is not None:
+            # pixel_values shape: (TOTAL_PATCHES, C, H, W)
+            pixel_values_na = hax.named(
+                jnp.array(pixel_values),
+                (TotalPatches, hax.Axis("C", pixel_values.shape[1]),
+                 hax.Axis("H", pixel_values.shape[2]), hax.Axis("W", pixel_values.shape[3]))
+            )
+
+        if grid_mask is not None:
+            grid_mask_na = hax.named(jnp.array(grid_mask), (TotalPatches,))
+
+        if unpad_indices is not None:
+            UnpadFeatures = hax.Axis("UnpadFeatures", len(unpad_indices))
+            unpad_indices_na = hax.named(jnp.array(unpad_indices), (UnpadFeatures,))
+
+        return VLMRequest(
+            prompt_tokens=input_ids.tolist(),
+            request_id=0,
+            decode_params=seq_params,
+            n_generations=1,
+            pixel_values=pixel_values_na,
+            grid_mask=grid_mask_na,
+            input_ids=None,  # Will be set from prompt_tokens
+            unpad_indices=unpad_indices_na,
+            num_unpadded_features=num_unpadded_features,
+        )
+
+    def generate_until(self, requests: List[Instance], disable_tqdm: bool = False) -> List[str]:
+        """
+        Generate text for VLM requests with images.
+
+        Args:
+            requests: List of Instance objects from lm-eval-harness
+                     Each request has args: (context, gen_kwargs, {"visual": images})
+            disable_tqdm: Whether to disable progress bar
+
+        Returns:
+            List of generated strings
+        """
+        if self.tokenizer.pad_token_id is None:
+            logger.warning("No pad token set. Setting to eos token.")
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+
+        engine = self._get_engine()
+        results: List[str] = []
+
+        pbar = tqdm(requests, desc="VLM generate_until", disable=disable_tqdm)
+        for req in pbar:
+            # Extract context, gen_kwargs, and multimodal args
+            args = req.args
+            if len(args) >= 3 and isinstance(args[2], dict):
+                context = args[0]
+                gen_kwargs = args[1] if len(args) > 1 else {}
+                multimodal_args = args[2]
+                images = multimodal_args.get("visual", [])
+            elif len(args) >= 2:
+                context = args[0]
+                gen_kwargs = args[1] if isinstance(args[1], dict) else {}
+                images = []
+            else:
+                context = args[0]
+                gen_kwargs = {}
+                images = []
+
+            # Process generation kwargs
+            processed_kwargs = self._modify_gen_kwargs(gen_kwargs.copy())
+
+            # Override with our default kwargs
+            for key, value in self._generation_kwargs.items():
+                if key not in processed_kwargs:
+                    processed_kwargs[key] = value
+
+            # Convert images to PIL format
+            pil_images = [self._process_image(img) for img in images] if images else []
+
+            try:
+                if pil_images:
+                    # Create VLM request with images
+                    vlm_request = self._create_vlm_request(context, pil_images, processed_kwargs)
+
+                    # Generate using the engine
+                    result = engine.generate([vlm_request])
+
+                    # Decode the generated tokens
+                    if result.tokens and len(result.tokens) > 0:
+                        generated_tokens = result.tokens[0]
+                        text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+                    else:
+                        text = ""
+                else:
+                    # Text-only request - use basic generation
+                    logger.warning(f"No images provided for VLM request, using empty response")
+                    text = ""
+
+                # Post-process with stop sequences
+                until = processed_kwargs.get("until", [])
+                if until:
+                    for stop_seq in until:
+                        if stop_seq in text:
+                            text = text.split(stop_seq)[0]
+                            break
+
+                results.append(text)
+
+                # Log sample if enabled
+                bucket = self.sample_outputs.get(self._current_task, [])
+                if len(bucket) < 100:  # Limit samples
+                    bucket.append({
+                        "prompt": context,
+                        "generation": text,
+                        "num_images": len(pil_images),
+                    })
+                    self.sample_outputs[self._current_task] = bucket
+
+            except Exception as e:
+                logger.error(f"Error during VLM generation: {e}")
+                results.append("")
+
+        return results
+
+    def loglikelihood(self, requests: List[Instance], disable_tqdm: bool = False) -> List[Tuple[float, bool]]:
+        """
+        Compute log-likelihood of generating a continuation from a context.
+
+        Note: This is a simplified implementation. For multiple-choice tasks,
+        we compute the forward pass and return log probabilities.
+        """
+        # For now, we raise NotImplementedError since most VLM benchmarks
+        # use generate_until rather than loglikelihood
+        raise NotImplementedError(
+            "loglikelihood for VLM is not yet implemented. "
+            "Most VLM benchmarks use generate_until instead."
+        )
+
+    def loglikelihood_rolling(self, requests) -> List[Tuple[float]]:
+        raise NotImplementedError("loglikelihood_rolling is not supported for VLM")
+
+    @staticmethod
+    def _modify_gen_kwargs(kwargs: dict) -> dict:
+        """Modify generation kwargs to standardize parameters."""
+        # Handle temperature
+        if "temperature" in kwargs and kwargs["temperature"] is not None:
+            kwargs["temperature"] = max(0.0, float(kwargs["temperature"]))
+        else:
+            kwargs.setdefault("temperature", 0.0)
+
+        # Handle do_sample parameter
+        do_sample = kwargs.pop("do_sample", None)
+        if do_sample is False and kwargs["temperature"] > 0.0:
+            raise ValueError(
+                f"Conflicting parameters: do_sample=False but temperature={kwargs['temperature']} > 0.0."
+            )
+
+        # Handle max_gen_toks parameter
+        if "max_gen_toks" in kwargs and kwargs["max_gen_toks"] is not None:
+            kwargs["max_gen_toks"] = int(kwargs["max_gen_toks"])
+        else:
+            kwargs.setdefault("max_gen_toks", 256)
+
+        # Handle n generations parameter
+        if "n" in kwargs and kwargs["n"] is not None:
+            kwargs["n"] = int(kwargs["n"])
+        else:
+            kwargs.setdefault("n", 1)
+
+        return kwargs
+
+
+def run_vlm_eval_harness(
+    model: LlavaOnevisionModel,
+    tokenizer: HfTokenizer,
+    image_processor: BatchImageProcessor,
+    config: VLMEvalHarnessConfig,
+    EvalBatch: Axis,
+    EvalPos: Axis,
+    axis_resources: ResourceMapping,
+    mp: jmp.Policy | None = None,
+) -> dict:
+    """
+    Run VLM evaluation using lm-eval-harness.
+
+    Args:
+        model: The LlavaOnevision model
+        tokenizer: HuggingFace tokenizer
+        image_processor: BatchImageProcessor for image processing
+        config: VLM evaluation configuration
+        EvalBatch: Batch axis for evaluation
+        EvalPos: Position axis for evaluation
+        axis_resources: Resource mapping for sharding
+        mp: Mixed precision policy
+
+    Returns:
+        Dictionary containing evaluation results
+    """
+    from lm_eval import evaluator
+
+    # Create the VLM harness adapter
+    vlm_lm = LevanterVLMHarnessLM(
+        model=model,
+        tokenizer=tokenizer,
+        image_processor=image_processor,
+        EvalBatch=EvalBatch,
+        EvalPos=EvalPos,
+        axis_resources=axis_resources,
+        mp=mp,
+        generation_kwargs=config.generation_kwargs,
+        max_images=config.max_images,
+    )
+
+    # Run evaluation
+    task_spec = config.to_task_spec()
+    logger.info(f"Running VLM evaluation on tasks: {task_spec}")
+
+    results = evaluator.simple_evaluate(
+        model=vlm_lm,
+        tasks=task_spec,
+        limit=config.max_examples,
+        bootstrap_iters=config.bootstrap_iters,
+        apply_chat_template=config.apply_chat_template,
+        confirm_run_unsafe_code=config.confirm_run_unsafe_code,
+    )
+
+    # Log results
+    if results and "results" in results:
+        for task_name, metrics in results["results"].items():
+            logger.info(f"{task_name}: {metrics}")
+            # Log to tracker
+            for metric_name, value in metrics.items():
+                if isinstance(value, (int, float)):
+                    levanter.tracker.log({f"vlm_eval/{task_name}/{metric_name}": value})
+
+    return results
+
+
+__all__ = [
+    "VLMTaskConfig",
+    "VLMEvalHarnessConfig",
+    "LevanterVLMHarnessLM",
+    "run_vlm_eval_harness",
+]
