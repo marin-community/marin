@@ -16,6 +16,8 @@ edition = "2023";
 
 package iris.cluster;
 
+import "vm.proto";
+
 // ============================================================================
 // SHARED TYPES
 // ============================================================================
@@ -69,6 +71,10 @@ message TaskStatus {
 
   int32 current_attempt_id = 14;
   repeated TaskAttempt attempts = 15;
+
+  // Scheduling diagnostics for pending tasks (dashboard display)
+  string pending_reason = 16;         // Why task can't be scheduled (empty if schedulable)
+  bool can_be_scheduled = 17;         // Whether task is currently schedulable
 }
 
 // Record of a single task execution attempt
@@ -125,13 +131,21 @@ message JobStatus {
   int32 failure_count = 17;                // Total task failures (aggregated)
   int32 preemption_count = 18;             // Total task preemptions (aggregated)
 
-  // Per-task status information
-  int32 num_tasks = 19;
-  int32 tasks_pending = 20;
-  int32 tasks_running = 21;
-  int32 tasks_succeeded = 22;
-  int32 tasks_failed = 23;
   repeated TaskStatus tasks = 24;          // Per-task status (always included)
+
+  // Job metadata from request (for dashboard display)
+  string name = 25;                        // Job name from request
+  int64 submitted_at_ms = 26;              // Submission timestamp
+
+  // Resource specification from job request (for dashboard display)
+  ResourceSpecProto resources = 27;
+
+  // Aggregated task state counts: {"running": 2, "pending": 5, "succeeded": 10}
+  map<string, int32> task_state_counts = 28;
+
+  // Convenience counts (could derive from task_state_counts)
+  int32 task_count = 29;
+  int32 completed_count = 30;
 }
 
 // JobAttempt message removed: Jobs don't have attempts - tasks do.
@@ -191,15 +205,28 @@ message ResourceSpecProto {
 // ============================================================================
 
 // Job environment configuration
-// Exactly one of workspace or docker_image must be set (enforced in client)
 message EnvironmentConfig {
-  oneof source {
-    string workspace = 1;        // Path to workspace root for uv-based execution
-  }
+  repeated string pip_packages = 1;  // Additional pip packages to install
+  map<string, string> env_vars = 2;  // Environment variables to set
+  repeated string extras = 3;         // Extra dependency groups for uv (e.g., ["tpu", "eval"])
+}
 
-  repeated string pip_packages = 2;  // Additional pip packages to install
-  map<string, string> env_vars = 3;  // Environment variables to set
-  repeated string extras = 4;         // Extra dependency groups for uv (e.g., ["tpu", "eval"])
+// ============================================================================
+// ENTRYPOINT
+// ============================================================================
+
+// Job entrypoint - either a cloudpickled callable or a command line.
+// Exactly one must be set.
+message Entrypoint {
+  oneof kind {
+    bytes callable = 1;           // cloudpickle.dumps((fn, args, kwargs))
+    CommandEntrypoint command = 2; // Command-line execution
+  }
+}
+
+// Command-line entrypoint for script execution.
+message CommandEntrypoint {
+  repeated string argv = 1;  // e.g., ["python", "train.py", "--epochs", "10"]
 }
 
 // ============================================================================
@@ -282,6 +309,11 @@ message WorkerMetadata {
   // Additional attributes can be set via IRIS_WORKER_ATTRIBUTES env var
   // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
   map<string, AttributeValue> attributes = 40;
+
+  // VM address from IRIS_VM_ADDRESS env var, used for autoscaler VM tracking.
+  // For cloud VMs, this is the VM's IP address injected by ManagedVm.
+  // For local workers, this may be empty or a local identifier.
+  string vm_address = 41;
 }
 
 // ============================================================================
@@ -292,7 +324,7 @@ message Controller {
   // --- Job Lifecycle ---
   message LaunchJobRequest {
     string name = 1;
-    bytes serialized_entrypoint = 2;   // cloudpickle(Entrypoint)
+    Entrypoint entrypoint = 2;              // Job entrypoint (callable or command)
     ResourceSpecProto resources = 3;        // Full resource specification
     EnvironmentConfig environment = 4;  // Environment configuration
 
@@ -389,11 +421,17 @@ message Controller {
     string worker_id = 1;
     string address = 2;
     WorkerMetadata metadata = 3;
+    // Task IDs the worker believes it is running (for controller restart recovery).
+    // If the controller doesn't recognize these tasks, it signals should_reset.
+    repeated string running_task_ids = 4;
   }
 
   message RegisterWorkerResponse {
     bool accepted = 1;
     string controller_address = 2;   // For callbacks
+    // If true, worker should reset: kill all containers and re-register with empty task list.
+    // Set when worker claims tasks the controller doesn't know about (stale state).
+    bool should_reset = 3;
   }
 
   message WorkerHealthStatus {
@@ -402,6 +440,8 @@ message Controller {
     int32 consecutive_failures = 3;
     int64 last_heartbeat_ms = 4;
     repeated string running_job_ids = 5;
+    string address = 6;                    // Worker RPC address (host:port)
+    WorkerMetadata metadata = 7;           // Full worker metadata
   }
 
   message ListWorkersRequest {}
@@ -465,6 +505,41 @@ message Controller {
   message ListEndpointsResponse {
     repeated Endpoint endpoints = 1;
   }
+
+  // --- Autoscaler ---
+  message GetAutoscalerStatusRequest {}
+
+  message GetAutoscalerStatusResponse {
+    iris.vm.AutoscalerStatus status = 1;
+  }
+
+  // --- VM Logs ---
+  message GetVmLogsRequest {
+    string vm_id = 1;
+    int32 tail = 2;  // 0 = all lines
+  }
+
+  message GetVmLogsResponse {
+    string logs = 1;
+    string vm_id = 2;
+    iris.vm.VmState state = 3;
+  }
+
+  // --- Transactions / Actions Log ---
+  message TransactionAction {
+    int64 timestamp_ms = 1;
+    string action = 2;
+    string entity_id = 3;
+    string details = 4;
+  }
+
+  message GetTransactionsRequest {
+    int32 limit = 1;  // 0 = default (50)
+  }
+
+  message GetTransactionsResponse {
+    repeated TransactionAction actions = 1;
+  }
 }
 
 // ============================================================================
@@ -478,7 +553,7 @@ message Worker {
     int32 task_index = 3;           // 0-indexed task number
     int32 num_tasks = 4;            // Total tasks in job (for IRIS_NUM_TASKS)
 
-    bytes serialized_entrypoint = 5;
+    Entrypoint entrypoint = 5;      // Job entrypoint (callable or command)
     EnvironmentConfig environment = 6;
     string bundle_gcs_path = 7;
     ResourceSpecProto resources = 8;
@@ -563,6 +638,15 @@ service ControllerService {
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (Empty);
   rpc LookupEndpoint(Controller.LookupEndpointRequest) returns (Controller.LookupEndpointResponse);
   rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
+
+  // Autoscaler
+  rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);
+
+  // VM Logs
+  rpc GetVmLogs(Controller.GetVmLogsRequest) returns (Controller.GetVmLogsResponse);
+
+  // Transactions / Actions Log
+  rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
 }
 
 service WorkerService {

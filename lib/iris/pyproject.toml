@@ -7,21 +7,33 @@ name = "iris"
 version = "0.1.0"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+    "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python @ git+https://github.com/connectrpc/connect-python.git@5342eacecef85e52717604ee5ac7e03a1e16c7ac",
     "fsspec>=2024.0.0",
+    "gcsfs>=2024.0.0",
     "grpcio>=1.76.0",
     "httpx>=0.28.1",
     "humanfriendly>=10.0",
     "pydantic>=2.12.5",
+    "pyyaml>=6.0",
     "starlette>=0.50.0",
     "typing-extensions>=4.0",
     "uvicorn[standard]>=0.23.0",
 ]
 
+[project.scripts]
+iris = "iris.cli:iris"
+
+[project.optional-dependencies]
+dev = [
+    "ipykernel>=7.1.0",
+    "nbconvert>=7.16.6",
+    "nbformat>=5.10.4",
+]
+
 [dependency-groups]
 demo = [
-    "click>=8.3.1",
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",
     "nbconvert>=7.16.6",

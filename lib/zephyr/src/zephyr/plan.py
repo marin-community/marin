@@ -199,7 +199,11 @@ def _load_file_gen(stream: Iterator) -> Iterator:
     from zephyr.readers import load_file
 
     for spec in stream:
-        yield from load_file(spec)
+        try:
+            yield from load_file(spec)
+        except Exception as e:
+            logger.exception(f"Failed to load from {spec}")
+            raise RuntimeError(f"Failed to load from {spec}: {e}") from e
 
 
 def compose_map(operations: list) -> Callable[[Iterator], Iterator]:

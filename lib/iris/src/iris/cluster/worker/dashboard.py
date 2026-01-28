@@ -23,6 +23,7 @@ from starlette.routing import Mount, Route
 
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceWSGIApplication
+from iris.rpc.proto_utils import task_state_name
 from iris.cluster.worker.service import WorkerServiceImpl
 
 
@@ -254,6 +255,8 @@ class WorkerDashboard:
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         routes = [
+            # Health check (for bootstrap and load balancers)
+            Route("/health", self._health),
             # Web dashboard
             Route("/", self._dashboard),
             Route("/task/{task_id:path}", self._task_detail_page),
@@ -267,6 +270,10 @@ class WorkerDashboard:
             Mount(rpc_wsgi_app.path, app=rpc_app),
         ]
         return Starlette(routes=routes)
+
+    def _health(self, _request: Request) -> JSONResponse:
+        """Simple health check endpoint for bootstrap and load balancers."""
+        return JSONResponse({"status": "healthy"})
 
     def _dashboard(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(DASHBOARD_HTML)
@@ -310,7 +317,7 @@ class WorkerDashboard:
                     "job_id": t.job_id,
                     "task_index": t.task_index,
                     "attempt_id": t.current_attempt_id,
-                    "status": self._status_name(t.state),
+                    "status": task_state_name(t.state),
                     "started_at": t.started_at_ms,
                     "finished_at": t.finished_at_ms,
                     "exit_code": t.exit_code,
@@ -344,7 +351,7 @@ class WorkerDashboard:
                 "job_id": task.job_id,
                 "task_index": task.task_index,
                 "attempt_id": task.current_attempt_id,
-                "status": self._status_name(task.state),
+                "status": task_state_name(task.state),
                 "started_at": task.started_at_ms,
                 "finished_at": task.finished_at_ms,
                 "exit_code": task.exit_code,
@@ -400,17 +407,6 @@ class WorkerDashboard:
             logs = [log for log in logs if log["source"] == source]
 
         return JSONResponse(logs)
-
-    def _status_name(self, status: cluster_pb2.TaskState) -> str:
-        status_map = {
-            cluster_pb2.TASK_STATE_PENDING: "pending",
-            cluster_pb2.TASK_STATE_BUILDING: "building",
-            cluster_pb2.TASK_STATE_RUNNING: "running",
-            cluster_pb2.TASK_STATE_SUCCEEDED: "succeeded",
-            cluster_pb2.TASK_STATE_FAILED: "failed",
-            cluster_pb2.TASK_STATE_KILLED: "killed",
-        }
-        return status_map.get(status, "unknown")
 
     def run(self) -> None:
         import uvicorn

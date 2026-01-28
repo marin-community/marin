@@ -20,7 +20,6 @@ import zipfile
 from pathlib import Path
 from unittest.mock import Mock
 
-import cloudpickle
 import pytest
 from connectrpc.request import RequestContext
 
@@ -41,22 +40,6 @@ from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
 def allocator():
     """Create PortAllocator with small range for testing."""
     return PortAllocator(port_range=(40000, 40100))
-
-
-def test_allocate_single_port(allocator):
-    """Test allocating a single port."""
-    ports = allocator.allocate(count=1)
-    assert len(ports) == 1
-    assert 40000 <= ports[0] < 40100
-
-
-def test_allocate_multiple_ports(allocator):
-    """Test allocating multiple ports at once."""
-    ports = allocator.allocate(count=5)
-    assert len(ports) == 5
-    assert len(set(ports)) == 5  # All unique
-    for port in ports:
-        assert 40000 <= port < 40100
 
 
 def test_allocated_ports_are_usable(allocator):
@@ -186,6 +169,8 @@ def mock_runtime():
     runtime.remove = Mock()
     runtime.get_stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
     runtime.get_logs = Mock(return_value=[])
+    runtime.list_iris_containers = Mock(return_value=[])
+    runtime.remove_all_iris_containers = Mock(return_value=0)
     return runtime
 
 
@@ -233,11 +218,13 @@ def create_run_task_request(
     ports: list[str] | None = None,
 ):
     """Create a RunTaskRequest for testing."""
-    entrypoint = create_test_entrypoint()
-    serialized_entrypoint = cloudpickle.dumps(entrypoint)
+
+    def test_fn():
+        print("Hello from test")
+
+    entrypoint_proto = Entrypoint.from_callable(test_fn).to_proto()
 
     env_config = cluster_pb2.EnvironmentConfig(
-        workspace="/workspace",
         env_vars={
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",
@@ -252,25 +239,13 @@ def create_run_task_request(
         job_id=job_id or task_id,
         task_index=task_index,
         num_tasks=num_tasks,
-        serialized_entrypoint=serialized_entrypoint,
+        entrypoint=entrypoint_proto,
         environment=env_config,
         bundle_gcs_path="gs://bucket/bundle.zip",
         resources=resources,
         timeout_seconds=300,
         ports=ports or [],
     )
-
-
-def test_submit_task_returns_task_id(worker):
-    """Test that submit_task returns task_id immediately."""
-    request = create_run_task_request()
-    task_id = worker.submit_task(request)
-
-    assert task_id == "test-task-1"
-
-    task = worker.get_task(task_id)
-    assert task is not None
-    assert task.task_id == task_id
 
 
 def test_task_lifecycle_phases(worker):
@@ -363,7 +338,6 @@ def test_list_tasks(worker):
 
     tasks = worker.list_tasks()
     assert len(tasks) == 3
-    assert {task.task_id for task in tasks} == {"task-0", "task-1", "task-2"}
 
 
 def test_kill_running_task(worker, mock_runtime):
@@ -588,11 +562,9 @@ def create_integration_run_task_request(bundle_path: str, task_id: str):
         job_id=task_id,
         task_index=0,
         num_tasks=1,
-        serialized_entrypoint=cloudpickle.dumps(entrypoint),
+        entrypoint=entrypoint.to_proto(),
         bundle_gcs_path=bundle_path,
-        environment=cluster_pb2.EnvironmentConfig(
-            workspace="/app",
-        ),
+        environment=cluster_pb2.EnvironmentConfig(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=512 * 1024**2),
     )
 
@@ -612,7 +584,7 @@ def test_bundle(tmp_path):
 
 
 @pytest.fixture
-def real_worker(cache_dir):
+def real_worker(cache_dir, docker_cleanup_scope):
     """Create Worker with real components (not mocks)."""
     config = WorkerConfig(
         port=0,

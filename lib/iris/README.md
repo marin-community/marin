@@ -1,36 +1,329 @@
 # Iris
 
-Iris is a distributed job orchestration and RPC framework designed to replace
-Ray with simpler, more focused primitives. It provides job lifecycle management,
-actor-based RPC communication, and task dispatch capabilities for distributed
-Python workloads.
+Distributed job orchestration replacing Ray with simpler primitives.
 
-## Architecture Overview
+## Quick Start
 
-Iris consists of four main components:
+### Production: GCP Cluster
 
-| Component | Description |
-|-----------|-------------|
-| **Controller** | Central coordinator managing job scheduling, worker registration, and service discovery |
-| **Worker** | Execution agent that runs jobs in isolated containers with resource management |
-| **Actor System** | RPC framework enabling Python object method invocation across processes |
-| **WorkerPool** | High-level task dispatch abstraction for stateless parallel workloads |
+```bash
+# Start controller VM (runs autoscaler internally)
+uv run iris cluster --config=examples/eu-west4.yaml start
+
+# Check cluster status
+uv run iris cluster --config=examples/eu-west4.yaml status
+
+# Validate cluster with test jobs (establishes SSH tunnel automatically)
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate
+
+# Stop cluster (controller + all worker slices)
+uv run iris cluster --config=examples/eu-west4.yaml stop
+```
+
+### Development: Local Controller
+
+```bash
+# Run controller locally with integrated autoscaler
+uv run iris cluster --config=cluster.yaml controller run-local
+
+# Or use the controller daemon directly
+uv run python -m iris.cluster.controller.main serve --config=cluster.yaml
+```
+
+### Submit a Job
+
+```python
+from iris.client import IrisClient
+from iris.cluster.types import Entrypoint, ResourceSpec
+
+def my_task():
+    print("Hello from Iris!")
+
+client = IrisClient.remote("http://controller:10000", workspace=Path("."))
+job = client.submit(
+    name="my-job",
+    entrypoint=Entrypoint.from_callable(my_task),
+    resources=ResourceSpec(cpu=1, memory="2GB"),
+)
+job.wait()
+```
+
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Controller                               │
-│                                                                  │
-│     Job Scheduling    │    Worker Registry    │  Endpoint Registry│
-└─────────────────────────────────────────────────────────────────┘
-        │                       │                       ▲
-        │ dispatch              │ health                │ register
-        ▼                       ▼                       │
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│     Worker      │     │     Worker      │     │   ActorServer   │
-│                 │     │                 │     │   (in job)      │
-│  runs jobs in   │     │  runs jobs in   │     │                 │
-│  containers     │     │  containers     │     │                 │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
+Controller Process (in Docker container):
+├── gRPC service (job dispatch, worker registration)
+├── HTTP dashboard (monitoring, status)
+├── Scheduler thread (task→worker matching)
+├── Autoscaler thread (VM lifecycle management)
+└── ManagedVm threads (per-VM state machines)
+
+Worker Process (on each VM):
+├── Task executor (runs jobs in containers)
+└── Heartbeat reporter (health monitoring)
+```
+
+## Actor System
+
+Iris includes a lightweight actor RPC system for service-style workloads. Actor
+servers run inside worker containers (or standalone VMs), and clients resolve
+actor endpoints via a resolver implementation:
+
+```
+Actor Client
+  │
+  │ resolve(actor_name)
+  v
+Resolver (ClusterResolver / GcsResolver / FixedResolver)
+  │
+  │ endpoints (url + actor_id)
+  v
+Worker VM
+  └─ Job Container (iris-managed)
+       └─ Actor Server
+            └─ Actor instance (registered methods)
+```
+
+Resolver options:
+- **ClusterResolver** (in `iris.client.resolver`): query the controller for
+  namespace-aware actor endpoints (best for Iris clusters).
+- **GcsResolver**: discover endpoints via GCP VM metadata tags
+  (`iris_actor_<name>`).
+- **FixedResolver**: static endpoint mapping (tests or fixed deployments).
+
+The actor system also provides `ActorPool` for round-robin calls and broadcast
+RPCs across all resolved endpoints.
+
+Example:
+
+```python
+from iris.actor import ActorClient
+from iris.client.resolver import ClusterResolver
+
+resolver = ClusterResolver("http://controller:10000", namespace="default")
+client = ActorClient(resolver, "inference")
+result = client.predict({"text": "hello"})
+```
+
+### Key Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **Controller** | Central coordinator: job scheduling, worker registry, autoscaling |
+| **Worker** | Execution agent running jobs in isolated containers |
+| **Scale Group** | Configuration for a type of accelerator (TPU, GPU) with min/max slices |
+| **Slice** | Atomic scaling unit - a complete TPU pod that succeeds or fails as a whole |
+| **VmManager** | Abstraction for VM lifecycle (GCP, Manual, or Fake for testing) |
+
+### Network Architecture
+
+#### Controller Addresses
+
+| Client Type | Address Type | Notes |
+|-------------|--------------|-------|
+| Workers | Internal IP | Workers on VPC connect via internal IP (automatic with autoscaler) |
+| External Clients | SSH Tunnel | Use `gcloud compute ssh` with port forwarding |
+
+Workers communicate with the controller using internal VPC IPs. External clients (your laptop, CI) should use SSH tunneling to access the controller.
+
+## Worker Lifecycle
+
+### Registration and Reconciliation
+
+Workers register with the controller via heartbeat (every 10 seconds). The registration
+includes `running_task_ids` - the list of tasks the worker believes it's running.
+
+The controller performs bidirectional reconciliation:
+
+1. **Worker claims unknown tasks** (e.g., controller restarted):
+   - Controller sends `should_reset=True`
+   - Worker wipes all containers and re-registers
+
+2. **Worker missing expected tasks** (e.g., worker restarted):
+   - Controller marks missing tasks as `WORKER_FAILED`
+   - Tasks will be retried on another worker
+
+### Startup Cleanup
+
+Workers wipe ALL `iris.managed=true` containers at startup. This simple approach:
+- Handles crash recovery without complex tracking
+- Cleans orphaned containers from previous runs
+- Ensures fresh state on every worker start
+
+### Container Labels
+
+Task containers are labeled for discoverability:
+- `iris.managed=true` - All iris-managed containers
+- `iris.task_id=<id>` - Task identifier
+- `iris.job_id=<id>` - Job identifier
+
+## Bundle Storage (Required)
+
+Jobs can include a `bundle_blob` containing workspace files. The controller stores these in a shared location accessible to all workers.
+
+**Configuration** (required):
+
+```yaml
+controller_vm:
+  bundle_prefix: gs://my-bucket/iris/bundles  # GCS for distributed workers
+```
+
+The controller will **fail at startup** if `bundle_prefix` is not configured.
+
+For local development:
+```bash
+uv run iris cluster controller run-local --bundle-prefix file:///var/cache/iris/bundles
+```
+
+## CLI Reference
+
+### Cluster Commands
+
+```bash
+# Start/stop/restart controller VM (--config on cluster group)
+iris cluster --config=cluster.yaml start
+iris cluster --config=cluster.yaml stop
+iris cluster --config=cluster.yaml restart
+iris cluster --config=cluster.yaml status
+
+# Controller subcommands (for GCE-managed controller)
+iris cluster --config=... controller start
+iris cluster --config=... controller stop
+iris cluster --config=... controller restart
+iris cluster --config=... controller status
+iris cluster --config=... controller run-local  # Development mode
+```
+
+### Slice Management
+
+```bash
+# Create/list/terminate slices
+iris cluster --config=... slice create --scale-group tpu_v5e_4
+iris cluster --config=... slice list
+iris cluster --config=... slice get SLICE_ID
+iris cluster --config=... slice terminate SLICE_ID
+iris cluster --config=... slice terminate --all
+```
+
+### VM Operations
+
+```bash
+# VM status and logs (via config or controller URL)
+iris cluster --config=... vm status
+iris cluster vm --controller-url=http://localhost:10000 status
+iris cluster --config=... vm logs VM_ID
+iris cluster --config=... vm get VM_ID
+```
+
+### Image Builds
+
+```bash
+# Build and push Docker images
+iris build worker-image -t iris-worker:v1 --push --region us-central1
+iris build controller-image -t iris-controller:v1 --push --region us-central1
+```
+
+### Cluster Tools (Debugging & Validation)
+
+The `scripts/cluster-tools.py` script provides debugging and validation commands:
+
+```bash
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models --help
+
+# Discover and show controller VM status
+discover
+autoscaler-status
+list-workers
+# controller logs
+logs {--follow}
+bootstrap-logs
+validate
+# Cleanup all iris resources (dry-run by default)
+cleanup {--no-dry-run}
+```
+
+## Smoke Test
+
+The smoke test validates end-to-end cluster functionality including autoscaling.
+
+```bash
+# Full smoke test (builds images, starts cluster, runs TPU jobs)
+uv run python lib/iris/scripts/smoke-test.py --config lib/iris/examples/eu-west4.yaml
+
+# Skip image builds (use existing images)
+uv run python lib/iris/scripts/smoke-test.py --config ... --no-build-images
+
+# Keep cluster on failure for debugging
+uv run python lib/iris/scripts/smoke-test.py --config ... --no-cleanup-on-failure
+
+# Custom job timeout
+uv run python lib/iris/scripts/smoke-test.py --config ... --job-timeout 900
+```
+
+The smoke test:
+1. Builds and pushes controller + worker images
+2. Starts controller VM with autoscaler
+3. Submits TPU jobs to exercise autoscaling
+4. Collects logs on failure for debugging
+5. Cleans up all resources
+
+## Configuration
+
+Configuration uses a nested structure with `bootstrap`, `timeouts`, and `ssh` sub-configs:
+
+```yaml
+# Cluster-level settings
+project_id: my-project
+region: us-central1
+zone: us-central1-a
+
+# Bootstrap config for worker VMs
+bootstrap:
+  docker_image: us-central1-docker.pkg.dev/my-project/marin/iris-worker:latest
+  worker_port: 10001
+  controller_address: "10.0.0.1:10000"  # Or use env var: "${IRIS_CONTROLLER_ADDRESS}"
+
+# Timeout settings (VM lifecycle)
+timeouts:
+  boot_timeout_seconds: 300        # Time for VM to become SSH-reachable
+  init_timeout_seconds: 600        # Time for worker to register with controller
+  ssh_poll_interval_seconds: 5     # Interval for health checks
+
+# SSH config (for manual provider)
+ssh:
+  user: ubuntu
+  key_file: ~/.ssh/cluster_key
+  port: 22
+  connect_timeout: 30
+
+# Controller VM (GCP-managed)
+controller_vm:
+  gcp:
+    image: us-central1-docker.pkg.dev/my-project/marin/iris-controller:latest
+    machine_type: n2-standard-4
+    port: 10000
+
+# Scale groups define VM pools with autoscaling
+scale_groups:
+  tpu_v5e_4:
+    provider:
+      tpu:
+        project_id: my-project
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-4
+    runtime_version: v2-alpha-tpuv5-lite
+    min_slices: 0
+    max_slices: 10
+    preemptible: true
+    zones: [us-central1-a, us-central1-b]
+
+  # Manual hosts example (no cloud provisioning)
+  manual_hosts:
+    provider:
+      manual:
+        hosts: [10.0.0.1, 10.0.0.2]
+        ssh_user: ubuntu        # Per-group SSH override
+        ssh_key_file: ~/.ssh/manual_key
 ```
 
 ## Directory Structure
@@ -47,149 +340,14 @@ src/iris/
 │   ├── resolver.py          # ClusterResolver
 │   └── worker_pool.py       # Task dispatch
 ├── cluster/                  # Cluster orchestration
-│   ├── controller/          # Controller service
+│   ├── controller/          # Controller service + autoscaler
 │   ├── worker/              # Worker service
-│   └── client/              # Low-level cluster clients
-├── proto/                    # Protocol definitions
-└── *_pb2.py, *_connect.py   # Generated RPC code
+│   └── vm/                  # VM management + autoscaling
+├── rpc/                      # Protocol definitions + generated code
+└── cli.py                    # Main CLI entry point
 ```
 
-## Component Documentation
+## References
 
-- [Controller Overview](docs/controller.md) - Job scheduling and coordination
-- [Worker Overview](docs/worker.md) - Job execution and container management
-- [Actor System Overview](docs/actor.md) - RPC and service discovery
-
-## Quick Start
-
-### Submitting a Job
-
-```python
-from iris.client import IrisClient
-from iris.cluster.types import Entrypoint, ResourceSpec
-
-def my_task():
-    print("Hello from iris!")
-
-client = IrisClient.remote("http://controller:8080", workspace=Path("."))
-job = client.submit(
-    name="my-job",
-    entrypoint=Entrypoint.from_callable(my_task),
-    resources=ResourceSpec(cpu=1, memory="2GB"),
-)
-job.wait()  # Blocks until complete, raises JobFailedError on failure
-
-# Access task-level information
-for task in job.tasks():
-    for entry in task.logs():
-        print(entry.data)
-```
-
-### Running an Actor Server
-
-```python
-from iris.actor import ActorServer
-
-class InferenceActor:
-    def predict(self, data: list) -> list:
-        return [x * 2 for x in data]
-
-server = ActorServer(host="127.0.0.1")
-server.register("inference", InferenceActor())
-server.serve()
-```
-
-### Calling Actors
-
-```python
-from iris.actor import ActorPool
-from iris.client.resolver import ClusterResolver
-
-resolver = ClusterResolver("http://controller:8080")
-pool: ActorPool = resolver.lookup("inference")
-pool.wait_for_size(1)
-
-result = pool.call().predict([1, 2, 3])
-```
-
-### Using WorkerPool for Task Dispatch
-
-```python
-from iris.client import IrisClient, WorkerPool, WorkerPoolConfig
-from iris.cluster.types import ResourceSpec
-
-client = IrisClient.remote("http://controller:8080", workspace=Path("."))
-config = WorkerPoolConfig(num_workers=10, resources=ResourceSpec(cpu=2))
-pool = WorkerPool(client, config)
-
-futures = [pool.submit(process_shard, shard) for shard in shards]
-results = [f.result() for f in futures]
-pool.shutdown()
-```
-
-## Job Hierarchy and Name Prefixing
-
-### Hierarchical Job IDs
-
-Jobs form parent-child hierarchies. When a job launches sub-jobs, they become children:
-
-```
-Root job:     "abc123"                    (UUID generated by controller)
-Child job:    "abc123/worker-0"           (parent_id/name)
-Grandchild:   "abc123/worker-0/sub-task"  (nested hierarchy)
-```
-
-When a parent job terminates, all children are automatically terminated (cascade termination).
-
-### Endpoint Name Prefixing
-
-Actors register endpoints with simple names, but they're stored with a prefix derived from the root job ID:
-
-```python
-# Inside job "abc123/worker-0"
-ctx.controller.endpoint_registry.register("calculator", "localhost:8080")
-# Stored as: "abc123/calculator"
-```
-
-This provides automatic isolation:
-- Jobs in the same hierarchy can discover each other's actors
-- Jobs in different hierarchies cannot see each other's actors
-- No explicit namespace parameter needed
-
-### Resolution
-
-```python
-# Inside job "abc123/worker-0"
-resolver = ctx.resolver
-result = resolver.resolve("calculator")  # Looks up "abc123/calculator"
-```
-
-### IrisContext
-
-The `IrisContext` available in job code provides convenient access:
-
-```python
-from iris.client import iris_ctx
-
-ctx = iris_ctx()
-print(f"Job ID: {ctx.job_id}")        # "abc123/worker-0"
-print(f"Namespace: {ctx.namespace}")   # Namespace("abc123") - derived from root
-print(f"Parent: {ctx.parent_job_id}")  # "abc123"
-```
-
-### Environment Variables
-
-Jobs receive their identity via environment variables:
-
-- `IRIS_JOB_ID`: Full hierarchical job ID (e.g., `"root-uuid/child-a/grandchild"`)
-
-## Design Principles
-
-1. **Shallow interfaces**: Components expose minimal APIs with clear responsibilities
-2. **Explicit over implicit**: No magic discovery or hidden state synchronization
-3. **Stateless workers**: Task retry and load balancing work because workers maintain no shared state
-4. **Arbitrary callables**: Jobs and actor methods accept any picklable Python callable
-
-## Related Documentation
-
-- [Fray-Zero Design](docs/fray-zero.md) - Original design document and rationale
+- [Original Design](docs/fray-zero.md) - Design rationale and architectural decisions
+- [Autoscaler Design](docs/autoscaler-v0-design.md) - Technical specification for VM autoscaling

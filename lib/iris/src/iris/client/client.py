@@ -30,6 +30,7 @@ Example:
 
 import logging
 import os
+import sys
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -58,7 +59,6 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import cluster_pb2
-from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -262,17 +262,23 @@ class Job:
         timeout: float,
         poll_interval: float,
     ) -> cluster_pb2.JobStatus:
-        """Wait while streaming logs from all tasks."""
+        """Wait while streaming logs from all tasks.
+
+        Uses a fixed low poll interval for responsive log streaming. The poll_interval
+        parameter sets the base rate; we don't use exponential backoff here since
+        we want logs to appear in near real-time during active job execution.
+        """
         log_states: list[_TaskLogState] = []
-        backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
+        # Use a fixed low interval for responsive streaming (capped at poll_interval)
+        stream_interval = min(0.2, poll_interval)
         start = time.monotonic()
 
         while True:
             status = self._client._cluster.get_job_status(self._job_id)
 
             # Initialize log pollers when we learn num_tasks
-            if not log_states and status.num_tasks > 0:
-                log_states = [_TaskLogState(i) for i in range(status.num_tasks)]
+            if not log_states and len(status.tasks) > 0:
+                log_states = [_TaskLogState(i) for i in range(len(status.tasks))]
 
             # Poll logs from all tasks
             for state in log_states:
@@ -305,7 +311,7 @@ class Job:
             if elapsed >= timeout:
                 raise TimeoutError(f"Job {self._job_id} did not complete in {timeout}s")
 
-            time.sleep(backoff.next_interval())
+            time.sleep(stream_interval)
 
     def terminate(self) -> None:
         """Terminate this job."""
@@ -930,13 +936,18 @@ class IrisClient:
 
 
 def _print_log_entry(job_id: JobId, entry: LogEntry, task_index: int | None = None) -> None:
-    """Log a job log entry."""
+    """Print a job log entry to stdout for real-time streaming.
+
+    Uses sys.__stdout__ directly instead of print() to avoid being captured
+    by redirect_stdout in local in-process containers.
+    """
     ts = datetime.fromtimestamp(entry.timestamp_ms / 1000, tz=timezone.utc)
     ts_str = ts.strftime("%H:%M:%S")
     if task_index is not None:
-        logger.info("[%s/task-%d][%s] %s", job_id, task_index, ts_str, entry.data)
+        sys.__stdout__.write(f"[{job_id}/task-{task_index}][{ts_str}] {entry.data}\n")
     else:
-        logger.info("[%s][%s] %s", job_id, ts_str, entry.data)
+        sys.__stdout__.write(f"[{job_id}][{ts_str}] {entry.data}\n")
+    sys.__stdout__.flush()
 
 
 def create_context_from_env() -> IrisContext:

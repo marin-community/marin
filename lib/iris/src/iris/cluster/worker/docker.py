@@ -25,32 +25,27 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
-from collections.abc import Callable
-
-import cloudpickle
+from typing import Protocol
 
 from iris.rpc import cluster_pb2
+from iris.cluster.types import Entrypoint
 from iris.cluster.worker.worker_types import TaskLogs, LogLine
 
 
 @dataclass
 class ContainerConfig:
-    """Configuration for running a container.
-
-    The entrypoint is the primary data - it specifies what to run.
-    Each ContainerRuntime implementation decides how to execute it
-    (Docker builds a command, local runtime calls it directly).
-    """
+    """Configuration for running a container."""
 
     image: str
-    entrypoint: tuple[Callable[..., Any], tuple[Any, ...], dict[str, Any]]
+    entrypoint: Entrypoint
     env: dict[str, str]
     workdir: str = "/app"
     resources: cluster_pb2.ResourceSpecProto | None = None
     timeout_seconds: int | None = None
     mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
     ports: dict[str, int] = field(default_factory=dict)  # name -> host_port
+    task_id: str | None = None
+    job_id: str | None = None
 
     def get_cpu_millicores(self) -> int | None:
         if not self.resources or not self.resources.cpu:
@@ -132,6 +127,10 @@ class ContainerRuntime(Protocol):
 
     def get_stats(self, container_id: str) -> ContainerStats: ...
 
+    def list_iris_containers(self, all_states: bool = True) -> list[str]: ...
+
+    def remove_all_iris_containers(self) -> int: ...
+
 
 class ImageBuilder(Protocol):
     """Protocol for image building (Docker build, rootfs creation, etc.)."""
@@ -158,10 +157,23 @@ class DockerRuntime:
     Uses subprocess for lifecycle, Docker Python SDK for stats/logs.
     """
 
-    def _build_command(self, entrypoint: tuple[Callable[..., Any], tuple[Any, ...], dict[str, Any]]) -> list[str]:
-        """Build the Python command that executes the entrypoint in a container."""
-        fn, args, kwargs = entrypoint
-        serialized = cloudpickle.dumps((fn, args, kwargs))
+    def _build_command(self, entrypoint: Entrypoint) -> list[str]:
+        """Build the container command from the entrypoint.
+
+        For callable entrypoints: generates a Python thunk that deserializes
+        and executes the cloudpickled function.
+
+        For command entrypoints: returns the command directly.
+        """
+        if entrypoint.is_command:
+            assert entrypoint.command is not None
+            return entrypoint.command
+
+        # Callable entrypoint: build Python thunk
+        import cloudpickle
+
+        assert entrypoint.callable is not None
+        serialized = cloudpickle.dumps((entrypoint.callable, entrypoint.args, entrypoint.kwargs))
         encoded = base64.b64encode(serialized).decode()
 
         thunk = f"""
@@ -194,6 +206,13 @@ except Exception:
             "-w",
             config.workdir,
         ]
+
+        # Add iris labels for discoverability
+        cmd.extend(["--label", "iris.managed=true"])
+        if config.task_id:
+            cmd.extend(["--label", f"iris.task_id={config.task_id}"])
+        if config.job_id:
+            cmd.extend(["--label", f"iris.job_id={config.job_id}"])
 
         # Resource limits (cgroups v2)
         cpu_millicores = config.get_cpu_millicores()
@@ -425,6 +444,29 @@ except Exception:
             return int(value / (1024 * 1024))
         else:
             return 0
+
+    def list_iris_containers(self, all_states: bool = True) -> list[str]:
+        """List all containers with iris.managed=true label."""
+        cmd = ["docker", "ps", "-q", "--filter", "label=iris.managed=true"]
+        if all_states:
+            cmd.append("-a")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            return []
+        return [cid for cid in result.stdout.strip().split("\n") if cid]
+
+    def remove_all_iris_containers(self) -> int:
+        """Force remove all iris-managed containers. Returns count attempted."""
+        container_ids = self.list_iris_containers(all_states=True)
+        if not container_ids:
+            return 0
+
+        subprocess.run(
+            ["docker", "rm", "-f", *container_ids],
+            capture_output=True,
+            check=False,
+        )
+        return len(container_ids)
 
 
 class DockerImageBuilder:

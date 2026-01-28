@@ -19,27 +19,48 @@ creates N tasks). Tasks are the unit of scheduling and execution. Job state is
 aggregated from task states.
 """
 
+import json
 import logging
 import uuid
-from pathlib import Path
 from typing import Any, Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
+from iris.cluster.controller.bundle_store import BundleStore
 from iris.cluster.controller.events import (
     JobCancelledEvent,
     JobSubmittedEvent,
     TaskStateChangedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.state import ControllerEndpoint, ControllerState
+from iris.cluster.controller.scheduler import TaskScheduleResult
+from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerTask
 from iris.cluster.types import JobId, TaskId, WorkerId
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.errors import rpc_error_handler
+from iris.rpc.proto_utils import task_state_name
 from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_TRANSACTION_LIMIT = 50
+
+
+class AutoscalerProtocol(Protocol):
+    """Protocol for autoscaler operations used by ControllerServiceImpl."""
+
+    def get_status(self) -> vm_pb2.AutoscalerStatus:
+        """Get autoscaler status."""
+        ...
+
+    def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
+        """Get info for a specific VM."""
+        ...
+
+    def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
+        """Get initialization log for a VM."""
+        ...
 
 
 class SchedulerProtocol(Protocol):
@@ -51,6 +72,15 @@ class SchedulerProtocol(Protocol):
         """Send KILL RPCs to workers for tasks that were running."""
         ...
 
+    def task_schedule_status(self, task: ControllerTask) -> TaskScheduleResult:
+        """Get the current scheduling status of a task (for dashboard display)."""
+        ...
+
+    @property
+    def autoscaler(self) -> AutoscalerProtocol | None:
+        """Get the autoscaler instance, if autoscaling is enabled."""
+        ...
+
 
 class ControllerServiceImpl:
     """ControllerService RPC implementation.
@@ -58,18 +88,19 @@ class ControllerServiceImpl:
     Args:
         state: Controller state containing jobs, tasks, and workers
         scheduler: Background scheduler for task dispatch (any object with wake() method)
-        bundle_dir: Directory for storing uploaded bundles (optional)
+        bundle_prefix: URI prefix for storing bundles (e.g., gs://bucket/path or file:///path).
+                      Required for job submission with bundles.
     """
 
     def __init__(
         self,
         state: ControllerState,
         scheduler: SchedulerProtocol,
-        bundle_dir: str | Path | None = None,
+        bundle_prefix: str,
     ):
         self._state = state
         self._scheduler = scheduler
-        self._bundle_dir = Path(bundle_dir) if bundle_dir else None
+        self._bundle_store = BundleStore(bundle_prefix)
 
     def launch_job(
         self,
@@ -90,18 +121,16 @@ class ControllerServiceImpl:
             if self._state.get_job(JobId(job_id)):
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists")
 
-            # Handle bundle_blob: write to bundle_dir if provided
-            if request.bundle_blob and self._bundle_dir:
-                bundle_path = self._bundle_dir / job_id / "bundle.zip"
-                bundle_path.parent.mkdir(parents=True, exist_ok=True)
-                bundle_path.write_bytes(request.bundle_blob)
+            # Handle bundle_blob: upload to bundle store if provided
+            if request.bundle_blob:
+                bundle_path = self._bundle_store.write_bundle(job_id, request.bundle_blob)
 
                 request = cluster_pb2.Controller.LaunchJobRequest(
                     name=request.name,
-                    serialized_entrypoint=request.serialized_entrypoint,
+                    entrypoint=request.entrypoint,
                     resources=request.resources,
                     environment=request.environment,
-                    bundle_gcs_path=f"file://{bundle_path}",
+                    bundle_gcs_path=bundle_path,
                     bundle_hash=request.bundle_hash,
                     ports=list(request.ports),
                     scheduling_timeout_seconds=request.scheduling_timeout_seconds,
@@ -189,7 +218,6 @@ class ControllerServiceImpl:
                 parent_job_id=str(job.parent_job_id) if job.parent_job_id else "",
                 failure_count=total_failure_count,
                 preemption_count=total_preemption_count,
-                num_tasks=len(task_statuses),
                 tasks=task_statuses,
             )
         )
@@ -245,10 +273,20 @@ class ControllerServiceImpl:
         """List all jobs."""
         jobs = []
         for j in self._state.list_all_jobs():
-            # Aggregate failure and preemption counts from all tasks
+            # Aggregate counts from all tasks in single pass
             tasks = self._state.get_job_tasks(j.job_id)
-            total_failure_count = sum(task.failure_count for task in tasks)
-            total_preemption_count = sum(task.preemption_count for task in tasks)
+            total_failure_count = 0
+            total_preemption_count = 0
+            task_state_counts: dict[str, int] = {}
+            completed_count = 0
+
+            for task in tasks:
+                total_failure_count += task.failure_count
+                total_preemption_count += task.preemption_count
+                state_name = task_state_name(task.state)
+                task_state_counts[state_name] = task_state_counts.get(state_name, 0) + 1
+                if state_name in ("TASK_STATE_SUCCEEDED", "TASK_STATE_KILLED"):
+                    completed_count += 1
 
             jobs.append(
                 cluster_pb2.JobStatus(
@@ -261,6 +299,12 @@ class ControllerServiceImpl:
                     parent_job_id=str(j.parent_job_id) if j.parent_job_id else "",
                     failure_count=total_failure_count,
                     preemption_count=total_preemption_count,
+                    name=j.request.name if j.request else "",
+                    submitted_at_ms=j.submitted_at_ms or 0,
+                    resources=j.request.resources if j.request else cluster_pb2.ResourceSpecProto(),
+                    task_state_counts=task_state_counts,
+                    task_count=len(tasks),
+                    completed_count=completed_count,
                 )
             )
         return cluster_pb2.Controller.ListJobsResponse(jobs=jobs)
@@ -325,6 +369,13 @@ class ControllerServiceImpl:
                 if worker:
                     worker_address = worker.address
 
+            # Add scheduling diagnostics for pending tasks
+            pending_reason = ""
+            can_be_scheduled = task.can_be_scheduled()
+            if task.state == cluster_pb2.TASK_STATE_PENDING:
+                schedule_status = self._scheduler.task_schedule_status(task)
+                pending_reason = schedule_status.failure_reason or ""
+
             task_statuses.append(
                 cluster_pb2.TaskStatus(
                     task_id=str(task.task_id),
@@ -338,6 +389,8 @@ class ControllerServiceImpl:
                     exit_code=task.exit_code or 0,
                     error=task.error or "",
                     current_attempt_id=task.current_attempt_id,
+                    pending_reason=pending_reason,
+                    can_be_scheduled=can_be_scheduled,
                 )
             )
 
@@ -397,11 +450,46 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.RegisterWorkerRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.RegisterWorkerResponse:
-        """Register a new worker or process a heartbeat from an existing worker."""
+        """Register a new worker or process a heartbeat from an existing worker.
+
+        Performs bidirectional reconciliation:
+        1. Worker claims unknown tasks (controller restart) -> signal reset
+        2. Controller expects tasks worker doesn't report (worker restart) -> mark tasks failed
+        """
+        worker_id = WorkerId(request.worker_id)
+        reported_tasks = set(request.running_task_ids)
+
+        # Case 1: Worker claims unknown tasks (controller restart recovery)
+        if reported_tasks:
+            unknown_tasks = [tid for tid in reported_tasks if self._state.get_task(TaskId(tid)) is None]
+            if unknown_tasks:
+                logger.warning("Worker %s claims unknown tasks %s, signaling reset", worker_id, unknown_tasks)
+                return cluster_pb2.Controller.RegisterWorkerResponse(
+                    accepted=False,
+                    should_reset=True,
+                )
+
+        # Case 2: Controller expects tasks worker doesn't report (worker restart recovery)
+        existing_worker = self._state.get_worker(worker_id)
+        if existing_worker:
+            expected_tasks = existing_worker.running_tasks
+            missing_tasks = expected_tasks - {TaskId(tid) for tid in reported_tasks}
+            if missing_tasks:
+                logger.warning("Worker %s missing expected tasks %s, marking failed", worker_id, missing_tasks)
+                for task_id in missing_tasks:
+                    self._state.handle_event(
+                        TaskStateChangedEvent(
+                            task_id=task_id,
+                            new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                            error="Worker restarted without task",
+                            exit_code=1,
+                        )
+                    )
+
         # Use WORKER_REGISTERED event for both new and existing workers
         self._state.handle_event(
             WorkerRegisteredEvent(
-                worker_id=WorkerId(request.worker_id),
+                worker_id=worker_id,
                 address=request.address,
                 metadata=request.metadata,
                 timestamp_ms=now_ms(),
@@ -423,6 +511,8 @@ class ControllerServiceImpl:
                 consecutive_failures=w.consecutive_failures,
                 last_heartbeat_ms=w.last_heartbeat_ms,
                 running_job_ids=list(w.running_tasks),  # Now contains task IDs
+                address=w.address,
+                metadata=w.metadata,
             )
             for w in self._state.list_all_workers()
         ]
@@ -510,3 +600,66 @@ class ControllerServiceImpl:
                 for e in endpoints
             ]
         )
+
+    # --- Autoscaler ---
+
+    def get_autoscaler_status(
+        self,
+        request: cluster_pb2.Controller.GetAutoscalerStatusRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
+        """Get current autoscaler status."""
+        autoscaler = self._scheduler.autoscaler
+        if not autoscaler:
+            return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
+
+        return cluster_pb2.Controller.GetAutoscalerStatusResponse(status=autoscaler.get_status())
+
+    # --- VM Logs ---
+
+    def get_vm_logs(
+        self,
+        request: cluster_pb2.Controller.GetVmLogsRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetVmLogsResponse:
+        """Get initialization logs for a VM."""
+        autoscaler = self._scheduler.autoscaler
+        if not autoscaler:
+            raise ConnectError(Code.UNAVAILABLE, "Autoscaler not configured")
+
+        vm_info = autoscaler.get_vm(request.vm_id)
+        if not vm_info:
+            raise ConnectError(Code.NOT_FOUND, f"VM {request.vm_id} not found")
+
+        tail = request.tail if request.tail > 0 else None
+        logs = autoscaler.get_init_log(request.vm_id, tail)
+
+        return cluster_pb2.Controller.GetVmLogsResponse(
+            logs=logs,
+            vm_id=vm_info.vm_id,
+            state=vm_info.state,
+        )
+
+    # --- Transactions ---
+
+    def get_transactions(
+        self,
+        request: cluster_pb2.Controller.GetTransactionsRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetTransactionsResponse:
+        """Get recent controller actions for the dashboard action log."""
+        limit = request.limit if request.limit > 0 else DEFAULT_TRANSACTION_LIMIT
+        transactions = self._state.get_transactions(limit=limit)
+        actions = []
+        for txn in transactions:
+            for action in txn.actions:
+                details_str = json.dumps(action.details) if action.details else ""
+                actions.append(
+                    cluster_pb2.Controller.TransactionAction(
+                        timestamp_ms=action.timestamp_ms,
+                        action=action.action,
+                        entity_id=action.entity_id,
+                        details=details_str,
+                    )
+                )
+        return cluster_pb2.Controller.GetTransactionsResponse(actions=actions)

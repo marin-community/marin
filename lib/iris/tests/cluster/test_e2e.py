@@ -95,7 +95,7 @@ class E2ECluster:
         controller_config = ControllerConfig(
             host="127.0.0.1",
             port=self._controller_port,
-            bundle_dir=bundle_dir,
+            bundle_prefix=f"file://{bundle_dir}",
         )
         self._controller = Controller(
             config=controller_config,
@@ -191,7 +191,7 @@ class E2ECluster:
     ):
         """Submit a job and return a Job handle."""
         entrypoint = Entrypoint.from_callable(fn, *args, **kwargs)
-        environment = EnvironmentSpec(workspace="/app")
+        environment = EnvironmentSpec()
         resources = ResourceSpec(cpu=cpu, memory=memory)
         return self.get_client().submit(
             entrypoint=entrypoint,
@@ -275,14 +275,14 @@ class E2ECluster:
 
 
 @pytest.fixture(scope="session")
-def test_cluster(use_docker):
+def test_cluster(use_docker, docker_cleanup_session):
     """Provide a running test cluster for E2E tests (session-scoped)."""
     with E2ECluster(use_docker=use_docker) as cluster:
         yield cluster
 
 
 @pytest.fixture(scope="session")
-def multi_worker_cluster(use_docker):
+def multi_worker_cluster(use_docker, docker_cleanup_session):
     """Provide a cluster with multiple workers (session-scoped)."""
     with E2ECluster(num_workers=3, use_docker=use_docker) as cluster:
         yield cluster
@@ -459,53 +459,72 @@ class TestPorts:
 
 
 class TestJobInfo:
-    """Test JobInfo contextvar is available in jobs."""
+    """Test JobInfo contextvar is available in jobs and provides runtime context."""
 
-    def test_job_info_contextvar(self, test_cluster):
-        """JobInfo is available via contextvar with correct job_id and worker_id."""
+    def test_job_info_provides_context(self, test_cluster):
+        """JobInfo is available and provides job_id, worker_id, and ports during execution."""
         job_name = unique_name("test-job-info")
 
         def test_fn(expected_job_id):
             info = get_job_info()
-            assert info is not None
-            assert info.job_id == expected_job_id
-            assert info.worker_id is not None
-            assert "actor" in info.ports
-            return info.job_id
+            # Verify JobInfo is available and provides expected context
+            if info is None:
+                raise ValueError("JobInfo not available")
+            if info.job_id != expected_job_id:
+                raise ValueError(f"JobInfo has wrong job_id: {info.job_id}")
+            if info.worker_id is None:
+                raise ValueError("JobInfo missing worker_id")
+            if "actor" not in info.ports:
+                raise ValueError("JobInfo missing expected port 'actor'")
+            return "success"
 
         job_id = test_cluster.submit(test_fn, job_name, name=job_name, ports=["actor"])
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
-    def test_job_info_with_multiple_ports(self, test_cluster):
-        """JobInfo contains all allocated ports and they are unique."""
+    def test_job_info_port_allocation(self, test_cluster):
+        """JobInfo provides all requested ports and they are unique."""
 
         def test_fn():
             info = get_job_info()
-            assert info is not None
-            assert "actor" in info.ports
-            assert "metrics" in info.ports
-            assert "custom" in info.ports
-            # Ports should be unique
+            if info is None:
+                raise ValueError("JobInfo not available")
+
+            # Verify all ports are present
+            required_ports = {"actor", "metrics", "custom"}
+            if not required_ports.issubset(info.ports.keys()):
+                raise ValueError(f"Missing ports. Expected {required_ports}, got {info.ports.keys()}")
+
+            # Verify ports are unique
             port_values = list(info.ports.values())
-            assert len(port_values) == len(set(port_values))
-            return info.ports
+            if len(port_values) != len(set(port_values)):
+                raise ValueError(f"Ports are not unique: {port_values}")
+
+            return "success"
 
         job_id = test_cluster.submit(test_fn, name=unique_name("test-job-ports"), ports=["actor", "metrics", "custom"])
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
-    def test_job_info_task_fields(self, test_cluster):
-        """JobInfo contains task fields (task_id, task_index, num_tasks)."""
+    def test_job_info_task_context(self, test_cluster):
+        """JobInfo provides task-specific context (task_id, task_index, num_tasks)."""
         job_name = unique_name("test-task-fields")
 
         def test_fn(expected_job_name):
             info = get_job_info()
-            assert info is not None
-            assert info.task_id == f"{expected_job_name}/task-0"
-            assert info.task_index == 0
-            assert info.num_tasks == 1
-            return info.task_id
+            if info is None:
+                raise ValueError("JobInfo not available")
+
+            # Verify task context is correct
+            expected_task_id = f"{expected_job_name}/task-0"
+            if info.task_id != expected_task_id:
+                raise ValueError(f"Expected task_id {expected_task_id}, got {info.task_id}")
+            if info.task_index != 0:
+                raise ValueError(f"Expected task_index 0, got {info.task_index}")
+            if info.num_tasks != 1:
+                raise ValueError(f"Expected num_tasks 1, got {info.num_tasks}")
+
+            return "success"
 
         job_id = test_cluster.submit(test_fn, job_name, name=job_name)
         status = test_cluster.wait(job_id, timeout=30)

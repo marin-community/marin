@@ -219,8 +219,11 @@ class DefaultEnvironmentProvider:
         memory_bytes = _get_memory_total_bytes()
         disk_bytes = _get_disk_bytes()
 
-        # TPU environment variables
+        # TPU environment variables:
+        # - TPU_NAME: TPU slice name (e.g., iris-tpu_v5e_16-xxx) for coscheduling group_by
+        # - TPU_TYPE: accelerator type (e.g., v5litepod-16) for topology/chip count lookup
         tpu_name = os.environ.get("TPU_NAME", "")
+        tpu_type = os.environ.get("TPU_TYPE", "")
         tpu_worker_hostnames = os.environ.get("TPU_WORKER_HOSTNAMES", "")
         tpu_worker_id = os.environ.get("TPU_WORKER_ID", "")
         tpu_chips_per_host_bounds = os.environ.get("TPU_CHIPS_PER_HOST_BOUNDS", "")
@@ -231,19 +234,19 @@ class DefaultEnvironmentProvider:
         # GCE metadata
         gce_instance_name, gce_zone = _probe_gce_metadata()
 
-        # Build device config
+        # Build device config using TPU_TYPE for topology lookup
         device = cluster_pb2.DeviceConfig()
-        if tpu_name:
+        if tpu_type:
             tpu_chip_count = 0
             try:
-                topo = get_tpu_topology(tpu_name)
+                topo = get_tpu_topology(tpu_type)
                 tpu_chip_count = topo.chips_per_vm
             except ValueError:
-                logger.warning("Unknown TPU topology: %s", tpu_name)
+                logger.warning("Unknown TPU topology: %s", tpu_type)
 
             device.tpu.CopyFrom(
                 cluster_pb2.TpuDevice(
-                    variant=tpu_name,
+                    variant=tpu_type,
                     count=tpu_chip_count,
                 )
             )
@@ -272,8 +275,12 @@ class DefaultEnvironmentProvider:
             extra_attributes or "none",
         )
 
-        # Build worker attributes for constraint-based scheduling
+        # Build worker attributes for constraint-based scheduling.
+        # TPU_NAME is the slice name, used for coscheduling (group_by="tpu-name" groups workers by slice)
         attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device, extra_attributes)
+
+        # VM address from environment (injected by ManagedVm bootstrap)
+        vm_address = os.environ.get("IRIS_VM_ADDRESS", "")
 
         return cluster_pb2.WorkerMetadata(
             hostname=hostname,
@@ -281,7 +288,7 @@ class DefaultEnvironmentProvider:
             cpu_count=cpu_count,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
-            tpu_name=tpu_name,
+            tpu_name=tpu_name,  # TPU slice name for coscheduling (from TPU_NAME env var)
             tpu_worker_hostnames=tpu_worker_hostnames,
             tpu_worker_id=tpu_worker_id,
             tpu_chips_per_host_bounds=tpu_chips_per_host_bounds,
@@ -292,4 +299,5 @@ class DefaultEnvironmentProvider:
             gce_zone=gce_zone,
             device=device,
             attributes=attributes,
+            vm_address=vm_address,
         )
