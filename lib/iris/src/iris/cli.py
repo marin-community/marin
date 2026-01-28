@@ -44,6 +44,7 @@ from iris.cluster.vm.config import (
     create_manual_autoscaler,
     load_config,
 )
+from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.controller import create_controller
 from iris.cluster.vm.debug import controller_tunnel
 from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
@@ -1106,25 +1107,33 @@ def cluster_init(
 
 
 @cluster.command("start")
+@click.option("--local", is_flag=True, help="Run locally without GCP")
 @click.pass_context
-def cluster_start(ctx):
+def cluster_start(ctx, local: bool):
     """Start controller VM and wait for health.
 
     Automatically builds and pushes both worker and controller images, then
     boots the controller GCE VM which runs the autoscaler internally.
     The autoscaler provisions/terminates worker VMs based on task demand.
+
+    Use --local to run entirely on the local machine without GCP.
     """
     config = ctx.obj.get("config")
     if not config:
         click.echo("Error: --config is required", err=True)
         raise SystemExit(1)
 
-    _build_cluster_images(config)
+    if local:
+        config = make_local_config(config)
 
-    ctrl = create_controller(config)
+    manager = ClusterManager(config)
+
+    if not manager.is_local:
+        _build_cluster_images(config)
+
     click.echo("Starting controller...")
     try:
-        address = ctrl.start()
+        address = manager.start()
         click.echo(f"Controller started at {address}")
         click.echo("\nController is running with integrated autoscaler.")
         click.echo("Use 'iris cluster --config=... status' to check cluster state.")
