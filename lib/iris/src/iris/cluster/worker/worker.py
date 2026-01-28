@@ -478,6 +478,10 @@ class Worker:
             iris_env = self._build_iris_env(task)
             env.update(iris_env)
 
+            # Add workspace to environment if specified (for local mode execution)
+            if env_config.HasField("workspace") and env_config.workspace:
+                env["IRIS_WORKSPACE"] = env_config.workspace
+
             # Convert proto entrypoint to typed Entrypoint
             entrypoint = Entrypoint.from_proto(task.request.entrypoint)
 

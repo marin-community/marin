@@ -247,12 +247,8 @@ def _build_and_push_image(params: ImageBuildParams) -> None:
     )
 
 
-def _build_cluster_images(config, skip_build: bool = False) -> None:
+def _build_cluster_images(config) -> None:
     """Build and push all cluster images (worker and controller)."""
-    if skip_build:
-        click.echo("Skipping image builds (--skip-build)")
-        return
-
     for extract_fn in [_extract_worker_image_params, _extract_controller_image_params]:
         params = extract_fn(config)
         if params:
@@ -362,23 +358,25 @@ def controller(ctx):
 
 
 @controller.command("start")
-@click.option("--skip-build", is_flag=True, help="Skip building controller image (use existing)")
 @click.pass_context
-def controller_start(ctx, skip_build: bool):
+def controller_start(ctx):
     """Boot controller GCE VM and wait for health.
 
     Automatically builds and pushes the controller image before starting.
-    Use --skip-build to skip image building if the image is already pushed.
     """
     config = ctx.obj["config"]
 
-    if not skip_build:
-        params = _extract_controller_image_params(config)
-        if params:
-            _build_and_push_image(params)
-            click.echo()
-        else:
-            raise click.ClickException("Cannot extract controller image params from config")
+    params = _extract_controller_image_params(config)
+    if not params:
+        raise click.ClickException(
+            "Cannot extract controller image params from config. "
+            "config.controller_vm.image must be a valid Artifact Registry tag.\n"
+            "Expected format: REGION-docker.pkg.dev/PROJECT/REPO/IMAGE:VERSION\n"
+            f"Got: {config.controller_vm.image or 'None'}"
+        )
+
+    _build_and_push_image(params)
+    click.echo()
 
     ctrl = create_controller(config)
 
@@ -421,26 +419,27 @@ def controller_restart(ctx):
 
 
 @controller.command("reload")
-@click.option("--skip-build", is_flag=True, help="Skip building controller image (use existing)")
 @click.pass_context
-def controller_reload(ctx, skip_build: bool):
+def controller_reload(ctx):
     """Reload controller by re-running bootstrap on existing VM.
 
     Automatically builds and pushes the controller image, then SSHs into
     the existing VM and re-runs the bootstrap script to pull the latest
     image and restart the container. Faster than a full restart.
-
-    Use --skip-build to skip image building if the image is already pushed.
     """
     config = ctx.obj["config"]
 
-    if not skip_build:
-        params = _extract_controller_image_params(config)
-        if params:
-            _build_and_push_image(params)
-            click.echo()
-        else:
-            raise click.ClickException("Cannot extract controller image params from config")
+    params = _extract_controller_image_params(config)
+    if not params:
+        raise click.ClickException(
+            "Cannot extract controller image params from config. "
+            "config.controller_vm.image must be a valid Artifact Registry tag.\n"
+            "Expected format: REGION-docker.pkg.dev/PROJECT/REPO/IMAGE:VERSION\n"
+            f"Got: {config.controller_vm.image or 'None'}"
+        )
+
+    _build_and_push_image(params)
+    click.echo()
 
     ctrl = create_controller(config)
 
@@ -1107,23 +1106,20 @@ def cluster_init(
 
 
 @cluster.command("start")
-@click.option("--skip-build", is_flag=True, help="Skip building images (use existing)")
 @click.pass_context
-def cluster_start(ctx, skip_build: bool):
+def cluster_start(ctx):
     """Start controller VM and wait for health.
 
     Automatically builds and pushes both worker and controller images, then
     boots the controller GCE VM which runs the autoscaler internally.
     The autoscaler provisions/terminates worker VMs based on task demand.
-
-    Use --skip-build to skip image building if images are already pushed.
     """
     config = ctx.obj.get("config")
     if not config:
         click.echo("Error: --config is required", err=True)
         raise SystemExit(1)
 
-    _build_cluster_images(config, skip_build=skip_build)
+    _build_cluster_images(config)
 
     ctrl = create_controller(config)
     click.echo("Starting controller...")

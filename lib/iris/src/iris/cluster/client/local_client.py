@@ -65,6 +65,18 @@ class _StreamingCapture(io.StringIO):
             )
         return result
 
+    def flush_remaining(self):
+        """Flush any remaining buffered content as a final log line."""
+        if self._buffer:
+            self._container._logs.append(
+                LogLine(
+                    timestamp=datetime.now(timezone.utc),
+                    source=self._source,
+                    data=self._buffer,
+                )
+            )
+            self._buffer = ""
+
 
 def _find_free_port() -> int:
     with socket.socket() as s:
@@ -170,11 +182,19 @@ class _LocalContainer:
                     assert entrypoint.command is not None
                     import subprocess
 
+                    # Use IRIS_WORKSPACE if set (for local mode), otherwise fall back to workdir
+                    # Only set cwd if the directory exists (local execution doesn't use Docker's workdir)
+                    cwd = self.config.env.get("IRIS_WORKSPACE") or self.config.workdir
+                    if cwd and not Path(cwd).exists():
+                        cwd = None
+
                     result = subprocess.run(
                         entrypoint.command,
                         capture_output=True,
                         text=True,
                         check=False,
+                        env=self.config.env,
+                        cwd=cwd,
                     )
                     stdout_capture.write(result.stdout)
                     stderr_capture.write(result.stderr)
@@ -186,6 +206,9 @@ class _LocalContainer:
             self._error = str(e)
             self._exit_code = 1
         finally:
+            # Flush any remaining buffered output
+            stdout_capture.flush_remaining()
+            stderr_capture.flush_remaining()
             self._running = False
 
     def kill(self):

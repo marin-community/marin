@@ -53,7 +53,12 @@ class BundleStore:
         """
         bundle_path = f"{self._prefix}/{job_id}/bundle.zip"
         try:
-            with fsspec.open(bundle_path, "wb") as f:
+            # Create parent directory if needed (use same filesystem instance)
+            fs, path = fsspec.core.url_to_fs(bundle_path)
+            parent_dir = path.rsplit("/", 1)[0]
+            fs.makedirs(parent_dir, exist_ok=True)
+
+            with fs.open(path, "wb") as f:
                 f.write(blob)
             logger.info("Uploaded bundle for job %s to %s (%d bytes)", job_id, bundle_path, len(blob))
             return bundle_path

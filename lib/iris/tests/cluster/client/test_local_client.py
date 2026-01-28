@@ -1,0 +1,172 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Tests for local cluster client functionality."""
+
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from iris.cluster.client.local_client import LocalClusterClient
+from iris.cluster.types import Entrypoint
+from iris.rpc import cluster_pb2
+
+
+@pytest.fixture
+def client():
+    """Create a local cluster client for testing."""
+    client = LocalClusterClient.create()
+    yield client
+    client.shutdown()
+
+
+def test_command_entrypoint_preserves_env_vars(client):
+    """Verify command entrypoints receive Iris environment variables."""
+    job_id = "test-env-vars"
+
+    # Create a command that echoes an environment variable
+    entrypoint = Entrypoint.from_command("sh", "-c", "echo IRIS_JOB_ID=$IRIS_JOB_ID")
+
+    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+
+    client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
+
+    # Wait for job completion
+    status = client.wait_for_job(job_id, timeout=10.0, poll_interval=0.1)
+
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    # Check logs contain the job ID
+    logs = client.fetch_task_logs(f"{job_id}/task-0")
+    log_text = "\n".join(entry.data for entry in logs)
+    assert f"IRIS_JOB_ID={job_id}" in log_text
+
+
+def test_command_entrypoint_preserves_workdir(client):
+    """Verify command entrypoints run in correct working directory."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        job_id = "test-workdir"
+        workspace = Path(tmpdir)
+
+        # Create a marker file in the workspace
+        marker_file = workspace / "marker.txt"
+        marker_file.write_text("test content")
+
+        # Create a command that checks if the marker file exists
+        entrypoint = Entrypoint.from_command(
+            "sh", "-c", "test -f marker.txt && echo 'File found' || echo 'File not found'"
+        )
+
+        resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+        environment = cluster_pb2.EnvironmentConfig(workspace=str(workspace))
+
+        client.submit_job(
+            job_id=job_id,
+            entrypoint=entrypoint,
+            resources=resources,
+            environment=environment,
+        )
+
+        # Wait for job completion
+        status = client.wait_for_job(job_id, timeout=10.0, poll_interval=0.1)
+
+        assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+        # Check logs contain "File found"
+        logs = client.fetch_task_logs(f"{job_id}/task-0")
+        log_text = "\n".join(entry.data for entry in logs)
+        assert "File found" in log_text
+
+
+def test_log_streaming_captures_output_without_trailing_newline(client):
+    """Verify log streaming captures output without trailing newline."""
+    job_id = "test-no-newline"
+
+    # Use printf which doesn't add a newline
+    entrypoint = Entrypoint.from_command("sh", "-c", "printf 'output without newline'")
+
+    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+
+    client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
+
+    # Wait for job completion
+    status = client.wait_for_job(job_id, timeout=10.0, poll_interval=0.1)
+
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    # Check logs contain the output
+    logs = client.fetch_task_logs(f"{job_id}/task-0")
+    log_text = "\n".join(entry.data for entry in logs)
+    assert "output without newline" in log_text
+
+
+def test_log_streaming_captures_final_line_from_callable(client):
+    """Verify log streaming captures final line from callable without trailing newline."""
+    job_id = "test-callable-no-newline"
+
+    def task_func():
+        # Print without trailing newline
+        print("line with newline")
+        print("final line without newline", end="")
+
+    entrypoint = Entrypoint.from_callable(task_func)
+
+    resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+
+    client.submit_job(job_id=job_id, entrypoint=entrypoint, resources=resources)
+
+    # Wait for job completion
+    status = client.wait_for_job(job_id, timeout=10.0, poll_interval=0.1)
+
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+    # Check logs contain both lines
+    logs = client.fetch_task_logs(f"{job_id}/task-0")
+    log_text = "\n".join(entry.data for entry in logs)
+    assert "line with newline" in log_text
+    assert "final line without newline" in log_text
+
+
+def test_command_entrypoint_with_custom_env_var(client):
+    """Verify command entrypoints can access custom environment variables."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        job_id = "test-custom-env"
+        workspace = Path(tmpdir)
+
+        # Create a command that uses a custom env var
+        entrypoint = Entrypoint.from_command("sh", "-c", "echo CUSTOM_VAR=$CUSTOM_VAR")
+
+        resources = cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3)
+        environment = cluster_pb2.EnvironmentConfig(
+            workspace=str(workspace),
+            env_vars={"CUSTOM_VAR": "custom_value"},
+        )
+
+        client.submit_job(
+            job_id=job_id,
+            entrypoint=entrypoint,
+            resources=resources,
+            environment=environment,
+        )
+
+        # Wait for job completion
+        status = client.wait_for_job(job_id, timeout=10.0, poll_interval=0.1)
+
+        assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+
+        # Check logs contain the custom env var
+        logs = client.fetch_task_logs(f"{job_id}/task-0")
+        log_text = "\n".join(entry.data for entry in logs)
+        assert "CUSTOM_VAR=custom_value" in log_text
