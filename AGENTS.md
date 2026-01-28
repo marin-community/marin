@@ -7,13 +7,14 @@
 - Consult the subproject manuals when working in submodule trees:
   * `lib/levanter/AGENTS.md` for Levanter-specific conventions.
   * `lib/marin/AGENTS.md` for Marin-specific conventions
-- When a recipe exists, follow it—the agent-friendly playbooks live in `docs/recipes/`. Some live in the individual `lib/*/docs` directories.
+  * `lib/iris/AGENTS.md` for Iris-specific conventions
 
 ## Shared Workflow Playbooks
 
 - Begin with the agent-friendly recipes in `docs/recipes/`.
 - The first step for dataset addition is schema inspection. See the [add_dataset.md](docs/recipes/add_dataset.md) recipe for details.
 - You can help organize experiments using the [organize_experiments.md](docs/recipes/organize_experiments.md) recipe.
+- When making significant changes to Grug/Grugformer, follow [change_grug.md](docs/recipes/change_grug.md).
 - Follow the rules and examples in each recipe to ensure compatibility and automation-friendliness.
 
 ## Shared Coding Practices
@@ -22,7 +23,7 @@
 
 - Assume Python >=3.11.
 - Always use `uv run` for Python entry points. If that fails, try `.venv/bin/python` directly.
-- Run `uv run python infra/pre-commit.py --all-files` before sending changes; formatting and linting are enforced with `ruff`.
+- Run `./infra/pre-commit.py --all-files` before sending changes; formatting and linting are enforced with `ruff`.
 - Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
 
 ### Communication & Commits
@@ -56,7 +57,7 @@
 
 ### Deprecation
 
-- Unless specifically requested, do not introduce deprecation or fallback paths—update all call sites instead.
+**NO BACKWARD COMPATIBILITY**: Do NOT add deprecation warnings, fallback paths, or compatibility shims. Update all call sites instead. Only add backward compatibility if the user explicitly requests it.
 
 ## Comments
 

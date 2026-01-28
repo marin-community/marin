@@ -188,7 +188,13 @@ class SyncVLLMWrapper:
     """
 
     def __init__(
-        self, model: str, max_model_len: int = 1024, tensor_parallel_size: int = 1, gpu_memory_utilization: float = 0.95
+        self,
+        model: str,
+        max_model_len: int = 1024,
+        tensor_parallel_size: int = 1,
+        gpu_memory_utilization: float = 0.95,
+        load_format: str = "auto",
+        enforce_eager: bool = True,
     ):
         if AsyncEngineArgs is None:
             raise RuntimeError("vLLM async engine is not available. Please install vLLM v1 with: pip install vllm")
@@ -203,6 +209,8 @@ class SyncVLLMWrapper:
             worker_extension_cls="marin.rl.environments.inference_ctx.inflight.worker.WorkerExtension",
             tensor_parallel_size=tensor_parallel_size,
             gpu_memory_utilization=gpu_memory_utilization,
+            load_format=load_format,
+            enforce_eager=enforce_eager,
         )
 
         self.engine = self.bridge.run(self._init_engine(engine_args))

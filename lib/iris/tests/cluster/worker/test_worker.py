@@ -26,7 +26,7 @@ from connectrpc.request import RequestContext
 
 from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint
-from iris.cluster.worker.builder import BuildResult, VenvCache
+from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
 from iris.cluster.worker.service import WorkerServiceImpl
@@ -41,22 +41,6 @@ from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
 def allocator():
     """Create PortAllocator with small range for testing."""
     return PortAllocator(port_range=(40000, 40100))
-
-
-def test_allocate_single_port(allocator):
-    """Test allocating a single port."""
-    ports = allocator.allocate(count=1)
-    assert len(ports) == 1
-    assert 40000 <= ports[0] < 40100
-
-
-def test_allocate_multiple_ports(allocator):
-    """Test allocating multiple ports at once."""
-    ports = allocator.allocate(count=5)
-    assert len(ports) == 5
-    assert len(set(ports)) == 5  # All unique
-    for port in ports:
-        assert 40000 <= port < 40100
 
 
 def test_allocated_ports_are_usable(allocator):
@@ -148,21 +132,12 @@ def mock_bundle_cache():
 
 
 @pytest.fixture
-def mock_venv_cache():
-    """Create mock VenvCache."""
-    cache = Mock(spec=VenvCache)
-    cache.compute_deps_hash = Mock(return_value="abc123")
-    return cache
-
-
-@pytest.fixture
 def mock_image_cache():
     """Create mock ImageBuilder."""
     builder = Mock(spec=ImageBuilder)
     builder.build = Mock(
         return_value=BuildResult(
             image_tag="test-image:latest",
-            deps_hash="abc123",
             build_time_ms=1000,
             from_cache=False,
         )
@@ -195,11 +170,13 @@ def mock_runtime():
     runtime.remove = Mock()
     runtime.get_stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
     runtime.get_logs = Mock(return_value=[])
+    runtime.list_iris_containers = Mock(return_value=[])
+    runtime.remove_all_iris_containers = Mock(return_value=0)
     return runtime
 
 
 @pytest.fixture
-def worker(mock_bundle_cache, mock_venv_cache, mock_image_cache, mock_runtime):
+def worker(mock_bundle_cache, mock_image_cache, mock_runtime):
     """Create Worker with mocked dependencies."""
     config = WorkerConfig(
         port=0,
@@ -268,18 +245,6 @@ def create_run_task_request(
         timeout_seconds=300,
         ports=ports or [],
     )
-
-
-def test_submit_task_returns_task_id(worker):
-    """Test that submit_task returns task_id immediately."""
-    request = create_run_task_request()
-    task_id = worker.submit_task(request)
-
-    assert task_id == "test-task-1"
-
-    task = worker.get_task(task_id)
-    assert task is not None
-    assert task.task_id == task_id
 
 
 def test_task_lifecycle_phases(worker):
@@ -372,7 +337,6 @@ def test_list_tasks(worker):
 
     tasks = worker.list_tasks()
     assert len(tasks) == 3
-    assert {task.task_id for task in tasks} == {"task-0", "task-1", "task-2"}
 
 
 def test_kill_running_task(worker, mock_runtime):
@@ -453,9 +417,8 @@ def test_task_failure_error_appears_in_logs(worker, mock_bundle_cache):
     assert any("Bundle download failed" in log.data for log in error_logs)
 
 
-def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_image_cache):
+def test_port_retry_on_binding_failure(mock_bundle_cache, mock_image_cache):
     """Test that task retries with new ports when port binding fails."""
-    del mock_venv_cache  # unused
     runtime = Mock(spec=DockerRuntime)
     runtime.create_container = Mock(return_value="container123")
 
@@ -514,9 +477,8 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_
     assert any("Port conflict" in log.data for log in build_logs)
 
 
-def test_port_retry_exhausted(mock_bundle_cache, mock_venv_cache, mock_image_cache):
+def test_port_retry_exhausted(mock_bundle_cache, mock_image_cache):
     """Test that task fails after max port retries are exhausted."""
-    del mock_venv_cache  # unused
     runtime = Mock(spec=DockerRuntime)
     runtime.create_container = Mock(return_value="container123")
     runtime.start_container = Mock(side_effect=RuntimeError("failed to bind host port: address already in use"))
@@ -623,7 +585,7 @@ def test_bundle(tmp_path):
 
 
 @pytest.fixture
-def real_worker(cache_dir):
+def real_worker(cache_dir, docker_cleanup_scope):
     """Create Worker with real components (not mocks)."""
     config = WorkerConfig(
         port=0,

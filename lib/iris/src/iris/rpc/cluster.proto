@@ -16,6 +16,8 @@ edition = "2023";
 
 package iris.cluster;
 
+import "vm.proto";
+
 // ============================================================================
 // SHARED TYPES
 // ============================================================================
@@ -69,6 +71,10 @@ message TaskStatus {
 
   int32 current_attempt_id = 14;
   repeated TaskAttempt attempts = 15;
+
+  // Scheduling diagnostics for pending tasks (dashboard display)
+  string pending_reason = 16;         // Why task can't be scheduled (empty if schedulable)
+  bool can_be_scheduled = 17;         // Whether task is currently schedulable
 }
 
 // Record of a single task execution attempt
@@ -125,13 +131,21 @@ message JobStatus {
   int32 failure_count = 17;                // Total task failures (aggregated)
   int32 preemption_count = 18;             // Total task preemptions (aggregated)
 
-  // Per-task status information
-  int32 num_tasks = 19;
-  int32 tasks_pending = 20;
-  int32 tasks_running = 21;
-  int32 tasks_succeeded = 22;
-  int32 tasks_failed = 23;
   repeated TaskStatus tasks = 24;          // Per-task status (always included)
+
+  // Job metadata from request (for dashboard display)
+  string name = 25;                        // Job name from request
+  int64 submitted_at_ms = 26;              // Submission timestamp
+
+  // Resource specification from job request (for dashboard display)
+  ResourceSpecProto resources = 27;
+
+  // Aggregated task state counts: {"running": 2, "pending": 5, "succeeded": 10}
+  map<string, int32> task_state_counts = 28;
+
+  // Convenience counts (could derive from task_state_counts)
+  int32 task_count = 29;
+  int32 completed_count = 30;
 }
 
 // JobAttempt message removed: Jobs don't have attempts - tasks do.
@@ -162,6 +176,7 @@ message GpuDevice {
 message TpuDevice {
   string variant = 1;       // e.g., "v5litepod-16", "v4-8"
   string topology = 2;      // topology spec (e.g., "2x2x1")
+  int32 count = 3;          // Number of TPU chips on this worker
 }
 
 // Unified resource specification for jobs
@@ -202,6 +217,48 @@ message EnvironmentConfig {
 }
 
 // ============================================================================
+// WORKER ATTRIBUTES
+// ============================================================================
+
+// Typed attribute value for worker attributes and constraint matching.
+// Workers report attributes (e.g., tpu-name, tpu-worker-id) at registration.
+// Jobs can filter workers using constraints on these attributes.
+message AttributeValue {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double float_value = 3;
+  }
+}
+
+// Constraint operators for filtering workers by attributes.
+enum ConstraintOp {
+  CONSTRAINT_OP_EQ = 0;         // Attribute equals value
+  CONSTRAINT_OP_NE = 1;         // Attribute not equals value
+  CONSTRAINT_OP_EXISTS = 2;     // Attribute exists (value ignored)
+  CONSTRAINT_OP_NOT_EXISTS = 3; // Attribute does not exist (value ignored)
+  CONSTRAINT_OP_GT = 4;         // Attribute greater than value (numeric)
+  CONSTRAINT_OP_GE = 5;         // Attribute greater than or equal to value (numeric)
+  CONSTRAINT_OP_LT = 6;         // Attribute less than value (numeric)
+  CONSTRAINT_OP_LE = 7;         // Attribute less than or equal to value (numeric)
+}
+
+// Constraint for filtering workers by attribute.
+// Used in LaunchJobRequest to specify which workers can run a job.
+message Constraint {
+  string key = 1;           // Attribute key to match (e.g., "tpu-name")
+  ConstraintOp op = 2;      // Comparison operator
+  AttributeValue value = 3; // Value to compare against (ignored for EXISTS/NOT_EXISTS)
+}
+
+// Coscheduling configuration for multi-host jobs.
+// When set, all tasks in the job must be scheduled atomically onto workers
+// that share the same value for the specified group_by attribute.
+message CoschedulingConfig {
+  string group_by = 1;  // Attribute key to group workers by (e.g., "tpu-name")
+}
+
+// ============================================================================
 // WORKER METADATA
 // ============================================================================
 
@@ -229,6 +286,21 @@ message WorkerMetadata {
   // GCE instance metadata
   string gce_instance_name = 30;
   string gce_zone = 31;
+
+  // Worker attributes for constraint-based scheduling.
+  // Standard attributes include:
+  //   tpu-name: TPU slice name (string)
+  //   tpu-worker-id: Worker ID within slice (int)
+  //   tpu-topology: TPU topology variant, e.g. "v5litepod-16" (string)
+  //   tpu-vm-count: Number of VMs in the TPU slice (int)
+  // Additional attributes can be set via IRIS_WORKER_ATTRIBUTES env var
+  // using format: key1=value1,key2=value2 (e.g., taint:maintenance=true,pool=large-jobs)
+  map<string, AttributeValue> attributes = 40;
+
+  // VM address from IRIS_VM_ADDRESS env var, used for autoscaler VM tracking.
+  // For cloud VMs, this is the VM's IP address injected by ManagedVm.
+  // For local workers, this may be empty or a local identifier.
+  string vm_address = 41;
 }
 
 // ============================================================================
@@ -271,6 +343,16 @@ message Controller {
 
     // When a task is preempted (worker dies), retry up to this many times
     int32 max_retries_preemption = 13;  // Default: 100 (generous preemption tolerance)
+
+    // Constraints for filtering workers by attribute.
+    // All constraints must match for a worker to be eligible (AND semantics).
+    repeated Constraint constraints = 14;
+
+    // Coscheduling configuration for multi-host jobs (e.g., multi-host TPU).
+    // When set, all tasks are scheduled atomically to workers sharing the same
+    // group_by attribute value. If not enough workers are available in any group,
+    // the job stays pending.
+    CoschedulingConfig coscheduling = 15;
   }
 
   message LaunchJobResponse {
@@ -326,11 +408,17 @@ message Controller {
     string worker_id = 1;
     string address = 2;
     WorkerMetadata metadata = 3;
+    // Task IDs the worker believes it is running (for controller restart recovery).
+    // If the controller doesn't recognize these tasks, it signals should_reset.
+    repeated string running_task_ids = 4;
   }
 
   message RegisterWorkerResponse {
     bool accepted = 1;
     string controller_address = 2;   // For callbacks
+    // If true, worker should reset: kill all containers and re-register with empty task list.
+    // Set when worker claims tasks the controller doesn't know about (stale state).
+    bool should_reset = 3;
   }
 
   message WorkerHealthStatus {
@@ -339,6 +427,8 @@ message Controller {
     int32 consecutive_failures = 3;
     int64 last_heartbeat_ms = 4;
     repeated string running_job_ids = 5;
+    string address = 6;                    // Worker RPC address (host:port)
+    WorkerMetadata metadata = 7;           // Full worker metadata
   }
 
   message ListWorkersRequest {}
@@ -401,6 +491,41 @@ message Controller {
 
   message ListEndpointsResponse {
     repeated Endpoint endpoints = 1;
+  }
+
+  // --- Autoscaler ---
+  message GetAutoscalerStatusRequest {}
+
+  message GetAutoscalerStatusResponse {
+    iris.vm.AutoscalerStatus status = 1;
+  }
+
+  // --- VM Logs ---
+  message GetVmLogsRequest {
+    string vm_id = 1;
+    int32 tail = 2;  // 0 = all lines
+  }
+
+  message GetVmLogsResponse {
+    string logs = 1;
+    string vm_id = 2;
+    iris.vm.VmState state = 3;
+  }
+
+  // --- Transactions / Actions Log ---
+  message TransactionAction {
+    int64 timestamp_ms = 1;
+    string action = 2;
+    string entity_id = 3;
+    string details = 4;
+  }
+
+  message GetTransactionsRequest {
+    int32 limit = 1;  // 0 = default (50)
+  }
+
+  message GetTransactionsResponse {
+    repeated TransactionAction actions = 1;
   }
 }
 
@@ -500,6 +625,15 @@ service ControllerService {
   rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (Empty);
   rpc LookupEndpoint(Controller.LookupEndpointRequest) returns (Controller.LookupEndpointResponse);
   rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
+
+  // Autoscaler
+  rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);
+
+  // VM Logs
+  rpc GetVmLogs(Controller.GetVmLogsRequest) returns (Controller.GetVmLogsResponse);
+
+  // Transactions / Actions Log
+  rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
 }
 
 service WorkerService {

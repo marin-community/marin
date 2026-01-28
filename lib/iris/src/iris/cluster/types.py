@@ -26,6 +26,7 @@ Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.pr
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from enum import IntEnum
 from typing import Any, NewType
 
 import humanfriendly
@@ -36,6 +37,182 @@ JobId = NewType("JobId", str)
 TaskId = NewType("TaskId", str)
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
+
+
+@dataclass(frozen=True)
+class VmWorkerStatus:
+    """Worker status keyed by VM address for autoscaler.
+
+    The VM address is the worker's identity. This enables the autoscaler
+    to look up worker status directly by VM address without needing
+    to correlate separate worker_id to VM.
+    """
+
+    vm_address: str
+    running_task_ids: frozenset[str]
+
+    @property
+    def is_idle(self) -> bool:
+        return len(self.running_task_ids) == 0
+
+
+# Map of VM address -> worker status, used by autoscaler for idle tracking
+VmWorkerStatusMap = dict[str, VmWorkerStatus]
+
+
+@dataclass(frozen=True)
+class AttributeValue:
+    """Typed attribute value for worker attributes and constraint matching.
+
+    Used for coscheduling and constraint-based worker filtering.
+    Values can be strings, integers, or floats.
+    """
+
+    value: str | int | float
+
+    def to_proto(self) -> cluster_pb2.AttributeValue:
+        """Convert to protobuf representation."""
+        proto = cluster_pb2.AttributeValue()
+        if isinstance(self.value, str):
+            proto.string_value = self.value
+        elif isinstance(self.value, int):
+            proto.int_value = self.value
+        elif isinstance(self.value, float):
+            proto.float_value = self.value
+        return proto
+
+    @staticmethod
+    def from_proto(proto: cluster_pb2.AttributeValue) -> "AttributeValue":
+        """Convert from protobuf representation."""
+        if proto.HasField("string_value"):
+            return AttributeValue(proto.string_value)
+        elif proto.HasField("int_value"):
+            return AttributeValue(proto.int_value)
+        elif proto.HasField("float_value"):
+            return AttributeValue(proto.float_value)
+        # Default to empty string if no value set
+        return AttributeValue("")
+
+
+class ConstraintOp(IntEnum):
+    """Constraint operators for worker attribute matching.
+
+    Used to define constraints that filter which workers can run a job.
+    Each operator compares a worker attribute against a constraint value.
+
+    Example:
+        >>> # Match workers where region equals "us-central1"
+        >>> Constraint(key="region", op=ConstraintOp.EQ, value="us-central1")
+        >>> # Match workers with memory > 32GB
+        >>> Constraint(key="memory_gb", op=ConstraintOp.GT, value=32)
+        >>> # Match workers that have the "gpu" attribute set
+        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
+    """
+
+    EQ = 0
+    NE = 1
+    EXISTS = 2
+    NOT_EXISTS = 3
+    GT = 4
+    GE = 5
+    LT = 6
+    LE = 7
+
+    def to_proto(self) -> cluster_pb2.ConstraintOp:
+        """Convert to protobuf ConstraintOp enum value."""
+        mapping = {
+            ConstraintOp.EQ: cluster_pb2.CONSTRAINT_OP_EQ,
+            ConstraintOp.NE: cluster_pb2.CONSTRAINT_OP_NE,
+            ConstraintOp.EXISTS: cluster_pb2.CONSTRAINT_OP_EXISTS,
+            ConstraintOp.NOT_EXISTS: cluster_pb2.CONSTRAINT_OP_NOT_EXISTS,
+            ConstraintOp.GT: cluster_pb2.CONSTRAINT_OP_GT,
+            ConstraintOp.GE: cluster_pb2.CONSTRAINT_OP_GE,
+            ConstraintOp.LT: cluster_pb2.CONSTRAINT_OP_LT,
+            ConstraintOp.LE: cluster_pb2.CONSTRAINT_OP_LE,
+        }
+        return mapping[self]
+
+
+@dataclass(frozen=True)
+class Constraint:
+    """Worker constraint for job scheduling.
+
+    Constraints filter which workers are eligible to run a job based on
+    worker attributes. Workers must satisfy all constraints to be considered.
+
+    Example:
+        >>> # Require a specific TPU pod
+        >>> Constraint(key="tpu-name", op=ConstraintOp.EQ, value="my-tpu-pod")
+        >>> # Require workers in a specific zone
+        >>> Constraint(key="zone", op=ConstraintOp.EQ, value="us-central1-a")
+        >>> # Require workers with at least 64GB memory
+        >>> Constraint(key="memory_gb", op=ConstraintOp.GE, value=64)
+        >>> # Require workers that have a GPU
+        >>> Constraint(key="gpu", op=ConstraintOp.EXISTS)
+    """
+
+    key: str
+    op: ConstraintOp
+    value: str | int | float | None = None
+
+    def to_proto(self) -> cluster_pb2.Constraint:
+        """Convert to protobuf representation."""
+        proto = cluster_pb2.Constraint(key=self.key, op=self.op.to_proto())
+        if self.value is not None:
+            proto.value.CopyFrom(AttributeValue(self.value).to_proto())
+        return proto
+
+
+@dataclass(frozen=True)
+class CoschedulingConfig:
+    """Configuration for coscheduling job tasks together.
+
+    Coscheduling ensures that all tasks of a job are scheduled on workers
+    that share a common attribute value. This is essential for multi-host
+    TPU jobs where all workers must belong to the same TPU pod.
+
+    Example:
+        >>> # Schedule all tasks on workers from the same TPU pod
+        >>> CoschedulingConfig(group_by="tpu-name")
+    """
+
+    group_by: str
+
+    def to_proto(self) -> cluster_pb2.CoschedulingConfig:
+        """Convert to protobuf representation."""
+        return cluster_pb2.CoschedulingConfig(group_by=self.group_by)
+
+
+def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConfig:
+    """Create a DeviceConfig for a TPU device.
+
+    Args:
+        variant: TPU variant string (e.g., "v5litepod-16", "v4-8", "v6e-256").
+        count: Number of TPU chips. If None, inferred from topology.
+
+    Returns:
+        DeviceConfig with the tpu field set to the specified variant and chip count.
+
+    Example:
+        >>> config = tpu_device("v5litepod-16")
+        >>> config.tpu.variant
+        'v5litepod-16'
+        >>> config.tpu.count
+        4
+    """
+    chip_count = count
+    if chip_count is None:
+        try:
+            topo = get_tpu_topology(variant)
+            chip_count = topo.chips_per_vm
+        except ValueError:
+            chip_count = 0
+    return cluster_pb2.DeviceConfig(
+        tpu=cluster_pb2.TpuDevice(
+            variant=variant,
+            count=chip_count,
+        )
+    )
 
 
 def parse_memory_string(memory_str: str) -> int:
@@ -208,6 +385,28 @@ def is_task_finished(state: int) -> bool:
         }
     )
     return state in terminal_states
+
+
+def job_task_counts(job: cluster_pb2.JobStatus) -> dict[str, int]:
+    """Compute task state counts from tasks[] in JobStatus proto.
+
+    Returns a dict with keys: pending, running, succeeded, failed.
+    """
+    counts = {"pending": 0, "running": 0, "succeeded": 0, "failed": 0}
+    for task in job.tasks:
+        if task.state == cluster_pb2.TASK_STATE_PENDING:
+            counts["pending"] += 1
+        elif task.state == cluster_pb2.TASK_STATE_RUNNING:
+            counts["running"] += 1
+        elif task.state == cluster_pb2.TASK_STATE_SUCCEEDED:
+            counts["succeeded"] += 1
+        elif task.state in (
+            cluster_pb2.TASK_STATE_FAILED,
+            cluster_pb2.TASK_STATE_KILLED,
+            cluster_pb2.TASK_STATE_WORKER_FAILED,
+        ):
+            counts["failed"] += 1
+    return counts
 
 
 JobState = cluster_pb2.JobState

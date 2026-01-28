@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Self
 
 from iris.cluster.client.remote_client import RemoteClusterClient
-from iris.cluster.controller.controller import Controller, ControllerConfig, DefaultWorkerStubFactory
+from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
@@ -54,13 +54,33 @@ def _find_free_port() -> int:
 
 
 class LocalEnvironmentProvider:
-    def __init__(self, cpu: int = 1000, memory_gb: int = 1000):
+    def __init__(
+        self,
+        cpu: int = 1000,
+        memory_gb: int = 1000,
+        attributes: dict[str, str | int | float] | None = None,
+        device: cluster_pb2.DeviceConfig | None = None,
+    ):
         self._cpu = cpu
         self._memory_gb = memory_gb
+        self._attributes = attributes or {}
+        self._device = device
 
     def probe(self) -> cluster_pb2.WorkerMetadata:
-        device = cluster_pb2.DeviceConfig()
-        device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+        if self._device is not None:
+            device = self._device
+        else:
+            device = cluster_pb2.DeviceConfig()
+            device.cpu.CopyFrom(cluster_pb2.CpuDevice(variant="cpu"))
+
+        proto_attrs = {}
+        for key, value in self._attributes.items():
+            if isinstance(value, str):
+                proto_attrs[key] = cluster_pb2.AttributeValue(string_value=value)
+            elif isinstance(value, int):
+                proto_attrs[key] = cluster_pb2.AttributeValue(int_value=value)
+            elif isinstance(value, float):
+                proto_attrs[key] = cluster_pb2.AttributeValue(float_value=value)
 
         return cluster_pb2.WorkerMetadata(
             hostname="local",
@@ -69,6 +89,7 @@ class LocalEnvironmentProvider:
             memory_bytes=self._memory_gb * 1024**3,
             disk_bytes=100 * 1024**3,  # Default 100GB for local
             device=device,
+            attributes=proto_attrs,
         )
 
 
@@ -190,6 +211,15 @@ class _LocalContainerRuntime(ContainerRuntime):
         del container_id
         return ContainerStats(memory_mb=100, cpu_percent=10, process_count=1, available=True)
 
+    def list_iris_containers(self, all_states: bool = True) -> list[str]:
+        del all_states
+        return list(self._containers.keys())
+
+    def remove_all_iris_containers(self) -> int:
+        count = len(self._containers)
+        self._containers.clear()
+        return count
+
 
 class _LocalBundleProvider:
     def __init__(self, bundle_path: Path):
@@ -207,13 +237,11 @@ class _LocalImageProvider:
         base_image: str,
         extras: list[str],
         job_id: str,
-        deps_hash: str,
         task_logs=None,
     ) -> BuildResult:
         del bundle_path, base_image, extras, job_id, task_logs
         return BuildResult(
             image_tag="local:latest",
-            deps_hash=deps_hash,
             build_time_ms=0,
             from_cache=True,
         )
@@ -287,20 +315,21 @@ class LocalClusterClient:
         )
         controller = Controller(
             config=controller_config,
-            worker_stub_factory=DefaultWorkerStubFactory(),
+            worker_stub_factory=RpcWorkerStubFactory(),
         )
         controller.start()
 
         controller_address = f"http://127.0.0.1:{controller_port}"
 
         # Start Worker with local providers
+        # Worker identity = vm_address = host:port (consistent with cloud workers)
         worker_port = _find_free_port()
         worker_config = WorkerConfig(
             host="127.0.0.1",
             port=worker_port,
             cache_dir=cache_path,
             controller_address=controller_address,
-            worker_id=f"local-worker-{uuid.uuid4().hex[:8]}",
+            worker_id=f"127.0.0.1:{worker_port}",
             poll_interval_seconds=0.1,  # Fast polling for local
             port_range=port_range,
         )
@@ -357,6 +386,8 @@ class LocalClusterClient:
         environment: cluster_pb2.EnvironmentConfig | None = None,
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,
+        constraints: list[cluster_pb2.Constraint] | None = None,
+        coscheduling: cluster_pb2.CoschedulingConfig | None = None,
     ) -> None:
         self._remote_client.submit_job(
             job_id=job_id,
@@ -365,6 +396,8 @@ class LocalClusterClient:
             environment=environment,
             ports=ports,
             scheduling_timeout_seconds=scheduling_timeout_seconds,
+            constraints=constraints,
+            coscheduling=coscheduling,
         )
 
     def get_job_status(self, job_id: str) -> cluster_pb2.JobStatus:

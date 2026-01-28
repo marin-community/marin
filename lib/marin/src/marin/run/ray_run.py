@@ -146,7 +146,7 @@ async def submit_and_track_job(
     runtime_dict = {
         "working_dir": current_dir,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"],
+        "excludes": [".git", "docs/", "**/*.pack", "lib/levanter/docs"],
     }
 
     # add the TPU dependency for cluster jobs.
@@ -274,6 +274,10 @@ def main():
                     env_vars[str(k)] = "" if v is None else str(v)
         except Exception as e:
             logger.warning(f"Failed to parse {marin_yaml}: {e}")
+
+    for key in ("HF_TOKEN", "WANDB_API_KEY"):
+        if key not in env_vars and os.environ.get(key) is not None:
+            env_vars[key] = os.environ[key]
 
     if args.env_vars:
         for item in args.env_vars:

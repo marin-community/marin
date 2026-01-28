@@ -739,6 +739,45 @@ def stop_job(ctx, job_id):
         print(f"Job {job_id} stop requested")
 
 
+@cli.command("job-logs")
+@click.argument("job_id")
+@click.option("--follow", "-f", is_flag=True, help="Follow the logs (stream in real-time)")
+@click.option("--tail", "-n", type=int, default=None, help="Show only the last N lines of logs")
+@click.option("--grep", "-g", type=str, default=None, help="Filter lines containing this pattern")
+@click.pass_context
+def job_logs(ctx, job_id, follow, tail, grep):
+    """View logs for a Ray job."""
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
+        cmd = ["ray", "job", "logs"]
+        if follow:
+            cmd.append("--follow")
+        cmd.append(job_id)
+
+        if tail is not None or grep is not None:
+            # Build pipeline: ray job logs | grep | tail
+            ray_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            if grep is not None:
+                grep_proc = subprocess.Popen(["grep", grep], stdin=ray_proc.stdout, stdout=subprocess.PIPE, text=True)
+                ray_proc.stdout.close()
+                prev_proc = grep_proc
+            else:
+                prev_proc = ray_proc
+
+            if tail is not None:
+                tail_proc = subprocess.Popen(
+                    ["tail", f"-{tail}"], stdin=prev_proc.stdout, stdout=subprocess.PIPE, text=True
+                )
+                prev_proc.stdout.close()
+                output, _ = tail_proc.communicate(timeout=120)
+            else:
+                output, _ = prev_proc.communicate(timeout=120)
+
+            print(output, end="")
+        else:
+            subprocess.run(cmd)
+
+
 # Top-level commands
 @cli.command("add-worker")
 @click.argument("tpu_type")
