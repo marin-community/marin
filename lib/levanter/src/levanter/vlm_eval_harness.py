@@ -191,6 +191,10 @@ class LevanterVLMHarnessLM(TemplateLM):
         """Get the generation kwargs."""
         return self._generation_kwargs
 
+    def _loglikelihood_tokens(self, requests, disable_tqdm: bool = False):
+        """Required abstract method from TemplateLM. Not yet implemented for VLM."""
+        raise NotImplementedError("_loglikelihood_tokens is not yet supported for VLM evaluation")
+
     def chat_template(self, chat_template: str | None = None) -> str | None:
         """Return the chat template for this model."""
         if chat_template is not None:

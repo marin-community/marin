@@ -185,13 +185,22 @@ def _load_vlm_model(
         # Load from HuggingFace
         logger.info(f"Loading model from HuggingFace: {config.hf_checkpoint}")
         model_config = config.model
-        if not hasattr(model_config, "hf_checkpoint_converter"):
-            raise ValueError("Model config does not have an HF checkpoint converter.")
 
-        converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-        converter = converter.replaced(reference_checkpoint=config.hf_checkpoint, tokenizer=tokenizer)
+        # Create converter directly with our already-loaded tokenizer to avoid
+        # re-loading from GCS path (which causes path handling issues)
+        from transformers import LlavaOnevisionConfig as HfLlavaOnevisionConfig
+        converter = HFCheckpointConverter(
+            LevConfigClass=model_config.__class__,
+            reference_checkpoint=str(config.hf_checkpoint),
+            HfConfigClass=HfLlavaOnevisionConfig,
+            tokenizer=tokenizer,
+            trust_remote_code=True,
+        )
         model = converter.load_pretrained(
-            model_config.model_type, ref=config.hf_checkpoint, dtype=mp.compute_dtype
+            model_config.model_type,
+            ref=config.hf_checkpoint,
+            dtype=mp.compute_dtype,
+            resize_vocab_to_match_tokenizer=False,
         )
         model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
 
@@ -231,14 +240,15 @@ def main(config: EvalVLMConfig):
 
     # Determine vocab size
     vocab_size = len(tokenizer)
-    Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), compute_axis_mapping)
-    if vocab_size != Vocab.size:
-        logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 
     mp: jmp.Policy = config.trainer.mp
     key = jax.random.PRNGKey(0)
 
     with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
+        # Round vocab size for partitioning (must be inside mesh context)
+        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), compute_axis_mapping)
+        if vocab_size != Vocab.size:
+            logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
         # Load model
         model = _load_vlm_model(
             config=config,
@@ -273,7 +283,6 @@ def main(config: EvalVLMConfig):
             tokenizer=tokenizer,
             max_length=config.max_eval_length,
             padding=True,
-            truncation=True,
             disable_anyres=config.disable_anyres,
             grid_pinpoints=grid_pinpoints,
             patch_size=config.patch_size,  # Use patch_size (16), not image_size (384)!
