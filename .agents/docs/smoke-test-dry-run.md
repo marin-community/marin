@@ -1,443 +1,326 @@
-# Smoke Test Dry-Run Mode (v2)
+# Smoke Test Dry-Run Mode (v3) — ClusterManager
 
-This is a revised design incorporating feedback from the [codex review](smoke-test-dry-run-review.md).
-The v1 design underestimated proto/config wiring, omitted worker bootstrap dependencies
-(`_LocalBundleProvider`, `_LocalImageProvider`, `_LocalContainerRuntime`, `LocalEnvironmentProvider`),
-and proposed a `LocalController` that didn't implement the full `ControllerProtocol`.
+This revision introduces `ClusterManager` as the central abstraction for cluster
+lifecycle, replacing the v2 `LocalController` approach. The key insight: callers
+(smoke-test, demo, CLI) don't care _how_ a controller runs — they need a URL and
+a clean shutdown. `ClusterManager` provides that uniformly.
 
-This revision:
-- **Replaces `demo_cluster.py`** with shared infrastructure in `local_platform.py`
-- Shows **complete control-flow diagrams** for GCP vs local mode
-- Identifies every GCP call site and the corresponding local shim
-- Resolves the open questions from v1
+## Design Principles
 
-## Motivation
-
-Same as v1 — local smoke test without GCP. See the v1 doc for context.
+1. **No new config files** — `--local` flag overrides any existing config at runtime
+2. **Maximize reuse** — extract `LocalVmManager`/`LocalVmGroup` from `demo_cluster.py`, don't duplicate
+3. **Explicit lifecycle** — `start()` returns references; no work in `__init__`
+4. **Callers stay readable** — smoke-test and demo use the same `ClusterManager` API
 
 ---
 
-## Current Control Flow: GCP Mode
-
-### Full call graph for `smoke-test.py --config eu-west4.yaml`
+## Architecture Overview
 
 ```
-smoke-test.py main()
-│
-├── Phase 0a: _build_images()
-│   └── subprocess: uv run iris build {controller,worker}-image --push
-│       (GCP: pushes to Artifact Registry)
-│
-├── Phase 0b: _cleanup_existing()
-│   └── cleanup_iris_resources(zone, project)
-│       └── gcloud compute instances delete ...
-│       └── gcloud compute tpus tpu-vm delete ...
-│
-├── Phase 1: _start_cluster(cluster_config)
-│   └── create_controller(cluster_config)        # controller.py:931
-│       ├── config.controller_vm.WhichOneof("controller")
-│       │   ├── "gcp"    → GcpController(config)
-│       │   └── "manual" → ManualController(config)
-│       └── GcpController.start()
-│           ├── gcloud compute instances create ...   ← GCP CALL
-│           ├── _wait_for_health(address)
-│           └── returns "http://<internal-ip>:10000"
-│
-├── Phase 2: SSH Tunnel
-│   └── controller_tunnel(zone, project)          # debug.py
-│       └── gcloud compute ssh ... -L 10000:localhost:10000  ← GCP CALL
-│
-├── Phase 3: _run_tests(tunnel_url)
-│   └── IrisClient.remote(tunnel_url)
-│       └── client.submit(entrypoint, resources)
-│           └── gRPC → Controller.LaunchJob()
-│
-│   [Inside Controller VM - separate process on GCE]
-│   Controller._run_scheduling_loop()
-│   ├── _run_scheduling()
-│   │   └── Scheduler.find_assignments() → dispatch RPCs to workers
-│   └── _run_autoscaler_once()
-│       ├── compute_demand_entries(state)
-│       ├── _build_vm_status_map()
-│       └── Autoscaler.run_once(demand, vm_status_map)
-│           ├── group.cleanup_failed_slices()
-│           ├── evaluate() → route_demand() → ScalingDecision(SCALE_UP)
-│           ├── execute() → group.scale_up()
-│           │   └── VmManager.create_vm_group()     ← KEY ABSTRACTION
-│           │       └── TpuVmManager._gcloud_create_tpu()  ← GCP CALL
-│           │           └── gcloud compute tpus tpu-vm create ...
-│           │       └── _make_vm_group()
-│           │           └── ManagedVm lifecycle thread
-│           │               └── GcloudSshConnection.bootstrap()  ← GCP CALL
-│           └── group.scale_down_if_idle()
-│               └── VmGroupProtocol.terminate()
-│                   └── TpuVmGroup.terminate()
-│                       └── gcloud compute tpus tpu-vm delete ...  ← GCP CALL
-│
-└── Phase 4 + Cleanup
-    └── controller.stop()
-        └── gcloud compute instances delete ...   ← GCP CALL
+┌─────────────────────────────────────────────────────────────┐
+│                        Callers                              │
+│  smoke-test.py  │  demo_cluster.py  │  cli.py (iris cluster)│
+└────────┬────────┴─────────┬─────────┴──────────┬────────────┘
+         │                  │                    │
+         ▼                  ▼                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     ClusterManager                          │
+│  vm/cluster_manager.py                                      │
+│                                                             │
+│  start() → str              # start controller, return URL  │
+│  stop()                     # stop controller + cleanup     │
+│  connect() → ctx[str]       # start + tunnel/direct → URL   │
+│  is_local: bool             # mode query                    │
+│                                                             │
+│  Owns:                                                      │
+│  ┌──────────────────┐  ┌─────────────────────┐              │
+│  │ControllerProtocol│  │ SSH Tunnel (GCP only)│              │
+│  │ GcpController    │  │ controller_tunnel()  │              │
+│  │ ManualController  │  │ (no-op for local)   │              │
+│  │ LocalController   │  └─────────────────────┘              │
+│  └──────┬───────────┘                                       │
+│         │ delegates to                                       │
+│  ┌──────▼───────────────────────────────────────────┐       │
+│  │ Controller (the real gRPC server)                 │       │
+│  │  + Autoscaler                                     │       │
+│  │    + ScalingGroup[]                               │       │
+│  │      + VmManager (TpuVmManager | LocalVmManager)  │       │
+│  └───────────────────────────────────────────────────┘       │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### Summary of GCP call sites
+### What `ClusterManager` replaces in each caller
 
-| Call Site | File | What it does |
-|-----------|------|--------------|
-| `GcpController.start()` | `controller.py` | Creates controller GCE VM |
-| `GcpController.stop()` | `controller.py` | Deletes controller GCE VM |
-| `controller_tunnel()` | `debug.py` | SSH port forwarding |
-| `TpuVmManager._gcloud_create_tpu()` | `gcp_tpu_platform.py` | Creates TPU VMs |
-| `TpuVmGroup.terminate()` | `gcp_tpu_platform.py` | Deletes TPU VMs |
-| `GcloudSshConnection.bootstrap()` | `ssh.py` | Runs bootstrap script on VMs |
-| `TpuVmManager._gcloud_list_tpus()` | `gcp_tpu_platform.py` | Discovery/reconcile |
-| `cleanup_iris_resources()` | `debug.py` | Cleanup on start/failure |
-| `discover_controller_vm()` | `debug.py` | Find controller for tunnel/logs |
-| `collect_docker_logs()` | `debug.py` | SSH to collect logs |
-| `list_iris_tpus()` | `debug.py` | Find TPUs for log collection |
-
-### Key insight: what needs to be replaced
-
-The GCP calls fall into two categories:
-
-1. **Controller lifecycle** (controller VM create/delete/ssh) — replaced by running `Controller` in-process
-2. **Worker lifecycle** (TPU create/delete/bootstrap/ssh) — replaced by `LocalVmManager` creating in-process `Worker` instances
-
-Everything between these boundaries is unchanged: the `Controller`, `Autoscaler`, `ScalingGroup`, `Scheduler`, and job execution code all run identically.
+| Caller | Before | After |
+|--------|--------|-------|
+| `smoke-test.py` | `create_controller()` + `controller_tunnel()` + manual phase skipping | `ClusterManager(config).connect()` |
+| `demo_cluster.py` | `DemoCluster.__enter__` builds Controller/Autoscaler/Workers manually | `ClusterManager(config).start()` |
+| `cli.py` (`cluster start`) | `create_controller(config)` + `ctrl.start()` | `ClusterManager(config).start()` |
 
 ---
 
-## Proposed Control Flow: Local Mode
+## Control Flow: GCP vs Local
+
+### GCP Mode
 
 ```
-smoke-test.py main(--local)
+ClusterManager(config)
 │
-├── Phase 0a: SKIP (no images to build)
-├── Phase 0b: SKIP (no GCP resources to clean)
+├── start()
+│   ├── create_controller(config) → GcpController
+│   └── GcpController.start()
+│       ├── gcloud compute instances create ...
+│       ├── _wait_for_health()
+│       └── returns "http://<internal-ip>:10000"
 │
-├── Phase 1: _start_cluster(cluster_config)
-│   └── create_controller(cluster_config)        # controller.py:931
-│       └── config.controller_vm.WhichOneof("controller")
-│           └── "local" → LocalController(config)
-│       └── LocalController.start()
-│           ├── Create temp dir for bundles/cache/fake_bundle
-│           ├── create_local_autoscaler(config, controller_address, cache, bundle)
-│           │   └── For each scale_group in config:
-│           │       └── LocalVmManager(scale_group, controller_address, cache, bundle, ...)
-│           │       └── ScalingGroup(config, vm_manager=local_vm_manager)
-│           │   └── Autoscaler(scale_groups, vm_registry)
-│           ├── Controller(config, RpcWorkerStubFactory(), autoscaler)
-│           ├── controller.start()
-│           └── returns "http://127.0.0.1:{port}"
+├── connect()  [context manager]
+│   ├── start()
+│   ├── controller_tunnel(zone, project) → SSH port forward
+│   ├── yield "http://localhost:10000"
+│   └── stop()
 │
-├── Phase 2: SKIP (no SSH tunnel — controller is localhost)
-│
-├── Phase 3: _run_tests(controller_url)   ← IDENTICAL TO GCP MODE
-│   └── IrisClient.remote(controller_url)
-│       └── client.submit(entrypoint, resources)
-│           └── gRPC → Controller.LaunchJob()
-│
-│   [Inside Controller — same process, same code path]
-│   Controller._run_scheduling_loop()
-│   ├── _run_scheduling()                 ← IDENTICAL
-│   └── _run_autoscaler_once()            ← IDENTICAL
-│       └── Autoscaler.run_once()         ← IDENTICAL
-│           └── group.scale_up()          ← IDENTICAL (calls VmManager interface)
-│               └── LocalVmManager.create_vm_group()  ← LOCAL SHIM
-│                   ├── Determine worker_count from topology
-│                   ├── For each worker:
-│                   │   ├── _LocalBundleProvider(fake_bundle)
-│                   │   ├── _LocalImageProvider()
-│                   │   ├── _LocalContainerRuntime()
-│                   │   ├── LocalEnvironmentProvider(cpu, mem, device, attrs)
-│                   │   └── Worker(config, bundle_provider, image_provider,
-│                   │             container_runtime, environment_provider,
-│                   │             port_allocator)
-│                   │       └── worker.start()  (gRPC server on localhost)
-│                   └── LocalVmGroup(workers, vm_registry)
-│                       └── _StubManagedVm(vm_info) for each worker
-│
-└── Phase 4 + Cleanup
-    └── controller.stop()
-        └── LocalController.stop()
-            ├── Controller.stop()  (stops scheduling loop, uvicorn server)
-            └── temp_dir.cleanup()
-            (Autoscaler terminating workers happens via ScalingGroup cleanup)
+└── stop()
+    └── GcpController.stop()
+        └── gcloud compute instances delete ...
 ```
 
-### What changes, what stays the same
+### Local Mode
 
-| Component | GCP Mode | Local Mode | Changed? |
-|-----------|----------|------------|----------|
-| `Controller` | Runs on GCE VM | Runs in-process | **No** — same class |
-| `ControllerConfig` | bundle_prefix=gs://... | bundle_prefix=file:///tmp/... | Config only |
-| `Autoscaler` | Same | Same | **No** |
-| `ScalingGroup` | Same | Same | **No** |
-| `Scheduler` | Same | Same | **No** |
-| `VmManager` | `TpuVmManager` | `LocalVmManager` | **Replaced** |
-| `VmGroup` | `TpuVmGroup` | `LocalVmGroup` | **Replaced** |
-| `ManagedVm` | Real lifecycle threads | `_StubManagedVm` | **Replaced** |
-| `Worker` | Docker + bootstrap | In-process threads | **Same class**, different providers |
-| `BundleProvider` | GCS download | Returns fake path | **Replaced** |
-| `ImageProvider` | Docker build | Returns no-op result | **Replaced** |
-| `ContainerRuntime` | Docker containers | Thread-based execution | **Replaced** |
-| `EnvironmentProvider` | Probes real hardware | Returns fake metadata | **Replaced** |
-| `PortAllocator` | Per-worker | Shared (same process) | Config only |
-| SSH tunnel | gcloud ssh | Not needed | **Skipped** |
-| Image build | Docker + push | Not needed | **Skipped** |
+```
+ClusterManager(config)   # config has local controller + local providers
+│
+├── start()
+│   ├── create_controller(config) → LocalController
+│   └── LocalController.start()
+│       ├── Create temp dir (bundles, cache, fake_bundle)
+│       ├── _create_local_autoscaler()
+│       │   └── For each scale_group:
+│       │       └── LocalVmManager → ScalingGroup
+│       │   └── Autoscaler(scale_groups, vm_registry)
+│       ├── Controller(config, RpcWorkerStubFactory(), autoscaler)
+│       ├── controller.start()
+│       └── returns "http://127.0.0.1:{port}"
+│
+├── connect()  [context manager]
+│   ├── start()
+│   ├── (no tunnel — direct connection)
+│   ├── yield "http://127.0.0.1:{port}"
+│   └── stop()
+│
+└── stop()
+    └── LocalController.stop()
+        ├── Controller.stop()
+        └── temp_dir.cleanup()
+```
+
+### Local Mode: Inside the Autoscaler (on job submit)
+
+```
+Controller._run_scheduling_loop()         ← IDENTICAL to GCP
+├── _run_scheduling()                     ← IDENTICAL
+└── _run_autoscaler_once()                ← IDENTICAL
+    └── Autoscaler.run_once()             ← IDENTICAL
+        └── group.scale_up()              ← IDENTICAL (calls VmManager interface)
+            └── LocalVmManager.create_vm_group()  ← LOCAL SHIM
+                ├── Determine worker_count from topology
+                ├── For each worker:
+                │   ├── _LocalBundleProvider(fake_bundle)
+                │   ├── _LocalImageProvider()
+                │   ├── _LocalContainerRuntime()
+                │   ├── LocalEnvironmentProvider(...)
+                │   └── Worker(...).start()  (gRPC on localhost)
+                └── LocalVmGroup(workers, vm_registry)
+```
+
+---
+
+## Module Layout
+
+```
+src/iris/cluster/vm/
+├── cluster_manager.py      # NEW — ClusterManager + make_local_config()
+├── local_platform.py       # NEW — extracted from demo_cluster.py
+│   ├── LocalVmManager      (VmManagerProtocol)
+│   ├── LocalVmGroup        (VmGroupProtocol)
+│   └── _StubManagedVm
+├── controller.py           # MODIFIED — add LocalController + factory branch
+│   ├── ControllerProtocol
+│   ├── GcpController
+│   ├── ManualController
+│   ├── LocalController     # NEW
+│   └── create_controller()
+├── config.py               # MODIFIED — add local provider branch
+├── vm_platform.py          # UNCHANGED
+├── gcp_tpu_platform.py     # UNCHANGED
+├── manual_platform.py      # UNCHANGED
+└── ...
+
+examples/
+└── demo_cluster.py         # SIMPLIFIED — uses ClusterManager
+
+scripts/
+└── smoke-test.py           # SIMPLIFIED — uses ClusterManager
+
+src/iris/rpc/
+└── config.proto            # MODIFIED — add LocalProvider, LocalControllerConfig
+```
 
 ---
 
 ## Detailed Design
 
-### 1. Proto Changes: `config.proto`
-
-Add `local` variant to both oneofs:
-
-```protobuf
-// ProviderConfig — per-scale-group
-message ProviderConfig {
-  oneof provider {
-    TpuProvider tpu = 1;
-    ManualProvider manual = 2;
-    LocalProvider local = 3;      // NEW
-  }
-}
-
-message LocalProvider {
-  // No fields needed — local provider uses in-process workers.
-  // Scale group config (accelerator_type, accelerator_variant, etc.)
-  // drives worker attribute simulation.
-}
-
-// ControllerVmConfig — controller lifecycle
-message ControllerVmConfig {
-  string image = 10;
-  string bundle_prefix = 11;
-  oneof controller {
-    GcpControllerConfig gcp = 1;
-    ManualControllerConfig manual = 2;
-    LocalControllerConfig local = 3;  // NEW
-  }
-}
-
-message LocalControllerConfig {
-  int32 port = 1;  // Port to bind (default 10000)
-}
-```
-
-After editing, run `scripts/generate-protos.py`.
-
-### 2. New Module: `src/iris/cluster/vm/local_platform.py`
-
-This extracts and generalizes code from `demo_cluster.py` and `local_client.py`.
-
-The worker bootstrap dependencies are the key thing the v1 design missed
-(flagged by the codex review). Each in-process worker needs four provider
-implementations already defined in `local_client.py`:
-
-- `_LocalBundleProvider` — returns a fake bundle path
-- `_LocalImageProvider` — returns a no-op `BuildResult`
-- `_LocalContainerRuntime` — executes entrypoints in threads
-- `LocalEnvironmentProvider` — returns fake CPU/memory/device metadata
+### 1. `ClusterManager` — `vm/cluster_manager.py`
 
 ```python
-"""Local platform: in-process VmManager for testing without GCP.
+"""Cluster lifecycle manager.
 
-Provides LocalVmManager (VmManagerProtocol) and LocalVmGroup (VmGroupProtocol)
-that create real Worker instances running in-process with thread-based execution
-instead of Docker containers.
-
-Worker dependencies (bundle, image, container, environment providers) come from
-iris.cluster.client.local_client — the same providers used by LocalClusterClient.
+Provides a uniform interface for starting/stopping/connecting to an Iris
+cluster regardless of backend (GCP, manual, local). Callers get a URL;
+ClusterManager handles tunnel setup, mode detection, and cleanup.
 """
 
-from iris.cluster.client.local_client import (
-    LocalEnvironmentProvider,
-    _LocalBundleProvider,
-    _LocalContainerRuntime,
-    _LocalImageProvider,
-)
-from iris.cluster.vm.managed_vm import ManagedVm, VmRegistry
-from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
-from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
+from contextlib import contextmanager
+from collections.abc import Iterator
+
+from iris.cluster.vm.config import load_config
+from iris.cluster.vm.controller import ControllerProtocol, create_controller
+from iris.cluster.vm.debug import controller_tunnel
+from iris.rpc import config_pb2
 
 
-class _StubManagedVm(ManagedVm):
-    """Minimal ManagedVm that holds VmInfo without lifecycle threads.
+def make_local_config(
+    base_config: config_pb2.IrisClusterConfig,
+) -> config_pb2.IrisClusterConfig:
+    """Override a GCP/manual config to run locally.
 
-    In-process workers don't need SSH bootstrap or health polling —
-    they are immediately READY. This stub satisfies the VmGroupProtocol
-    interface for the autoscaler's VmRegistry tracking.
+    Replaces the controller oneof with LocalControllerConfig and every
+    scale group's provider oneof with LocalProvider. Everything else
+    (accelerator_type, accelerator_variant, min/max_slices) is preserved.
+
+    Usage:
+        config = load_config("eu-west4.yaml")
+        local = make_local_config(config)
+        manager = ClusterManager(local)
+    """
+    config = config_pb2.IrisClusterConfig()
+    config.CopyFrom(base_config)
+    config.controller_vm.ClearField("controller")
+    config.controller_vm.local.port = 0  # auto-assign
+    config.controller_vm.bundle_prefix = ""  # LocalController will set temp path
+    for sg in config.scale_groups.values():
+        sg.provider.ClearField("provider")
+        sg.provider.local.SetInParent()
+    return config
+
+
+class ClusterManager:
+    """Manages the full cluster lifecycle: controller + connectivity.
+
+    Provides explicit start/stop methods and a connect() context manager
+    that handles tunnel setup for GCP or direct connection for local mode.
+
+    Example (smoke test / demo):
+        manager = ClusterManager(config)
+        with manager.connect() as url:
+            client = IrisClient.remote(url)
+            client.submit(...)
+
+    Example (CLI - long-running):
+        manager = ClusterManager(config)
+        url = manager.start()
+        # ... use cluster ...
+        manager.stop()
     """
 
-    def __init__(self, info: vm_pb2.VmInfo):
-        self.info = info
-        self._log_lines: list[str] = []
+    def __init__(self, config: config_pb2.IrisClusterConfig):
+        self._config = config
+        self._controller: ControllerProtocol | None = None
 
-    def start(self) -> None:
-        pass
+    @property
+    def is_local(self) -> bool:
+        return self._config.controller_vm.WhichOneof("controller") == "local"
+
+    def start(self) -> str:
+        """Start the controller. Returns the controller address.
+
+        For GCP: creates a GCE VM, bootstraps, returns internal IP.
+        For local: starts in-process Controller, returns localhost URL.
+        """
+        self._controller = create_controller(self._config)
+        return self._controller.start()
 
     def stop(self) -> None:
-        pass
+        """Stop the controller and clean up resources."""
+        if self._controller:
+            self._controller.stop()
+            self._controller = None
 
-    def init_log(self, tail: int | None = None) -> str:
-        return ""
+    @contextmanager
+    def connect(self) -> Iterator[str]:
+        """Start controller, yield a usable URL, stop on exit.
 
-    def check_health(self) -> bool:
-        return True
-
-
-class LocalVmGroup(VmGroupProtocol):
-    """VM group backed by in-process Worker instances.
-
-    Each "VM" is a Worker running on localhost with a unique port.
-    Workers become ready immediately (no bootstrap delay).
-    The group tracks workers and their stub ManagedVm instances
-    for autoscaler compatibility.
-    """
-
-    def __init__(
-        self,
-        group_id: str,
-        scale_group: str,
-        workers: list[Worker],
-        worker_ids: list[str],
-        vm_registry: VmRegistry,
-    ):
-        ...
-        # Create _StubManagedVm for each worker
-        # Register each with vm_registry
-        # Workers are already started
-
-    # Properties: group_id, slice_id, scale_group, created_at_ms
-    # Methods: status(), vms(), terminate(), to_proto()
-    # terminate() calls worker.stop() + vm_registry.unregister()
-
-
-class LocalVmManager:
-    """VmManager for in-process workers. Implements VmManagerProtocol.
-
-    Creates LocalVmGroup instances containing real Worker instances.
-    Workers use local providers (from local_client.py) for bundle/image/
-    container/environment — no Docker, no GCS, no SSH.
-
-    Key difference from demo_cluster: accepts controller_address and
-    temp paths as constructor args instead of computing them internally,
-    so it can be wired into the standard config → autoscaler → controller
-    pipeline via create_autoscaler_from_config().
-    """
-
-    def __init__(
-        self,
-        scale_group_config: config_pb2.ScaleGroupConfig,
-        controller_address: str,
-        cache_path: Path,
-        fake_bundle: Path,          # ← v1 missed this (flagged by review)
-        vm_registry: VmRegistry,
-        port_allocator: PortAllocator,  # ← shared across groups (flagged by review)
-    ):
-        ...
-
-    def create_vm_group(self, tags: dict[str, str] | None = None) -> VmGroupProtocol:
-        """Create a new group of in-process workers.
-
-        1. Determine worker_count from accelerator_variant topology
-           (get_tpu_topology(variant).vm_count, or 1 for CPU)
-        2. For each worker:
-           a. Allocate port via find_free_port()
-           b. Create providers:
-              - _LocalBundleProvider(self._fake_bundle)
-              - _LocalImageProvider()
-              - _LocalContainerRuntime()
-              - LocalEnvironmentProvider(cpu=1000, memory_gb=1000,
-                  attributes={"tpu-name": slice_id, "tpu-worker-id": i, ...},
-                  device=tpu_device(variant) if TPU else None)
-           c. Create Worker(config, providers..., port_allocator=self._port_allocator)
-           d. worker.start()
-        3. Return LocalVmGroup(workers, vm_registry)
+        For GCP: establishes SSH tunnel, yields tunnel URL.
+        For local: yields direct localhost URL (no tunnel).
         """
-        ...
+        address = self.start()
+        try:
+            if self.is_local:
+                yield address
+            else:
+                zone = self._config.zone
+                project = self._config.project_id
+                label_prefix = self._config.label_prefix or "iris"
+                with controller_tunnel(
+                    zone, project, label_prefix=label_prefix
+                ) as tunnel_url:
+                    yield tunnel_url
+        finally:
+            self.stop()
 
-    def discover_vm_groups(self) -> list[VmGroupProtocol]:
-        return []  # No persistence — local workers are ephemeral
+    @property
+    def controller(self) -> ControllerProtocol:
+        """Access the underlying controller (must call start() first)."""
+        if self._controller is None:
+            raise RuntimeError("ClusterManager.start() not called")
+        return self._controller
 ```
 
-### 3. `LocalController` in `controller.py`
-
-The v1 design only had `start()/stop()/status()`. The review flagged that
-`ControllerProtocol` requires `restart()`, `reload()`, `discover()`, and
-`fetch_startup_logs()`.
+### 2. `LocalController` — added to `controller.py`
 
 ```python
 class LocalController:
-    """In-process controller for local testing and demos.
+    """In-process controller for local testing.
 
-    Unlike GcpController (creates GCE VM) or ManualController (SSHs to host),
-    LocalController runs the Controller class directly in the current process.
-
-    Worker creation happens via LocalVmManager through the standard autoscaler
-    pipeline — the Controller doesn't know it's running locally.
-
-    Used by:
-    - smoke-test.py --local
-    - demo_cluster.py (replaces DemoCluster)
+    Runs Controller + Autoscaler(LocalVmManagers) in the current process.
+    Workers are threads, not VMs. No Docker, no GCS, no SSH.
     """
 
     def __init__(self, config: config_pb2.IrisClusterConfig):
         self._config = config
         self._controller: Controller | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
-        self._port: int = 0
 
     def start(self) -> str:
-        """Start in-process controller with local autoscaler.
-
-        Control flow:
-        1. Create temp directory for bundles, cache, fake_bundle
-        2. Create Autoscaler via _create_local_autoscaler()
-           └── For each scale_group:
-               └── LocalVmManager (reads accelerator config from proto)
-               └── ScalingGroup(config, vm_manager)
-           └── Autoscaler(scale_groups, vm_registry)
-        3. Create Controller(config, RpcWorkerStubFactory(), autoscaler)
-        4. controller.start()
-        5. Return controller.url
-        """
         self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_")
-        temp_path = Path(self._temp_dir.name)
+        temp = Path(self._temp_dir.name)
+        bundle_dir = temp / "bundles"; bundle_dir.mkdir()
+        cache_path = temp / "cache"; cache_path.mkdir()
+        fake_bundle = temp / "fake_bundle"; fake_bundle.mkdir()
+        (fake_bundle / "pyproject.toml").write_text("[project]\nname='local'\n")
 
-        bundle_dir = temp_path / "bundles"
-        bundle_dir.mkdir()
-        cache_path = temp_path / "cache"
-        cache_path.mkdir()
-        fake_bundle = temp_path / "fake_bundle"
-        fake_bundle.mkdir()
-        (fake_bundle / "pyproject.toml").write_text("[project]\nname = 'local'\n")
+        port = self._config.controller_vm.local.port or find_free_port()
+        address = f"http://127.0.0.1:{port}"
 
-        # Read port from config (local controller config)
-        local_config = self._config.controller_vm.local
-        self._port = local_config.port or find_free_port()
-
-        controller_address = f"http://127.0.0.1:{self._port}"
-
-        # Create autoscaler using the standard pipeline but with LocalVmManagers
         autoscaler = _create_local_autoscaler(
-            config=self._config,
-            controller_address=controller_address,
-            cache_path=cache_path,
-            fake_bundle=fake_bundle,
-        )
-
-        # Wire bundle_prefix to local filesystem
-        bundle_prefix = self._config.controller_vm.bundle_prefix or f"file://{bundle_dir}"
-
-        controller_config = ControllerConfig(
-            host="127.0.0.1",
-            port=self._port,
-            bundle_prefix=bundle_prefix,
+            self._config, address, cache_path, fake_bundle,
         )
         self._controller = Controller(
-            config=controller_config,
+            config=ControllerConfig(
+                host="127.0.0.1",
+                port=port,
+                bundle_prefix=self._config.controller_vm.bundle_prefix
+                    or f"file://{bundle_dir}",
+            ),
             worker_stub_factory=RpcWorkerStubFactory(),
             autoscaler=autoscaler,
         )
@@ -455,32 +338,44 @@ class LocalController:
         return self.start()
 
     def reload(self) -> str:
-        # For local mode, reload == restart (no SSH, no Docker pull)
         return self.restart()
 
     def discover(self) -> str | None:
-        if self._controller:
-            return self._controller.url
-        return None
-
-    def fetch_startup_logs(self) -> str:
-        return "(local controller — no startup logs)"
+        return self._controller.url if self._controller else None
 
     def status(self) -> ControllerStatus:
         if self._controller:
             return ControllerStatus(
-                running=True,
-                address=self._controller.url,
-                healthy=True,  # In-process controller is always healthy if running
+                running=True, address=self._controller.url, healthy=True,
             )
         return ControllerStatus(running=False, address="", healthy=False)
+
+    def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
+        return "(local controller — no startup logs)"
 ```
 
-### 4. Autoscaler Factory for Local Mode
+### 3. `local_platform.py` — extracted from `demo_cluster.py`
 
-New function in `config.py` (or `local_platform.py`):
+This is a **move**, not new code. The classes `LocalVmManager`, `LocalVmGroup`,
+and `_StubManagedVm` are extracted verbatim from `demo_cluster.py` lines 89–332
+into `src/iris/cluster/vm/local_platform.py`. The `_create_local_autoscaler()`
+function lives here too.
 
 ```python
+"""Local platform: in-process VmManager for testing without GCP.
+
+Extracted from demo_cluster.py. Provides LocalVmManager (VmManagerProtocol)
+and LocalVmGroup (VmGroupProtocol) that create real Worker instances running
+in-process with thread-based execution instead of Docker containers.
+
+Worker dependencies (bundle, image, container, environment providers) come
+from iris.cluster.client.local_client.
+"""
+
+# _StubManagedVm — holds VmInfo, immediately READY, no lifecycle threads
+# LocalVmGroup   — VmGroupProtocol backed by in-process Workers
+# LocalVmManager  — VmManagerProtocol, creates LocalVmGroups
+
 def _create_local_autoscaler(
     config: config_pb2.IrisClusterConfig,
     controller_address: str,
@@ -489,15 +384,7 @@ def _create_local_autoscaler(
 ) -> Autoscaler:
     """Create Autoscaler with LocalVmManagers for all scale groups.
 
-    This parallels create_autoscaler_from_config() but creates LocalVmManagers
-    instead of TpuVmManager/ManualVmManager.
-
-    Control flow:
-    1. Create shared VmRegistry + PortAllocator
-    2. For each scale_group in config:
-       a. Create LocalVmManager with the group's config
-       b. Wrap in ScalingGroup with fast cooldowns
-    3. Return Autoscaler(scale_groups, vm_registry)
+    Parallels create_autoscaler_from_config() but uses LocalVmManagers.
     """
     vm_registry = VmRegistry()
     shared_port_allocator = PortAllocator(port_range=(30000, 40000))
@@ -515,8 +402,8 @@ def _create_local_autoscaler(
         scale_groups[name] = ScalingGroup(
             config=sg_config,
             vm_manager=manager,
-            scale_up_cooldown_ms=1000,       # Fast for local
-            scale_down_cooldown_ms=300_000,   # Keep workers alive
+            scale_up_cooldown_ms=1000,
+            scale_down_cooldown_ms=300_000,
         )
 
     return Autoscaler(
@@ -526,256 +413,346 @@ def _create_local_autoscaler(
     )
 ```
 
-### 5. Config Wiring: `config.py`
+### 4. Proto Changes — `config.proto`
 
-Add local provider support to the existing factory functions:
+```protobuf
+message ProviderConfig {
+  oneof provider {
+    TpuProvider tpu = 1;
+    ManualProvider manual = 2;
+    LocalProvider local = 3;      // NEW
+  }
+}
 
-```python
-# In _get_provider_info():
-def _get_provider_info(group_config):
-    ...
-    which = provider.WhichOneof("provider")
-    if which == "tpu":
-        ...
-    if which == "manual":
-        ...
-    if which == "local":                           # NEW
-        return ("local", None, None)
-    raise ValueError(...)
+message LocalProvider {}  // No fields — config drives simulation via scale group
 
-# In _create_manager_from_config():
-def _create_manager_from_config(group_name, cluster_config, vm_factory, *, dry_run=False):
-    ...
-    if provider_type == "local":                    # NEW
-        # LocalVmManager doesn't use vm_factory (no SSH/lifecycle threads)
-        # It creates its own workers directly.
-        # The controller_address and paths are provided by LocalController,
-        # not by this factory. So we defer LocalVmManager creation to
-        # _create_local_autoscaler() which has the necessary context.
-        raise ValueError(
-            "Local provider is handled by LocalController, not by "
-            "create_autoscaler_from_config(). Use LocalController instead."
-        )
-    ...
+message ControllerVmConfig {
+  string image = 10;
+  string bundle_prefix = 11;
+  oneof controller {
+    GcpControllerConfig gcp = 1;
+    ManualControllerConfig manual = 2;
+    LocalControllerConfig local = 3;  // NEW
+  }
+}
 
-# In create_controller():
-def create_controller(config):
-    which = config.controller_vm.WhichOneof("controller")
-    if which == "gcp":
-        return GcpController(config)
-    if which == "manual":
-        return ManualController(config)
-    if which == "local":                            # NEW
-        return LocalController(config)
-    raise ValueError(...)
+message LocalControllerConfig {
+  int32 port = 1;  // 0 = auto-assign
+}
 ```
 
-**Design note:** The local provider in `_create_manager_from_config` raises
-because `LocalVmManager` needs runtime context (controller address, temp paths)
-that aren't available at config-load time. The `LocalController` constructs the
-entire autoscaler itself via `_create_local_autoscaler()`. This is analogous to
-how `DemoCluster._create_autoscaler()` works today.
-
-### 6. Smoke Test Changes
-
-The smoke test already uses `create_controller(config)` which dispatches on the
-config's controller type. With `local` support wired in, the smoke test needs
-**minimal changes** — just skipping GCP-only phases:
+### 5. Config Wiring — `config.py`
 
 ```python
-# In SmokeTestRunner.run():
-def run(self) -> bool:
+# create_controller() — add "local" branch:
+def create_controller(config):
+    which = config.controller_vm.WhichOneof("controller")
+    if which == "gcp":    return GcpController(config)
+    if which == "manual": return ManualController(config)
+    if which == "local":  return LocalController(config)
+    raise ValueError(...)
+
+# _get_provider_info() — add "local" branch:
+#   Returns ("local", None, None)
+# _create_manager_from_config() — NOT used for local
+#   LocalVmManager needs runtime context (address, paths) that
+#   LocalController provides. The standard factory path is not used.
+```
+
+---
+
+## Caller Rewrites
+
+### smoke-test.py — Before vs After
+
+**Before** (current code, ~120 lines of lifecycle management):
+
+```python
+def run(self):
     cluster_config = load_config(self.config.config_path)
+    zone = cluster_config.zone
+    project = cluster_config.project_id
 
-    is_local = cluster_config.controller_vm.WhichOneof("controller") == "local"
+    # Phase 0a: Build images
+    if not self._build_images(): return False
 
-    # Phase 0a: Build images (skip for local)
-    if self.config.build_images and not is_local:
-        ...
+    # Phase 0b: Cleanup
+    if self.config.clean_start:
+        self._cleanup_existing(zone, project)
 
-    # Phase 0b: Clean start (skip for local)
-    if self.config.clean_start and not is_local:
-        ...
+    # Phase 1: Start cluster
+    controller = create_controller(cluster_config)
+    controller.start()
 
-    # Phase 1: Start cluster (works for both — create_controller dispatches)
-    self._start_cluster(cluster_config)
-
-    if is_local:
-        # Direct connection, no tunnel needed
-        controller_url = self._controller.discover()
-        # Skip log streaming (no SSH/Docker)
-        self._run_tests(controller_url)
+    # Phase 2: SSH tunnel + log streaming
+    self._start_log_streaming(zone, project)
+    with controller_tunnel(zone, project) as tunnel_url:
+        # Phase 3: Run tests
+        self._run_tests(tunnel_url)
         success = self._print_results()
-    else:
-        # GCP: SSH tunnel + log streaming (existing code)
-        with controller_tunnel(...) as tunnel_url:
-            self._run_tests(tunnel_url)
-            success = self._print_results()
 
+    # Cleanup
+    controller.stop()
     return success
 ```
 
-The test job definitions (`_hello_tpu_job`, `_distributed_work_job`, etc.) and
-`_run_tests()` method work **unchanged** — they use `IrisClient.remote()` which
-connects via gRPC regardless of whether the controller is local or remote.
-
-### 7. Delete `demo_cluster.py` / Replace with Local Config
-
-The current `demo_cluster.py` (845 lines) duplicates most of this infrastructure.
-After extracting to `local_platform.py`, `demo_cluster.py` becomes:
+**After** (~60 lines, mode-aware at top only):
 
 ```python
-"""Demo cluster launcher.
+def run(self):
+    cluster_config = load_config(self.config.config_path)
 
-Usage:
-    uv run python examples/demo_cluster.py
-    uv run python examples/demo_cluster.py --config examples/local.yaml
-"""
+    # Apply --local override if requested
+    if self.config.local:
+        cluster_config = make_local_config(cluster_config)
 
-@click.command()
-@click.option("--config", default="examples/local.yaml")
-@click.option("--no-browser", is_flag=True)
-def main(config: str, no_browser: bool):
-    cluster_config = load_config(config)
-    controller = create_controller(cluster_config)
-    controller_url = controller.start()
-    print(f"Controller: {controller_url}")
+    manager = ClusterManager(cluster_config)
 
-    # Seed cluster
-    client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
-    # ... submit demo jobs (reuse from existing seed_cluster) ...
+    # GCP-only setup phases
+    if not manager.is_local:
+        if not self._build_images(): return False
+        if self.config.clean_start:
+            self._cleanup_existing(cluster_config.zone, cluster_config.project_id)
 
-    # Launch Jupyter
-    # ... existing launch_jupyter() code ...
-
-    controller.stop()
+    # Run tests (connect() handles tunnel for GCP, direct for local)
+    with manager.connect() as url:
+        if not manager.is_local:
+            self._start_log_streaming(cluster_config.zone, cluster_config.project_id)
+        self._run_tests(url)
+        return self._print_results()
 ```
 
-This shrinks demo_cluster.py from ~845 lines to ~100 lines by delegating all
-infrastructure to the shared `local_platform.py` + `LocalController`.
+The `--local` flag is a one-liner that transforms any config:
 
-### Example Local Config: `examples/local.yaml`
-
-```yaml
-# Local development cluster — no GCP, no Docker
-# Usage: uv run python scripts/smoke-test.py --config examples/local.yaml
-
-controller_vm:
-  bundle_prefix: "file:///tmp/iris-local/bundles"
-  local:
-    port: 0  # 0 = auto-assign
-
-scale_groups:
-  tpu_v5e_16:
-    provider:
-      local: {}
-    accelerator_type: tpu
-    accelerator_variant: v5litepod-16
-    min_slices: 0
-    max_slices: 4
-
-  cpu:
-    provider:
-      local: {}
-    accelerator_type: cpu
-    min_slices: 0
-    max_slices: 4
+```python
+@click.option("--local", is_flag=True, help="Run locally without GCP")
 ```
+
+### demo_cluster.py — Before vs After
+
+**Before** (~845 lines, builds everything manually):
+
+```python
+class DemoCluster:
+    def __enter__(self):
+        self._temp_dir = tempfile.TemporaryDirectory(...)
+        # ... 80 lines of manual Controller/Autoscaler/Worker wiring ...
+        self._controller.start()
+        return self
+
+    def __exit__(self, ...):
+        self._controller.stop()
+        self._temp_dir.cleanup()
+```
+
+**After** (~150 lines total, Jupyter + seed logic preserved):
+
+```python
+class DemoCluster:
+    def __init__(self, config_path: str | None = None, controller_url: str | None = None):
+        self._remote_url = controller_url
+        self._config_path = config_path
+        self._manager: ClusterManager | None = None
+
+    def __enter__(self):
+        if self._remote_url:
+            return self  # remote mode, no local infra
+
+        config = self._load_or_default_config()
+        config = make_local_config(config)
+        self._manager = ClusterManager(config)
+        self._manager.start()
+        return self
+
+    def __exit__(self, ...):
+        self._stop_jupyter()
+        if self._manager:
+            self._manager.stop()
+
+    @property
+    def controller_url(self) -> str:
+        if self._remote_url:
+            return self._remote_url
+        return self._manager.controller.discover()
+
+    # seed_cluster(), launch_jupyter(), etc. — UNCHANGED
+```
+
+The ~700 lines of `LocalVmManager`, `LocalVmGroup`, `_StubManagedVm`, and manual
+autoscaler wiring are deleted from `demo_cluster.py` — they now live in
+`local_platform.py` and are used via `LocalController` inside `ClusterManager`.
+
+### cli.py — Before vs After
+
+The CLI commands that use `create_controller()` directly can optionally migrate to
+`ClusterManager`, but this is not required in v3. The main win is that `cluster start`
+and `cluster stop` could use `ClusterManager` to gain local mode support for free:
+
+```python
+# Before:
+@cluster.command("start")
+def cluster_start(ctx):
+    config = ctx.obj["config"]
+    _build_cluster_images(config)
+    ctrl = create_controller(config)
+    address = ctrl.start()
+    click.echo(f"Controller started at {address}")
+
+# After:
+@cluster.command("start")
+@click.option("--local", is_flag=True, help="Run locally without GCP")
+def cluster_start(ctx, local: bool):
+    config = ctx.obj["config"]
+    if local:
+        config = make_local_config(config)
+    if not ClusterManager(config).is_local:
+        _build_cluster_images(config)
+    manager = ClusterManager(config)
+    address = manager.start()
+    click.echo(f"Controller started at {address}")
+    # Note: for long-running CLI, caller manages stop
+```
+
+The `run-local` command becomes a thin wrapper around `ClusterManager` with
+`make_local_config()`.
+
+---
+
+## What Changes, What Stays the Same
+
+| Component | GCP Mode | Local Mode | Changed? |
+|-----------|----------|------------|----------|
+| `ClusterManager` | tunnel + GcpController | direct + LocalController | **NEW** |
+| `Controller` | Runs on GCE VM | Runs in-process | **No** — same class |
+| `Autoscaler` | Same | Same | **No** |
+| `ScalingGroup` | Same | Same | **No** |
+| `Scheduler` | Same | Same | **No** |
+| `VmManager` | `TpuVmManager` | `LocalVmManager` | **Extracted** from demo_cluster |
+| `VmGroup` | `TpuVmGroup` | `LocalVmGroup` | **Extracted** from demo_cluster |
+| `Worker` | Docker + bootstrap | In-process threads | **No** — same class, different providers |
+| SSH tunnel | gcloud ssh | Not needed | Handled by `ClusterManager.connect()` |
+| Image build | Docker + push | Not needed | Skipped when `is_local` |
 
 ---
 
 ## Implementation Plan (Spiral)
 
-Following the AGENTS.md guidance for spiral plans where each step is independently testable.
+### Step 1: Extract `local_platform.py` from `demo_cluster.py`
 
-### Step 1: Proto + LocalVmManager extraction + test
+**Files changed:**
+- `src/iris/cluster/vm/local_platform.py` — **new** (extracted code)
+- `examples/demo_cluster.py` — imports from `local_platform` instead of defining inline
+- `tests/cluster/vm/test_local_platform.py` — **new**
+
+**Test:** `demo_cluster.py` works identically after extraction. Unit test creates
+`LocalVmManager`, calls `create_vm_group()`, verifies workers are gRPC-reachable.
+
+### Step 2: Proto + `LocalController` + config wiring
 
 **Files changed:**
 - `src/iris/rpc/config.proto` — add `LocalProvider`, `LocalControllerConfig`
-- `scripts/generate-protos.py` — run to regenerate
-- `src/iris/cluster/vm/local_platform.py` — **new**, extracted from `demo_cluster.py`
-- `tests/cluster/vm/test_local_platform.py` — **new**
-
-**Test:** Create a `LocalVmManager`, call `create_vm_group()`, verify workers
-start and are reachable via gRPC health check.
-
-### Step 2: LocalController + config wiring
-
-**Files changed:**
+- `scripts/generate-protos.py` — run
 - `src/iris/cluster/vm/controller.py` — add `LocalController`
-- `src/iris/cluster/vm/config.py` — add local provider handling
-- `tests/cluster/vm/test_local_controller.py` — **new**
+- `src/iris/cluster/vm/config.py` — add local provider branch
+- `src/iris/cluster/vm/local_platform.py` — add `_create_local_autoscaler()`
 
-**Test:** Load a local.yaml config, call `create_controller()`, verify it returns
-a `LocalController`. Start it, submit a job via `IrisClient.remote()`, verify it
-completes.
+**Test:** `create_controller(local_config)` returns `LocalController`.
+Start it, submit a job via `IrisClient.remote()`, verify completion.
 
-### Step 3: Smoke test integration
-
-**Files changed:**
-- `scripts/smoke-test.py` — detect `local` mode, skip GCP phases
-- `examples/local.yaml` — **new** config file
-
-**Test:** Run `uv run python scripts/smoke-test.py --config examples/local.yaml`.
-All three test jobs (simple, concurrent, coscheduled) should pass locally.
-
-### Step 4: Replace demo_cluster.py
+### Step 3: `ClusterManager` + `make_local_config()`
 
 **Files changed:**
-- `examples/demo_cluster.py` — slim down to use `LocalController`
-- Delete duplicated code (~700 lines removed)
+- `src/iris/cluster/vm/cluster_manager.py` — **new**
+- `tests/cluster/vm/test_cluster_manager.py` — **new**
 
-**Test:** Run `uv run python examples/demo_cluster.py` and verify demo jobs complete.
+**Test:** `ClusterManager(local_config).connect()` yields a working URL.
+Submit and complete a job through it.
 
-### Step 5: Documentation
+### Step 4: Smoke test integration
 
 **Files changed:**
-- `README.md` — add local mode section
-- `AGENTS.md` — add local platform to key modules
+- `scripts/smoke-test.py` — use `ClusterManager`, add `--local` flag
+
+**Test:** `uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --local`
+passes all three test jobs locally.
+
+### Step 5: Simplify `demo_cluster.py`
+
+**Files changed:**
+- `examples/demo_cluster.py` — use `ClusterManager` + `make_local_config()`
+
+**Test:** `uv run python examples/demo_cluster.py` works as before.
+
+### Step 6: CLI integration (optional)
+
+**Files changed:**
+- `src/iris/cli.py` — add `--local` to `cluster start`/`stop`
 
 ---
 
-## Resolved Questions (from v1 + review)
+## `--local` Override: How It Works
 
-### Q1: Should local mode use the same config file format?
-**A:** Yes. Same YAML schema, with `controller_vm.local` and `provider.local`.
-The config file fully determines the mode — no `--local` flag needed.
+The `make_local_config()` function transforms any config to local mode:
 
-### Q2: How should local mode handle bundle storage?
-**A:** `file://` prefix with temp directory. `LocalController.start()` creates
-the temp directory and sets `bundle_prefix=file://{temp}/bundles`. This exercises
-the same `fsspec`-based bundle storage path as GCP mode.
+```
+Input (eu-west4.yaml):                Output (in memory):
+┌────────────────────────────┐        ┌────────────────────────────┐
+│ controller_vm:             │        │ controller_vm:             │
+│   image: ...docker.pkg...  │   →    │   local:                   │
+│   gcp:                     │        │     port: 0                │
+│     zone: europe-west4-b   │        │                            │
+│     machine_type: n1-std-4 │        │                            │
+│                            │        │                            │
+│ scale_groups:              │        │ scale_groups:              │
+│   tpu_v5e_16:              │        │   tpu_v5e_16:              │
+│     provider:              │        │     provider:              │
+│       tpu:                 │   →    │       local: {}            │
+│         project: hai-gcp   │        │     accelerator_type: tpu  │  ← preserved
+│     accelerator_type: tpu  │        │     accelerator_variant:   │  ← preserved
+│     accelerator_variant:   │        │       v5litepod-16         │
+│       v5litepod-16         │        │     max_slices: 4          │  ← preserved
+│     max_slices: 4          │        │                            │
+└────────────────────────────┘        └────────────────────────────┘
+```
 
-### Q3: Should local workers simulate TPU attributes?
-**A:** Yes. `LocalVmManager` reads `accelerator_type` and `accelerator_variant`
-from the scale group config and passes them to `LocalEnvironmentProvider` as
-attributes (`tpu-name`, `tpu-worker-id`, `tpu-topology`) and device config
-(`tpu_device(variant)`). This is what `demo_cluster.py` already does.
+Scale group topology (accelerator_type, variant, min/max slices) is preserved
+so local workers simulate the same TPU attributes. Only the provider and
+controller backend change.
 
-### Q4 (review): What about worker bootstrap dependencies?
-**A:** `LocalVmManager` imports and uses the four providers from
-`iris.cluster.client.local_client`: `_LocalBundleProvider`, `_LocalImageProvider`,
-`_LocalContainerRuntime`, `LocalEnvironmentProvider`. These are already tested
-by `LocalClusterClient` and `demo_cluster.py`.
+---
 
-### Q5 (review): ControllerProtocol completeness?
-**A:** `LocalController` implements all protocol methods. `restart()` = stop+start,
-`reload()` = restart (no Docker to pull), `discover()` = return url if running,
-`fetch_startup_logs()` = no-op string.
+## Resolved Questions
 
-### Q6 (review): PortAllocator shared namespace?
-**A:** `_create_local_autoscaler()` creates a single shared `PortAllocator(port_range=(30000, 40000))`
-and passes it to all `LocalVmManager` instances, preventing port collisions.
+**Q: Should local mode have its own config file?**
+No. `make_local_config()` transforms any existing config. A standalone
+`local.yaml` can exist for convenience but is not required.
+
+**Q: Where does `ClusterManager` live?**
+`src/iris/cluster/vm/cluster_manager.py`. It sits alongside `controller.py`
+and `config.py` in the `vm` package — it orchestrates VM-level lifecycle.
+
+**Q: Does `ClusterManager` replace `create_controller()`?**
+No. `create_controller()` remains the factory for `ControllerProtocol`.
+`ClusterManager` wraps it with tunnel/lifecycle management. Low-level callers
+(e.g., unit tests) can still use `create_controller()` directly.
+
+**Q: How does `demo_cluster.py` handle its hardcoded scale groups?**
+`DemoCluster._load_or_default_config()` builds a config proto programmatically
+(same as today) when no config file is provided. `make_local_config()` is then
+applied. When a config file is provided, it's loaded and overridden.
+
+**Q: Port allocation across multiple LocalVmManagers?**
+`_create_local_autoscaler()` creates a single shared `PortAllocator(30000, 40000)`
+passed to all `LocalVmManager` instances, preventing collisions.
 
 ---
 
 ## References
 
-- [Codex Review](smoke-test-dry-run-review.md) — review of v1 design
-- `examples/demo_cluster.py` — existing local cluster (to be replaced)
+- `examples/demo_cluster.py` — existing local cluster (source for extraction)
 - `src/iris/cluster/client/local_client.py` — local worker providers
 - `src/iris/cluster/vm/vm_platform.py` — `VmManagerProtocol`, `VmGroupProtocol`
 - `src/iris/cluster/vm/controller.py` — `ControllerProtocol`, `create_controller()`
-- `src/iris/cluster/vm/config.py` — `create_autoscaler_from_config()`, `_get_provider_info()`
-- `src/iris/cluster/vm/gcp_tpu_platform.py` — `TpuVmManager` (the thing we're replacing)
-- `src/iris/cluster/controller/controller.py` — `Controller`, `_run_autoscaler_once()`
+- `src/iris/cluster/vm/config.py` — `create_autoscaler_from_config()`
+- `src/iris/cluster/vm/debug.py` — `controller_tunnel()`
+- `src/iris/cli.py` — CLI commands that use `create_controller()`

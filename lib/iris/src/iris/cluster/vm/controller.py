@@ -28,8 +28,10 @@ import json
 import logging
 import shlex
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.vm.config import config_to_dict
@@ -928,12 +930,112 @@ class ManualController:
             return None
 
 
+class _InProcessController(Protocol):
+    """Protocol for the in-process Controller used by LocalController.
+
+    Avoids importing iris.cluster.controller.controller at module level
+    which would create a circular dependency through the autoscaler.
+    """
+
+    def start(self) -> None: ...
+    def stop(self) -> None: ...
+
+    @property
+    def url(self) -> str: ...
+
+
+class LocalController:
+    """In-process controller for local testing.
+
+    Runs Controller + Autoscaler(LocalVmManagers) in the current process.
+    Workers are threads, not VMs. No Docker, no GCS, no SSH.
+    """
+
+    def __init__(self, config: config_pb2.IrisClusterConfig):
+        self._config = config
+        self._controller: _InProcessController | None = None
+        self._temp_dir: tempfile.TemporaryDirectory | None = None
+
+    def start(self) -> str:
+        from iris.cluster.controller.controller import (
+            Controller as _InnerController,
+            ControllerConfig as _InnerControllerConfig,
+            RpcWorkerStubFactory,
+        )
+        from iris.cluster.vm.local_platform import (
+            _create_local_autoscaler,
+            find_free_port,
+        )
+
+        self._temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_")
+        temp = Path(self._temp_dir.name)
+        bundle_dir = temp / "bundles"
+        bundle_dir.mkdir()
+        cache_path = temp / "cache"
+        cache_path.mkdir()
+        fake_bundle = temp / "fake_bundle"
+        fake_bundle.mkdir()
+        (fake_bundle / "pyproject.toml").write_text("[project]\nname='local'\n")
+
+        port = self._config.controller_vm.local.port or find_free_port()
+        address = f"http://127.0.0.1:{port}"
+
+        autoscaler = _create_local_autoscaler(
+            self._config,
+            address,
+            cache_path,
+            fake_bundle,
+        )
+        self._controller = _InnerController(
+            config=_InnerControllerConfig(
+                host="127.0.0.1",
+                port=port,
+                bundle_prefix=self._config.controller_vm.bundle_prefix or f"file://{bundle_dir}",
+            ),
+            worker_stub_factory=RpcWorkerStubFactory(),
+            autoscaler=autoscaler,
+        )
+        self._controller.start()
+        return self._controller.url
+
+    def stop(self) -> None:
+        if self._controller:
+            self._controller.stop()
+            self._controller = None
+        if self._temp_dir:
+            self._temp_dir.cleanup()
+            self._temp_dir = None
+
+    def restart(self) -> str:
+        self.stop()
+        return self.start()
+
+    def reload(self) -> str:
+        return self.restart()
+
+    def discover(self) -> str | None:
+        return self._controller.url if self._controller else None
+
+    def status(self) -> ControllerStatus:
+        if self._controller:
+            return ControllerStatus(
+                running=True,
+                address=self._controller.url,
+                healthy=True,
+            )
+        return ControllerStatus(running=False, address="", healthy=False)
+
+    def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
+        return "(local controller — no startup logs)"
+
+
 def create_controller(config: config_pb2.IrisClusterConfig) -> ControllerProtocol:
     """Factory function to create appropriate controller type.
 
     Dispatches based on the controller_vm.controller oneof field:
     - gcp: Creates GcpController for GCP-managed VMs
     - manual: Creates ManualController for SSH bootstrap to pre-existing hosts
+    - local: Creates LocalController for in-process testing
     """
     controller_vm = config.controller_vm
     which = controller_vm.WhichOneof("controller")
@@ -941,4 +1043,6 @@ def create_controller(config: config_pb2.IrisClusterConfig) -> ControllerProtoco
         return GcpController(config)
     if which == "manual":
         return ManualController(config)
+    if which == "local":
+        return LocalController(config)
     raise ValueError("No controller config specified in controller_vm")

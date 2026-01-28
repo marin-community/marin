@@ -111,3 +111,7 @@ uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml list-jobs
 # Kill / Stop Job (if necessary / error / bug)
 uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml stop-job raysubmit_pAJM8vKfHPhiyHBa
 ```
+
+## Precommit
+
+`./infra/pre-commit.py --all-files --fix`

@@ -18,6 +18,7 @@ import logging
 import re
 import socket
 import subprocess
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -25,6 +26,26 @@ from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def _docker_log_ssh_command(
+    vm_name: str,
+    container_name: str,
+    zone: str,
+    project: str,
+    is_tpu: bool,
+    follow: bool = False,
+) -> list[str]:
+    """Build gcloud SSH command for docker log collection."""
+    docker_cmd = "sudo docker logs"
+    if follow:
+        docker_cmd += " -f"
+    docker_cmd += f" {container_name} 2>&1"
+
+    base = ["gcloud", "compute"]
+    if is_tpu:
+        base += ["tpus", "tpu-vm"]
+    return [*base, "ssh", vm_name, f"--zone={zone}", f"--project={project}", "--command", docker_cmd]
 
 
 def collect_docker_logs(
@@ -35,7 +56,7 @@ def collect_docker_logs(
     output_dir: Path,
     is_tpu: bool = False,
 ) -> Path | None:
-    """SSH to VM and collect docker logs.
+    """SSH to VM and collect docker logs (one-shot).
 
     Args:
         vm_name: GCE VM or TPU name
@@ -52,30 +73,7 @@ def collect_docker_logs(
     output_file = output_dir / f"{vm_name}-{container_name}-{timestamp}.log"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if is_tpu:
-        cmd = [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "ssh",
-            vm_name,
-            f"--zone={zone}",
-            f"--project={project}",
-            "--command",
-            f"sudo docker logs {container_name} 2>&1",
-        ]
-    else:
-        cmd = [
-            "gcloud",
-            "compute",
-            "ssh",
-            vm_name,
-            f"--zone={zone}",
-            f"--project={project}",
-            "--command",
-            f"sudo docker logs {container_name} 2>&1",
-        ]
+    cmd = _docker_log_ssh_command(vm_name, container_name, zone, project, is_tpu)
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -88,6 +86,43 @@ def collect_docker_logs(
     except Exception as e:
         logger.warning("Failed to collect logs from %s: %s", vm_name, e)
         return None
+
+
+def stream_docker_logs(
+    vm_name: str,
+    container_name: str,
+    zone: str,
+    project: str,
+    output_file: Path,
+    is_tpu: bool = False,
+    stop_event: threading.Event | None = None,
+) -> None:
+    """Stream docker logs from a VM to a file until stop_event is set.
+
+    Blocking call. Uses `docker logs -f` via gcloud SSH.
+    Streaming counterpart to collect_docker_logs().
+    """
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    cmd = _docker_log_ssh_command(vm_name, container_name, zone, project, is_tpu, follow=True)
+
+    with open(output_file, "w") as f:
+        proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
+        try:
+            if stop_event:
+                while not stop_event.is_set():
+                    if proc.poll() is not None:
+                        break
+                    stop_event.wait(1.0)
+            else:
+                proc.wait()
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
 
 
 def cleanup_iris_resources(

@@ -36,13 +36,19 @@ class ManualProvider(_message.Message):
     ssh_port: int
     def __init__(self, hosts: _Optional[_Iterable[str]] = ..., ssh_user: _Optional[str] = ..., ssh_key_file: _Optional[str] = ..., ssh_port: _Optional[int] = ...) -> None: ...
 
+class LocalProvider(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
 class ProviderConfig(_message.Message):
-    __slots__ = ("tpu", "manual")
+    __slots__ = ("tpu", "manual", "local")
     TPU_FIELD_NUMBER: _ClassVar[int]
     MANUAL_FIELD_NUMBER: _ClassVar[int]
+    LOCAL_FIELD_NUMBER: _ClassVar[int]
     tpu: TpuProvider
     manual: ManualProvider
-    def __init__(self, tpu: _Optional[_Union[TpuProvider, _Mapping]] = ..., manual: _Optional[_Union[ManualProvider, _Mapping]] = ...) -> None: ...
+    local: LocalProvider
+    def __init__(self, tpu: _Optional[_Union[TpuProvider, _Mapping]] = ..., manual: _Optional[_Union[ManualProvider, _Mapping]] = ..., local: _Optional[_Union[LocalProvider, _Mapping]] = ...) -> None: ...
 
 class ScaleGroupConfig(_message.Message):
     __slots__ = ("name", "min_slices", "max_slices", "accelerator_type", "accelerator_variant", "runtime_version", "preemptible", "zones", "priority", "provider")
@@ -131,17 +137,25 @@ class ManualControllerConfig(_message.Message):
     port: int
     def __init__(self, host: _Optional[str] = ..., port: _Optional[int] = ...) -> None: ...
 
+class LocalControllerConfig(_message.Message):
+    __slots__ = ("port",)
+    PORT_FIELD_NUMBER: _ClassVar[int]
+    port: int
+    def __init__(self, port: _Optional[int] = ...) -> None: ...
+
 class ControllerVmConfig(_message.Message):
-    __slots__ = ("image", "bundle_prefix", "gcp", "manual")
+    __slots__ = ("image", "bundle_prefix", "gcp", "manual", "local")
     IMAGE_FIELD_NUMBER: _ClassVar[int]
     BUNDLE_PREFIX_FIELD_NUMBER: _ClassVar[int]
     GCP_FIELD_NUMBER: _ClassVar[int]
     MANUAL_FIELD_NUMBER: _ClassVar[int]
+    LOCAL_FIELD_NUMBER: _ClassVar[int]
     image: str
     bundle_prefix: str
     gcp: GcpControllerConfig
     manual: ManualControllerConfig
-    def __init__(self, image: _Optional[str] = ..., bundle_prefix: _Optional[str] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ...) -> None: ...
+    local: LocalControllerConfig
+    def __init__(self, image: _Optional[str] = ..., bundle_prefix: _Optional[str] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
     __slots__ = ("provider_type", "project_id", "region", "zone", "controller_vm", "scale_groups", "label_prefix", "bootstrap", "timeouts", "ssh")

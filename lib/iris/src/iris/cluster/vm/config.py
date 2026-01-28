@@ -297,6 +297,8 @@ def _get_provider_info(
         if not manual.hosts:
             raise ValueError(f"Manual provider in {group_config.name} missing hosts")
         return ("manual", None, list(manual.hosts))
+    if which == "local":
+        return ("local", None, None)
 
     raise ValueError(f"Unknown provider type in scale group {group_config.name}")
 
