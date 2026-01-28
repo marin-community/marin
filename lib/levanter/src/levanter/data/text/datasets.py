@@ -287,8 +287,8 @@ class HfDatasetSourceConfig(LmDatasetSourceConfigBase):
 @LmDatasetSourceConfigBase.register_subclass("url")
 @dataclass(frozen=True)
 class UrlDatasetSourceConfig(LmDatasetSourceConfigBase):
-    train_urls: list[str] = ()  # type: ignore
-    validation_urls: list[str] = ()  # type:ignore
+    train_urls: list[str] = field(default_factory=list)
+    validation_urls: list[str] = field(default_factory=list)
 
     def get_shard_source(self, split) -> ShardedDataSource[dict] | None:
         split_urls = self.urls_for_split(split)
@@ -309,9 +309,6 @@ class UrlDatasetSourceConfig(LmDatasetSourceConfigBase):
         # it's ok for there to be no urls for a split, but if there are, they need to be findable
         if len(urls) == 0:
             return []
-
-        if len(urls) == 0:
-            raise ValueError(f"No urls found for split {split}")
         return urls
 
 
@@ -636,14 +633,13 @@ class LmDataConfig:
         batch_schedule: BatchSchedule,
         *,
         key: PRNGKeyArray,
-        epochs: int | None = None,
     ) -> AsyncDataset[LmExample]:
         mix_key, shuffle_key = jax.random.split(key)
         weights = self.train_weights
         if isinstance(weights, list):
             weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
         initial_batch_size = batch_schedule.batch_size_at_step(0)
-        datasets = self.train_sets(Pos, key=shuffle_key, epochs=epochs, initial_batch_size=initial_batch_size)
+        datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
         mixture = MixtureDataset(
             datasets=datasets,
             weights=weights,
@@ -658,14 +654,10 @@ class LmDataConfig:
         Pos: Axis,
         *,
         initial_batch_size: int | None = None,
-        epochs: int | None = None,
         key: PRNGKeyArray,
     ) -> Mapping[str, AsyncDataset[LmExample]]:
         doc_caches = self.build_caches("train")
         datasets = self.build_token_datasets(doc_caches, Pos, split="train")
-
-        if epochs:
-            raise ValueError("Epochs are not supported for mixture datasets")
 
         if key is None:
             key = jax.random.PRNGKey(0)
@@ -857,7 +849,7 @@ def count_corpus_sizes(
             weight = weights.get(name, 0.0)
             stats[f"{metric_prefix}weight"] = weight
             stats[f"{metric_prefix}normalized_weight"] = weights[name]
-            stats[f"{metric_prefix}approx_global_tokens_per_epoch"] = train_seqs * seq_len / max(weight, 1e-8)
+            stats[f"{metric_prefix}approx_global_tokens_per_pass"] = train_seqs * seq_len / max(weight, 1e-8)
 
     validation_caches = config.build_caches("validation")
     for name, cache in validation_caches.items():

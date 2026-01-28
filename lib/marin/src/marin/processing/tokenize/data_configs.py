@@ -402,7 +402,7 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
 
 
 def _verify_tokenizers_same(components: dict[str, TokenizerStep | TokenizeConfig]):
-    _first_name, first_step = next(iter(components.items()))
+    first_name, first_step = next(iter(components.items()))
     tokenizer = first_step.config.tokenizer if isinstance(first_step, ExecutorStep) else first_step.tokenizer
     for name, step in components.items():
         step_tokenizer = step.config.tokenizer if isinstance(step, ExecutorStep) else step.tokenizer
@@ -410,11 +410,11 @@ def _verify_tokenizers_same(components: dict[str, TokenizerStep | TokenizeConfig
             if not _are_tokenizers_equivalent(step_tokenizer, tokenizer):
                 raise ValueError(
                     "All components must have the same tokenizer, but got:"
-                    f" {step_tokenizer} ({name}) vs {tokenizer} ({name})"
+                    f" {step_tokenizer} ({name}) vs {tokenizer} ({first_name})"
                 )
             else:
                 logger.warning(
-                    f"Tokenizers ({name}) and {tokenizer} ({name}) have equivalent vocabularies but are not the same"
-                    f"tokenizer. This may cause issues with training."
+                    f"Tokenizers ({name}) and {tokenizer} ({first_name}) have equivalent vocabularies but are not the"
+                    " same tokenizer. This may cause issues with training."
                 )
     return tokenizer

@@ -62,7 +62,6 @@ class TrainLmConfig:
     If provided, will initialize from this checkpoint, used for llama style ablation. This resets the data loader.
     Note that this differs from --trainer.initialize_from, which does not reset the data loader.
     """
-    epoch: int = 0
     eval_harness: Optional[LmEvalHarnessConfig] = None
     eval_harness_steps: int = 10000
 
@@ -155,7 +154,6 @@ def main(config: TrainLmConfig):
             Pos,
             config.trainer.batch_schedule,
             key=data_key,
-            epochs=config.epoch,
         )
 
         # Get the tagged evaluation datasets
@@ -302,13 +300,7 @@ def main(config: TrainLmConfig):
             train_loader = train_loader.iter_from_step(0)
 
         ## OK, actually run training!
-        last_info = trainer.train(state, train_loader)
-
-        # If running EpochDataset save latest checkpoint by default
-        if trainer.config.checkpointer is not None and config.epoch > 0:
-            trainer.run_hooks(last_info, force=True)
-            checkpointer = trainer.config.checkpointer.create(trainer.run_id)
-            checkpointer.wait_until_finished()
+        trainer.train(state, train_loader)
 
     # This isn't necessary except when Levanter is run in a subprocess (as happens w/ ray)
     trainer.tracker.finish()
