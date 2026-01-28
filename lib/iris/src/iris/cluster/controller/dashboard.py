@@ -33,6 +33,7 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.logging import LogBuffer, logs_api_response, logs_page_response
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 
@@ -1433,10 +1434,12 @@ class ControllerDashboard:
         service: ControllerServiceImpl,
         host: str = "0.0.0.0",
         port: int = 8080,
+        log_buffer: LogBuffer | None = None,
     ):
         self._service = service
         self._host = host
         self._port = port
+        self._log_buffer = log_buffer
         self._app = self._create_app()
         self._server: uvicorn.Server | None = None
 
@@ -1451,6 +1454,8 @@ class ControllerDashboard:
         routes = [
             Route("/", self._dashboard),
             Route("/job/{job_id}", self._job_detail_page),
+            Route("/logs", self._logs_page),
+            Route("/api/logs", self._api_logs),
             Route("/health", self._health),
             Mount(rpc_wsgi_app.path, app=rpc_app),
         ]
@@ -1464,6 +1469,12 @@ class ControllerDashboard:
 
         job_id = request.path_params["job_id"]
         return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", html.escape(job_id)))
+
+    def _logs_page(self, request: Request) -> HTMLResponse:
+        return logs_page_response(request)
+
+    def _api_logs(self, request: Request):
+        return logs_api_response(request, self._log_buffer)
 
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""

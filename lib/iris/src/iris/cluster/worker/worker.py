@@ -25,10 +25,6 @@ from pathlib import Path
 
 import uvicorn
 
-from iris.rpc import cluster_pb2
-from iris.time_utils import ExponentialBackoff, now_ms
-from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.rpc.errors import format_exception_with_traceback
 from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import ImageCache, ImageProvider
 from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
@@ -37,6 +33,11 @@ from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, Docker
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider, collect_workdir_size_mb
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker_types import Task
+from iris.logging import get_global_buffer
+from iris.rpc import cluster_pb2
+from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.errors import format_exception_with_traceback
+from iris.time_utils import ExponentialBackoff, now_ms
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,7 @@ class Worker:
             self._service,
             host=config.host,
             port=config.port,
+            log_buffer=get_global_buffer(),
         )
 
         self._server_thread: threading.Thread | None = None
