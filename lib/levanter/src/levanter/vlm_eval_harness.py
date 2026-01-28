@@ -86,8 +86,10 @@ class VLMEvalHarnessConfig:
     """Maximum number of images per sample."""
     image_size: int = 384
     """Image size for processing."""
-    vision_feature_height: int = 27
-    """Vision feature height (determines num_image_tokens = height * height)."""
+    patch_size: int = 16
+    """Patch size for vision encoder. Default: 16 for SigLIP patch16."""
+    vision_feature_height: int = 24
+    """Vision feature height (num_image_tokens = height^2). Default: 24 for image_size=384, patch_size=16."""
     bootstrap_iters: int = 0
     apply_chat_template: bool = True
     confirm_run_unsafe_code: bool = True

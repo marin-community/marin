@@ -9,13 +9,17 @@ on standard benchmarks using the lm-eval-harness framework.
 
 Supported Benchmarks:
 - MMMU, ChartQA (already in lm-eval-harness)
-- MME, GQA, RealWorldQA, SEED, MMStar, AI2D, OCRBench (custom tasks)
+- MME, GQA, RealWorldQA, SEED, MMStar, AI2D, OCRBench (direct evaluation)
+
+Default Model: LLaVA-OneVision architecture
+- Vision Encoder: SigLIP (384x384, patch16)
+- Language Model: Qwen3-1.7B
+- Projector: 2-layer MLP
 
 Usage:
     python -m levanter.main.eval_vlm \
-        --config eval_vlm_config.yaml \
-        --eval_harness.task_spec='["mmmu", "mme"]' \
-        --checkpoint_path /path/to/checkpoint
+        --checkpoint_path /path/to/checkpoint \
+        --eval_harness.task_spec='["mme", "gqa"]'
 """
 
 import logging
@@ -36,7 +40,10 @@ import levanter
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_processor, load_tokenizer
 from levanter.data.image import BatchImageProcessor, ImageMixtureDatasetConfig
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llava_onevision import LlavaOnevisionConfig, LlavaOnevisionModel
+from levanter.models.qwen import Qwen3Config
+from levanter.models.siglip import SiglipVisionConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
@@ -53,9 +60,66 @@ DIRECT_EVAL_TASKS = {"mme", "gqa", "realworldqa", "seed", "mmstar", "ai2d", "ocr
 logger = logging.getLogger(__name__)
 
 
+# ============================================================================
+# DEFAULT MODEL CONFIGURATION (matches demo_vlm_train.py)
+# ============================================================================
+
+# Vision encoder: SigLIP (matches google/siglip2-so400m-patch16-384)
+DEFAULT_VISION_CONFIG = SiglipVisionConfig(
+    hidden_size=1152,
+    intermediate_size=4304,
+    num_hidden_layers=27,
+    num_attention_heads=16,
+    image_size=384,
+    patch_size=16,
+    gradient_checkpointing=False,  # Not needed for inference
+)
+
+# Language model: Qwen3-1.7B
+DEFAULT_TEXT_CONFIG = Qwen3Config(
+    max_seq_len=2048,
+    hidden_dim=2048,
+    intermediate_dim=6144,
+    num_heads=16,
+    num_kv_heads=8,
+    num_layers=28,
+    rope=Llama3RotaryEmbeddingsConfig(),
+    tie_word_embeddings=True,
+    gradient_checkpointing=False,  # Not needed for inference
+)
+
+# Qwen3-1.7B <|image_pad|> token ID
+DEFAULT_IMAGE_TOKEN_INDEX = 151655
+
+# Combined VLM config
+DEFAULT_VLM_CONFIG = LlavaOnevisionConfig(
+    vision_config=DEFAULT_VISION_CONFIG,
+    text_config=DEFAULT_TEXT_CONFIG,
+    vision_encoder_type="siglip",
+    vision_feature_select_strategy="full",
+    vision_aspect_ratio="single",
+    disable_anyres=True,
+    image_token_index=DEFAULT_IMAGE_TOKEN_INDEX,
+    gradient_checkpointing=False,
+)
+
+# Vision feature height: 384 // 16 = 24
+DEFAULT_VISION_FEATURE_HEIGHT = DEFAULT_VISION_CONFIG.image_size // DEFAULT_VISION_CONFIG.patch_size
+
+# Default paths
+DEFAULT_PROCESSOR_PATH = "gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf"
+DEFAULT_TOKENIZER_PATH = "gs://marin-vlm/tokenizers/Qwen3-1.7B"
+
+
 @dataclass
 class EvalVLMConfig:
-    """Configuration for VLM benchmark evaluation."""
+    """Configuration for VLM benchmark evaluation.
+
+    Default model configuration matches demo_vlm_train.py:
+    - Vision: SigLIP (384x384, patch16, 1152 hidden)
+    - LLM: Qwen3-1.7B (2048 hidden, 28 layers)
+    - Single resolution mode (disable_anyres=True)
+    """
 
     # Checkpoint loading options (mutually exclusive)
     checkpoint_path: Optional[str] = None
@@ -63,31 +127,36 @@ class EvalVLMConfig:
     hf_checkpoint: Optional[RepoRef] = None
     """HuggingFace checkpoint reference (e.g., 'lmms-lab/llava-onevision-qwen2-7b-ov')."""
 
-    # Model and training config
+    # Model config - defaults to LLaVA-OneVision (SigLIP + Qwen3-1.7B)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
-    model: LlavaOnevisionConfig = field(default_factory=LlavaOnevisionConfig)
-    data: ImageMixtureDatasetConfig = field(default_factory=ImageMixtureDatasetConfig)
+    model: LlavaOnevisionConfig = field(default_factory=lambda: DEFAULT_VLM_CONFIG)
 
     # VLM Evaluation config
-    eval_harness: VLMEvalHarnessConfig = field(default_factory=VLMEvalHarnessConfig)
+    eval_harness: VLMEvalHarnessConfig = field(default_factory=lambda: VLMEvalHarnessConfig(
+        task_spec=["mme"],  # Default task
+        max_examples=None,
+        generation_kwargs={"max_gen_toks": 64, "temperature": 0.0, "n": 1},
+    ))
 
-    # Processor/tokenizer paths (can differ from checkpoint)
-    processor_path: Optional[str] = None
-    """HuggingFace processor path. If not specified, uses hf_checkpoint or model default."""
-    tokenizer_path: Optional[str] = None
-    """HuggingFace tokenizer path. If not specified, uses processor's tokenizer."""
+    # Processor/tokenizer paths - defaults to GCS paths for Qwen3
+    processor_path: Optional[str] = DEFAULT_PROCESSOR_PATH
+    """HuggingFace processor path."""
+    tokenizer_path: Optional[str] = DEFAULT_TOKENIZER_PATH
+    """HuggingFace tokenizer path."""
 
-    # Evaluation length
+    # Evaluation length - matches model's max_seq_len
     max_eval_length: int = 2048
     """Maximum sequence length for evaluation."""
 
-    # Image processing options
+    # Image processing options - matches demo_vlm_train.py
     image_size: int = 384
-    """Image size for processing."""
-    vision_feature_height: int = 27
-    """Vision feature height (num_image_tokens = height^2)."""
-    disable_anyres: bool = False
-    """If True, disable anyres (use single image resolution)."""
+    """Image size for processing (384 for SigLIP)."""
+    patch_size: int = 16
+    """Patch size for vision encoder (16 for SigLIP patch16)."""
+    vision_feature_height: int = DEFAULT_VISION_FEATURE_HEIGHT  # 24 for patch_size=16
+    """Vision feature height (num_image_tokens = height^2). Default: 24 = 384//16."""
+    disable_anyres: bool = True
+    """If True, disable anyres (use single image resolution). Default: True to match training."""
 
 
 def _load_vlm_model(
@@ -186,19 +255,17 @@ def main(config: EvalVLMConfig):
 
         # Create BatchImageProcessor for image processing
         # Determine grid pinpoints for anyres
-        grid_pinpoints = None
-        if not config.disable_anyres and hasattr(config.model, "image_grid_pinpoints"):
-            grid_pinpoints = config.model.image_grid_pinpoints
-
-        # Calculate max_num_patches
         if config.disable_anyres:
+            # Single resolution mode - use image_size as single pinpoint
+            grid_pinpoints = [[config.image_size, config.image_size]]  # [[384, 384]]
             max_num_patches = 0  # Only base patch
-        elif grid_pinpoints:
+        elif hasattr(config.model, "image_grid_pinpoints") and config.model.image_grid_pinpoints:
+            grid_pinpoints = config.model.image_grid_pinpoints
             max_resolution = max(max(h, w) for h, w in grid_pinpoints)
-            patch_size = config.image_size
-            max_patches_per_dim = max_resolution // patch_size
+            max_patches_per_dim = max_resolution // config.patch_size  # Use patch_size, not image_size!
             max_num_patches = max_patches_per_dim * max_patches_per_dim
         else:
+            grid_pinpoints = None
             max_num_patches = 9  # Default for anyres_max_9
 
         image_processor = BatchImageProcessor(
@@ -209,7 +276,7 @@ def main(config: EvalVLMConfig):
             truncation=True,
             disable_anyres=config.disable_anyres,
             grid_pinpoints=grid_pinpoints,
-            patch_size=config.image_size,
+            patch_size=config.patch_size,  # Use patch_size (16), not image_size (384)!
             vision_feature_height=config.vision_feature_height,
             max_num_patches=max_num_patches,
         )
