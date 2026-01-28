@@ -42,6 +42,7 @@ from iris.cluster.controller.state import (
 )
 from iris.cluster.types import JobId, TaskId, VmWorkerStatus, VmWorkerStatusMap
 from iris.cluster.vm.autoscaler import Autoscaler
+from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import ExponentialBackoff
@@ -271,6 +272,7 @@ class Controller:
             self._service,
             host=config.host,
             port=config.port,
+            log_buffer=get_global_buffer(),
         )
 
         # Background loop state
