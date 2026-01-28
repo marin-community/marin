@@ -63,8 +63,7 @@ dependencies = [
     "lenses",
     "jinja2",  # needed for apply_chat_template
     "protobuf>=6,<7",  # ensure TB/XProf compatibility; avoid 7+ due to ray
-  # "lm-eval==0.4.2",
-  # "lm-eval @ git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch"
+    "tokamax",
 ]
 
 [project.urls]

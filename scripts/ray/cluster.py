@@ -71,6 +71,45 @@ def _list_jobs(filters: list[str] | None = None) -> list[dict]:
         return []
 
 
+def _select_job(jobs: list[dict], job_id: str, match: bool) -> dict | None:
+    if match:
+        matches = [
+            job for job in jobs if job_id in (job.get("submission_id") or "") or job_id in (job.get("job_id") or "")
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda job: job.get("start_time") or job.get("submission_id") or "")
+
+    for job in jobs:
+        if job_id == job.get("submission_id") or job_id == job.get("job_id"):
+            return job
+    return None
+
+
+def _print_job_logs(job_id: str, tail: int | None = None, grep: str | None = None) -> None:
+    cmd = ["ray", "job", "logs", job_id]
+    if tail is not None or grep is not None:
+        ray_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        if grep is not None:
+            grep_proc = subprocess.Popen(["grep", grep], stdin=ray_proc.stdout, stdout=subprocess.PIPE, text=True)
+            ray_proc.stdout.close()
+            prev_proc = grep_proc
+        else:
+            prev_proc = ray_proc
+
+        if tail is not None:
+            tail_proc = subprocess.Popen(["tail", f"-{tail}"], stdin=prev_proc.stdout, stdout=subprocess.PIPE, text=True)
+            prev_proc.stdout.close()
+            output, _ = tail_proc.communicate(timeout=120)
+        else:
+            output, _ = prev_proc.communicate(timeout=120)
+
+        print(output, end="")
+    else:
+        subprocess.run(cmd, check=False)
+
+
 def _submit_job(
     entrypoint: str,
     working_dir: str | None = None,
@@ -748,34 +787,54 @@ def stop_job(ctx, job_id):
 def job_logs(ctx, job_id, follow, tail, grep):
     """View logs for a Ray job."""
     with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
-        cmd = ["ray", "job", "logs"]
         if follow:
-            cmd.append("--follow")
-        cmd.append(job_id)
+            subprocess.run(["ray", "job", "logs", "--follow", job_id], check=False)
+            return
+        _print_job_logs(job_id, tail=tail, grep=grep)
 
-        if tail is not None or grep is not None:
-            # Build pipeline: ray job logs | grep | tail
-            ray_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-            if grep is not None:
-                grep_proc = subprocess.Popen(["grep", grep], stdin=ray_proc.stdout, stdout=subprocess.PIPE, text=True)
-                ray_proc.stdout.close()
-                prev_proc = grep_proc
-            else:
-                prev_proc = ray_proc
+@cli.command("wait-job")
+@click.argument("job_id")
+@click.option("--match", is_flag=True, help="Match job_id as a substring of submission_id.")
+@click.option("--poll", type=float, default=5.0, show_default=True, help="Polling interval in seconds.")
+@click.option("--timeout", type=float, default=None, help="Timeout in seconds before exiting.")
+@click.option("--show-logs", is_flag=True, help="Print logs after completion.")
+@click.option("--tail", "-n", type=int, default=200, show_default=True, help="Show only the last N lines of logs.")
+@click.option("--grep", "-g", type=str, default=None, help="Filter lines containing this pattern.")
+@click.pass_context
+def wait_job(ctx, job_id, match, poll, timeout, show_logs, tail, grep):
+    """Wait for a Ray job to finish."""
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
+        if job_id == "latest":
+            print("Error: job_id must be an explicit submission id; 'latest' is not supported.", file=sys.stderr)
+            sys.exit(1)
+        start = time.time()
+        last_status = None
 
-            if tail is not None:
-                tail_proc = subprocess.Popen(
-                    ["tail", f"-{tail}"], stdin=prev_proc.stdout, stdout=subprocess.PIPE, text=True
-                )
-                prev_proc.stdout.close()
-                output, _ = tail_proc.communicate(timeout=120)
-            else:
-                output, _ = prev_proc.communicate(timeout=120)
+        while True:
+            job = _select_job(_list_jobs(), job_id, match=match)
+            if job is None:
+                print(f"Job '{job_id}' not found.", file=sys.stderr)
+                sys.exit(1)
 
-            print(output, end="")
-        else:
-            subprocess.run(cmd)
+            status = job.get("status")
+            message = job.get("message", "")
+            if status != last_status:
+                ts = time.strftime("%Y-%m-%d %H:%M:%S")
+                print(f"[{ts}] {job.get('submission_id')} status={status} {message}".rstrip())
+                last_status = status
+
+            if status in {"SUCCEEDED", "FAILED", "STOPPED"}:
+                break
+
+            if timeout is not None and (time.time() - start) > timeout:
+                print("Timeout reached while waiting for job completion.", file=sys.stderr)
+                sys.exit(2)
+
+            time.sleep(poll)
+
+        if show_logs:
+            _print_job_logs(job.get("submission_id") or job_id, tail=tail, grep=grep)
 
 
 # Top-level commands
