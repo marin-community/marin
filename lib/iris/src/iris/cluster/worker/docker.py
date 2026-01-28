@@ -19,6 +19,7 @@
 
 import base64
 import json
+import logging
 import os
 import re
 import subprocess
@@ -30,6 +31,8 @@ from typing import Protocol
 from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint
 from iris.cluster.worker.worker_types import TaskLogs, LogLine
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -46,6 +49,7 @@ class ContainerConfig:
     ports: dict[str, int] = field(default_factory=dict)  # name -> host_port
     task_id: str | None = None
     job_id: str | None = None
+    worker_metadata: cluster_pb2.WorkerMetadata | None = None
 
     def get_cpu_millicores(self) -> int | None:
         if not self.resources or not self.resources.cpu:
@@ -157,6 +161,78 @@ class DockerRuntime:
     Uses subprocess for lifecycle, Docker Python SDK for stats/logs.
     """
 
+    def _build_device_flags(self, config: ContainerConfig) -> list[str]:
+        """Build Docker device flags based on resource configuration.
+
+        Detects TPU resources and returns appropriate Docker flags for TPU passthrough.
+        Returns empty list if no special device configuration is needed.
+        """
+        flags: list[str] = []
+
+        if not config.resources:
+            logger.debug("No resources on container config; skipping device flags")
+            return flags
+
+        has_device = config.resources.HasField("device")
+        has_tpu = has_device and config.resources.device.HasField("tpu")
+        logger.info("Device flags check: has_device=%s, has_tpu=%s", has_device, has_tpu)
+
+        if has_tpu:
+            flags.extend(
+                [
+                    "--device",
+                    "/dev/vfio:/dev/vfio",
+                    "--shm-size=100g",
+                    "--cap-add=SYS_RESOURCE",
+                    "--ulimit",
+                    "memlock=68719476736:68719476736",
+                ]
+            )
+            logger.info("TPU device flags: %s", flags)
+
+        return flags
+
+    def _build_device_env_vars(self, config: ContainerConfig) -> dict[str, str]:
+        """Build device-specific environment variables for the container.
+
+        When TPU resources are requested, adds JAX/PJRT environment variables
+        and TPU metadata from the worker's environment. These environment variables
+        enable JAX to properly initialize on TPU devices inside the container.
+        """
+        env: dict[str, str] = {}
+
+        if not config.resources:
+            logger.debug("No resources on container config; skipping device env vars")
+            return env
+
+        has_device = config.resources.HasField("device")
+        has_tpu = has_device and config.resources.device.HasField("tpu")
+
+        if has_tpu:
+            env["JAX_PLATFORMS"] = "tpu,cpu"
+            env["PJRT_DEVICE"] = "TPU"
+
+            if config.worker_metadata:
+                if config.worker_metadata.tpu_name:
+                    env["TPU_NAME"] = config.worker_metadata.tpu_name
+                if config.worker_metadata.tpu_worker_id:
+                    env["TPU_WORKER_ID"] = config.worker_metadata.tpu_worker_id
+                if config.worker_metadata.tpu_worker_hostnames:
+                    env["TPU_WORKER_HOSTNAMES"] = config.worker_metadata.tpu_worker_hostnames
+                    # JAX multi-host coordination: coordinator is worker-0's IP
+                    hostnames = config.worker_metadata.tpu_worker_hostnames.split(",")
+                    env["JAX_COORDINATOR_ADDRESS"] = hostnames[0]
+                    env["JAX_NUM_PROCESSES"] = str(len(hostnames))
+                    env["JAX_PROCESS_ID"] = config.worker_metadata.tpu_worker_id or "0"
+                if config.worker_metadata.tpu_chips_per_host_bounds:
+                    env["TPU_CHIPS_PER_HOST_BOUNDS"] = config.worker_metadata.tpu_chips_per_host_bounds
+                logger.info("TPU device env vars (with metadata): %s", env)
+            else:
+                logger.warning("TPU device requested but worker_metadata is None; TPU host env vars will be missing")
+                logger.info("TPU device env vars (no metadata): %s", env)
+
+        return env
+
     def _build_command(self, entrypoint: Entrypoint) -> list[str]:
         """Build the container command from the entrypoint.
 
@@ -169,12 +245,11 @@ class DockerRuntime:
             assert entrypoint.command is not None
             return entrypoint.command
 
-        # Callable entrypoint: build Python thunk
-        import cloudpickle
-
-        assert entrypoint.callable is not None
-        serialized = cloudpickle.dumps((entrypoint.callable, entrypoint.args, entrypoint.kwargs))
-        encoded = base64.b64encode(serialized).decode()
+        # Callable entrypoint: build Python thunk using the raw pickle bytes
+        # from the client. No deserialization on the worker — avoids Python
+        # version mismatches between worker and client.
+        assert entrypoint.callable_bytes is not None
+        encoded = base64.b64encode(entrypoint.callable_bytes).decode()
 
         thunk = f"""
 import cloudpickle
@@ -201,11 +276,13 @@ except Exception:
             "--add-host=host.docker.internal:host-gateway",
             "--security-opt",
             "no-new-privileges",
-            "--cap-drop",
-            "ALL",
             "-w",
             config.workdir,
         ]
+
+        # Always drop all capabilities, then add back only what's needed.
+        cmd.extend(["--cap-drop", "ALL"])
+        cmd.extend(self._build_device_flags(config))
 
         # Add iris labels for discoverability
         cmd.extend(["--label", "iris.managed=true"])
@@ -223,8 +300,13 @@ except Exception:
         if memory_mb:
             cmd.extend(["--memory", f"{memory_mb}m"])
 
+        # Build combined environment: device env vars first, then user config
+        # User config takes precedence if there are duplicates
+        device_env = self._build_device_env_vars(config)
+        combined_env = {**device_env, **config.env}
+
         # Environment variables
-        for k, v in config.env.items():
+        for k, v in combined_env.items():
             cmd.extend(["-e", f"{k}={v}"])
 
         # Mounts
@@ -237,6 +319,9 @@ except Exception:
 
         cmd.append(config.image)
         cmd.extend(self._build_command(config.entrypoint))
+
+        logger.info("Creating container: %s", " ".join(cmd[:20]))  # truncate for readability
+        logger.debug("Full docker create command: %s", cmd)
 
         result = subprocess.run(
             cmd,

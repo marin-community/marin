@@ -30,6 +30,7 @@ import pytest
 from iris.cluster.types import Entrypoint
 from iris.cluster.worker.docker import ContainerConfig, DockerRuntime
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
+from iris.rpc import cluster_pb2
 
 TEST_IMAGE = "iris-test-runtime:latest"
 
@@ -356,3 +357,34 @@ def test_get_stats_from_busy_container(docker_runtime, test_image):
     finally:
         docker_runtime.kill(container_id, force=True)
         docker_runtime.remove(container_id)
+
+
+def test_tpu_metadata_flows_to_container_env():
+    """Test that TPU worker metadata is correctly passed through to container env vars."""
+    resources = cluster_pb2.ResourceSpecProto()
+    resources.device.tpu.variant = "v5litepod-16"
+
+    config = ContainerConfig(
+        image="test",
+        entrypoint=Entrypoint.from_command("echo", "hello"),
+        env={},
+        resources=resources,
+    )
+
+    config.worker_metadata = cluster_pb2.WorkerMetadata(
+        tpu_name="iris-tpu-slice-001",
+        tpu_worker_id="0",
+        tpu_worker_hostnames="10.0.0.1,10.0.0.2",
+        tpu_chips_per_host_bounds="2,2,1",
+    )
+
+    runtime = DockerRuntime()
+    env = runtime._build_device_env_vars(config)
+
+    assert env["TPU_NAME"] == "iris-tpu-slice-001"
+    assert env["TPU_WORKER_ID"] == "0"
+    assert env["TPU_WORKER_HOSTNAMES"] == "10.0.0.1,10.0.0.2"
+    assert env["TPU_CHIPS_PER_HOST_BOUNDS"] == "2,2,1"
+    assert env["JAX_COORDINATOR_ADDRESS"] == "10.0.0.1"
+    assert env["JAX_NUM_PROCESSES"] == "2"
+    assert env["JAX_PROCESS_ID"] == "0"
