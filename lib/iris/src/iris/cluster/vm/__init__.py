@@ -31,11 +31,15 @@ from iris.cluster.vm.ssh import (
     GceSshConnection,
     GcloudSshConnection,
     SshConnection,
-    check_health,
     connection_available,
     run_streaming_with_retry,
-    shutdown_worker,
     wait_for_connection,
+)
+
+# Health checking (from controller module where diagnostics matter)
+from iris.cluster.vm.controller import (
+    HealthCheckResult,
+    check_health,
 )
 
 # Platform protocols and status types
@@ -102,6 +106,14 @@ from iris.cluster.vm.config import (
     load_config,
 )
 
+# Debug utilities
+from iris.cluster.vm.debug import (
+    cleanup_iris_resources,
+    collect_docker_logs,
+    discover_controller_vm,
+    list_iris_tpus,
+)
+
 __all__ = [
     "BOOTSTRAP_SCRIPT",
     "MAX_RECONCILE_WORKERS",
@@ -115,6 +127,7 @@ __all__ = [
     "GceSshConnection",
     "GcloudSshConnection",
     "GroupAvailability",
+    "HealthCheckResult",
     "ManagedVm",
     "ManualVmGroup",
     "ManualVmManager",
@@ -137,15 +150,18 @@ __all__ = [
     "VmRegistry",
     "VmSnapshot",
     "check_health",
+    "cleanup_iris_resources",
+    "collect_docker_logs",
     "config_to_dict",
     "connection_available",
     "create_autoscaler_from_config",
     "create_autoscaler_from_specs",
     "create_manual_autoscaler",
+    "discover_controller_vm",
     "get_ssh_config",
+    "list_iris_tpus",
     "load_config",
     "route_demand",
     "run_streaming_with_retry",
-    "shutdown_worker",
     "wait_for_connection",
 ]

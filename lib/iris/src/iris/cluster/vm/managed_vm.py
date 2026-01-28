@@ -33,9 +33,7 @@ from typing import Protocol
 
 from iris.cluster.vm.ssh import (
     SshConnection,
-    check_health,
     run_streaming_with_retry,
-    shutdown_worker,
     wait_for_connection,
 )
 from iris.rpc import config_pb2, vm_pb2
@@ -75,6 +73,47 @@ BOOTSTRAP_SCRIPT = """
 set -e
 
 echo "[iris-init] Starting Iris worker bootstrap"
+
+# Fetch TPU metadata from GCE and export as environment variables.
+# GCP TPU VMs expose TPU info via instance metadata, not environment variables.
+echo "[iris-init] Probing TPU metadata..."
+METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
+METADATA_HEADER="Metadata-Flavor: Google"
+
+# Derive TPU slice name from instance name by stripping -w{{N}} suffix.
+# Example: "iris-v5litepod_16-abc123-w0" -> "iris-v5litepod_16-abc123"
+INSTANCE_NAME=$(curl -sf -H "$METADATA_HEADER" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/name" 2>/dev/null || echo "")
+if [ -n "$INSTANCE_NAME" ]; then
+    export TPU_NAME=$(echo "$INSTANCE_NAME" | sed 's/-w[0-9]*$//')
+fi
+
+# Fetch accelerator-type as TPU_TYPE (e.g., v5litepod-16)
+export TPU_TYPE=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/accelerator-type" 2>/dev/null || echo "")
+
+# Fetch agent-worker-number as TPU_WORKER_ID
+export TPU_WORKER_ID=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/agent-worker-number" 2>/dev/null || echo "")
+
+# Fetch worker hostnames for multi-host slices (JSON array of network endpoints)
+TPU_HOSTNAMES_RAW=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/worker-network-endpoints" 2>/dev/null || echo "")
+if [ -n "$TPU_HOSTNAMES_RAW" ]; then
+    export TPU_WORKER_HOSTNAMES=$(echo "$TPU_HOSTNAMES_RAW" | \
+        python3 -c "import sys,json; print(','.join(e.get('address','') for e in json.load(sys.stdin)))" \
+        2>/dev/null || echo "")
+fi
+
+# Fetch chips per host bounds for topology info
+TOPO_RAW=$(curl -sf -H "$METADATA_HEADER" "$METADATA_URL/tpu-chips-per-host-bounds" 2>/dev/null || echo "")
+if [ -n "$TOPO_RAW" ]; then
+    export TPU_CHIPS_PER_HOST_BOUNDS="$TOPO_RAW"
+fi
+
+if [ -n "$TPU_NAME" ]; then
+    echo "[iris-init] TPU detected: name=$TPU_NAME type=$TPU_TYPE worker_id=$TPU_WORKER_ID"
+else
+    echo "[iris-init] No TPU metadata found (this may be a non-TPU VM)"
+fi
+
 echo "[iris-init] Phase: prerequisites"
 
 # Install Docker if missing
@@ -168,6 +207,11 @@ def _build_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str
 
     Note: IRIS_CONTROLLER_ADDRESS is set from the shell variable $CONTROLLER_ADDRESS
     which is populated by the discovery preamble.
+
+    TPU environment variables (TPU_NAME, TPU_WORKER_ID, etc.) are passed through
+    from the host if they exist. These are set by GCP on TPU VMs and are required
+    for the worker to register with tpu-name and tpu-worker-id attributes needed
+    for coscheduled job scheduling.
     """
     flags = []
     for k, v in config.env_vars.items():
@@ -177,6 +221,22 @@ def _build_env_flags(config: config_pb2.BootstrapConfig, vm_address: str) -> str
     # Inject VM address so worker can include it in registration for autoscaler tracking
     if vm_address:
         flags.append(f"-e IRIS_VM_ADDRESS={shlex.quote(vm_address)}")
+
+    # Pass through TPU environment variables from host if they exist.
+    # These are fetched from GCE metadata by the bootstrap script preamble.
+    # TPU_NAME = instance name with -w{{N}} suffix stripped (TPU slice name) for coscheduling group_by
+    # TPU_TYPE = accelerator-type (e.g., v5litepod-16) for topology lookup
+    tpu_env_vars = [
+        "TPU_NAME",
+        "TPU_TYPE",
+        "TPU_WORKER_ID",
+        "TPU_WORKER_HOSTNAMES",
+        "TPU_CHIPS_PER_HOST_BOUNDS",
+    ]
+    for var in tpu_env_vars:
+        # Use shell syntax to pass through only if set on host
+        flags.append(f'-e {var}="${{{var}:-}}"')
+
     return " ".join(flags)
 
 
@@ -400,7 +460,11 @@ class ManagedVm:
     def _check_worker_healthy(self) -> bool:
         """Check if worker container is already running and healthy."""
         port = self._bootstrap_config.worker_port or 10001
-        return check_health(self._conn, port)
+        try:
+            result = self._conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def _transition(self, new_state: vm_pb2.VmState) -> None:
         """Update state with timestamp and log the transition."""
@@ -419,11 +483,20 @@ class ManagedVm:
     def check_health(self) -> bool:
         """Check if worker is healthy via health endpoint."""
         port = self._bootstrap_config.worker_port or 10001
-        return check_health(self._conn, port)
+        try:
+            result = self._conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def shutdown(self, graceful: bool = True) -> bool:
         """Shutdown worker container."""
-        return shutdown_worker(self._conn, graceful)
+        cmd = "docker stop iris-worker" if graceful else "docker kill iris-worker"
+        try:
+            self._conn.run(cmd, timeout=30)
+            return True
+        except Exception:
+            return False
 
     @property
     def is_terminal(self) -> bool:

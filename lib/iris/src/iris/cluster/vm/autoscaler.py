@@ -37,7 +37,7 @@ from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 
-from iris.cluster.types import VmWorkerStatusMap
+from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.vm.managed_vm import VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.rpc import vm_pb2
@@ -76,8 +76,11 @@ class ScalingDecision:
 class DemandEntry:
     """A demand entry specifying resource requirements and count."""
 
-    accelerator_type: str | None = None  # None = any accelerator
+    device_type: DeviceType = DeviceType.CPU
+    device_variant: str | None = None  # None = any variant of this type
     count: int = 0
+    total_cpu: int = 0
+    total_memory_bytes: int = 0
 
 
 @dataclass
@@ -103,7 +106,7 @@ def route_demand(
     """Route demand to groups based on requirements and priority.
 
     For each demand entry:
-    1. Find groups that match the accelerator_type requirement
+    1. Find groups that match the device type/variant requirement
     2. Sort matching groups by priority (lower = higher priority)
     3. Route demand through available groups until satisfied or all exhausted
 
@@ -114,7 +117,7 @@ def route_demand(
     total_unmet = 0
 
     for entry in demand_entries:
-        matching = [g for g in groups if g.matches_requirements(entry.accelerator_type)]
+        matching = [g for g in groups if g.matches_device_requirement(entry.device_type, entry.device_variant)]
         # Sort by priority (lower = higher priority). Default to 100 if not set (proto3 defaults to 0).
         matching.sort(key=lambda g: g.config.priority or 100)
 
@@ -141,10 +144,11 @@ def route_demand(
 
         if remaining > 0:
             logger.warning(
-                "Demand overflow: %d/%d slices for accelerator_type=%s unmet (tried %d groups)",
+                "Demand overflow: %d/%d slices for device_type=%s, device_variant=%s unmet (tried %d groups)",
                 remaining,
                 entry.count,
-                entry.accelerator_type,
+                entry.device_type.value,
+                entry.device_variant,
                 len(matching),
             )
             total_unmet += remaining

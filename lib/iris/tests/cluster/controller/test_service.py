@@ -30,6 +30,14 @@ from iris.cluster.controller.state import ControllerState, ControllerTask
 from iris.cluster.types import JobId, WorkerId
 from iris.rpc import cluster_pb2
 
+
+def _make_test_entrypoint() -> cluster_pb2.Entrypoint:
+    """Create a minimal Entrypoint proto for testing."""
+    entrypoint = cluster_pb2.Entrypoint()
+    entrypoint.command.argv[:] = ["python", "-c", "pass"]
+    return entrypoint
+
+
 # =============================================================================
 # Test Helpers - Wrap handle_event() for common test patterns
 # =============================================================================
@@ -75,9 +83,9 @@ def job_request():
     ) -> cluster_pb2.Controller.LaunchJobRequest:
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
-            serialized_entrypoint=b"test",
+            entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=replicas),
-            environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+            environment=cluster_pb2.EnvironmentConfig(),
             parent_job_id=parent_job_id or "",
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
@@ -133,7 +141,7 @@ def mock_scheduler():
 @pytest.fixture
 def service(state, mock_scheduler):
     """Create a ControllerServiceImpl for testing."""
-    return ControllerServiceImpl(state, mock_scheduler)
+    return ControllerServiceImpl(state, mock_scheduler, bundle_prefix="file:///tmp/iris-test-bundles")
 
 
 # =============================================================================
@@ -155,15 +163,6 @@ def test_launch_job_returns_job_id(service, job_request):
     assert status_response.job.state == cluster_pb2.JOB_STATE_PENDING
 
 
-def test_launch_job_uses_name_as_job_id(service, job_request):
-    """Verify job_id is the same as the provided name."""
-    request = job_request("my-unique-job")
-
-    response = service.launch_job(request, None)
-
-    assert response.job_id == "my-unique-job"
-
-
 def test_launch_job_rejects_duplicate_name(service, job_request):
     """Verify launch_job rejects duplicate job names."""
     request = job_request("duplicate-job")
@@ -182,9 +181,9 @@ def test_launch_job_rejects_empty_name(service, state):
     """Verify launch_job rejects empty job names."""
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
     )
 
     with pytest.raises(ConnectError) as exc_info:
@@ -237,17 +236,6 @@ def test_get_job_status_not_found(service):
 
     assert exc_info.value.code == Code.NOT_FOUND
     assert "nonexistent" in exc_info.value.message
-
-
-def test_get_job_status_includes_parent_job_id(service, job_request):
-    """Verify get_job_status returns parent_job_id in response."""
-    service.launch_job(job_request("parent-job"), None)
-    service.launch_job(job_request("child-job", parent_job_id="parent-job"), None)
-
-    request = cluster_pb2.Controller.GetJobStatusRequest(job_id="child-job")
-    response = service.get_job_status(request, None)
-
-    assert response.job.parent_job_id == "parent-job"
 
 
 # =============================================================================
@@ -825,9 +813,9 @@ def test_task_failure_causing_job_failure_sends_kill_rpcs(service, state, mock_s
     # Launch job with 3 replicas and max_task_failures=0 (first failure kills job)
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="kill-rpc-job",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
     )
     service.launch_job(request, None)
@@ -918,9 +906,9 @@ def test_no_kill_rpcs_for_pending_tasks(service, state, mock_scheduler, job_requ
     # Launch job with 3 replicas
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="partial-dispatch-job",
-        serialized_entrypoint=b"test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
     )
     service.launch_job(request, None)

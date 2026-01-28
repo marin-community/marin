@@ -20,7 +20,6 @@ import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Protocol
 
 import grpc
@@ -34,7 +33,13 @@ from iris.cluster.controller.events import (
 )
 from iris.cluster.controller.scheduler import Scheduler, TaskScheduleResult
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker, get_device_variant
+from iris.cluster.controller.state import (
+    ControllerState,
+    ControllerTask,
+    ControllerWorker,
+    get_device_type_enum,
+    get_device_variant,
+)
 from iris.cluster.types import JobId, TaskId, VmWorkerStatus, VmWorkerStatusMap
 from iris.cluster.vm.autoscaler import Autoscaler
 from iris.rpc import cluster_pb2
@@ -50,30 +55,64 @@ DISPATCH_RPC_TIMEOUT_SECONDS = 5.0
 def compute_demand_entries(state: ControllerState) -> list:
     """Compute demand entries from controller state.
 
-    Groups pending tasks by accelerator_type and returns DemandEntry objects.
-    Tracks ALL demand including CPU-only tasks (accelerator_type="").
+    Groups pending tasks by device type and variant, returning DemandEntry objects.
+    CPU-only tasks get DeviceType.CPU with variant=None.
+
+    For coscheduled jobs, all tasks in the job share a single slice, so we count
+    the job once (not each task). For non-coscheduled jobs, each task counts as
+    one slice of demand.
 
     Args:
         state: Controller state with pending tasks.
 
     Returns:
-        List of DemandEntry objects with accelerator_type and count.
+        List of DemandEntry objects with device_type, device_variant, and count.
     """
     from iris.cluster.vm.autoscaler import DemandEntry
+    from iris.cluster.types import DeviceType
 
-    demand_by_accelerator: dict[str, int] = {}
+    @dataclass
+    class DemandAccumulator:
+        count: int = 0
+        total_cpu: int = 0
+        total_memory_bytes: int = 0
+
+    demand_by_device: dict[tuple[DeviceType, str | None], DemandAccumulator] = {}
+    coscheduled_jobs_counted: set[str] = set()
+
     for task in state.peek_pending_tasks():
         job = state.get_job(task.job_id)
         if not job:
             continue
 
-        device = job.request.resources.device
-        accelerator_type = get_device_variant(device)
-        # Track ALL demand including CPU (accelerator_type=None → "")
-        key = accelerator_type or ""
-        demand_by_accelerator[key] = demand_by_accelerator.get(key, 0) + 1
+        # For coscheduled jobs, only count once per job (all tasks share one slice)
+        if job.is_coscheduled:
+            if job.job_id in coscheduled_jobs_counted:
+                continue
+            coscheduled_jobs_counted.add(job.job_id)
 
-    return [DemandEntry(accelerator_type=acc, count=count) for acc, count in demand_by_accelerator.items()]
+        device = job.request.resources.device
+        device_type = get_device_type_enum(device)
+        device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
+
+        key = (device_type, device_variant)
+        if key not in demand_by_device:
+            demand_by_device[key] = DemandAccumulator()
+        acc = demand_by_device[key]
+        acc.count += 1
+        acc.total_cpu += job.request.resources.cpu
+        acc.total_memory_bytes += job.request.resources.memory_bytes
+
+    return [
+        DemandEntry(
+            device_type=dt,
+            device_variant=variant,
+            count=acc.count,
+            total_cpu=acc.total_cpu,
+            total_memory_bytes=acc.total_memory_bytes,
+        )
+        for (dt, variant), acc in demand_by_device.items()
+    ]
 
 
 class WorkerClient(Protocol):
@@ -143,8 +182,10 @@ class ControllerConfig:
     port: int = 0
     """Port to bind the HTTP server to. Use 0 for auto-assign."""
 
-    bundle_dir: Path | None = None
-    """Directory for storing uploaded job bundles."""
+    bundle_prefix: str | None = None
+    """URI prefix for storing job bundles (e.g., gs://bucket/path or file:///var/cache/iris/bundles).
+    Uses fsspec for storage, so supports both GCS and local filesystems. For distributed deployments,
+    use a GCS path so workers can download bundles."""
 
     scheduler_interval_seconds: float = 0.5
     """How often to run the scheduling loop (in seconds)."""
@@ -210,12 +251,22 @@ class Controller:
         worker_stub_factory: WorkerStubFactory,
         autoscaler: "Autoscaler | None" = None,
     ):
+        if not config.bundle_prefix:
+            raise ValueError(
+                "bundle_prefix is required. Set via ControllerConfig.bundle_prefix. "
+                "Example: bundle_prefix='gs://my-bucket/iris/bundles'"
+            )
+
         self._config = config
         self._stub_factory = worker_stub_factory
 
         self._state = ControllerState()
         self._scheduler = Scheduler(self._state)
-        self._service = ControllerServiceImpl(self._state, self, bundle_dir=config.bundle_dir)
+        self._service = ControllerServiceImpl(
+            self._state,
+            self,
+            bundle_prefix=config.bundle_prefix,
+        )
         self._dashboard = ControllerDashboard(
             self._service,
             host=config.host,
@@ -378,9 +429,8 @@ class Controller:
                     task_id=str(task.task_id),
                     task_index=task.task_index,
                     num_tasks=len(self._state.get_job_tasks(task.job_id)),
-                    serialized_entrypoint=job.request.serialized_entrypoint,
+                    entrypoint=job.request.entrypoint,
                     environment=cluster_pb2.EnvironmentConfig(
-                        workspace=job.request.environment.workspace,
                         env_vars=dict(job.request.environment.env_vars),
                     ),
                     bundle_gcs_path=job.request.bundle_gcs_path,
