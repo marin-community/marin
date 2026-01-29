@@ -25,6 +25,7 @@ from pathlib import Path
 
 import uvicorn
 
+from iris.chaos import chaos, chaos_raise
 from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import ImageCache, ImageProvider
 from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
@@ -307,6 +308,9 @@ class Worker:
             )
 
             try:
+                if chaos("worker.heartbeat"):
+                    logger.debug("chaos: skipping heartbeat")
+                    continue
                 logger.debug("Registration attempt %d for worker %s", attempt, self._worker_id)
                 response = self._controller_client.register_worker(request)
 
@@ -329,6 +333,9 @@ class Worker:
             if self._stop_heartbeat.is_set():
                 break
             try:
+                if chaos("worker.heartbeat"):
+                    logger.debug("chaos: skipping heartbeat")
+                    continue
                 # Update active task IDs for each heartbeat
                 with self._lock:
                     running_task_ids = [
@@ -372,6 +379,10 @@ class Worker:
         if not self._controller_client or not self._worker_id:
             return
 
+        if chaos("worker.report_task_state"):
+            logger.debug("chaos: skipping report_task_state")
+            return
+
         try:
             request = cluster_pb2.Controller.ReportTaskStateRequest(
                 worker_id=self._worker_id,
@@ -392,6 +403,8 @@ class Worker:
 
     def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str:
         """Submit a new task for execution."""
+        if chaos("worker.submit_task"):
+            raise RuntimeError("chaos: worker rejecting task")
         task_id = request.task_id
         job_id = request.job_id
         task_index = request.task_index
@@ -437,6 +450,8 @@ class Worker:
             # Phase 1: Download bundle
             task.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
             task.started_at_ms = now_ms()
+
+            chaos_raise("worker.bundle_download")
 
             bundle_path = self._bundle_cache.get_bundle(
                 task.request.bundle_gcs_path,
@@ -513,6 +528,7 @@ class Worker:
             max_port_retries = 3
             for attempt in range(max_port_retries):
                 try:
+                    chaos_raise("worker.create_container")
                     container_id = self._runtime.create_container(config)
                     task.container_id = container_id
                     self._runtime.start_container(container_id)
@@ -588,6 +604,10 @@ class Worker:
         start_time = time.time()
 
         while True:
+            if chaos("worker.task_monitor"):
+                task.transition_to(cluster_pb2.TASK_STATE_FAILED, error="chaos: monitor crashed")
+                break
+
             # Check if we should stop
             if task.should_stop:
                 task.transition_to(cluster_pb2.TASK_STATE_KILLED)
