@@ -324,7 +324,7 @@ def create_autoscaler_from_config(
 
     Args:
         config: Cluster configuration proto with scale groups
-        autoscaler_config: Optional autoscaler configuration
+        autoscaler_config: Optional autoscaler configuration (overrides config.autoscaler if provided)
         dry_run: If True, don't actually create VMs
 
     Returns:
@@ -357,10 +357,17 @@ def create_autoscaler_from_config(
 
         logger.info("Created scale group %s", name)
 
+    # Use provided autoscaler_config, or load from proto, or use defaults
+    if autoscaler_config is None:
+        if config.HasField("autoscaler"):
+            autoscaler_config = AutoscalerConfig.from_proto(config.autoscaler)
+        else:
+            autoscaler_config = AutoscalerConfig()
+
     return Autoscaler(
         scale_groups=scale_groups,
         vm_registry=vm_registry,
-        config=autoscaler_config or AutoscalerConfig(),
+        config=autoscaler_config,
     )
 
 

@@ -21,6 +21,7 @@ Each ScalingGroup has its own VmManager instance and tracks its own VM groups.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from enum import Enum
 
@@ -39,6 +40,7 @@ class GroupAvailability(Enum):
     BACKOFF = "backoff"
     AT_CAPACITY = "at_capacity"
     QUOTA_EXCEEDED = "quota_exceeded"
+    REQUESTING = "requesting"
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,7 @@ class ScalingGroup:
         self._config = config
         self._vm_manager = vm_manager
         self._vm_groups: dict[str, VmGroupProtocol] = {}
+        self._vm_groups_lock = threading.Lock()
 
         # Demand tracking (simple current/peak, no history)
         self._current_demand: int = 0
@@ -112,6 +115,9 @@ class ScalingGroup:
         self._quota_exceeded_until_ms: int = 0
         self._quota_reason: str = ""
         self._quota_timeout_ms = quota_timeout_ms
+
+        # Requesting state (set during async scale-up)
+        self._requesting_until_ms: int = 0
 
     @property
     def config(self) -> config_pb2.ScaleGroupConfig:
@@ -163,6 +169,19 @@ class ScalingGroup:
         """Timestamp of last scale-down operation."""
         return self._last_scale_down_ms
 
+    def mark_requesting(self, ts: int, timeout_ms: int) -> None:
+        """Mark this group as REQUESTING (scale-up in progress).
+
+        Args:
+            ts: Current timestamp in milliseconds
+            timeout_ms: How long to stay in REQUESTING state
+        """
+        self._requesting_until_ms = ts + timeout_ms
+
+    def clear_requesting(self) -> None:
+        """Clear REQUESTING state (scale-up completed or failed)."""
+        self._requesting_until_ms = 0
+
     def reconcile(self) -> None:
         """Discover and adopt existing VM groups from the cloud.
 
@@ -189,7 +208,8 @@ class ScalingGroup:
         ts = ts or now_ms()
         try:
             vm_group = self._vm_manager.create_vm_group(tags)
-            self._vm_groups[vm_group.group_id] = vm_group
+            with self._vm_groups_lock:
+                self._vm_groups[vm_group.group_id] = vm_group
             self._last_scale_up_ms = ts
             self._consecutive_failures = 0
             self._backoff_until_ms = 0
@@ -209,7 +229,8 @@ class ScalingGroup:
             timestamp_ms: Optional timestamp (for testing)
         """
         timestamp_ms = timestamp_ms or now_ms()
-        vm_group = self._vm_groups.pop(group_id, None)
+        with self._vm_groups_lock:
+            vm_group = self._vm_groups.pop(group_id, None)
         if vm_group:
             vm_group.terminate()
             self._last_scale_down_ms = timestamp_ms
@@ -226,11 +247,11 @@ class ScalingGroup:
         failed_slice_ids = [slice_id for slice_id, slice_obj in self._vm_groups.items() if slice_obj.status().any_failed]
 
         for slice_id in failed_slice_ids:
-            slice_obj = self._vm_groups.get(slice_id)
+            with self._vm_groups_lock:
+                slice_obj = self._vm_groups.pop(slice_id, None)
             if slice_obj:
                 logger.info("Cleaning up failed slice %s in group %s", slice_id, self.name)
                 slice_obj.terminate()
-                self._vm_groups.pop(slice_id, None)
                 self._slice_last_active.pop(slice_id, None)
                 cleaned.append(slice_obj)
 
@@ -488,7 +509,7 @@ class ScalingGroup:
         """Compute current availability state for waterfall routing.
 
         All states are computed from timestamps—no external state setting.
-        Priority: QUOTA_EXCEEDED > BACKOFF > AT_CAPACITY > AVAILABLE
+        Priority: QUOTA_EXCEEDED > BACKOFF > REQUESTING > AT_CAPACITY > AVAILABLE
         """
         ts = timestamp_ms or now_ms()
 
@@ -506,6 +527,14 @@ class ScalingGroup:
                 GroupAvailability.BACKOFF,
                 f"backoff until {self._backoff_until_ms}",
                 self._backoff_until_ms,
+            )
+
+        # Requesting (scale-up in progress)
+        if ts < self._requesting_until_ms:
+            return AvailabilityState(
+                GroupAvailability.REQUESTING,
+                "scale-up in progress",
+                self._requesting_until_ms,
             )
 
         # At capacity

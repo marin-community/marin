@@ -34,13 +34,14 @@ from __future__ import annotations
 
 import logging
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 
 from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.vm.managed_vm import VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
-from iris.rpc import vm_pb2
+from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,22 @@ class AutoscalerConfig:
     """Configuration for the autoscaler."""
 
     evaluation_interval_seconds: float = 10.0
+    requesting_timeout_seconds: float = 120.0
+
+    @classmethod
+    def from_proto(cls, proto: config_pb2.AutoscalerConfig) -> AutoscalerConfig:
+        """Create AutoscalerConfig from proto message.
+
+        Args:
+            proto: config_pb2.AutoscalerConfig proto message
+
+        Returns:
+            AutoscalerConfig with values from proto (using defaults if proto fields are 0)
+        """
+        return cls(
+            evaluation_interval_seconds=proto.evaluation_interval_seconds or 10.0,
+            requesting_timeout_seconds=proto.requesting_timeout_seconds or 120.0,
+        )
 
 
 def route_demand(
@@ -191,6 +208,15 @@ class Autoscaler:
 
         # Bounded log of recent autoscaler actions for dashboard/debugging
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
+
+        # Thread pool for async scale-up
+        self._scale_up_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="scale-up")
+
+    def shutdown(self) -> None:
+        """Shutdown the autoscaler and wait for in-flight scale-ups to complete."""
+        logger.info("Shutting down autoscaler, waiting for in-flight scale-ups...")
+        self._scale_up_executor.shutdown(wait=True)
+        logger.info("Autoscaler shutdown complete")
 
     def reconcile(self) -> None:
         """Reconcile all groups (discover existing slices from cloud).
@@ -358,8 +384,24 @@ class Autoscaler:
             if decision.action == ScalingAction.SCALE_UP:
                 self._execute_scale_up(group, timestamp_ms, reason=decision.reason)
 
-    def _execute_scale_up(self, group: ScalingGroup, ts: int, reason: str = "") -> bool:
-        """Create a new slice for a scale group.
+    def _execute_scale_up(self, group: ScalingGroup, ts: int, reason: str = "") -> None:
+        """Initiate async scale-up for a scale group.
+
+        Marks the group as REQUESTING and submits the actual scale-up work to
+        a background thread pool. Returns immediately without blocking.
+        """
+        # Mark group as requesting before submitting to executor
+        timeout_ms = int(self._config.requesting_timeout_seconds * 1000)
+        group.mark_requesting(ts, timeout_ms)
+
+        # Submit to background thread
+        self._scale_up_executor.submit(self._do_scale_up, group, ts, reason)
+
+    def _do_scale_up(self, group: ScalingGroup, ts: int, reason: str = "") -> bool:
+        """Execute the actual blocking scale-up work.
+
+        This runs in a background thread and should not be called directly.
+        Use _execute_scale_up instead.
 
         Returns:
             True if scale-up succeeded, False otherwise.
@@ -369,8 +411,8 @@ class Autoscaler:
         # Log action as pending BEFORE execution
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
 
-        logger.info("Scaling up %s: %s", group.name, reason)
         try:
+            logger.info("Scaling up %s: %s", group.name, reason)
             slice_obj = group.scale_up(ts=ts)
             self._slice_created_at[slice_obj.slice_id] = slice_obj.created_at_ms
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
@@ -391,6 +433,9 @@ class Autoscaler:
             action.reason = f"{reason} - error: {e}"
             group.record_failure(ts)
             return False
+        finally:
+            # Always clear requesting state when done
+            group.clear_requesting()
 
     def run_once(
         self,
@@ -410,7 +455,7 @@ class Autoscaler:
         timestamp_ms = timestamp_ms or now_ms()
         logger.debug("Autoscaler run_once: demand_entries=%s", demand_entries)
 
-        # Step 1: Clean up failed slices FIRST
+        # Step 1: Clean up failed slices FIRST (always done, not rate-limited)
         for group in self._groups.values():
             cleaned = group.cleanup_failed_slices(timestamp_ms)
             for slice_obj in cleaned:
@@ -421,6 +466,10 @@ class Autoscaler:
                     slice_id=slice_obj.slice_id,
                     reason="cleaning up failed slice",
                 )
+
+        # Rate-limit evaluation based on evaluation_interval_seconds
+        if timestamp_ms - self._last_evaluation_ms < self._config.evaluation_interval_seconds * 1000:
+            return []
 
         # Step 2: Evaluate (scale-up only)
         decisions = self.evaluate(demand_entries, timestamp_ms)

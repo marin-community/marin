@@ -347,6 +347,10 @@ class Controller:
         # Shutdown dispatch executor
         self._dispatch_executor.shutdown(wait=True, cancel_futures=True)
 
+        # Shutdown autoscaler
+        if self._autoscaler:
+            self._autoscaler.shutdown()
+
     def _run_scheduling_loop(self) -> None:
         """Main controller loop running scheduling, autoscaler, and worker timeout checks."""
         while not self._stop:
