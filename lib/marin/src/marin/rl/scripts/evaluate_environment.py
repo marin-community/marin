@@ -36,14 +36,16 @@ from fray.cluster import (
     ResourceConfig,
     current_cluster,
 )
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
+from marin.rl.environments.inference_ctx.levanter import LevanterInferenceContextConfig, LevanterInferenceContext
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution import ExecutorStep
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, InputName
+from marin.utilities.executor_utils import ckpt_path_to_step_name
 from marin.rl.environments.base import EnvConfig, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.rollout_worker import create_inference_context
@@ -81,10 +83,12 @@ def rollout_group_to_dict(group: "RolloutGroup") -> dict[str, Any]:
 class EnvironmentEvalConfig:
     """Configuration for environment evaluation."""
 
-    checkpoint: str
-    """Path to model checkpoint (HuggingFace repo or local path)."""
-
     env_config: EnvConfig
+    """Environment configuration."""
+
+    checkpoint: str
+    checkpoint_is_hf: bool = False
+    """Path to model checkpoint (HuggingFace repo or local path)."""
 
     model_config: LmConfig | None = None
     """Model configuration. If None, auto-detected from checkpoint."""
@@ -137,7 +141,8 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
 
     def _run_inference():
         logger.info("Loading tokenizer for evaluation")
-        tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
+        # tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
+        tokenizer = load_tokenizer(checkpoint_path)
 
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
@@ -168,6 +173,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
 
             policy_model = load_model_from_checkpoint(
                 checkpoint=checkpoint_path,
+                checkpoint_is_hf=config.checkpoint_is_hf,
                 model_config=model_config,
                 trainer_config=trainer_config,
                 mesh=trainer_config.device_mesh,  # Now this is concrete after levanter.initialize
@@ -199,24 +205,19 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
                     ),
                 )
 
-                inference_server = InferenceServer.create(
-                    inference_server_config,
-                    model=policy_model,
-                    tokenizer=tokenizer,
-                )
-
-                import threading
-
-                threading.Thread(target=inference_server.serve, daemon=True).start()
-                time.sleep(2)
-
                 env = load_environment_from_spec(config.env_config)
                 logger.info(f"Loaded environment: {env}")
 
-                policy_ctx = create_inference_context(
-                    inference_type="levanter",
-                    inference_config=inference_server_config,
+                levanter_config = LevanterInferenceContextConfig(
+                    inference_server_config=inference_server_config,
+                    tokenizer=tokenizer,
+                    mesh=trainer_config.device_mesh,
+                    axis_mapping=trainer_config.compute_axis_mapping,
+                    max_tokens=config.max_output_length,
                 )
+                policy_ctx = LevanterInferenceContext(levanter_config)
+                policy_ctx.start_server(policy_model)
+                time.sleep(2)
 
                 # Sample examples, generate responses, and create rollouts from selected lesson
                 rollout_groups, metrics = env.sample(
@@ -276,11 +277,12 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
 
 
 def evaluate_environment(
-    checkpoint: str,
+    checkpoint: str | InputName,
     env_config: EnvConfig,
     output_path: str,
     model_config: LmConfig | None = None,
     tpu_type: str | None = None,  # "v5litepod-128"
+    checkpoint_is_hf: bool = False,
 ) -> ExecutorStep:
     """Create an executor step for evaluating a model on an environment.
 
@@ -298,11 +300,13 @@ def evaluate_environment(
     env_id = env_config.env_args.get("env_id", "unknown")
 
     # Get model identifier from checkpoint path for naming
-    model_identifier = checkpoint.split("/")[-1] if "/" in checkpoint else checkpoint
+    # model_identifier = checkpoint.split("/")[-1] if "/" in checkpoint else checkpoint
+    model_identifier = ckpt_path_to_step_name(checkpoint)
 
     config = EnvironmentEvalConfig(
-        checkpoint=checkpoint,
         env_config=env_config,
+        checkpoint=checkpoint,
+        checkpoint_is_hf=checkpoint_is_hf,
         model_config=model_config,
         output_path=output_path,
         tpu_type=tpu_type,

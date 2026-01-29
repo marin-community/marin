@@ -61,6 +61,7 @@ def load_model_from_checkpoint(
     tokenizer,
     *,
     key: jax.Array,
+    checkpoint_is_hf: bool = False,
 ) -> LmHeadModel:
     """Load a model from checkpoint, auto-detecting HF vs local Levanter format.
 
@@ -82,7 +83,7 @@ def load_model_from_checkpoint(
 
     mp = trainer_config.mp
 
-    if is_hf_checkpoint(checkpoint):
+    if is_hf_checkpoint(checkpoint) or checkpoint_is_hf:
         # Load from HuggingFace
         if not hasattr(model_config, "hf_checkpoint_converter"):
             raise ValueError("Model config lacks HF checkpoint converter for loading from HuggingFace")

@@ -43,6 +43,8 @@ from marin.rl.scripts.evaluate_environment import evaluate_environment
 
 logger = logging.getLogger(__name__)
 
+models = models[:1]
+
 
 def build_steps(model_types: list[str]):
     steps = []
@@ -65,6 +67,7 @@ def build_steps(model_types: list[str]):
             steps.append(
                 evaluate_environment(
                     checkpoint=checkpoint_path,
+                    checkpoint_is_hf=True,
                     env_config=env_config,
                     output_path=this_output_path(),
                     tpu_type="v5p-8",
@@ -79,6 +82,7 @@ def build_steps(model_types: list[str]):
             steps.append(
                 evaluate_environment(
                     checkpoint=output_path_of(model_instance),
+                    checkpoint_is_hf=True,
                     env_config=env_config,
                     output_path=this_output_path(),
                     tpu_type="v5p-8",
@@ -118,7 +122,7 @@ def get_isoflop_hf_model(isoflop_step: ExecutorStep, prefix: str):
         return int(checkpoint.rsplit("step-", 1)[-1])
 
     return sorted(checkpoints, key=get_step)[-1]
-    
+
 
 def main():
     if os.getenv("CI", None) is not None:
