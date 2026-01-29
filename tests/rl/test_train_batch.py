@@ -42,13 +42,16 @@ def create_test_rollout(
         response_logprobs=response_logprobs,
         token_rewards=token_rewards,
         episode_reward=episode_reward,
+        temperature=1.0,
+        top_k=None,
+        is_truncated=False,
     )
 
 
 def test_trim_exact_length_no_change():
     """Test that array of exact length is unchanged."""
     ary = np.array([1, 2, 3, 4, 5], dtype=np.int32)
-    result = train_batch.trim_and_pad(ary, max_seq_len=5, padding_value=999)
+    result = train_batch.trim_and_pad(ary, max_seq_len=5, pad_to=5, padding_value=999)
 
     np.testing.assert_array_equal(result, ary)
 
@@ -56,7 +59,7 @@ def test_trim_exact_length_no_change():
 def test_float_array_padding():
     """Test padding behavior with float arrays."""
     ary = np.array([1.0, 2.0], dtype=np.float32)
-    result = train_batch.trim_and_pad(ary, max_seq_len=4, padding_value=999)
+    result = train_batch.trim_and_pad(ary, max_seq_len=4, pad_to=4, padding_value=999)
 
     expected = np.array([1.0, 2.0, 999.0, 999.0], dtype=np.float32)
     np.testing.assert_array_equal(result, expected)
@@ -67,7 +70,7 @@ def test_basic_conversion():
     rollout = create_test_rollout(prompt_len=4, response_len=3)
     advantage = 2.5
 
-    result = train_batch.convert_rollout_to_training_format(rollout, advantage, max_tokens=16, pad_token_id=0)
+    result = train_batch.convert_rollout_to_training_format(rollout, advantage, max_tokens=16, pad_token_id=0, pad_to=16)
 
     # Check all expected keys are present
     expected_keys = {
@@ -76,12 +79,16 @@ def test_basic_conversion():
         "loss_weights",
         "loss_masks",
         "policy_logprobs",
+        "temperature",
+        "top_k",
+        "truncated",
     }
     assert set(result.keys()) == expected_keys
 
     # Check shapes - should be padded to max_tokens
     for _, value in result.items():
-        assert len(value) == 16
+        if isinstance(value, np.ndarray):
+            assert len(value) == 16
 
 
 def test_loss_mask_correct():
@@ -89,7 +96,7 @@ def test_loss_mask_correct():
     rollout = create_test_rollout(prompt_len=4, response_len=3)
     advantage = 1.0
 
-    result = train_batch.convert_rollout_to_training_format(rollout, advantage, max_tokens=16, pad_token_id=0)
+    result = train_batch.convert_rollout_to_training_format(rollout, advantage, max_tokens=16, pad_token_id=0, pad_to=16)
 
     loss_mask = result["loss_masks"]
 
@@ -105,7 +112,7 @@ def test_loss_weights_have_advantage():
     rollout = create_test_rollout(prompt_len=4, response_len=3)
     advantage = 2.5
 
-    result = train_batch.convert_rollout_to_training_format(rollout, advantage, max_tokens=16, pad_token_id=0)
+    result = train_batch.convert_rollout_to_training_format(rollout, advantage, max_tokens=16, pad_token_id=0, pad_to=16)
 
     loss_weights = result["loss_weights"]
 
@@ -118,7 +125,7 @@ def test_token_sequence_shifted_correctly():
     """Test that input sequence contains full prompt+response (shifting now happens in rl_losses.py)."""
     rollout = create_test_rollout(prompt_len=3, response_len=2)
 
-    result = train_batch.convert_rollout_to_training_format(rollout, 1.0, max_tokens=16, pad_token_id=0)
+    result = train_batch.convert_rollout_to_training_format(rollout, 1.0, max_tokens=16, pad_token_id=0, pad_to=16)
 
     # Original tokens: prompt=[12345, 12345, 12345], response=[1000, 1001]
     # input_ids should contain the full sequence: [12345, 12345, 12345, 1000, 1001]
@@ -194,7 +201,7 @@ def test_padding_consistency():
     batch = train_batch.create_training_batch_from_rollouts(individual_rollouts, max_tokens=16, pad_token_id=999)
 
     # All sequences should have the same length after padding
-    assert batch.input_ids.axis_size("position") == 16  # max_tokens
+    assert batch.input_ids.axis_size("position") == 10  # max_tokens (dynamic padding to max in batch)
 
     # Check that padding tokens are present where expected
     # For the shortest rollout (prompt_len=3, response_len=1, total=4)

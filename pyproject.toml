@@ -9,11 +9,12 @@ description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
-    "marin",
-    "levanter",
-    "zephyr",
-    "haliax",
+    "iris",
     "fray",
+    "haliax",
+    "levanter",
+    "marin",
+    "zephyr",
 ]
 
 [tool.uv]
@@ -21,18 +22,22 @@ fork-strategy = "fewest"
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
+    "python-multipart>=0.0.22",
+    "wheel>=0.46.2",
 ]
 
 [tool.uv.workspace]
 members = [
-    "lib/marin",
-    "lib/levanter",
-    "lib/zephyr",
-    "lib/haliax",
+    "lib/iris",
     "lib/fray",
+    "lib/haliax",
+    "lib/levanter",
+    "lib/marin",
+    "lib/zephyr",
 ]
 
 [tool.uv.sources]
+iris = { workspace = true }
 fray = { workspace = true }
 haliax = { workspace = true }
 levanter = { workspace = true }
@@ -78,7 +83,14 @@ exclude = ["marin/", "scripts/"]
 
 # Pyrefly type checker configuration
 [tool.pyrefly]
-project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"]
+project-includes = [
+    "lib/marin/src/**/*.py",
+    "lib/levanter/src/**/*.py",
+    "lib/haliax/src/**/*.py",
+    "lib/fray/src/**/*.py",
+    "lib/iris/src/**/*.py",
+    "lib/zephyr/src/**/*.py",
+]
 
 # Explicitly tell Pyrefly where our editable packages live so it resolves imports
 # against the library sources instead of the top-level `src` directory, which only
@@ -89,6 +101,7 @@ search-path = [
     "lib/haliax/src",
     "lib/zephyr/src",
     "lib/fray/src",
+    "lib/iris/src",
 ]
 disable-search-path-heuristics = true
 
@@ -103,8 +116,7 @@ project-excludes = [
     "tests/**",
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
-    "lib/**/post_training/**",  # No longer used
-    "lib/marin/src/marin/processing/classification/deduplication/vendor", # Exclude vendor stuff in dedupe
+    "lib/iris/src/iris/rpc/*_pb2*",  # Generated protobuf files
 ]
 
 # Disable specific error codes that are primarily noise from missing type stubs
@@ -182,4 +194,4 @@ markers = [
 testpaths = ["tests", "experiments"]
 
 # Make sure we timeout before CI kills us, and don't run TPU or slow tests by default
-addopts = "--session-timeout=480 -m 'not tpu_ci and not slow'"
+#addopts = "--session-timeout=480 -m 'not tpu_ci and not slow'"

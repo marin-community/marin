@@ -8,8 +8,10 @@ import functools
 import json
 import logging
 import os
+import random
 import shutil
 import tempfile
+import time
 import urllib.parse
 import warnings
 from dataclasses import dataclass
@@ -26,6 +28,7 @@ import jax
 import jax.numpy as jnp
 import mergedeep
 import numpy as np
+import requests
 import transformers.utils.hub
 from fsspec import AbstractFileSystem
 from fsspec.asyn import get_loop
@@ -35,7 +38,8 @@ from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
-from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download
+from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download, ModelInfo
+from huggingface_hub.errors import HfHubHTTPError
 from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
@@ -76,6 +80,36 @@ from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_to_hf_url(model_id: str, revision: Optional[str] = None) -> str:
+    """Convert a HuggingFace model ID to an hf:// URL for fsspec streaming.
+
+    Args:
+        model_id: HuggingFace model ID like "meta-llama/Llama-2-7b"
+        revision: Optional git revision (branch, tag, or commit hash)
+
+    Returns:
+        An hf:// URL like "hf://meta-llama/Llama-2-7b" or "hf://meta-llama/Llama-2-7b@main"
+    """
+    if revision:
+        return f"hf://{model_id}@{revision}"
+    return f"hf://{model_id}"
+
+
+def _is_hf_model_id(path: str) -> bool:
+    """Check if a path looks like a HuggingFace model ID (not a URL or local path)."""
+    # If it contains "://", it's already a URL
+    if "://" in path:
+        return False
+    # If it starts with "/" or "./" or "../", it's a local path
+    if path.startswith("/") or path.startswith("./") or path.startswith("../"):
+        return False
+    # If it exists as a local directory, it's a local path
+    if os.path.isdir(path):
+        return False
+    # Otherwise, assume it's an HF model ID
+    return True
 
 
 PYTORCH_MODEL = "pytorch_model.bin"
@@ -515,7 +549,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
         return ref.model_name_or_path, ref.revision
 
     def load_state_dict(self, ref: Optional[Union[str, RepoRef]] = None, dtype: Optional[jnp.dtype] = None) -> dict:
-        """Load a state dict from either HF Hub or a GCS path"""
+        """Load a state dict from either HF Hub or a GCS path.
+
+        HuggingFace model IDs are converted to hf:// URLs and streamed directly
+        without caching to local disk.
+        """
         if ref is None:
             ref = self.reference_checkpoint
         if ref is None:
@@ -527,6 +565,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
             if rev is not None:
                 raise ValueError("Revisions not supported for explicit URLs")
             return self._load_from_remote(id, dtype)
+
+        # Convert HF model IDs to hf:// URLs and stream directly
+        if _is_hf_model_id(id):
+            hf_url = _convert_to_hf_url(id, rev)
+            logger.info(f"Loading from HuggingFace Hub: {hf_url}")
+            return self._load_from_remote(hf_url, dtype)
 
         for index_file in [SAFE_TENSORS_INDEX_NAME, PYTORCH_WEIGHTS_INDEX_NAME]:
             try:
@@ -736,10 +780,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
         dict_config = config.to_dict()
 
         try:
-            for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
-                attr = getattr(self.default_hf_config, k, None)
-                if attr is not None:
-                    dict_config[k] = attr
+            base_config = self.default_hf_config
+        except ValueError:
+            # Training-from-scratch runs may intentionally omit a reference checkpoint. In that case, we can't pull
+            # metadata like `architectures` from an upstream config; the config produced by `to_hf_config()` is still
+            # sufficient for most built-in architectures.
+            base_config = None
+            logger.warning("No reference checkpoint set; skipping base HF config metadata copy.")
         except Exception as e:  # noqa: BLE001
             if isinstance(e, GatedRepoError) or isinstance(e.__cause__, GatedRepoError):
                 warnings.warn("Could not copy keys from base config because the repo is gated. Making assumptions.")
@@ -748,8 +795,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     "AutoConfig": self.HfConfigClass.__qualname__,
                 }
                 dict_config["architectures"] = [self.HFAutoModelClass(AutoModelForCausalLM).__name__]
+                base_config = None
             else:
                 raise
+
+        if base_config is not None:
+            for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
+                attr = getattr(base_config, k, None)
+                if attr is not None:
+                    dict_config[k] = attr
 
         if self.tokenizer:
             tokenizer_dependent_config = {}
@@ -1101,19 +1155,67 @@ def save_hf_checkpoint_callback(
     return cb
 
 
+T = TypeVar("T")
+
+
+def _hf_hub_retry(fn: Callable[[], T], *, action: str, max_attempts: int = 8, max_sleep_seconds: float = 60.0) -> T:
+    """Retry HuggingFace Hub operations that fail transiently (e.g. 5xx/429/timeouts).
+
+    Args:
+        fn: Callable to execute.
+        action: Human-readable description of what we're doing (used for logs).
+        max_attempts: Maximum number of attempts.
+        max_sleep_seconds: Maximum sleep between retries.
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            if attempt >= max_attempts or not _is_retryable_hf_exception(exc):
+                raise
+
+            base_sleep_seconds = min(max_sleep_seconds, 2.0**attempt)
+            sleep_seconds = base_sleep_seconds * (0.5 + random.random())  # [0.5, 1.5) jitter
+            logger.warning(
+                "HuggingFace Hub request failed while trying to %s. Retrying in %.1fs (%d/%d). Error: %s",
+                action,
+                sleep_seconds,
+                attempt,
+                max_attempts,
+                exc,
+            )
+            time.sleep(sleep_seconds)
+
+    raise RuntimeError(f"Unreachable: failed to {action} after {max_attempts} attempts.")
+
+
+def _is_retryable_hf_exception(exc: Exception) -> bool:
+    if isinstance(exc, HfHubHTTPError):
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        return status_code in {408, 429} or (status_code is not None and 500 <= status_code < 600)
+
+    return isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+
+
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:
     """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec"""
     with _patch_hf_hub_download():
-        return AutoTokenizer.from_pretrained(
-            model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+        return _hf_hub_retry(
+            lambda: AutoTokenizer.from_pretrained(
+                model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+            ),
+            action=f"load tokenizer {model_name_or_path!r}",
         )
 
 
 def load_processor(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> ProcessorMixin:
     """Like AutoProcessor.from_pretrained, but works with gs:// paths or anything on fsspec"""
     with _patch_hf_hub_download():
-        return AutoProcessor.from_pretrained(
-            model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+        return _hf_hub_retry(
+            lambda: AutoProcessor.from_pretrained(
+                model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+            ),
+            action=f"load processor {model_name_or_path!r}",
         )
 
 
@@ -1343,9 +1445,21 @@ def _patch_hf_hub_download():
 
         huggingface_hub.utils._validators.validate_repo_id = custom_validate_repo_id
 
+        # transformers calls  model_info in _patch_mistral_regex to check if model is a base Mistral model
+        original_model_info = huggingface_hub.hf_api.model_info
+
+        def custom_model_info(repo_id, *args, **kwargs) -> ModelInfo:
+            if _is_url_like(repo_id):
+                # `tags=None` makes is_base_mistral return False, skipping the problematic code path
+                return ModelInfo(id="monkeypatched", tags=None)
+            return original_model_info(repo_id, *args, **kwargs)
+
+        huggingface_hub.hf_api.model_info = custom_model_info
+
         try:
             yield custom_hf_hub_download
         finally:
             # Restore the original implementation
             transformers.utils.hub.hf_hub_download = original_hf_hub_download
             huggingface_hub.utils._validators.validate_repo_id = original_validate_repo_id
+            huggingface_hub.hf_api.model_info = original_model_info

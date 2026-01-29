@@ -18,4 +18,7 @@ pyo3 = { version = "0.26", features = [
     "extension-module",
     "abi3-py311",
 ] } # stable ABI with minimum Python version 3.11
+rand = "0.8"
+rand_pcg = "0.3"
+regex = "1.10"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }

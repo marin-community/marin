@@ -19,7 +19,6 @@ This file uses Levanter to compute validation losses and entropies.
 import dataclasses
 import hashlib
 import os
-import shutil
 from dataclasses import dataclass
 
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
@@ -35,12 +34,8 @@ from levanter.models.lm_model import LmConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.evaluation.utils import discover_levanter_checkpoints, download_from_gcs, is_remote_path
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
-
-HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"
-GCSFUSE_MOUNT_POINT = "/opt/gcsfuse_mount"
 
 
 def _wandb_id(name: str) -> str:
@@ -186,39 +181,9 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
     Args:
         config (EvalLmConfig): The configuration for visualizing log probabilities.
     """
-    try:
-        local_path = None
-        # for hf checkpoints, levanter can read hf://, gs:// directly
-        # but for non-gcs hf checkpoints, we download to gcs fuse for now.
-        if config.hf_checkpoint and is_remote_path(config.hf_checkpoint.model_name_or_path):
-            pass
-        elif config.hf_checkpoint:
-            # Use GCSFuse directly so that we don't have to download the checkpoint to the local filesystem
-            checkpoint_ref = str(config.hf_checkpoint)
-            local_path = os.path.join(config.local_model_dir, ckpt_path_to_step_name(checkpoint_ref))
-            download_from_gcs(
-                gcs_path=checkpoint_ref,
-                destination_path=local_path,
-            )
-            config.hf_checkpoint = RepoRef.from_string(local_path)
-            print(f"Downloaded model checkpoint to {local_path}: {os.listdir(local_path)}")
-        elif config.checkpoint_path and is_remote_path(config.checkpoint_path):
-            local_path = os.path.join(config.local_model_dir, ckpt_path_to_step_name(config.checkpoint_path))
-            download_from_gcs(
-                gcs_path=config.checkpoint_path,
-                destination_path=local_path,
-            )
-            config.checkpoint_path = discover_levanter_checkpoints(local_path)[-1]
-        eval_lm_main(config)
-    finally:
-        if config.hf_checkpoint:
-            hf_checkpoint_path = str(config.hf_checkpoint)
-            if not os.path.exists(hf_checkpoint_path):
-                shutil.rmtree(HUGGINGFACE_CACHE_PATH, ignore_errors=True)
-                print(f"Deleted HuggingFace cache at {HUGGINGFACE_CACHE_PATH}.")
-        if local_path and not local_path.startswith(GCSFUSE_MOUNT_POINT):
-            shutil.rmtree(local_path, ignore_errors=True)
-            print(f"Deleted local checkpoint at {local_path}.")
+    # Levanter can read `gs://` checkpoints directly via fsspec/tensorstore, and HF
+    # checkpoints via fsspec as well. Avoid staging large directories locally.
+    eval_lm_main(config)
 
 def do_eval_ensemble(config: LevanterEvalEnsembleConfig) -> None:
     """
@@ -263,13 +228,12 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
 
     assert isinstance(config.resource_config.device, TpuConfig), "evaluate_lm_log_probs requires TPU resource config"
 
-    env_vars = {"HF_HOME": HUGGINGFACE_CACHE_PATH}
     cluster = current_cluster()
     job_request = JobRequest(
         name=f"eval-lm-{name}",
         resources=config.resource_config,
         entrypoint=Entrypoint.from_callable(do_eval_lm, args=[levanter_config]),
-        environment=EnvironmentConfig.create(env_vars=env_vars),
+        environment=EnvironmentConfig.create(),
     )
     job_id = cluster.launch(job_request)
     cluster.wait(job_id, raise_on_failure=True)

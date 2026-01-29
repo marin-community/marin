@@ -10,10 +10,21 @@ take along the way to get there. As no design survives contact with reality for
 long, we're hoping to achieve some incremental improvements in our usability
 while we learn more about what we actually need.
 
+> **Note**: Some forward-looking concepts from this document (credit-based scheduling,
+> WorkerPool, Resolver/ActorPool pattern) have evolved and are being implemented in
+> `lib/iris/`. See `lib/iris/docs/fray-zero.md` for the next-generation design.
+
 # Baby Steps
 
-**Status**: The Cluster interface described below has been **implemented** in `fray.cluster`.
-Available backends: `LocalCluster` (subprocess-based) and `RayCluster` (Ray job submission).
+**Status**: The following has been **implemented**:
+- Cluster interface in `fray.cluster` with `LocalCluster` and `RayCluster` backends
+- Job Context API in `fray.job` with `SyncContext`, `ThreadContext`, `RayContext` backends
+- Queue system with lease semantics (`MemoryQueue`, `FileQueue`, `HttpQueue`)
+- Actor support for distributed coordination
+- TPU orchestration migrated from Levanter (`run_on_pod`, gang scheduling, multislice)
+- Resource configuration for CPU, GPU, and TPU
+- Zephyr fully migrated to fray Job context
+
 See the main README.md for usage examples.
 
 Let's walk through what we're trying to accomplish. We're struggling with the
@@ -37,10 +48,10 @@ us some of these features in the short-term?
 
 We have a few ways we use Ray now:
 
-* Data processing (cpu)
-* Launching TPUs (slices)
+* Data processing (cpu) — **migrated to Zephyr**
+* Launching TPUs (slices) — **migrated to fray.cluster.ray.tpu**
 * Running inference (pools)
-* RL (actors)
+* RL (actors) — **supported via fray.job actors**
 
 Our data processing has almost entirely moved over to `zephyr` at this point,
 providing a clean Ray-free boundary for that work.
@@ -48,17 +59,27 @@ providing a clean Ray-free boundary for that work.
 For launching TPUs, we propose lifting the existing Levanter TPU launching code
 into fray, as a TpuJobRequest, and then providing a simple "cluster" API to
 interact with jobs. This will serve as the kernel for our longer-term design
-while still building on top of our Ray system.
+while still building on top of our Ray system. **Status**: This has been implemented
+in `fray.cluster.ray.tpu` with `run_on_pod`, `run_on_pod_resumable`, and multislice
+variants.
 
 ## Example job request
 
-```
-job_request = {
-  "slice": ...
-  "environment": ...
-}
-# cluster translates this into a ray job request internally
-cluster.run_job(job_request)
+```python
+from fray.cluster import current_cluster, JobRequest, ResourceConfig, TpuConfig
+
+cluster = current_cluster()
+
+job_id = cluster.launch(JobRequest(
+    name="my-training-job",
+    resources=ResourceConfig(
+        device=TpuConfig(tpu_type="v5litepod-16"),
+        ram="128g",
+    ),
+    entrypoint=train_fn,
+))
+
+cluster.monitor(job_id)  # streams logs, blocks until complete
 ```
 
 ## Cluster interface
@@ -66,12 +87,19 @@ cluster.run_job(job_request)
 Our v0 cluster interface will have our standard contextvar access pattern with
 methods to launch and check the status of jobs, and wait for job success:
 
+```python
 class Cluster:
-  def launch(job_request) -> id
-  def monitor(job_id) -> status # wait for completion, spool stdout to waiter
-  def poll(job_id) -> status
+    def launch(job_request) -> JobId
+    def monitor(job_id) -> JobInfo  # wait for completion, spool stdout to waiter
+    def poll(job_id) -> JobInfo
+    def terminate(job_id)
+    def list_jobs() -> list[JobInfo]
+    def wait(job_id, fail_on_error=False) -> JobInfo
+```
 
-We'll define Ray and multiprocess backends, e.g. cluster/{ray,multiprocess.py}
+We define Ray and local backends in `fray.cluster`:
+- `LocalCluster`: Runs jobs as subprocesses, useful for development/testing
+- `RayCluster`: Submits jobs via Ray's JobSubmissionClient
 
 The cluster launches a job and starts it running from a provided script
 entrypoint/main function. It uses environment variables as needed to ensure that
@@ -79,35 +107,53 @@ the `job_context.py` code can auto-detect and use the correct job environment.
 e.g. we might set `FRAY_ENVIRONMENT=ray:...` to indicate we're in a Ray
 execution mode.
 
-## Pools
+## Queues
+
+**Status**: The Queue interface described below has been **implemented** in `fray.queue`.
+Available backends: `MemoryQueue` (in-process), `FileQueue` (fsspec-compatible),
+`HttpQueue` (client for `HttpQueueServer`).
 
 Our thorniest Ray dependency is LLM inference, where we'd like to be able to
-support scaling inference via pools of workers. To support this, we'll define a
-WorkerPool abstraction that manages a set of individual jobs via the cluster
-scheduler. A worker pool can manage jobs of any type, but we're mostly concerned
-with TPU jobs.
-
-The pool _controller_ creates a distributed queue by requesting it from the cluster:
-
-cluster.create_queue(name: str) -> Queue
+support scaling inference via pools of workers. To support this, we define a
+Queue abstraction for distributing work to a pool of workers.
 
 The Queue supports a standard distributed queue lease/pop interface:
 
-Queue:
-  push()
-  peek()
-  pop() -> Lease[T]
-  done(Lease[T])
-  pending() -> int
+```python
+class Queue[T]:
+    def push(item: T)
+    def peek() -> T | None
+    def pop(lease_timeout: int) -> Lease[T]
+    def done(lease: Lease[T])
+    def release(lease: Lease[T])  # return to queue on failure
+    def pending() -> int
+```
 
-The Ray queue will use a Ray actor, the multiprocessing queue can use a helper
-process.
+The lease semantics ensure at-least-once delivery: if a worker fails to call
+`done()` before the lease expires, the item is automatically returned to the
+queue for another worker to process.
+
+```python
+from fray.queue import MemoryQueue, FileQueue, HttpQueue
+
+# In-memory (for testing)
+queue = MemoryQueue()
+
+# File-based (works with GCS, S3 via fsspec)
+queue = FileQueue("gs://bucket/queue-dir")
+
+# HTTP client connecting to HttpQueueServer
+queue = HttpQueue("http://localhost:8080", "my-queue")
+```
 
 The controller creates a queue, then issues create_job requests to the cluster,
 providing the queue name as e.g. a command line flag to the users
 worker_pool.py. The user code will typically listen on the queue for requests,
 take a lease, apply e.g. inference, then push the inference result on a result
 queue for retrieval.
+
+> **Note**: The WorkerPool abstraction that manages pools of workers has evolved
+> and is being implemented in `lib/iris/`. See `iris.client.worker_pool`.
 
 ## Actors (Job API)
 
@@ -116,9 +162,9 @@ They are used in a few places in Marin for distributed coordination. We may
 phase them out but they are useful for compatibility with existing Ray code.
 
 ```python
-from fray.job import fray_job_ctx
+from fray.job import create_job_ctx
 
-ctx = fray_job_ctx()
+ctx = create_job_ctx()
 
 # Create an actor
 actor = ctx.create_actor(
@@ -127,7 +173,7 @@ actor = ctx.create_actor(
     name="my-actor",
     get_if_exists=True,
     lifetime="detached",
-    num_cpus=0
+    num_cpus=0  # Important: use 0 for actors on head node to avoid resource contention
 )
 
 future = actor.my_method.remote(arg1, arg2)
@@ -170,6 +216,11 @@ actor_ref = ctx.put(actor)
 actor = ctx.get(actor_ref)
 ```
 
+### CPU Allocation for Actors
+
+For RL training, set `num_cpus=0` on actors (CurriculumActor, ArrowFlightCoordinator)
+to avoid blocking job scheduling on the head node.
+
 # Design
 
 Fray provides 2 related interfaces for _cluster_ vs _job_ level APIs.
@@ -192,55 +243,50 @@ A job request consists of a device type, a set of resources, and an execution
 environment to run. "Slices" provide gang-scheduling support for e.g. GPU or TPU
 clusters, where all workers must run simultaneously.
 
-```
+```python
 DeviceConfig = CpuConfig | GpuConfig | TpuConfig
 
 class TpuConfig:
-  types: list[TpuType] # list of acceptable TPUs to run on
-  size: int # number of TPU chips required
+    tpu_type: str  # e.g., "v5litepod-16", "v6e-256"
 
+class GpuConfig:
+    gpu_type: str  # e.g., "a100", "h100"
+    count: int
 
 class ResourceConfig:
-  """Job resource worker configuration."""
-  device: DeviceConfig = CpuConfig()
-  ram: int
-  disk: int
-  cpu: int # measured in cores
-
-  # how many instances of this resource to schedule
-  # for accelerators, an instance may involve multiple hosts
-  count: int
-  min_count: int
-  max_count: int
-
-  # which regions is this job okay scheduling on, or anywhere if blank
-  regions: list[str] | None
-
-  # filters the target hosts must satisfy. for example, NON_PREEMPTIBLE
-  # ensures your job will run on a persistent host
-  constraints: dict[str, str]
-
-
+    """Job resource worker configuration."""
+    device: DeviceConfig = CpuConfig()
+    ram: str   # e.g., "8g"
+    disk: str  # e.g., "10g"
+    cpu: int   # measured in cores
+    count: int = 1  # number of replicas
 
 class EnvironmentConfig:
-  """An environment is either a workspace containing a pyproject.toml, or a docker image."""
-  workspace: Url
-  docker_image: str
+    """Environment configuration for the job."""
+    extras: list[str]           # pip extras (e.g., ["tpu"])
+    pip_packages: list[str]
+    env_vars: dict[str, str]
 
 class JobRequest:
-  user: str
-  name: str
-  resources: ResourceConfig
-  environment: EnvironmentConfig
+    name: str
+    resources: ResourceConfig
+    environment: EnvironmentConfig
+    entrypoint: Callable | Entrypoint
 
 class Cluster:
-  schedule(request: JobRequest) -> JobId
-  list() -> JobInfo
-  status(id: JobId) -> JobInfo
-  terminate(id: JobId)
+    def launch(request: JobRequest) -> JobId
+    def monitor(job_id: JobId) -> JobInfo
+    def poll(job_id: JobId) -> JobInfo
+    def list_jobs() -> list[JobInfo]
+    def terminate(job_id: JobId)
+    def wait(job_id: JobId, fail_on_error: bool = False) -> JobInfo
 ```
 
 ### Job Scheduling
+
+> **Note**: The credit-based scheduling system described below has not been
+> implemented in Fray. Advanced scheduling features are being developed in
+> `lib/iris/`. The current implementation uses Ray's native scheduling.
 
 A cluster manages a set of underlying VMs and makes global scheduling decisions
 based on a credit system. Users are assigned an initial credit amount which is
@@ -311,16 +357,17 @@ tokenize_req = JobRequest(
 Finally our accelerator job requires a more complex configuration to specify the
 acceptable device types and slice size:
 
-```
+```python
 JobRequest(
   resources=ResourceConfig(
-    device=TpuConfig(types=["v5e", "v6e", "v5p"], size="4x4"),
+    device=TpuConfig(tpu_type="v5litepod-16"),
     ram="128g",
     disk="64g",
     cpu=64,
-    count=1 # measure in device units, so one _slice_
+    count=1  # one slice
   ),
-  environment=...levanter.train_lm
+  environment=EnvironmentConfig(extras=["tpu"]),
+  entrypoint=train_fn,
 )
 ```
 
@@ -332,17 +379,21 @@ any direct work itself other than to dispatch sub-jobs. We launch the controller
 with a zero CPU request to ensure it can always schedule so long as ram is
 available on a non-preemtible machine.
 
-```
-controller = cluster.launch_job("marin.executor", job_list, cpu=0, ram="512m", constraints={fray.NON_PREEMPTIBLE})
+```python
+controller = cluster.launch(JobRequest(
+    name="executor",
+    resources=ResourceConfig(cpu=0, ram="512m"),
+    entrypoint=executor_main,
+))
 ```
 
 The controller assembles individual job requests and submits them to the cluster
 as their dependencies are available:
 
-```
-job = cluster.launch_job(stepN)
-while True:
-  cluster.status(job)
+```python
+for step in ready_steps:
+    job_id = cluster.launch(step.job_request)
+    cluster.wait(job_id, fail_on_error=True)
 ```
 
 As a future enhancement, we may allow execution steps to be submitted to the
@@ -376,59 +427,74 @@ environment. We initialize Ray by assuming the first worker will be the
 controller, and then trampoline to call the underlying user entrypoint. A user
 entrypoint typically uses Fray to do some processing:
 
-```
+```python
 def tokenize():
   backend = zephyr.current_flow()
   ds = Dataset.from_files(...).map().flat_map().writer_jsonl()
   backend.execute(ds)
 ```
 
+## TPU Orchestration
+
+**Status**: Implemented in `fray.cluster.ray.tpu`.
+
+For TPU jobs requiring gang scheduling:
+
+```python
+from fray.cluster.ray.tpu import run_on_pod_resumable, run_on_pod_multislice_resumable
+
+# Single slice with automatic retry on preemption
+result = run_on_pod_resumable(
+    my_tpu_function,
+    tpu_type="v5litepod-16",
+)
+
+# Multislice training
+result = run_on_pod_multislice_resumable(
+    my_multislice_function,
+    tpu_type="v5litepod-16",
+    num_slices=4,
+)
+```
+
+The TPU orchestration layer handles:
+- Gang scheduling (all hosts in a slice must run simultaneously)
+- Preemption detection and automatic retry
+- Multislice coordination via MEGASCALE environment variables
+- `OwnerDiedError` classified as preemption for retry purposes
+
 ## Questions
 
-With things like Ray for scheduling, we want the Ray scheduler to run on a
+~~With things like Ray for scheduling, we want the Ray scheduler to run on a
 persistent host, and the rest of the cluster to run on the pre-emptible part.
-How do we specify that? Ray doesn't make this easy? Or certainly not as easy as
-just running ray.init() on all of the machines.
+How do we specify that?~~
 
-### Multi-part jobs?
+**Resolved**: Launch the Ray head node on a non-preemptible worker. For actors
+that need to persist (like CurriculumActor), use `num_cpus=0` to avoid resource
+contention on the head node.
 
-One thought would be that jobs could have multiple simultaneous resource
-requests with independent entry points, so you could have a Job that requests 2
-separate sets of workers:
+### ~~Multi-part jobs?~~
 
-```
-ray_controller = WorkerRequest(..., entrypoint="ray.main")
-ray_worker = WorkerRequest(..., entrypoint="run_filter.main")
-```
+**Resolved**: This concept has evolved into Iris's co-scheduling with failure
+domains. See `lib/iris/docs/iris-coscheduling.md`.
 
-If any sub-worker failed, then the cluster would abort all of the workers and
-cleanup.
+### ~~RL and Actors~~
 
-Workers should be able to query the cluster to find the IP & port of running
-jobs and find their controller and register with it, for example. So I guess could have a stub function which just registers the worker with Ray:
+**Resolved**: RL training uses Fray actors with `num_cpus=0` for CurriculumActor
+and ArrowFlightCoordinator. This prevents actors from blocking job scheduling.
+StatusActor was replaced with a file-based semaphore pattern. RobustActor was
+replaced by launching critical processes on non-preemptible workers.
 
-```
-def ray_boot():
-  ray_controller = find_controller(my_environment)
-  ray.init(controller_address=ray_controller)
-  time.sleep(forever)
-```
+---
 
-How much do we care/need the resumability _within_ a Ray job, can we just
-continue by resuming the whole job? This feels over-complicated, since most of
-our tasks can be resumable if we checkpoint in the middle.
+## Change Log
 
-### RL and Actors
+**Jan 2026 Update:**
+- Updated status to reflect implemented features
+- Added notes where concepts have evolved into Iris
+- Documented Queue system implementation (MemoryQueue, FileQueue, HttpQueue)
+- Documented TPU orchestration (run_on_pod, multislice support)
+- Added `num_cpus=0` guidance for actors
+- Marked resolved questions
 
-What about situations like RL, what's the scheduling setup? Curriculum is
-currently shared across all of the RL tasks via a Ray actor, so how do we keep
-that working?
-
-We save our curriculum state with the training checkpoint, but that's
-unnecessary and can be replaced by having the curriculum checkpoint itself.
-
-Rollout workers and the trainer coordinate via a Ray actor for how to get
-checkpoints, but this can likely be replaced with some kind of queue mechanism:
-the trainer would pop from the queue, and rollout workers would peek.
-
-
+For detailed history, see PRs #1985, #2014, #2121, #2145, #2176, #2258.

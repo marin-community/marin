@@ -330,9 +330,9 @@ def _block_cross_entropy_forward(
     num_blocks = vocab_size // block_size
 
     # Initialize accumulators: loss, logsumexp, max_logits
-    initial_O = hax.zeros(labels_y.axes)
-    initial_logsumexp = hax.full(labels_y.axes, -jnp.inf)
-    initial_max = hax.full(labels_y.axes, -jnp.inf)
+    initial_O = hax.auto_sharded(hax.zeros(labels_y.axes))
+    initial_logsumexp = hax.auto_sharded(hax.full(labels_y.axes, -jnp.inf))
+    initial_max = hax.auto_sharded(hax.full(labels_y.axes, -jnp.inf))
     # We don't need this b/c we're using one-hot targets
     # initial_sumV = hax.full(labels_y.axes, 0.0)
 
@@ -450,8 +450,8 @@ def _block_cross_entropy_backward(
 
     num_blocks = vocab_size // block_size
 
-    grad_embeddings = hax.zeros(pred_embeddings.axes, dtype=pred_embeddings.dtype)
-    grad_lm_head = hax.zeros(pred_lm_head.axes, dtype=pred_lm_head.dtype)
+    grad_embeddings = hax.zeros_like(pred_embeddings, dtype=pred_embeddings.dtype)
+    grad_lm_head = hax.zeros_like(pred_lm_head, dtype=pred_lm_head.dtype)
 
     def process_block(block_idx, acc, current_block_size):
         """

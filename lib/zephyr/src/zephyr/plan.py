@@ -51,6 +51,7 @@ from zephyr.dataset import (
     WindowOp,
     WriteOp,
 )
+from zephyr.expr import Expr
 from zephyr.readers import InputFileSpec
 
 if TYPE_CHECKING:
@@ -198,7 +199,11 @@ def _load_file_gen(stream: Iterator) -> Iterator:
     from zephyr.readers import load_file
 
     for spec in stream:
-        yield from load_file(spec)
+        try:
+            yield from load_file(spec)
+        except Exception as e:
+            logger.exception(f"Failed to load from {spec}")
+            raise RuntimeError(f"Failed to load from {spec}: {e}") from e
 
 
 def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
@@ -271,6 +276,23 @@ class PhysicalStage:
     operations: list[PhysicalOp] = field(default_factory=list)
     stage_type: StageType = StageType.WORKER
     output_shards: int | None = None
+
+    def stage_name(self, max_length: int | None = None) -> str:
+        """Generate a descriptive name from operations.
+
+        Args:
+            max_length: Maximum length of the name (truncates with "..." if exceeded).
+                        None means no limit. Must be >= 3 if specified.
+
+        Returns:
+            Name like "Map → Filter → Write" or "Map → Filter → ..." if truncated
+        """
+        assert max_length is None or max_length >= 3, "max_length must be at least 3"
+        op_names = [type(op).__name__ for op in self.operations]
+        name = " → ".join(op_names)
+        if max_length is not None and len(name) > max_length:
+            return name[: max_length - 3] + "..."
+        return name
 
 
 @dataclass
@@ -495,7 +517,7 @@ def _compute_file_pushdown(
     Returns:
         Tuple of (source_items, remaining_operations), where filter/select have been pushed down.
     """
-    filter_expr = None
+    filter_expr: Expr | None = None
     select_columns = load_op.columns
     ops_to_skip: set[int] = set()
 
@@ -865,7 +887,7 @@ class StageContext:
     total_shards: int
     chunk_size: int
     aux_shards: dict[int, list[Any]] = field(default_factory=dict)
-    execution_context: JobContext = None
+    execution_context: JobContext | None = None
 
     def get_right_shard(self, op_index: int) -> Any:
         """Get right shard for join at given op index.
@@ -895,6 +917,10 @@ def run_stage(
     Yields:
         ChunkHeader followed by list of items for each chunk produced
     """
+
+    # TODO(rav): this should live in a common logging configuration module?
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(filename)s:%(lineno)d %(message)s")
+
     from zephyr.writers import write_binary_file, write_jsonl_file, write_levanter_cache, write_parquet_file
 
     stream: Iterator = iter(ctx.shard)

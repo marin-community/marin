@@ -33,6 +33,7 @@ dependencies = [
     "jax>=0.8.0",
     "fray",
     "zephyr",
+    "einops",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
     "transformers>=4.57.1,<5.0",
@@ -108,12 +109,13 @@ test = [
   "pytest-asyncio",
   "soundfile",
   "librosa>=0.11.0",
-  "numba>=0.63.1",
   "tensorboardX>=2.6",
   "chex>=0.1.86",
   "httpx>=0.28.1",
   "pytest-profiling>=1.8.1",
   "trackio>=0.5.0",
+  # need this or else the resolver gets a bad version
+  "numba>=0.62.1"
 ]
 
 docs = [
@@ -174,5 +176,6 @@ markers = [
     "entry: marks tests as entry point tests (deselect with '-m \"not entry\"')",
     "ray: marks tests that require Ray (deselect with '-m \"not ray\"')",
     "torch: mark tests that use Torch (deselect with '-m \"not torch\"')",
+    "tpu: mark tests that require TPU (deselect with '-m \"not tpu\"')",
 ]
 asyncio_default_fixture_loop_scope = "function"
