@@ -91,6 +91,7 @@ def linear_softmax_cross_entropy_loss_forward_pallas_kernel(
     v_dim: int,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
 ):
     """Pallas kernel for per-example loss + logsumexp.
 
@@ -125,6 +126,7 @@ def linear_softmax_cross_entropy_loss_forward_pallas_kernel(
         w_ref[...],
         (((1,), (0,)), ((), ())),
         preferred_element_type=jnp.float32,
+        precision=precision,
     )
 
     # Once we've accumulated across H, compute label logit + LSE for this V tile.
@@ -150,7 +152,7 @@ def linear_softmax_cross_entropy_loss_forward_pallas_kernel(
 
 @partial(
     jax.jit,
-    static_argnames=["block_sizes", "dtype", "logit_soft_cap"],
+    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision"],
 )
 def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
     x: Float[Array, "B H"],
@@ -160,6 +162,7 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
     block_sizes: BlockSizes,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
     """Forward Pallas kernel wrapper (per-example loss + logsumexp)."""
     _validate_inputs(x, labels, w, block_sizes)
@@ -180,6 +183,7 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
             v_dim=v_dim,
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
+            precision=precision,
         ),
         in_specs=[
             pl.BlockSpec(
@@ -246,6 +250,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
     *,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
 ):
     """Pallas kernel for backward pass of per-example cross-entropy.
 
@@ -273,6 +278,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
             w_ref[...],
             (((1,), (0,)), ((), ())),
             preferred_element_type=jnp.float32,
+            precision=precision,
         )
 
     @pl.when(jnp.logical_and(stage_index == 0, h_index != 0))
@@ -282,6 +288,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
             w_ref[...],
             (((1,), (0,)), ((), ())),
             preferred_element_type=jnp.float32,
+            precision=precision,
         )
 
     cur_v_block_size = jnp.minimum(v_dim - v_block_size * v_index, v_block_size)
@@ -340,6 +347,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
             w_ref[...],
             (((1,), (1,)), ((), ())),
             preferred_element_type=jnp.float32,
+            precision=precision,
         )
         x_write_future.start()
 
@@ -350,6 +358,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
             xw_scratch_ref[...],
             (((0,), (0,)), ((), ())),
             preferred_element_type=jnp.float32,
+            precision=precision,
         )
         w_write_future.start()
 
@@ -360,6 +369,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
             w_ref[...],
             (((1,), (1,)), ((), ())),
             preferred_element_type=jnp.float32,
+            precision=precision,
         )
         x_read_future.wait()
         x_grad_tile_ref[...] += res
@@ -372,6 +382,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
             xw_scratch_ref[...],
             (((0,), (0,)), ((), ())),
             preferred_element_type=jnp.float32,
+            precision=precision,
         )
         w_read_future.wait()
         w_grad_tile_ref[...] += res
@@ -385,7 +396,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
 
 @partial(
     jax.jit,
-    static_argnames=["block_sizes", "dtype", "logit_soft_cap"],
+    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision"],
 )
 def linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
     dout_loss: Float[Array, "B"],
@@ -398,6 +409,7 @@ def linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
     block_sizes: BlockSizes,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
 ) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
     """Backward Pallas kernel wrapper."""
     _validate_inputs(x, labels, w, block_sizes)
@@ -415,6 +427,7 @@ def linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
             linear_softmax_cross_entropy_loss_backward_pallas_kernel,
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
+            precision=precision,
         ),
         in_specs=[
             pl.BlockSpec(  # x
@@ -484,6 +497,7 @@ def _make_custom_vjp(
     v_block_size: int,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
 ):
     block_sizes = BlockSizes(
         b_block_size=b_block_size,
@@ -500,6 +514,7 @@ def _make_custom_vjp(
             block_sizes=block_sizes,
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
+            precision=precision,
         )
 
     def _fn_fwd(x: jax.Array, labels: jax.Array, w: jax.Array):
@@ -510,6 +525,7 @@ def _make_custom_vjp(
             block_sizes=block_sizes,
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
+            precision=precision,
         )
         return (loss, lse), (x, labels, w, lse)
 
@@ -529,6 +545,7 @@ def _make_custom_vjp(
             block_sizes=block_sizes,
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
+            precision=precision,
         )
         labels_grad = jnp.zeros_like(labels)
         return x_grad, labels_grad, w_grad
@@ -545,6 +562,7 @@ def linear_softmax_cross_entropy_loss_pallas(
     block_sizes: BlockSizes,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
     """Pallas implementation returning (loss, lse) per example."""
     fn = _make_custom_vjp(
@@ -553,6 +571,7 @@ def linear_softmax_cross_entropy_loss_pallas(
         block_sizes.v_block_size,
         dtype,
         logit_soft_cap,
+        precision,
     )
     return fn(x, labels, w)
 

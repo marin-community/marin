@@ -15,7 +15,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from .attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
-from .loss import linear_softmax_cross_entropy_loss_and_logz
+from .loss import fused_linear_softmax_cross_entropy_loss
 from .sharding import Pbatch, Pvocab, unshard
 
 
@@ -271,25 +271,16 @@ def loss_fn(
     # good enough for now.
     block_size = cfg.cross_entropy_block_size
 
-    per_pos_loss, logz = linear_softmax_cross_entropy_loss_and_logz(
+    return fused_linear_softmax_cross_entropy_loss(
         hidden,
         params.output_proj,
         labels,
+        weight=loss_weight,
+        reduction=reduction,
+        logsumexp_weight=logsumexp_weight,
         block_size=block_size,
         dtype=loss_dtype,
     )
-    per_pos_loss = per_pos_loss.astype(loss_dtype) * loss_weight
-    if logsumexp_weight is not None and logsumexp_weight != 0.0:
-        per_pos_loss = per_pos_loss + logsumexp_weight * (logz.astype(loss_dtype) ** 2) * loss_weight
-
-    if reduction == "none":
-        return per_pos_loss
-    if reduction == "sum":
-        return jnp.sum(per_pos_loss)
-    if reduction == "mean":
-        denom = jnp.sum(loss_weight)
-        return jnp.sum(per_pos_loss) / jnp.maximum(denom, jnp.array(1.0, dtype=loss_dtype))
-    raise ValueError(f"Unknown reduction: {reduction}")
 
 
 __all__ = [

@@ -97,6 +97,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     block_sizes: Optional[BlockSizes] = None,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
     implementation: Implementation | Sequence[Implementation | ArrayImpl] | None = None,
 ) -> jax.Array:
     """Fused cross-entropy + logsumexp penalty on raw arrays.
@@ -112,6 +113,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         block_sizes: Block size configuration for the kernel.
         dtype: Optional dtype for logits/softmax computations.
         logit_soft_cap: Optional tanh soft cap for logits.
+        precision: Optional matmul precision override for XLA/reference paths.
         implementation: Backend selector or override implementation list.
 
     Returns:
@@ -141,6 +143,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                     block_sizes=block_sizes,
                     dtype=dtype,
                     logit_soft_cap=logit_soft_cap,
+                    precision=precision,
                 )
             except PallasUnsupportedError as e:
                 if explicit:
@@ -172,6 +175,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                     block_sizes=block_sizes,
                     dtype=dtype,
                     logit_soft_cap=logit_soft_cap,
+                    precision=precision,
                 )
             except PallasUnsupportedError as e:
                 if explicit:

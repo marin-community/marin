@@ -21,6 +21,7 @@ def linear_softmax_cross_entropy_loss_reference(
     *,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
     """Reference loss + logsumexp for linear softmax cross-entropy.
 
@@ -35,8 +36,12 @@ def linear_softmax_cross_entropy_loss_reference(
         loss: [B] per-example cross-entropy loss.
         lse: [B] logsumexp of logits.
     """
-
-    logits = x @ w
+    logits = jax.lax.dot_general(
+        x,
+        w,
+        (((1,), (0,)), ((), ())),
+        precision=precision,
+    )
     if dtype is not None:
         logits = logits.astype(dtype)
 
@@ -55,6 +60,7 @@ def linear_softmax_cross_entropy_loss_streaming(
     block_size: int,
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
     """Streaming reference loss + logsumexp without materializing logits."""
 
@@ -71,8 +77,10 @@ def linear_softmax_cross_entropy_loss_streaming(
     v_padded = v_dim + pad
     num_blocks = v_padded // block_size
 
-    logsumexp_init = jnp.full((b_dim,), -jnp.inf, dtype=out_dtype)
-    label_logit_init = jnp.full((b_dim,), -jnp.inf, dtype=out_dtype)
+    # this "full_like(x.sum(-1))" is just a convenient way to get a (B,) shaped array that is sharded like x's first axis
+    # DCE means this won't allocate any real memory or do real computation
+    logsumexp_init = jnp.full_like(x.sum(-1), -jnp.inf, dtype=out_dtype)
+    label_logit_init = jnp.full_like(x.sum(-1), -jnp.inf, dtype=out_dtype)
 
     def body(block_idx, state):
         logsumexp, label_logit = state
@@ -83,6 +91,7 @@ def linear_softmax_cross_entropy_loss_streaming(
             x,
             w_block,
             (((1,), (0,)), ((), ())),
+            precision=precision,
             preferred_element_type=jnp.float32,
         )
         if dtype is not None:
