@@ -35,7 +35,7 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.dashboard_common import html_shell, logs_api_response, logs_page_response, static_files_mount
+from iris.cluster.dashboard_common import html_shell, static_files_mount
 from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
@@ -95,11 +95,21 @@ class ControllerDashboard:
     def _vm_detail_page(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(html_shell("VM Detail", "/static/controller/vm-detail.js"))
 
-    def _logs_page(self, request: Request) -> HTMLResponse:
-        return logs_page_response(request)
+    def _logs_page(self, _request: Request) -> HTMLResponse:
+        return HTMLResponse(html_shell("Iris Logs", "/static/shared/log-viewer.js"))
 
-    def _api_logs(self, request: Request):
-        return logs_api_response(request, self._log_buffer)
+    def _api_logs(self, request: Request) -> JSONResponse:
+        if not self._log_buffer:
+            return JSONResponse([])
+        prefix = request.query_params.get("prefix") or None
+        try:
+            limit = int(request.query_params.get("limit", "200"))
+        except (ValueError, TypeError):
+            limit = 200
+        records = self._log_buffer.query(prefix=prefix, limit=limit)
+        return JSONResponse(
+            [{"timestamp": r.timestamp, "level": r.level, "logger_name": r.logger_name, "message": r.message} for r in records]
+        )
 
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""

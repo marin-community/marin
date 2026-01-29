@@ -76,6 +76,8 @@ tr:hover {
 .status-worker_failed { color: #8250df; }
 .status-unschedulable { color: #cf222e; }
 .status-requesting { color: #bc4c00; }
+.status-unspecified { color: #57606a; }
+.status-unknown { color: #57606a; }
 
 /* VM-specific states */
 .status-ready { color: #1a7f37; }

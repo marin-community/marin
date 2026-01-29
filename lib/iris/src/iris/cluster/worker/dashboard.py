@@ -22,20 +22,9 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.dashboard_common import html_shell, logs_api_response, logs_page_response, static_files_mount
+from iris.cluster.dashboard_common import html_shell, static_files_mount
 from iris.logging import LogBuffer
-from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceWSGIApplication
-from iris.rpc.proto_utils import task_state_name
-
-
-class FakeRequestContext:
-    """Minimal stub RequestContext for internal REST-to-RPC bridging.
-
-    RPC methods require a RequestContext parameter but never access it.
-    """
-
-    pass
 
 
 class WorkerDashboard:
@@ -64,31 +53,31 @@ class WorkerDashboard:
         rpc_app = WSGIMiddleware(rpc_wsgi_app)
 
         routes = [
-            # Health check (for bootstrap and load balancers)
             Route("/health", self._health),
-            # Web dashboard
             Route("/", self._dashboard),
             Route("/task/{task_id:path}", self._task_detail_page),
             Route("/logs", self._logs_page),
-            # REST API (for dashboard)
-            # Note: logs route must come before get_task to avoid {task_id:path} matching "task-id/logs"
-            Route("/api/stats", self._stats),
-            Route("/api/tasks", self._list_tasks),
             Route("/api/logs", self._api_logs),
-            Route("/api/tasks/{task_id:path}/logs", self._get_logs),
-            Route("/api/tasks/{task_id:path}", self._get_task),
-            # Static files (JS/CSS for Preact components)
             static_files_mount(),
-            # Connect RPC - mount WSGI app wrapped for ASGI
             Mount(rpc_wsgi_app.path, app=rpc_app),
         ]
         return Starlette(routes=routes)
 
-    def _logs_page(self, request: Request) -> HTMLResponse:
-        return logs_page_response(request)
+    def _logs_page(self, _request: Request) -> HTMLResponse:
+        return HTMLResponse(html_shell("Iris Logs", "/static/shared/log-viewer.js"))
 
-    def _api_logs(self, request: Request):
-        return logs_api_response(request, self._log_buffer)
+    def _api_logs(self, request: Request) -> JSONResponse:
+        if not self._log_buffer:
+            return JSONResponse([])
+        prefix = request.query_params.get("prefix") or None
+        try:
+            limit = int(request.query_params.get("limit", "200"))
+        except (ValueError, TypeError):
+            limit = 200
+        records = self._log_buffer.query(prefix=prefix, limit=limit)
+        return JSONResponse(
+            [{"timestamp": r.timestamp, "level": r.level, "logger_name": r.logger_name, "message": r.message} for r in records]
+        )
 
     def _health(self, _request: Request) -> JSONResponse:
         """Simple health check endpoint for bootstrap and load balancers."""
@@ -99,132 +88,6 @@ class WorkerDashboard:
 
     def _task_detail_page(self, request: Request) -> HTMLResponse:
         return HTMLResponse(html_shell("Task Detail", "/static/worker/task-detail.js"))
-
-    def _stats(self, _request: Request) -> JSONResponse:
-        ctx = FakeRequestContext()
-        response = self._service.list_tasks(cluster_pb2.Worker.ListTasksRequest(), ctx)
-        tasks = response.tasks
-
-        return JSONResponse(
-            {
-                "running": sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_RUNNING),
-                "pending": sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_PENDING),
-                "building": sum(1 for t in tasks if t.state == cluster_pb2.TASK_STATE_BUILDING),
-                "completed": sum(
-                    1
-                    for t in tasks
-                    if t.state
-                    in (
-                        cluster_pb2.TASK_STATE_SUCCEEDED,
-                        cluster_pb2.TASK_STATE_FAILED,
-                        cluster_pb2.TASK_STATE_KILLED,
-                    )
-                ),
-            }
-        )
-
-    def _list_tasks(self, _request: Request) -> JSONResponse:
-        ctx = FakeRequestContext()
-        response = self._service.list_tasks(cluster_pb2.Worker.ListTasksRequest(), ctx)
-        tasks = response.tasks
-
-        return JSONResponse(
-            [
-                {
-                    "task_id": t.task_id,
-                    "job_id": t.job_id,
-                    "task_index": t.task_index,
-                    "attempt_id": t.current_attempt_id,
-                    "status": task_state_name(t.state),
-                    "started_at": t.started_at_ms,
-                    "finished_at": t.finished_at_ms,
-                    "exit_code": t.exit_code,
-                    "error": t.error,
-                    # Add resource metrics
-                    "memory_mb": t.resource_usage.memory_mb,
-                    "memory_peak_mb": t.resource_usage.memory_peak_mb,
-                    "cpu_percent": t.resource_usage.cpu_percent,
-                    "process_count": t.resource_usage.process_count,
-                    "disk_mb": t.resource_usage.disk_mb,
-                    # Add build metrics
-                    "build_from_cache": t.build_metrics.from_cache,
-                    "image_tag": t.build_metrics.image_tag,
-                }
-                for t in tasks
-            ]
-        )
-
-    def _get_task(self, request: Request) -> JSONResponse:
-        task_id = request.path_params["task_id"]
-        ctx = FakeRequestContext()
-        try:
-            task = self._service.get_task_status(cluster_pb2.Worker.GetTaskStatusRequest(task_id=task_id), ctx)
-        except Exception:
-            # RPC raises ConnectError with NOT_FOUND for missing tasks
-            return JSONResponse({"error": "Not found"}, status_code=404)
-
-        return JSONResponse(
-            {
-                "task_id": task.task_id,
-                "job_id": task.job_id,
-                "task_index": task.task_index,
-                "attempt_id": task.current_attempt_id,
-                "status": task_state_name(task.state),
-                "started_at": task.started_at_ms,
-                "finished_at": task.finished_at_ms,
-                "exit_code": task.exit_code,
-                "error": task.error,
-                "ports": dict(task.ports),
-                "resources": {
-                    "memory_mb": task.resource_usage.memory_mb,
-                    "memory_peak_mb": task.resource_usage.memory_peak_mb,
-                    "cpu_percent": task.resource_usage.cpu_percent,
-                    "disk_mb": task.resource_usage.disk_mb,
-                    "process_count": task.resource_usage.process_count,
-                },
-                "build": {
-                    "started_ms": task.build_metrics.build_started_ms,
-                    "finished_ms": task.build_metrics.build_finished_ms,
-                    "duration_ms": (
-                        (task.build_metrics.build_finished_ms - task.build_metrics.build_started_ms)
-                        if task.build_metrics.build_started_ms
-                        else 0
-                    ),
-                    "from_cache": task.build_metrics.from_cache,
-                    "image_tag": task.build_metrics.image_tag,
-                },
-            }
-        )
-
-    def _get_logs(self, request: Request) -> JSONResponse:
-        task_id = request.path_params["task_id"]
-        tail = request.query_params.get("tail")
-        start_line = -int(tail) if tail else 0
-        source = request.query_params.get("source")
-        ctx = FakeRequestContext()
-        log_filter = cluster_pb2.Worker.FetchLogsFilter(start_line=start_line)
-        try:
-            response = self._service.fetch_task_logs(
-                cluster_pb2.Worker.FetchTaskLogsRequest(task_id=task_id, filter=log_filter), ctx
-            )
-        except Exception:
-            # RPC raises ConnectError with NOT_FOUND for missing tasks
-            return JSONResponse({"error": "Not found"}, status_code=404)
-
-        logs = [
-            {
-                "timestamp": entry.timestamp_ms,
-                "source": entry.source,
-                "data": entry.data,
-            }
-            for entry in response.logs
-        ]
-
-        # Apply source filter if specified
-        if source:
-            logs = [log for log in logs if log["source"] == source]
-
-        return JSONResponse(logs)
 
     def run(self) -> None:
         import uvicorn
