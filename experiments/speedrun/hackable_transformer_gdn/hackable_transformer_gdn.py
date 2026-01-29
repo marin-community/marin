@@ -672,7 +672,7 @@ def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]
         profiler=True,
     )
 
-    run_name = f"hacktx_{size}_gdn_{seq_len}_ch_{model_cfg.gdn_chunk_size}_seg_{model_cfg.gdn_segment_size}_fp32_v5p32"
+    run_name = f"hacktx_{size}_gdn_{seq_len}_ch_{model_cfg.gdn_chunk_size}_seg_{model_cfg.gdn_segment_size}_v5p32"
     desc = f"Hackable Transformer ({size}) w/ hybrid Gated DeltaNet and standard attention layers (Muon)"
     cfg = SpeedrunConfig(author=AUTHOR, description=desc, model_config=model_cfg, train_config=train)
     return run_name, cfg
