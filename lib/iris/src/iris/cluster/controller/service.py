@@ -37,6 +37,7 @@ from iris.cluster.controller.events import (
 from iris.cluster.controller.scheduler import SchedulingContext, TaskScheduleResult
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerTask
 from iris.cluster.types import JobId, TaskId, WorkerId
+from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
@@ -98,10 +99,12 @@ class ControllerServiceImpl:
         state: ControllerState,
         scheduler: SchedulerProtocol,
         bundle_prefix: str,
+        log_buffer: LogBuffer | None = None,
     ):
         self._state = state
         self._scheduler = scheduler
         self._bundle_store = BundleStore(bundle_prefix)
+        self._log_buffer = log_buffer
 
     def launch_job(
         self,
@@ -732,3 +735,28 @@ class ControllerServiceImpl:
                     )
                 )
         return cluster_pb2.Controller.GetTransactionsResponse(actions=actions)
+
+    # --- Controller Logs ---
+
+    def get_controller_logs(
+        self,
+        request: cluster_pb2.Controller.GetControllerLogsRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetControllerLogsResponse:
+        """Get controller process logs from the in-memory ring buffer."""
+        if not self._log_buffer:
+            return cluster_pb2.Controller.GetControllerLogsResponse(records=[])
+        prefix = request.prefix or None
+        limit = request.limit if request.limit > 0 else 200
+        records = self._log_buffer.query(prefix=prefix, limit=limit)
+        return cluster_pb2.Controller.GetControllerLogsResponse(
+            records=[
+                cluster_pb2.Controller.ControllerLogRecord(
+                    timestamp=r.timestamp,
+                    level=r.level,
+                    logger_name=r.logger_name,
+                    message=r.message,
+                )
+                for r in records
+            ]
+        )

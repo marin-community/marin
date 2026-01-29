@@ -67,6 +67,9 @@ class ControllerService(Protocol):
     async def get_task_logs(self, request: cluster__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTaskLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def get_controller_logs(self, request: cluster__pb2.Controller.GetControllerLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetControllerLogsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]):
     def __init__(self, service: ControllerService | AsyncGenerator[ControllerService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None) -> None:
@@ -242,6 +245,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_task_logs,
+                ),
+                "/iris.cluster.ControllerService/GetControllerLogs": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetControllerLogs",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.GetControllerLogsRequest,
+                        output=cluster__pb2.Controller.GetControllerLogsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_controller_logs,
                 ),
             },
             interceptors=interceptors,
@@ -595,6 +608,26 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def get_controller_logs(
+        self,
+        request: cluster__pb2.Controller.GetControllerLogsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.GetControllerLogsResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetControllerLogs",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.GetControllerLogsRequest,
+                output=cluster__pb2.Controller.GetControllerLogsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 
 class WorkerService(Protocol):
@@ -850,6 +883,8 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_task_logs(self, request: cluster__pb2.Controller.GetTaskLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetTaskLogsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_controller_logs(self, request: cluster__pb2.Controller.GetControllerLogsRequest, ctx: RequestContext) -> cluster__pb2.Controller.GetControllerLogsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
 class ControllerServiceWSGIApplication(ConnectWSGIApplication):
@@ -1025,6 +1060,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_task_logs,
+                ),
+                "/iris.cluster.ControllerService/GetControllerLogs": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetControllerLogs",
+                        service_name="iris.cluster.ControllerService",
+                        input=cluster__pb2.Controller.GetControllerLogsRequest,
+                        output=cluster__pb2.Controller.GetControllerLogsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_controller_logs,
                 ),
             },
             interceptors=interceptors,
@@ -1372,6 +1417,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=cluster__pb2.Controller.GetTaskLogsRequest,
                 output=cluster__pb2.Controller.GetTaskLogsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_controller_logs(
+        self,
+        request: cluster__pb2.Controller.GetControllerLogsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.Controller.GetControllerLogsResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetControllerLogs",
+                service_name="iris.cluster.ControllerService",
+                input=cluster__pb2.Controller.GetControllerLogsRequest,
+                output=cluster__pb2.Controller.GetControllerLogsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

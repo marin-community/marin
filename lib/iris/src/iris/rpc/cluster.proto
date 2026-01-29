@@ -558,6 +558,23 @@ message Controller {
     repeated Worker.LogEntry logs = 1;
     string worker_address = 2;
   }
+
+  // --- Controller Process Logs ---
+  message GetControllerLogsRequest {
+    string prefix = 1;   // Logger name prefix filter (empty = all)
+    int32 limit = 2;     // Max records to return (0 = default 200)
+  }
+
+  message ControllerLogRecord {
+    double timestamp = 1;
+    string level = 2;
+    string logger_name = 3;
+    string message = 4;
+  }
+
+  message GetControllerLogsResponse {
+    repeated ControllerLogRecord records = 1;
+  }
 }
 
 // ============================================================================
@@ -668,6 +685,9 @@ service ControllerService {
 
   // Task logs (proxied to worker)
   rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
+
+  // Controller process logs
+  rpc GetControllerLogs(Controller.GetControllerLogsRequest) returns (Controller.GetControllerLogsResponse);
 }
 
 service WorkerService {
