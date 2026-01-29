@@ -25,6 +25,7 @@ from typing import Protocol
 import grpc
 import uvicorn
 
+from iris.chaos import chaos
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import (
     TaskAssignedEvent,
@@ -523,6 +524,8 @@ class Controller:
                     f"Dispatching task {task.task_id} to worker {worker.worker_id} "
                     f"at {worker.address} (attempt {attempt + 1})"
                 )
+                if chaos("controller.dispatch"):
+                    raise Exception("chaos: dispatch unavailable")
                 stub = self._stub_factory.get_stub(worker.address)
                 stub.run_task(request)
                 logger.info(f"Successfully dispatched task {task.task_id} to worker {worker.worker_id}")
