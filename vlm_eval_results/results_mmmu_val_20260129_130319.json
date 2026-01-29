@@ -1,0 +1,194 @@
+{
+  "timestamp": "20260129_130319",
+  "checkpoint": "gs://marin-us-east1/checkpoints/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/hf/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/step-39061/",
+  "tasks": [
+    "mmmu_val"
+  ],
+  "results": {
+    "mmmu_val": {
+      "acc,none": 0.3466666666666667,
+      "acc_stderr,none": "N/A",
+      "alias": "mmmu_val"
+    },
+    "mmmu_val_art_and_design": {
+      "acc,none": 0.35,
+      "acc_stderr,none": "N/A",
+      "alias": " - Art and Design"
+    },
+    "mmmu_val_art": {
+      "alias": "  - Art",
+      "acc,none": 0.4,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_art_theory": {
+      "alias": "  - Art Theory",
+      "acc,none": 0.2,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_design": {
+      "alias": "  - Design",
+      "acc,none": 0.8,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_music": {
+      "alias": "  - Music",
+      "acc,none": 0.0,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_business": {
+      "acc,none": 0.2,
+      "acc_stderr,none": "N/A",
+      "alias": " - Business"
+    },
+    "mmmu_val_accounting": {
+      "alias": "  - Accounting",
+      "acc,none": 0.2,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_economics": {
+      "alias": "  - Economics",
+      "acc,none": 0.4,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_finance": {
+      "alias": "  - Finance",
+      "acc,none": 0.0,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_manage": {
+      "alias": "  - Manage",
+      "acc,none": 0.0,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_marketing": {
+      "alias": "  - Marketing",
+      "acc,none": 0.4,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_health_and_medicine": {
+      "acc,none": 0.32,
+      "acc_stderr,none": "N/A",
+      "alias": " - Health and Medicine"
+    },
+    "mmmu_val_basic_medical_science": {
+      "alias": "  - Basic Medical Science",
+      "acc,none": 0.6,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_clinical_medicine": {
+      "alias": "  - Clinical Medicine",
+      "acc,none": 0.2,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_diagnostics_and_laboratory_medicine": {
+      "alias": "  - Diagnostics and Laboratory Medicine",
+      "acc,none": 0.0,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_pharmacy": {
+      "alias": "  - Pharmacy",
+      "acc,none": 0.2,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_public_health": {
+      "alias": "  - Public Health",
+      "acc,none": 0.6,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_humanities_and_social_science": {
+      "acc,none": 0.5,
+      "acc_stderr,none": "N/A",
+      "alias": " - Humanities and Social Science"
+    },
+    "mmmu_val_history": {
+      "alias": "  - History",
+      "acc,none": 0.2,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_literature": {
+      "alias": "  - Literature",
+      "acc,none": 1.0,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_psychology": {
+      "alias": "  - Psychology",
+      "acc,none": 0.6,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_sociology": {
+      "alias": "  - Sociology",
+      "acc,none": 0.2,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_science": {
+      "acc,none": 0.32,
+      "acc_stderr,none": "N/A",
+      "alias": " - Science"
+    },
+    "mmmu_val_biology": {
+      "alias": "  - Biology",
+      "acc,none": 0.4,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_chemistry": {
+      "alias": "  - Chemistry",
+      "acc,none": 0.4,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_geography": {
+      "alias": "  - Geography",
+      "acc,none": 0.4,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_math": {
+      "alias": "  - Math",
+      "acc,none": 0.2,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_physics": {
+      "alias": "  - Physics",
+      "acc,none": 0.2,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_tech_and_engineering": {
+      "acc,none": 0.4,
+      "acc_stderr,none": "N/A",
+      "alias": " - Tech and Engineering"
+    },
+    "mmmu_val_agriculture": {
+      "alias": "  - Agriculture",
+      "acc,none": 0.6,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_architecture_and_engineering": {
+      "alias": "  - Architecture and Engineering",
+      "acc,none": 0.4,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_computer_science": {
+      "alias": "  - Computer Science",
+      "acc,none": 0.4,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_electronics": {
+      "alias": "  - Electronics",
+      "acc,none": 0.0,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_energy_and_power": {
+      "alias": "  - Energy and Power",
+      "acc,none": 0.6,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_materials": {
+      "alias": "  - Materials",
+      "acc,none": 0.6,
+      "acc_stderr,none": "N/A"
+    },
+    "mmmu_val_mechanical_engineering": {
+      "alias": "  - Mechanical Engineering",
+      "acc,none": 0.2,
+      "acc_stderr,none": "N/A"
+    }
+  }
+}
