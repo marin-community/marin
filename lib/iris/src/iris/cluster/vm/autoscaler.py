@@ -92,29 +92,6 @@ class RoutingResult:
     unmet_demand: int
 
 
-@dataclass
-class AutoscalerConfig:
-    """Configuration for the autoscaler."""
-
-    evaluation_interval_seconds: float = 10.0
-    requesting_timeout_seconds: float = 120.0
-
-    @classmethod
-    def from_proto(cls, proto: config_pb2.AutoscalerConfig) -> AutoscalerConfig:
-        """Create AutoscalerConfig from proto message.
-
-        Args:
-            proto: config_pb2.AutoscalerConfig proto message
-
-        Returns:
-            AutoscalerConfig with values from proto (using defaults if proto fields are 0)
-        """
-        return cls(
-            evaluation_interval_seconds=proto.evaluation_interval_seconds or 10.0,
-            requesting_timeout_seconds=proto.requesting_timeout_seconds or 120.0,
-        )
-
-
 def route_demand(
     groups: list[ScalingGroup],
     demand_entries: list[DemandEntry],
@@ -196,12 +173,16 @@ class Autoscaler:
         self,
         scale_groups: dict[str, ScalingGroup],
         vm_registry: VmRegistry,
-        config: AutoscalerConfig | None = None,
+        config: config_pb2.AutoscalerConfig | None = None,
     ):
         self._groups = scale_groups
         self._vm_registry = vm_registry
-        self._config = config or AutoscalerConfig()
-        self._last_evaluation_ms: int = 0
+
+        # Apply defaults for proto fields (proto float defaults to 0.0)
+        if config is None:
+            config = config_pb2.AutoscalerConfig()
+        self._evaluation_interval_seconds = config.evaluation_interval_seconds or 10.0
+        self._requesting_timeout_seconds = config.requesting_timeout_seconds or 120.0
 
         # Track slice creation times for short-lived slice detection
         self._slice_created_at: dict[str, int] = {}
@@ -209,8 +190,11 @@ class Autoscaler:
         # Bounded log of recent autoscaler actions for dashboard/debugging
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
 
-        # Thread pool for async scale-up
-        self._scale_up_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="scale-up")
+        # Thread pool for async scale-up (scale with number of groups, min 4)
+        self._scale_up_executor = ThreadPoolExecutor(
+            max_workers=max(len(scale_groups), 4),
+            thread_name_prefix="scale-up",
+        )
 
     def shutdown(self) -> None:
         """Shutdown the autoscaler and wait for in-flight scale-ups to complete."""
@@ -373,8 +357,6 @@ class Autoscaler:
             decisions: List of scaling decisions to execute.
             timestamp_ms: Current timestamp.
         """
-        self._last_evaluation_ms = timestamp_ms
-
         for decision in decisions:
             group = self._groups.get(decision.scale_group)
             if not group:
@@ -391,7 +373,7 @@ class Autoscaler:
         a background thread pool. Returns immediately without blocking.
         """
         # Mark group as requesting before submitting to executor
-        timeout_ms = int(self._config.requesting_timeout_seconds * 1000)
+        timeout_ms = int(self._requesting_timeout_seconds * 1000)
         group.mark_requesting(ts, timeout_ms)
 
         # Submit to background thread
@@ -455,7 +437,7 @@ class Autoscaler:
         timestamp_ms = timestamp_ms or now_ms()
         logger.debug("Autoscaler run_once: demand_entries=%s", demand_entries)
 
-        # Step 1: Clean up failed slices FIRST (always done, not rate-limited)
+        # Step 1: Clean up failed slices FIRST
         for group in self._groups.values():
             cleaned = group.cleanup_failed_slices(timestamp_ms)
             for slice_obj in cleaned:
@@ -466,10 +448,6 @@ class Autoscaler:
                     slice_id=slice_obj.slice_id,
                     reason="cleaning up failed slice",
                 )
-
-        # Rate-limit evaluation based on evaluation_interval_seconds
-        if timestamp_ms - self._last_evaluation_ms < self._config.evaluation_interval_seconds * 1000:
-            return []
 
         # Step 2: Evaluate (scale-up only)
         decisions = self.evaluate(demand_entries, timestamp_ms)
@@ -510,7 +488,7 @@ class Autoscaler:
         return vm_pb2.AutoscalerStatus(
             groups=[g.to_status() for g in self._groups.values()],
             current_demand={g.name: g.current_demand for g in self._groups.values()},
-            last_evaluation_ms=self._last_evaluation_ms,
+            last_evaluation_ms=0,  # Controlled by controller now
             recent_actions=list(self._action_log),
         )
 
@@ -527,6 +505,11 @@ class Autoscaler:
     def groups(self) -> dict[str, ScalingGroup]:
         """All scale groups."""
         return self._groups
+
+    @property
+    def evaluation_interval_seconds(self) -> float:
+        """Configured evaluation interval in seconds."""
+        return self._evaluation_interval_seconds
 
     def notify_worker_failed(self, vm_address: str) -> None:
         """Called by controller when a worker fails. Terminates the containing slice.

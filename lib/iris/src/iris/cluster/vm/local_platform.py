@@ -36,7 +36,7 @@ from iris.cluster.client.local_client import (
     _LocalImageProvider,
 )
 from iris.cluster.types import get_tpu_topology, tpu_device
-from iris.cluster.vm.autoscaler import Autoscaler, AutoscalerConfig
+from iris.cluster.vm.autoscaler import Autoscaler
 from iris.cluster.vm.managed_vm import ManagedVm, VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
@@ -339,5 +339,5 @@ def _create_local_autoscaler(
     return Autoscaler(
         scale_groups=scale_groups,
         vm_registry=vm_registry,
-        config=AutoscalerConfig(evaluation_interval_seconds=2.0),
+        config=config_pb2.AutoscalerConfig(evaluation_interval_seconds=2.0),
     )

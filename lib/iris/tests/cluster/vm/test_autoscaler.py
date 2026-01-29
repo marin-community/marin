@@ -26,7 +26,6 @@ import pytest
 from iris.cluster.types import DeviceType, VmWorkerStatus
 from iris.cluster.vm.autoscaler import (
     Autoscaler,
-    AutoscalerConfig,
     DemandEntry,
     ScalingAction,
     ScalingDecision,
@@ -158,7 +157,7 @@ def autoscaler_with_ready_slices(scale_group_config):
 def make_autoscaler(
     scale_groups: dict[str, ScalingGroup],
     vm_registry: VmRegistry | None = None,
-    config: AutoscalerConfig | None = None,
+    config: config_pb2.AutoscalerConfig | None = None,
 ) -> Autoscaler:
     """Create an Autoscaler with the given groups."""
     return Autoscaler(
@@ -1003,7 +1002,7 @@ class TestAutoscalerWaterfallEndToEnd:
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown_ms=0)
 
         # Use short evaluation interval to allow rapid re-evaluation
-        config = AutoscalerConfig(evaluation_interval_seconds=0.0)
+        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
             config=config,
@@ -1071,7 +1070,7 @@ class TestAutoscalerWaterfallEndToEnd:
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown_ms=0)
 
         # Use short evaluation interval to allow rapid re-evaluation
-        config = AutoscalerConfig(evaluation_interval_seconds=0.0)
+        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
             config=config,
@@ -1138,7 +1137,7 @@ class TestAutoscalerWaterfallEndToEnd:
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown_ms=0)
 
         # Use short evaluation interval to allow rapid re-evaluation
-        config = AutoscalerConfig(evaluation_interval_seconds=0.0)
+        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
             config=config,
@@ -1238,7 +1237,7 @@ class TestAutoscalerWaterfallEndToEnd:
 
         # Use short evaluation interval to allow rapid re-evaluation
 
-        config = AutoscalerConfig(evaluation_interval_seconds=0.0)
+        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
             config=config,
@@ -1316,7 +1315,7 @@ class TestAutoscalerQuotaHandling:
         manager.create_vm_group.side_effect = QuotaExceededError("Quota exceeded")
         group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0, quota_timeout_ms=60_000)
         # Use short evaluation interval to avoid rate-limiting
-        config = AutoscalerConfig(evaluation_interval_seconds=0.0)
+        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
@@ -1353,7 +1352,7 @@ class TestAutoscalerQuotaHandling:
         group_primary = ScalingGroup(config_primary, manager_primary, scale_up_cooldown_ms=0, quota_timeout_ms=60_000)
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown_ms=0)
         # Use short evaluation interval to avoid rate-limiting
-        config = AutoscalerConfig(evaluation_interval_seconds=0.0)
+        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
         autoscaler = make_autoscaler({"primary": group_primary, "fallback": group_fallback}, config=config)
 
         # First call: primary fails with quota, triggers quota state
@@ -1395,7 +1394,7 @@ class TestAutoscalerQuotaHandling:
 
         group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0, backoff_initial_ms=5000)
         # Use short evaluation interval to avoid rate-limiting
-        config = AutoscalerConfig(evaluation_interval_seconds=0.0)
+        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
@@ -1528,88 +1527,6 @@ class TestAutoscalerActionLogging:
         status = empty_autoscaler.get_status()
         action = status.recent_actions[0]
         assert before <= action.timestamp_ms <= after
-
-
-class TestAutoscalerRateLimiting:
-    """Tests for autoscaler evaluation rate-limiting."""
-
-    def test_run_once_skips_evaluation_before_interval(self, empty_autoscaler: Autoscaler):
-        """run_once() returns early when called before evaluation_interval_seconds."""
-        from iris.time_utils import now_ms
-
-        # Configure with 10 second evaluation interval
-        config = AutoscalerConfig(evaluation_interval_seconds=10.0)
-        manager = make_mock_vm_manager()
-        group = ScalingGroup(
-            config_pb2.ScaleGroupConfig(
-                name="test-group",
-                min_slices=0,
-                max_slices=5,
-                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                accelerator_variant="v5p-8",
-            ),
-            manager,
-            scale_up_cooldown_ms=0,
-        )
-        autoscaler = make_autoscaler({"test-group": group}, config=config)
-
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
-
-        # First call should evaluate
-        ts1 = now_ms()
-        decisions1 = autoscaler.run_once(demand, {}, timestamp_ms=ts1)
-        assert len(decisions1) == 1  # Should scale up
-
-        # Second call 5 seconds later should be skipped (< 10 second interval)
-        ts2 = ts1 + 5000
-        decisions2 = autoscaler.run_once(demand, {}, timestamp_ms=ts2)
-        assert len(decisions2) == 0  # Evaluation skipped
-
-        autoscaler.shutdown()  # Wait for async scale-up from first call
-        # Verify only one slice was created (second call was rate-limited)
-        assert group.slice_count() == 1
-
-    def test_run_once_evaluates_after_interval(self, empty_autoscaler: Autoscaler):
-        """run_once() evaluates normally after evaluation_interval_seconds elapses."""
-
-        from iris.time_utils import now_ms
-
-        # Configure with 10 second evaluation interval
-        config = AutoscalerConfig(evaluation_interval_seconds=10.0)
-        manager = make_mock_vm_manager()
-        group = ScalingGroup(
-            config_pb2.ScaleGroupConfig(
-                name="test-group",
-                min_slices=0,
-                max_slices=5,
-                accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                accelerator_variant="v5p-8",
-            ),
-            manager,
-            scale_up_cooldown_ms=0,
-        )
-        autoscaler = make_autoscaler({"test-group": group}, config=config)
-
-        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
-
-        # First call
-        ts1 = now_ms()
-        decisions1 = autoscaler.run_once(demand, {}, timestamp_ms=ts1)
-        assert len(decisions1) == 1
-
-        # Wait for async scale-up to complete
-        time.sleep(0.1)
-
-        # Second call 11 seconds later should evaluate (>= 10 second interval)
-        ts2 = ts1 + 11000
-        decisions2 = autoscaler.run_once(demand, {}, timestamp_ms=ts2)
-        assert len(decisions2) == 1  # Should scale up again
-
-        # Wait for second async scale-up to complete
-        time.sleep(0.1)
-
-        # Two slices created
-        assert group.slice_count() == 2
 
 
 class TestScalingGroupRequestingState:

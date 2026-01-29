@@ -291,6 +291,7 @@ class Controller:
 
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
+        self._last_autoscaler_run_ms: int = 0
 
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
@@ -622,9 +623,19 @@ class Controller:
 
         Called from the scheduling loop every cycle. Computes demand from pending
         tasks and worker idle state, then runs the autoscaler.
+
+        Rate-limits evaluations based on the autoscaler's configured evaluation_interval_seconds.
         """
         if not self._autoscaler:
             return
+
+        from iris.time_utils import now_ms
+
+        now = now_ms()
+        interval_ms = int(self._autoscaler.evaluation_interval_seconds * 1000)
+        if interval_ms > 0 and now - self._last_autoscaler_run_ms < interval_ms:
+            return
+        self._last_autoscaler_run_ms = now
 
         demand_entries = compute_demand_entries(self._state)
         vm_status_map = self._build_vm_status_map()
