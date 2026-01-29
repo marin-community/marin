@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-from typing import Callable, TypeVar
+from typing import Callable, Literal, TypeVar
 
+import chex
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import optax.tree_utils
+from jax.sharding import PartitionSpec
 from jaxtyping import PyTree
 from optax import GradientTransformation, GradientTransformationExtraArgs
 from optax._src.base import init_empty_state
@@ -210,3 +213,92 @@ def map_flattened_linear_layers(
     # params = eqx.combine(masked_nodes, flattened_linear, is_leaf=is_leaf)
 
     return unflatten_linear_layers(params, flattened_linear)
+
+
+# Newton-Schulz coefficient options for zeropower iteration
+CoefficientType = Literal["simple", "quintic", "polar_express", "aol"]
+
+# Coefficient sets from https://github.com/NVIDIA-NeMo/Emerging-Optimizers
+NEWTON_SCHULZ_COEFFICIENTS = {
+    "simple": [(3.4445, -4.7750, 2.0315)],
+    "quintic": [
+        (4.0848, -6.8946, 2.9270),
+        (3.9505, -6.3029, 2.6377),
+        (3.7418, -5.5913, 2.3037),
+        (2.8769, -3.1427, 1.2046),
+        (2.8366, -3.0525, 1.2012),
+    ],
+    "polar_express": [
+        (8.2051, -22.9019, 16.4607),
+        (4.0664, -2.8612, 0.5184),
+        (3.9096, -2.8234, 0.5250),
+        (3.2856, -2.4153, 0.4853),
+        (2.2779, -1.6198, 0.3985),
+        (1.8726, -1.2307, 0.3585),
+        (1.8564, -1.2132, 0.3568),
+        (1.8750, -1.2500, 0.3750),
+    ],
+    "aol": [
+        (4.0098, -7.0585, 2.4635),
+        (3.4585, -5.5479, 2.5959),
+        (2.7573, -3.2939, 1.4254),
+        (2.7215, -3.0494, 1.3169),
+    ],
+}
+
+
+def zeropower_via_newtonschulz5(X, steps: int = 5, eps: float = 1e-7, coefficient_type: CoefficientType = "quintic"):
+    """
+    Newton-Schulz iteration to compute the zeroth power / orthogonalization of X.
+
+    Args:
+        X: 2D matrix to orthogonalize
+        steps: Number of Newton-Schulz iterations to perform
+        eps: Small epsilon for numerical stability
+        coefficient_type: Type of coefficients to use. Options are:
+            - "simple": Basic Newton-Schulz coefficients
+            - "quintic": Optimized quintic iteration coefficients (default)
+            - "polar_express": Specialized polar iteration coefficients
+            - "aol": Alternative optimized coefficients
+
+    Returns:
+        Orthogonalized version of X
+    """
+    chex.assert_rank(X, 2)
+
+    # Get coefficients for the specified type
+    coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
+
+    X /= jnp.linalg.norm(X) + eps  # Ensure top singular value <= 1
+    transpose = False
+
+    # Transpose if needed to optimize computation
+    if X.shape[0] > X.shape[1]:
+        X = X.T
+        transpose = True
+
+    # Apply sharding constraint if we're in a distributed setting
+    # TODO: because most things are in fact scan layers [L, m, n] (we vmap L)
+    # it would be smarter to shard the layers so that basically each device gets its own layer
+    # This doesn't quite optimally use the compute because there are usually more devices than layers, so we should
+    # really do something even fancier.
+    # It would be even smarter to stack similar layers together, but that would require more even more work
+    # Let's call this good enough until we think it's not good enough
+    if not jax.sharding.get_abstract_mesh().empty:
+        X = jax.lax.with_sharding_constraint(X, PartitionSpec(None, ("data", "model")))
+
+    # Perform Newton-Schulz iterations
+    for i in range(steps):
+        # Use coefficients cyclically if we have multiple sets
+        a, b, c = coeffs[i % len(coeffs)]
+
+        A = X @ X.T
+        # doesn't seem to be necessary, so leaving it out. When I used inspect_sharding it was a problem, but I dunno
+        # A = jax.lax.with_sharding_constraint(A, PartitionSpec(None, None))  # ensure it's desharded
+        B = b * A + c * A @ A
+        X = a * X + B @ X
+
+    if transpose:
+        X = X.T
+
+    return X
