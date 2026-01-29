@@ -238,17 +238,24 @@ class Worker:
 
             # Get active task IDs for controller restart recovery (RUNNING or BUILDING)
             with self._lock:
-                running_task_ids = [
-                    t.task_id
+                active_tasks = [
+                    t
                     for t in self._tasks.values()
                     if t.status in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
+                ]
+                running_tasks = [
+                    cluster_pb2.Controller.RunningTaskEntry(
+                        task_id=t.task_id,
+                        attempt_id=t.attempt_id,
+                    )
+                    for t in active_tasks
                 ]
 
             request = cluster_pb2.Controller.RegisterWorkerRequest(
                 worker_id=self._worker_id,
                 address=f"{address_host}:{self._config.port}",
                 metadata=metadata,
-                running_task_ids=running_task_ids,
+                running_tasks=running_tasks,
             )
 
             try:
@@ -284,16 +291,23 @@ class Worker:
                     continue
                 # Update active task IDs for each heartbeat
                 with self._lock:
-                    running_task_ids = [
-                        t.task_id
+                    active_tasks = [
+                        t
                         for t in self._tasks.values()
                         if t.status in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
+                    ]
+                    running_tasks = [
+                        cluster_pb2.Controller.RunningTaskEntry(
+                            task_id=t.task_id,
+                            attempt_id=t.attempt_id,
+                        )
+                        for t in active_tasks
                     ]
                 request = cluster_pb2.Controller.RegisterWorkerRequest(
                     worker_id=self._worker_id,
                     address=f"{address_host}:{self._config.port}",
                     metadata=metadata,
-                    running_task_ids=running_task_ids,
+                    running_tasks=running_tasks,
                 )
                 response = self._controller_client.register_worker(request)
 
