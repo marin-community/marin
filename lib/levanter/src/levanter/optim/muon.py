@@ -6,18 +6,16 @@ from dataclasses import dataclass
 from functools import partial
 from typing import NamedTuple, Optional
 
-import chex
 import jax
 import jax.numpy as jnp
 import optax
-from jax.sharding import PartitionSpec
 from optax import tree_utils as otu
 
 import haliax
 from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
-from levanter.optim.util import map_flattened_linear_layers
+from levanter.optim.util import CoefficientType, map_flattened_linear_layers, zeropower_via_newtonschulz5
 from levanter.utils.jax_utils import leaf_key_paths
 
 
@@ -45,6 +43,7 @@ class MuonConfig(OptimizerConfig):
     # Kimi scales the learning rate for every d_1 * d_2 module by 0.2 * jnp.sqrt{\max{d_1, d_2}}, instead of the jnp.sqrt{\max{1, d_1/d_2}} as in the original nanogpt speedrun.
     # When this scaling is enabled, it is recommended to use learning rate and weight decay similar to adam
     use_kimi_scaling: bool = False
+    coefficient_type: CoefficientType = "quintic"  # Type of Newton-Schulz coefficients to use
 
     def build(self, num_train_steps):
         """
@@ -58,7 +57,12 @@ class MuonConfig(OptimizerConfig):
                 components = []
                 components.append(
                     scale_with_muon(
-                        self.momentum, self.nesterov, self.backend_steps, self.muon_epsilon, self.use_kimi_scaling
+                        self.momentum,
+                        self.nesterov,
+                        self.backend_steps,
+                        self.muon_epsilon,
+                        self.use_kimi_scaling,
+                        self.coefficient_type,
                     )
                 )
                 if self.weight_decay > 0:
@@ -119,7 +123,9 @@ class ScaleByMuonState(NamedTuple):
     momentum_buffer: optax.Updates
 
 
-def scale_with_muon(momentum=0.95, nesterov=True, steps=5, muon_eps=1e-8, use_kimi_scaling=False):
+def scale_with_muon(
+    momentum=0.95, nesterov=True, steps=5, muon_eps=1e-8, use_kimi_scaling=False, coefficient_type="quintic"
+):
     # Convert steps to concrete int at function definition time
     steps = int(steps)
 
@@ -149,7 +155,9 @@ def scale_with_muon(momentum=0.95, nesterov=True, steps=5, muon_eps=1e-8, use_ki
             assert layer.weight.ndim == 2
             # steps is now a concrete int
             array = layer.weight.array
-            updated_weight_array = zeropower_via_newtonschulz5(array, steps=steps, eps=muon_eps)
+            updated_weight_array = zeropower_via_newtonschulz5(
+                array, steps=steps, eps=muon_eps, coefficient_type=coefficient_type
+            )
 
             if not use_kimi_scaling:
                 scale = jnp.sqrt(
@@ -168,37 +176,3 @@ def scale_with_muon(momentum=0.95, nesterov=True, steps=5, muon_eps=1e-8, use_ki
         return updates, ScaleByMuonState(momentum_buffer=buf)
 
     return optax.GradientTransformation(init_fn, update_fn)
-
-
-def zeropower_via_newtonschulz5(X, steps=5, eps=1e-7):
-    """
-    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G.
-    """
-    chex.assert_rank(X, 2)
-    a, b, c = (3.4445, -4.7750, 2.0315)
-    X /= jnp.linalg.norm(X) + eps  # Ensure top singular value <= 1
-    transpose = False
-    # assert X.shape[0] <= X.shape[1], "X should have more columns than rows for this implementation."
-    # TODO: we should be smarter and also transpose if they're ~the same and X is already sharded along first axis
-    if X.shape[0] > X.shape[1]:
-        X = X.T
-        transpose = True
-
-    # TODO: because most things are in fact scan layers [L, m, n] (we vmap L)
-    # it would be smarter to shard the layers so that basically each device gets its own layer
-    # This doesn't quite optimally use the compute because there are usually more devices than layers, so we should
-    # really do something even fancier.
-    # It would be even smarter to stack similar layers together, but that would require more even more work
-    # Let's call this good enough until we think it's not good enough
-    if not jax.sharding.get_abstract_mesh().empty:
-        X = jax.lax.with_sharding_constraint(X, PartitionSpec(None, ("data", "model")))
-
-    for i in range(steps):
-        A = X @ X.T
-        # doesn't seem to be necessary, so leaivng it out. When I used inspect_sharding it was a problem, but I dunno
-        # A = jax.lax.with_sharding_constraint(A, PartitionSpec(None, None))  # ensure it's desharded
-        B = b * A + c * A @ A
-        X = a * X + B @ X
-    if transpose:
-        X = X.T
-    return X
