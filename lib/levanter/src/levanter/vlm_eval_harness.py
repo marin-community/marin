@@ -345,9 +345,26 @@ class LevanterVLMHarnessLM(TemplateLM):
         seed = gen_kwargs.get("seed")
 
         base_key = jrandom.PRNGKey(42 if seed is None else seed)
+
+        # Build stop tokens list with EOS token
+        stop_token_ids = [self.tokenizer.eos_token_id]
+        # For Qwen models, also add <|im_end|> token if it exists
+        if hasattr(self.tokenizer, 'convert_tokens_to_ids'):
+            try:
+                im_end_id = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
+                if im_end_id is not None and im_end_id != self.tokenizer.unk_token_id:
+                    stop_token_ids.append(im_end_id)
+            except Exception:
+                pass  # Token doesn't exist, skip
+
+        # Convert stop tokens to NamedArray with axes ("stop_seq", "position")
+        # Each stop token is a separate stop sequence of length 1
+        stop_tokens_array = jnp.array([[token_id] for token_id in stop_token_ids], dtype=jnp.int32)
+        stop_tokens_na = hax.named(stop_tokens_array, axis=("stop_seq", "position"))
+
         seq_params = SeqDecodingParams(
             max_num_tokens=jnp.array(len(input_ids_list) + max_gen_toks, dtype=jnp.int32),
-            stop_tokens=None,  # Will be set later if needed
+            stop_tokens=stop_tokens_na,
             temperature=jnp.array(temperature, dtype=jnp.float32),
             key=base_key,
         )
