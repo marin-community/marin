@@ -25,6 +25,7 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "jax==0.8.0",  # vllm-tpu currently requires this exact version
+    "jaxopt>=0.8.3",
     "haliax",
     "levanter[serve]",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
@@ -36,7 +37,8 @@ dependencies = [
     "multiprocess==0.70.16",
     "numpy",
     "openai",
-    "pandas",
+    "pandas>=2.0",
+    "plotly",
     "pyarrow>=22",
     "ray==2.53.0",
     "regex",
@@ -66,6 +68,8 @@ test = [
     # need this for integration tests
     "pip",
     "openai-responses",
+    # for scaling law plotting tests
+    "plotly",
 ]
 lint = [
     "ruff==0.14.3",
@@ -147,10 +151,13 @@ rl = [
 ]
 
 eval = [
-    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    "lm-eval[math,api]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
 ]
 
-vllm =["vllm-tpu==0.13.2.post6"]
+vllm =[
+    "vllm-tpu==0.13.2.post6",
+    "triton==3.5.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
+]
 
 math = ["pylatexenc", "sympy"]
 
