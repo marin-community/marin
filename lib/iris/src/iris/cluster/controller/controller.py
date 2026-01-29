@@ -560,6 +560,7 @@ class Controller:
             TaskStateChangedEvent(
                 task_id=task.task_id,
                 new_state=cluster_pb2.TASK_STATE_UNSCHEDULABLE,
+                attempt_id=task.current_attempt_id,
                 error=f"Scheduling timeout exceeded ({timeout_seconds}s)",
             )
         )

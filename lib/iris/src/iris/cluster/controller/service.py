@@ -435,14 +435,6 @@ class ControllerServiceImpl:
             logger.warning(f"Received task state report for unknown task {task_id}")
             return cluster_pb2.Controller.ReportTaskStateResponse()
 
-        # Validate attempt_id matches current attempt
-        if request.attempt_id != task.current_attempt_id:
-            logger.warning(
-                f"Received stale task state report: task_id={task_id} "
-                f"expected_attempt={task.current_attempt_id} reported_attempt={request.attempt_id}"
-            )
-            return cluster_pb2.Controller.ReportTaskStateResponse()
-
         new_state = request.state
 
         txn = self._state.handle_event(
@@ -451,6 +443,7 @@ class ControllerServiceImpl:
                 new_state=new_state,
                 error=request.error if request.error else None,
                 exit_code=request.exit_code if request.exit_code else None,
+                attempt_id=request.attempt_id,
             )
         )
 
@@ -480,7 +473,8 @@ class ControllerServiceImpl:
         2. Controller expects tasks worker doesn't report (worker restart) -> mark tasks failed
         """
         worker_id = WorkerId(request.worker_id)
-        reported_tasks = set(request.running_task_ids)
+
+        reported_tasks = {entry.task_id for entry in request.running_tasks}
 
         # Case 1: Worker claims unknown tasks (controller restart recovery)
         if reported_tasks:
@@ -500,14 +494,33 @@ class ControllerServiceImpl:
             if missing_tasks:
                 logger.warning("Worker %s missing expected tasks %s, marking failed", worker_id, missing_tasks)
                 for task_id in missing_tasks:
+                    task = self._state.get_task(task_id)
+                    if not task:
+                        continue
                     self._state.handle_event(
                         TaskStateChangedEvent(
                             task_id=task_id,
                             new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                            attempt_id=task.current_attempt_id,
                             error="Worker restarted without task",
                             exit_code=1,
                         )
                     )
+
+        # Case 3: Worker running stale attempt (attempt ID mismatch)
+        if request.running_tasks:
+            for entry in request.running_tasks:
+                task = self._state.get_task(TaskId(entry.task_id))
+                if task and task.current_attempt_id != entry.attempt_id:
+                    logger.error(
+                        "Worker %s running stale attempt of task %s: " "worker_attempt=%d controller_attempt=%d",
+                        worker_id,
+                        entry.task_id,
+                        entry.attempt_id,
+                        task.current_attempt_id,
+                    )
+                    # Kill the stale task on this worker
+                    self._scheduler.kill_tasks_on_workers({TaskId(entry.task_id)})
 
         # Use WORKER_REGISTERED event for both new and existing workers
         self._state.handle_event(

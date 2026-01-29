@@ -429,13 +429,18 @@ message Controller {
     int64 registered_at_ms = 4;
   }
 
+  message RunningTaskEntry {
+    string task_id = 1;
+    int32 attempt_id = 2;
+  }
+
   message RegisterWorkerRequest {
     string worker_id = 1;
     string address = 2;
     WorkerMetadata metadata = 3;
-    // Task IDs the worker believes it is running (for controller restart recovery).
-    // If the controller doesn't recognize these tasks, it signals should_reset.
-    repeated string running_task_ids = 4;
+    reserved 4;  // was running_task_ids
+    // Tasks the worker is currently running, with attempt IDs for stale detection.
+    repeated RunningTaskEntry running_tasks = 5;
   }
 
   message RegisterWorkerResponse {
