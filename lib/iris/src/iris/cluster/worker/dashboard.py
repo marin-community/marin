@@ -22,7 +22,7 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.dashboard_common import logs_api_response, logs_page_response
+from iris.cluster.dashboard_common import html_shell, logs_api_response, logs_page_response, static_files_mount
 from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceWSGIApplication
@@ -36,274 +36,6 @@ class FakeRequestContext:
     """
 
     pass
-
-
-DASHBOARD_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Iris Worker</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-      max-width: 1400px;
-      margin: 40px auto;
-      padding: 0 20px;
-      color: #1f2328;
-      background: #f6f8fa;
-      font-size: 14px;
-    }
-    h1 { color: #1f2328; border-bottom: 2px solid #d1d9e0; padding-bottom: 10px; font-size: 24px; font-weight: 600; }
-    h2 { color: #1f2328; margin-top: 30px; font-size: 20px; font-weight: 600; }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      background: white;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-      border-radius: 6px;
-      overflow: hidden;
-      border: 1px solid #d1d9e0;
-    }
-    th {
-      background-color: #f6f8fa;
-      color: #1f2328;
-      padding: 10px 12px;
-      text-align: left;
-      font-weight: 600;
-      font-size: 13px;
-      border-bottom: 1px solid #d1d9e0;
-    }
-    td {
-      padding: 8px 12px;
-      border-bottom: 1px solid #d1d9e0;
-      font-size: 13px;
-    }
-    tr:hover { background-color: #f6f8fa; }
-    .status-running { color: #0969da; }
-    .status-building { color: #8250df; }
-    .status-succeeded { color: #1a7f37; }
-    .status-failed { color: #cf222e; }
-    .status-killed { color: #57606a; }
-    .status-pending { color: #9a6700; }
-    .task-link { color: #0969da; text-decoration: none; font-weight: 500; }
-    .task-link:hover { text-decoration: underline; }
-  </style>
-</head>
-<body>
-  <h1>Iris Worker Dashboard</h1>
-  <div id="stats"></div>
-  <h2>Tasks</h2>
-  <table id="tasks">
-    <tr>
-      <th>Task ID</th><th>Job ID</th><th>Index</th><th>Status</th><th>Exit</th>
-      <th>Memory</th><th>CPU</th><th>Started</th><th>Finished</th><th>Error</th>
-    </tr>
-  </table>
-  <script>
-    async function refresh() {
-      const stats = await fetch('/api/stats').then(r => r.json());
-      document.getElementById('stats').innerHTML =
-        `<b>Running:</b> ${stats.running} | <b>Pending:</b> ${stats.pending} | ` +
-        `<b>Building:</b> ${stats.building} | <b>Completed:</b> ${stats.completed}`;
-
-      const tasks = await fetch('/api/tasks').then(r => r.json());
-      const tbody = tasks.map(t => {
-        const started = t.started_at ? new Date(t.started_at).toLocaleString() : '-';
-        const finished = t.finished_at ? new Date(t.finished_at).toLocaleString() : '-';
-        const exitCode = t.exit_code !== null && t.exit_code !== undefined ? t.exit_code : '-';
-        const taskDisplay = t.attempt_id > 0
-          ? `${t.task_id.slice(0, 12)}... (attempt ${t.attempt_id})`
-          : `${t.task_id.slice(0, 12)}...`;
-        return `<tr>
-          <td><a href="/task/${encodeURIComponent(t.task_id)}" class="task-link" target="_blank">${taskDisplay}</a></td>
-          <td>${t.job_id.slice(0, 8)}...</td>
-          <td>${t.task_index}/${t.num_tasks || '?'}</td>
-          <td class="status-${t.status}">${t.status}</td>
-          <td>${exitCode}</td>
-          <td>${t.memory_mb || 0}/${t.memory_peak_mb || 0} MB</td>
-          <td>${t.cpu_percent || 0}%</td>
-          <td>${started}</td>
-          <td>${finished}</td>
-          <td>${t.error || '-'}</td>
-        </tr>`;
-      }).join('');
-      document.getElementById('tasks').innerHTML =
-        '<tr><th>Task ID</th><th>Job ID</th><th>Index</th><th>Status</th><th>Exit</th><th>Memory</th><th>CPU</th>' +
-        '<th>Started</th><th>Finished</th><th>Error</th></tr>' + tbody;
-    }
-    refresh();
-    setInterval(refresh, 5000);
-  </script>
-</body>
-</html>
-"""
-
-
-TASK_DETAIL_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Task {{task_id}} - Iris Worker</title>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-      max-width: 1400px;
-      margin: 40px auto;
-      padding: 0 20px;
-      color: #1f2328;
-      background: #f6f8fa;
-      font-size: 14px;
-    }
-    h1 { color: #1f2328; border-bottom: 2px solid #d1d9e0; padding-bottom: 10px; font-size: 24px; font-weight: 600; }
-    h2 { color: #1f2328; margin-top: 30px; font-size: 20px; font-weight: 600; }
-    a { color: #0969da; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .section {
-      margin: 20px 0;
-      padding: 15px 20px;
-      background: white;
-      border: 1px solid #d1d9e0;
-      border-radius: 6px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-    }
-    .status-running { color: #0969da; font-weight: bold; }
-    .status-building { color: #8250df; font-weight: bold; }
-    .status-succeeded { color: #1a7f37; font-weight: bold; }
-    .status-failed { color: #cf222e; font-weight: bold; }
-    .status-killed { color: #57606a; font-weight: bold; }
-    .status-pending { color: #9a6700; font-weight: bold; }
-    .tabs { display: flex; border-bottom: 2px solid #d1d9e0; }
-    .tab {
-      padding: 10px 20px;
-      cursor: pointer;
-      background: transparent;
-      margin-right: 2px;
-      border: 1px solid #d1d9e0;
-      border-bottom: none;
-      border-radius: 6px 6px 0 0;
-      font-size: 13px;
-      font-weight: 500;
-      color: #57606a;
-    }
-    .tab.active { background: #0969da; color: white; border-color: #0969da; }
-    .tab-content {
-      display: none;
-      padding: 15px;
-      border: 1px solid #d1d9e0;
-      max-height: 500px;
-      overflow-y: auto;
-      background: white;
-      font-family: monospace;
-      font-size: 12px;
-      white-space: pre-wrap;
-    }
-    .tab-content.active { display: block; }
-    .metrics { display: flex; gap: 30px; flex-wrap: wrap; }
-    .metric { text-align: center; padding: 10px; }
-    .metric-value { font-size: 24px; font-weight: bold; color: #0969da; }
-    .metric-label { font-size: 12px; color: #57606a; }
-  </style>
-</head>
-<body>
-  <h1>Task: <code>{{task_id}}</code></h1>
-  <a href="/">← Back to Dashboard</a>
-
-  <div class="section">
-    <h2>Status: <span id="status"></span></h2>
-    <div id="details"></div>
-  </div>
-
-  <div class="section">
-    <h2>Resources</h2>
-    <div class="metrics" id="resources"></div>
-  </div>
-
-  <div class="section">
-    <h2>Build</h2>
-    <div id="build"></div>
-  </div>
-
-  <div class="section">
-    <h2>Logs</h2>
-    <div class="tabs">
-      <div class="tab active" data-tab="all">ALL</div>
-      <div class="tab" data-tab="stdout">STDOUT</div>
-      <div class="tab" data-tab="stderr">STDERR</div>
-      <div class="tab" data-tab="build">BUILD</div>
-    </div>
-    <div id="log-all" class="tab-content active"></div>
-    <div id="log-stdout" class="tab-content"></div>
-    <div id="log-stderr" class="tab-content"></div>
-    <div id="log-build" class="tab-content"></div>
-  </div>
-
-  <script>
-    const taskId = "{{task_id}}";
-
-    async function refresh() {
-      const task = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`).then(r => r.json());
-      if (task.error === "Not found") {
-        document.getElementById('status').textContent = "Not Found";
-        return;
-      }
-
-      document.getElementById('status').innerHTML = `<span class="status-${task.status}">${task.status}</span>`;
-      document.getElementById('details').innerHTML = `
-        <p><b>Job ID:</b> ${task.job_id}</p>
-        <p><b>Task Index:</b> ${task.task_index}</p>
-        <p><b>Attempt:</b> ${task.attempt_id}</p>
-        <p><b>Started:</b> ${task.started_at ? new Date(task.started_at).toLocaleString() : '-'}</p>
-        <p><b>Finished:</b> ${task.finished_at ? new Date(task.finished_at).toLocaleString() : '-'}</p>
-        <p><b>Exit Code:</b> ${task.exit_code !== null ? task.exit_code : '-'}</p>
-        <p><b>Error:</b> ${task.error || '-'}</p>
-        <p><b>Ports:</b> ${JSON.stringify(task.ports)}</p>
-      `;
-
-      document.getElementById('resources').innerHTML = `
-        <div class="metric"><div class="metric-value">${task.resources.memory_mb}</div>
-          <div class="metric-label">Memory (MB)</div></div>
-        <div class="metric"><div class="metric-value">${task.resources.memory_peak_mb}</div>
-          <div class="metric-label">Peak Memory (MB)</div></div>
-        <div class="metric"><div class="metric-value">${task.resources.cpu_percent}%</div>
-          <div class="metric-label">CPU</div></div>
-        <div class="metric"><div class="metric-value">${task.resources.process_count}</div>
-          <div class="metric-label">Processes</div></div>
-        <div class="metric"><div class="metric-value">${task.resources.disk_mb}</div>
-          <div class="metric-label">Disk (MB)</div></div>
-      `;
-
-      const buildDuration = task.build.duration_ms > 0 ? (task.build.duration_ms / 1000).toFixed(2) + 's' : '-';
-      document.getElementById('build').innerHTML = `
-        <p><b>Image:</b> <code>${task.build.image_tag || '-'}</code></p>
-        <p><b>Build Time:</b> ${buildDuration}</p>
-        <p><b>From Cache:</b> ${task.build.from_cache ? 'Yes' : 'No'}</p>
-      `;
-
-      const logs = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/logs`).then(r => r.json());
-      const format = (logs) => logs.map(l =>
-        `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.data}`
-      ).join('\\n') || 'No logs';
-      document.getElementById('log-all').textContent = format(logs);
-      document.getElementById('log-stdout').textContent = format(logs.filter(l => l.source === 'stdout'));
-      document.getElementById('log-stderr').textContent = format(logs.filter(l => l.source === 'stderr'));
-      document.getElementById('log-build').textContent = format(logs.filter(l => l.source === 'build'));
-    }
-
-    document.querySelectorAll('.tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        tab.classList.add('active');
-        document.getElementById('log-' + tab.dataset.tab).classList.add('active');
-      });
-    });
-
-    refresh();
-    setInterval(refresh, 5000);
-  </script>
-</body>
-</html>
-"""
 
 
 class WorkerDashboard:
@@ -345,6 +77,8 @@ class WorkerDashboard:
             Route("/api/logs", self._api_logs),
             Route("/api/tasks/{task_id:path}/logs", self._get_logs),
             Route("/api/tasks/{task_id:path}", self._get_task),
+            # Static files (JS/CSS for Preact components)
+            static_files_mount(),
             # Connect RPC - mount WSGI app wrapped for ASGI
             Mount(rpc_wsgi_app.path, app=rpc_app),
         ]
@@ -361,11 +95,10 @@ class WorkerDashboard:
         return JSONResponse({"status": "healthy"})
 
     def _dashboard(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(DASHBOARD_HTML)
+        return HTMLResponse(html_shell("Iris Worker", "/static/worker/app.js"))
 
     def _task_detail_page(self, request: Request) -> HTMLResponse:
-        task_id = request.path_params["task_id"]
-        return HTMLResponse(TASK_DETAIL_HTML.replace("{{task_id}}", task_id))
+        return HTMLResponse(html_shell("Task Detail", "/static/worker/task-detail.js"))
 
     def _stats(self, _request: Request) -> JSONResponse:
         ctx = FakeRequestContext()
