@@ -1479,6 +1479,9 @@ def maybe_replace_chat_template(tokenizer: HfTokenizer):
     elif tokenizer.name_or_path == "Qwen/Qwen3-8B":
         from experiments.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
         tokenizer.chat_template = QWEN_3_CHAT_TEMPLATE
+    elif re.match(r"Qwen/Qwen3-\d+(\.\d+)?B-Base", tokenizer.name_or_path):
+        from experiments.qwen3_base_template import QWEN_3_BASE_TEMPLATE
+        tokenizer.chat_template = QWEN_3_BASE_TEMPLATE
     elif tokenizer.name_or_path == "meta-llama/Llama-3.1-8B-Instruct":
         from experiments.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
         tokenizer.chat_template = LLAMA_3_1_CHAT_TEMPLATE

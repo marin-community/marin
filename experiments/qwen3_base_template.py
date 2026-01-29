@@ -57,22 +57,22 @@ QWEN_3_BASE_TEMPLATE = r"""{%- if tools %}
         {%- endif %}
         {%- if loop.index0 > ns.last_query_index %}
             {%- if loop.last or (not loop.last and reasoning_content) %}
-                {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+                {{- '<|im_start|>' + message.role + '\n' }}{% generation %}{{- '<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}{% endgeneration %}
             {%- else %}
-                {{- '<|im_start|>' + message.role + '\n' + content }}
+                {{- '<|im_start|>' + message.role + '\n' }}{% generation %}{{- content }}{% endgeneration %}
             {%- endif %}
         {%- else %}
-            {{- '<|im_start|>' + message.role + '\n' + content }}
+            {{- '<|im_start|>' + message.role + '\n' }}{% generation %}{{- content }}{% endgeneration %}
         {%- endif %}
         {%- if message.tool_calls %}
             {%- for tool_call in message.tool_calls %}
                 {%- if (loop.first and content) or (not loop.first) %}
-                    {{- '\n' }}
+                    {% generation %}{{- '\n' }}{% endgeneration %}
                 {%- endif %}
                 {%- if tool_call.function %}
                     {%- set tool_call = tool_call.function %}
                 {%- endif %}
-                {{- '<tool_call>\n{"name": "' }}
+                {% generation %}{{- '<tool_call>\n{"name": "' }}
                 {{- tool_call.name }}
                 {{- '", "arguments": ' }}
                 {%- if tool_call.arguments is string %}
@@ -80,10 +80,10 @@ QWEN_3_BASE_TEMPLATE = r"""{%- if tools %}
                 {%- else %}
                     {{- tool_call.arguments | tojson }}
                 {%- endif %}
-                {{- '}\n</tool_call>' }}
+                {{- '}\n</tool_call>' }}{% endgeneration %}
             {%- endfor %}
         {%- endif %}
-        {{- '<|im_end|>\n' }}
+        {% generation %}{{- '<|im_end|>\n' }}{% endgeneration %}
     {%- elif message.role == "tool" %}
         {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
             {{- '<|im_start|>user' }}
@@ -99,6 +99,6 @@ QWEN_3_BASE_TEMPLATE = r"""{%- if tools %}
 {%- if add_generation_prompt %}
     {{- '<|im_start|>assistant\n' }}
     {%- if enable_thinking is defined and enable_thinking is false %}
-        {{- '<think>\n\n</think>\n\n' }}
+        {% generation %}{{- '<think>\n\n</think>\n\n' }}{% endgeneration %}
     {%- endif %}
 {%- endif %}"""
