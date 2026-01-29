@@ -50,6 +50,7 @@ class ImageProvider(Protocol):
         extras: list[str],
         job_id: str,
         task_logs: TaskLogs | None = None,
+        pip_packages: list[str] | None = None,
     ) -> BuildResult: ...
 
     def protect(self, tag: str) -> None:
@@ -87,9 +88,10 @@ COPY . .
 # Use the venv python
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Always install cloudpickle - required by iris to unpickle job entrypoints
-RUN uv pip install cloudpickle
-"""
+# Install the workspace project in editable mode (so imports work)
+# and ensure cloudpickle is available (required by iris to unpickle job entrypoints)
+RUN uv pip install -e . cloudpickle
+{pip_install_step}"""
 
 
 class ImageCache:
@@ -141,6 +143,7 @@ class ImageCache:
         extras: list[str],
         job_id: str,
         task_logs: TaskLogs | None = None,
+        pip_packages: list[str] | None = None,
     ) -> BuildResult:
         uv_locks_files = _find_all_recursive(bundle_path, "pyproject.toml") + _find_all_recursive(bundle_path, "uv.lock")
 
@@ -153,6 +156,12 @@ class ImageCache:
             for f in uv_locks_files:
                 with open(f, "rb") as fd:
                     h.update(fd.read())
+            # Include base image and pip_packages in hash so different configurations
+            # get different images
+            h.update(base_image.encode())
+            if pip_packages:
+                for pkg in sorted(pip_packages):
+                    h.update(pkg.encode())
             tag = h.hexdigest()[:tag_len]
 
         if self._registry:
@@ -179,8 +188,17 @@ class ImageCache:
             for f in uv_locks_files
         )
 
+        # Build pip install step if packages are specified
+        pip_install_step = ""
+        if pip_packages:
+            packages_str = " ".join(f'"{pkg}"' for pkg in pip_packages)
+            pip_install_step = f"\n# Install additional pip packages\nRUN uv pip install {packages_str}\n"
+
         dockerfile = DOCKERFILE_TEMPLATE.format(
-            base_image=base_image, extras_flags=extras_flags, pyproject_mounts=pyproject_mounts
+            base_image=base_image,
+            extras_flags=extras_flags,
+            pyproject_mounts=pyproject_mounts,
+            pip_install_step=pip_install_step,
         )
         # TODO (rav): does there need to be a lock around docker build?
         self._docker.build(bundle_path, dockerfile, image_tag, task_logs)

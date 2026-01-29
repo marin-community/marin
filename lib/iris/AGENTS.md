@@ -46,7 +46,7 @@ IF they disagree with the code, ALWAYS add a task to update them.
 
 Documentation should be kept up-to-date as code changes. When implementing new features or making significant changes, update the relevant documentation files:
 
-- [README.md](README.md) - Main overview, CLI reference, and quick start
+@README.md - Main overview, CLI reference, and quick start
 
 ## Protocols and Testing
 

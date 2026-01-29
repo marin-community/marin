@@ -8,13 +8,16 @@ Distributed job orchestration replacing Ray with simpler primitives.
 
 ```bash
 # Start controller VM (runs autoscaler internally)
-uv run iris cluster --config=cluster.yaml start
+uv run iris cluster --config=examples/eu-west4.yaml start
 
 # Check cluster status
-uv run iris cluster --config=cluster.yaml status
+uv run iris cluster --config=examples/eu-west4.yaml status
+
+# Validate cluster with test jobs (establishes SSH tunnel automatically)
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models validate
 
 # Stop cluster (controller + all worker slices)
-uv run iris cluster --config=cluster.yaml stop
+uv run iris cluster --config=examples/eu-west4.yaml stop
 ```
 
 ### Development: Local Controller
@@ -60,6 +63,48 @@ Worker Process (on each VM):
 └── Heartbeat reporter (health monitoring)
 ```
 
+## Actor System
+
+Iris includes a lightweight actor RPC system for service-style workloads. Actor
+servers run inside worker containers (or standalone VMs), and clients resolve
+actor endpoints via a resolver implementation:
+
+```
+Actor Client
+  │
+  │ resolve(actor_name)
+  v
+Resolver (ClusterResolver / GcsResolver / FixedResolver)
+  │
+  │ endpoints (url + actor_id)
+  v
+Worker VM
+  └─ Job Container (iris-managed)
+       └─ Actor Server
+            └─ Actor instance (registered methods)
+```
+
+Resolver options:
+- **ClusterResolver** (in `iris.client.resolver`): query the controller for
+  namespace-aware actor endpoints (best for Iris clusters).
+- **GcsResolver**: discover endpoints via GCP VM metadata tags
+  (`iris_actor_<name>`).
+- **FixedResolver**: static endpoint mapping (tests or fixed deployments).
+
+The actor system also provides `ActorPool` for round-robin calls and broadcast
+RPCs across all resolved endpoints.
+
+Example:
+
+```python
+from iris.actor import ActorClient
+from iris.client.resolver import ClusterResolver
+
+resolver = ClusterResolver("http://controller:10000", namespace="default")
+client = ActorClient(resolver, "inference")
+result = client.predict({"text": "hello"})
+```
+
 ### Key Concepts
 
 | Concept | Description |
@@ -69,6 +114,17 @@ Worker Process (on each VM):
 | **Scale Group** | Configuration for a type of accelerator (TPU, GPU) with min/max slices |
 | **Slice** | Atomic scaling unit - a complete TPU pod that succeeds or fails as a whole |
 | **VmManager** | Abstraction for VM lifecycle (GCP, Manual, or Fake for testing) |
+
+### Network Architecture
+
+#### Controller Addresses
+
+| Client Type | Address Type | Notes |
+|-------------|--------------|-------|
+| Workers | Internal IP | Workers on VPC connect via internal IP (automatic with autoscaler) |
+| External Clients | SSH Tunnel | Use `gcloud compute ssh` with port forwarding |
+
+Workers communicate with the controller using internal VPC IPs. External clients (your laptop, CI) should use SSH tunneling to access the controller.
 
 ## Worker Lifecycle
 
@@ -100,6 +156,41 @@ Task containers are labeled for discoverability:
 - `iris.managed=true` - All iris-managed containers
 - `iris.task_id=<id>` - Task identifier
 - `iris.job_id=<id>` - Job identifier
+
+### TPU Container Configuration
+
+When a job requests TPU resources (`device=tpu_device("v5litepod-16")`), workers automatically configure Docker containers with the necessary flags and environment variables for TPU access:
+
+**Docker flags:**
+- `--device /dev/vfio:/dev/vfio` - VFIO device for TPU passthrough
+- `--shm-size=100g` - Large shared memory for TPU operations
+- `--cap-add=SYS_RESOURCE` - Resource management capabilities
+- `--ulimit memlock=68719476736:68719476736` - Unlocked memory limits
+
+**Environment variables:**
+- `JAX_PLATFORMS=tpu,cpu` - JAX platform configuration
+- `PJRT_DEVICE=TPU` - PJRT runtime device
+- `TPU_NAME`, `TPU_WORKER_ID`, `TPU_WORKER_HOSTNAMES`, `TPU_CHIPS_PER_HOST_BOUNDS` - TPU metadata from host
+
+This enables JAX and other TPU-aware frameworks to initialize correctly inside job containers.
+
+## Bundle Storage (Required)
+
+Jobs can include a `bundle_blob` containing workspace files. The controller stores these in a shared location accessible to all workers.
+
+**Configuration** (required):
+
+```yaml
+controller_vm:
+  bundle_prefix: gs://my-bucket/iris/bundles  # GCS for distributed workers
+```
+
+The controller will **fail at startup** if `bundle_prefix` is not configured.
+
+For local development:
+```bash
+uv run iris cluster controller run-local --bundle-prefix file:///var/cache/iris/bundles
+```
 
 ## CLI Reference
 
@@ -149,6 +240,60 @@ iris build worker-image -t iris-worker:v1 --push --region us-central1
 iris build controller-image -t iris-controller:v1 --push --region us-central1
 ```
 
+### Cluster Tools (Debugging & Validation)
+
+The `scripts/cluster-tools.py` script provides debugging and validation commands:
+
+```bash
+uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models --help
+
+# Discover and show controller VM status
+discover
+autoscaler-status
+list-workers
+# controller logs
+logs {--follow}
+bootstrap-logs
+validate
+# Cleanup all iris resources (dry-run by default)
+cleanup {--no-dry-run}
+```
+
+## Smoke Test
+
+The smoke test validates end-to-end cluster functionality including autoscaling.
+
+```bash
+# Full smoke test (builds images, starts cluster, runs TPU jobs)
+uv run python lib/iris/scripts/smoke-test.py --config lib/iris/examples/eu-west4.yaml
+
+# Skip image builds (use existing images)
+uv run python lib/iris/scripts/smoke-test.py --config ... --no-build-images
+
+# Keep cluster on failure for debugging
+uv run python lib/iris/scripts/smoke-test.py --config ... --no-cleanup-on-failure
+
+# Custom job timeout
+uv run python lib/iris/scripts/smoke-test.py --config ... --job-timeout 900
+
+# Save logs to a custom directory
+uv run python lib/iris/scripts/smoke-test.py --config ... --log-dir /path/to/logs
+
+# Use a unique prefix (isolates resources from other smoke tests)
+uv run python lib/iris/scripts/smoke-test.py --config ... --prefix my-test
+```
+
+The smoke test:
+1. Builds and pushes controller + worker images
+2. Starts controller VM with autoscaler
+3. Submits 4 TPU jobs to exercise autoscaling:
+   - Simple TPU job (basic execution)
+   - Concurrent TPU jobs (parallel provisioning)
+   - Coscheduled multi-task job (distributed work)
+   - JAX TPU job (validates TPU initialization and computation)
+4. Collects logs on failure for debugging
+5. Cleans up all resources
+
 ## Configuration
 
 Configuration uses a nested structure with `bootstrap`, `timeouts`, and `ssh` sub-configs:
@@ -191,7 +336,8 @@ scale_groups:
     provider:
       tpu:
         project_id: my-project
-    accelerator_type: v5litepod-4
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-4
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 0
     max_slices: 10

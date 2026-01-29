@@ -23,13 +23,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import cloudpickle
 import uvicorn
 
-from iris.rpc import cluster_pb2
-from iris.time_utils import ExponentialBackoff, now_ms
-from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.rpc.errors import format_exception_with_traceback
+from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import ImageCache, ImageProvider
 from iris.cluster.worker.bundle_cache import BundleCache, BundleProvider
 from iris.cluster.worker.dashboard import WorkerDashboard
@@ -37,6 +33,11 @@ from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, Docker
 from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, EnvironmentProvider, collect_workdir_size_mb
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker_types import Task
+from iris.logging import get_global_buffer
+from iris.rpc import cluster_pb2
+from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.rpc.errors import format_exception_with_traceback
+from iris.time_utils import ExponentialBackoff, now_ms
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,7 @@ class Worker:
         image_provider: ImageProvider | None = None,
         container_runtime: ContainerRuntime | None = None,
         environment_provider: EnvironmentProvider | None = None,
+        port_allocator: PortAllocator | None = None,
     ):
         self._config = config
 
@@ -144,7 +146,10 @@ class Worker:
         )
         self._runtime = container_runtime or DockerRuntime()
         self._environment_provider = environment_provider or DefaultEnvironmentProvider()
-        self._port_allocator = PortAllocator(config.port_range)
+        self._port_allocator = port_allocator or PortAllocator(config.port_range)
+
+        # Probe worker metadata eagerly so it's available before any task arrives.
+        self._worker_metadata = self._environment_provider.probe()
 
         # Task state
         self._tasks: dict[str, Task] = {}
@@ -155,6 +160,7 @@ class Worker:
             self._service,
             host=config.host,
             port=config.port,
+            log_buffer=get_global_buffer(),
         )
 
         self._server_thread: threading.Thread | None = None
@@ -206,6 +212,11 @@ class Worker:
         if removed > 0:
             logger.info("Startup cleanup: removed %d iris containers", removed)
 
+    def wait(self) -> None:
+        """Block until the server thread exits."""
+        if self._server_thread:
+            self._server_thread.join()
+
     def stop(self) -> None:
         self._stop_heartbeat.set()
         if self._heartbeat_thread:
@@ -252,7 +263,7 @@ class Worker:
             print(f"Worker server error: {e}")
 
     def _heartbeat_loop(self) -> None:
-        metadata = self._environment_provider.probe()
+        metadata = self._worker_metadata
 
         # Determine the address to advertise to the controller.
         # If host is 0.0.0.0 (bind to all interfaces), use the probed IP for external access.
@@ -441,17 +452,26 @@ class Worker:
             task.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="populating uv cache")
             task.logs.add("build", "Building Docker image...")
 
-            # Detect host Python version for container compatibility
-            # cloudpickle serializes bytecode which is version-specific
-            py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-            base_image = f"python:{py_version}-slim"
+            # Use the client's Python version for the task container so cloudpickle
+            # bytecode is deserialized with the same Python that serialized it.
+            py_version = env_config.python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
 
+            pip_packages = list(env_config.pip_packages) if env_config.pip_packages else None
+
+            # Use the full Python image when additional pip packages are requested,
+            # since native wheels (e.g. libtpu for jax[tpu]) often depend on system
+            # libraries (libstdc++, libgomp, etc.) that python:*-slim strips out.
+            if pip_packages:
+                base_image = f"python:{py_version}"
+            else:
+                base_image = f"python:{py_version}-slim"
             build_result = self._image_cache.build(
                 bundle_path=bundle_path,
                 base_image=base_image,
                 extras=extras,
                 job_id=task.job_id,
                 task_logs=task.logs,
+                pip_packages=pip_packages,
             )
 
             task.build_finished_ms = now_ms()
@@ -465,10 +485,6 @@ class Worker:
             # Phase 3: Create and start container
             task.transition_to(cluster_pb2.TASK_STATE_RUNNING)
 
-            # Deserialize entrypoint
-            entrypoint = cloudpickle.loads(task.request.serialized_entrypoint)
-            entrypoint_tuple = (entrypoint.callable, entrypoint.args, entrypoint.kwargs)
-
             # Build environment from user-provided vars + EnvironmentConfig
             env = dict(env_config.env_vars)
 
@@ -476,9 +492,12 @@ class Worker:
             iris_env = self._build_iris_env(task)
             env.update(iris_env)
 
+            # Convert proto entrypoint to typed Entrypoint
+            entrypoint = Entrypoint.from_proto(task.request.entrypoint)
+
             config = ContainerConfig(
                 image=build_result.image_tag,
-                entrypoint=entrypoint_tuple,
+                entrypoint=entrypoint,
                 env=env,
                 resources=task.request.resources if task.request.HasField("resources") else None,
                 timeout_seconds=task.request.timeout_seconds or None,
@@ -486,6 +505,7 @@ class Worker:
                 mounts=[(str(task.workdir), "/workdir", "rw")],
                 task_id=task.task_id,
                 job_id=task.job_id,
+                worker_metadata=self._worker_metadata,
             )
 
             # Create and start container with retry on port binding failures

@@ -33,6 +33,8 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.dashboard_common import logs_api_response, logs_page_response
+from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceWSGIApplication
 
@@ -524,6 +526,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return protoState.replace(/^(JOB_STATE_|TASK_STATE_)/, '').toLowerCase();
     }
 
+    // Convert accelerator type enum to friendly name
+    function acceleratorTypeFriendly(accelType) {
+      if (typeof accelType === 'string') {
+        // Already a string like "ACCELERATOR_TYPE_TPU"
+        if (accelType.startsWith('ACCELERATOR_TYPE_')) {
+          return accelType.replace('ACCELERATOR_TYPE_', '').toLowerCase();
+        }
+        return accelType.toLowerCase();
+      }
+      // Numeric enum value
+      const typeMap = {
+        0: 'unspecified',
+        1: 'cpu',
+        2: 'gpu',
+        3: 'tpu'
+      };
+      return typeMap[accelType] || `unknown(${accelType})`;
+    }
+
+    // Format accelerator type and variant for display
+    function formatAcceleratorDisplay(accelType, variant) {
+      const friendly = acceleratorTypeFriendly(accelType);
+      if (variant) {
+        return `${friendly} (${variant})`;
+      }
+      return friendly;
+    }
+
     // Cache for task data to avoid refetching on expand
     const jobTasksCache = {};
 
@@ -756,11 +786,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           .map(([k, v]) => `${k}: ${v}`)
           .join(', ') || 'no slices';
 
+        const accelDisplay = formatAcceleratorDisplay(
+          config.accelerator_type,
+          config.accelerator_variant || ''
+        );
         return `<div class="scale-group">
           <div class="scale-group-header">
             <h3>${escapeHtml(group.name)}</h3>
             <div class="scale-group-meta">
-              Accelerator: ${escapeHtml(config.accelerator_type || '-')} |
+              Accelerator: ${escapeHtml(accelDisplay)} |
               Min: ${config.min_slices || 0} Max: ${config.max_slices || 0} |
               Demand: ${group.current_demand || 0} |
               ${statesSummary}
@@ -1401,10 +1435,12 @@ class ControllerDashboard:
         service: ControllerServiceImpl,
         host: str = "0.0.0.0",
         port: int = 8080,
+        log_buffer: LogBuffer | None = None,
     ):
         self._service = service
         self._host = host
         self._port = port
+        self._log_buffer = log_buffer
         self._app = self._create_app()
         self._server: uvicorn.Server | None = None
 
@@ -1419,6 +1455,8 @@ class ControllerDashboard:
         routes = [
             Route("/", self._dashboard),
             Route("/job/{job_id}", self._job_detail_page),
+            Route("/logs", self._logs_page),
+            Route("/api/logs", self._api_logs),
             Route("/health", self._health),
             Mount(rpc_wsgi_app.path, app=rpc_app),
         ]
@@ -1432,6 +1470,12 @@ class ControllerDashboard:
 
         job_id = request.path_params["job_id"]
         return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", html.escape(job_id)))
+
+    def _logs_page(self, request: Request) -> HTMLResponse:
+        return logs_page_response(request)
+
+    def _api_logs(self, request: Request):
+        return logs_api_response(request, self._log_buffer)
 
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""

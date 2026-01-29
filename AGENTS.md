@@ -41,7 +41,6 @@
 - Disprefer internal mutation of function arguments, especially config dataclasses; prefer returning a modified copy (e.g., via `dataclasses.replace`) so call sites remain predictable and side effects are explicit.
 - Use early returns (`if not x: return None`) when they reduce nesting.
 - Do not introduce ad-hoc compatibility hacks like `hasattr(m, "old_attr")`; update the code consistently instead.
-- Do not use `from future import ...` statements.
 - Document public APIs with concise Google-style docstrings.
 
 ### Error Handling

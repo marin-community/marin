@@ -33,11 +33,15 @@ message ManualProvider {
   int32 ssh_port = 4;            // Default: 22
 }
 
+// Provider configuration for local (in-process) scale groups
+message LocalProvider {}
+
 // Per-scale-group provider configuration
 message ProviderConfig {
   oneof provider {
     TpuProvider tpu = 1;
     ManualProvider manual = 2;
+    LocalProvider local = 3;
   }
 }
 
@@ -45,14 +49,23 @@ message ProviderConfig {
 // SCALE GROUP CONFIGURATION
 // ============================================================================
 
+// Device/accelerator type for scale groups
+enum AcceleratorType {
+  ACCELERATOR_TYPE_UNSPECIFIED = 0;
+  ACCELERATOR_TYPE_CPU = 1;
+  ACCELERATOR_TYPE_GPU = 2;
+  ACCELERATOR_TYPE_TPU = 3;
+}
+
 // Configuration for a scale group
 message ScaleGroupConfig {
   string name = 1;
   int32 min_slices = 2;
   int32 max_slices = 3;
 
-  // TPU configuration
-  string accelerator_type = 10;
+  // Device configuration
+  AcceleratorType accelerator_type = 9;  // Device type: cpu, gpu, or tpu
+  string accelerator_variant = 10;       // Device variant: e.g., "v5litepod-16", "A100"
   string runtime_version = 11;
   bool preemptible = 12;
 
@@ -102,7 +115,6 @@ message SshConfig {
 
 // GCP-managed controller configuration
 message GcpControllerConfig {
-  string image = 1;
   string machine_type = 2;      // Default: "n2-standard-4"
   int32 boot_disk_size_gb = 3;  // Default: 50
   int32 port = 4;               // Default: 10000
@@ -111,15 +123,22 @@ message GcpControllerConfig {
 // Manually-managed controller configuration (SSH bootstrap)
 message ManualControllerConfig {
   string host = 1;
-  string image = 2;
   int32 port = 3;               // Default: 10000
+}
+
+// Locally-managed controller configuration (in-process)
+message LocalControllerConfig {
+  int32 port = 1;               // 0 = auto-assign
 }
 
 // Controller configuration using oneof for type-safe dispatch
 message ControllerVmConfig {
+  string image = 10;            // Controller docker image (shared by all controller types)
+  string bundle_prefix = 11;    // URI prefix for job bundles (e.g., gs://bucket/path)
   oneof controller {
     GcpControllerConfig gcp = 1;
     ManualControllerConfig manual = 2;
+    LocalControllerConfig local = 3;
   }
 }
 

@@ -18,7 +18,6 @@ import logging
 import os
 import socket
 import subprocess
-import urllib.request
 from pathlib import Path
 from typing import Protocol
 
@@ -55,31 +54,6 @@ def _probe_gpu_info() -> tuple[int, str, int]:
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError) as e:
         logger.debug("GPU probe failed (nvidia-smi not available or error): %s", type(e).__name__)
         return 0, "", 0
-
-
-def _probe_gce_metadata() -> tuple[str, str]:
-    """Query GCE metadata server.
-
-    Returns ("", "") if not on GCE.
-    """
-    try:
-        headers = {"Metadata-Flavor": "Google"}
-
-        def fetch(path: str) -> str:
-            req = urllib.request.Request(
-                f"http://169.254.169.254/computeMetadata/v1/{path}",
-                headers=headers,
-            )
-            with urllib.request.urlopen(req, timeout=1.0) as resp:
-                return resp.read().decode().strip()
-
-        instance_name = fetch("instance/name")
-        zone_full = fetch("instance/zone")
-        zone = zone_full.split("/")[-1] if zone_full else ""
-        return instance_name, zone
-    except Exception:
-        logger.debug("GCE metadata probe failed (not running on GCE or metadata server unavailable)")
-        return "", ""
 
 
 def _get_memory_total_bytes() -> int:
@@ -219,8 +193,11 @@ class DefaultEnvironmentProvider:
         memory_bytes = _get_memory_total_bytes()
         disk_bytes = _get_disk_bytes()
 
-        # TPU environment variables
+        # TPU environment variables:
+        # - TPU_NAME: TPU slice name (e.g., iris-tpu_v5e_16-xxx) for coscheduling group_by
+        # - TPU_TYPE: accelerator type (e.g., v5litepod-16) for topology/chip count lookup
         tpu_name = os.environ.get("TPU_NAME", "")
+        tpu_type = os.environ.get("TPU_TYPE", "")
         tpu_worker_hostnames = os.environ.get("TPU_WORKER_HOSTNAMES", "")
         tpu_worker_id = os.environ.get("TPU_WORKER_ID", "")
         tpu_chips_per_host_bounds = os.environ.get("TPU_CHIPS_PER_HOST_BOUNDS", "")
@@ -228,22 +205,19 @@ class DefaultEnvironmentProvider:
         # GPU info via nvidia-smi
         gpu_count, gpu_name, gpu_memory_mb = _probe_gpu_info()
 
-        # GCE metadata
-        gce_instance_name, gce_zone = _probe_gce_metadata()
-
-        # Build device config
+        # Build device config using TPU_TYPE for topology lookup
         device = cluster_pb2.DeviceConfig()
-        if tpu_name:
+        if tpu_type:
             tpu_chip_count = 0
             try:
-                topo = get_tpu_topology(tpu_name)
+                topo = get_tpu_topology(tpu_type)
                 tpu_chip_count = topo.chips_per_vm
             except ValueError:
-                logger.warning("Unknown TPU topology: %s", tpu_name)
+                logger.warning("Unknown TPU topology: %s", tpu_type)
 
             device.tpu.CopyFrom(
                 cluster_pb2.TpuDevice(
-                    variant=tpu_name,
+                    variant=tpu_type,
                     count=tpu_chip_count,
                 )
             )
@@ -272,7 +246,8 @@ class DefaultEnvironmentProvider:
             extra_attributes or "none",
         )
 
-        # Build worker attributes for constraint-based scheduling
+        # Build worker attributes for constraint-based scheduling.
+        # TPU_NAME is the slice name, used for coscheduling (group_by="tpu-name" groups workers by slice)
         attributes = _build_worker_attributes(tpu_name, tpu_worker_id, device, extra_attributes)
 
         # VM address from environment (injected by ManagedVm bootstrap)
@@ -284,15 +259,13 @@ class DefaultEnvironmentProvider:
             cpu_count=cpu_count,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
-            tpu_name=tpu_name,
+            tpu_name=tpu_name,  # TPU slice name for coscheduling (from TPU_NAME env var)
             tpu_worker_hostnames=tpu_worker_hostnames,
             tpu_worker_id=tpu_worker_id,
             tpu_chips_per_host_bounds=tpu_chips_per_host_bounds,
             gpu_count=gpu_count,
             gpu_name=gpu_name,
             gpu_memory_mb=gpu_memory_mb,
-            gce_instance_name=gce_instance_name,
-            gce_zone=gce_zone,
             device=device,
             attributes=attributes,
             vm_address=vm_address,

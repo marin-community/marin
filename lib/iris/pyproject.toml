@@ -11,6 +11,7 @@ dependencies = [
     "cloudpickle>=3.1.2",
     "connect-python @ git+https://github.com/connectrpc/connect-python.git@5342eacecef85e52717604ee5ac7e03a1e16c7ac",
     "fsspec>=2024.0.0",
+    "gcsfs>=2024.0.0",
     "grpcio>=1.76.0",
     "httpx>=0.28.1",
     "humanfriendly>=10.0",
