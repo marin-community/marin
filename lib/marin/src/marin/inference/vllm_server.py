@@ -439,7 +439,7 @@ def _detect_nvidia_gpu_environment() -> bool:
         value = os.environ.get(key)
         if not value:
             continue
-        if value.lower():
+        if value:
             return True
     return bool(glob.glob("/dev/nvidia[0-9]*"))
 
@@ -459,8 +459,6 @@ def _resolve_docker_gpu_arg() -> str | None:
         if not value:
             return None
         lowered = value.lower()
-        if lowered in {"none", "void", "no", "false", "-1"}:
-            return None
         if lowered == "all":
             return "all"
         devices = [device.strip() for device in value.split(",") if device.strip()]
