@@ -291,7 +291,7 @@ class Controller:
 
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
-        self._last_autoscaler_run_ms: int = 0
+        self._last_autoscaler_run: float = 0.0
 
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
@@ -629,13 +629,13 @@ class Controller:
         if not self._autoscaler:
             return
 
-        from iris.time_utils import now_ms
+        import time
 
-        now = now_ms()
-        interval_ms = int(self._autoscaler.evaluation_interval_seconds * 1000)
-        if interval_ms > 0 and now - self._last_autoscaler_run_ms < interval_ms:
+        now = time.monotonic()
+        interval = self._autoscaler.evaluation_interval_seconds
+        if interval > 0 and now - self._last_autoscaler_run < interval:
             return
-        self._last_autoscaler_run_ms = now
+        self._last_autoscaler_run = now
 
         demand_entries = compute_demand_entries(self._state)
         vm_status_map = self._build_vm_status_map()

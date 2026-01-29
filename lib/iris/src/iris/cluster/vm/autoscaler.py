@@ -178,11 +178,14 @@ class Autoscaler:
         self._groups = scale_groups
         self._vm_registry = vm_registry
 
-        # Apply defaults for proto fields (proto float defaults to 0.0)
+        # Proto float fields default to 0.0; apply sensible defaults.
         if config is None:
             config = config_pb2.AutoscalerConfig()
-        self._evaluation_interval_seconds = config.evaluation_interval_seconds or 10.0
-        self._requesting_timeout_seconds = config.requesting_timeout_seconds or 120.0
+        if not config.evaluation_interval_seconds:
+            config.evaluation_interval_seconds = 10.0
+        if not config.requesting_timeout_seconds:
+            config.requesting_timeout_seconds = 120.0
+        self._config = config
 
         # Track slice creation times for short-lived slice detection
         self._slice_created_at: dict[str, int] = {}
@@ -373,7 +376,7 @@ class Autoscaler:
         a background thread pool. Returns immediately without blocking.
         """
         # Mark group as requesting before submitting to executor
-        timeout_ms = int(self._requesting_timeout_seconds * 1000)
+        timeout_ms = int(self._config.requesting_timeout_seconds * 1000)
         group.mark_requesting(ts, timeout_ms)
 
         # Submit to background thread
@@ -509,7 +512,7 @@ class Autoscaler:
     @property
     def evaluation_interval_seconds(self) -> float:
         """Configured evaluation interval in seconds."""
-        return self._evaluation_interval_seconds
+        return self._config.evaluation_interval_seconds
 
     def notify_worker_failed(self, vm_address: str) -> None:
         """Called by controller when a worker fails. Terminates the containing slice.
