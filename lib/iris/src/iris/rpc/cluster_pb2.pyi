@@ -73,6 +73,18 @@ class Empty(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class ProcessLogRecord(_message.Message):
+    __slots__ = ("timestamp", "level", "logger_name", "message")
+    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
+    LEVEL_FIELD_NUMBER: _ClassVar[int]
+    LOGGER_NAME_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    timestamp: float
+    level: str
+    logger_name: str
+    message: str
+    def __init__(self, timestamp: _Optional[float] = ..., level: _Optional[str] = ..., logger_name: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
+
 class TaskStatus(_message.Message):
     __slots__ = ("task_id", "job_id", "task_index", "state", "worker_id", "worker_address", "exit_code", "error", "started_at_ms", "finished_at_ms", "ports", "resource_usage", "build_metrics", "current_attempt_id", "attempts", "pending_reason", "can_be_scheduled")
     class PortsEntry(_message.Message):
@@ -167,7 +179,7 @@ class BuildMetrics(_message.Message):
     def __init__(self, build_started_ms: _Optional[int] = ..., build_finished_ms: _Optional[int] = ..., from_cache: _Optional[bool] = ..., image_tag: _Optional[str] = ...) -> None: ...
 
 class JobStatus(_message.Message):
-    __slots__ = ("job_id", "state", "exit_code", "error", "started_at_ms", "finished_at_ms", "ports", "resource_usage", "status_message", "build_metrics", "serialized_result", "parent_job_id", "failure_count", "preemption_count", "tasks", "name", "submitted_at_ms", "resources", "task_state_counts", "task_count", "completed_count")
+    __slots__ = ("job_id", "state", "exit_code", "error", "started_at_ms", "finished_at_ms", "ports", "resource_usage", "status_message", "build_metrics", "serialized_result", "parent_job_id", "failure_count", "preemption_count", "tasks", "name", "submitted_at_ms", "resources", "task_state_counts", "task_count", "completed_count", "pending_reason")
     class PortsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -203,6 +215,7 @@ class JobStatus(_message.Message):
     TASK_STATE_COUNTS_FIELD_NUMBER: _ClassVar[int]
     TASK_COUNT_FIELD_NUMBER: _ClassVar[int]
     COMPLETED_COUNT_FIELD_NUMBER: _ClassVar[int]
+    PENDING_REASON_FIELD_NUMBER: _ClassVar[int]
     job_id: str
     state: JobState
     exit_code: int
@@ -224,7 +237,8 @@ class JobStatus(_message.Message):
     task_state_counts: _containers.ScalarMap[str, int]
     task_count: int
     completed_count: int
-    def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., ports: _Optional[_Mapping[str, int]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., status_message: _Optional[str] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., serialized_result: _Optional[bytes] = ..., parent_job_id: _Optional[str] = ..., failure_count: _Optional[int] = ..., preemption_count: _Optional[int] = ..., tasks: _Optional[_Iterable[_Union[TaskStatus, _Mapping]]] = ..., name: _Optional[str] = ..., submitted_at_ms: _Optional[int] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., task_state_counts: _Optional[_Mapping[str, int]] = ..., task_count: _Optional[int] = ..., completed_count: _Optional[int] = ...) -> None: ...
+    pending_reason: str
+    def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., ports: _Optional[_Mapping[str, int]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., status_message: _Optional[str] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., serialized_result: _Optional[bytes] = ..., parent_job_id: _Optional[str] = ..., failure_count: _Optional[int] = ..., preemption_count: _Optional[int] = ..., tasks: _Optional[_Iterable[_Union[TaskStatus, _Mapping]]] = ..., name: _Optional[str] = ..., submitted_at_ms: _Optional[int] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., task_state_counts: _Optional[_Mapping[str, int]] = ..., task_count: _Optional[int] = ..., completed_count: _Optional[int] = ..., pending_reason: _Optional[str] = ...) -> None: ...
 
 class DeviceConfig(_message.Message):
     __slots__ = ("cpu", "gpu", "tpu")
@@ -279,7 +293,7 @@ class ResourceSpecProto(_message.Message):
     def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., preemptible: _Optional[bool] = ..., regions: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
-    __slots__ = ("pip_packages", "env_vars", "extras")
+    __slots__ = ("pip_packages", "env_vars", "extras", "python_version")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -290,10 +304,12 @@ class EnvironmentConfig(_message.Message):
     PIP_PACKAGES_FIELD_NUMBER: _ClassVar[int]
     ENV_VARS_FIELD_NUMBER: _ClassVar[int]
     EXTRAS_FIELD_NUMBER: _ClassVar[int]
+    PYTHON_VERSION_FIELD_NUMBER: _ClassVar[int]
     pip_packages: _containers.RepeatedScalarFieldContainer[str]
     env_vars: _containers.ScalarMap[str, str]
     extras: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ...) -> None: ...
+    python_version: str
+    def __init__(self, pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ..., python_version: _Optional[str] = ...) -> None: ...
 
 class Entrypoint(_message.Message):
     __slots__ = ("callable", "command")
@@ -499,7 +515,7 @@ class Controller(_message.Message):
         should_reset: bool
         def __init__(self, accepted: _Optional[bool] = ..., controller_address: _Optional[str] = ..., should_reset: _Optional[bool] = ...) -> None: ...
     class WorkerHealthStatus(_message.Message):
-        __slots__ = ("worker_id", "healthy", "consecutive_failures", "last_heartbeat_ms", "running_job_ids", "address", "metadata")
+        __slots__ = ("worker_id", "healthy", "consecutive_failures", "last_heartbeat_ms", "running_job_ids", "address", "metadata", "status_message")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
         HEALTHY_FIELD_NUMBER: _ClassVar[int]
         CONSECUTIVE_FAILURES_FIELD_NUMBER: _ClassVar[int]
@@ -507,6 +523,7 @@ class Controller(_message.Message):
         RUNNING_JOB_IDS_FIELD_NUMBER: _ClassVar[int]
         ADDRESS_FIELD_NUMBER: _ClassVar[int]
         METADATA_FIELD_NUMBER: _ClassVar[int]
+        STATUS_MESSAGE_FIELD_NUMBER: _ClassVar[int]
         worker_id: str
         healthy: bool
         consecutive_failures: int
@@ -514,7 +531,8 @@ class Controller(_message.Message):
         running_job_ids: _containers.RepeatedScalarFieldContainer[str]
         address: str
         metadata: WorkerMetadata
-        def __init__(self, worker_id: _Optional[str] = ..., healthy: _Optional[bool] = ..., consecutive_failures: _Optional[int] = ..., last_heartbeat_ms: _Optional[int] = ..., running_job_ids: _Optional[_Iterable[str]] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ...) -> None: ...
+        status_message: str
+        def __init__(self, worker_id: _Optional[str] = ..., healthy: _Optional[bool] = ..., consecutive_failures: _Optional[int] = ..., last_heartbeat_ms: _Optional[int] = ..., running_job_ids: _Optional[_Iterable[str]] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ..., status_message: _Optional[str] = ...) -> None: ...
     class ListWorkersRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
@@ -660,6 +678,36 @@ class Controller(_message.Message):
         ACTIONS_FIELD_NUMBER: _ClassVar[int]
         actions: _containers.RepeatedCompositeFieldContainer[Controller.TransactionAction]
         def __init__(self, actions: _Optional[_Iterable[_Union[Controller.TransactionAction, _Mapping]]] = ...) -> None: ...
+    class GetTaskLogsRequest(_message.Message):
+        __slots__ = ("job_id", "task_index", "start_ms", "limit")
+        JOB_ID_FIELD_NUMBER: _ClassVar[int]
+        TASK_INDEX_FIELD_NUMBER: _ClassVar[int]
+        START_MS_FIELD_NUMBER: _ClassVar[int]
+        LIMIT_FIELD_NUMBER: _ClassVar[int]
+        job_id: str
+        task_index: int
+        start_ms: int
+        limit: int
+        def __init__(self, job_id: _Optional[str] = ..., task_index: _Optional[int] = ..., start_ms: _Optional[int] = ..., limit: _Optional[int] = ...) -> None: ...
+    class GetTaskLogsResponse(_message.Message):
+        __slots__ = ("logs", "worker_address")
+        LOGS_FIELD_NUMBER: _ClassVar[int]
+        WORKER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
+        logs: _containers.RepeatedCompositeFieldContainer[Worker.LogEntry]
+        worker_address: str
+        def __init__(self, logs: _Optional[_Iterable[_Union[Worker.LogEntry, _Mapping]]] = ..., worker_address: _Optional[str] = ...) -> None: ...
+    class GetProcessLogsRequest(_message.Message):
+        __slots__ = ("prefix", "limit")
+        PREFIX_FIELD_NUMBER: _ClassVar[int]
+        LIMIT_FIELD_NUMBER: _ClassVar[int]
+        prefix: str
+        limit: int
+        def __init__(self, prefix: _Optional[str] = ..., limit: _Optional[int] = ...) -> None: ...
+    class GetProcessLogsResponse(_message.Message):
+        __slots__ = ("records",)
+        RECORDS_FIELD_NUMBER: _ClassVar[int]
+        records: _containers.RepeatedCompositeFieldContainer[ProcessLogRecord]
+        def __init__(self, records: _Optional[_Iterable[_Union[ProcessLogRecord, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...
 
 class Worker(_message.Message):
@@ -761,4 +809,16 @@ class Worker(_message.Message):
         uptime_ms: int
         running_tasks: int
         def __init__(self, healthy: _Optional[bool] = ..., uptime_ms: _Optional[int] = ..., running_tasks: _Optional[int] = ...) -> None: ...
+    class GetProcessLogsRequest(_message.Message):
+        __slots__ = ("prefix", "limit")
+        PREFIX_FIELD_NUMBER: _ClassVar[int]
+        LIMIT_FIELD_NUMBER: _ClassVar[int]
+        prefix: str
+        limit: int
+        def __init__(self, prefix: _Optional[str] = ..., limit: _Optional[int] = ...) -> None: ...
+    class GetProcessLogsResponse(_message.Message):
+        __slots__ = ("records",)
+        RECORDS_FIELD_NUMBER: _ClassVar[int]
+        records: _containers.RepeatedCompositeFieldContainer[ProcessLogRecord]
+        def __init__(self, records: _Optional[_Iterable[_Union[ProcessLogRecord, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...

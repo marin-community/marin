@@ -157,6 +157,23 @@ Task containers are labeled for discoverability:
 - `iris.task_id=<id>` - Task identifier
 - `iris.job_id=<id>` - Job identifier
 
+### TPU Container Configuration
+
+When a job requests TPU resources (`device=tpu_device("v5litepod-16")`), workers automatically configure Docker containers with the necessary flags and environment variables for TPU access:
+
+**Docker flags:**
+- `--device /dev/vfio:/dev/vfio` - VFIO device for TPU passthrough
+- `--shm-size=100g` - Large shared memory for TPU operations
+- `--cap-add=SYS_RESOURCE` - Resource management capabilities
+- `--ulimit memlock=68719476736:68719476736` - Unlocked memory limits
+
+**Environment variables:**
+- `JAX_PLATFORMS=tpu,cpu` - JAX platform configuration
+- `PJRT_DEVICE=TPU` - PJRT runtime device
+- `TPU_NAME`, `TPU_WORKER_ID`, `TPU_WORKER_HOSTNAMES`, `TPU_CHIPS_PER_HOST_BOUNDS` - TPU metadata from host
+
+This enables JAX and other TPU-aware frameworks to initialize correctly inside job containers.
+
 ## Bundle Storage (Required)
 
 Jobs can include a `bundle_blob` containing workspace files. The controller stores these in a shared location accessible to all workers.
@@ -258,12 +275,22 @@ uv run python lib/iris/scripts/smoke-test.py --config ... --no-cleanup-on-failur
 
 # Custom job timeout
 uv run python lib/iris/scripts/smoke-test.py --config ... --job-timeout 900
+
+# Save logs to a custom directory
+uv run python lib/iris/scripts/smoke-test.py --config ... --log-dir /path/to/logs
+
+# Use a unique prefix (isolates resources from other smoke tests)
+uv run python lib/iris/scripts/smoke-test.py --config ... --prefix my-test
 ```
 
 The smoke test:
 1. Builds and pushes controller + worker images
 2. Starts controller VM with autoscaler
-3. Submits TPU jobs to exercise autoscaling
+3. Submits 4 TPU jobs to exercise autoscaling:
+   - Simple TPU job (basic execution)
+   - Concurrent TPU jobs (parallel provisioning)
+   - Coscheduled multi-task job (distributed work)
+   - JAX TPU job (validates TPU initialization and computation)
 4. Collects logs on failure for debugging
 5. Cleans up all resources
 

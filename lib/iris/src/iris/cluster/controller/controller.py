@@ -25,13 +25,14 @@ from typing import Protocol
 import grpc
 import uvicorn
 
+from iris.chaos import chaos
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import (
     TaskAssignedEvent,
     TaskStateChangedEvent,
     WorkerFailedEvent,
 )
-from iris.cluster.controller.scheduler import Scheduler, TaskScheduleResult
+from iris.cluster.controller.scheduler import Scheduler, SchedulingContext, TaskScheduleResult
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import (
     ControllerState,
@@ -42,6 +43,7 @@ from iris.cluster.controller.state import (
 )
 from iris.cluster.types import JobId, TaskId, VmWorkerStatus, VmWorkerStatusMap
 from iris.cluster.vm.autoscaler import Autoscaler
+from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import ExponentialBackoff
@@ -266,6 +268,7 @@ class Controller:
             self._state,
             self,
             bundle_prefix=config.bundle_prefix,
+            log_buffer=get_global_buffer(),
         )
         self._dashboard = ControllerDashboard(
             self._service,
@@ -430,14 +433,9 @@ class Controller:
                     task_index=task.task_index,
                     num_tasks=len(self._state.get_job_tasks(task.job_id)),
                     entrypoint=job.request.entrypoint,
-                    environment=cluster_pb2.EnvironmentConfig(
-                        env_vars=dict(job.request.environment.env_vars),
-                    ),
+                    environment=job.request.environment,
                     bundle_gcs_path=job.request.bundle_gcs_path,
-                    resources=cluster_pb2.ResourceSpecProto(
-                        cpu=job.request.resources.cpu,
-                        memory_bytes=job.request.resources.memory_bytes,
-                    ),
+                    resources=job.request.resources,
                     ports=list(job.request.ports),
                     attempt_id=task.current_attempt_id,
                 )
@@ -526,6 +524,8 @@ class Controller:
                     f"Dispatching task {task.task_id} to worker {worker.worker_id} "
                     f"at {worker.address} (attempt {attempt + 1})"
                 )
+                if chaos("controller.dispatch"):
+                    raise Exception("chaos: dispatch unavailable")
                 stub = self._stub_factory.get_stub(worker.address)
                 stub.run_task(request)
                 logger.info(f"Successfully dispatched task {task.task_id} to worker {worker.worker_id}")
@@ -560,13 +560,12 @@ class Controller:
         if txn.tasks_to_kill:
             self.kill_tasks_on_workers(txn.tasks_to_kill)
 
-    def task_schedule_status(self, task: ControllerTask) -> TaskScheduleResult:
+    def task_schedule_status(self, task: ControllerTask, context: SchedulingContext) -> TaskScheduleResult:
         """Get the current scheduling status of a task (for dashboard display).
 
         Delegates to the internal scheduler.
         """
-
-        return self._scheduler.task_schedule_status(task)
+        return self._scheduler.task_schedule_status(task, context)
 
     def kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
         """Send KILL RPCs to workers for tasks that were running.

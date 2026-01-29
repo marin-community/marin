@@ -24,8 +24,9 @@ Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.pr
 """
 
 import os
+import sys
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, IntEnum
 from typing import Any, NewType
 
@@ -320,6 +321,7 @@ class EnvironmentSpec:
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
+            python_version=f"{sys.version_info.major}.{sys.version_info.minor}",
         )
 
 
@@ -487,13 +489,17 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
-@dataclass
 class Entrypoint:
     """Job entrypoint specification.
 
     Supports two execution modes:
     1. Callable: A Python function with args/kwargs (cloudpickled)
     2. Command: A command-line invocation (e.g., ["python", "train.py", "--epochs", "10"])
+
+    Callable entrypoints are stored as cloudpickle bytes. The bytes are the
+    single source of truth — they pass from client to worker to task container
+    without deserialization, avoiding Python version mismatches between the
+    client and worker processes.
 
     Examples:
         # Callable entrypoint
@@ -503,31 +509,49 @@ class Entrypoint:
         entrypoint = Entrypoint.from_command("python", "train.py", "--epochs", "10")
     """
 
-    # Callable entrypoint (mutually exclusive with command)
-    callable: Callable[..., Any] | None = None
-    args: tuple = ()
-    kwargs: dict[str, Any] = field(default_factory=dict)
-
-    # Command entrypoint (mutually exclusive with callable)
-    command: list[str] | None = None
-
-    def __post_init__(self):
-        has_callable = self.callable is not None
-        has_command = self.command is not None
+    def __init__(
+        self,
+        *,
+        callable_bytes: bytes | None = None,
+        command: list[str] | None = None,
+    ):
+        has_callable = callable_bytes is not None
+        has_command = command is not None
         if has_callable == has_command:
-            raise ValueError("Exactly one of 'callable' or 'command' must be set")
+            raise ValueError("Exactly one of 'callable_bytes' or 'command' must be set")
+        self._callable_bytes = callable_bytes
+        self.command = command
+
+    @property
+    def callable_bytes(self) -> bytes | None:
+        return self._callable_bytes
 
     @property
     def is_callable(self) -> bool:
-        return self.callable is not None
+        return self._callable_bytes is not None
 
     @property
     def is_command(self) -> bool:
         return self.command is not None
 
+    def resolve(self) -> tuple[Callable[..., Any], tuple, dict[str, Any]]:
+        """Deserialize the callable, args, kwargs from pickle bytes.
+
+        Only call this when you need to actually invoke the function locally
+        (e.g. local_client). Avoid on the worker — use callable_bytes directly
+        to pass through to the task container without version-sensitive unpickling.
+        """
+        if self._callable_bytes is None:
+            raise ValueError("Not a callable entrypoint")
+        import cloudpickle
+
+        return cloudpickle.loads(self._callable_bytes)
+
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
-        return cls(callable=fn, args=args, kwargs=kwargs)
+        import cloudpickle
+
+        return cls(callable_bytes=cloudpickle.dumps((fn, args, kwargs)))
 
     @classmethod
     def from_command(cls, *argv: str) -> "Entrypoint":
@@ -546,23 +570,23 @@ class Entrypoint:
     def to_proto(self) -> cluster_pb2.Entrypoint:
         """Convert to protobuf representation."""
         proto = cluster_pb2.Entrypoint()
-        if self.callable is not None:
-            import cloudpickle
-
-            proto.callable = cloudpickle.dumps((self.callable, self.args, self.kwargs))
+        if self._callable_bytes is not None:
+            proto.callable = self._callable_bytes
         elif self.command is not None:
             proto.command.argv[:] = self.command
         return proto
 
     @classmethod
     def from_proto(cls, proto: cluster_pb2.Entrypoint) -> "Entrypoint":
-        """Create from protobuf representation."""
+        """Create from protobuf representation.
+
+        For callable entrypoints, stores the raw pickle bytes without
+        deserializing. This avoids Python version mismatches when the
+        worker runs a different Python than the client.
+        """
         kind = proto.WhichOneof("kind")
         if kind == "callable":
-            import cloudpickle
-
-            fn, args, kwargs = cloudpickle.loads(proto.callable)
-            return cls(callable=fn, args=args, kwargs=kwargs)
+            return cls(callable_bytes=proto.callable)
         elif kind == "command":
             return cls(command=list(proto.command.argv))
         else:

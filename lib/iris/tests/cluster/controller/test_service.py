@@ -28,6 +28,7 @@ from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEv
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerState, ControllerTask
 from iris.cluster.types import JobId, WorkerId
+from iris.logging import BufferedLogRecord, LogRingBuffer
 from iris.rpc import cluster_pb2
 
 
@@ -955,3 +956,52 @@ def test_no_kill_rpcs_for_pending_tasks(service, state, mock_scheduler, job_requ
 
     # Only task[1] should be killed (task[2] was never dispatched)
     assert killed_task_ids == {tasks[1].task_id}
+
+
+def test_get_process_logs():
+    """Test GetProcessLogs RPC retrieves logs from the buffer."""
+
+    state = ControllerState()
+    mock_scheduler = MockSchedulerWake()
+    log_buffer = LogRingBuffer(maxlen=100)
+
+    # Add some test log records
+    log_buffer.append(BufferedLogRecord(timestamp=1000.0, level="INFO", logger_name="iris.test", message="Test log 1"))
+    log_buffer.append(
+        BufferedLogRecord(timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="Autoscaler log")
+    )
+    log_buffer.append(BufferedLogRecord(timestamp=1002.0, level="ERROR", logger_name="iris.test", message="Test log 2"))
+
+    service = ControllerServiceImpl(
+        state, mock_scheduler, bundle_prefix="file:///tmp/test-bundles", log_buffer=log_buffer
+    )
+
+    # Test: Get all logs
+    response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=0), None)
+    assert len(response.records) == 3
+    assert response.records[0].message == "Test log 1"
+    assert response.records[1].logger_name == "iris.cluster.vm"
+    assert response.records[2].level == "ERROR"
+
+    # Test: Filter by prefix
+    response = service.get_process_logs(
+        cluster_pb2.Controller.GetProcessLogsRequest(prefix="iris.cluster.vm", limit=0), None
+    )
+    assert len(response.records) == 1
+    assert response.records[0].message == "Autoscaler log"
+
+    # Test: Limit results
+    response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=2), None)
+    assert len(response.records) == 2
+    assert response.records[0].message == "Autoscaler log"
+    assert response.records[1].message == "Test log 2"
+
+
+def test_get_process_logs_no_buffer():
+    """Test GetProcessLogs returns empty when buffer is None."""
+    state = ControllerState()
+    mock_scheduler = MockSchedulerWake()
+    service = ControllerServiceImpl(state, mock_scheduler, bundle_prefix="file:///tmp/test-bundles", log_buffer=None)
+
+    response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=0), None)
+    assert len(response.records) == 0

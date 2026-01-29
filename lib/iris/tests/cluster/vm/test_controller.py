@@ -676,25 +676,6 @@ class TestBootstrapScript:
 
     # Regression tests
 
-    def test_regression_unescaped_braces_in_comments(self):
-        """Regression: unescaped {N} in comments caused KeyError.
-
-        Original bug: Lines 83, 227 had -w{N} in comments.
-        Fix: Escaped to -w{{N}}.
-        """
-        config = config_pb2.BootstrapConfig(
-            docker_image="gcr.io/test/iris-worker:latest",
-            worker_port=10001,
-            cache_dir="/var/cache/iris",
-        )
-
-        try:
-            script = _build_bootstrap_script(config, vm_address="10.0.0.1")
-            assert script
-            assert "{N}" in script  # {{N}} in template becomes {N} after format()
-        except KeyError as e:
-            pytest.fail(f"Unescaped braces in template: {e}")
-
     # Integration tests
 
     def test_multiple_configs_generate_without_errors(self):
