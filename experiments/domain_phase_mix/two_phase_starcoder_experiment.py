@@ -59,7 +59,7 @@ logger = logging.getLogger("ray")
 # EXPERIMENT CONFIGURATION
 # ============================================================================
 
-NAME = "pinlin_calvin_xu/data_mixture/two_phase_starcoder"
+NAME = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_2"
 
 # Token budget: 1B tokens (as specified in RegMix paper)
 EXPERIMENT_BUDGET = 1_000_000_000  # Actual tokens we train with
@@ -81,15 +81,11 @@ DOMAIN_NAMES = ["nemotron_full", "starcoder"]
 # Combine CORE_TASKS + CODE_TASKS for evaluation
 EVAL_TASKS = CORE_TASKS + CODE_TASKS
 
-# Use Dirichlet sampling strategy for weight exploration
+# Use uniform sampling strategy for weight exploration
 SAMPLING_PARAMS = DirichletSamplingParams(
-    strategy=SamplingStrategy.DIRICHLET,
-    temp=0.1,
-    min_strength=0.1,
-    max_strength=0.5,
-    max_ratio = 100.0,
+    strategy=SamplingStrategy.UNIFORM,
     min_weight=0.01,
-    min_phase_change=0.15,
+    # min_phase_change=0.15,
 )
 
 

@@ -339,11 +339,200 @@ def create_ternary_plot_figure(
     return fig
 
 
+def create_scatter_plot_figure(
+    weights_by_phase: dict[str, dict[str, list[float]]],
+    phases: list[str],
+    domains: list[str],
+    experiment_name: str,
+) -> go.Figure:
+    """Create a scatter plot showing Phase 0 vs Phase 1 weights for each domain.
+
+    Only applicable for 2-phase experiments. Shows how weights change between phases.
+
+    Args:
+        weights_by_phase: Nested dict from extract_weights_by_phase.
+        phases: List of phase names (must be exactly 2).
+        domains: List of domain names.
+        experiment_name: Experiment name for the title.
+
+    Returns:
+        Plotly Figure object.
+    """
+    if len(phases) != 2:
+        raise ValueError(f"Scatter plot requires exactly 2 phases, got {len(phases)}")
+
+    from plotly.subplots import make_subplots
+
+    n_domains = len(domains)
+    fig = make_subplots(
+        rows=1,
+        cols=n_domains,
+        subplot_titles=[f"{domain}" for domain in domains],
+        horizontal_spacing=0.1,
+    )
+
+    # Color palette
+    colors = [
+        "rgb(31, 119, 180)",  # Blue
+        "rgb(255, 127, 14)",  # Orange
+        "rgb(44, 160, 44)",  # Green
+        "rgb(214, 39, 40)",  # Red
+        "rgb(148, 103, 189)",  # Purple
+    ]
+
+    phase_0, phase_1 = phases[0], phases[1]
+
+    for col_idx, domain in enumerate(domains):
+        weights_p0 = weights_by_phase[phase_0][domain]
+        weights_p1 = weights_by_phase[phase_1][domain]
+        color = colors[col_idx % len(colors)]
+
+        # Scatter plot
+        fig.add_trace(
+            go.Scatter(
+                x=weights_p0,
+                y=weights_p1,
+                mode="markers",
+                name=domain,
+                marker=dict(
+                    size=8,
+                    color=color,
+                    opacity=0.7,
+                    line=dict(width=1, color="white"),
+                ),
+                showlegend=False,
+            ),
+            row=1,
+            col=col_idx + 1,
+        )
+
+        # Diagonal reference line (equal weight)
+        fig.add_trace(
+            go.Scatter(
+                x=[0, 1],
+                y=[0, 1],
+                mode="lines",
+                line=dict(dash="dash", color="gray", width=1),
+                showlegend=False,
+            ),
+            row=1,
+            col=col_idx + 1,
+        )
+
+        # Update axes
+        fig.update_xaxes(
+            title_text=f"{phase_0} Weight",
+            range=[0, 1.05],
+            row=1,
+            col=col_idx + 1,
+        )
+        fig.update_yaxes(
+            title_text=f"{phase_1} Weight",
+            range=[0, 1.05],
+            row=1,
+            col=col_idx + 1,
+        )
+
+    fig.update_layout(
+        title=dict(
+            text=f"Phase Weight Comparison: {experiment_name}",
+            font=dict(size=16),
+        ),
+        height=500,
+        width=400 * n_domains,
+        font=dict(size=12),
+    )
+
+    return fig
+
+
+def create_trajectory_plot_figure(
+    weights_by_phase: dict[str, dict[str, list[float]]],
+    phases: list[str],
+    domains: list[str],
+    experiment_name: str,
+    domain_to_show: str | None = None,
+) -> go.Figure:
+    """Create a trajectory plot showing weight changes across phases.
+
+    Each run is shown as a line connecting its weights across phases.
+    Best for 2-phase experiments but works with more phases.
+
+    Args:
+        weights_by_phase: Nested dict from extract_weights_by_phase.
+        phases: List of phase names.
+        domains: List of domain names.
+        experiment_name: Experiment name for the title.
+        domain_to_show: If specified, only show this domain. Otherwise shows the
+            second domain (typically the "rare" domain of interest).
+
+    Returns:
+        Plotly Figure object.
+    """
+    # Default to second domain (typically the "rare" domain)
+    if domain_to_show is None:
+        domain_to_show = domains[1] if len(domains) > 1 else domains[0]
+
+    n_runs = len(weights_by_phase[phases[0]][domain_to_show])
+
+    fig = go.Figure()
+
+    # Generate a color scale for runs
+    import plotly.express as px
+
+    colorscale = px.colors.sample_colorscale("Viridis", n_runs)
+
+    for run_idx in range(n_runs):
+        # Get weights across phases for this run
+        x_vals = list(range(len(phases)))
+        y_vals = [weights_by_phase[phase][domain_to_show][run_idx] for phase in phases]
+
+        fig.add_trace(
+            go.Scatter(
+                x=x_vals,
+                y=y_vals,
+                mode="lines+markers",
+                line=dict(color=colorscale[run_idx], width=1.5),
+                marker=dict(size=6, color=colorscale[run_idx]),
+                opacity=0.6,
+                showlegend=False,
+                hovertemplate=(
+                    f"Run {run_idx}<br>"
+                    + "<br>".join([f"{phase}: {y_vals[i]:.3f}" for i, phase in enumerate(phases)])
+                    + "<extra></extra>"
+                ),
+            )
+        )
+
+    fig.update_layout(
+        title=dict(
+            text=f"{domain_to_show} Weight Trajectories: {experiment_name}",
+            font=dict(size=16),
+        ),
+        xaxis=dict(
+            title="Phase",
+            tickmode="array",
+            tickvals=list(range(len(phases))),
+            ticktext=phases,
+        ),
+        yaxis=dict(
+            title=f"{domain_to_show} Weight",
+            range=[0, 1.05],
+        ),
+        height=500,
+        width=700,
+        font=dict(size=12),
+    )
+
+    return fig
+
+
 def visualize_weights(
     weight_configs_path: str,
     output_path: str | None = None,
     plot_type: str = "all",
     dpi: int = 300,
+    trajectory_domain: str | None = None,
 ) -> dict[str, go.Figure]:
     """Generate visualizations of mixture weight distributions.
 
@@ -351,8 +540,10 @@ def visualize_weights(
         weight_configs_path: Path to weight_configs.json (GCS or local).
         output_path: Output path for saving images (without extension).
             If None, figures are not saved.
-        plot_type: Type of plot to generate: "histogram", "box", "ternary", or "all".
+        plot_type: Type of plot to generate: "histogram", "box", "ternary",
+            "scatter", "trajectory", or "all".
         dpi: DPI for saved images (default 300).
+        trajectory_domain: Domain to show in trajectory plot (default: second domain).
 
     Returns:
         Dictionary mapping plot names to Figure objects.
@@ -372,6 +563,16 @@ def visualize_weights(
     # Extract weights by phase
     weights_by_phase = extract_weights_by_phase(configs, phases, domains)
 
+    # Print summary statistics
+    import numpy as np
+
+    print("\n=== Summary Statistics ===")
+    for phase in phases:
+        print(f"\n{phase}:")
+        for domain in domains:
+            w = np.array(weights_by_phase[phase][domain])
+            print(f"  {domain}: mean={w.mean():.3f}, std={w.std():.3f}, min={w.min():.3f}, max={w.max():.3f}")
+
     figures: dict[str, go.Figure] = {}
 
     # Generate requested plots
@@ -386,6 +587,18 @@ def visualize_weights(
     if plot_type in ("ternary", "all") and len(domains) == 3:
         fig_ternary = create_ternary_plot_figure(weights_by_phase, phases, domains, experiment_name)
         figures["ternary"] = fig_ternary
+
+    # Scatter plot for 2-phase experiments
+    if plot_type in ("scatter", "all") and len(phases) == 2:
+        fig_scatter = create_scatter_plot_figure(weights_by_phase, phases, domains, experiment_name)
+        figures["scatter"] = fig_scatter
+
+    # Trajectory plot
+    if plot_type in ("trajectory", "all"):
+        fig_trajectory = create_trajectory_plot_figure(
+            weights_by_phase, phases, domains, experiment_name, domain_to_show=trajectory_domain
+        )
+        figures["trajectory"] = fig_trajectory
 
     # Save figures if output path provided
     if output_path:
@@ -446,7 +659,7 @@ def main():
         "--plot-type",
         "-t",
         type=str,
-        choices=["histogram", "box", "ternary", "all"],
+        choices=["histogram", "box", "ternary", "scatter", "trajectory", "all"],
         default="all",
         help="Type of plot to generate (default: all)",
     )
@@ -455,6 +668,12 @@ def main():
         type=int,
         default=300,
         help="DPI for saved images (default: 300)",
+    )
+    parser.add_argument(
+        "--trajectory-domain",
+        type=str,
+        default=None,
+        help="Domain to show in trajectory plot (default: second domain)",
     )
     parser.add_argument(
         "--show",
@@ -469,6 +688,7 @@ def main():
         output_path=args.output,
         plot_type=args.plot_type,
         dpi=args.dpi,
+        trajectory_domain=args.trajectory_domain,
     )
 
     if args.show:
