@@ -159,7 +159,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         if wandb_api_key:
             env_vars["WANDB_API_KEY"] = wandb_api_key
         return build_runtime_env_for_packages(
-            extra=["eval"],
+            extra=["eval", "vllm"],
             pip_packages=["pandas", "langdetect", "immutabledict"],
             env_vars=env_vars,
         )
@@ -229,17 +229,17 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         """
         if not os.path.isdir(model_local_dir):
             return
-        
+
         # Patch model config.json
         config_json_path = os.path.join(model_local_dir, "config.json")
         if os.path.exists(config_json_path):
             self._patch_config_file(config_json_path, max_model_len)
-        
+
         # Also patch tokenizer_config.json if it exists
         tokenizer_config_json_path = os.path.join(model_local_dir, "tokenizer_config.json")
         if os.path.exists(tokenizer_config_json_path):
             self._patch_config_file(tokenizer_config_json_path, max_model_len)
-    
+
     def _patch_config_file(self, config_json_path: str, max_model_len: int) -> None:
         """Helper method to patch a config.json or tokenizer_config.json file."""
         with open(config_json_path, "r") as f:
@@ -254,7 +254,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             elif cfg[key] != max_model_len:
                 cfg[key] = max_model_len
                 updated = True
-        
+
         if updated:
             with open(config_json_path, "w") as f:
                 json.dump(cfg, f, indent=2)
@@ -325,11 +325,11 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
             # Build model args string first to get engine_kwargs
             engine_kwargs = dict(model.engine_kwargs) if model.engine_kwargs else {}
-            
+
             # Extract max_gen_toks from engine_kwargs if present, or use the function parameter
             # max_gen_toks should be passed to lm-eval via model_args, but NOT to vLLM's engine initialization
             max_gen_toks_value = engine_kwargs.pop("max_gen_toks", None) or max_gen_toks
-            
+
             # Patch config.json BEFORE vLLM initializes to ensure it reads the correct values
             # Use local config directory if available (for GCS paths), otherwise use model path
             config_dir_for_patching = local_config_dir if local_config_dir else model_name_or_path
@@ -343,7 +343,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             if "max_model_len" in engine_kwargs and engine_kwargs["max_model_len"] is not None:
                 max_model_len_value = engine_kwargs["max_model_len"]
                 self._patch_max_position_embeddings_if_needed(config_dir_for_patching, max_model_len_value)
-            
+
             # Get configurable values from engine_kwargs with defaults
             max_num_seqs = engine_kwargs.pop("max_num_seqs", 1)
             enforce_eager = engine_kwargs.pop("enforce_eager", False)

@@ -53,9 +53,11 @@ def accelerator_type_from_extra(extra: list[str] | None = None) -> AcceleratorTy
         return AcceleratorType.NONE
 
     extra_set = set(extra)
-    if "tpu" in extra_set:
+    # Note: "vllm" extra uses vllm-tpu which runs on TPUs, so it should use
+    # the CPU PyTorch index (TPUs use CPU torch, not CUDA torch).
+    if "tpu" in extra_set or "vllm" in extra_set:
         return AcceleratorType.TPU
-    elif "gpu" in extra_set or "vllm" in extra_set:
+    elif "gpu" in extra_set:
         return AcceleratorType.GPU
     elif "cpu" in extra_set:
         return AcceleratorType.CPU
