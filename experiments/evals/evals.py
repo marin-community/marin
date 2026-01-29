@@ -374,3 +374,89 @@ def default_key_evals(
             max_eval_instances=max_eval_instances,
         ),
     ]
+
+
+def evaluate_harbor(
+    model_name: str,
+    model_path: str,
+    dataset: str,
+    version: str = "1.0",
+    max_eval_instances: int | None = None,
+    resource_config: ResourceConfig | None = None,
+    apply_chat_template: bool = False,
+    wandb_tags: list[str] | None = None,
+    generation_params: dict | None = None,
+    agent: str = "claude-code",
+    n_concurrent: int = 4,
+    env: str = "local",
+) -> ExecutorStep:
+    """
+    Evaluate on ANY Harbor dataset from the registry.
+
+    No custom adapters needed! Harbor's registry handles all datasets generically.
+
+    Available datasets: https://harborframework.com/registry
+    - aime@1.0: 60 math problems (AIME 2024, 2025-I, 2025-II)
+    - terminal-bench@2.0: 89 terminal tasks
+    - swebench-verified@1.0: 500 software engineering tasks
+    - And 40+ more benchmarks!
+
+    Args:
+        model_name: Model identifier
+        model_path: Path to model (can be None for API models like Claude)
+        dataset: Harbor dataset name (e.g., "aime", "terminal-bench", "swebench-verified")
+        version: Dataset version (e.g., "1.0", "2.0")
+        max_eval_instances: Limit number of tasks to run
+        resource_config: Resource configuration for Ray
+        apply_chat_template: Whether to apply chat template (not used by Harbor)
+        wandb_tags: Tags for W&B logging
+        generation_params: Generation parameters (not used by Harbor)
+        agent: Harbor agent type ("claude-code", "terminus-2", etc.)
+        n_concurrent: Number of parallel trials
+        env: Environment type ("local", "daytona", "e2b", "modal")
+
+    Returns:
+        ExecutorStep configured for Harbor evaluation
+
+    Examples:
+        # AIME evaluation
+        evaluate_harbor("claude-opus-4", None, "aime", "1.0")
+
+        # Terminal-Bench
+        evaluate_harbor("qwen2.5-7b", "gs://.../model", "terminal-bench", "2.0")
+
+        # SWE-bench Verified
+        evaluate_harbor("claude-opus-4", None, "swebench-verified", "1.0", max_eval_instances=10)
+    """
+
+    # Harbor config goes in engine_kwargs
+    engine_kwargs = {
+        "harbor_config": {
+            "dataset": dataset,
+            "version": version,
+            "agent": agent,
+            "n_concurrent": n_concurrent,
+            "env": env,
+        }
+    }
+
+    return ExecutorStep(
+        name=f"evaluation/harbor/{model_name}-{dataset}-{version}",
+        fn=evaluate,
+        config=EvaluationConfig(
+            evaluator="harbor",
+            model_name=model_name,
+            model_path=model_path,
+            evaluation_path=this_output_path(),
+            evals=[],  # Harbor uses dataset directly, not evals
+            max_eval_instances=max_eval_instances,
+            launch_with_ray=True,
+            discover_latest_checkpoint=False,
+            engine_kwargs=engine_kwargs,
+            resource_config=resource_config,
+            apply_chat_template=apply_chat_template,
+            wandb_tags=wandb_tags,
+            generation_params=generation_params,
+        ),
+        pip_dependency_groups=["harbor"],
+    )
