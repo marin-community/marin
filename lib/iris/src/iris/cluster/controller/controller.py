@@ -268,12 +268,12 @@ class Controller:
             self._state,
             self,
             bundle_prefix=config.bundle_prefix,
+            log_buffer=get_global_buffer(),
         )
         self._dashboard = ControllerDashboard(
             self._service,
             host=config.host,
             port=config.port,
-            log_buffer=get_global_buffer(),
         )
 
         # Background loop state

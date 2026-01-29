@@ -24,6 +24,13 @@ import "vm.proto";
 
 message Empty {}
 
+message ProcessLogRecord {
+  double timestamp = 1;
+  string level = 2;
+  string logger_name = 3;
+  string message = 4;
+}
+
 enum JobState {
   JOB_STATE_UNSPECIFIED = 0;
   JOB_STATE_PENDING = 1;
@@ -558,6 +565,16 @@ message Controller {
     repeated Worker.LogEntry logs = 1;
     string worker_address = 2;
   }
+
+  // --- Process Logs ---
+  message GetProcessLogsRequest {
+    string prefix = 1;   // Logger name prefix filter (empty = all)
+    int32 limit = 2;     // Max records to return (0 = default 200)
+  }
+
+  message GetProcessLogsResponse {
+    repeated ProcessLogRecord records = 1;
+  }
 }
 
 // ============================================================================
@@ -629,6 +646,16 @@ message Worker {
     int64 uptime_ms = 2;
     int32 running_tasks = 3;        // Renamed from running_jobs
   }
+
+  // --- Process Logs ---
+  message GetProcessLogsRequest {
+    string prefix = 1;   // Logger name prefix filter (empty = all)
+    int32 limit = 2;     // Max records to return (0 = default 200)
+  }
+
+  message GetProcessLogsResponse {
+    repeated ProcessLogRecord records = 1;
+  }
 }
 
 // ============================================================================
@@ -668,6 +695,9 @@ service ControllerService {
 
   // Task logs (proxied to worker)
   rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
+
+  // Controller process logs
+  rpc GetProcessLogs(Controller.GetProcessLogsRequest) returns (Controller.GetProcessLogsResponse);
 }
 
 service WorkerService {
@@ -677,4 +707,5 @@ service WorkerService {
   rpc FetchTaskLogs(Worker.FetchTaskLogsRequest) returns (Worker.FetchTaskLogsResponse);
   rpc KillTask(Worker.KillTaskRequest) returns (Empty);
   rpc HealthCheck(Empty) returns (Worker.HealthResponse);
+  rpc GetProcessLogs(Worker.GetProcessLogsRequest) returns (Worker.GetProcessLogsResponse);
 }
