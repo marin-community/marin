@@ -191,29 +191,39 @@ def request_context():
     return Mock(spec=RequestContext)
 
 
+def rpc_post(client, method, body=None):
+    """Call a Connect RPC method via the test client."""
+    return client.post(
+        f"/iris.cluster.WorkerService/{method}",
+        json=body or {},
+        headers={"Content-Type": "application/json"},
+    )
+
+
 def test_list_tasks_with_data(client, service):
-    """Test /api/tasks returns all tasks."""
+    """Test ListTasks RPC returns all tasks."""
     for i in range(3):
         request = create_run_task_request(task_id=f"task-{i}", job_id=f"job-{i}")
         service.run_task(request, Mock())
 
-    response = client.get("/api/tasks")
+    response = rpc_post(client, "ListTasks")
     assert response.status_code == 200
-    tasks = response.json()
+    data = response.json()
+    tasks = data.get("tasks", [])
     assert len(tasks) == 3
 
-    task_ids = {t["task_id"] for t in tasks}
+    task_ids = {t["taskId"] for t in tasks}
     assert task_ids == {"task-0", "task-1", "task-2"}
 
 
 def test_get_task_not_found(client):
-    """Test /api/tasks/{task_id} with nonexistent task."""
-    response = client.get("/api/tasks/nonexistent")
-    assert response.status_code == 404
+    """Test GetTaskStatus RPC with nonexistent task returns error."""
+    response = rpc_post(client, "GetTaskStatus", {"taskId": "nonexistent"})
+    assert response.status_code != 200
 
 
 def test_get_task_success(client, service):
-    """Test /api/tasks/{task_id} returns task details."""
+    """Test GetTaskStatus RPC returns task details."""
     request = create_run_task_request(task_id="task-details", job_id="job-details", ports=["http", "grpc"])
     service.run_task(request, Mock())
 
@@ -221,20 +231,20 @@ def test_get_task_success(client, service):
     task = service._provider.get_task("task-details")
     task.thread.join(timeout=5.0)
 
-    response = client.get("/api/tasks/task-details")
+    response = rpc_post(client, "GetTaskStatus", {"taskId": "task-details"})
     assert response.status_code == 200
     data = response.json()
 
-    assert data["task_id"] == "task-details"
-    assert data["job_id"] == "job-details"
-    assert data["status"] == "TASK_STATE_SUCCEEDED"  # Task completes immediately with mock runtime
-    assert data["exit_code"] == 0
+    assert data["taskId"] == "task-details"
+    assert data["jobId"] == "job-details"
+    assert data["state"] == "TASK_STATE_SUCCEEDED"
+    assert data["exitCode"] == 0
     assert "http" in data["ports"]
     assert "grpc" in data["ports"]
 
 
 def test_get_logs_with_tail_parameter(client, service):
-    """Test /api/tasks/{task_id}/logs?tail=N returns last N lines."""
+    """Test FetchTaskLogs RPC with negative start_line for tailing."""
     request = create_run_task_request(task_id="task-tail", job_id="job-tail")
     service.run_task(request, Mock())
 
@@ -249,9 +259,17 @@ def test_get_logs_with_tail_parameter(client, service):
     for i in range(100):
         task.logs.add("stdout", f"Log line {i}")
 
-    response = client.get("/api/tasks/task-tail/logs?tail=5")
+    response = rpc_post(
+        client,
+        "FetchTaskLogs",
+        {
+            "taskId": "task-tail",
+            "filter": {"startLine": -5},
+        },
+    )
     assert response.status_code == 200
-    logs = response.json()
+    data = response.json()
+    logs = data.get("logs", [])
 
     assert len(logs) == 5
     assert logs[0]["data"] == "Log line 95", logs
@@ -259,7 +277,7 @@ def test_get_logs_with_tail_parameter(client, service):
 
 
 def test_get_logs_with_source_filter(client, service):
-    """Test /api/tasks/{task_id}/logs?source=stdout filters by source."""
+    """Test FetchTaskLogs RPC returns logs that can be filtered client-side."""
     import time
 
     request = create_run_task_request(task_id="task-source-filter", job_id="job-source-filter")
@@ -279,25 +297,16 @@ def test_get_logs_with_source_filter(client, service):
     task.logs.add("stderr", "stderr line 1")
     task.logs.add("stderr", "stderr line 2")
 
-    # Test stdout filter
-    response = client.get("/api/tasks/task-source-filter/logs?source=stdout")
+    response = rpc_post(client, "FetchTaskLogs", {"taskId": "task-source-filter"})
     assert response.status_code == 200
-    logs = response.json()
-    assert len(logs) == 2
-    assert all(log["source"] == "stdout" for log in logs)
+    data = response.json()
+    logs = data.get("logs", [])
+    assert len(logs) == 4
 
-    # Test stderr filter
-    response = client.get("/api/tasks/task-source-filter/logs?source=stderr")
-    assert response.status_code == 200
-    logs = response.json()
-    assert len(logs) == 2
-    assert all(log["source"] == "stderr" for log in logs)
-
-    # Test without filter - should get all logs
-    response = client.get("/api/tasks/task-source-filter/logs")
-    assert response.status_code == 200
-    logs = response.json()
-    assert len(logs) == 4  # 2 stdout + 2 stderr
+    stdout_logs = [entry for entry in logs if entry["source"] == "stdout"]
+    stderr_logs = [entry for entry in logs if entry["source"] == "stderr"]
+    assert len(stdout_logs) == 2
+    assert len(stderr_logs) == 2
 
 
 def test_fetch_task_logs_tail_with_negative_start_line(service, request_context):
