@@ -300,22 +300,34 @@ class LevanterVLMHarnessLM(TemplateLM):
         gen_kwargs: dict,
     ) -> VLMRequest:
         """Create a VLMRequest from prompt and images."""
-        # Process images and text using BatchImageProcessor
-        # Create a conversation format that the processor expects
+        # For lm-eval-harness VLM tasks, the prompt already contains <image> placeholders
+        # from doc_to_text(). We should NOT add {"type": "image"} content items,
+        # as that would create duplicate placeholders.
+        #
+        # Instead, create a simple text message and let the HF processor
+        # replace <image> placeholders with actual image tokens.
         messages = [
             {
                 "role": "user",
-                "content": [{"type": "image"}] * len(images) + [{"type": "text", "text": prompt}]
+                "content": [{"type": "text", "text": prompt}]
             }
         ]
 
         # Use the image processor to process the example
+        # The processor will:
+        # 1. Apply chat template to get formatted text
+        # 2. Count <image> placeholders and match with provided images
+        # 3. Replace <image> with actual image tokens
         example = {"messages": messages, "images": images}
-        processed = self.image_processor(example)
+        processed = self.image_processor([example])[0]
 
         # Extract processed data
         input_ids = processed["input_ids"]
         pixel_values = processed.get("pixel_values")
+
+        # Debug logging to understand sequence length
+        logger.info(f"DEBUG: num_images={len(images)}, <image> in prompt={prompt.count('<image>')}")
+        logger.info(f"DEBUG: input_ids length={len(input_ids)}, pixel_values shape={pixel_values.shape if pixel_values is not None else None}")
         grid_mask = processed.get("grid_mask")
         unpad_indices = processed.get("unpad_indices")
         num_unpadded_features = processed.get("num_unpadded_features")
@@ -337,6 +349,8 @@ class LevanterVLMHarnessLM(TemplateLM):
         )
 
         # Convert to NamedArray format
+        # Model expects 5D: (batch, num_patches, channels, height, width)
+        Batch = hax.Axis("batch", 1)
         TotalPatches = hax.Axis("TotalPatches", pixel_values.shape[0]) if pixel_values is not None else None
 
         pixel_values_na = None
@@ -345,15 +359,16 @@ class LevanterVLMHarnessLM(TemplateLM):
         input_ids_na = None
 
         if pixel_values is not None:
-            # pixel_values shape: (TOTAL_PATCHES, C, H, W)
+            # pixel_values shape: (TOTAL_PATCHES, C, H, W) -> (batch, TOTAL_PATCHES, channels, height, width)
             pixel_values_na = hax.named(
-                jnp.array(pixel_values),
-                (TotalPatches, hax.Axis("C", pixel_values.shape[1]),
-                 hax.Axis("H", pixel_values.shape[2]), hax.Axis("W", pixel_values.shape[3]))
+                jnp.array(pixel_values)[None, ...],  # Add batch dimension
+                (Batch, TotalPatches, hax.Axis("channels", pixel_values.shape[1]),
+                 hax.Axis("height", pixel_values.shape[2]), hax.Axis("width", pixel_values.shape[3]))
             )
 
         if grid_mask is not None:
-            grid_mask_na = hax.named(jnp.array(grid_mask), (TotalPatches,))
+            # grid_mask shape: (TOTAL_PATCHES,) -> (batch, TOTAL_PATCHES)
+            grid_mask_na = hax.named(jnp.array(grid_mask)[None, ...], (Batch, TotalPatches,))
 
         if unpad_indices is not None:
             UnpadFeatures = hax.Axis("UnpadFeatures", len(unpad_indices))
@@ -361,7 +376,6 @@ class LevanterVLMHarnessLM(TemplateLM):
 
         # Convert input_ids to NamedArray with shape (batch, position)
         # LlavaInferenceEngine.generate() calls set_request_data(input_ids=...) which expects NamedArray
-        Batch = hax.Axis("batch", 1)
         Position = hax.Axis("position", len(input_ids_list))
         input_ids_array = jnp.array(input_ids_list, dtype=jnp.int32).reshape(1, -1)
         input_ids_na = hax.named(input_ids_array, (Batch, Position))
