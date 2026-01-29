@@ -158,12 +158,8 @@ class ClusterManager:
             for group in vm_groups:
                 logger.info("Reloading VM group %s", group.group_id)
                 for vm in group.vms():
-                    try:
-                        vm.reload()
-                        logger.info("  ✓ Reloaded VM %s", vm.info.vm_id)
-                    except Exception as e:
-                        logger.error("  ✗ Failed to reload VM %s: %s", vm.info.vm_id, e)
-                        raise
+                    vm.reload()
+                    logger.info("  ✓ Reloaded VM %s", vm.info.vm_id)
 
         logger.info("Worker reload complete")
 

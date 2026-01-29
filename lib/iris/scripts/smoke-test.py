@@ -582,7 +582,8 @@ class SmokeTestRunner:
                 if self.config.fast:
                     # Fast mode: reload existing VMs instead of recreating
                     self.logger.section("FAST MODE: Reloading Cluster")
-                    self._reload_cluster(manager, zone, project)
+                    manager.reload()
+                    self.logger.log("Cluster reloaded successfully")
                     if self._interrupted or self._check_deadline():
                         return False
                 else:
@@ -906,15 +907,6 @@ class SmokeTestRunner:
             self.logger.log(f"  (Could not fetch autoscaler status: {e})")
         finally:
             rpc_client.close()
-
-    def _reload_cluster(self, manager: ClusterManager, zone: str, project: str) -> None:
-        """Reload cluster using fast mode."""
-        try:
-            manager.reload()
-            self.logger.log("Cluster reloaded successfully")
-        except Exception as e:
-            self.logger.log(f"Cluster reload failed: {e}", level="ERROR")
-            raise
 
     def _run_cluster_tests(self, url: str, manager: ClusterManager, zone: str, project: str) -> None:
         """Run tests against the cluster."""

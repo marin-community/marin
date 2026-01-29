@@ -545,7 +545,6 @@ class ManagedVm:
 
         except Exception as e:
             self.info.init_error = str(e)
-            logger.error("VM %s: Reload failed: %s", self.info.vm_id, e)
             self._dump_log_on_failure()
             self._transition(vm_pb2.VM_STATE_FAILED)
             raise RuntimeError(f"VM {self.info.vm_id} reload failed: {e}") from e
