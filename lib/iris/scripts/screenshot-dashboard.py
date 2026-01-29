@@ -191,31 +191,58 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["insufficient-capacity"] = str(job.job_id)
     logger.info("Submitted insufficient-capacity job: %s", job.job_id)
 
+    # 10. Killed job — submit a slow job, then terminate it
+    job = client.submit(
+        entrypoint=Entrypoint.from_callable(_slow_job),
+        name="snapshot-killed",
+        resources=ResourceSpec(cpu=1, memory="2g"),
+        environment=EnvironmentSpec(),
+    )
+    job_ids["killed"] = str(job.job_id)
+    logger.info("Submitted killed job (will terminate after brief delay): %s", job.job_id)
+
     return job_ids
 
 
 def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout: float = 60.0):
-    """Wait for the succeeded and failed jobs to reach terminal states."""
-    terminal_names = ["succeeded", "failed"]
-    deadline = time.monotonic() + timeout
+    """Wait for the succeeded, failed, and killed jobs to reach terminal states."""
+    terminal_states = (
+        cluster_pb2.JOB_STATE_SUCCEEDED,
+        cluster_pb2.JOB_STATE_FAILED,
+        cluster_pb2.JOB_STATE_KILLED,
+        cluster_pb2.JOB_STATE_WORKER_FAILED,
+    )
 
-    for name in terminal_names:
+    # Wait for succeeded and failed jobs first
+    deadline = time.monotonic() + timeout
+    for name in ["succeeded", "failed"]:
         jid = job_ids[name]
         logger.info("Waiting for %s job (%s) to finish...", name, jid)
         while time.monotonic() < deadline:
             status = client.status(jid)
-            if status.state in (
-                cluster_pb2.JOB_STATE_SUCCEEDED,
-                cluster_pb2.JOB_STATE_FAILED,
-                cluster_pb2.JOB_STATE_KILLED,
-                cluster_pb2.JOB_STATE_WORKER_FAILED,
-            ):
+            if status.state in terminal_states:
                 state_name = cluster_pb2.JobState.Name(status.state)
                 logger.info("  %s -> %s", name, state_name)
                 break
             time.sleep(0.5)
         else:
             logger.warning("  %s job did not finish within %.0fs", name, timeout)
+
+    # Kill the "killed" job after a brief delay so it has time to start
+    killed_jid = job_ids.get("killed")
+    if killed_jid:
+        time.sleep(1.0)
+        logger.info("Terminating killed job (%s)...", killed_jid)
+        client.terminate(killed_jid)
+        while time.monotonic() < deadline:
+            status = client.status(killed_jid)
+            if status.state in terminal_states:
+                state_name = cluster_pb2.JobState.Name(status.state)
+                logger.info("  killed -> %s", state_name)
+                break
+            time.sleep(0.5)
+        else:
+            logger.warning("  killed job did not reach terminal state within timeout")
 
 
 # =============================================================================
@@ -270,8 +297,8 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             page.screenshot(path=str(path), full_page=True)
             saved.append(path)
 
-        # Screenshot pending and coscheduled job detail pages
-        for name, label in [("pending-constraint", "pending"), ("coscheduled", "coscheduled")]:
+        # Screenshot killed and pending and coscheduled job detail pages
+        for name, label in [("killed", "killed"), ("pending-constraint", "pending"), ("coscheduled", "coscheduled")]:
             jid = job_ids.get(name)
             if not jid:
                 continue
