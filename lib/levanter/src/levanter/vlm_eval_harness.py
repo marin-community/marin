@@ -56,6 +56,102 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+import re
+
+
+def _extract_answer_option(
+    response: str,
+    all_choices: list[str] | None = None,
+    index2ans: dict[str, str] | None = None,
+) -> str | None:
+    """Extract the answer option (A, B, C, D, etc.) from generated text.
+
+    This follows the same logic as lm-eval-harness MMMU evaluation:
+    https://github.com/MMMU-Benchmark/MMMU/blob/main/eval/utils/eval_utils.py
+
+    Args:
+        response: The generated text to parse
+        all_choices: Optional list of valid choices (e.g., ["A", "B", "C", "D"])
+        index2ans: Optional mapping from choice letter to answer text
+
+    Returns:
+        The extracted answer letter (uppercase) or None if not found
+    """
+    if not response:
+        return None
+
+    # Default choices if not provided
+    if all_choices is None:
+        all_choices = ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
+
+    # Strip punctuation from ends (matching MMMU logic)
+    for char in [",", ".", "!", "?", ";", ":", "'"]:
+        response = response.strip(char)
+    response = " " + response + " "  # add space to avoid partial match
+
+    candidates = []
+    ans_with_brack = False
+
+    # Step 1: Look for (A), (B), (C), (D) patterns
+    for choice in all_choices:
+        if f"({choice})" in response or f"({choice.lower()})" in response:
+            candidates.append(choice)
+            ans_with_brack = True
+
+    # Step 2: If no bracketed matches, look for space-separated letters: " A ", " B "
+    if len(candidates) == 0:
+        for choice in all_choices:
+            if f" {choice} " in response or f" {choice.lower()} " in response:
+                candidates.append(choice)
+
+    # Step 3: If still no match and response > 5 tokens, try matching answer content
+    index_ans = True
+    if len(candidates) == 0 and len(response.split()) > 5 and index2ans is not None:
+        for index, ans in index2ans.items():
+            if ans.lower() in response.lower():
+                candidates.append(index)
+                index_ans = False  # it's content ans
+
+    # Step 4: Select the answer
+    if len(candidates) == 0:
+        # No match found, return None (MMMU randomly picks, but we can't without knowing choices)
+        return None
+    elif len(candidates) > 1:
+        # Multiple candidates: take the LAST occurrence
+        start_indexes = []
+        if index_ans:
+            if ans_with_brack:
+                for can in candidates:
+                    # Try both upper and lower case
+                    idx_upper = response.rfind(f"({can})")
+                    idx_lower = response.rfind(f"({can.lower()})")
+                    start_indexes.append(max(idx_upper, idx_lower))
+            else:
+                for can in candidates:
+                    idx_upper = response.rfind(f" {can} ")
+                    idx_lower = response.rfind(f" {can.lower()} ")
+                    start_indexes.append(max(idx_upper, idx_lower))
+        else:
+            # Content-based matching
+            for can in candidates:
+                if index2ans is not None:
+                    idx = response.lower().rfind(index2ans[can].lower())
+                    start_indexes.append(idx)
+                else:
+                    start_indexes.append(-1)
+
+        # Get the last occurring candidate
+        if start_indexes:
+            pred_index = candidates[np.argmax(start_indexes)]
+        else:
+            pred_index = candidates[0]
+    else:
+        # Single candidate
+        pred_index = candidates[0]
+
+    return pred_index.upper()
+
+
 @dataclass(frozen=True)
 class VLMTaskConfig:
     """Configuration for a VLM evaluation task."""
@@ -540,22 +636,68 @@ class LevanterVLMHarnessLM(TemplateLM):
                         "generation": text,
                         "num_images": len(batch_pil_images[i]) if batch_pil_images[i] else 0,
                     }
-                    # Try to get expected answer from the request's doc
+
+                    # Try to get expected answer and choices from the request's doc
+                    expected_answer = None
+                    all_choices = None
+                    index2ans = None
+
                     if hasattr(req, 'doc') and req.doc is not None:
                         doc = req.doc
                         # Common answer field names in VLM benchmarks
                         for key in ['answer', 'target', 'gold', 'label', 'response']:
                             if key in doc:
-                                sample_data["expected"] = str(doc[key])
+                                expected_answer = str(doc[key])
+                                sample_data["expected"] = expected_answer
                                 break
                         # Also capture question if available
                         for key in ['question', 'query', 'text']:
                             if key in doc and key not in sample_data:
                                 sample_data["question"] = str(doc[key])[:200]
                                 break
-                    # Capture task name
+
+                        # Try to get choices for better answer extraction (MMMU format)
+                        if 'options' in doc:
+                            try:
+                                import ast
+                                options = doc['options']
+                                if isinstance(options, str):
+                                    options = ast.literal_eval(options)
+                                if isinstance(options, list):
+                                    option_letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
+                                    all_choices = option_letters[:len(options)]
+                                    index2ans = {letter: ans for letter, ans in zip(option_letters, options)}
+                            except Exception:
+                                pass  # Failed to parse options, use defaults
+
+                    # Extract answer option from generation (using MMMU-style logic)
+                    extracted = _extract_answer_option(text, all_choices, index2ans)
+                    sample_data["extracted_answer"] = extracted
+
+                    # Determine correctness (matching MMMU eval_multi_choice logic)
+                    if extracted is not None and expected_answer is not None:
+                        # Expected answer should be a single letter like "A", "B", "C", "D"
+                        expected_normalized = expected_answer.strip().upper()
+                        # If expected is already a single letter, use it directly
+                        if len(expected_normalized) == 1 and expected_normalized in "ABCDEFGHI":
+                            sample_data["correct"] = (extracted == expected_normalized)
+                        else:
+                            # Try to extract from expected answer string
+                            expected_option = _extract_answer_option(expected_answer, all_choices, index2ans)
+                            if expected_option:
+                                sample_data["correct"] = (extracted == expected_option)
+                            else:
+                                sample_data["correct"] = None
+                    else:
+                        sample_data["correct"] = None
+
+                    # Capture task/subset name
                     if hasattr(req, 'task_name'):
                         sample_data["task"] = req.task_name
+                        sample_data["subset"] = req.task_name
+                    else:
+                        sample_data["subset"] = self._current_task
+
                     bucket.append(sample_data)
                     self.sample_outputs[self._current_task] = bucket
 
@@ -735,24 +877,36 @@ def run_vlm_eval_harness(
     sample_outputs = vlm_lm.get_sample_outputs()
     if sample_outputs:
         results["sample_outputs"] = sample_outputs
-        # Log samples to wandb as a table
+        # Log samples to wandb as a table (use log_summary to avoid step conflicts)
         try:
             import wandb
-            for task_name, samples in sample_outputs.items():
-                if samples:
-                    # Create wandb table with sample outputs
-                    table = wandb.Table(columns=["prompt", "generation", "expected", "num_images"])
-                    for sample in samples[:50]:  # Limit to 50 samples per task
-                        table.add_data(
-                            sample.get("prompt", "")[:500],  # Truncate long prompts
-                            sample.get("generation", ""),
-                            sample.get("expected", "N/A"),
-                            sample.get("num_images", 0),
-                        )
-                    levanter.tracker.log({f"vlm_eval/{task_name}/samples": table}, step=0)
-                    logger.info(f"Logged {len(samples)} samples for {task_name} to wandb")
+            if wandb.run is not None:
+                for task_name, samples in sample_outputs.items():
+                    if samples:
+                        # Create wandb table with sample outputs
+                        table = wandb.Table(columns=[
+                            "prompt", "generation", "extracted_answer", "expected", "correct", "subset", "num_images"
+                        ])
+                        for sample in samples[:50]:  # Limit to 50 samples per task
+                            table.add_data(
+                                sample.get("prompt", "")[:500],  # Truncate long prompts
+                                sample.get("generation", ""),
+                                sample.get("extracted_answer", "N/A"),
+                                sample.get("expected", "N/A"),
+                                sample.get("correct", None),
+                                sample.get("subset", task_name),
+                                sample.get("num_images", 0),
+                            )
+                        # Use wandb.run.log directly to avoid step conflict issues
+                        # Also log to summary for persistent storage
+                        table_key = f"vlm_eval/{task_name}/samples"
+                        wandb.run.log({table_key: table})
+                        wandb.run.summary[table_key] = table
+                        logger.info(f"Logged {len(samples)} samples for {task_name} to wandb")
+            else:
+                logger.warning("wandb.run is None - samples not logged to wandb")
         except Exception as e:
-            logger.warning(f"Failed to log samples to wandb: {e}")
+            logger.warning(f"Failed to log samples to wandb: {e}", exc_info=True)
 
     return results
 
@@ -944,17 +1098,23 @@ def run_vlm_benchmark_direct(
     # Log samples to wandb
     try:
         import wandb
-        table = wandb.Table(columns=["prediction", "reference", "correct"])
-        for result in results_list[:50]:  # Limit to 50 samples
-            table.add_data(
-                result.get("prediction", "")[:500],
-                result.get("reference", ""),
-                result.get("correct", False),
-            )
-        levanter.tracker.log({f"vlm_eval/{benchmark_name}/samples": table}, step=0)
-        logger.info(f"Logged {min(len(results_list), 50)} samples for {benchmark_name} to wandb")
+        if wandb.run is not None:
+            table = wandb.Table(columns=["prediction", "reference", "correct"])
+            for result in results_list[:50]:  # Limit to 50 samples
+                table.add_data(
+                    result.get("prediction", "")[:500],
+                    result.get("reference", ""),
+                    result.get("correct", False),
+                )
+            # Use wandb.run.log directly to avoid step conflict issues
+            table_key = f"vlm_eval/{benchmark_name}/samples"
+            wandb.run.log({table_key: table})
+            wandb.run.summary[table_key] = table
+            logger.info(f"Logged {min(len(results_list), 50)} samples for {benchmark_name} to wandb")
+        else:
+            logger.warning("wandb.run is None - samples not logged to wandb")
     except Exception as e:
-        logger.warning(f"Failed to log samples to wandb: {e}")
+        logger.warning(f"Failed to log samples to wandb: {e}", exc_info=True)
 
     return {
         "benchmark": benchmark_name,
