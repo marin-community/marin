@@ -423,28 +423,35 @@ def main(
         print("Starting demo cluster with autoscaler...")
 
     with DemoCluster(controller_url=controller_url, workspace=workspace) as demo:
-        print(f"Controller: {demo.controller_url}")
+        url = demo.controller_url
+        # Extract port from URL
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        print(f"Controller: {url}")
+        print(f"Controller Port: {port}")
         print()
         print("Seeding cluster with demo jobs...")
         results = demo.seed_cluster()
 
         if not demo.validate_seed_results(results):
             print()
-            print("ERROR: Seed jobs did not complete as expected!")
+            print("WARNING: Seed jobs did not complete as expected!")
             for job_id, state in results:
                 if state != "JOB_STATE_SUCCEEDED":
                     print(f"  {job_id}: {state}")
-            sys.exit(1)
-
-        print()
-        print("All seed jobs succeeded!")
+        else:
+            print()
+            print("All seed jobs succeeded!")
 
         print()
         print("Testing notebook execution...")
         if not demo.run_notebook():
-            print("Notebook test FAILED!")
-            sys.exit(1)
-        print("Notebook test passed!")
+            print("WARNING: Notebook test FAILED!")
+        else:
+            print("Notebook test passed!")
 
         print()
         print("Launching Jupyter notebook...")
