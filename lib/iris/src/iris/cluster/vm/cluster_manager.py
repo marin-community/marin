@@ -49,6 +49,9 @@ def make_local_config(
     for sg in config.scale_groups.values():
         sg.provider.ClearField("provider")
         sg.provider.local.SetInParent()
+    # Local mode needs fast autoscaler evaluation for tests
+    if not config.autoscaler.evaluation_interval_seconds:
+        config.autoscaler.evaluation_interval_seconds = 0.5
     return config
 
 
