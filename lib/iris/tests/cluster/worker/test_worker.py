@@ -550,7 +550,7 @@ def create_integration_entrypoint():
         print("Hello from test task!")
         return 42
 
-    return Entrypoint(callable=test_fn, args=(), kwargs={})
+    return Entrypoint.from_callable(test_fn)
 
 
 def create_integration_run_task_request(bundle_path: str, task_id: str):

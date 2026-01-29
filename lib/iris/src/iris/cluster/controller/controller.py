@@ -42,6 +42,7 @@ from iris.cluster.controller.state import (
 )
 from iris.cluster.types import JobId, TaskId, VmWorkerStatus, VmWorkerStatusMap
 from iris.cluster.vm.autoscaler import Autoscaler
+from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import ExponentialBackoff
@@ -271,6 +272,7 @@ class Controller:
             self._service,
             host=config.host,
             port=config.port,
+            log_buffer=get_global_buffer(),
         )
 
         # Background loop state
@@ -430,14 +432,9 @@ class Controller:
                     task_index=task.task_index,
                     num_tasks=len(self._state.get_job_tasks(task.job_id)),
                     entrypoint=job.request.entrypoint,
-                    environment=cluster_pb2.EnvironmentConfig(
-                        env_vars=dict(job.request.environment.env_vars),
-                    ),
+                    environment=job.request.environment,
                     bundle_gcs_path=job.request.bundle_gcs_path,
-                    resources=cluster_pb2.ResourceSpecProto(
-                        cpu=job.request.resources.cpu,
-                        memory_bytes=job.request.resources.memory_bytes,
-                    ),
+                    resources=job.request.resources,
                     ports=list(job.request.ports),
                     attempt_id=task.current_attempt_id,
                 )

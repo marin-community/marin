@@ -14,12 +14,14 @@
 
 """Click-based CLI for the Iris worker daemon."""
 
+import logging
 import shutil
 from pathlib import Path
 
 import click
 
 from iris.cluster.worker.worker import Worker, WorkerConfig
+from iris.logging import configure_logging
 
 
 @click.group()
@@ -52,6 +54,8 @@ def serve(
     worker_id: str | None,
 ):
     """Start the Iris worker service."""
+    configure_logging(level=logging.INFO)
+
     port_start, port_end = map(int, port_range.split("-"))
 
     config = WorkerConfig(

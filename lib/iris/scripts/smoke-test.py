@@ -59,13 +59,15 @@ from iris.cluster.types import (
     ResourceSpec,
     tpu_device,
 )
+from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.config import load_config
-from iris.cluster.vm.controller import ControllerProtocol, create_controller
 from iris.cluster.vm.debug import (
     cleanup_iris_resources,
     controller_tunnel,
     discover_controller_vm,
+    list_docker_containers,
     list_iris_tpus,
+    stream_docker_logs,
 )
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -73,7 +75,7 @@ from iris.rpc.proto_utils import format_accelerator_display
 
 IRIS_ROOT = Path(__file__).parent.parent
 DEFAULT_CONTROLLER_PORT = 10000
-DEFAULT_JOB_TIMEOUT = 600  # 10 minutes for TPU provisioning
+DEFAULT_JOB_TIMEOUT = 300  # 5 minutes; TPU slices are pre-warmed by earlier tests
 SCHEDULING_POLL_INTERVAL_SECONDS = 5.0
 WORKER_DISCOVERY_INTERVAL_SECONDS = 10.0
 
@@ -154,6 +156,52 @@ def _distributed_work_job():
         raise RuntimeError("Not running in an Iris job context")
     print(f"Task {info.task_index} of {info.num_tasks} on worker {info.worker_id}")
     return f"Task {info.task_index} done"
+
+
+def _jax_tpu_job():
+    """Initialize JAX on TPU and run simple computation."""
+    import os
+    import sys
+
+    print(f"Python: {sys.executable} {sys.version}", flush=True)
+    print(f"JAX_PLATFORMS={os.environ.get('JAX_PLATFORMS', '<unset>')}", flush=True)
+    print(f"PJRT_DEVICE={os.environ.get('PJRT_DEVICE', '<unset>')}", flush=True)
+    print(f"TPU_NAME={os.environ.get('TPU_NAME', '<unset>')}", flush=True)
+    print(f"TPU_WORKER_ID={os.environ.get('TPU_WORKER_ID', '<unset>')}", flush=True)
+    print(f"TPU_WORKER_HOSTNAMES={os.environ.get('TPU_WORKER_HOSTNAMES', '<unset>')}", flush=True)
+    print(f"TPU_CHIPS_PER_HOST_BOUNDS={os.environ.get('TPU_CHIPS_PER_HOST_BOUNDS', '<unset>')}", flush=True)
+
+    # Check /dev/vfio exists
+    vfio_path = "/dev/vfio"
+    if os.path.exists(vfio_path):
+        print(f"/dev/vfio exists, contents: {os.listdir(vfio_path)}", flush=True)
+    else:
+        print("/dev/vfio does NOT exist", flush=True)
+
+    # Check jax is importable
+    print("Importing jax...", flush=True)
+    import jax
+
+    print(f"JAX version: {jax.__version__}", flush=True)
+
+    import jax.numpy as jnp
+
+    # Verify TPU is available
+    print("Calling jax.devices()...", flush=True)
+    devices = jax.devices()
+    tpu_devices = [d for d in devices if d.platform == "tpu"]
+    if not tpu_devices:
+        raise RuntimeError(f"No TPU devices found. Available: {[d.platform for d in devices]}")
+
+    print(f"Found {len(tpu_devices)} TPU device(s): {tpu_devices}")
+
+    # Simple computation to exercise TPU
+    x = jnp.ones((1000, 1000))
+    y = jnp.dot(x, x)
+    result = float(y[0, 0])
+
+    print(f"JAX TPU computation successful: {result}")
+    return result
 
 
 def _configure_logging():
@@ -253,7 +301,7 @@ class DockerLogStreamer:
         self._label_prefix = label_prefix
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._discovered_vms: set[str] = set()
+        self._streaming: set[tuple[str, str]] = set()  # (vm_name, container_name) pairs
 
     def start(self):
         """Start background streaming thread."""
@@ -276,64 +324,55 @@ class DockerLogStreamer:
         if not vm_name:
             return
         log_file = self._log_tree.get_writer("controller-logs.txt", "Controller docker logs")
-        self._stream_vm_logs(vm_name, log_file, is_tpu=False)
+        stream_docker_logs(
+            vm_name,
+            self._container_name,
+            self._zone,
+            self._project,
+            log_file,
+            is_tpu=False,
+            stop_event=self._stop_event,
+        )
+
+    def _start_stream(self, vm_name: str, container_name: str, is_tpu: bool):
+        """Start streaming a container's logs if not already streaming."""
+        key = (vm_name, container_name)
+        if key in self._streaming:
+            return
+        self._streaming.add(key)
+        log_file = self._log_tree.get_writer(
+            f"workers/{vm_name}/{container_name}.txt",
+            f"Worker logs: {vm_name}/{container_name}",
+        )
+        threading.Thread(
+            target=stream_docker_logs,
+            args=(vm_name, container_name, self._zone, self._project, log_file),
+            kwargs={"is_tpu": is_tpu, "stop_event": self._stop_event},
+            daemon=True,
+        ).start()
 
     def _discover_and_stream_workers(self):
-        """Discovery loop: find workers and stream logs."""
+        """Discovery loop: find workers and stream logs from service + per-task containers."""
         while not self._stop_event.is_set():
             tpu_names = list_iris_tpus(self._zone, self._project, self._label_prefix)
             for tpu_name in tpu_names:
-                if tpu_name not in self._discovered_vms:
-                    self._discovered_vms.add(tpu_name)
-                    log_file = self._log_tree.get_writer(f"workers/{tpu_name}.txt", f"Worker logs: {tpu_name}")
-                    threading.Thread(
-                        target=self._stream_vm_logs,
-                        args=(tpu_name, log_file, True),
-                        daemon=True,
-                    ).start()
+                # Stream the main worker service container
+                self._start_stream(tpu_name, self._container_name, is_tpu=True)
+
+                # Discover and stream per-task containers (labeled iris.managed=true)
+                try:
+                    task_containers = list_docker_containers(
+                        tpu_name,
+                        self._zone,
+                        self._project,
+                        label_filter="iris.managed=true",
+                        is_tpu=True,
+                    )
+                    for container in task_containers:
+                        self._start_stream(tpu_name, container, is_tpu=True)
+                except Exception:
+                    logging.debug("Failed to discover containers on %s", tpu_name, exc_info=True)
             self._stop_event.wait(WORKER_DISCOVERY_INTERVAL_SECONDS)
-
-    def _stream_vm_logs(self, vm_name: str, log_file: Path, is_tpu: bool):
-        """Stream docker logs from a specific VM to file."""
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-
-        if is_tpu:
-            cmd = [
-                "gcloud",
-                "compute",
-                "tpus",
-                "tpu-vm",
-                "ssh",
-                vm_name,
-                f"--zone={self._zone}",
-                f"--project={self._project}",
-                "--command",
-                f"sudo docker logs -f {self._container_name} 2>&1",
-            ]
-        else:
-            cmd = [
-                "gcloud",
-                "compute",
-                "ssh",
-                vm_name,
-                f"--zone={self._zone}",
-                f"--project={self._project}",
-                "--command",
-                f"sudo docker logs -f {self._container_name} 2>&1",
-            ]
-
-        with open(log_file, "w") as f:
-            proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
-            while not self._stop_event.is_set():
-                if proc.poll() is not None:
-                    break
-                self._stop_event.wait(1.0)
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
 
 
 class TaskSchedulingMonitor:
@@ -409,6 +448,8 @@ class SmokeTestConfig:
     cleanup_on_failure: bool = True
     clean_start: bool = True  # Delete existing resources before starting
     prefix: str | None = None  # Unique prefix for controller VM name (sets label_prefix in config)
+    local: bool = False  # Run locally without GCP
+    fast: bool = False  # Fast mode: redeploy containers on existing VMs instead of recreating
 
     @property
     def label_prefix(self) -> str:
@@ -477,8 +518,7 @@ class SmokeTestRunner:
         self.config = config
         self.log_tree = LogTree(config.log_dir)
         self.logger = SmokeTestLogger(self.log_tree)
-        self._controller: ControllerProtocol | None = None
-        self._tunnel_proc: subprocess.Popen | None = None
+        self._manager: ClusterManager | None = None
         self._interrupted = False
         self._deadline: float | None = None
         self._results: list[TestResult] = []
@@ -508,9 +548,16 @@ class SmokeTestRunner:
             self._print_header()
             cluster_config = load_config(self.config.config_path)
 
+            # Apply --local override if requested
+            if self.config.local:
+                cluster_config = make_local_config(cluster_config)
+
             # Apply prefix to cluster config for unique controller VM name
             if self.config.prefix:
                 cluster_config.label_prefix = self.config.prefix
+
+            manager = ClusterManager(cluster_config)
+            self._manager = manager
 
             zone = cluster_config.zone
             project = cluster_config.project_id
@@ -518,86 +565,52 @@ class SmokeTestRunner:
             self._zone = zone
             self._project = project
 
-            # Extract region/project for image building
-            self._image_region = zone.rsplit("-", 1)[0]  # "europe-west4-b" -> "europe-west4"
-            self._image_project = project
+            # GCP-only setup phases
+            if not manager.is_local:
+                # Extract region/project for image building
+                self._image_region = zone.rsplit("-", 1)[0]  # "europe-west4-b" -> "europe-west4"
+                self._image_project = project
 
-            # Phase 0a: Build and push images
-            self.logger.section("PHASE 0a: Building Images")
-            if not self._build_images():
-                self.logger.log("Image build failed!", level="ERROR")
-                return False
-            if self._interrupted or self._check_deadline():
-                return False
-
-            # Phase 0b: Clean start (delete existing resources)
-            if self.config.clean_start:
-                self.logger.section("PHASE 0b: Clean Start")
-                self._cleanup_existing(zone, project)
+                # Phase 0a: Build and push images (always needed for code changes)
+                self.logger.section("PHASE 0a: Building Images")
+                if not self._build_images():
+                    self.logger.log("Image build failed!", level="ERROR")
+                    return False
                 if self._interrupted or self._check_deadline():
                     return False
 
-            # Phase 1: Start cluster
-            self.logger.section("PHASE 1: Starting Cluster")
-            self._start_cluster(cluster_config)  # Address logged, but we connect via SSH tunnel
-            if self._interrupted or self._check_deadline():
-                return False
+                if self.config.fast:
+                    # Fast mode: reload existing VMs instead of recreating
+                    self.logger.section("FAST MODE: Reloading Cluster")
+                    manager.reload()
+                    self.logger.log("Cluster reloaded successfully")
+                    if self._interrupted or self._check_deadline():
+                        return False
+                else:
+                    # Normal mode: clean start + create VMs
+                    if self.config.clean_start:
+                        self.logger.section("PHASE 0b: Clean Start")
+                        self._cleanup_existing(zone, project)
+                        if self._interrupted or self._check_deadline():
+                            return False
 
-            # Start controller log streaming
-            label_prefix = self.config.label_prefix
-            self._controller_streamer = DockerLogStreamer(
-                mode="controller",
-                zone=zone,
-                project=project,
-                log_tree=self.log_tree,
-                container_name="iris-controller",
-                label_prefix=label_prefix,
-            )
-            self._controller_streamer.start()
-            self.logger.log("Started controller log streaming")
+            # Connect to cluster and run tests
+            # In fast mode, we already started the cluster via reload()
+            # In normal mode, connect() will start it
+            if self.config.fast and not manager.is_local:
+                self.logger.section("Connecting to Cluster")
+                # For fast mode, we need to establish tunnel but not start/stop
+                with controller_tunnel(zone, project, label_prefix=self.config.label_prefix) as url:
+                    self._run_cluster_tests(url, manager, zone, project)
+            else:
+                # Normal mode: use connect() context manager
+                self.logger.section("Starting Cluster")
+                with manager.connect() as url:
+                    self._run_cluster_tests(url, manager, zone, project)
 
-            # Phase 2: SSH tunnel
-            self.logger.section("PHASE 2: SSH Tunnel Setup")
-
-            with controller_tunnel(
-                zone,
-                project,
-                local_port=DEFAULT_CONTROLLER_PORT,
-                tunnel_logger=logging.getLogger("iris.cluster.vm.debug"),
-                label_prefix=label_prefix,
-            ) as tunnel_url:
-                if self._interrupted or self._check_deadline():
-                    return False
-
-                # Start worker log streaming
-                self._worker_streamer = DockerLogStreamer(
-                    mode="workers",
-                    zone=zone,
-                    project=project,
-                    log_tree=self.log_tree,
-                    container_name="iris-worker",
-                    label_prefix=label_prefix,
-                )
-                self._worker_streamer.start()
-                self.logger.log("Started worker log streaming")
-
-                # Start task scheduling monitor
-                self._scheduling_monitor = TaskSchedulingMonitor(
-                    controller_url=tunnel_url,
-                    log_tree=self.log_tree,
-                    logger=self.logger,
-                )
-                self._scheduling_monitor.start()
-                self.logger.log("Started task scheduling monitor")
-
-                # Phase 3: Run tests
-                self.logger.section("PHASE 3: Running Tests")
-                self._run_tests(tunnel_url)
-
-                # Phase 4: Results
-                self.logger.section("PHASE 4: Results Summary")
-                success = self._print_results()
-
+            # Results
+            self.logger.section("Results Summary")
+            success = self._print_results()
             return success
 
         except Exception as e:
@@ -674,26 +687,12 @@ class SmokeTestRunner:
 
         return True
 
-    def _start_cluster(self, cluster_config) -> str:
-        """Start the cluster using create_controller from controller.py."""
-        self.logger.log("Creating controller from config...")
-        controller = create_controller(cluster_config)
-        self._controller = controller
-
-        self.logger.log("Starting controller VM (this may take a few minutes)...")
-        start = time.monotonic()
-        address = controller.start()
-        elapsed = time.monotonic() - start
-
-        self.logger.log(f"Controller started at {address} in {elapsed:.1f}s")
-        return address
-
     def _run_tests(self, controller_url: str):
         """Run test jobs against the cluster."""
         client = IrisClient.remote(controller_url, workspace=IRIS_ROOT)
 
         # Test 1: Simple TPU job
-        self.logger.log(f"[Test 1/3] Simple TPU job ({self.config.tpu_type})")
+        self.logger.log(f"[Test 1/4] Simple TPU job ({self.config.tpu_type})")
         result = self._run_simple_tpu_job(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
@@ -702,7 +701,7 @@ class SmokeTestRunner:
             return
 
         # Test 2: Concurrent TPU jobs
-        self.logger.log(f"[Test 2/3] Concurrent TPU jobs (3x {self.config.tpu_type})")
+        self.logger.log(f"[Test 2/4] Concurrent TPU jobs (3x {self.config.tpu_type})")
         result = self._run_concurrent_tpu_jobs(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
@@ -711,8 +710,17 @@ class SmokeTestRunner:
             return
 
         # Test 3: Coscheduled multi-task job
-        self.logger.log(f"[Test 3/3] Coscheduled multi-task job ({self.config.tpu_type})")
+        self.logger.log(f"[Test 3/4] Coscheduled multi-task job ({self.config.tpu_type})")
         result = self._run_coscheduled_job(client)
+        self._results.append(result)
+        self._log_autoscaler_status(controller_url)
+
+        if self._interrupted:
+            return
+
+        # Test 4: JAX TPU job - validates JAX can initialize and use TPU
+        self.logger.log(f"[Test 4/4] JAX TPU job ({self.config.tpu_type})")
+        result = self._run_jax_tpu_job(client)
         self._results.append(result)
         self._log_autoscaler_status(controller_url)
 
@@ -736,15 +744,18 @@ class SmokeTestRunner:
         job_name: str,
         resources: ResourceSpec,
         coscheduling: CoschedulingConfig | None = None,
+        environment: EnvironmentSpec | None = None,
+        timeout: int | None = None,
     ) -> TestResult:
         """Generic job runner that handles submission, waiting, and result collection."""
+        job_timeout = timeout or self.config.job_timeout_seconds
         start = time.monotonic()
         try:
             job = client.submit(
                 entrypoint=entrypoint,
                 name=job_name,
                 resources=resources,
-                environment=EnvironmentSpec(),
+                environment=environment or EnvironmentSpec(),
                 coscheduling=coscheduling,
             )
             self.logger.log(f"  Job submitted: {job.job_id}")
@@ -752,7 +763,7 @@ class SmokeTestRunner:
             if self._scheduling_monitor:
                 self._scheduling_monitor.track_job(job.job_id)
 
-            status = job.wait(timeout=self.config.job_timeout_seconds, raise_on_failure=False)
+            status = job.wait(timeout=job_timeout, raise_on_failure=False)
             duration = time.monotonic() - start
 
             if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
@@ -766,8 +777,8 @@ class SmokeTestRunner:
 
         except TimeoutError:
             duration = time.monotonic() - start
-            self.logger.log(f"  [FAIL] Timed out after {self.config.job_timeout_seconds}s", level="ERROR")
-            return TestResult(test_name, False, f"Timed out after {self.config.job_timeout_seconds}s", duration)
+            self.logger.log(f"  [FAIL] Timed out after {job_timeout}s", level="ERROR")
+            return TestResult(test_name, False, f"Timed out after {job_timeout}s", duration)
 
     def _submit_and_wait_multiple(
         self,
@@ -852,6 +863,26 @@ class SmokeTestRunner:
             coscheduling=CoschedulingConfig(group_by="tpu-name"),
         )
 
+    def _run_jax_tpu_job(self, client: IrisClient) -> TestResult:
+        """Run a JAX TPU job that initializes JAX and exercises the TPU.
+
+        Uses coscheduling with replicas=4 because multi-host TPU pods (e.g. v5litepod-16)
+        require all hosts to run JAX simultaneously for collective initialization.
+        """
+        return self._run_job_test(
+            client=client,
+            test_name=f"JAX TPU job ({self.config.tpu_type})",
+            entrypoint=Entrypoint.from_callable(_jax_tpu_job),
+            job_name=f"smoke-jax-tpu-{self._run_id}",
+            resources=ResourceSpec(
+                replicas=4,
+                device=tpu_device(self.config.tpu_type),
+            ),
+            environment=EnvironmentSpec(pip_packages=["jax[tpu]"]),
+            coscheduling=CoschedulingConfig(group_by="tpu-name"),
+            timeout=300,
+        )
+
     def _log_autoscaler_status(self, controller_url: str):
         """Log current autoscaler state for observability."""
         rpc_client = ControllerServiceClientSync(controller_url)
@@ -876,6 +907,51 @@ class SmokeTestRunner:
             self.logger.log(f"  (Could not fetch autoscaler status: {e})")
         finally:
             rpc_client.close()
+
+    def _run_cluster_tests(self, url: str, manager: ClusterManager, zone: str, project: str) -> None:
+        """Run tests against the cluster."""
+        if self._interrupted or self._check_deadline():
+            return
+
+        self.logger.log(f"Connected to controller at {url}")
+
+        # GCP-only: start log streaming
+        if not manager.is_local:
+            label_prefix = self.config.label_prefix
+            self._controller_streamer = DockerLogStreamer(
+                mode="controller",
+                zone=zone,
+                project=project,
+                log_tree=self.log_tree,
+                container_name="iris-controller",
+                label_prefix=label_prefix,
+            )
+            self._controller_streamer.start()
+            self.logger.log("Started controller log streaming")
+
+            self._worker_streamer = DockerLogStreamer(
+                mode="workers",
+                zone=zone,
+                project=project,
+                log_tree=self.log_tree,
+                container_name="iris-worker",
+                label_prefix=label_prefix,
+            )
+            self._worker_streamer.start()
+            self.logger.log("Started worker log streaming")
+
+        # Start task scheduling monitor
+        self._scheduling_monitor = TaskSchedulingMonitor(
+            controller_url=url,
+            log_tree=self.log_tree,
+            logger=self.logger,
+        )
+        self._scheduling_monitor.start()
+        self.logger.log("Started task scheduling monitor")
+
+        # Run tests
+        self.logger.section("Running Tests")
+        self._run_tests(url)
 
     def _print_results(self) -> bool:
         """Print final results and return True if all passed."""
@@ -914,6 +990,11 @@ class SmokeTestRunner:
             self._scheduling_monitor.stop()
         self.logger.log("Stopped background monitoring")
 
+        # In fast mode, skip VM cleanup to preserve VMs for next run
+        if self.config.fast:
+            self.logger.log("Fast mode: keeping VMs running for next iteration")
+            return
+
         should_cleanup = self.config.cleanup_on_failure or all(r.passed for r in self._results)
 
         if not should_cleanup:
@@ -921,16 +1002,16 @@ class SmokeTestRunner:
             self.logger.log("Controller VM left running for debugging")
             return
 
-        if self._controller:
-            self.logger.log("Stopping controller VM...")
+        if self._manager:
+            self.logger.log("Stopping cluster...")
             try:
-                self._controller.stop()
-                self.logger.log("Controller stopped")
+                self._manager.stop()
+                self.logger.log("Cluster stopped")
             except Exception as e:
-                self.logger.log(f"Error stopping controller: {e}", level="WARN")
+                self.logger.log(f"Error stopping cluster: {e}", level="WARN")
 
-        # Delete any remaining TPU slices and controller VM
-        if self._zone and self._project:
+        # Delete any remaining TPU slices and controller VM (GCP only)
+        if self._zone and self._project and (not self._manager or not self._manager.is_local):
             label_prefix = self.config.label_prefix
             deleted = cleanup_iris_resources(self._zone, self._project, label_prefix=label_prefix, dry_run=False)
             for resource in deleted:
@@ -990,6 +1071,16 @@ class SmokeTestRunner:
     default=None,
     help="Unique prefix for controller VM name (e.g., 'smoke-123' creates 'iris-controller-smoke-123')",
 )
+@click.option(
+    "--local",
+    is_flag=True,
+    help="Run locally without GCP (in-process controller and workers)",
+)
+@click.option(
+    "--fast",
+    is_flag=True,
+    help="Fast mode: redeploy containers on existing VMs without recreating",
+)
 def main(
     config_path: Path,
     timeout_seconds: int,
@@ -999,6 +1090,8 @@ def main(
     no_cleanup_on_failure: bool,
     no_clean_start: bool,
     prefix: str | None,
+    local: bool,
+    fast: bool,
 ):
     """Run Iris cluster autoscaling smoke test.
 
@@ -1008,8 +1101,11 @@ def main(
 
     Examples:
 
-        # Basic smoke test
+        # Basic smoke test (full VM creation)
         uv run python scripts/smoke-test.py --config examples/eu-west4.yaml
+
+        # Fast mode: redeploy containers on existing VMs (much faster for iteration)
+        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --fast
 
         # With custom log directory
         uv run python scripts/smoke-test.py --config examples/eu-west4.yaml \\
@@ -1035,6 +1131,8 @@ def main(
         cleanup_on_failure=not no_cleanup_on_failure,
         clean_start=not no_clean_start,
         prefix=prefix,
+        local=local,
+        fast=fast,
     )
 
     runner = SmokeTestRunner(config)
