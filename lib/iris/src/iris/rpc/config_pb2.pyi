@@ -157,8 +157,16 @@ class ControllerVmConfig(_message.Message):
     local: LocalControllerConfig
     def __init__(self, image: _Optional[str] = ..., bundle_prefix: _Optional[str] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ...) -> None: ...
 
+class AutoscalerConfig(_message.Message):
+    __slots__ = ("evaluation_interval_seconds", "requesting_timeout_seconds")
+    EVALUATION_INTERVAL_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    REQUESTING_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    evaluation_interval_seconds: float
+    requesting_timeout_seconds: float
+    def __init__(self, evaluation_interval_seconds: _Optional[float] = ..., requesting_timeout_seconds: _Optional[float] = ...) -> None: ...
+
 class IrisClusterConfig(_message.Message):
-    __slots__ = ("provider_type", "project_id", "region", "zone", "controller_vm", "scale_groups", "label_prefix", "bootstrap", "timeouts", "ssh")
+    __slots__ = ("provider_type", "project_id", "region", "zone", "controller_vm", "scale_groups", "label_prefix", "bootstrap", "timeouts", "ssh", "autoscaler")
     class ScaleGroupsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -176,6 +184,7 @@ class IrisClusterConfig(_message.Message):
     BOOTSTRAP_FIELD_NUMBER: _ClassVar[int]
     TIMEOUTS_FIELD_NUMBER: _ClassVar[int]
     SSH_FIELD_NUMBER: _ClassVar[int]
+    AUTOSCALER_FIELD_NUMBER: _ClassVar[int]
     provider_type: str
     project_id: str
     region: str
@@ -186,4 +195,5 @@ class IrisClusterConfig(_message.Message):
     bootstrap: BootstrapConfig
     timeouts: TimeoutConfig
     ssh: SshConfig
-    def __init__(self, provider_type: _Optional[str] = ..., project_id: _Optional[str] = ..., region: _Optional[str] = ..., zone: _Optional[str] = ..., controller_vm: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., label_prefix: _Optional[str] = ..., bootstrap: _Optional[_Union[BootstrapConfig, _Mapping]] = ..., timeouts: _Optional[_Union[TimeoutConfig, _Mapping]] = ..., ssh: _Optional[_Union[SshConfig, _Mapping]] = ...) -> None: ...
+    autoscaler: AutoscalerConfig
+    def __init__(self, provider_type: _Optional[str] = ..., project_id: _Optional[str] = ..., region: _Optional[str] = ..., zone: _Optional[str] = ..., controller_vm: _Optional[_Union[ControllerVmConfig, _Mapping]] = ..., scale_groups: _Optional[_Mapping[str, ScaleGroupConfig]] = ..., label_prefix: _Optional[str] = ..., bootstrap: _Optional[_Union[BootstrapConfig, _Mapping]] = ..., timeouts: _Optional[_Union[TimeoutConfig, _Mapping]] = ..., ssh: _Optional[_Union[SshConfig, _Mapping]] = ..., autoscaler: _Optional[_Union[AutoscalerConfig, _Mapping]] = ...) -> None: ...

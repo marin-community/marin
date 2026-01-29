@@ -87,7 +87,6 @@ from iris.cluster.vm.scaling_group import (
 # Autoscaler
 from iris.cluster.vm.autoscaler import (
     Autoscaler,
-    AutoscalerConfig,
     DemandEntry,
     RoutingResult,
     ScalingAction,
@@ -119,7 +118,6 @@ __all__ = [
     "MAX_RECONCILE_WORKERS",
     "PARTIAL_SLICE_GRACE_MS",
     "Autoscaler",
-    "AutoscalerConfig",
     "AvailabilityState",
     "BootstrapError",
     "DemandEntry",

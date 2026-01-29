@@ -291,6 +291,7 @@ class Controller:
 
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
+        self._last_autoscaler_run: float = 0.0
 
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
@@ -346,6 +347,10 @@ class Controller:
 
         # Shutdown dispatch executor
         self._dispatch_executor.shutdown(wait=True, cancel_futures=True)
+
+        # Shutdown autoscaler
+        if self._autoscaler:
+            self._autoscaler.shutdown()
 
     def _run_scheduling_loop(self) -> None:
         """Main controller loop running scheduling, autoscaler, and worker timeout checks."""
@@ -618,9 +623,19 @@ class Controller:
 
         Called from the scheduling loop every cycle. Computes demand from pending
         tasks and worker idle state, then runs the autoscaler.
+
+        Rate-limits evaluations based on the autoscaler's configured evaluation_interval_seconds.
         """
         if not self._autoscaler:
             return
+
+        import time
+
+        now = time.monotonic()
+        interval = self._autoscaler.evaluation_interval_seconds
+        if interval > 0 and now - self._last_autoscaler_run < interval:
+            return
+        self._last_autoscaler_run = now
 
         demand_entries = compute_demand_entries(self._state)
         vm_status_map = self._build_vm_status_map()

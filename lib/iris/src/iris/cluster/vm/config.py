@@ -305,7 +305,7 @@ def _get_provider_info(
 
 def create_autoscaler_from_config(
     config: config_pb2.IrisClusterConfig,
-    autoscaler_config=None,  # AutoscalerConfig | None - type is from autoscaler module
+    autoscaler_config: config_pb2.AutoscalerConfig | None = None,
     dry_run: bool = False,
 ):
     """Create autoscaler with per-group managers from configuration.
@@ -324,7 +324,7 @@ def create_autoscaler_from_config(
 
     Args:
         config: Cluster configuration proto with scale groups
-        autoscaler_config: Optional autoscaler configuration
+        autoscaler_config: Optional autoscaler configuration proto (overrides config.autoscaler if provided)
         dry_run: If True, don't actually create VMs
 
     Returns:
@@ -333,7 +333,7 @@ def create_autoscaler_from_config(
     Raises:
         ValueError: If a scale group is missing provider config or has unknown provider type
     """
-    from iris.cluster.vm.autoscaler import Autoscaler, AutoscalerConfig
+    from iris.cluster.vm.autoscaler import Autoscaler
 
     logger.info("Creating Autoscaler")
 
@@ -357,10 +357,14 @@ def create_autoscaler_from_config(
 
         logger.info("Created scale group %s", name)
 
+    # Use provided autoscaler_config, or load from cluster config, or use defaults (None creates default proto)
+    if autoscaler_config is None and config.HasField("autoscaler"):
+        autoscaler_config = config.autoscaler
+
     return Autoscaler(
         scale_groups=scale_groups,
         vm_registry=vm_registry,
-        config=autoscaler_config or AutoscalerConfig(),
+        config=autoscaler_config,
     )
 
 
@@ -370,7 +374,7 @@ def create_autoscaler_from_specs(
     bootstrap_config: config_pb2.BootstrapConfig,
     timeouts: config_pb2.TimeoutConfig,
     ssh_config: SshConfig | None = None,
-    autoscaler_config=None,
+    autoscaler_config: config_pb2.AutoscalerConfig | None = None,
     label_prefix: str = "iris",
     dry_run: bool = False,
 ):
@@ -385,7 +389,7 @@ def create_autoscaler_from_specs(
         bootstrap_config: Bootstrap configuration for all VMs
         timeouts: Timeout configuration for all VMs
         ssh_config: SSH configuration for manual groups
-        autoscaler_config: Optional autoscaler configuration
+        autoscaler_config: Optional autoscaler configuration proto
         label_prefix: Prefix for GCP labels
 
     Returns:
@@ -394,7 +398,7 @@ def create_autoscaler_from_specs(
     Raises:
         ValueError: If a scale group has an unknown provider type
     """
-    from iris.cluster.vm.autoscaler import Autoscaler, AutoscalerConfig
+    from iris.cluster.vm.autoscaler import Autoscaler
 
     vm_registry = VmRegistry()
     vm_factory = TrackedVmFactory(vm_registry)
@@ -429,7 +433,7 @@ def create_autoscaler_from_specs(
     return Autoscaler(
         scale_groups=scale_groups,
         vm_registry=vm_registry,
-        config=autoscaler_config or AutoscalerConfig(),
+        config=autoscaler_config,
     )
 
 
