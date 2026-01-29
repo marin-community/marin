@@ -706,7 +706,7 @@ class Executor:
         *,
         dry_run: bool = False,
         run_only: list[str] | None = None,
-        force_run_failed: bool = False,
+        force_run_failed: bool = True,
         max_concurrent: int | None = None,
     ):
         """
@@ -1140,7 +1140,7 @@ class PreviousTaskFailedError(Exception):
     pass
 
 
-def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = False) -> bool:
+def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = True) -> bool:
     """Check if the step should run based on lease-based distributed locking.
 
     Uses lease files for distributed locking and status file for final state.
@@ -1226,7 +1226,7 @@ class ExecutorMainConfig:
     """Where the executor info should be stored under a file determined by a hash."""
 
     dry_run: bool = False
-    force_run_failed: bool = False  # Force run failed steps
+    force_run_failed: bool = True  # Force run failed steps
     run_only: list[str] | None = None
     """Run these steps (matched by regex.search) and their dependencies only. If None, run all steps."""
 
