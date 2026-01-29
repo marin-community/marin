@@ -156,12 +156,11 @@ class Worker:
         self._tasks: dict[str, Task] = {}
         self._lock = threading.Lock()
 
-        self._service = WorkerServiceImpl(self)
+        self._service = WorkerServiceImpl(self, log_buffer=get_global_buffer())
         self._dashboard = WorkerDashboard(
             self._service,
             host=config.host,
             port=config.port,
-            log_buffer=get_global_buffer(),
         )
 
         self._server_thread: threading.Thread | None = None
