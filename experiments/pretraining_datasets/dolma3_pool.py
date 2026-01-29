@@ -567,11 +567,26 @@ def get_web_topics() -> list[str]:
     return list(OLMOCR_TOPICS)
 
 
-def get_all_web_partitions() -> list[str]:
-    """Get all CC + olmOCR PDF partitions (315 partitions total).
+def get_web_partitions() -> list[str]:
+    """Get all Common Crawl partitions (290 partitions).
+
+    This returns only the CC web content, excluding olmOCR PDFs which have
+    known data quality issues.
 
     Returns:
-        List of all partition names for web content.
+        List of all Common Crawl partition names.
+    """
+    return get_common_crawl_partitions()
+
+
+def get_web_with_ocr_partitions() -> list[str]:
+    """Get all CC + olmOCR PDF partitions (315 partitions total).
+
+    Note: olmOCR PDFs have known data quality issues (malformed files).
+    Consider using get_web_partitions() instead for only CC content.
+
+    Returns:
+        List of all partition names for web content (CC + olmOCR).
     """
     return get_common_crawl_partitions() + get_olmocr_pdfs_partitions()
 

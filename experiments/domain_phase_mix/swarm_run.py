@@ -60,7 +60,8 @@ from experiments.pretraining_datasets.dolma3_pool import (
     get_finemath_partitions as get_dolma3_finemath_partitions,
     get_arxiv_partitions as get_dolma3_arxiv_partitions,
     get_wikipedia_partitions as get_dolma3_wikipedia_partitions,
-    get_all_web_partitions as get_dolma3_web_partitions,
+    get_web_partitions as get_dolma3_web_partitions,
+    get_web_with_ocr_partitions as get_dolma3_web_with_ocr_partitions,
     get_web_partitions_by_topic as get_dolma3_web_partitions_by_topic,
     get_web_topics as get_dolma3_web_topics,
     DOLMA3_POOL_PARTITIONS,
@@ -195,7 +196,8 @@ def prepare_dolma3_pool_by_category(
 
     Args:
         category: One of "common_crawl", "olmocr_pdfs", "stack_edu",
-                  "finemath", "arxiv", "wikipedia", "web" (CC + olmOCR by topic), or "all"
+                  "finemath", "arxiv", "wikipedia", "web" (CC only),
+                  "web_with_ocr" (CC + olmOCR), or "all"
         tokenizer: Tokenizer to use. Defaults to marin_tokenizer.
     """
     if category == "common_crawl":
@@ -211,8 +213,12 @@ def prepare_dolma3_pool_by_category(
     elif category == "wikipedia":
         partitions = get_dolma3_wikipedia_partitions()
     elif category == "web":
-        # All web content: CC + olmOCR PDFs (315 partitions across 24 topics)
+        # Common Crawl only (290 partitions)
         partitions = get_dolma3_web_partitions()
+    elif category == "web_with_ocr":
+        # All web content: CC + olmOCR PDFs (315 partitions across 24 topics)
+        # Note: olmOCR PDFs have known data quality issues
+        partitions = get_dolma3_web_with_ocr_partitions()
     elif category.startswith("web/"):
         # Specific topic within web content (e.g., "web/science_math_and_technology")
         topic = category[4:]  # Remove "web/" prefix
@@ -227,7 +233,7 @@ def prepare_dolma3_pool_by_category(
         raise ValueError(
             f"Unknown category: {category}. "
             "Must be one of: common_crawl, olmocr_pdfs, stack_edu, finemath, arxiv, wikipedia, "
-            "web, web/<topic>, all"
+            "web (CC only), web_with_ocr (CC+olmOCR), web/<topic>, all"
         )
 
     logger.info(f"Preparing Dolma 3 Pool category: {category}")
@@ -258,7 +264,8 @@ DOLMA3_POOL_CATEGORIES = [
     "finemath",
     "arxiv",
     "wikipedia",
-    "web",  # CC + olmOCR PDFs (315 partitions across 24 topics)
+    "web",  # CC only (290 partitions)
+    "web_with_ocr",  # CC + olmOCR PDFs (315 partitions) - olmOCR has data quality issues
     "all",
 ]
 
@@ -315,8 +322,12 @@ def main(
     logger.info(f"  - arXiv: {len(get_dolma3_arxiv_partitions())} partitions")
     logger.info(f"  - Wikipedia: {len(get_dolma3_wikipedia_partitions())} partitions")
     web_partitions = get_dolma3_web_partitions()
+    web_with_ocr_partitions = get_dolma3_web_with_ocr_partitions()
     web_topics = get_dolma3_web_topics()
-    logger.info(f"  - Web (CC + olmOCR): {len(web_partitions)} partitions across {len(web_topics)} topics")
+    logger.info(f"  - Web (CC only): {len(web_partitions)} partitions")
+    logger.info(
+        f"  - Web with OCR (CC + olmOCR): {len(web_with_ocr_partitions)} partitions across {len(web_topics)} topics"
+    )
 
     # Show web topics breakdown
     web_by_topic = get_dolma3_web_partitions_by_topic()
@@ -351,7 +362,7 @@ def _parse_args():
             "Data category to prepare (only used with --prepare_data). "
             "For dolmino_pool: common_crawl_hq, olmocr_pdfs_hq, stack_edu_fim, stem_heavy_crawl, synthetic, all. "
             "For dolma3_pool: common_crawl, olmocr_pdfs, stack_edu, finemath, arxiv, wikipedia, "
-            "web (CC+olmOCR, 315 partitions), web/<topic> (specific topic), all."
+            "web (CC only, 290 partitions), web_with_ocr (CC+olmOCR, 315 partitions), web/<topic>, all."
         ),
     )
     parser.add_argument(
