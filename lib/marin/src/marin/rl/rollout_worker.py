@@ -235,7 +235,7 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
 def create_inference_context(
     inference_type: str,
     inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig,
-    inflight_weight_updates: bool,
+    inflight_weight_updates: bool = False,
 ) -> BaseInferenceContext:
     """Create an inference context based on the configuration."""
     if inference_type == "levanter":
