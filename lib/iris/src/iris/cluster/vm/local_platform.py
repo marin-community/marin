@@ -233,11 +233,11 @@ class LocalVmManager:
         worker_ids: list[str] = []
         worker_ports: list[int] = []
 
-        bundle_provider = _LocalBundleProvider(self._fake_bundle)
-        image_provider = _LocalImageProvider()
-        container_runtime = _LocalContainerRuntime()
-
         for tpu_worker_id in range(worker_count):
+            # Each worker needs its own runtime to avoid container dict conflicts
+            bundle_provider = _LocalBundleProvider(self._fake_bundle)
+            image_provider = _LocalImageProvider()
+            container_runtime = _LocalContainerRuntime()
             worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
             worker_port = find_free_port()
 
