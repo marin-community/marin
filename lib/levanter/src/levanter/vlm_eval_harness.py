@@ -515,15 +515,32 @@ class LevanterVLMHarnessLM(TemplateLM):
                 results.append(text)
 
                 # Log sample if enabled
-                if batch_pil_images[i]:
-                    bucket = self.sample_outputs.get(self._current_task, [])
-                    if len(bucket) < 100:  # Limit samples
-                        bucket.append({
-                            "prompt": batch_contexts[i],
-                            "generation": text,
-                            "num_images": len(batch_pil_images[i]),
-                        })
-                        self.sample_outputs[self._current_task] = bucket
+                bucket = self.sample_outputs.get(self._current_task, [])
+                if len(bucket) < 100:  # Limit samples
+                    req = batch_requests[i]
+                    sample_data = {
+                        "prompt": batch_contexts[i],
+                        "generation": text,
+                        "num_images": len(batch_pil_images[i]) if batch_pil_images[i] else 0,
+                    }
+                    # Try to get expected answer from the request's doc
+                    if hasattr(req, 'doc') and req.doc is not None:
+                        doc = req.doc
+                        # Common answer field names in VLM benchmarks
+                        for key in ['answer', 'target', 'gold', 'label', 'response']:
+                            if key in doc:
+                                sample_data["expected"] = str(doc[key])
+                                break
+                        # Also capture question if available
+                        for key in ['question', 'query', 'text']:
+                            if key in doc and key not in sample_data:
+                                sample_data["question"] = str(doc[key])[:200]
+                                break
+                    # Capture task name
+                    if hasattr(req, 'task_name'):
+                        sample_data["task"] = req.task_name
+                    bucket.append(sample_data)
+                    self.sample_outputs[self._current_task] = bucket
 
         return results
 
@@ -651,6 +668,16 @@ def run_vlm_eval_harness(
     task_spec = config.to_task_spec()
     logger.info(f"Running VLM evaluation on tasks: {task_spec}")
 
+    # Set current task for sample logging
+    task_names = []
+    for task in task_spec:
+        if isinstance(task, str):
+            task_names.append(task)
+        elif isinstance(task, dict):
+            task_names.append(task.get("task", "unknown"))
+    for task_name in task_names:
+        vlm_lm.set_current_task(task_name)
+
     # Use task_manager if custom tasks are registered
     eval_kwargs = {
         "model": vlm_lm,
@@ -673,6 +700,29 @@ def run_vlm_eval_harness(
             for metric_name, value in metrics.items():
                 if isinstance(value, (int, float)):
                     levanter.tracker.log({f"vlm_eval/{task_name}/{metric_name}": value}, step=0)
+
+    # Get sample outputs and add to results
+    sample_outputs = vlm_lm.get_sample_outputs()
+    if sample_outputs:
+        results["sample_outputs"] = sample_outputs
+        # Log samples to wandb as a table
+        try:
+            import wandb
+            for task_name, samples in sample_outputs.items():
+                if samples:
+                    # Create wandb table with sample outputs
+                    table = wandb.Table(columns=["prompt", "generation", "expected", "num_images"])
+                    for sample in samples[:50]:  # Limit to 50 samples per task
+                        table.add_data(
+                            sample.get("prompt", "")[:500],  # Truncate long prompts
+                            sample.get("generation", ""),
+                            sample.get("expected", "N/A"),
+                            sample.get("num_images", 0),
+                        )
+                    levanter.tracker.log({f"vlm_eval/{task_name}/samples": table}, step=0)
+                    logger.info(f"Logged {len(samples)} samples for {task_name} to wandb")
+        except Exception as e:
+            logger.warning(f"Failed to log samples to wandb: {e}")
 
     return results
 
@@ -860,6 +910,21 @@ def run_vlm_benchmark_direct(
 
     accuracy = correct / total if total > 0 else 0.0
     logger.info(f"{benchmark_name} accuracy: {accuracy:.4f} ({correct}/{total})")
+
+    # Log samples to wandb
+    try:
+        import wandb
+        table = wandb.Table(columns=["prediction", "reference", "correct"])
+        for result in results_list[:50]:  # Limit to 50 samples
+            table.add_data(
+                result.get("prediction", "")[:500],
+                result.get("reference", ""),
+                result.get("correct", False),
+            )
+        levanter.tracker.log({f"vlm_eval/{benchmark_name}/samples": table}, step=0)
+        logger.info(f"Logged {min(len(results_list), 50)} samples for {benchmark_name} to wandb")
+    except Exception as e:
+        logger.warning(f"Failed to log samples to wandb: {e}")
 
     return {
         "benchmark": benchmark_name,

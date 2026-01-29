@@ -114,6 +114,13 @@ class LevanterVLMEvaluator(LevanterTpuEvaluator):
                 with fs.open(output_file, "w") as f:
                     json.dump(results, f, indent=2, default=_json_default)
 
+                # Save sample outputs separately if available
+                if results and "sample_outputs" in results:
+                    samples_file = os.path.join(output_path, "sample_outputs.json")
+                    logger.info(f"Uploading sample outputs to: {samples_file}")
+                    with fs.open(samples_file, "w") as f:
+                        json.dump(results["sample_outputs"], f, indent=2, default=_json_default)
+
                 levanter.tracker.current_tracker().finish()
                 logger.info("Results upload completed successfully.")
 

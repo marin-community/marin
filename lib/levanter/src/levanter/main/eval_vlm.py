@@ -22,9 +22,11 @@ Usage:
         --eval_harness.task_spec='["mme", "gqa"]'
 """
 
+import json
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional, Union
 
 import equinox as eqx
@@ -157,6 +159,12 @@ class EvalVLMConfig:
     """Vision feature height (num_image_tokens = height^2). Default: 24 = 384//16."""
     disable_anyres: bool = True
     """If True, disable anyres (use single image resolution). Default: True to match training."""
+
+    # Output options
+    output_dir: Optional[str] = None
+    """Directory to save evaluation results locally. If None, saves to ./vlm_eval_results/."""
+    save_samples: bool = True
+    """If True, save individual sample outputs to local files."""
 
 
 def _load_vlm_model(
@@ -365,6 +373,11 @@ def main(config: EvalVLMConfig):
                     logger.error(f"Failed to evaluate {task_name}: {e}")
                     all_results[task_name] = {"error": str(e)}
 
+        # Collect sample outputs from harness results if available
+        sample_outputs = {}
+        if lm_eval_tasks and harness_results and "sample_outputs" in harness_results:
+            sample_outputs.update(harness_results["sample_outputs"])
+
         # Print summary
         print("\n" + "=" * 60)
         print("VLM Benchmark Evaluation Results")
@@ -380,7 +393,53 @@ def main(config: EvalVLMConfig):
 
         print("=" * 60)
 
-        return {"results": all_results}
+        # Save results locally
+        output_dir = config.output_dir or "./vlm_eval_results"
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Generate timestamped filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        task_names = "_".join([t.lower() for t in task_spec[:3]])  # Use first 3 task names
+        if len(task_spec) > 3:
+            task_names += f"_and_{len(task_spec) - 3}_more"
+
+        # Save summary results
+        results_file = os.path.join(output_dir, f"results_{task_names}_{timestamp}.json")
+        results_data = {
+            "timestamp": timestamp,
+            "checkpoint": config.checkpoint_path or str(config.hf_checkpoint),
+            "tasks": [str(t) for t in task_spec],
+            "results": all_results,
+        }
+
+        with open(results_file, "w") as f:
+            json.dump(results_data, f, indent=2, default=str)
+        logger.info(f"Results saved to: {results_file}")
+        print(f"\nResults saved to: {results_file}")
+
+        # Save sample outputs if enabled
+        if config.save_samples and sample_outputs:
+            samples_file = os.path.join(output_dir, f"samples_{task_names}_{timestamp}.json")
+            with open(samples_file, "w") as f:
+                json.dump(sample_outputs, f, indent=2, default=str)
+            logger.info(f"Sample outputs saved to: {samples_file}")
+            print(f"Sample outputs saved to: {samples_file}")
+
+            # Also print a few sample outputs to console
+            print("\n" + "-" * 60)
+            print("Sample Outputs (first 3 per task):")
+            print("-" * 60)
+            for task_name, samples in sample_outputs.items():
+                print(f"\n[{task_name}]")
+                for i, sample in enumerate(samples[:3]):
+                    prompt = sample.get("prompt", "")
+                    if len(prompt) > 200:
+                        prompt = prompt[:200] + "..."
+                    print(f"  [{i+1}] Prompt: {prompt}")
+                    print(f"      Response: {sample.get('generation', '')}")
+                    print()
+
+        return {"results": all_results, "sample_outputs": sample_outputs}
 
 
 if __name__ == "__main__":
