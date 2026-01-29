@@ -400,13 +400,17 @@ def is_task_finished(state: int) -> bool:
 def job_task_counts(job: cluster_pb2.JobStatus) -> dict[str, int]:
     """Compute task state counts from tasks[] in JobStatus proto.
 
-    Returns a dict with keys: pending, running, succeeded, failed.
+    Returns a dict with keys: pending, assigned, running, succeeded, failed.
+    ASSIGNED tasks are counted separately since they have been dispatched to a worker
+    but have not yet started container setup/execution.
     """
-    counts = {"pending": 0, "running": 0, "succeeded": 0, "failed": 0}
+    counts = {"pending": 0, "assigned": 0, "running": 0, "succeeded": 0, "failed": 0}
     for task in job.tasks:
         if task.state == cluster_pb2.TASK_STATE_PENDING:
             counts["pending"] += 1
-        elif task.state == cluster_pb2.TASK_STATE_RUNNING:
+        elif task.state == cluster_pb2.TASK_STATE_ASSIGNED:
+            counts["assigned"] += 1
+        elif task.state in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING):
             counts["running"] += 1
         elif task.state == cluster_pb2.TASK_STATE_SUCCEEDED:
             counts["succeeded"] += 1

@@ -327,14 +327,14 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, wor
     tasks = submit_job(state, "j1", req)
     task = tasks[0]
 
-    # Task gets assigned (creates attempt, puts in PENDING state)
+    # Task gets assigned (creates attempt, puts in ASSIGNED state)
     state.handle_event(
         TaskAssignedEvent(
             task_id=task.task_id,
             worker_id=worker_id,
         )
     )
-    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.state == cluster_pb2.TASK_STATE_ASSIGNED
     assert task.current_attempt_id == 0
 
     # Dispatch RPC fails -> WORKER_FAILED event

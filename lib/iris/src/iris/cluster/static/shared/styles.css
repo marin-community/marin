@@ -68,6 +68,7 @@ tr:hover {
 
 /* === Status colors (jobs, tasks, VMs) === */
 .status-pending { color: #9a6700; }
+.status-assigned { color: #bc4c00; }
 .status-running { color: #0969da; }
 .status-building { color: #8250df; }
 .status-succeeded { color: #1a7f37; }
@@ -278,6 +279,7 @@ button:not(.tab-btn):disabled { color: #8c959f; cursor: default; background: #f6
 .task-badge.succeeded { background: #1a7f37; }
 .task-badge.running { background: #0969da; }
 .task-badge.building { background: #8250df; }
+.task-badge.assigned { background: #bc4c00; }
 .task-badge.pending { background: #eaeef2; border: 1px solid #8c959f; }
 .task-badge.failed { background: #cf222e; }
 .task-badge.killed { background: #57606a; }
@@ -287,6 +289,7 @@ button:not(.tab-btn):disabled { color: #8c959f; cursor: default; background: #f6
 .task-icon.succeeded { color: #1a7f37; }
 .task-icon.running { color: #0969da; }
 .task-icon.building { color: #8250df; }
+.task-icon.assigned { color: #bc4c00; }
 .task-icon.pending { color: #57606a; }
 .task-icon.failed { color: #cf222e; }
 .task-icon.killed { color: #57606a; }
