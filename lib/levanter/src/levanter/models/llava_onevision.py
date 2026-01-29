@@ -1512,6 +1512,9 @@ class _LlavaInferenceWrapper(eqx.Module):
         Returns:
             A new wrapper configured for batched inference
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         if len(requests) != len(slot_ids):
             raise ValueError("Number of requests must match number of slot_ids")
 
@@ -1532,15 +1535,42 @@ class _LlavaInferenceWrapper(eqx.Module):
         pixel_values_list = [squeeze_batch(req.pixel_values) for req in requests]
         grid_mask_list = [squeeze_batch(req.grid_mask) for req in requests]
 
-        # Check shapes match for batching (after squeezing)
-        first_shape = pixel_values_list[0].shape
-        if not all(pv.shape == first_shape for pv in pixel_values_list):
-            raise ValueError("All requests must have the same pixel_values shape for batching")
+        # Find the maximum TOTAL_PATCHES across all requests
+        def get_total_patches(pv):
+            for ax in pv.axes:
+                if ax.name == "TotalPatches":
+                    return ax.size
+            raise ValueError("TotalPatches axis not found in pixel_values")
 
-        # Stack along a new batch dimension
+        total_patches_list = [get_total_patches(pv) for pv in pixel_values_list]
+        max_total_patches = max(total_patches_list)
+        logger.info(f"Padding {len(requests)} requests to max TOTAL_PATCHES={max_total_patches}")
+
+        # Pad each request's pixel_values and grid_mask to max_total_patches
+        padded_pixel_values = []
+        padded_grid_masks = []
+        for pv, gm, current_patches in zip(pixel_values_list, grid_mask_list, total_patches_list):
+            if current_patches < max_total_patches:
+                # Need to pad
+                pad_size = max_total_patches - current_patches
+
+                # Pad pixel_values with zeros (hax.pad auto-resizes the axis)
+                pv_padded = hax.pad(pv, {"TotalPatches": (0, pad_size)}, constant_values=0.0)
+
+                # Pad grid_mask with False (indicates padding is invalid)
+                gm_padded = hax.pad(gm, {"TotalPatches": (0, pad_size)}, constant_values=False)
+
+                padded_pixel_values.append(pv_padded)
+                padded_grid_masks.append(gm_padded)
+            else:
+                # No padding needed
+                padded_pixel_values.append(pv)
+                padded_grid_masks.append(gm)
+
+        # Stack along a new batch dimension (now all have the same shape)
         Batch = Axis("batch", len(requests))
-        stacked_pixel_values = hax.stack(Batch, pixel_values_list)
-        stacked_grid_mask = hax.stack(Batch, grid_mask_list)
+        stacked_pixel_values = hax.stack(Batch, padded_pixel_values)
+        stacked_grid_mask = hax.stack(Batch, padded_grid_masks)
 
         # Compute image features for all requests at once
         with hax.axis_mapping({}):
@@ -1552,12 +1582,12 @@ class _LlavaInferenceWrapper(eqx.Module):
         # Flatten the batched features: (batch, patches, features_per_patch, embed) -> (total_patches, features_per_patch, embed)
         # First get the shape info
         num_requests = len(requests)
-        patches_per_request = batched_features.axis_size("TOTAL_PATCHES")
+        patches_per_request = batched_features.axis_size("TotalPatches")
         features_per_patch = batched_features.axis_size("features_per_patch")
         embed_size = batched_features.axis_size("embed")
 
         # Create axes for the flattened features
-        TotalPatches = Axis("TOTAL_PATCHES", num_requests * patches_per_request)
+        TotalPatches = Axis("TotalPatches", num_requests * patches_per_request)
         FeaturesPerPatch = Axis("features_per_patch", features_per_patch)
         Embed = Axis("embed", embed_size)
 
@@ -1570,7 +1600,8 @@ class _LlavaInferenceWrapper(eqx.Module):
         # Build slot_id to segment mapping (segment 0, 1, 2, ... based on order in requests)
         slot_to_segment = {slot: i for i, slot in enumerate(slot_ids)}
 
-        # Count patches per segment (all same for now since shapes match)
+        # Count valid patches per segment (from original grid_masks before padding)
+        # This is the number of TRUE values in each grid_mask
         num_patches_per_segment = tuple(
             int(jnp.sum(gm.array).item()) for gm in grid_mask_list
         )
@@ -1705,12 +1736,12 @@ class _LlavaInferenceWrapper(eqx.Module):
         feature_indices = segment_starts_per_token + within_seg_counts
 
         # Clamp to valid range
-        total_features = self._batched_image_features.axis_size("TOTAL_PATCHES") * features_per_patch
+        total_features = self._batched_image_features.axis_size("TotalPatches") * features_per_patch
         feature_indices = jnp.clip(feature_indices, 0, total_features - 1)
 
         # 5. Flatten image features to (total_features, embed)
         # _batched_image_features: (total_patches, features_per_patch, embed)
-        total_patches = self._batched_image_features.axis_size("TOTAL_PATCHES")
+        total_patches = self._batched_image_features.axis_size("TotalPatches")
         embed_size = self._batched_image_features.axis_size("embed")
         flat_features = self._batched_image_features.array.reshape(total_patches * features_per_patch, embed_size)
 
@@ -1897,6 +1928,9 @@ class LlavaInferenceEngine:
     def _try_batched_inference(self, requests: list[VLMRequest], step_callback=None):
         """Try to use true batched LLM inference for all requests.
 
+        Padding is handled in set_batched_request_data() so different TOTAL_PATCHES sizes
+        are supported.
+
         Returns:
             GenerationResult if successful, None if batching not possible
         """
@@ -1904,13 +1938,6 @@ class LlavaInferenceEngine:
         logger = logging.getLogger(__name__)
 
         try:
-            # Check that all requests have the same pixel_values shape
-            pixel_values_list = [req.pixel_values for req in requests]
-            first_shape = pixel_values_list[0].shape
-            if not all(pv.shape == first_shape for pv in pixel_values_list):
-                logger.info("Pixel values shapes don't match, falling back to sequential inference")
-                return None
-
             # Assign slot IDs to requests (0, 1, 2, ...)
             slot_ids = list(range(len(requests)))
 
@@ -2016,16 +2043,41 @@ class LlavaInferenceEngine:
             pixel_values_list = [squeeze_batch(req.pixel_values) for req in requests]
             grid_mask_list = [squeeze_batch(req.grid_mask) for req in requests]
 
-            # Check that all requests have the same shape (after squeezing)
-            first_shape = pixel_values_list[0].shape
-            if not all(pv.shape == first_shape for pv in pixel_values_list):
-                # Shapes don't match, can't batch
-                return None
+            # Find the maximum TOTAL_PATCHES across all requests
+            def get_total_patches(pv):
+                for ax in pv.axes:
+                    if ax.name == "TotalPatches":
+                        return ax.size
+                raise ValueError("TotalPatches axis not found in pixel_values")
 
-            # Stack along a new batch dimension
+            total_patches_list = [get_total_patches(pv) for pv in pixel_values_list]
+            max_total_patches = max(total_patches_list)
+
+            # Pad each request's pixel_values and grid_mask to max_total_patches
+            padded_pixel_values = []
+            padded_grid_masks = []
+            for pv, gm, current_patches in zip(pixel_values_list, grid_mask_list, total_patches_list):
+                if current_patches < max_total_patches:
+                    # Need to pad
+                    pad_size = max_total_patches - current_patches
+
+                    # Pad pixel_values with zeros (hax.pad auto-resizes the axis)
+                    pv_padded = hax.pad(pv, {"TotalPatches": (0, pad_size)}, constant_values=0.0)
+
+                    # Pad grid_mask with False (indicates padding is invalid)
+                    gm_padded = hax.pad(gm, {"TotalPatches": (0, pad_size)}, constant_values=False)
+
+                    padded_pixel_values.append(pv_padded)
+                    padded_grid_masks.append(gm_padded)
+                else:
+                    # No padding needed
+                    padded_pixel_values.append(pv)
+                    padded_grid_masks.append(gm)
+
+            # Stack along a new batch dimension (now all have the same shape)
             Batch = Axis("batch", len(requests))
-            stacked_pixel_values = hax.stack(Batch, pixel_values_list)
-            stacked_grid_mask = hax.stack(Batch, grid_mask_list)
+            stacked_pixel_values = hax.stack(Batch, padded_pixel_values)
+            stacked_grid_mask = hax.stack(Batch, padded_grid_masks)
 
             # Compute image features for all requests at once
             # Use empty axis_mapping to avoid sharding issues
@@ -2038,10 +2090,17 @@ class LlavaInferenceEngine:
             # Split back into individual features
             # batched_features: (batch, TOTAL_PATCHES, features_per_patch, embed)
             # Keep batch dimension (size 1) for each feature to match _merge_embeddings expectations
+            # Also slice back to original TOTAL_PATCHES size for each request
             Batch1 = Axis("batch", 1)
             features_list = []
-            for i in range(len(requests)):
-                single_feature = batched_features["batch", i]  # (TOTAL_PATCHES, features_per_patch, embed)
+            for i, orig_patches in enumerate(total_patches_list):
+                single_feature = batched_features["batch", i]  # (max_TOTAL_PATCHES, features_per_patch, embed)
+
+                # Slice back to original TotalPatches if needed
+                if orig_patches < max_total_patches:
+                    # Create axis with original size and slice
+                    single_feature = single_feature["TotalPatches", :orig_patches]
+
                 # Add batch dimension back with size 1 using broadcast_axis
                 single_feature_batched = hax.broadcast_axis(single_feature, Batch1)
                 features_list.append(single_feature_batched)

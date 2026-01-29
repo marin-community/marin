@@ -1,0 +1,180 @@
+{
+  "mmmu_val_art": [
+    {
+      "prompt": "<|im_start|>user\nThis Roman portrait mummy <image> from the 1st century AD was discovered in Cairo, Egypt, and now belongs in the collection of Girton College, University of Cambridge. Which well-known fictional character does this woman share her name with?\n\n(A) Aurelia\n(B) Matilda\n(C) Hermione\n(D) Juno\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "C",
+      "question": "This Roman portrait mummy <image 1> from the 1st century AD was discovered in Cairo, Egypt, and now belongs in the collection of Girton College, University of Cambridge. Which well-known fictional cha",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nWho created <image>?\n\n(A) SERGE VINOGRADOV\n(B) GEORGES SEURAT\n(C) VINCENT WILLEM VAN GOGH\n(D) PAUL GAUGUIN\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "B",
+      "question": "Who created <image 1>?",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nName the Artist of <image>:\n\n(A) CLAUDE MONET\n(B) HENRI MATISSE\n(C) HENRI DE TOULOUSE-LAUTREC\n(D) EDOUARD MANET\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "C",
+      "question": "Name the Artist of <image 1>:",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nSlight? what can be fixed by editing programs after it has been shot? (fill in the <image>)\n\n(A) Colour\n(B) Aperture problems\n(C) Blurs\n(D) Over and underexposure\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "D",
+      "question": "Slight? what can be fixed by editing programs after it has been shot? (fill in the <image 1>)",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nWho created <image>?\n\n(A) PAUL SIGNAC\n(B) HENRI MATISSE\n(C) JOHN SINGER SARGENT\n(D) PIERRE-AUGUSTE RENOIR\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "D",
+      "question": "Who created <image 1>?",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nWhat is <image> known as?\n\n(A) Lady with an Ermine\n(B) First Steps\n(C) Nude Descending a Staircase, No. 2\n(D) Woman with a parasol\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "D",
+      "question": "What is <image 1> known as?",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nTrue or False: <image> is painted by Michelangelo\n\n(A) True\n(B) False\n(C) No enough evidence\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "A",
+      "question": "True or False: <image 1> is painted by Michelangelo",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\n<image>: A Conversation with the Sea stands in which British seaside town?\n\n(A) Herne Bay, Kent\n(B) St Ives, Cornwall\n(C) Aldeburgh, Suffolk\n(D) Sandown, Isle of Wight\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "C",
+      "question": "<image 1>: A Conversation with the Sea stands in which British seaside town?",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nMany of Frederic Leighton's early paintings took their inspiration from the Renaissance art historian Giorgio Vasari's text The Lives of the Artists. It includes <image> that shows the death of which famous figure?\n\n(A) Cimabue\n(B) Donatello\n(C) Giotto\n(D) Brunelleschi\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "D",
+      "question": "Many of Frederic Leighton's early paintings took their inspiration from the Renaissance art historian Giorgio Vasari's text The Lives of the Artists. It includes <image 1> that shows the death of whic",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nWho painted <image>?\n\n(A) Edgar Degas\n(B) Vincent van Gogh\n(C) Gustav Klimt\n(D) Claude Monet\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "B",
+      "question": "Who painted <image 1>?",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nWho created <image>?\n\n(A) ARKHIP KUINII\n(B) PAUL SIGNAC\n(C) GEORGES SEURAT\n(D) VALENTIN SEROV\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "C",
+      "question": "Who created <image 1>?",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nWho created <image>?\n\n(A) PAUL C\u00c9ZANNE\n(B) EDVARD MUNCH\n(C) EDGAR DEGAS\n(D) ANDY WARHOL\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "A",
+      "question": "Who created <image 1>?",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nWhat movement of art would you consider <image> to be?\n\n(A) Neoclassical\n(B) Baroque\n(C) Renaissance\n(D) Rococo\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "A",
+      "question": "What movement of art would you consider <image 1> to be?",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nWho is depicted in <image> by Malcolm Drummond?\n\n(A) Spencer Gore\n(B) Harold Gilman\n(C) Charles Ginner\n(D) William Ratcliffe\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "C",
+      "question": "Who is depicted in <image 1> by Malcolm Drummond?",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nWho created <image>?\n\n(A) ANTONELLO DA MESSINA\n(B) MICHELANGELO BUONARROTI\n(C) PETER BRUEGEL\n(D) LUCAS CRANACH THE ELDER\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "B",
+      "question": "Who created <image 1>?",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    },
+    {
+      "prompt": "<|im_start|>user\nTrue or False: The name of <image> is 'This is not a Pipe' by Ren\u00e9 Magritte\n\n(A) True\n(B) False\n(C) No enough evidence\n\nAnswer with the option's letter from the given choices directly.<|im_end|>\n<|im_start|>assistant\n",
+      "generation": "",
+      "num_images": 1,
+      "expected": "B",
+      "question": "True or False: The name of <image 1> is 'This is not a Pipe' by Ren\u00e9 Magritte",
+      "extracted_answer": null,
+      "correct": null,
+      "task": "mmmu_val_art",
+      "subset": "mmmu_val_art"
+    }
+  ]
+}

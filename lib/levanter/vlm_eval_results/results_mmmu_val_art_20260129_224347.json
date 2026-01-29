@@ -1,0 +1,14 @@
+{
+  "timestamp": "20260129_224347",
+  "checkpoint": "llava-hf/llava-onevision-qwen2-0.5b-si-hf",
+  "tasks": [
+    "mmmu_val_art"
+  ],
+  "results": {
+    "mmmu_val_art": {
+      "alias": "Art",
+      "acc,none": 0.25,
+      "acc_stderr,none": "N/A"
+    }
+  }
+}
