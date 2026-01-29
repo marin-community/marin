@@ -23,7 +23,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
-from iris.cluster.worker.task_attempt import TaskAttempt
+from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
@@ -32,11 +32,14 @@ logger = logging.getLogger(__name__)
 
 
 class TaskProvider(Protocol):
-    """Protocol for task management operations."""
+    """Protocol for task management operations.
+
+    Returns TaskInfo (read-only view) to decouple service layer from TaskAttempt internals.
+    """
 
     def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str: ...
-    def get_task(self, task_id: str) -> TaskAttempt | None: ...
-    def list_tasks(self) -> list[TaskAttempt]: ...
+    def get_task(self, task_id: str) -> TaskInfo | None: ...
+    def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
     def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]: ...
 

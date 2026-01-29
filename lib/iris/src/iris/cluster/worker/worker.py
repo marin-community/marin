@@ -31,6 +31,7 @@ from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, Environmen
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
+from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -399,12 +400,20 @@ class Worker:
 
         return task_id
 
-    def get_task(self, task_id: str) -> TaskAttempt | None:
-        """Get a task by ID."""
+    def get_task(self, task_id: str) -> TaskInfo | None:
+        """Get a task by ID.
+
+        Returns TaskInfo view (implemented by TaskAttempt) to decouple callers
+        from execution internals.
+        """
         return self._tasks.get(task_id)
 
-    def list_tasks(self) -> list[TaskAttempt]:
-        """List all tasks."""
+    def list_tasks(self) -> list[TaskInfo]:
+        """List all tasks.
+
+        Returns TaskInfo views (implemented by TaskAttempt) to decouple callers
+        from execution internals.
+        """
         return list(self._tasks.values())
 
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:

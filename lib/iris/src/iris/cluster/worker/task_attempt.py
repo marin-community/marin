@@ -140,6 +140,12 @@ class TaskAttempt:
     This class is module-internal to iris.cluster.worker and has no external
     consumers. It encapsulates the complex task execution logic that was
     previously interleaved in the Worker class.
+
+    Thread safety: This object is mutated by its execution thread (run()) and
+    read concurrently by RPC handlers via the TaskInfo protocol. Python's GIL
+    ensures atomic field assignments. State transitions are one-way (PENDING →
+    BUILDING → RUNNING → terminal), preventing inconsistent states. External
+    code should only read via TaskInfo protocol (status, result, to_proto()).
     """
 
     def __init__(
@@ -169,7 +175,6 @@ class TaskAttempt:
             report_state: Callback to report task state changes to Worker
             poll_interval_seconds: How often to poll container status
         """
-        self._config = config
         self._bundle_provider = bundle_provider
         self._image_provider = image_provider
         self._runtime = container_runtime
