@@ -28,6 +28,12 @@ def pytest_addoption(parser):
         default=False,
         help="Use real Docker containers instead of in-process mocks",
     )
+    parser.addoption(
+        "--update-snapshots",
+        action="store_true",
+        default=False,
+        help="Update golden snapshot files instead of comparing",
+    )
 
 
 @pytest.fixture(scope="session")

@@ -23,7 +23,7 @@ This script provides end-to-end validation of an Iris cluster:
 5. Cleans up on success/failure/interrupt
 
 Usage:
-    # Basic smoke test (logs to .agents/logs/smoke-test-{timestamp}/)
+    # Basic smoke test (logs to logs/smoke-test-{timestamp}/)
     uv run python scripts/smoke-test.py --config examples/eu-west4.yaml
 
     # With custom log directory
@@ -34,7 +34,7 @@ Usage:
     uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --timeout 2700
 
     # Keep cluster running on failure for debugging
-    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --no-cleanup-on-failure
+    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --no-cleanup
 """
 
 import logging
@@ -445,7 +445,7 @@ class SmokeTestConfig:
     timeout_seconds: int = 1800  # 30 min total
     job_timeout_seconds: int = DEFAULT_JOB_TIMEOUT
     tpu_type: str = "v5litepod-16"
-    cleanup_on_failure: bool = True
+    cleanup: bool = True
     clean_start: bool = True  # Delete existing resources before starting
     prefix: str | None = None  # Unique prefix for controller VM name (sets label_prefix in config)
     local: bool = False  # Run locally without GCP
@@ -594,18 +594,19 @@ class SmokeTestRunner:
                         if self._interrupted or self._check_deadline():
                             return False
 
-            # Connect to cluster and run tests
-            # In fast mode, we already started the cluster via reload()
-            # In normal mode, connect() will start it
-            if self.config.fast and not manager.is_local:
-                self.logger.section("Connecting to Cluster")
-                # For fast mode, we need to establish tunnel but not start/stop
-                with controller_tunnel(zone, project, label_prefix=self.config.label_prefix) as url:
-                    self._run_cluster_tests(url, manager, zone, project)
-            else:
-                # Normal mode: use connect() context manager
+            # Start cluster and run tests. We avoid connect() context manager
+            # because it always calls stop() on exit — we handle cleanup ourselves
+            # to support --no-cleanup.
+            if not self.config.fast:
                 self.logger.section("Starting Cluster")
-                with manager.connect() as url:
+                manager.start()
+
+            if manager.is_local:
+                url = f"http://localhost:{DEFAULT_CONTROLLER_PORT}"
+                self._run_cluster_tests(url, manager, zone, project)
+            else:
+                self.logger.section("Connecting to Cluster")
+                with controller_tunnel(zone, project, label_prefix=self.config.label_prefix) as url:
                     self._run_cluster_tests(url, manager, zone, project)
 
             # Results
@@ -995,11 +996,9 @@ class SmokeTestRunner:
             self.logger.log("Fast mode: keeping VMs running for next iteration")
             return
 
-        should_cleanup = self.config.cleanup_on_failure or all(r.passed for r in self._results)
-
-        if not should_cleanup:
-            self.logger.log("Skipping cleanup (--no-cleanup-on-failure and tests failed)")
-            self.logger.log("Controller VM left running for debugging")
+        if not self.config.cleanup:
+            self.logger.log("Skipping cleanup (--no-cleanup)")
+            self.logger.log("VMs left running for debugging or --fast iteration")
             return
 
         if self._manager:
@@ -1048,7 +1047,7 @@ class SmokeTestRunner:
 @click.option(
     "--log-dir",
     type=click.Path(path_type=Path),
-    help="Log directory path (default: .agents/logs/smoke-test-{timestamp})",
+    help="Log directory path (default: logs/smoke-test-{timestamp})",
 )
 @click.option(
     "--tpu-type",
@@ -1056,9 +1055,9 @@ class SmokeTestRunner:
     help="TPU type for test jobs (default: v5litepod-16)",
 )
 @click.option(
-    "--no-cleanup-on-failure",
+    "--no-cleanup",
     is_flag=True,
-    help="Keep cluster running on failure for debugging",
+    help="Skip cleanup, leaving VMs running for debugging or --fast iteration",
 )
 @click.option(
     "--no-clean-start",
@@ -1087,7 +1086,7 @@ def main(
     job_timeout_seconds: int,
     log_dir: Path | None,
     tpu_type: str,
-    no_cleanup_on_failure: bool,
+    no_cleanup: bool,
     no_clean_start: bool,
     prefix: str | None,
     local: bool,
@@ -1097,7 +1096,7 @@ def main(
 
     This script starts a cluster, submits TPU jobs to exercise autoscaling,
     and validates that everything works correctly. On completion (or failure),
-    the cluster is cleaned up unless --no-cleanup-on-failure is specified.
+    the cluster is cleaned up unless --no-cleanup is specified.
 
     Examples:
 
@@ -1115,12 +1114,12 @@ def main(
         uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --timeout 2700
 
         # Keep cluster running on failure for debugging
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --no-cleanup-on-failure
+        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --no-cleanup
     """
     # Create default log directory with timestamp if not provided
     if log_dir is None:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        log_dir = Path(".agents") / "logs" / f"smoke-test-{timestamp}"
+        log_dir = Path("logs") / f"smoke-test-{timestamp}"
 
     config = SmokeTestConfig(
         config_path=config_path,
@@ -1128,7 +1127,7 @@ def main(
         job_timeout_seconds=job_timeout_seconds,
         log_dir=log_dir,
         tpu_type=tpu_type,
-        cleanup_on_failure=not no_cleanup_on_failure,
+        cleanup=not no_cleanup,
         clean_start=not no_clean_start,
         prefix=prefix,
         local=local,
