@@ -65,6 +65,8 @@ def evaluate(config: EvaluationConfig) -> None:
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
             resource_config=config.resource_config,
+            processor_path=config.processor_path,
+            tokenizer_path=config.tokenizer_path,
         )
     else:
         evaluator.evaluate(
@@ -72,6 +74,8 @@ def evaluate(config: EvaluationConfig) -> None:
             evals=config.evals,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
+            processor_path=config.processor_path,
+            tokenizer_path=config.tokenizer_path,
         )
 
     logger.info(f"Done (total time: {time.time() - start_time} seconds)")

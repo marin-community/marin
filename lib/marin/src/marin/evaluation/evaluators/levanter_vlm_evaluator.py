@@ -62,6 +62,8 @@ class LevanterVLMEvaluator(LevanterTpuEvaluator):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        processor_path: str | None = None,
+        tokenizer_path: str | None = None,
     ) -> None:
         """Run VLM evaluation on the specified model.
 
@@ -71,6 +73,8 @@ class LevanterVLMEvaluator(LevanterTpuEvaluator):
             output_path: Path to save evaluation results
             max_eval_instances: Maximum number of examples per task
             wandb_tags: Optional tags for wandb logging
+            processor_path: Path to processor (HF hub ID or GCS path). If None, uses default.
+            tokenizer_path: Path to tokenizer (HF hub ID or GCS path). If None, uses default.
         """
         try:
             model_path = self.download_model_if_necessary(model)
@@ -78,6 +82,8 @@ class LevanterVLMEvaluator(LevanterTpuEvaluator):
 
             logger.info(f"WandB Run Name: {name}")
             logger.info(f"Running VLM eval on model: {model_path}")
+            logger.info(f"Processor path: {processor_path or '(default GCS path)'}")
+            logger.info(f"Tokenizer path: {tokenizer_path or '(default GCS path)'}")
 
             trainer_config = TrainerConfig(
                 tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
@@ -90,9 +96,12 @@ class LevanterVLMEvaluator(LevanterTpuEvaluator):
             task_spec = [e.name for e in evals]
             logger.info(f"VLM Tasks: {task_spec}")
 
+            # Build eval config with optional processor/tokenizer paths
+            # If not specified, EvalVLMConfig uses default GCS paths
             eval_config = EvalVLMConfig(
                 hf_checkpoint=model_path,
-                tokenizer_path=model_path,
+                processor_path=processor_path,  # None uses default GCS path
+                tokenizer_path=tokenizer_path,  # None uses default GCS path
                 trainer=trainer_config,
                 eval_harness=VLMEvalHarnessConfig(
                     task_spec=task_spec,

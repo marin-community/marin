@@ -194,6 +194,8 @@ def evaluate_levanter_vlm_evaluation_harness(
     resource_config: ResourceConfig,
     max_eval_instances: int | None = None,
     discover_latest_checkpoint: bool = True,
+    processor_path: str | None = None,
+    tokenizer_path: str | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate a VLM using Levanter VLM Evaluation Harness.
@@ -205,6 +207,8 @@ def evaluate_levanter_vlm_evaluation_harness(
         resource_config: TPU resource configuration
         max_eval_instances: Maximum number of examples per task
         discover_latest_checkpoint: Whether to discover latest checkpoint from path
+        processor_path: Path to processor (HF hub ID or GCS path). If None, uses default.
+        tokenizer_path: Path to tokenizer (HF hub ID or GCS path). If None, uses default.
     """
     logger.info(f"Running VLM evals on the following tasks: {evals}")
     return ExecutorStep(
@@ -220,6 +224,8 @@ def evaluate_levanter_vlm_evaluation_harness(
             max_eval_instances=versioned(max_eval_instances),
             resource_config=resource_config,
             launch_with_ray=True,
+            processor_path=processor_path,
+            tokenizer_path=tokenizer_path,
         ),
     )
 
@@ -230,6 +236,8 @@ def default_eval_vlm(
     evals: list[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
     discover_latest_checkpoint: bool = True,
+    processor_path: str | None = None,
+    tokenizer_path: str | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate a VLM model.
@@ -241,6 +249,8 @@ def default_eval_vlm(
               Defaults to mmmu_val if not specified
         max_eval_instances: Maximum number of examples per task
         discover_latest_checkpoint: Whether to discover latest checkpoint from path
+        processor_path: Path to processor (HF hub ID or GCS path). If None, uses default.
+        tokenizer_path: Path to tokenizer (HF hub ID or GCS path). If None, uses default.
 
     Returns:
         ExecutorStep configured for VLM evaluation
@@ -262,6 +272,8 @@ def default_eval_vlm(
         resource_config,
         max_eval_instances=max_eval_instances,
         discover_latest_checkpoint=discover_latest_checkpoint,
+        processor_path=processor_path,
+        tokenizer_path=tokenizer_path,
     )
 
 

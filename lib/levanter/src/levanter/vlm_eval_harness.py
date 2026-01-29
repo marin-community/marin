@@ -542,6 +542,19 @@ class LevanterVLMHarnessLM(TemplateLM):
                     bucket.append(sample_data)
                     self.sample_outputs[self._current_task] = bucket
 
+                    # Incremental log to wandb (every 10 samples)
+                    if len(bucket) % 10 == 0:
+                        try:
+                            levanter.tracker.log({
+                                f"vlm_eval/{self._current_task}/progress": len(bucket),
+                                f"vlm_eval/{self._current_task}/latest_prompt": sample_data.get("prompt", "")[:100],
+                                f"vlm_eval/{self._current_task}/latest_generation": text[:200],
+                                f"vlm_eval/{self._current_task}/latest_expected": sample_data.get("expected", "N/A"),
+                            }, step=len(bucket))
+                            logger.info(f"[{self._current_task}] Progress: {len(bucket)} samples evaluated")
+                        except Exception as e:
+                            logger.debug(f"Failed to log incremental progress: {e}")
+
         return results
 
     def loglikelihood(self, requests: List[Instance], disable_tqdm: bool = False) -> List[Tuple[float, bool]]:

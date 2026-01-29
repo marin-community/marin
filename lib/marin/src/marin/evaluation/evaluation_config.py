@@ -102,3 +102,15 @@ class EvaluationConfig:
     """
     Tags to add to the wandb run.
     """
+
+    processor_path: str | None = None
+    """
+    Path to the processor for VLM evaluation. Can be a HuggingFace hub ID or GCS path.
+    If None, uses the default GCS path for the processor.
+    """
+
+    tokenizer_path: str | None = None
+    """
+    Path to the tokenizer for VLM evaluation. Can be a HuggingFace hub ID or GCS path.
+    If None, uses the default GCS path for the tokenizer.
+    """

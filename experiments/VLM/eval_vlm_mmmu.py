@@ -30,6 +30,18 @@ Usage:
 
     # Custom TPU type
     TPU_TYPE="v5p-8" python experiments/VLM/eval_vlm_mmmu.py
+
+    # Custom processor and tokenizer paths
+    PROCESSOR_PATH="gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf" \\
+    TOKENIZER_PATH="Qwen/Qwen3-1.7B" \\
+    python experiments/VLM/eval_vlm_mmmu.py
+
+Environment Variables:
+    VLM_CHECKPOINT: Path to the model checkpoint (GCS or HuggingFace)
+    TPU_TYPE: TPU type to use (default: v5p-8)
+    MAX_EXAMPLES: Maximum examples per task (default: all)
+    PROCESSOR_PATH: Path to processor (GCS or HuggingFace hub ID, default: uses EvalVLMConfig default)
+    TOKENIZER_PATH: Path to tokenizer (GCS or HuggingFace hub ID, default: uses EvalVLMConfig default)
 """
 
 import os
@@ -89,6 +101,13 @@ CHECKPOINT = os.environ.get("VLM_CHECKPOINT", DEFAULT_CHECKPOINT)
 TPU_TYPE = os.environ.get("TPU_TYPE", "v5p-8")
 MAX_EXAMPLES = os.environ.get("MAX_EXAMPLES", None)
 
+# Processor and tokenizer paths (optional, uses defaults if not specified)
+# These can be HuggingFace hub IDs or GCS paths
+# e.g., PROCESSOR_PATH="gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf"
+# e.g., TOKENIZER_PATH="Qwen/Qwen3-1.7B" or "gs://marin-vlm/tokenizers/Qwen3-1.7B"
+PROCESSOR_PATH = os.environ.get("PROCESSOR_PATH", "gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf")
+TOKENIZER_PATH = os.environ.get("TOKENIZER_PATH", "gs://marin-vlm/tokenizers/Qwen3-1.7B")
+
 if MAX_EXAMPLES is not None:
     MAX_EXAMPLES = int(MAX_EXAMPLES)
 
@@ -110,6 +129,8 @@ def create_mmmu_eval_steps():
             evals=[EvalTaskConfig(task_name, 0)],  # 0-shot
             max_eval_instances=MAX_EXAMPLES,
             discover_latest_checkpoint=False,
+            processor_path=PROCESSOR_PATH,
+            tokenizer_path=TOKENIZER_PATH,
         )
         eval_steps.append(step)
 
@@ -128,6 +149,8 @@ if __name__ == "__main__":
     print(f"Checkpoint: {CHECKPOINT}")
     print(f"TPU Type: {TPU_TYPE}")
     print(f"Max Examples: {MAX_EXAMPLES or 'All'}")
+    print(f"Processor Path: {PROCESSOR_PATH or '(default GCS path)'}")
+    print(f"Tokenizer Path: {TOKENIZER_PATH or '(default GCS path)'}")
     print(f"Subjects: {len(MMMU_SUBJECTS)}")
     print("=" * 60)
 
