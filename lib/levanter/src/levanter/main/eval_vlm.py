@@ -77,7 +77,7 @@ DEFAULT_VISION_CONFIG = SiglipVisionConfig(
 
 # Language model: Qwen3-1.7B
 DEFAULT_TEXT_CONFIG = Qwen3Config(
-    max_seq_len=2048,
+    max_seq_len=4096,
     hidden_dim=2048,
     intermediate_dim=6144,
     num_heads=16,
@@ -145,7 +145,7 @@ class EvalVLMConfig:
     """HuggingFace tokenizer path."""
 
     # Evaluation length - matches model's max_seq_len
-    max_eval_length: int = 2048
+    max_eval_length: int = 4096
     """Maximum sequence length for evaluation."""
 
     # Image processing options - matches demo_vlm_train.py
