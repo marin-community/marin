@@ -97,6 +97,72 @@ class ClusterManager:
             self._controller = None
             logger.info("Controller stopped")
 
+    def reload(self) -> str:
+        """Reload cluster: redeploy containers on existing VMs.
+
+        Reloads controller and all workers by re-running bootstrap scripts
+        without recreating VMs. Much faster than stop/start cycle.
+
+        For GCP: SSHs into existing VMs and pulls new images, restarts containers.
+        For local: Equivalent to restart (no VMs to preserve).
+
+        Returns:
+            Controller address
+
+        Raises:
+            RuntimeError: If controller or worker VMs don't exist
+        """
+        # Reload controller
+        self._controller = create_controller(self._config)
+        address = self._controller.reload()
+        logger.info("Controller reloaded at %s", address)
+
+        # Reload workers (GCP only - local workers restart with controller)
+        if not self.is_local:
+            self._reload_workers()
+
+        return address
+
+    def _reload_workers(self) -> None:
+        """Reload all worker VMs by discovering and re-running bootstrap."""
+        from iris.cluster.vm.config import _create_manager_from_config
+        from iris.cluster.vm.managed_vm import TrackedVmFactory, VmRegistry
+
+        # Create temporary registry and factory for discovery
+        vm_registry = VmRegistry()
+        vm_factory = TrackedVmFactory(vm_registry)
+
+        logger.info("Reloading workers across %d scale group(s)", len(self._config.scale_groups))
+
+        for group_name in self._config.scale_groups:
+            logger.info("Processing scale group: %s", group_name)
+
+            # Create VmManager for this scale group
+            manager = _create_manager_from_config(
+                group_name=group_name,
+                cluster_config=self._config,
+                vm_factory=vm_factory,
+                dry_run=False,
+            )
+
+            # Discover existing VMs
+            vm_groups = manager.discover_vm_groups()
+
+            if not vm_groups:
+                logger.warning("No existing VMs found for scale group %s", group_name)
+                continue
+
+            logger.info("Found %d VM group(s) in %s", len(vm_groups), group_name)
+
+            # Reload each VM in each group
+            for group in vm_groups:
+                logger.info("Reloading VM group %s", group.group_id)
+                for vm in group.vms():
+                    vm.reload()
+                    logger.info("  ✓ Reloaded VM %s", vm.info.vm_id)
+
+        logger.info("Worker reload complete")
+
     @contextmanager
     def connect(self) -> Iterator[str]:
         """Start controller, yield a usable URL, stop on exit.
