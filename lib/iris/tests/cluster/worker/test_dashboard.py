@@ -259,10 +259,14 @@ def test_get_logs_with_tail_parameter(client, service):
     for i in range(100):
         task.logs.add("stdout", f"Log line {i}")
 
-    response = rpc_post(client, "FetchTaskLogs", {
-        "taskId": "task-tail",
-        "filter": {"startLine": -5},
-    })
+    response = rpc_post(
+        client,
+        "FetchTaskLogs",
+        {
+            "taskId": "task-tail",
+            "filter": {"startLine": -5},
+        },
+    )
     assert response.status_code == 200
     data = response.json()
     logs = data.get("logs", [])
@@ -299,8 +303,8 @@ def test_get_logs_with_source_filter(client, service):
     logs = data.get("logs", [])
     assert len(logs) == 4
 
-    stdout_logs = [l for l in logs if l["source"] == "stdout"]
-    stderr_logs = [l for l in logs if l["source"] == "stderr"]
+    stdout_logs = [entry for entry in logs if entry["source"] == "stdout"]
+    stderr_logs = [entry for entry in logs if entry["source"] == "stderr"]
     assert len(stdout_logs) == 2
     assert len(stderr_logs) == 2
 

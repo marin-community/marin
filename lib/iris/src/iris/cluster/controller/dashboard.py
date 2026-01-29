@@ -108,7 +108,10 @@ class ControllerDashboard:
             limit = 200
         records = self._log_buffer.query(prefix=prefix, limit=limit)
         return JSONResponse(
-            [{"timestamp": r.timestamp, "level": r.level, "logger_name": r.logger_name, "message": r.message} for r in records]
+            [
+                {"timestamp": r.timestamp, "level": r.level, "logger_name": r.logger_name, "message": r.message}
+                for r in records
+            ]
         )
 
     def _health(self, _request: Request) -> JSONResponse:
