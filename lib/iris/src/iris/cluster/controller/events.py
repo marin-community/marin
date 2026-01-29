@@ -94,6 +94,7 @@ class TaskStateChangedEvent(Event):
 
     task_id: TaskId
     new_state: int  # cluster_pb2.TaskState
+    attempt_id: int
     error: str | None = None
     exit_code: int | None = None
 

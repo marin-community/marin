@@ -98,6 +98,7 @@ def transition_task_to_running(state: ControllerState, task: ControllerTask) -> 
         TaskStateChangedEvent(
             task_id=task.task_id,
             new_state=cluster_pb2.TASK_STATE_RUNNING,
+            attempt_id=task.current_attempt_id,
         )
     )
 
@@ -1185,6 +1186,7 @@ def test_tpu_chips_released_after_task_completion(scheduler, state):
         TaskStateChangedEvent(
             task_id=tasks1[0].task_id,
             new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+            attempt_id=tasks1[0].current_attempt_id,
         )
     )
 

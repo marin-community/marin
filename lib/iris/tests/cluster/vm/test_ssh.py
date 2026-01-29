@@ -147,6 +147,7 @@ def test_run_streaming_with_retry_retries_on_connection_error(_mock_sleep):
     assert call_count[0] == 3
 
 
+@pytest.mark.slow  # Flaky in CI: background thread holds logging lock (gh#2551)
 @patch("iris.cluster.vm.ssh.time.sleep")
 def test_run_streaming_with_retry_raises_after_max_retries(_mock_sleep):
     """run_streaming_with_retry raises RuntimeError after max retries."""

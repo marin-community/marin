@@ -1086,6 +1086,7 @@ class ControllerState:
             cascade_event = TaskStateChangedEvent(
                 task_id=task_id,
                 new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                attempt_id=task.current_attempt_id,
                 error=f"Worker {event.worker_id} failed: {event.error or 'unknown'}",
             )
             self._on_task_state_changed(txn, cascade_event)
@@ -1149,6 +1150,7 @@ class ControllerState:
             cascade_event = TaskStateChangedEvent(
                 task_id=task_id,
                 new_state=cluster_pb2.TASK_STATE_KILLED,
+                attempt_id=task.current_attempt_id,
                 error=event.reason,
             )
             self._on_task_state_changed(txn, cascade_event)
@@ -1194,6 +1196,34 @@ class ControllerState:
         state transition logic including retry budget management.
         """
         task = self._tasks[event.task_id]
+
+        # Validate attempt_id matches the current attempt
+        if event.attempt_id != task.current_attempt_id:
+            stale_attempt = task.attempts[event.attempt_id] if 0 <= event.attempt_id < len(task.attempts) else None
+            if stale_attempt and not stale_attempt.is_terminal():
+                logger.error(
+                    "Stale attempt precondition violation: task=%s received attempt=%d "
+                    "but current is %d and stale attempt state is %s (not terminal)",
+                    event.task_id,
+                    event.attempt_id,
+                    task.current_attempt_id,
+                    stale_attempt.state,
+                )
+            else:
+                logger.warning(
+                    "Ignoring stale task state report: task=%s attempt=%d current=%d",
+                    event.task_id,
+                    event.attempt_id,
+                    task.current_attempt_id,
+                )
+            txn.log(
+                "stale_attempt_ignored",
+                event.task_id,
+                reported_attempt=event.attempt_id,
+                current_attempt=task.current_attempt_id,
+            )
+            return
+
         job = self._jobs[task.job_id]
         old_state = task.state
 
