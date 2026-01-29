@@ -21,11 +21,7 @@ import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
 from iris.cluster.types import ResourceSpec, CoschedulingConfig
-from .conftest import submit, wait
-
-
-def _quick():
-    return 1
+from .conftest import submit, wait, _quick
 
 
 def test_bundle_download_intermittent(cluster):

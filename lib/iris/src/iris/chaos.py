@@ -20,7 +20,7 @@ Usage:
     enable_chaos("controller.dispatch", failure_rate=0.3)
 
     # Site decides what to do:
-    if chaos("controller.dispatch"):
+    if chaos("controller.dispatch") is not None:
         raise Exception("chaos: dispatch failed")
 
     # Or use helper for simple raise cases:
@@ -44,17 +44,17 @@ class ChaosRule:
     _failure_count: int = field(default=0, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def should_fire(self) -> bool:
+    def try_fire(self) -> bool:
+        """Atomically check and increment the failure counter."""
         with self._lock:
             if self.max_failures is not None and self._failure_count >= self.max_failures:
                 return False
-            return random.random() < self.failure_rate
-
-    def fire(self) -> None:
-        with self._lock:
+            if random.random() >= self.failure_rate:
+                return False
             self._failure_count += 1
         if self.delay_seconds > 0:
             time.sleep(self.delay_seconds)
+        return True
 
 
 _rules: dict[str, ChaosRule] = {}
@@ -75,28 +75,24 @@ def enable_chaos(
     )
 
 
-def chaos(key: str) -> bool:
+def chaos(key: str) -> ChaosRule | None:
     """Check if chaos should fire for this key.
 
-    Returns True if chaos is active and fires, False otherwise.
-    Injection sites decide what to do with the signal.
+    Returns the fired rule, or None. Injection sites decide what to do.
     """
     rule = _rules.get(key)
     if rule is None:
-        return False
-    if rule.should_fire():
-        rule.fire()  # increment counter, apply delay
-        return True
-    return False
+        return None
+    if rule.try_fire():
+        return rule
+    return None
 
 
 def chaos_raise(key: str) -> None:
     """Convenience: raise an exception if chaos fires for this key."""
-    if chaos(key):
-        rule = _rules[key]
-        if rule.error:
-            raise rule.error
-        raise RuntimeError(f"chaos: {key}")
+    rule = chaos(key)
+    if rule is not None:
+        raise rule.error or RuntimeError(f"chaos: {key}")
 
 
 def reset_chaos() -> None:

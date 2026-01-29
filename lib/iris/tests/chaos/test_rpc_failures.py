@@ -19,19 +19,10 @@ Tests that Iris handles RPC failures gracefully:
 - Heartbeat timeout (60s)
 - Heartbeat reconciliation (running_task_ids)
 """
-import time
 import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
-from .conftest import submit, wait
-
-
-def _quick():
-    return 1
-
-
-def _slow():
-    time.sleep(120)
+from .conftest import submit, wait, _quick, _slow
 
 
 def test_dispatch_intermittent_failure(cluster):

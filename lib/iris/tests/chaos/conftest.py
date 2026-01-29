@@ -27,6 +27,17 @@ from .chronos import VirtualClock
 IRIS_ROOT = Path(__file__).resolve().parents[2]  # lib/iris (from tests/chaos/conftest.py -> tests -> lib/iris)
 DEFAULT_CONFIG = IRIS_ROOT / "examples" / "demo.yaml"
 
+
+def _quick():
+    return 1
+
+
+def _slow():
+    import time
+
+    time.sleep(120)
+
+
 TERMINAL_STATES = {
     cluster_pb2.JOB_STATE_SUCCEEDED,
     cluster_pb2.JOB_STATE_FAILED,
@@ -81,7 +92,7 @@ def wait(client, job, timeout=60, chronos=None):
     If chronos is provided, uses virtual time.
     Otherwise uses real time.sleep().
     """
-    if chronos:
+    if chronos is not None:
         # Virtual time: tick until job completes or timeout
         start_time = chronos.time()
         while chronos.time() - start_time < timeout:

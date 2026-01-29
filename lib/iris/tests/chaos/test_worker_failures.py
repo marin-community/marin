@@ -20,17 +20,7 @@ All chaos is injected inline in worker.py.
 import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
-from .conftest import submit, wait
-
-
-def _quick():
-    return 1
-
-
-def _slow():
-    import time
-
-    time.sleep(120)
+from .conftest import submit, wait, _quick, _slow
 
 
 def test_worker_crash_mid_task(cluster):

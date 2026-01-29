@@ -12,40 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import time
 from iris.rpc import cluster_pb2
-from iris.cluster.types import Entrypoint, ResourceSpec, EnvironmentSpec
-
-
-def _ok():
-    return 42
+from .conftest import submit, wait, _quick
 
 
 def test_smoke(cluster):
     _url, client = cluster
-
-    # Submit job
-    job = client.submit(
-        entrypoint=Entrypoint.from_callable(_ok),
-        name="chaos-smoke",
-        resources=ResourceSpec(cpu=1, memory="1g"),
-        environment=EnvironmentSpec(),
-    )
-
-    # Wait for completion
-    terminal_states = {
-        cluster_pb2.JOB_STATE_SUCCEEDED,
-        cluster_pb2.JOB_STATE_FAILED,
-        cluster_pb2.JOB_STATE_KILLED,
-        cluster_pb2.JOB_STATE_WORKER_FAILED,
-    }
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        status = client.status(str(job.job_id))
-        if status.state in terminal_states:
-            break
-        time.sleep(0.5)
-    else:
-        status = client.status(str(job.job_id))
-
+    job = submit(client, _quick, "chaos-smoke")
+    status = wait(client, job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
