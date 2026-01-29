@@ -436,6 +436,107 @@ dclm_real_train_tokenized = tokenize_data_efficiency_dataset(
     "a982851",
 )
 
+# new wrap baselines (cpr2)
+
+
+wrap_icpt_back_cpr2_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_icpt_back_cpr2",
+    "konwoo/wicpt_back_cpr2",
+    "13255ab",
+)
+
+wrap_icpt_back_cpr2_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_icpt_back_cpr2_shuffled",
+    "konwoo/wicpt_back_cpr2-shuffled",
+    "f60f0bc",
+)
+
+wrap_icpt_front_cpr2_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_icpt_front_cpr2",
+    "konwoo/wicpt_front_cpr2",
+    "27b0c4e",
+)
+
+# paired wrap baselines 
+
+
+paired_wrap_back_cpr4_tokenized = tokenize_data_efficiency_dataset(
+    "fixed_paired_wrap_back_cpr4",
+    "konwoo/wicpt_paired_cpr4",
+    "224f4a6",
+)
+
+paired_wrap_back_cpr4_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "fixed_paired_wrap_back_cpr4_shuffled",
+    "konwoo/wicpt_paired_cpr4-shuffled",
+    "bf3d61a",
+)
+
+# wrap synthetic data scaling 
+
+wrap_back_cpr16_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_back_cpr16",
+    "konwoo/wicpt_back_cpr16",
+    "ee2b717",
+)
+
+wrap_back_cpr16_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_back_cpr16_shuffled",
+    "konwoo/wicpt_back_cpr16-shuffled",
+    "d2f2836",
+)
+
+wrap_back_cpr8_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_back_cpr8",
+    "konwoo/wicpt_back_cpr8",
+    "832b978",
+)
+
+wrap_back_cpr8_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_back_cpr8_shuffled",
+    "konwoo/wicpt_back_cpr8-shuffled",
+    "dbff3f8",
+)
+
+wrap_back_cpr4_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_back_cpr4",
+    "konwoo/wicpt_back_cpr4",
+    "a5e6a79",
+)
+
+wrap_back_cpr4_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_back_cpr4_shuffled",
+    "konwoo/wicpt_back_cpr4-shuffled",
+    "07ac50c",
+)
+
+wrap_back_cpr2_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_back_cpr2_new",
+    "konwoo/wicpt_back_cpr2_new",
+    "17b865a",
+)
+
+wrap_back_cpr2_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_back_cpr2_new_shuffled",
+    "konwoo/wicpt_back_cpr2_new-shuffled",
+    "e2a0dc5",
+)
+
+### no doc
+
+wrap_nodoc_cpr8_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_nodoc_cpr8",
+    "konwoo/wicpt_cpr8_nodoc",
+    "bc6c2b3",
+)
+
+wrap_nodoc_cpr8_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "wrap_nodoc_cpr8_shuffled",
+    "konwoo/wicpt_cpr8_nodoc-shuffled",
+    "f73340b",
+)
+
+
 data_dict = {
     "dclm": dclm_tokenized,
     "sd0715": sd0715_tokenized,
@@ -513,4 +614,23 @@ data_dict = {
     "hqs": hq_cpr4_shuffled_tokenized,
     "w4": wrap_icpt_cpr4_real_tokenized,
     "w4s": wrap_icpt_cpr4_shuffled_tokenized,
+    # new wrap baselines (cpr2)
+    "w2": wrap_icpt_back_cpr2_tokenized, 
+    "w2s": wrap_icpt_back_cpr2_shuffled_tokenized,
+    "w2f": wrap_icpt_front_cpr2_tokenized,
+    # paired wrap baselines (cpr4)
+    "p4b": paired_wrap_back_cpr4_tokenized,
+    "p4s": paired_wrap_back_cpr4_shuffled_tokenized,
+    # cpr 16 (and synth data scaling)
+    "b16": wrap_back_cpr16_tokenized,
+    "s16": wrap_back_cpr16_shuffled_tokenized,
+    "b8": wrap_back_cpr8_tokenized,
+    "s8": wrap_back_cpr8_shuffled_tokenized,
+    "b4": wrap_back_cpr4_tokenized,
+    "s4": wrap_back_cpr4_shuffled_tokenized,
+    "b2": wrap_back_cpr2_tokenized,
+    "s2": wrap_back_cpr2_shuffled_tokenized,
+    # nodoc baselines
+    "n8": wrap_nodoc_cpr8_tokenized,
+    "n8s": wrap_nodoc_cpr8_shuffled_tokenized,
 }

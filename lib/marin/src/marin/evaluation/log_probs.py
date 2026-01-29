@@ -17,6 +17,7 @@ This file uses Levanter to compute validation losses and entropies.
 """
 
 import dataclasses
+import hashlib
 import os
 import shutil
 from dataclasses import dataclass
@@ -40,6 +41,12 @@ from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"
 GCSFUSE_MOUNT_POINT = "/opt/gcsfuse_mount"
+
+
+def _wandb_id(name: str) -> str:
+    digest = hashlib.md5(name.encode()).hexdigest()[:8]
+    base = name[-52:] if len(name) > 52 else name
+    return f"{base}-{digest}"
 
 
 @dataclass
@@ -245,7 +252,7 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
         model=config.model,
         data=config.datasets,
         trainer=TrainerConfig(
-            tracker=WandbConfig(project="suhas-eval-data-efficiency", tags=wandb_tags, name=name, id=name[:64]),
+            tracker=WandbConfig(project="suhas-eval-data-efficiency", tags=wandb_tags, name=name, id=_wandb_id(name)),
             # tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
             ray=RayConfig(auto_start_cluster=False),
             per_device_eval_parallelism=config.per_device_batch_size,
@@ -290,7 +297,12 @@ def evaluate_ensemble_log_probs(config: EvalEnsembleLmConfig) -> None:
         model=config.model,
         data=config.datasets,
         trainer=TrainerConfig(
-            tracker=WandbConfig(project="suhas-eval-data-efficiency", tags=["eval_lm"] + [config.key] if config.key else [], name=name, id=name[:64]),
+            tracker=WandbConfig(
+                project="suhas-eval-data-efficiency",
+                tags=["eval_lm"] + [config.key] if config.key else [],
+                name=name,
+                id=_wandb_id(name),
+            ),
             ray=RayConfig(auto_start_cluster=False),
             per_device_eval_parallelism=config.per_device_batch_size,
             max_eval_batches=max_eval_batches,
