@@ -31,7 +31,6 @@ from iris.cluster.worker.env_probe import DefaultEnvironmentProvider, Environmen
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
-from iris.cluster.worker.worker_types import Task
 from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
@@ -97,7 +96,7 @@ class Worker:
         self._worker_metadata = self._environment_provider.probe()
 
         # Task state
-        self._tasks: dict[str, Task] = {}
+        self._tasks: dict[str, TaskAttempt] = {}
         self._lock = threading.Lock()
 
         self._service = WorkerServiceImpl(self, log_buffer=get_global_buffer())
@@ -317,7 +316,7 @@ class Worker:
 
         logger.info("Worker state reset complete")
 
-    def _report_task_state(self, task: Task) -> None:
+    def _report_task_state(self, task: TaskAttempt) -> None:
         """Report task state to controller."""
         if not self._controller_client or not self._worker_id:
             return
@@ -391,20 +390,20 @@ class Worker:
         )
 
         with self._lock:
-            self._tasks[task_id] = attempt.task
+            self._tasks[task_id] = attempt
 
         # Start execution in background
         thread = threading.Thread(target=attempt.run, daemon=True)
-        attempt.task.thread = thread
+        attempt.thread = thread
         thread.start()
 
         return task_id
 
-    def get_task(self, task_id: str) -> Task | None:
+    def get_task(self, task_id: str) -> TaskAttempt | None:
         """Get a task by ID."""
         return self._tasks.get(task_id)
 
-    def list_tasks(self) -> list[Task]:
+    def list_tasks(self) -> list[TaskAttempt]:
         """List all tasks."""
         return list(self._tasks.values())
 
