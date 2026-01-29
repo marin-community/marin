@@ -45,15 +45,17 @@ class ChaosRule:
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def try_fire(self) -> bool:
-        """Atomically check and increment the failure counter."""
+        """Atomically check and increment the failure counter.
+
+        Returns True if chaos should fire, False otherwise.
+        Does NOT sleep - call sites must explicitly handle delay_seconds.
+        """
         with self._lock:
             if self.max_failures is not None and self._failure_count >= self.max_failures:
                 return False
             if random.random() >= self.failure_rate:
                 return False
             self._failure_count += 1
-        if self.delay_seconds > 0:
-            time.sleep(self.delay_seconds)
         return True
 
 
@@ -78,7 +80,12 @@ def enable_chaos(
 def chaos(key: str) -> ChaosRule | None:
     """Check if chaos should fire for this key.
 
-    Returns the fired rule, or None. Injection sites decide what to do.
+    Returns the fired rule (with delay_seconds, error, etc.), or None.
+    Call sites must explicitly handle delay_seconds and error.
+    No side effects - use walrus operator pattern:
+
+        if rule := chaos("worker.building_delay"):
+            time.sleep(rule.delay_seconds)
     """
     rule = _rules.get(key)
     if rule is None:
@@ -89,9 +96,12 @@ def chaos(key: str) -> ChaosRule | None:
 
 
 def chaos_raise(key: str) -> None:
-    """Convenience: raise an exception if chaos fires for this key."""
-    rule = chaos(key)
-    if rule is not None:
+    """Convenience: raise an exception if chaos fires for this key.
+
+    Handles delay_seconds before raising.
+    """
+    if rule := chaos(key):
+        time.sleep(rule.delay_seconds)
         raise rule.error or RuntimeError(f"chaos: {key}")
 
 
