@@ -80,12 +80,14 @@ echo "[iris-init] Probing TPU metadata..."
 METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
 METADATA_HEADER="Metadata-Flavor: Google"
 
-# Derive TPU slice name from instance name by stripping -w{{N}} suffix.
+# Derive TPU slice name from instance name by stripping worker suffix.
+# Handles both -wN (original) and -w-N (GCP multi-host) formats.
 # Example: "iris-v5litepod_16-abc123-w0" -> "iris-v5litepod_16-abc123"
+# Example: "t1v-n-598bede5-w-0" -> "t1v-n-598bede5"
 INSTANCE_NAME=$(curl -sf -H "$METADATA_HEADER" \
     "http://metadata.google.internal/computeMetadata/v1/instance/name" 2>/dev/null || echo "")
 if [ -n "$INSTANCE_NAME" ]; then
-    export TPU_NAME=$(echo "$INSTANCE_NAME" | sed 's/-w[0-9]*$//')
+    export TPU_NAME=$(echo "$INSTANCE_NAME" | sed 's/-w-*[0-9]*$//')
 fi
 
 # Fetch accelerator-type as TPU_TYPE (e.g., v5litepod-16)
@@ -148,9 +150,8 @@ sudo docker pull {docker_image}
 
 echo "[iris-init] Phase: worker_start"
 
-# Stop existing worker if running (idempotent)
-sudo docker stop iris-worker 2>/dev/null || true
-sudo docker rm iris-worker 2>/dev/null || true
+# Force-remove existing worker (handles restart policy race)
+sudo docker rm -f iris-worker 2>/dev/null || true
 
 # Clean up ALL iris-managed task containers by label
 echo "[iris-init] Cleaning up iris task containers"
