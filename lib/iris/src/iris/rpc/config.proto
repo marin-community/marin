@@ -143,6 +143,16 @@ message ControllerVmConfig {
 }
 
 // ============================================================================
+// AUTOSCALER CONFIGURATION
+// ============================================================================
+
+// Configuration for the autoscaler
+message AutoscalerConfig {
+  float evaluation_interval_seconds = 1;  // Default: 10.0
+  float requesting_timeout_seconds = 2;   // Default: 120.0
+}
+
+// ============================================================================
 // ROOT CLUSTER CONFIGURATION
 // ============================================================================
 
@@ -169,4 +179,5 @@ message IrisClusterConfig {
   BootstrapConfig bootstrap = 80;
   TimeoutConfig timeouts = 81;
   SshConfig ssh = 82;
+  AutoscalerConfig autoscaler = 83;
 }
