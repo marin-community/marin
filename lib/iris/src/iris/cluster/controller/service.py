@@ -736,22 +736,22 @@ class ControllerServiceImpl:
                 )
         return cluster_pb2.Controller.GetTransactionsResponse(actions=actions)
 
-    # --- Controller Logs ---
+    # --- Process Logs ---
 
-    def get_controller_logs(
+    def get_process_logs(
         self,
-        request: cluster_pb2.Controller.GetControllerLogsRequest,
+        request: cluster_pb2.Controller.GetProcessLogsRequest,
         ctx: Any,
-    ) -> cluster_pb2.Controller.GetControllerLogsResponse:
+    ) -> cluster_pb2.Controller.GetProcessLogsResponse:
         """Get controller process logs from the in-memory ring buffer."""
         if not self._log_buffer:
-            return cluster_pb2.Controller.GetControllerLogsResponse(records=[])
+            return cluster_pb2.Controller.GetProcessLogsResponse(records=[])
         prefix = request.prefix or None
         limit = request.limit if request.limit > 0 else 200
         records = self._log_buffer.query(prefix=prefix, limit=limit)
-        return cluster_pb2.Controller.GetControllerLogsResponse(
+        return cluster_pb2.Controller.GetProcessLogsResponse(
             records=[
-                cluster_pb2.Controller.ControllerLogRecord(
+                cluster_pb2.ProcessLogRecord(
                     timestamp=r.timestamp,
                     level=r.level,
                     logger_name=r.logger_name,

@@ -73,6 +73,18 @@ class Empty(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class ProcessLogRecord(_message.Message):
+    __slots__ = ("timestamp", "level", "logger_name", "message")
+    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
+    LEVEL_FIELD_NUMBER: _ClassVar[int]
+    LOGGER_NAME_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    timestamp: float
+    level: str
+    logger_name: str
+    message: str
+    def __init__(self, timestamp: _Optional[float] = ..., level: _Optional[str] = ..., logger_name: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
+
 class TaskStatus(_message.Message):
     __slots__ = ("task_id", "job_id", "task_index", "state", "worker_id", "worker_address", "exit_code", "error", "started_at_ms", "finished_at_ms", "ports", "resource_usage", "build_metrics", "current_attempt_id", "attempts", "pending_reason", "can_be_scheduled")
     class PortsEntry(_message.Message):
@@ -684,29 +696,18 @@ class Controller(_message.Message):
         logs: _containers.RepeatedCompositeFieldContainer[Worker.LogEntry]
         worker_address: str
         def __init__(self, logs: _Optional[_Iterable[_Union[Worker.LogEntry, _Mapping]]] = ..., worker_address: _Optional[str] = ...) -> None: ...
-    class GetControllerLogsRequest(_message.Message):
+    class GetProcessLogsRequest(_message.Message):
         __slots__ = ("prefix", "limit")
         PREFIX_FIELD_NUMBER: _ClassVar[int]
         LIMIT_FIELD_NUMBER: _ClassVar[int]
         prefix: str
         limit: int
         def __init__(self, prefix: _Optional[str] = ..., limit: _Optional[int] = ...) -> None: ...
-    class ControllerLogRecord(_message.Message):
-        __slots__ = ("timestamp", "level", "logger_name", "message")
-        TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
-        LEVEL_FIELD_NUMBER: _ClassVar[int]
-        LOGGER_NAME_FIELD_NUMBER: _ClassVar[int]
-        MESSAGE_FIELD_NUMBER: _ClassVar[int]
-        timestamp: float
-        level: str
-        logger_name: str
-        message: str
-        def __init__(self, timestamp: _Optional[float] = ..., level: _Optional[str] = ..., logger_name: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
-    class GetControllerLogsResponse(_message.Message):
+    class GetProcessLogsResponse(_message.Message):
         __slots__ = ("records",)
         RECORDS_FIELD_NUMBER: _ClassVar[int]
-        records: _containers.RepeatedCompositeFieldContainer[Controller.ControllerLogRecord]
-        def __init__(self, records: _Optional[_Iterable[_Union[Controller.ControllerLogRecord, _Mapping]]] = ...) -> None: ...
+        records: _containers.RepeatedCompositeFieldContainer[ProcessLogRecord]
+        def __init__(self, records: _Optional[_Iterable[_Union[ProcessLogRecord, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...
 
 class Worker(_message.Message):
@@ -808,4 +809,16 @@ class Worker(_message.Message):
         uptime_ms: int
         running_tasks: int
         def __init__(self, healthy: _Optional[bool] = ..., uptime_ms: _Optional[int] = ..., running_tasks: _Optional[int] = ...) -> None: ...
+    class GetProcessLogsRequest(_message.Message):
+        __slots__ = ("prefix", "limit")
+        PREFIX_FIELD_NUMBER: _ClassVar[int]
+        LIMIT_FIELD_NUMBER: _ClassVar[int]
+        prefix: str
+        limit: int
+        def __init__(self, prefix: _Optional[str] = ..., limit: _Optional[int] = ...) -> None: ...
+    class GetProcessLogsResponse(_message.Message):
+        __slots__ = ("records",)
+        RECORDS_FIELD_NUMBER: _ClassVar[int]
+        records: _containers.RepeatedCompositeFieldContainer[ProcessLogRecord]
+        def __init__(self, records: _Optional[_Iterable[_Union[ProcessLogRecord, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...

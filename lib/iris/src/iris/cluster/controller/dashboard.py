@@ -92,7 +92,7 @@ class ControllerDashboard:
         return HTMLResponse(html_shell("VM Detail", "/static/controller/vm-detail.js"))
 
     def _logs_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Logs", "/static/shared/log-viewer.js"))
+        return HTMLResponse(html_shell("Iris Logs", "/static/controller/logs-page.js"))
 
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
