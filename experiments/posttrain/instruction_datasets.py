@@ -47,6 +47,7 @@ Current datasets:
 21. HuggingFaceH4/no_robots
 22. open-thoughts/OpenThoughts3-1.2M  # Note that this is the *original* OpenThoughts3 dataset; smoltalk2 has a slightly different version
 23. marin-community/OpenThoughts4-1.2M-Qwen3-32B  # Subsampled from full OT4 dataset annotated with Qwen3-32B
+24. open-r1/Mixture-of-Thoughts-Math  # Math subset of the Mixture-of-Thoughts dataset
 """
 
 import dataclasses
@@ -358,6 +359,15 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         adapter=multi_turn_adapter(),
         metadata_columns=["system", "source", "generated_token_count", "correct"],
         name="open-r1/OpenThoughts-114k-math",
+    ),
+    "open-r1/Mixture-of-Thoughts-Math": InstructionDatasetConfig(
+        hf_dataset_id="open-r1/Mixture-of-Thoughts",
+        revision="e55fa28",
+        adapter=multi_turn_adapter(),
+        metadata_columns=["num_tokens", "source"],
+        name="open-r1/Mixture-of-Thoughts-Math",
+        subsets=["math"],
+        splits=["train"],
     ),
     "bespokelabs/Bespoke-Stratos-17k": InstructionDatasetConfig(
         hf_dataset_id="bespokelabs/Bespoke-Stratos-17k",
