@@ -17,6 +17,7 @@
 import logging
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -251,7 +252,8 @@ class Worker:
             )
 
             try:
-                if chaos("worker.heartbeat"):
+                if rule := chaos("worker.heartbeat"):
+                    time.sleep(rule.delay_seconds)
                     logger.debug("chaos: skipping heartbeat")
                     continue
                 logger.debug("Registration attempt %d for worker %s", attempt, self._worker_id)
@@ -276,7 +278,8 @@ class Worker:
             if self._stop_heartbeat.is_set():
                 break
             try:
-                if chaos("worker.heartbeat"):
+                if rule := chaos("worker.heartbeat"):
+                    time.sleep(rule.delay_seconds)
                     logger.debug("chaos: skipping heartbeat")
                     continue
                 # Update active task IDs for each heartbeat
@@ -322,7 +325,8 @@ class Worker:
         if not self._controller_client or not self._worker_id:
             return
 
-        if chaos("worker.report_task_state"):
+        if rule := chaos("worker.report_task_state"):
+            time.sleep(rule.delay_seconds)
             logger.debug("chaos: skipping report_task_state")
             return
 
@@ -346,7 +350,8 @@ class Worker:
 
     def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str:
         """Submit a new task for execution."""
-        if chaos("worker.submit_task"):
+        if rule := chaos("worker.submit_task"):
+            time.sleep(rule.delay_seconds)
             raise RuntimeError("chaos: worker rejecting task")
         task_id = request.task_id
         job_id = request.job_id

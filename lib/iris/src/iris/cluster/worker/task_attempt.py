@@ -303,8 +303,8 @@ class TaskAttempt:
         chaos_raise("worker.bundle_download")
 
         # Chaos injection for testing delayed builds (for screenshot tests)
-        # This checks for a delay rule and sleeps if configured, without raising
-        chaos("worker.building_delay")
+        if rule := chaos("worker.building_delay"):
+            time.sleep(rule.delay_seconds)
 
         # Periodically check should_stop during download to support kill during BUILDING
         # (RF-3: For now, we defer kill handling until container starts, as bundle
@@ -469,7 +469,8 @@ class TaskAttempt:
         start_time = time.time()
 
         while True:
-            if chaos("worker.task_monitor"):
+            if rule := chaos("worker.task_monitor"):
+                time.sleep(rule.delay_seconds)
                 self.transition_to(cluster_pb2.TASK_STATE_FAILED, error="chaos: monitor crashed")
                 break
 

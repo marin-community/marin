@@ -529,7 +529,8 @@ class Controller:
                     f"Dispatching task {task.task_id} to worker {worker.worker_id} "
                     f"at {worker.address} (attempt {attempt + 1})"
                 )
-                if chaos("controller.dispatch"):
+                if rule := chaos("controller.dispatch"):
+                    time.sleep(rule.delay_seconds)
                     raise Exception("chaos: dispatch unavailable")
                 stub = self._stub_factory.get_stub(worker.address)
                 stub.run_task(request)
