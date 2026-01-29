@@ -8,8 +8,8 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
+from .tuned_block_sizes import infer_block_sizes
 from .reference import (
-    linear_softmax_cross_entropy_loss_reference,
     linear_softmax_cross_entropy_loss_streaming,
 )
 
@@ -25,14 +25,7 @@ def linear_softmax_cross_entropy_loss_xla(
     precision: jax.lax.PrecisionLike = None,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
     if block_sizes is None:
-        return linear_softmax_cross_entropy_loss_reference(
-            x,
-            labels,
-            w,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-        )
+        block_sizes = infer_block_sizes(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
     return linear_softmax_cross_entropy_loss_streaming(
         x,
         labels,

@@ -234,7 +234,7 @@ giraffe_long_mixture = dataclasses.replace(giraffe_long_mixture, tokenizer=marin
 # --------------------------
 # Model configs per phase
 # --------------------------
-llama_8b_4k = dataclasses.replace(llama_8b, cross_entropy_block_size=32000)
+llama_8b_4k = llama_8b
 
 llama_8b_32k = dataclasses.replace(
     llama_8b_4k, max_seq_len=32_768, rope=dataclasses.replace(llama_8b.rope, theta=1_500_000)  # type: ignore[arg-type]
@@ -244,7 +244,6 @@ llama_8b_64k = dataclasses.replace(
     llama_8b_4k,
     max_seq_len=65_536,
     rope=Llama3RotaryEmbeddingsConfig(theta=5_000_000),
-    cross_entropy_block_size=16384,
 )
 
 

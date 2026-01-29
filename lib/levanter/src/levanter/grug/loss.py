@@ -102,6 +102,7 @@ def fused_linear_softmax_cross_entropy_loss(
         _loss_shard,
         in_specs=(P(("data",)), P(None, None), P(("data",)), P(("data",))),
         out_specs=out_specs,
+        check_vma=False,
     )(hidden, lm_head, labels, weight_array)
 
 

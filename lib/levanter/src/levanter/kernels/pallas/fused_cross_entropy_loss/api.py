@@ -11,17 +11,21 @@ from jaxtyping import Array, Float, Int
 
 from .config import BlockSizes
 from .tuned_block_sizes import infer_block_sizes
+from .reference import linear_softmax_cross_entropy_loss_reference
 from .xla import linear_softmax_cross_entropy_loss_xla
 
 
-Implementation: TypeAlias = Literal["pallas_tpu", "xla"]
+Implementation: TypeAlias = Literal["pallas_tpu", "xla", "reference"]
 Reduction: TypeAlias = Literal["sum", "mean"] | None
 
 
 ArrayImpl = Callable[..., tuple[jax.Array, jax.Array]]
 
 
-IMPLEMENTATIONS: dict[str, ArrayImpl] = {"xla": linear_softmax_cross_entropy_loss_xla}
+IMPLEMENTATIONS: dict[str, ArrayImpl] = {
+    "reference": linear_softmax_cross_entropy_loss_reference,
+    "xla": linear_softmax_cross_entropy_loss_xla,
+}
 _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 
 try:

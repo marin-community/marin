@@ -51,15 +51,6 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
-    # Controls how we compute logsumexp over the vocab in `levanter.grug.loss_fn`.
-    #
-    # - `None` means "single full-vocab block" (often faster for small-ish models/vocabs).
-    # - Smaller values reduce peak memory, but can be significantly slower in practice.
-    #
-    # TODO(grug): Replace with a faster large-vocab CE kernel so we don't have to pick between
-    # speed and memory.
-    cross_entropy_block_size: int | None = 32768
-
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
         if self.num_heads % self.num_kv_heads != 0:
@@ -163,9 +154,12 @@ def init_parameters(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> GrugModelPara
 
 def rms_norm(x: Float[Array, "... D"], weight: Float[Array, "D"], eps: float) -> Float[Array, "... D"]:
     weight = unshard(weight)
+    dtype = x.dtype
+    x = x.astype(jnp.float32)
     variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
     normed = x * jax.lax.rsqrt(variance + eps)
-    return normed * weight
+    out = normed * weight
+    return out.astype(dtype)
 
 
 def mlp(block: GrugBlockParams, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
@@ -251,7 +245,7 @@ def loss_fn(
         params: Model parameters.
         token_ids: Integer array with shape (batch, seq).
         loss_weight: Float array with shape (batch, seq), typically 1 except last position (0).
-        cfg: Model config (uses `cfg.cross_entropy_block_size`).
+        cfg: Model config.
         mask: Optional attention mask spec.
         reduction: One of {"mean", "sum", "none"}.
         logsumexp_weight: Optional z-loss weight (logsumexp^2 term).
@@ -265,12 +259,6 @@ def loss_fn(
     labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
     loss_weight = loss_weight.astype(loss_dtype)
 
-    # NOTE: `block_size=None` corresponds to a single full-vocab block. On the 125M speedrun,
-    # disabling blockwise chunking doubled observed MFU (~20 -> ~40). We'll likely need a better
-    # large-vocab loss kernel eventually (esp. for sharded vocab / padding weights), but this is
-    # good enough for now.
-    block_size = cfg.cross_entropy_block_size
-
     return fused_linear_softmax_cross_entropy_loss(
         hidden,
         params.output_proj,
@@ -278,7 +266,6 @@ def loss_fn(
         weight=loss_weight,
         reduction=reduction,
         logsumexp_weight=logsumexp_weight,
-        block_size=block_size,
         dtype=loss_dtype,
     )
 
