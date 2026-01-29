@@ -334,11 +334,17 @@ class LevanterVLMHarnessLM(TemplateLM):
             max_length = self.EvalPos.size
             # Use vlm_batch_size for max_seqs to enable batched VLM inference
             max_seqs = max(1, self.vlm_batch_size)
+            # Set max_seqs_in_prefill to match max_seqs for true batched inference
+            max_seqs_in_prefill = max_seqs
+            # Ensure queued tokens can hold at least one full prompt per sequence
+            max_queued_tokens = max(512, max_seqs * 2)
             self._engine_config = InferenceEngineConfig(
                 max_stop_seqs=4,
                 max_stop_tokens=16,
                 max_seq_len=max_length,
                 max_seqs=max_seqs,
+                max_seqs_in_prefill=max_seqs_in_prefill,
+                max_queued_tokens=max_queued_tokens,
                 page_size=8,
                 compute_dtype=jnp.bfloat16,
                 hbm_utilization=0.5,

@@ -984,6 +984,7 @@ class LlavaOnevisionModel(eqx.Module):
         *,
         precomputed_combined_mask: Optional[NamedArray] = None,
         precomputed_position_ids: Optional[NamedArray] = None,
+        precomputed_image_features: Optional[NamedArray] = None,
         segment_ids: Optional[NamedArray] = None,
         image_segment_ids: Optional[NamedArray] = None,
         key=None,
@@ -1015,6 +1016,8 @@ class LlavaOnevisionModel(eqx.Module):
                           (batch, seq_len) int32 - if provided, skips GPU computation
             precomputed_position_ids: Optional precomputed position IDs from CPU data pipeline
                           (batch, seq_len) int32 - if provided, skips GPU computation
+            precomputed_image_features: Optional precomputed image features from batched vision encoder
+                          (batch, TOTAL_PATCHES, features_per_patch, embed) - if provided, skips vision encoder
             segment_ids: Optional segment IDs for packing (batch, seq_len)
                         Each token gets segment_id 0, 1, 2, ... or -1 for padding
             image_segment_ids: Optional segment IDs for patches (batch, max_patches)
@@ -1049,11 +1052,15 @@ class LlavaOnevisionModel(eqx.Module):
             return inputs_embeds, position_ids, validity_mask
 
         # Get image features: (batch, TOTAL_PATCHES, features_per_patch, embed)
-        image_features, grid_mask = self.get_image_features(
-            pixel_values=pixel_values,
-            grid_mask=grid_mask,
-            key=key,
-        )
+        # Use precomputed features if provided (for batched inference), otherwise compute
+        if precomputed_image_features is not None:
+            image_features = precomputed_image_features
+        else:
+            image_features, grid_mask = self.get_image_features(
+                pixel_values=pixel_values,
+                grid_mask=grid_mask,
+                key=key,
+            )
 
         # Get dimensions
         num_patches_ax = image_features.axes[1]
@@ -1374,6 +1381,7 @@ class _LlavaInferenceWrapper(eqx.Module):
     _grid_mask: NamedArray | None = None
     _unpad_indices: NamedArray | None = None
     _num_unpadded_features: int | None = eqx.field(static=True, default=None)
+    _precomputed_image_features: NamedArray | None = None  # For batched inference
 
     # Batch size for tracking (1 for single request, >1 for batched)
     _batch_size: int = eqx.field(static=True, default=1)
@@ -1385,6 +1393,18 @@ class _LlavaInferenceWrapper(eqx.Module):
     # Position offset for decode phase (static since it's computed from static fields)
     # This is the difference between the padded sequence length and the actual valid length
     _position_offset: int = eqx.field(static=True, default=0)
+
+    # Batched inference mode fields
+    # When _batched_mode is True, multiple requests are processed together
+    _batched_mode: bool = eqx.field(static=True, default=False)
+    # Stacked image features from all requests: (total_patches, features_per_patch, embed)
+    _batched_image_features: NamedArray | None = None
+    # Number of patches per segment (request), used to build image_segment_ids
+    _batched_num_patches_per_segment: tuple[int, ...] | None = eqx.field(static=True, default=None)
+    # Mapping from slot_id to segment index
+    _slot_to_segment_map: dict[int, int] | None = eqx.field(static=True, default=None)
+    # Input IDs per segment (slot_id → input_ids), for building segment_ids from token patterns
+    _batched_input_ids_per_slot: dict[int, NamedArray] | None = None
 
     @classmethod
     def create(
@@ -1424,6 +1444,7 @@ class _LlavaInferenceWrapper(eqx.Module):
         unpad_indices: Optional[NamedArray] = None,
         num_unpadded_features: Optional[int] = None,
         batch_size: int = 1,
+        precomputed_image_features: Optional[NamedArray] = None,
     ) -> "_LlavaInferenceWrapper":
         """Set the image data for the current request(s).
 
@@ -1440,6 +1461,8 @@ class _LlavaInferenceWrapper(eqx.Module):
             unpad_indices: Pre-computed indices to reorder features to HF's unpadded order
             num_unpadded_features: Actual number of unpadded features (before padding)
             batch_size: Number of requests in the batch (1 for single request)
+            precomputed_image_features: Optional pre-computed image features for batched inference
+                (batch, TOTAL_PATCHES, features_per_patch, embed) - skips vision encoder if provided
 
         Returns:
             A new wrapper with the request data set
@@ -1465,10 +1488,96 @@ class _LlavaInferenceWrapper(eqx.Module):
             _grid_mask=grid_mask,
             _unpad_indices=unpad_indices,
             _num_unpadded_features=num_unpadded_features,
+            _precomputed_image_features=precomputed_image_features,
             _batch_size=batch_size,
             _position_offset=position_offset,
             _cached_embeds=None,
             _cached_pos_ids=None,
+        )
+
+    def set_batched_request_data(
+        self,
+        requests: list,  # list of VLMRequest
+        slot_ids: list[int],
+    ) -> "_LlavaInferenceWrapper":
+        """Set data for multiple requests for batched inference.
+
+        This enables true data parallelism where multiple requests are processed
+        together in a single prefill and decode loop.
+
+        Args:
+            requests: List of VLMRequest objects
+            slot_ids: List of slot IDs assigned by the engine to each request
+
+        Returns:
+            A new wrapper configured for batched inference
+        """
+        if len(requests) != len(slot_ids):
+            raise ValueError("Number of requests must match number of slot_ids")
+
+        if len(requests) == 0:
+            raise ValueError("At least one request is required")
+
+        # Pre-compute image features for all requests in one batched call
+        # Stack pixel_values and grid_masks from all requests
+        pixel_values_list = [req.pixel_values for req in requests]
+        grid_mask_list = [req.grid_mask for req in requests]
+
+        # Check shapes match for batching
+        first_shape = pixel_values_list[0].shape
+        if not all(pv.shape == first_shape for pv in pixel_values_list):
+            raise ValueError("All requests must have the same pixel_values shape for batching")
+
+        # Stack along batch dimension
+        Batch = Axis("batch", len(requests))
+        stacked_pixel_values = hax.stack(Batch, pixel_values_list)
+        stacked_grid_mask = hax.stack(Batch, grid_mask_list)
+
+        # Compute image features for all requests at once
+        with hax.axis_mapping({}):
+            batched_features, _ = self.model.get_image_features(
+                pixel_values=stacked_pixel_values,
+                grid_mask=stacked_grid_mask,
+            )
+
+        # Flatten the batched features: (batch, patches, features_per_patch, embed) -> (total_patches, features_per_patch, embed)
+        # First get the shape info
+        num_requests = len(requests)
+        patches_per_request = batched_features.axis_size("TOTAL_PATCHES")
+        features_per_patch = batched_features.axis_size("features_per_patch")
+        embed_size = batched_features.axis_size("embed")
+
+        # Create axes for the flattened features
+        TotalPatches = Axis("TOTAL_PATCHES", num_requests * patches_per_request)
+        FeaturesPerPatch = Axis("features_per_patch", features_per_patch)
+        Embed = Axis("embed", embed_size)
+
+        # Reshape: (batch, patches, features_per_patch, embed) -> (total_patches, features_per_patch, embed)
+        flattened_features = batched_features.array.reshape(
+            num_requests * patches_per_request, features_per_patch, embed_size
+        )
+        flattened_features = hax.named(flattened_features, (TotalPatches, FeaturesPerPatch, Embed))
+
+        # Build slot_id to segment mapping (segment 0, 1, 2, ... based on order in requests)
+        slot_to_segment = {slot: i for i, slot in enumerate(slot_ids)}
+
+        # Count patches per segment (all same for now since shapes match)
+        num_patches_per_segment = tuple(
+            int(jnp.sum(gm.array).item()) for gm in grid_mask_list
+        )
+
+        # Store input_ids per slot for later use in decode()
+        input_ids_per_slot = {slot: req.input_ids for slot, req in zip(slot_ids, requests)}
+
+        return _LlavaInferenceWrapper(
+            model=self.model,
+            Vocab=self.Vocab,
+            _text_config=self._text_config,
+            _batched_mode=True,
+            _batched_image_features=flattened_features,
+            _batched_num_patches_per_segment=num_patches_per_segment,
+            _slot_to_segment_map=slot_to_segment,
+            _batched_input_ids_per_slot=input_ids_per_slot,
         )
 
     def _compute_embeddings(self) -> Tuple[NamedArray, NamedArray]:
@@ -1490,6 +1599,7 @@ class _LlavaInferenceWrapper(eqx.Module):
                 grid_mask=self._grid_mask,
                 unpad_indices=self._unpad_indices,
                 num_unpadded_features=self._num_unpadded_features,
+                precomputed_image_features=self._precomputed_image_features,
                 key=None,
             )
 
@@ -1499,6 +1609,110 @@ class _LlavaInferenceWrapper(eqx.Module):
             position_ids = position_ids["batch", 0]
 
         return merged_embeds, position_ids
+
+    def _compute_batched_embeddings(
+        self,
+        tokens: NamedArray,
+        batch_info,
+    ) -> NamedArray:
+        """Compute embeddings for batched mode with flat packed tokens.
+
+        This method handles multiple requests packed into a single flat array.
+        It computes per-token segment_ids from batch_info and merges image
+        features using segment-aware indexing.
+
+        Args:
+            tokens: Flat packed tokens with shape (position,)
+            batch_info: PageBatchInfo containing slot_ids, cu_q_lens, etc.
+
+        Returns:
+            merged_embeds: embeddings with image features merged at placeholder positions
+        """
+        if self._batched_image_features is None or self._slot_to_segment_map is None:
+            raise ValueError("Batched mode data not set. Call set_batched_request_data() first.")
+
+        lm = self.model.language_model
+        num_tokens = tokens.axis_size("position")
+
+        # 1. Get text embeddings for all packed tokens
+        text_embeds = lm.embeddings.embed(tokens)  # (position, embed)
+
+        # 2. Compute per-token segment_ids from batch_info
+        # batch_info.cu_q_lens: cumulative token counts [0, n0, n0+n1, ...]
+        cu_q_lens = batch_info.cu_q_lens.array  # (seq,)
+        num_seqs = batch_info.num_seqs
+
+        # For each position, find which sequence it belongs to
+        # segment_indices[i] = j means token i belongs to sequence j (not slot j!)
+        positions = jnp.arange(num_tokens)
+        # searchsorted gives index where position would be inserted to keep sorted order
+        # We use 'right' and subtract 1 to get the segment containing each position
+        segment_indices = jnp.searchsorted(cu_q_lens, positions, side='right') - 1
+        segment_indices = jnp.clip(segment_indices, 0, num_seqs - 1)
+
+        # segment_indices maps each token to its sequence index in the batch (0, 1, 2, ...)
+        # Since we assign slot_ids as 0, 1, 2, ... in the same order as requests,
+        # segment_indices directly corresponds to segment_ids for image feature mapping
+        segment_ids = segment_indices
+
+        # 3. Identify image placeholder tokens
+        image_token_id = self.model.config.image_token_index
+        is_image_token = tokens.array == image_token_id  # (position,)
+
+        # 4. Compute gather indices for image features
+        # For each image placeholder, compute which image feature to gather
+        # Using per-segment cumsum
+        features_per_patch = self._batched_image_features.axis_size("features_per_patch")
+
+        # Compute starting feature index for each segment
+        # segment_feature_starts[s] = sum of features in segments 0, 1, ..., s-1
+        num_patches_per_seg = jnp.array(self._batched_num_patches_per_segment)
+        features_per_seg = num_patches_per_seg * features_per_patch
+        segment_feature_starts = jnp.concatenate([
+            jnp.array([0]),
+            jnp.cumsum(features_per_seg[:-1])
+        ])
+
+        # Compute per-segment cumsum of image placeholders using scan
+        def segment_cumsum_fn(carry, x):
+            mask_val, seg_id = x
+            # carry is (count_per_segment,)
+            count = carry[seg_id]
+            new_carry = carry.at[seg_id].add(mask_val)
+            return new_carry, count
+
+        num_segments = len(self._batched_num_patches_per_segment)
+        init_counts = jnp.zeros(num_segments, dtype=jnp.int32)
+        _, within_seg_counts = jax.lax.scan(
+            segment_cumsum_fn,
+            init_counts,
+            (is_image_token.astype(jnp.int32), segment_ids)
+        )
+
+        # Compute final feature indices
+        # For each image placeholder at position i with segment s:
+        # feature_index = segment_feature_starts[s] + within_seg_counts[i]
+        segment_starts_per_token = segment_feature_starts[segment_ids]
+        feature_indices = segment_starts_per_token + within_seg_counts
+
+        # Clamp to valid range
+        total_features = self._batched_image_features.axis_size("TOTAL_PATCHES") * features_per_patch
+        feature_indices = jnp.clip(feature_indices, 0, total_features - 1)
+
+        # 5. Flatten image features to (total_features, embed)
+        # _batched_image_features: (total_patches, features_per_patch, embed)
+        total_patches = self._batched_image_features.axis_size("TOTAL_PATCHES")
+        embed_size = self._batched_image_features.axis_size("embed")
+        flat_features = self._batched_image_features.array.reshape(total_patches * features_per_patch, embed_size)
+
+        # 6. Gather image features at placeholder positions
+        gathered_features = flat_features[feature_indices]  # (position, embed)
+
+        # 7. Merge: replace image placeholders with image features
+        merged = jnp.where(is_image_token[:, None], gathered_features, text_embeds.array)
+        merged_embeds = hax.named(merged, text_embeds.axes)
+
+        return merged_embeds
 
     def initial_cache(self, spec, *, dtype):
         """Creates an initial paged KV cache for the language model."""
@@ -1522,19 +1736,30 @@ class _LlavaInferenceWrapper(eqx.Module):
         For VLM with masked tokens (e.g., anyres padding):
         - During prefill: Uses position IDs from _compute_embeddings() which skip masked tokens
         - During decode: Adjusts position IDs to account for skipped padding tokens
+
+        For batched inference (_batched_mode=True):
+        - During prefill: Uses _compute_batched_embeddings() which handles flat packed tokens
+        - During decode: Uses standard text embeddings
         """
         is_prefill = tokens.axis_size("position") > 1
         lm = self.model.language_model
 
         if is_prefill:
-            # Use position IDs from _compute_embeddings for proper RoPE with padding
-            embeds, computed_pos_ids = self._compute_embeddings()
-            pos_ids = computed_pos_ids
+            if self._batched_mode:
+                # Batched mode: compute embeddings for flat packed tokens
+                # Use the pos_ids passed by the engine (already correct per-sequence positions)
+                embeds = self._compute_batched_embeddings(tokens, batch_info)
+                # pos_ids stays as passed by the engine
+            else:
+                # Single request mode: use position IDs from _compute_embeddings for proper RoPE with padding
+                embeds, computed_pos_ids = self._compute_embeddings()
+                pos_ids = computed_pos_ids
         else:
             embeds = lm.embeddings.embed(tokens)
             # Adjust position IDs for decode phase to account for skipped padding
             # During prefill, we skip _position_offset padding tokens
             # So decode positions should be adjusted by the same amount
+            # Note: In batched mode, _position_offset is 0 so no adjustment needed
             if self._position_offset > 0:
                 pos_ids = hax.named(pos_ids.array - self._position_offset, pos_ids.axes)
 
@@ -1626,16 +1851,19 @@ class LlavaInferenceEngine:
 
         return cls(wrapper=wrapper, base_engine=base_engine)
 
-    def generate(self, requests: list[VLMRequest], step_callback=None):
+    def generate(self, requests: list[VLMRequest], step_callback=None, use_batched_inference: bool = True):
         """Generate tokens for a batch of VLMRequests.
 
-        This method processes each VLM request sequentially since each request
-        has different image data (pixel_values, grid_mask). The results are
-        merged into a single GenerationResult.
+        This method supports two modes:
+        1. True batched inference (use_batched_inference=True): All requests are processed
+           together in a single prefill and decode loop. This provides maximum parallelism.
+        2. Sequential inference (use_batched_inference=False): Each request is processed
+           separately, with vision encoder batching for image features.
 
         Args:
             requests: List of VLMRequest objects
             step_callback: Optional callback for each decode iteration
+            use_batched_inference: Whether to use true batched LLM inference (default True)
 
         Returns:
             GenerationResult with tokens, logprobs, and total_generated
@@ -1643,9 +1871,80 @@ class LlavaInferenceEngine:
         if not requests:
             raise ValueError("At least one request is required")
 
-        # Process each request sequentially (each has different image data)
+        # For single request, use the simpler sequential path
+        if len(requests) == 1:
+            return self._generate_sequential(requests, step_callback)
+
+        # Try true batched inference if enabled
+        if use_batched_inference:
+            result = self._try_batched_inference(requests, step_callback)
+            if result is not None:
+                return result
+            # Fall back to sequential if batched inference fails
+
+        # Sequential inference with vision encoder batching
+        return self._generate_sequential(requests, step_callback)
+
+    def _try_batched_inference(self, requests: list[VLMRequest], step_callback=None):
+        """Try to use true batched LLM inference for all requests.
+
+        Returns:
+            GenerationResult if successful, None if batching not possible
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            # Check that all requests have the same pixel_values shape
+            pixel_values_list = [req.pixel_values for req in requests]
+            first_shape = pixel_values_list[0].shape
+            if not all(pv.shape == first_shape for pv in pixel_values_list):
+                logger.info("Pixel values shapes don't match, falling back to sequential inference")
+                return None
+
+            # Assign slot IDs to requests (0, 1, 2, ...)
+            slot_ids = list(range(len(requests)))
+
+            # Set up batched mode on the wrapper
+            self._base_engine.model = self._wrapper.set_batched_request_data(requests, slot_ids)
+
+            # Convert VLMRequests to standard Requests for the base engine
+            standard_requests = [
+                Request(
+                    prompt_tokens=vlm_request.prompt_tokens,
+                    request_id=i,  # Use index as request_id for slot mapping
+                    decode_params=vlm_request.decode_params,
+                    n_generations=vlm_request.n_generations,
+                )
+                for i, vlm_request in enumerate(requests)
+            ]
+
+            # Generate using the base engine with all requests at once
+            result = self._base_engine.generate(standard_requests, step_callback=step_callback)
+
+            # Reset the engine state
+            self._base_engine.reset()
+
+            logger.info(f"Batched inference completed for {len(requests)} requests")
+            return result
+
+        except Exception as e:
+            logger.warning(f"Batched inference failed: {e}. Falling back to sequential.")
+            # Reset engine state in case of failure
+            self._base_engine.reset()
+            return None
+
+    def _generate_sequential(self, requests: list[VLMRequest], step_callback=None):
+        """Generate using sequential processing with vision encoder batching.
+
+        This is the fallback mode when true batched inference is not possible.
+        """
+        # Pre-compute image features for all requests in one batched call
+        precomputed_features = self._batch_compute_image_features(requests)
+
+        # Process each request sequentially (LLM generation)
         all_results = []
-        for vlm_request in requests:
+        for i, vlm_request in enumerate(requests):
             # Set the VLM data on the wrapper for this request
             self._base_engine.model = self._wrapper.set_request_data(
                 input_ids=vlm_request.input_ids,
@@ -1653,6 +1952,7 @@ class LlavaInferenceEngine:
                 grid_mask=vlm_request.grid_mask,
                 unpad_indices=vlm_request.unpad_indices,
                 num_unpadded_features=vlm_request.num_unpadded_features,
+                precomputed_image_features=precomputed_features[i] if precomputed_features else None,
             )
 
             # Convert VLMRequest to standard Request for the base engine
@@ -1675,6 +1975,65 @@ class LlavaInferenceEngine:
             return all_results[0]
 
         return self._merge_generation_results(all_results)
+
+    def _batch_compute_image_features(self, requests: list[VLMRequest]) -> list[NamedArray] | None:
+        """Pre-compute image features for all requests in a single batched forward pass.
+
+        This batches all requests' pixel_values together and runs them through the
+        vision encoder once, which is much faster than processing them one by one.
+
+        Args:
+            requests: List of VLMRequest objects
+
+        Returns:
+            List of image features, one per request (each with shape TOTAL_PATCHES, features_per_patch, embed)
+            Returns None if batching is not possible (e.g., mismatched shapes)
+        """
+        if len(requests) <= 1:
+            # No benefit from batching single request
+            return None
+
+        try:
+            # Stack pixel_values from all requests: (num_requests, TOTAL_PATCHES, C, H, W)
+            pixel_values_list = [req.pixel_values for req in requests]
+            grid_mask_list = [req.grid_mask for req in requests]
+
+            # Check that all requests have the same shape
+            first_shape = pixel_values_list[0].shape
+            if not all(pv.shape == first_shape for pv in pixel_values_list):
+                # Shapes don't match, can't batch
+                return None
+
+            # Stack along a new batch dimension
+            Batch = Axis("batch", len(requests))
+            stacked_pixel_values = hax.stack(Batch, pixel_values_list)
+            stacked_grid_mask = hax.stack(Batch, grid_mask_list)
+
+            # Compute image features for all requests at once
+            # Use empty axis_mapping to avoid sharding issues
+            with hax.axis_mapping({}):
+                batched_features, _ = self._wrapper.model.get_image_features(
+                    pixel_values=stacked_pixel_values,
+                    grid_mask=stacked_grid_mask,
+                )
+
+            # Split back into individual features
+            # batched_features: (batch, TOTAL_PATCHES, features_per_patch, embed)
+            # Keep batch dimension (size 1) for each feature to match _merge_embeddings expectations
+            Batch1 = Axis("batch", 1)
+            features_list = []
+            for i in range(len(requests)):
+                single_feature = batched_features["batch", i]  # (TOTAL_PATCHES, features_per_patch, embed)
+                # Add batch dimension back with size 1 using broadcast_axis
+                single_feature_batched = hax.broadcast_axis(single_feature, Batch1)
+                features_list.append(single_feature_batched)
+            return features_list
+
+        except Exception as e:
+            # If batching fails for any reason, fall back to sequential processing
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to batch image features: {e}. Falling back to sequential.")
+            return None
 
     def _merge_generation_results(self, results: list):
         """Merge multiple GenerationResults into one.
