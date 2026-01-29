@@ -1520,15 +1520,24 @@ class _LlavaInferenceWrapper(eqx.Module):
 
         # Pre-compute image features for all requests in one batched call
         # Stack pixel_values and grid_masks from all requests
-        pixel_values_list = [req.pixel_values for req in requests]
-        grid_mask_list = [req.grid_mask for req in requests]
+        # First, squeeze out any existing batch dimension (size 1) from each request
+        def squeeze_batch(arr):
+            """Remove batch dimension if it exists and has size 1."""
+            if arr is None:
+                return None
+            if "batch" in [ax.name for ax in arr.axes]:
+                return arr["batch", 0]
+            return arr
 
-        # Check shapes match for batching
+        pixel_values_list = [squeeze_batch(req.pixel_values) for req in requests]
+        grid_mask_list = [squeeze_batch(req.grid_mask) for req in requests]
+
+        # Check shapes match for batching (after squeezing)
         first_shape = pixel_values_list[0].shape
         if not all(pv.shape == first_shape for pv in pixel_values_list):
             raise ValueError("All requests must have the same pixel_values shape for batching")
 
-        # Stack along batch dimension
+        # Stack along a new batch dimension
         Batch = Axis("batch", len(requests))
         stacked_pixel_values = hax.stack(Batch, pixel_values_list)
         stacked_grid_mask = hax.stack(Batch, grid_mask_list)
@@ -1995,10 +2004,19 @@ class LlavaInferenceEngine:
 
         try:
             # Stack pixel_values from all requests: (num_requests, TOTAL_PATCHES, C, H, W)
-            pixel_values_list = [req.pixel_values for req in requests]
-            grid_mask_list = [req.grid_mask for req in requests]
+            # First, squeeze out any existing batch dimension (size 1) from each request
+            def squeeze_batch(arr):
+                """Remove batch dimension if it exists and has size 1."""
+                if arr is None:
+                    return None
+                if "batch" in [ax.name for ax in arr.axes]:
+                    return arr["batch", 0]
+                return arr
 
-            # Check that all requests have the same shape
+            pixel_values_list = [squeeze_batch(req.pixel_values) for req in requests]
+            grid_mask_list = [squeeze_batch(req.grid_mask) for req in requests]
+
+            # Check that all requests have the same shape (after squeezing)
             first_shape = pixel_values_list[0].shape
             if not all(pv.shape == first_shape for pv in pixel_values_list):
                 # Shapes don't match, can't batch
