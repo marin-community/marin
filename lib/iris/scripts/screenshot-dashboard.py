@@ -232,24 +232,19 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1400, "height": 900})
 
-        # Load dashboard once, wait for data, then screenshot each tab
+        # Load dashboard once, wait for Preact to render, then screenshot each tab
         page.goto(f"{dashboard_url}/")
-        page.wait_for_load_state("networkidle")
-        # Wait for jobs table to populate (Loading... replaced by actual rows)
+        page.wait_for_load_state("domcontentloaded")
         page.wait_for_function(
-            "() => document.getElementById('jobs-body').textContent.trim() !== 'Loading...'",
+            "() => document.getElementById('root').children.length > 0"
+            " && !document.getElementById('root').textContent.includes('Loading...')",
             timeout=10000,
         )
 
         for tab in DASHBOARD_TABS:
             logger.info("Capturing tab: %s", tab)
-            # Switch tab via JS click
             if tab != "jobs":
-                page.evaluate(
-                    f"""() => {{
-                    document.querySelector('.tab-btn[data-tab="{tab}"]').click();
-                }}"""
-                )
+                page.click(f'button.tab-btn:has-text("{tab.capitalize()}")')
                 page.wait_for_timeout(300)
 
             path = output_dir / f"tab-{tab}.png"
@@ -264,9 +259,10 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             url = f"{dashboard_url}/job/{jid}"
             logger.info("Capturing job detail: %s (%s)", name, jid)
             page.goto(url)
-            page.wait_for_load_state("networkidle")
+            page.wait_for_load_state("domcontentloaded")
             page.wait_for_function(
-                "() => document.getElementById('job-state').textContent !== '-'",
+                "() => document.getElementById('root').children.length > 0"
+                " && !document.getElementById('root').textContent.includes('Loading...')",
                 timeout=10000,
             )
 
@@ -282,9 +278,10 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             url = f"{dashboard_url}/job/{jid}"
             logger.info("Capturing %s job detail: %s", label, jid)
             page.goto(url)
-            page.wait_for_load_state("networkidle")
+            page.wait_for_load_state("domcontentloaded")
             page.wait_for_function(
-                "() => document.getElementById('job-state').textContent !== '-'",
+                "() => document.getElementById('root').children.length > 0"
+                " && !document.getElementById('root').textContent.includes('Loading...')",
                 timeout=10000,
             )
             path = output_dir / f"job-{label}.png"
@@ -313,9 +310,10 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
                             url = f"{dashboard_url}/vm/{vm_id}"
                             logger.info("Capturing VM detail: %s", vm_id)
                             page.goto(url)
-                            page.wait_for_load_state("networkidle")
+                            page.wait_for_load_state("domcontentloaded")
                             page.wait_for_function(
-                                "() => document.getElementById('vm-state').textContent !== '-'",
+                                "() => document.getElementById('root').children.length > 0"
+                                " && !document.getElementById('root').textContent.includes('Loading...')",
                                 timeout=10000,
                             )
                             path = output_dir / "vm-detail.png"
@@ -330,7 +328,7 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
         # Screenshot controller logs page
         logger.info("Capturing controller logs page")
         page.goto(f"{dashboard_url}/logs")
-        page.wait_for_load_state("networkidle")
+        page.wait_for_load_state("domcontentloaded")
         page.wait_for_function(
             "() => !document.body.textContent.includes('Loading')",
             timeout=10000,
