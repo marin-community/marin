@@ -146,6 +146,9 @@ message JobStatus {
   // Convenience counts (could derive from task_state_counts)
   int32 task_count = 29;
   int32 completed_count = 30;
+
+  // Diagnostic message for pending/failed jobs (e.g., "No workers match constraint: gpu=true")
+  string pending_reason = 31;
 }
 
 // JobAttempt message removed: Jobs don't have attempts - tasks do.
@@ -443,6 +446,7 @@ message Controller {
     repeated string running_job_ids = 5;
     string address = 6;                    // Worker RPC address (host:port)
     WorkerMetadata metadata = 7;           // Full worker metadata
+    string status_message = 8;             // Error or status message (e.g., "Heartbeat timeout", "Worker crashed")
   }
 
   message ListWorkersRequest {}
@@ -540,6 +544,19 @@ message Controller {
 
   message GetTransactionsResponse {
     repeated TransactionAction actions = 1;
+  }
+
+  // --- Task Logs (proxied to worker) ---
+  message GetTaskLogsRequest {
+    string job_id = 1;
+    int32 task_index = 2;
+    int64 start_ms = 3;
+    int64 limit = 4;
+  }
+
+  message GetTaskLogsResponse {
+    repeated Worker.LogEntry logs = 1;
+    string worker_address = 2;
   }
 }
 
@@ -648,6 +665,9 @@ service ControllerService {
 
   // Transactions / Actions Log
   rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
+
+  // Task logs (proxied to worker)
+  rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
 }
 
 service WorkerService {

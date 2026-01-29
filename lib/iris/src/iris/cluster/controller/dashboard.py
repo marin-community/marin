@@ -23,6 +23,7 @@ The dashboard serves:
 All data fetching happens via Connect RPC calls from the browser JavaScript.
 """
 
+import html
 import logging
 
 import uvicorn
@@ -50,56 +51,72 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       max-width: 1400px;
       margin: 40px auto;
       padding: 0 20px;
-      color: #333;
-      background: #f5f5f5;
+      color: #1f2328;
+      background: #f6f8fa;
+      font-size: 14px;
     }
     h1 {
-      color: #2c3e50;
-      border-bottom: 3px solid #3498db;
+      color: #1f2328;
+      border-bottom: 2px solid #d1d9e0;
       padding-bottom: 10px;
+      font-size: 24px;
+      font-weight: 600;
     }
     h2 {
-      color: #34495e;
+      color: #1f2328;
       margin-top: 30px;
+      font-size: 20px;
+      font-weight: 600;
+    }
+    h3 {
+      color: #1f2328;
+      font-size: 16px;
+      font-weight: 600;
     }
     table {
       width: 100%;
       border-collapse: collapse;
       background: white;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+      border-radius: 6px;
       overflow: hidden;
+      border: 1px solid #d1d9e0;
     }
     th {
-      background-color: #3498db;
-      color: white;
-      padding: 12px;
+      background-color: #f6f8fa;
+      color: #1f2328;
+      padding: 10px 12px;
       text-align: left;
       font-weight: 600;
+      font-size: 13px;
+      border-bottom: 1px solid #d1d9e0;
     }
     td {
-      padding: 10px 12px;
-      border-bottom: 1px solid #ecf0f1;
+      padding: 8px 12px;
+      border-bottom: 1px solid #d1d9e0;
+      font-size: 13px;
     }
     tr:hover {
-      background-color: #f8f9fa;
+      background-color: #f6f8fa;
     }
-    .status-pending { color: #f39c12; }
-    .status-running { color: #3498db; }
-    .status-succeeded { color: #27ae60; }
-    .status-failed { color: #e74c3c; }
-    .status-killed { color: #95a5a6; }
-    .status-worker_failed { color: #9b59b6; }
-    .healthy { color: #27ae60; }
-    .unhealthy { color: #e74c3c; }
-    .worker-link, .job-link { color: #2196F3; text-decoration: none; }
+    .status-pending { color: #9a6700; }
+    .status-running { color: #0969da; }
+    .status-succeeded { color: #1a7f37; }
+    .status-failed { color: #cf222e; }
+    .status-killed { color: #57606a; }
+    .status-worker_failed { color: #8250df; }
+    .status-requesting { color: #bc4c00; }
+    .healthy { color: #1a7f37; }
+    .unhealthy { color: #cf222e; }
+    .worker-link, .job-link { color: #0969da; text-decoration: none; }
     .worker-link:hover, .job-link:hover { text-decoration: underline; }
-    .status-building { color: #9b59b6; }
+    .status-building { color: #8250df; }
     .actions-log {
       background: white;
       padding: 15px;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+      border: 1px solid #d1d9e0;
       max-height: 300px;
       overflow-y: auto;
       font-family: monospace;
@@ -107,26 +124,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     .action-entry {
       padding: 5px 0;
-      border-bottom: 1px solid #ecf0f1;
+      border-bottom: 1px solid #d1d9e0;
     }
     .action-time {
-      color: #7f8c8d;
+      color: #57606a;
       margin-right: 10px;
     }
     .future-feature {
-      color: #95a5a6;
+      color: #57606a;
       font-style: italic;
       padding: 20px;
       background: white;
-      border-radius: 8px;
+      border-radius: 6px;
       text-align: center;
     }
-    /* Autoscaler status */
     .autoscaler-status {
       background: white;
       padding: 15px 20px;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+      border: 1px solid #d1d9e0;
       margin-bottom: 20px;
       display: flex;
       gap: 30px;
@@ -142,15 +159,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       height: 10px;
       border-radius: 50%;
     }
-    .autoscaler-status .status-indicator.active { background: #27ae60; }
-    .autoscaler-status .status-indicator.disabled { background: #95a5a6; }
-    .autoscaler-status .status-indicator.backoff { background: #f39c12; }
+    .autoscaler-status .status-indicator.active { background: #1a7f37; }
+    .autoscaler-status .status-indicator.disabled { background: #57606a; }
+    .autoscaler-status .status-indicator.backoff { background: #9a6700; }
     .scale-groups-table {
       width: 100%;
       border-collapse: collapse;
       background: white;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+      border: 1px solid #d1d9e0;
+      border-radius: 6px;
       overflow: hidden;
       margin-bottom: 20px;
     }
@@ -164,8 +182,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       height: 8px;
       border-radius: 50%;
     }
-    .group-status-dot.available { background: #27ae60; }
-    .group-status-dot.backoff { background: #f39c12; }
+    .group-status-dot.available { background: #1a7f37; }
+    .group-status-dot.backoff { background: #9a6700; }
+    .group-status-dot.disabled { background: #57606a; }
     .action-type {
       display: inline-block;
       padding: 2px 8px;
@@ -174,70 +193,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       font-weight: 600;
       text-transform: uppercase;
     }
-    .action-type.scale_up { background: #d4edda; color: #155724; }
-    .action-type.scale_down { background: #cce5ff; color: #004085; }
-    .action-type.quota_exceeded { background: #f8d7da; color: #721c24; }
-    .action-type.backoff_triggered { background: #fff3cd; color: #856404; }
-    .action-type.worker_failed { background: #f8d7da; color: #721c24; }
-    /* VM tree display */
-    .scale-group {
-      background: white;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      margin-bottom: 20px;
-      overflow: hidden;
-    }
-    .scale-group-header {
-      background: #3498db;
-      color: white;
-      padding: 15px 20px;
-    }
-    .scale-group-header h3 {
-      margin: 0 0 5px 0;
-    }
-    .scale-group-meta {
-      font-size: 14px;
-      opacity: 0.9;
-    }
-    .slice-row {
-      padding: 10px 20px;
-      border-bottom: 1px solid #ecf0f1;
-      cursor: pointer;
-    }
-    .slice-row:hover {
-      background: #f8f9fa;
-    }
-    .slice-toggle {
-      margin-right: 10px;
-      font-family: monospace;
-    }
-    .slice-state {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-size: 12px;
-      font-weight: 500;
-      margin-left: 10px;
-    }
-    .slice-state.ready { background: #d4edda; color: #155724; }
-    .slice-state.initializing { background: #fff3cd; color: #856404; }
-    .slice-state.booting { background: #cce5ff; color: #004085; }
-    .slice-state.failed { background: #f8d7da; color: #721c24; }
-    .slice-state.stopping { background: #e2e3e5; color: #383d41; }
-    .slice-state.preempted { background: #e2d3f0; color: #6c3483; }
-    .vm-list {
-      display: none;
-      padding: 10px 20px 10px 50px;
-      background: #f8f9fa;
-    }
-    .vm-list.expanded {
-      display: block;
-    }
-    .vm-row {
-      padding: 5px 0;
-      font-family: monospace;
-      font-size: 13px;
-    }
+    .action-type.scale_up { background: #dafbe1; color: #1a7f37; }
+    .action-type.scale_down { background: #ddf4ff; color: #0969da; }
+    .action-type.quota_exceeded { background: #ffebe9; color: #cf222e; }
+    .action-type.backoff_triggered { background: #fff8c5; color: #9a6700; }
+    .action-type.worker_failed { background: #ffebe9; color: #cf222e; }
     .vm-state-indicator {
       display: inline-block;
       width: 8px;
@@ -245,52 +205,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       border-radius: 50%;
       margin-right: 8px;
     }
-    .vm-state-indicator.ready { background: #27ae60; }
-    .vm-state-indicator.initializing { background: #f39c12; }
-    .vm-state-indicator.booting { background: #3498db; }
-    .vm-state-indicator.failed { background: #e74c3c; }
-    .vm-state-indicator.unhealthy { background: #e74c3c; }
-    .vm-state-indicator.stopping { background: #95a5a6; }
-    .vm-state-indicator.terminated { background: #bdc3c7; }
-    .vm-state-indicator.preempted { background: #9b59b6; }
-    .no-vms-message {
-      padding: 40px;
-      text-align: center;
-      color: #7f8c8d;
-    }
-    /* Compact job view */
-    .job-list {
-      background: white;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      overflow: hidden;
-    }
-    .job-row {
-      padding: 12px 20px;
-      border-bottom: 1px solid #ecf0f1;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 15px;
-    }
-    .job-row:hover {
-      background: #f8f9fa;
-    }
-    .job-toggle {
-      font-family: monospace;
-      color: #7f8c8d;
-      width: 15px;
-    }
-    .job-id {
-      font-family: monospace;
-      color: #3498db;
-      width: 80px;
-    }
-    .job-name {
-      flex: 1;
-      font-weight: 500;
-      word-break: break-word;
-    }
+    .vm-state-indicator.ready { background: #1a7f37; }
+    .vm-state-indicator.initializing { background: #9a6700; }
+    .vm-state-indicator.booting { background: #0969da; }
+    .vm-state-indicator.failed { background: #cf222e; }
+    .vm-state-indicator.unhealthy { background: #cf222e; }
+    .vm-state-indicator.stopping { background: #57606a; }
+    .vm-state-indicator.terminated { background: #8c959f; }
+    .vm-state-indicator.preempted { background: #8250df; }
+    .vm-state-indicator.requesting { background: #bc4c00; }
     .task-badges {
       display: flex;
       gap: 2px;
@@ -302,111 +225,86 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       border-radius: 50%;
       display: inline-block;
     }
-    .task-badge.succeeded { background: #27ae60; }
-    .task-badge.running { background: #3498db; }
-    .task-badge.building { background: #9b59b6; }
-    .task-badge.pending { background: #ecf0f1; border: 1px solid #bdc3c7; }
-    .task-badge.failed { background: #e74c3c; }
-    .task-badge.killed { background: #95a5a6; }
-    .task-badge.worker_failed { background: #9b59b6; }
-    .task-summary {
-      color: #7f8c8d;
-      font-size: 13px;
-      width: 100px;
-    }
-    .job-state {
-      font-weight: 500;
-      width: 100px;
-    }
-    .job-duration {
-      color: #7f8c8d;
-      font-size: 13px;
-      width: 80px;
-      text-align: right;
-    }
-    .task-list {
-      display: none;
-      background: #f8f9fa;
-      padding: 10px 20px 10px 55px;
-      border-bottom: 1px solid #ecf0f1;
-    }
-    .task-list.expanded {
-      display: block;
-    }
-    .task-row {
-      padding: 6px 0;
-      font-size: 13px;
-      display: flex;
-      align-items: center;
-      gap: 15px;
-    }
-    .task-row .task-id {
-      font-family: monospace;
-      width: 120px;
-    }
-    .task-row .task-worker {
-      width: 100px;
-      color: #7f8c8d;
-    }
-    .task-row .task-state {
-      width: 100px;
-    }
-    .task-row .task-attempts {
-      color: #7f8c8d;
-      font-size: 12px;
-    }
+    .task-badge.succeeded { background: #1a7f37; }
+    .task-badge.running { background: #0969da; }
+    .task-badge.building { background: #8250df; }
+    .task-badge.pending { background: #eaeef2; border: 1px solid #8c959f; }
+    .task-badge.failed { background: #cf222e; }
+    .task-badge.killed { background: #57606a; }
+    .task-badge.worker_failed { background: #8250df; }
     .task-icon {
       margin-right: 5px;
     }
-    .task-icon.succeeded { color: #27ae60; }
-    .task-icon.running { color: #3498db; }
-    .task-icon.building { color: #9b59b6; }
-    .task-icon.pending { color: #7f8c8d; }
-    .task-icon.failed { color: #e74c3c; }
-    .task-icon.killed { color: #95a5a6; }
-    .task-icon.worker_failed { color: #9b59b6; }
+    .task-icon.succeeded { color: #1a7f37; }
+    .task-icon.running { color: #0969da; }
+    .task-icon.building { color: #8250df; }
+    .task-icon.pending { color: #57606a; }
+    .task-icon.failed { color: #cf222e; }
+    .task-icon.killed { color: #57606a; }
+    .task-icon.worker_failed { color: #8250df; }
     .no-jobs {
       padding: 40px;
       text-align: center;
-      color: #7f8c8d;
+      color: #57606a;
     }
-    /* Tab navigation */
     .tab-nav {
       display: flex;
       background: white;
-      border-radius: 8px 8px 0 0;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      border-radius: 6px 6px 0 0;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+      border: 1px solid #d1d9e0;
+      border-bottom: none;
       margin-bottom: 0;
     }
     .tab-btn {
-      padding: 15px 30px;
+      padding: 12px 24px;
       border: none;
       background: transparent;
       cursor: pointer;
-      font-size: 16px;
+      font-size: 14px;
       font-weight: 500;
-      color: #7f8c8d;
-      border-bottom: 3px solid transparent;
-      transition: all 0.2s;
+      color: #57606a;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
     }
     .tab-btn:hover {
-      color: #3498db;
-      background: #f8f9fa;
+      color: #1f2328;
+      background: #f6f8fa;
     }
     .tab-btn.active {
-      color: #3498db;
-      border-bottom-color: #3498db;
-      background: #f8f9fa;
+      color: #0969da;
+      border-bottom-color: #0969da;
+      font-weight: 600;
     }
     .tab-content {
       display: none;
       background: white;
       padding: 20px;
-      border-radius: 0 0 8px 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      border-radius: 0 0 6px 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+      border: 1px solid #d1d9e0;
+      border-top: none;
     }
     .tab-content.active {
       display: block;
+    }
+    button:not(.tab-btn) {
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #1f2328;
+      background: #f6f8fa;
+      border: 1px solid #d1d9e0;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button:not(.tab-btn):hover {
+      background: #eaeef2;
+    }
+    button:not(.tab-btn):disabled {
+      color: #8c959f;
+      cursor: default;
+      background: #f6f8fa;
     }
   </style>
 </head>
@@ -419,17 +317,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <button class="tab-btn" data-tab="endpoints">Endpoints</button>
     <button class="tab-btn" data-tab="vms">VMs</button>
     <button class="tab-btn" data-tab="autoscaler">Autoscaler</button>
+    <a href="/logs" class="tab-btn" style="text-decoration:none">Logs</a>
+    <button class="tab-btn" onclick="refresh()" style="margin-left:auto;font-size:14px">↻ Refresh</button>
   </div>
 
   <div id="tab-jobs" class="tab-content active">
-    <div id="jobs-list" class="job-list">
-      <div class="no-jobs">Loading...</div>
-    </div>
+    <table id="jobs-table">
+      <thead><tr>
+        <th>ID</th><th>Name</th><th>State</th><th>Tasks</th>
+        <th>Duration</th><th>Failures</th><th>Preemptions</th><th>Diagnostic</th>
+      </tr></thead>
+      <tbody id="jobs-body"><tr><td colspan="8">Loading...</td></tr></tbody>
+    </table>
+    <div id="jobs-pagination"
+      style="margin-top:10px;display:flex;justify-content:space-between;align-items:center"></div>
   </div>
 
   <div id="tab-workers" class="tab-content">
     <table id="workers-table">
-      <tr><th>ID</th><th>Healthy</th><th>CPU</th><th>Memory</th><th>Running Tasks</th><th>Last Heartbeat</th></tr>
+      <tr><th>ID</th><th>Healthy</th><th>CPU</th><th>Memory</th><th>Running Tasks</th>
+        <th>Last Heartbeat</th><th>Attributes</th><th>Status</th></tr>
     </table>
   </div>
 
@@ -441,9 +348,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <div id="tab-vms" class="tab-content">
-    <div id="vms-container">
-      <div class="no-vms-message">No scale groups configured</div>
-    </div>
+    <table id="vms-table">
+      <thead><tr>
+        <th>VM ID</th><th>Scale Group</th><th>Slice</th><th>Accelerator</th>
+        <th>State</th><th>Address</th><th>Worker</th><th>Error</th>
+      </tr></thead>
+      <tbody id="vms-body"><tr><td colspan="8">No scale groups configured</td></tr></tbody>
+    </table>
+    <div id="vms-pagination" style="margin-top:10px;display:flex;justify-content:space-between;align-items:center"></div>
   </div>
 
   <div id="tab-autoscaler" class="tab-content">
@@ -472,6 +384,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <h3>Recent Actions</h3>
     <div class="actions-log" id="autoscaler-actions"></div>
+
+    <h3>Autoscaler Logs</h3>
+    <pre id="autoscaler-logs" style="background:white;padding:15px;border-radius:6px;
+      box-shadow:0 1px 3px rgba(0,0,0,0.12);border:1px solid #d1d9e0;
+      max-height:400px;overflow-y:auto;font-size:12px;white-space:pre-wrap">Loading logs...</pre>
+    <div style="margin-top:8px"><a href="/logs"
+      style="color:#0969da;text-decoration:none;font-size:13px">View full controller logs &rarr;</a></div>
   </div>
 
   <script>
@@ -526,6 +445,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return protoState.replace(/^(JOB_STATE_|TASK_STATE_)/, '').toLowerCase();
     }
 
+    function formatAttributeValue(v) {
+      if (!v) return '';
+      if (v.stringValue !== undefined) return v.stringValue;
+      if (v.intValue !== undefined) return String(v.intValue);
+      if (v.floatValue !== undefined) return String(v.floatValue);
+      if (typeof v === 'string') return v;
+      return JSON.stringify(v);
+    }
+
+    function formatAttributes(attrs) {
+      if (!attrs) return '-';
+      const entries = Object.entries(attrs).map(([k, v]) => k + '=' + formatAttributeValue(v)).join(', ');
+      return entries || '-';
+    }
+
     // Convert accelerator type enum to friendly name
     function acceleratorTypeFriendly(accelType) {
       if (typeof accelType === 'string') {
@@ -554,36 +488,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return friendly;
     }
 
-    // Cache for task data to avoid refetching on expand
-    const jobTasksCache = {};
-
-    async function fetchJobTasks(jobId) {
-      if (!jobTasksCache[jobId]) {
-        // RPC uses camelCase field names (Connect RPC standard)
-        const resp = await rpc('ListTasks', {jobId: jobId});
-        // Transform tasks for dashboard consumption
-        jobTasksCache[jobId] = (resp.tasks || []).map(t => ({
-          task_id: t.taskId,
-          task_index: t.taskIndex,
-          state: stateToName(t.state),
-          worker_id: t.workerId,
-          worker_address: t.workerAddress,
-          started_at_ms: parseInt(t.startedAtMs || 0),
-          finished_at_ms: parseInt(t.finishedAtMs || 0),
-          exit_code: t.exitCode,
-          error: t.error,
-          num_attempts: (t.attempts || []).length || 1,
-          pending_reason: t.pendingReason,
-          can_be_scheduled: t.canBeScheduled
-        }));
-      }
-      return jobTasksCache[jobId];
-    }
+    let jobsPage = 0;
+    let vmsPage = 0;
 
     function renderJobsTab(jobs) {
-      const container = document.getElementById('jobs-list');
+      const tbody = document.getElementById('jobs-body');
       if (!jobs || jobs.length === 0) {
-        container.innerHTML = '<div class="no-jobs">No jobs</div>';
+        tbody.innerHTML = '<tr><td colspan="8">No jobs</td></tr>';
+        document.getElementById('jobs-pagination').innerHTML = '';
         return;
       }
 
@@ -591,16 +503,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const stateOrder = {running: 0, building: 1, pending: 2, succeeded: 3, failed: 4, killed: 5, worker_failed: 6};
       jobs.sort((a, b) => (stateOrder[a.state] || 99) - (stateOrder[b.state] || 99));
 
-      container.innerHTML = jobs.map(job => {
+      const pageSize = 50;
+      const totalPages = Math.ceil(jobs.length / pageSize);
+      if (jobsPage >= totalPages) jobsPage = totalPages - 1;
+      if (jobsPage < 0) jobsPage = 0;
+      const pageJobs = jobs.slice(jobsPage * pageSize, (jobsPage + 1) * pageSize);
+
+      tbody.innerHTML = pageJobs.map(job => {
         const jobId = job.job_id;
         const shortId = jobId.slice(0, 8);
-        const taskCount = job.task_count || 0;
-        const completedCount = job.completed_count || 0;
-
-        // Build task badges based on state counts
         const badges = buildTaskBadges(job);
 
-        // Format duration
         let duration = '-';
         if (job.started_at_ms) {
           const endMs = job.finished_at_ms || Date.now();
@@ -609,77 +522,68 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           duration = 'queued ' + formatRelativeTime(job.submitted_at_ms);
         }
 
-        return `<div class="job-row" onclick="toggleJobTasks(this, '${jobId}')">
-          <span class="job-toggle">\u25b6</span>
-          <a href="/job/${jobId}" class="job-id" onclick="event.stopPropagation()">${shortId}...</a>
-          <span class="job-name">${escapeHtml(job.name || 'unnamed')}</span>
-          <span class="task-badges">${badges}</span>
-          <span class="task-summary">${completedCount}/${taskCount} tasks</span>
-          <span class="job-state status-${job.state}">${job.state}</span>
-          <span class="job-duration">${duration}</span>
-        </div>
-        <div class="task-list" id="tasks-${jobId}">Loading tasks...</div>`;
+        // Truncate diagnostic to 100 chars for table display
+        const diagnostic = job.pending_reason || '';
+        const diagnosticDisplay = diagnostic.length > 100
+          ? diagnostic.substring(0, 97) + '...'
+          : diagnostic;
+
+        return `<tr>
+          <td><a href="/job/${jobId}" class="job-link">${shortId}...</a></td>
+          <td>${escapeHtml(job.name || 'unnamed')}</td>
+          <td><span class="status-${job.state}">${job.state}</span></td>
+          <td>${badges}</td>
+          <td>${duration}</td>
+          <td>${job.failure_count || 0}</td>
+          <td>${job.preemption_count || 0}</td>
+          <td style="font-size:12px;color:#57606a;max-width:300px;overflow:hidden;
+            text-overflow:ellipsis;white-space:nowrap"
+            title="${escapeHtml(diagnostic)}">${escapeHtml(diagnosticDisplay) || '-'}</td>
+        </tr>`;
       }).join('');
+
+      const pag = document.getElementById('jobs-pagination');
+      if (totalPages <= 1) {
+        pag.innerHTML = '';
+      } else {
+        pag.innerHTML = `<button onclick="jobsPage--;refresh()" ${jobsPage===0?'disabled':''}>Prev</button>` +
+          `<span>Page ${jobsPage+1} of ${totalPages}</span>` +
+          `<button onclick="jobsPage++;refresh()" ${jobsPage>=totalPages-1?'disabled':''}>Next</button>`;
+      }
     }
 
     function buildTaskBadges(job) {
-      // Build badges from task state counts if available
       const counts = job.task_state_counts || {};
       const total = job.task_count || 0;
+      if (total === 0) return '<span style="color:#57606a;font-size:12px">no tasks</span>';
 
-      if (total === 0) {
-        return '<span style="color:#7f8c8d;font-size:12px">no tasks</span>';
-      }
-
-      // Use task state counts if available, otherwise estimate from job state
       const succeeded = counts.succeeded || 0;
       const running = counts.running || 0;
       const building = counts.building || 0;
       const failed = counts.failed || 0;
       const killed = counts.killed || 0;
       const workerFailed = counts.worker_failed || 0;
-      const pending = counts.pending || (total - succeeded - running - building - failed - killed - workerFailed);
+      const pending = total - succeeded - running - building - failed - killed - workerFailed;
 
-      let badges = '';
-      for (let i = 0; i < succeeded; i++) badges += '<span class="task-badge succeeded"></span>';
-      for (let i = 0; i < running; i++) badges += '<span class="task-badge running"></span>';
-      for (let i = 0; i < building; i++) badges += '<span class="task-badge building"></span>';
-      for (let i = 0; i < failed; i++) badges += '<span class="task-badge failed"></span>';
-      for (let i = 0; i < workerFailed; i++) badges += '<span class="task-badge worker_failed"></span>';
-      for (let i = 0; i < killed; i++) badges += '<span class="task-badge killed"></span>';
-      for (let i = 0; i < pending; i++) badges += '<span class="task-badge pending"></span>';
-      return badges;
-    }
+      const segments = [
+        {count: succeeded, color: '#1a7f37', label: 'succeeded'},
+        {count: running, color: '#0969da', label: 'running'},
+        {count: building, color: '#8250df', label: 'building'},
+        {count: failed, color: '#cf222e', label: 'failed'},
+        {count: workerFailed, color: '#8250df', label: 'worker_failed'},
+        {count: killed, color: '#57606a', label: 'killed'},
+        {count: pending, color: '#eaeef2', label: 'pending'},
+      ].filter(s => s.count > 0);
 
-    async function toggleJobTasks(row, jobId) {
-      const taskList = document.getElementById('tasks-' + jobId);
-      const toggle = row.querySelector('.job-toggle');
-
-      if (taskList.classList.contains('expanded')) {
-        taskList.classList.remove('expanded');
-        toggle.textContent = '\u25b6';
-        return;
+      let bar = '<div style="display:flex;align-items:center;gap:6px">' +
+        '<div style="display:flex;height:8px;width:120px;border-radius:4px;overflow:hidden;background:#eaeef2">';
+      for (const s of segments) {
+        const pct = (s.count / total * 100).toFixed(1);
+        bar += `<div style="width:${pct}%;background:${s.color}" title="${s.label}: ${s.count}"></div>`;
       }
-
-      toggle.textContent = '\u25bc';
-      taskList.classList.add('expanded');
-
-      // Fetch and render tasks
-      try {
-        const tasks = await fetchJobTasks(jobId);
-        taskList.innerHTML = tasks.map(t => {
-          const stateIcon = getTaskStateIcon(t.state);
-          const taskIdShort = t.task_id.length > 12 ? t.task_id.slice(0, 12) + '...' : t.task_id;
-          return `<div class="task-row">
-            <span class="task-id">${escapeHtml(taskIdShort)}</span>
-            <span class="task-worker">${escapeHtml(t.worker_id || '-')}</span>
-            <span class="task-state"><span class="task-icon ${t.state}">${stateIcon}</span>${t.state}</span>
-            <span class="task-attempts">(${t.num_attempts} attempt${t.num_attempts !== 1 ? 's' : ''})</span>
-          </div>`;
-        }).join('') || '<div class="task-row">No tasks</div>';
-      } catch (e) {
-        taskList.innerHTML = '<div class="task-row" style="color:#e74c3c">Failed to load tasks</div>';
-      }
+      bar += '</div>';
+      bar += `<span style="font-size:11px;color:#57606a">${succeeded}/${total}</span></div>`;
+      return bar;
     }
 
     function getTaskStateIcon(state) {
@@ -703,11 +607,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function computeSliceStateCounts(slices) {
       // Compute slice state counts from SliceInfo[] (mirrors Python helper)
-      const counts = {booting: 0, initializing: 0, ready: 0, failed: 0};
+      const counts = {requesting: 0, booting: 0, initializing: 0, ready: 0, failed: 0};
       for (const s of slices) {
         const vms = s.vms || [];
         if (vms.length === 0) continue;
-        // Skip terminated VM groups
         if (vms.every(vm => vm.state === "VM_STATE_TERMINATED")) continue;
         const anyFailed = vms.some(vm => vm.state === "VM_STATE_FAILED" || vm.state === "VM_STATE_PREEMPTED");
         const allReady = vms.every(vm => vm.state === "VM_STATE_READY");
@@ -715,6 +618,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           counts.failed++;
         } else if (allReady) {
           counts.ready++;
+        } else if (vms.some(vm => vm.state === "VM_STATE_REQUESTING")) {
+          counts.requesting++;
         } else if (vms.some(vm => vm.state === "VM_STATE_INITIALIZING")) {
           counts.initializing++;
         } else if (vms.some(vm => vm.state === "VM_STATE_BOOTING")) {
@@ -724,85 +629,68 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return counts;
     }
 
-    function toggleSlice(row) {
-      const vmList = row.nextElementSibling;
-      const toggle = row.querySelector('.slice-toggle');
-      if (vmList.classList.contains('expanded')) {
-        vmList.classList.remove('expanded');
-        toggle.textContent = '\u25b6';
-      } else {
-        vmList.classList.add('expanded');
-        toggle.textContent = '\u25bc';
-      }
-    }
-
     function renderVmsTab(data) {
-      const container = document.getElementById('vms-container');
+      const tbody = document.getElementById('vms-body');
       if (!data.groups || data.groups.length === 0) {
-        container.innerHTML = '<div class="no-vms-message">No scale groups configured</div>';
+        tbody.innerHTML = '<tr><td colspan="8">No scale groups configured</td></tr>';
+        document.getElementById('vms-pagination').innerHTML = '';
         return;
       }
 
-      container.innerHTML = data.groups.map(group => {
+      // Flatten all VMs from all groups into rows
+      const allVms = [];
+      for (const group of data.groups) {
         const config = group.config || {};
-        const slices = group.slices || [];
-        const counts = computeSliceStateCounts(slices);
+        const accel = formatAcceleratorDisplay(config.acceleratorType, config.acceleratorVariant || '');
+        for (const slice of (group.slices || [])) {
+          for (const vm of (slice.vms || [])) {
+            allVms.push({vm, groupName: group.name, sliceId: slice.sliceId, accel});
+          }
+        }
+      }
 
-        const slicesHtml = slices.map(slice => {
-          // Determine slice state from constituent VMs (RPC uses camelCase)
-          const vms = slice.vms || [];
-          const vmStates = vms.map(vm => formatVmState(vm.state));
-          const allReady = vms.length > 0 && vms.every(vm => vm.state === "VM_STATE_READY");
-          const anyFailed = vms.some(vm => vm.state === "VM_STATE_FAILED" || vm.state === "VM_STATE_PREEMPTED");
-          const sliceState = anyFailed ? 'failed' :
-                             allReady ? 'ready' :
-                             vmStates.some(s => s === 'booting') ? 'booting' :
-                             vmStates.some(s => s === 'stopping') ? 'stopping' :
-                             vmStates.some(s => s === 'preempted') ? 'preempted' :
-                             'initializing';
+      if (allVms.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8">No VMs</td></tr>';
+        document.getElementById('vms-pagination').innerHTML = '';
+        return;
+      }
 
-          const vmsHtml = vms.map(vm => {
-            const vmState = formatVmState(vm.state);
-            return `<div class="vm-row">
-              <span class="vm-state-indicator ${vmState}"></span>
-              ${escapeHtml(vm.vmId)} &nbsp; ${vmState.toUpperCase()} &nbsp;
-              ${escapeHtml(vm.address || '-')} &nbsp;
-              ${vm.workerId ? escapeHtml(vm.workerId) : ''}
-              ${vm.initError ? '<span style="color:#e74c3c">'+escapeHtml(vm.initError)+'</span>' : ''}
-            </div>`;
-          }).join('');
+      const pageSize = 50;
+      const totalPages = Math.ceil(allVms.length / pageSize);
+      if (vmsPage >= totalPages) vmsPage = totalPages - 1;
+      if (vmsPage < 0) vmsPage = 0;
+      const pageVms = allVms.slice(vmsPage * pageSize, (vmsPage + 1) * pageSize);
 
-          return `<div class="slice-row" onclick="toggleSlice(this)">
-            <span class="slice-toggle">\u25b6</span>
-            <strong>${escapeHtml(slice.sliceId)}</strong>
-            <span class="slice-state ${sliceState}">${sliceState.toUpperCase()}</span>
-            <span style="color:#7f8c8d">(${vms.length} VMs)</span>
-          </div>
-          <div class="vm-list">${vmsHtml || '<div>No VMs</div>'}</div>`;
-        }).join('');
-
-        const statesSummary = Object.entries(counts)
-          .filter(([k, v]) => v > 0)
-          .map(([k, v]) => `${k}: ${v}`)
-          .join(', ') || 'no slices';
-
-        const accelDisplay = formatAcceleratorDisplay(
-          config.accelerator_type,
-          config.accelerator_variant || ''
-        );
-        return `<div class="scale-group">
-          <div class="scale-group-header">
-            <h3>${escapeHtml(group.name)}</h3>
-            <div class="scale-group-meta">
-              Accelerator: ${escapeHtml(accelDisplay)} |
-              Min: ${config.min_slices || 0} Max: ${config.max_slices || 0} |
-              Demand: ${group.current_demand || 0} |
-              ${statesSummary}
-            </div>
-          </div>
-          ${slicesHtml || '<div class="no-vms-message">No slices in this group</div>'}
-        </div>`;
+      tbody.innerHTML = pageVms.map(({vm, groupName, sliceId, accel}) => {
+        const state = formatVmState(vm.state);
+        return `<tr>
+          <td><a href="/vm/${encodeURIComponent(vm.vmId)}" class="job-link">${escapeHtml(vm.vmId)}</a></td>
+          <td>${escapeHtml(groupName)}</td>
+          <td>${escapeHtml(sliceId)}</td>
+          <td>${escapeHtml(accel)}</td>
+          <td><span class="vm-state-indicator ${state}"></span><span class="status-${state}">${state}</span></td>
+          <td>${escapeHtml(vm.address || '-')}</td>
+          <td>${escapeHtml(vm.workerId || '-')}</td>
+          <td>${escapeHtml(vm.initError || '-')}</td>
+        </tr>`;
       }).join('');
+
+      const pag = document.getElementById('vms-pagination');
+      if (totalPages <= 1) {
+        pag.innerHTML = '';
+      } else {
+        pag.innerHTML = `<button onclick="vmsPage--;refresh()" ${vmsPage===0?'disabled':''}>Prev</button>` +
+          `<span>Page ${vmsPage+1} of ${totalPages}</span>` +
+          `<button onclick="vmsPage++;refresh()" ${vmsPage>=totalPages-1?'disabled':''}>Next</button>`;
+      }
+    }
+
+    function groupStatusText(group, counts) {
+      if (group.backoffUntilMs && parseInt(group.backoffUntilMs) > Date.now()) return ['backoff', 'Backoff'];
+      if (counts.requesting > 0 || counts.booting > 0 || counts.initializing > 0) return ['available', 'Scaling Up'];
+      if ((group.currentDemand || 0) > (counts.ready || 0)) return ['backoff', 'Pending'];
+      if (counts.ready > 0) return ['available', 'Available'];
+      return ['disabled', 'Idle'];
     }
 
     function renderAutoscalerTab(data) {
@@ -832,9 +720,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const groups = data.groups || [];
       const groupsHtml = groups.map(g => {
         const counts = computeSliceStateCounts(g.slices || []);
-        const isBackoff = g.backoffUntilMs && parseInt(g.backoffUntilMs) > Date.now();
-        const statusClass = isBackoff ? 'backoff' : 'available';
-        const statusText = isBackoff ? 'Backoff' : 'Available';
+        const [statusClass, statusText] = groupStatusText(g, counts);
 
         return `<tr>
           <td><strong>${escapeHtml(g.name)}</strong></td>
@@ -874,6 +760,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         actionsHtml || '<div class="action-entry">No recent actions</div>';
     }
 
+    async function fetchAutoscalerLogs() {
+      try {
+        const logsResp = await fetch('/api/logs?prefix=iris.cluster.vm&limit=200');
+        const logsData = await logsResp.json();
+        const logsEl = document.getElementById('autoscaler-logs');
+        if (logsData && logsData.length > 0) {
+          logsEl.textContent = logsData.map(l => l.message || l.formatted).join('\\n');
+          logsEl.scrollTop = logsEl.scrollHeight;
+        } else {
+          logsEl.textContent = 'No recent autoscaler logs';
+        }
+      } catch (e) {
+        document.getElementById('autoscaler-logs').textContent = 'Failed to load logs: ' + e.message;
+      }
+    }
+
     async function refresh() {
       try {
         // Fetch data via RPCs
@@ -894,7 +796,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           resources: {
             cpu: w.metadata ? w.metadata.cpuCount : 0,
             memory_bytes: w.metadata ? parseInt(w.metadata.memoryBytes || 0) : 0
-          }
+          },
+          attributes: w.metadata && w.metadata.attributes ? w.metadata.attributes : {}
         }));
 
         // Transform jobs for dashboard consumption (RPC uses camelCase)
@@ -937,6 +840,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const cpu = w.resources ? w.resources.cpu : '-';
           const memBytes = w.resources ? (w.resources.memory_bytes || 0) : 0;
           const memory = memBytes ? formatBytes(memBytes) : '-';
+          const statusMsg = w.status_message || '-';
           return `<tr>
             <td>${workerLink}</td>
             <td class="${healthClass}">${healthIndicator} ${healthText}</td>
@@ -944,10 +848,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <td>${memory}</td>
             <td>${w.running_tasks}</td>
             <td>${lastHb}</td>
+            <td>${escapeHtml(formatAttributes(w.attributes))}</td>
+            <td style="font-size:12px;color:${w.healthy ? '#57606a' : '#cf222e'}">${escapeHtml(statusMsg)}</td>
           </tr>`;
         }).join('');
         const workersHeader = '<tr><th>ID</th><th>Healthy</th><th>CPU</th><th>Memory</th>' +
-          '<th>Running Tasks</th><th>Last Heartbeat</th></tr>';
+          '<th>Running Tasks</th><th>Last Heartbeat</th><th>Attributes</th><th>Status</th></tr>';
         document.getElementById('workers-table').innerHTML = workersHeader + workersHtml;
 
         // Update jobs tab with compact view
@@ -980,6 +886,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
         // Update Autoscaler tab
         renderAutoscalerTab(autoscaler);
+        fetchAutoscalerLogs();
       } catch (e) {
         console.error('Failed to refresh:', e);
       }
@@ -997,7 +904,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
-    document.querySelectorAll('.tab-btn').forEach(btn => {
+    document.querySelectorAll('.tab-btn[data-tab]').forEach(btn => {
       btn.addEventListener('click', () => {
         const tabName = btn.dataset.tab;
         window.location.hash = tabName;
@@ -1018,7 +925,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     handleHash();
 
     refresh();
-    setInterval(refresh, 5000);
   </script>
 </body>
 </html>
@@ -1035,20 +941,20 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
       max-width: 1400px;
       margin: 40px auto;
       padding: 0 20px;
-      color: #333;
-      background: #f5f5f5;
+      color: #1f2328;
+      background: #f6f8fa;
     }
     h1 {
-      color: #2c3e50;
-      border-bottom: 3px solid #3498db;
+      color: #1f2328;
+      border-bottom: 2px solid #d1d9e0;
       padding-bottom: 10px;
     }
     h2 {
-      color: #34495e;
+      color: #1f2328;
       margin-top: 30px;
     }
     .back-link {
-      color: #2196F3;
+      color: #0969da;
       text-decoration: none;
       margin-bottom: 20px;
       display: inline-block;
@@ -1063,73 +969,74 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
     .info-card {
       background: white;
       padding: 20px;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
     }
     .info-card h3 {
       margin-top: 0;
-      color: #34495e;
-      border-bottom: 1px solid #ecf0f1;
+      color: #1f2328;
+      border-bottom: 1px solid #d1d9e0;
       padding-bottom: 10px;
     }
     .info-row {
       display: flex;
       justify-content: space-between;
       padding: 8px 0;
-      border-bottom: 1px solid #ecf0f1;
+      border-bottom: 1px solid #d1d9e0;
     }
     .info-row:last-child { border-bottom: none; }
-    .info-label { color: #7f8c8d; }
+    .info-label { color: #57606a; }
     .info-value { font-weight: 500; }
-    .status-pending { color: #f39c12; }
-    .status-building { color: #9b59b6; }
-    .status-running { color: #3498db; }
-    .status-succeeded { color: #27ae60; }
-    .status-failed { color: #e74c3c; }
-    .status-killed { color: #95a5a6; }
-    .status-worker_failed { color: #9b59b6; }
-    .status-unschedulable { color: #e74c3c; }
+    .status-pending { color: #9a6700; }
+    .status-building { color: #8250df; }
+    .status-running { color: #0969da; }
+    .status-succeeded { color: #1a7f37; }
+    .status-failed { color: #cf222e; }
+    .status-killed { color: #57606a; }
+    .status-worker_failed { color: #8250df; }
+    .status-unschedulable { color: #cf222e; }
     .error-message {
-      background: #fee;
-      border: 1px solid #e74c3c;
-      color: #c0392b;
+      background: #ffebe9;
+      border: 1px solid #cf222e;
+      color: #cf222e;
       padding: 15px;
-      border-radius: 8px;
+      border-radius: 6px;
       margin-bottom: 20px;
     }
     table {
       width: 100%;
       border-collapse: collapse;
       background: white;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+      border-radius: 6px;
       overflow: hidden;
       margin-top: 20px;
     }
     th {
-      background-color: #3498db;
-      color: white;
+      background-color: #f6f8fa;
+      color: #1f2328;
       padding: 12px;
       text-align: left;
       font-weight: 600;
     }
     td {
       padding: 10px 12px;
-      border-bottom: 1px solid #ecf0f1;
+      border-bottom: 1px solid #d1d9e0;
     }
     tr:hover {
-      background-color: #f8f9fa;
+      background-color: #f6f8fa;
     }
     .pending-reason {
       font-size: 12px;
-      color: #7f8c8d;
+      color: #57606a;
       font-style: italic;
     }
   </style>
 </head>
 <body>
   <a href="/" class="back-link">&larr; Back to Dashboard</a>
-  <h1>Job: {{job_id}}</h1>
+  <h1 id="job-title">Job: {{job_id}}</h1>
+  <div id="job-subtitle" style="color:#57606a;font-size:14px;margin-bottom:20px"></div>
 
   <div id="error-container"></div>
 
@@ -1199,6 +1106,17 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <h2>Task Logs</h2>
+  <div style="margin-bottom:10px;display:flex;align-items:center;gap:12px">
+    <select id="task-log-selector" onchange="fetchTaskLogs()">
+      <option value="">Select a task...</option>
+    </select>
+    <span id="task-log-status" style="color:#57606a;font-size:13px"></span>
+  </div>
+  <pre id="task-logs" style="background:white;padding:15px;border-radius:6px;
+    box-shadow:0 1px 3px rgba(0,0,0,0.12);border:1px solid #d1d9e0;
+    max-height:600px;overflow-y:auto;font-size:12px;white-space:pre-wrap">Loading logs...</pre>
+
   <h2>Tasks</h2>
   <table id="tasks-table">
     <tr>
@@ -1217,6 +1135,7 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
   <script>
     const jobId = '{{job_id}}';
     const controllerAddress = window.location.origin;
+    let cachedTasks = [];
 
     function escapeHtml(text) {
       const div = document.createElement('div');
@@ -1290,6 +1209,7 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
         // Transform job data (RPC uses camelCase)
         const jobs = (jobsResp.jobs || []).map(j => ({
           job_id: j.jobId,
+          name: j.name || '',
           state: stateToName(j.state),
           failure_count: j.failureCount || 0,
           error: j.error,
@@ -1314,6 +1234,7 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
           num_attempts: (t.attempts || []).length || 1,
           pending_reason: t.pendingReason || ''
         }));
+        cachedTasks = tasksResponse;
 
         const job = jobs.find(j => j.job_id === jobId);
         if (!job) {
@@ -1327,14 +1248,24 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
         stateEl.textContent = job.state || '-';
         stateEl.className = 'info-value ' + getStateClass(job.state);
 
+        // Fix 5: Show job name in title, ID as subtitle
+        if (job.name && job.name !== jobId) {
+          document.getElementById('job-title').textContent = job.name;
+          document.getElementById('job-subtitle').textContent = 'ID: ' + jobId;
+        }
+
         document.getElementById('job-exit-code').textContent =
           job.failure_count > 0 ? 'Failed' : (job.state === 'succeeded' ? '0' : '-');
         document.getElementById('job-started').textContent =
           formatTimestamp(job.started_at_ms);
+
+        // Fix 2: Show "-" for finished/duration on non-terminal jobs
+        const isTerminal = ['succeeded','failed','killed','worker_failed','unschedulable'].includes(job.state);
         document.getElementById('job-finished').textContent =
-          formatTimestamp(job.finished_at_ms);
+          isTerminal ? formatTimestamp(job.finished_at_ms) : '-';
         document.getElementById('job-duration').textContent =
-          formatDuration(job.started_at_ms, job.finished_at_ms);
+          isTerminal ? formatDuration(job.started_at_ms, job.finished_at_ms)
+                     : (job.started_at_ms ? formatDuration(job.started_at_ms, Date.now()) : '-');
 
         // Show error if present
         if (job.error) {
@@ -1387,7 +1318,9 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
             <td>${t.num_attempts}</td>
             <td>${formatTimestamp(t.started_at_ms)}</td>
             <td>${formatDuration(t.started_at_ms, t.finished_at_ms)}</td>
-            <td>${t.exit_code !== null && t.exit_code !== undefined ? t.exit_code : '-'}</td>
+            <td>${['succeeded','failed','killed','worker_failed'].includes(t.state)
+              && t.exit_code !== null && t.exit_code !== undefined
+              ? t.exit_code : '-'}</td>
             <td>${escapeHtml(errorText) || '-'}</td>
           </tr>`;
         }).join('');
@@ -1406,10 +1339,300 @@ JOB_DETAIL_HTML = """<!DOCTYPE html>
 
         document.getElementById('tasks-table').innerHTML = tableHeader + tasksHtml;
 
+        // Populate task log selector
+        const selector = document.getElementById('task-log-selector');
+        const previousValue = selector.value;
+        selector.innerHTML = '<option value="">Select a task...</option>' +
+          tasksResponse.map(t => `<option value="${t.task_index}">Task ${t.task_index} (${t.state})</option>`).join('');
+
+        // Auto-select: restore previous selection, or pick the most interesting task
+        if (previousValue) {
+          selector.value = previousValue;
+        } else {
+          const failedTask = tasksResponse.find(t => t.state === 'failed' || t.state === 'worker_failed');
+          const runningTask = tasksResponse.find(t => t.state === 'running' || t.state === 'building');
+          const autoTask = failedTask || runningTask || tasksResponse[0];
+          if (autoTask !== undefined) {
+            selector.value = String(autoTask.task_index);
+            fetchTaskLogs();
+          }
+        }
+
       } catch (e) {
         console.error('Failed to refresh:', e);
         document.getElementById('error-container').innerHTML =
           `<div class="error-message">Failed to load job details: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    async function fetchTaskLogs() {
+      const selector = document.getElementById('task-log-selector');
+      const taskIndex = parseInt(selector.value);
+      const logsEl = document.getElementById('task-logs');
+      const statusEl = document.getElementById('task-log-status');
+      if (isNaN(taskIndex)) {
+        logsEl.textContent = 'Select a task to view logs';
+        statusEl.textContent = '';
+        return;
+      }
+
+      // For pending/building tasks, show status message instead of fetching logs
+      const selectedTask = cachedTasks.find(t => t.task_index === taskIndex);
+      if (selectedTask && (selectedTask.state === 'pending' || selectedTask.state === 'building')) {
+        const reason = selectedTask.pending_reason || '';
+        const label = selectedTask.state === 'pending' ? 'Waiting to be scheduled' : 'Building container image';
+        statusEl.innerHTML = `<span style="color:#9a6700;font-weight:500">${escapeHtml(label)}</span>`;
+        logsEl.textContent = reason || 'No logs yet \\u2014 task has not started running.';
+        return;
+      }
+
+      logsEl.textContent = 'Loading logs...';
+      statusEl.textContent = '';
+      try {
+        const resp = await rpc('GetTaskLogs', {jobId: jobId, taskIndex: taskIndex, limit: 1000});
+        const logs = resp.logs || [];
+        if (selectedTask && selectedTask.error) {
+          statusEl.innerHTML = `<span style="color:#cf222e;font-weight:600">`
+            + `Error: ${escapeHtml(selectedTask.error)}</span>`;
+        } else {
+          statusEl.textContent = resp.workerAddress ? 'from ' + resp.workerAddress : '';
+        }
+        if (logs.length === 0) {
+          logsEl.textContent = 'No logs available';
+        } else {
+          logsEl.textContent = logs.map(l => l.data || '').join('\\n');
+          logsEl.scrollTop = logsEl.scrollHeight;
+        }
+      } catch (e) {
+        logsEl.textContent = 'Failed to load logs: ' + e.message;
+        statusEl.textContent = '';
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
+"""
+
+
+VM_DETAIL_HTML = """<!DOCTYPE html>
+<html>
+<head>
+  <title>VM Detail - {{vm_id}}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      max-width: 1400px;
+      margin: 40px auto;
+      padding: 0 20px;
+      color: #1f2328;
+      background: #f6f8fa;
+    }
+    h1 {
+      color: #1f2328;
+      border-bottom: 2px solid #d1d9e0;
+      padding-bottom: 10px;
+    }
+    h2 {
+      color: #1f2328;
+      margin-top: 30px;
+    }
+    .back-link {
+      color: #0969da;
+      text-decoration: none;
+      margin-bottom: 20px;
+      display: inline-block;
+    }
+    .back-link:hover { text-decoration: underline; }
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    .info-card {
+      background: white;
+      padding: 20px;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    }
+    .info-card h3 {
+      margin-top: 0;
+      color: #1f2328;
+      border-bottom: 1px solid #d1d9e0;
+      padding-bottom: 10px;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #d1d9e0;
+    }
+    .info-row:last-child { border-bottom: none; }
+    .info-label { color: #57606a; }
+    .info-value { font-weight: 500; }
+    .error-message {
+      background: #ffebe9;
+      border: 1px solid #cf222e;
+      color: #cf222e;
+      padding: 15px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+    }
+    .status-ready { color: #1a7f37; }
+    .status-booting { color: #0969da; }
+    .status-initializing { color: #9a6700; }
+    .status-requesting { color: #bc4c00; }
+    .status-failed { color: #cf222e; }
+    .status-preempted { color: #8250df; }
+    .status-terminated { color: #57606a; }
+    .status-stopping { color: #57606a; }
+    .status-unhealthy { color: #cf222e; }
+  </style>
+</head>
+<body>
+  <a href="/#vms" class="back-link">&larr; Back to Dashboard</a>
+  <h1>VM: {{vm_id}}</h1>
+
+  <div id="error-container"></div>
+
+  <div class="info-grid">
+    <div class="info-card">
+      <h3>VM Info</h3>
+      <div class="info-row">
+        <span class="info-label">ID</span>
+        <span class="info-value" id="vm-id">{{vm_id}}</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">State</span>
+        <span class="info-value" id="vm-state">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Address</span>
+        <span class="info-value" id="vm-address">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Worker</span>
+        <span class="info-value" id="vm-worker">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Init Phase</span>
+        <span class="info-value" id="vm-init-phase">-</span>
+      </div>
+    </div>
+
+    <div class="info-card">
+      <h3>Scale Group</h3>
+      <div class="info-row">
+        <span class="info-label">Group</span>
+        <span class="info-value" id="vm-group">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Slice</span>
+        <span class="info-value" id="vm-slice">-</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="error-detail-container"></div>
+
+  <h2>Bootstrap Logs</h2>
+  <pre id="vm-logs" style="background:white;padding:15px;border-radius:6px;
+    box-shadow:0 1px 3px rgba(0,0,0,0.12);max-height:600px;overflow-y:auto;
+    font-size:12px;white-space:pre-wrap">Loading logs...</pre>
+
+  <script>
+    const vmId = '{{vm_id}}';
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text || '';
+      return div.innerHTML;
+    }
+
+    async function rpc(method, body = {}) {
+      const response = await fetch(`/iris.cluster.ControllerService/${method}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      if (!response.ok) {
+        throw new Error(`RPC ${method} failed: ${response.status}`);
+      }
+      return response.json();
+    }
+
+    function formatVmState(state) {
+      if (!state) return 'unknown';
+      return state.replace('VM_STATE_', '').toLowerCase();
+    }
+
+    async function refresh() {
+      try {
+        const [autoscalerResp, logsResp] = await Promise.all([
+          rpc('GetAutoscalerStatus'),
+          rpc('GetVmLogs', {vmId: vmId, tail: 500})
+        ]);
+
+        const status = autoscalerResp.status || {};
+        let vmInfo = null;
+        let groupName = '-';
+        let sliceId = '-';
+
+        for (const group of (status.groups || [])) {
+          for (const slice of (group.slices || [])) {
+            for (const vm of (slice.vms || [])) {
+              if (vm.vmId === vmId) {
+                vmInfo = vm;
+                groupName = group.name;
+                sliceId = slice.sliceId;
+              }
+            }
+          }
+        }
+
+        if (vmInfo) {
+          const state = formatVmState(vmInfo.state);
+          const stateEl = document.getElementById('vm-state');
+          stateEl.textContent = state;
+          stateEl.className = 'info-value status-' + state;
+          document.getElementById('vm-address').textContent = vmInfo.address || '-';
+          document.getElementById('vm-worker').textContent = vmInfo.workerId || '-';
+          document.getElementById('vm-init-phase').textContent = vmInfo.initPhase || '-';
+          document.getElementById('vm-group').textContent = groupName;
+          document.getElementById('vm-slice').textContent = sliceId;
+
+          if (vmInfo.initError) {
+            document.getElementById('error-detail-container').innerHTML =
+              '<div class="error-message"><strong>Init Error:</strong> ' + escapeHtml(vmInfo.initError) + '</div>';
+          } else {
+            document.getElementById('error-detail-container').innerHTML = '';
+          }
+        } else {
+          // VM not found in autoscaler, but logs RPC may still have state
+          const logState = formatVmState(logsResp.state);
+          if (logState && logState !== 'unknown') {
+            const stateEl = document.getElementById('vm-state');
+            stateEl.textContent = logState;
+            stateEl.className = 'info-value status-' + logState;
+          }
+        }
+
+        const logsEl = document.getElementById('vm-logs');
+        if (logsResp.logs) {
+          logsEl.textContent = logsResp.logs;
+          logsEl.scrollTop = logsEl.scrollHeight;
+        } else {
+          logsEl.textContent = 'No bootstrap logs available';
+        }
+
+        document.getElementById('error-container').innerHTML = '';
+      } catch (e) {
+        console.error('Failed to refresh:', e);
+        document.getElementById('error-container').innerHTML =
+          '<div class="error-message">Failed to load VM details: ' + escapeHtml(e.message) + '</div>';
       }
     }
 
@@ -1455,6 +1678,7 @@ class ControllerDashboard:
         routes = [
             Route("/", self._dashboard),
             Route("/job/{job_id}", self._job_detail_page),
+            Route("/vm/{vm_id}", self._vm_detail_page),
             Route("/logs", self._logs_page),
             Route("/api/logs", self._api_logs),
             Route("/health", self._health),
@@ -1466,10 +1690,12 @@ class ControllerDashboard:
         return HTMLResponse(DASHBOARD_HTML)
 
     def _job_detail_page(self, request: Request) -> HTMLResponse:
-        import html
-
         job_id = request.path_params["job_id"]
         return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", html.escape(job_id)))
+
+    def _vm_detail_page(self, request: Request) -> HTMLResponse:
+        vm_id = request.path_params["vm_id"]
+        return HTMLResponse(VM_DETAIL_HTML.replace("{{vm_id}}", html.escape(vm_id)))
 
     def _logs_page(self, request: Request) -> HTMLResponse:
         return logs_page_response(request)

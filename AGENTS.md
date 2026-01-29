@@ -103,5 +103,3 @@ DO NOT:
 ## Environment
 
 - Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
-
-> This file will be expanded as agent workflows and best practices evolve.

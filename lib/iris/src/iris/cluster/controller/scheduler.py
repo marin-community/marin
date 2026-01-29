@@ -606,12 +606,60 @@ class Scheduler:
         timeout_ms = timeout_seconds * 1000
         return pending_duration_ms > timeout_ms
 
-    def task_schedule_status(self, task: ControllerTask) -> TaskScheduleResult:
+    def task_schedule_status(self, task: ControllerTask, context: SchedulingContext) -> TaskScheduleResult:
         """Get the current scheduling status of a task.
 
         Used by the dashboard to show why a task is pending.
-        Builds fresh scheduling context to reflect current state.
+        Caller provides the SchedulingContext so it can be reused across
+        multiple calls (e.g. when listing all tasks for a job).
         """
-        workers = self._state.get_available_workers()
-        context = SchedulingContext.from_workers(workers)
+        job = self._state.get_job(task.job_id)
+        if job and job.is_coscheduled:
+            return self._coscheduled_schedule_status(task, job, context)
+
+        return self.try_schedule_task(task, context)
+
+    def _coscheduled_schedule_status(
+        self,
+        task: ControllerTask,
+        job: ControllerJob,
+        context: SchedulingContext,
+    ) -> TaskScheduleResult:
+        """Detailed scheduling status for a coscheduled task."""
+        constraints = list(job.request.constraints)
+        matching_ids = context.matching_workers(constraints)
+        group_by = job.coscheduling_group_by
+        num_tasks = len(self._state.get_job_tasks(task.job_id))
+
+        if not matching_ids:
+            constraint_keys = [c.key for c in constraints]
+            return TaskScheduleResult(
+                task=task,
+                failure_reason=f"No workers match constraints: {constraint_keys}",
+            )
+
+        if not group_by:
+            return self.try_schedule_task(task, context)
+
+        groups = context.workers_by_group(group_by, matching_ids)
+
+        if not groups:
+            return TaskScheduleResult(
+                task=task,
+                failure_reason=(
+                    f"Coscheduling: {len(matching_ids)} workers match constraints "
+                    f"but none have '{group_by}' attribute"
+                ),
+            )
+
+        best = max(len(wids) for wids in groups.values())
+        if best < num_tasks:
+            return TaskScheduleResult(
+                task=task,
+                failure_reason=(
+                    f"Coscheduling: need {num_tasks} workers in same '{group_by}' group, " f"largest group has {best}"
+                ),
+            )
+
+        # Workers exist in theory, check capacity
         return self.try_schedule_task(task, context)

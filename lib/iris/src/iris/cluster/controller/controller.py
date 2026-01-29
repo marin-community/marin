@@ -31,7 +31,7 @@ from iris.cluster.controller.events import (
     TaskStateChangedEvent,
     WorkerFailedEvent,
 )
-from iris.cluster.controller.scheduler import Scheduler, TaskScheduleResult
+from iris.cluster.controller.scheduler import Scheduler, SchedulingContext, TaskScheduleResult
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import (
     ControllerState,
@@ -557,13 +557,12 @@ class Controller:
         if txn.tasks_to_kill:
             self.kill_tasks_on_workers(txn.tasks_to_kill)
 
-    def task_schedule_status(self, task: ControllerTask) -> TaskScheduleResult:
+    def task_schedule_status(self, task: ControllerTask, context: SchedulingContext) -> TaskScheduleResult:
         """Get the current scheduling status of a task (for dashboard display).
 
         Delegates to the internal scheduler.
         """
-
-        return self._scheduler.task_schedule_status(task)
+        return self._scheduler.task_schedule_status(task, context)
 
     def kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
         """Send KILL RPCs to workers for tasks that were running.
