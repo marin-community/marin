@@ -282,7 +282,7 @@ def main(config: EvalVLMConfig):
             processor=processor,
             tokenizer=tokenizer,
             max_length=config.max_eval_length,
-            padding=True,
+            padding=False,  # Don't pad to max_length - use actual sequence length for inference
             disable_anyres=config.disable_anyres,
             grid_pinpoints=grid_pinpoints,
             patch_size=config.patch_size,  # Use patch_size (16), not image_size (384)!
@@ -360,7 +360,7 @@ def main(config: EvalVLMConfig):
                     # Log to tracker
                     levanter.tracker.log({
                         f"vlm_eval/{task_name}/accuracy": task_results.get("accuracy", 0.0)
-                    })
+                    }, step=0)
                 except Exception as e:
                     logger.error(f"Failed to evaluate {task_name}: {e}")
                     all_results[task_name] = {"error": str(e)}

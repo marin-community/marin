@@ -1333,9 +1333,9 @@ class _LlavaInferenceWrapper(eqx.Module):
     embeddings during prefill. It stores the current request's image data
     (pixel_values, grid_mask, input_ids) and uses them during the prefill phase.
 
-    Uses fixed-shape processing for JIT compatibility:
-    - pixel_values: (TOTAL_PATCHES, C, H, W) - padded to fixed size
-    - grid_mask: (TOTAL_PATCHES,) - True for valid patches, False for padding
+    Supports both single-request and batched processing:
+    - Single request: pixel_values (TOTAL_PATCHES, C, H, W), grid_mask (TOTAL_PATCHES,)
+    - Batched: pixel_values (batch, TOTAL_PATCHES, C, H, W), grid_mask (batch, TOTAL_PATCHES)
 
     Usage:
         # Create wrapper with the model
@@ -1368,11 +1368,15 @@ class _LlavaInferenceWrapper(eqx.Module):
     _text_config: "QwenConfig" = eqx.field(static=True)
 
     # Request-specific data (set before each generation)
+    # Supports both single (no batch axis) and batched (with batch axis) inputs
     _input_ids: NamedArray | None = None
     _pixel_values: NamedArray | None = None
     _grid_mask: NamedArray | None = None
     _unpad_indices: NamedArray | None = None
     _num_unpadded_features: int | None = eqx.field(static=True, default=None)
+
+    # Batch size for tracking (1 for single request, >1 for batched)
+    _batch_size: int = eqx.field(static=True, default=1)
 
     # Cached embeddings and position IDs (computed lazily during prefill)
     _cached_embeds: NamedArray | None = None
@@ -1419,17 +1423,23 @@ class _LlavaInferenceWrapper(eqx.Module):
         grid_mask: NamedArray,
         unpad_indices: Optional[NamedArray] = None,
         num_unpadded_features: Optional[int] = None,
+        batch_size: int = 1,
     ) -> "_LlavaInferenceWrapper":
-        """Set the image data for the current request.
+        """Set the image data for the current request(s).
 
         This must be called before generating with InferenceEngine.
 
         Args:
             input_ids: Input token IDs with shape (batch, position)
-            pixel_values: Fixed-shape pixel values (TOTAL_PATCHES, C, H, W)
-            grid_mask: Boolean mask indicating valid patches (TOTAL_PATCHES,)
+            pixel_values: Fixed-shape pixel values
+                - Single request: (TOTAL_PATCHES, C, H, W)
+                - Batched: (batch, TOTAL_PATCHES, C, H, W)
+            grid_mask: Boolean mask indicating valid patches
+                - Single request: (TOTAL_PATCHES,)
+                - Batched: (batch, TOTAL_PATCHES)
             unpad_indices: Pre-computed indices to reorder features to HF's unpadded order
             num_unpadded_features: Actual number of unpadded features (before padding)
+            batch_size: Number of requests in the batch (1 for single request)
 
         Returns:
             A new wrapper with the request data set
@@ -1455,6 +1465,7 @@ class _LlavaInferenceWrapper(eqx.Module):
             _grid_mask=grid_mask,
             _unpad_indices=unpad_indices,
             _num_unpadded_features=num_unpadded_features,
+            _batch_size=batch_size,
             _position_offset=position_offset,
             _cached_embeds=None,
             _cached_pos_ids=None,
@@ -1618,10 +1629,9 @@ class LlavaInferenceEngine:
     def generate(self, requests: list[VLMRequest], step_callback=None):
         """Generate tokens for a batch of VLMRequests.
 
-        This method:
-        1. Extracts VLM data from the first request
-        2. Sets the request data on the wrapper
-        3. Calls the base engine's generate method
+        This method processes each VLM request sequentially since each request
+        has different image data (pixel_values, grid_mask). The results are
+        merged into a single GenerationResult.
 
         Args:
             requests: List of VLMRequest objects
@@ -1633,39 +1643,66 @@ class LlavaInferenceEngine:
         if not requests:
             raise ValueError("At least one request is required")
 
-        # For now, we only support single-request generation for VLM
-        # (because the wrapper stores a single set of pixel_values)
-        if len(requests) > 1:
-            raise NotImplementedError(
-                "LlavaInferenceEngine currently only supports single-request generation. "
-                "Multi-request batching for VLM is not yet implemented."
+        # Process each request sequentially (each has different image data)
+        all_results = []
+        for vlm_request in requests:
+            # Set the VLM data on the wrapper for this request
+            self._base_engine.model = self._wrapper.set_request_data(
+                input_ids=vlm_request.input_ids,
+                pixel_values=vlm_request.pixel_values,
+                grid_mask=vlm_request.grid_mask,
+                unpad_indices=vlm_request.unpad_indices,
+                num_unpadded_features=vlm_request.num_unpadded_features,
             )
 
-        vlm_request = requests[0]
+            # Convert VLMRequest to standard Request for the base engine
+            standard_request = Request(
+                prompt_tokens=vlm_request.prompt_tokens,
+                request_id=vlm_request.request_id,
+                decode_params=vlm_request.decode_params,
+                n_generations=vlm_request.n_generations,
+            )
 
-        # Set the VLM data on the wrapper
-        # We need to update the model in the base engine
-        self._base_engine.model = self._wrapper.set_request_data(
-            input_ids=vlm_request.input_ids,
-            pixel_values=vlm_request.pixel_values,
-            grid_mask=vlm_request.grid_mask,
-            unpad_indices=vlm_request.unpad_indices,
-            num_unpadded_features=vlm_request.num_unpadded_features,
+            # Generate using the base engine
+            result = self._base_engine.generate([standard_request], step_callback=step_callback)
+            all_results.append(result)
+
+            # Reset the engine state for the next request
+            self._base_engine.reset()
+
+        # Merge results if multiple requests
+        if len(all_results) == 1:
+            return all_results[0]
+
+        return self._merge_generation_results(all_results)
+
+    def _merge_generation_results(self, results: list):
+        """Merge multiple GenerationResults into one.
+
+        Args:
+            results: List of GenerationResult objects
+
+        Returns:
+            Merged GenerationResult
+        """
+        from levanter.inference.engine import GenerationResult
+
+        # Concatenate tokens from all results
+        all_tokens = []
+        all_logprobs = []
+        total_generated = 0
+
+        for result in results:
+            all_tokens.extend(result.tokens)
+            if result.logprobs is not None:
+                all_logprobs.extend(result.logprobs)
+            total_generated += result.total_generated
+
+        return GenerationResult(
+            tokens=all_tokens,
+            logprobs=all_logprobs if all_logprobs else None,
+            total_generated=total_generated,
         )
-
-        # Convert VLMRequest to standard Request for the base engine
-        standard_requests = [
-            Request(
-                prompt_tokens=r.prompt_tokens,
-                request_id=r.request_id,
-                decode_params=r.decode_params,
-                n_generations=r.n_generations,
-            )
-            for r in requests
-        ]
-
-        # Generate using the base engine
-        return self._base_engine.generate(standard_requests, step_callback=step_callback)
 
     def reset(self):
         """Reset the engine state."""

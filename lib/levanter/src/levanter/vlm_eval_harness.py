@@ -324,10 +324,6 @@ class LevanterVLMHarnessLM(TemplateLM):
         # Extract processed data
         input_ids = processed["input_ids"]
         pixel_values = processed.get("pixel_values")
-
-        # Debug logging to understand sequence length
-        logger.info(f"DEBUG: num_images={len(images)}, <image> in prompt={prompt.count('<image>')}")
-        logger.info(f"DEBUG: input_ids length={len(input_ids)}, pixel_values shape={pixel_values.shape if pixel_values is not None else None}")
         grid_mask = processed.get("grid_mask")
         unpad_indices = processed.get("unpad_indices")
         num_unpadded_features = processed.get("num_unpadded_features")
@@ -396,6 +392,10 @@ class LevanterVLMHarnessLM(TemplateLM):
         """
         Generate text for VLM requests with images.
 
+        Processes requests in batches for better efficiency. Each batch is sent
+        to the engine together, which processes them (currently sequentially,
+        but this enables future batched processing optimizations).
+
         Args:
             requests: List of Instance objects from lm-eval-harness
                      Each request has args: (context, gen_kwargs, {"visual": images})
@@ -411,77 +411,111 @@ class LevanterVLMHarnessLM(TemplateLM):
         engine = self._get_engine()
         results: List[str] = []
 
-        pbar = tqdm(requests, desc="VLM generate_until", disable=disable_tqdm)
-        for req in pbar:
-            # Extract context, gen_kwargs, and multimodal args
-            args = req.args
-            if len(args) >= 3 and isinstance(args[2], dict):
-                context = args[0]
-                gen_kwargs = args[1] if len(args) > 1 else {}
-                multimodal_args = args[2]
-                images = multimodal_args.get("visual", [])
-            elif len(args) >= 2:
-                context = args[0]
-                gen_kwargs = args[1] if isinstance(args[1], dict) else {}
-                images = []
-            else:
-                context = args[0]
-                gen_kwargs = {}
-                images = []
+        # Batch size for processing (can be tuned based on memory)
+        batch_size = 8
 
-            # Process generation kwargs
-            processed_kwargs = self._modify_gen_kwargs(gen_kwargs.copy())
+        # Process requests in batches
+        num_batches = (len(requests) + batch_size - 1) // batch_size
+        pbar = tqdm(range(num_batches), desc="VLM generate_until (batched)", disable=disable_tqdm)
 
-            # Override with our default kwargs
-            for key, value in self._generation_kwargs.items():
-                if key not in processed_kwargs:
-                    processed_kwargs[key] = value
+        for batch_idx in pbar:
+            batch_start = batch_idx * batch_size
+            batch_end = min(batch_start + batch_size, len(requests))
+            batch_requests = requests[batch_start:batch_end]
 
-            # Convert images to PIL format
-            pil_images = [self._process_image(img) for img in images] if images else []
+            # Prepare VLM requests for this batch
+            vlm_requests = []
+            batch_contexts = []
+            batch_kwargs = []
+            batch_pil_images = []
 
-            try:
-                if pil_images:
-                    # Create VLM request with images
-                    vlm_request = self._create_vlm_request(context, pil_images, processed_kwargs)
-
-                    # Generate using the engine
-                    result = engine.generate([vlm_request])
-
-                    # Decode the generated tokens
-                    if result.tokens and len(result.tokens) > 0:
-                        generated_tokens = result.tokens[0]
-                        text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
-                    else:
-                        text = ""
+            for req in batch_requests:
+                # Extract context, gen_kwargs, and multimodal args
+                args = req.args
+                if len(args) >= 3 and isinstance(args[2], dict):
+                    context = args[0]
+                    gen_kwargs = args[1] if len(args) > 1 else {}
+                    multimodal_args = args[2]
+                    images = multimodal_args.get("visual", [])
+                elif len(args) >= 2:
+                    context = args[0]
+                    gen_kwargs = args[1] if isinstance(args[1], dict) else {}
+                    images = []
                 else:
-                    # Text-only request - use basic generation
-                    logger.warning(f"No images provided for VLM request, using empty response")
-                    text = ""
+                    context = args[0]
+                    gen_kwargs = {}
+                    images = []
 
-                # Post-process with stop sequences
-                until = processed_kwargs.get("until", [])
-                if until:
-                    for stop_seq in until:
-                        if stop_seq in text:
-                            text = text.split(stop_seq)[0]
-                            break
+                # Process generation kwargs
+                processed_kwargs = self._modify_gen_kwargs(gen_kwargs.copy())
 
+                # Override with our default kwargs
+                for key, value in self._generation_kwargs.items():
+                    if key not in processed_kwargs:
+                        processed_kwargs[key] = value
+
+                # Convert images to PIL format
+                pil_images = [self._process_image(img) for img in images] if images else []
+
+                batch_contexts.append(context)
+                batch_kwargs.append(processed_kwargs)
+                batch_pil_images.append(pil_images)
+
+                try:
+                    if pil_images:
+                        # Create VLM request with images
+                        vlm_request = self._create_vlm_request(context, pil_images, processed_kwargs)
+                        vlm_requests.append(vlm_request)
+                    else:
+                        # No images - append None placeholder
+                        vlm_requests.append(None)
+                except Exception as e:
+                    logger.error(f"Error creating VLM request: {e}")
+                    vlm_requests.append(None)
+
+            # Generate for all valid requests in the batch
+            valid_requests = [r for r in vlm_requests if r is not None]
+            valid_indices = [i for i, r in enumerate(vlm_requests) if r is not None]
+
+            batch_results = [""] * len(vlm_requests)
+
+            if valid_requests:
+                try:
+                    # Generate using the engine for all valid requests at once
+                    result = engine.generate(valid_requests)
+
+                    # Decode the generated tokens for each request
+                    for i, idx in enumerate(valid_indices):
+                        if result.tokens and i < len(result.tokens):
+                            generated_tokens = result.tokens[i]
+                            text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+
+                            # Post-process with stop sequences
+                            until = batch_kwargs[idx].get("until", [])
+                            if until:
+                                for stop_seq in until:
+                                    if stop_seq in text:
+                                        text = text.split(stop_seq)[0]
+                                        break
+
+                            batch_results[idx] = text
+                except Exception as e:
+                    logger.error(f"Error during batch VLM generation: {e}")
+
+            # Add batch results to overall results
+            for i, text in enumerate(batch_results):
                 results.append(text)
 
                 # Log sample if enabled
-                bucket = self.sample_outputs.get(self._current_task, [])
-                if len(bucket) < 100:  # Limit samples
-                    bucket.append({
-                        "prompt": context,
-                        "generation": text,
-                        "num_images": len(pil_images),
-                    })
-                    self.sample_outputs[self._current_task] = bucket
-
-            except Exception as e:
-                logger.error(f"Error during VLM generation: {e}")
-                results.append("")
+                if batch_pil_images[i]:
+                    bucket = self.sample_outputs.get(self._current_task, [])
+                    if len(bucket) < 100:  # Limit samples
+                        bucket.append({
+                            "prompt": batch_contexts[i],
+                            "generation": text,
+                            "num_images": len(batch_pil_images[i]),
+                        })
+                        self.sample_outputs[self._current_task] = bucket
 
         return results
 
@@ -630,7 +664,7 @@ def run_vlm_eval_harness(
             # Log to tracker
             for metric_name, value in metrics.items():
                 if isinstance(value, (int, float)):
-                    levanter.tracker.log({f"vlm_eval/{task_name}/{metric_name}": value})
+                    levanter.tracker.log({f"vlm_eval/{task_name}/{metric_name}": value}, step=0)
 
     return results
 
