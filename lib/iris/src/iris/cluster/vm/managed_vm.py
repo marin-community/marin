@@ -80,12 +80,14 @@ echo "[iris-init] Probing TPU metadata..."
 METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
 METADATA_HEADER="Metadata-Flavor: Google"
 
-# Derive TPU slice name from instance name by stripping -w{{N}} suffix.
+# Derive TPU slice name from instance name by stripping worker suffix.
+# Handles both -wN (original) and -w-N (GCP multi-host) formats.
 # Example: "iris-v5litepod_16-abc123-w0" -> "iris-v5litepod_16-abc123"
+# Example: "t1v-n-598bede5-w-0" -> "t1v-n-598bede5"
 INSTANCE_NAME=$(curl -sf -H "$METADATA_HEADER" \
     "http://metadata.google.internal/computeMetadata/v1/instance/name" 2>/dev/null || echo "")
 if [ -n "$INSTANCE_NAME" ]; then
-    export TPU_NAME=$(echo "$INSTANCE_NAME" | sed 's/-w[0-9]*$//')
+    export TPU_NAME=$(echo "$INSTANCE_NAME" | sed 's/-w-*[0-9]*$//')
 fi
 
 # Fetch accelerator-type as TPU_TYPE (e.g., v5litepod-16)
@@ -148,9 +150,8 @@ sudo docker pull {docker_image}
 
 echo "[iris-init] Phase: worker_start"
 
-# Stop existing worker if running (idempotent)
-sudo docker stop iris-worker 2>/dev/null || true
-sudo docker rm iris-worker 2>/dev/null || true
+# Force-remove existing worker (handles restart policy race)
+sudo docker rm -f iris-worker 2>/dev/null || true
 
 # Clean up ALL iris-managed task containers by label
 echo "[iris-init] Cleaning up iris task containers"
@@ -501,6 +502,53 @@ class ManagedVm:
             return True
         except Exception:
             return False
+
+    def reload(self) -> None:
+        """Re-run bootstrap script to pull new image and restart container.
+
+        This is faster than recreating the VM - it SSHs into the existing VM
+        and re-runs the bootstrap sequence (pull image, stop old container,
+        start new one, health check).
+
+        Raises:
+            RuntimeError: If bootstrap fails or health check times out
+        """
+        logger.info("VM %s: Reloading (re-running bootstrap)", self.info.vm_id)
+
+        # Clear previous log and reset state
+        self._log_lines = []
+        self._phase = ""
+        self._transition(vm_pb2.VM_STATE_INITIALIZING)
+
+        # Build and run bootstrap script
+        script = _build_bootstrap_script(
+            self._bootstrap_config,
+            self.info.address,
+            self._discovery_preamble,
+        )
+
+        try:
+            result = run_streaming_with_retry(
+                self._conn,
+                script,
+                max_retries=3,
+                overall_timeout=600,
+                on_line=self._log,
+            )
+
+            if result.returncode != 0:
+                error_msg = f"Exit code {result.returncode}"
+                self._log(f"[iris-init] Reload failed: {error_msg}")
+                raise RuntimeError(f"Reload failed: {error_msg}")
+
+            logger.info("VM %s: Reload complete", self.info.vm_id)
+            self._transition(vm_pb2.VM_STATE_READY)
+
+        except Exception as e:
+            self.info.init_error = str(e)
+            self._dump_log_on_failure()
+            self._transition(vm_pb2.VM_STATE_FAILED)
+            raise RuntimeError(f"VM {self.info.vm_id} reload failed: {e}") from e
 
     @property
     def is_terminal(self) -> bool:

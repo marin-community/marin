@@ -23,7 +23,7 @@ This script provides end-to-end validation of an Iris cluster:
 5. Cleans up on success/failure/interrupt
 
 Usage:
-    # Basic smoke test (logs to .agents/logs/smoke-test-{timestamp}/)
+    # Basic smoke test (logs to logs/smoke-test-{timestamp}/)
     uv run python scripts/smoke-test.py --config examples/eu-west4.yaml
 
     # With custom log directory
@@ -34,7 +34,7 @@ Usage:
     uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --timeout 2700
 
     # Keep cluster running on failure for debugging
-    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --no-cleanup-on-failure
+    uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --no-cleanup
 """
 
 import logging
@@ -63,6 +63,7 @@ from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.config import load_config
 from iris.cluster.vm.debug import (
     cleanup_iris_resources,
+    controller_tunnel,
     discover_controller_vm,
     list_docker_containers,
     list_iris_tpus,
@@ -444,10 +445,11 @@ class SmokeTestConfig:
     timeout_seconds: int = 1800  # 30 min total
     job_timeout_seconds: int = DEFAULT_JOB_TIMEOUT
     tpu_type: str = "v5litepod-16"
-    cleanup_on_failure: bool = True
+    cleanup: bool = True
     clean_start: bool = True  # Delete existing resources before starting
     prefix: str | None = None  # Unique prefix for controller VM name (sets label_prefix in config)
     local: bool = False  # Run locally without GCP
+    fast: bool = False  # Fast mode: redeploy containers on existing VMs instead of recreating
 
     @property
     def label_prefix(self) -> str:
@@ -569,7 +571,7 @@ class SmokeTestRunner:
                 self._image_region = zone.rsplit("-", 1)[0]  # "europe-west4-b" -> "europe-west4"
                 self._image_project = project
 
-                # Phase 0a: Build and push images
+                # Phase 0a: Build and push images (always needed for code changes)
                 self.logger.section("PHASE 0a: Building Images")
                 if not self._build_images():
                     self.logger.log("Image build failed!", level="ERROR")
@@ -577,62 +579,39 @@ class SmokeTestRunner:
                 if self._interrupted or self._check_deadline():
                     return False
 
-                # Phase 0b: Clean start (delete existing resources)
-                if self.config.clean_start:
-                    self.logger.section("PHASE 0b: Clean Start")
-                    self._cleanup_existing(zone, project)
+                if self.config.fast:
+                    # Fast mode: reload existing VMs instead of recreating
+                    self.logger.section("FAST MODE: Reloading Cluster")
+                    manager.reload()
+                    self.logger.log("Cluster reloaded successfully")
                     if self._interrupted or self._check_deadline():
                         return False
+                else:
+                    # Normal mode: clean start + create VMs
+                    if self.config.clean_start:
+                        self.logger.section("PHASE 0b: Clean Start")
+                        self._cleanup_existing(zone, project)
+                        if self._interrupted or self._check_deadline():
+                            return False
 
-            # Start cluster and run tests via connect() (handles tunnel for GCP, direct for local)
-            self.logger.section("Starting Cluster")
-            with manager.connect() as url:
-                if self._interrupted or self._check_deadline():
-                    return False
-                self.logger.log(f"Connected to controller at {url}")
+            # Start cluster and run tests. We avoid connect() context manager
+            # because it always calls stop() on exit — we handle cleanup ourselves
+            # to support --no-cleanup.
+            if not self.config.fast:
+                self.logger.section("Starting Cluster")
+                manager.start()
 
-                # GCP-only: start log streaming
-                if not manager.is_local:
-                    label_prefix = self.config.label_prefix
-                    self._controller_streamer = DockerLogStreamer(
-                        mode="controller",
-                        zone=zone,
-                        project=project,
-                        log_tree=self.log_tree,
-                        container_name="iris-controller",
-                        label_prefix=label_prefix,
-                    )
-                    self._controller_streamer.start()
-                    self.logger.log("Started controller log streaming")
+            if manager.is_local:
+                url = f"http://localhost:{DEFAULT_CONTROLLER_PORT}"
+                self._run_cluster_tests(url, manager, zone, project)
+            else:
+                self.logger.section("Connecting to Cluster")
+                with controller_tunnel(zone, project, label_prefix=self.config.label_prefix) as url:
+                    self._run_cluster_tests(url, manager, zone, project)
 
-                    self._worker_streamer = DockerLogStreamer(
-                        mode="workers",
-                        zone=zone,
-                        project=project,
-                        log_tree=self.log_tree,
-                        container_name="iris-worker",
-                        label_prefix=label_prefix,
-                    )
-                    self._worker_streamer.start()
-                    self.logger.log("Started worker log streaming")
-
-                # Start task scheduling monitor
-                self._scheduling_monitor = TaskSchedulingMonitor(
-                    controller_url=url,
-                    log_tree=self.log_tree,
-                    logger=self.logger,
-                )
-                self._scheduling_monitor.start()
-                self.logger.log("Started task scheduling monitor")
-
-                # Run tests
-                self.logger.section("Running Tests")
-                self._run_tests(url)
-
-                # Results
-                self.logger.section("Results Summary")
-                success = self._print_results()
-
+            # Results
+            self.logger.section("Results Summary")
+            success = self._print_results()
             return success
 
         except Exception as e:
@@ -930,6 +909,51 @@ class SmokeTestRunner:
         finally:
             rpc_client.close()
 
+    def _run_cluster_tests(self, url: str, manager: ClusterManager, zone: str, project: str) -> None:
+        """Run tests against the cluster."""
+        if self._interrupted or self._check_deadline():
+            return
+
+        self.logger.log(f"Connected to controller at {url}")
+
+        # GCP-only: start log streaming
+        if not manager.is_local:
+            label_prefix = self.config.label_prefix
+            self._controller_streamer = DockerLogStreamer(
+                mode="controller",
+                zone=zone,
+                project=project,
+                log_tree=self.log_tree,
+                container_name="iris-controller",
+                label_prefix=label_prefix,
+            )
+            self._controller_streamer.start()
+            self.logger.log("Started controller log streaming")
+
+            self._worker_streamer = DockerLogStreamer(
+                mode="workers",
+                zone=zone,
+                project=project,
+                log_tree=self.log_tree,
+                container_name="iris-worker",
+                label_prefix=label_prefix,
+            )
+            self._worker_streamer.start()
+            self.logger.log("Started worker log streaming")
+
+        # Start task scheduling monitor
+        self._scheduling_monitor = TaskSchedulingMonitor(
+            controller_url=url,
+            log_tree=self.log_tree,
+            logger=self.logger,
+        )
+        self._scheduling_monitor.start()
+        self.logger.log("Started task scheduling monitor")
+
+        # Run tests
+        self.logger.section("Running Tests")
+        self._run_tests(url)
+
     def _print_results(self) -> bool:
         """Print final results and return True if all passed."""
         all_passed = True
@@ -967,11 +991,14 @@ class SmokeTestRunner:
             self._scheduling_monitor.stop()
         self.logger.log("Stopped background monitoring")
 
-        should_cleanup = self.config.cleanup_on_failure or all(r.passed for r in self._results)
+        # In fast mode, skip VM cleanup to preserve VMs for next run
+        if self.config.fast:
+            self.logger.log("Fast mode: keeping VMs running for next iteration")
+            return
 
-        if not should_cleanup:
-            self.logger.log("Skipping cleanup (--no-cleanup-on-failure and tests failed)")
-            self.logger.log("Controller VM left running for debugging")
+        if not self.config.cleanup:
+            self.logger.log("Skipping cleanup (--no-cleanup)")
+            self.logger.log("VMs left running for debugging or --fast iteration")
             return
 
         if self._manager:
@@ -1020,7 +1047,7 @@ class SmokeTestRunner:
 @click.option(
     "--log-dir",
     type=click.Path(path_type=Path),
-    help="Log directory path (default: .agents/logs/smoke-test-{timestamp})",
+    help="Log directory path (default: logs/smoke-test-{timestamp})",
 )
 @click.option(
     "--tpu-type",
@@ -1028,9 +1055,9 @@ class SmokeTestRunner:
     help="TPU type for test jobs (default: v5litepod-16)",
 )
 @click.option(
-    "--no-cleanup-on-failure",
+    "--no-cleanup",
     is_flag=True,
-    help="Keep cluster running on failure for debugging",
+    help="Skip cleanup, leaving VMs running for debugging or --fast iteration",
 )
 @click.option(
     "--no-clean-start",
@@ -1048,27 +1075,36 @@ class SmokeTestRunner:
     is_flag=True,
     help="Run locally without GCP (in-process controller and workers)",
 )
+@click.option(
+    "--fast",
+    is_flag=True,
+    help="Fast mode: redeploy containers on existing VMs without recreating",
+)
 def main(
     config_path: Path,
     timeout_seconds: int,
     job_timeout_seconds: int,
     log_dir: Path | None,
     tpu_type: str,
-    no_cleanup_on_failure: bool,
+    no_cleanup: bool,
     no_clean_start: bool,
     prefix: str | None,
     local: bool,
+    fast: bool,
 ):
     """Run Iris cluster autoscaling smoke test.
 
     This script starts a cluster, submits TPU jobs to exercise autoscaling,
     and validates that everything works correctly. On completion (or failure),
-    the cluster is cleaned up unless --no-cleanup-on-failure is specified.
+    the cluster is cleaned up unless --no-cleanup is specified.
 
     Examples:
 
-        # Basic smoke test
+        # Basic smoke test (full VM creation)
         uv run python scripts/smoke-test.py --config examples/eu-west4.yaml
+
+        # Fast mode: redeploy containers on existing VMs (much faster for iteration)
+        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --fast
 
         # With custom log directory
         uv run python scripts/smoke-test.py --config examples/eu-west4.yaml \\
@@ -1078,12 +1114,12 @@ def main(
         uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --timeout 2700
 
         # Keep cluster running on failure for debugging
-        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --no-cleanup-on-failure
+        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --no-cleanup
     """
     # Create default log directory with timestamp if not provided
     if log_dir is None:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        log_dir = Path(".agents") / "logs" / f"smoke-test-{timestamp}"
+        log_dir = Path("logs") / f"smoke-test-{timestamp}"
 
     config = SmokeTestConfig(
         config_path=config_path,
@@ -1091,10 +1127,11 @@ def main(
         job_timeout_seconds=job_timeout_seconds,
         log_dir=log_dir,
         tpu_type=tpu_type,
-        cleanup_on_failure=not no_cleanup_on_failure,
+        cleanup=not no_cleanup,
         clean_start=not no_clean_start,
         prefix=prefix,
         local=local,
+        fast=fast,
     )
 
     runner = SmokeTestRunner(config)

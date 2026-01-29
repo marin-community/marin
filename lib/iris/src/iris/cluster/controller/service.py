@@ -34,10 +34,11 @@ from iris.cluster.controller.events import (
     TaskStateChangedEvent,
     WorkerRegisteredEvent,
 )
-from iris.cluster.controller.scheduler import TaskScheduleResult
+from iris.cluster.controller.scheduler import SchedulingContext, TaskScheduleResult
 from iris.cluster.controller.state import ControllerEndpoint, ControllerState, ControllerTask
 from iris.cluster.types import JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2, vm_pb2
+from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
 from iris.rpc.proto_utils import task_state_name
 from iris.time_utils import now_ms
@@ -72,7 +73,7 @@ class SchedulerProtocol(Protocol):
         """Send KILL RPCs to workers for tasks that were running."""
         ...
 
-    def task_schedule_status(self, task: ControllerTask) -> TaskScheduleResult:
+    def task_schedule_status(self, task: ControllerTask, context: SchedulingContext) -> TaskScheduleResult:
         """Get the current scheduling status of a task (for dashboard display)."""
         ...
 
@@ -121,21 +122,16 @@ class ControllerServiceImpl:
             if self._state.get_job(JobId(job_id)):
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists")
 
-            # Handle bundle_blob: upload to bundle store if provided
+            # Handle bundle_blob: upload to bundle store, then replace blob
+            # with the resulting GCS path (preserving all other fields).
             if request.bundle_blob:
                 bundle_path = self._bundle_store.write_bundle(job_id, request.bundle_blob)
 
-                request = cluster_pb2.Controller.LaunchJobRequest(
-                    name=request.name,
-                    entrypoint=request.entrypoint,
-                    resources=request.resources,
-                    environment=request.environment,
-                    bundle_gcs_path=bundle_path,
-                    bundle_hash=request.bundle_hash,
-                    ports=list(request.ports),
-                    scheduling_timeout_seconds=request.scheduling_timeout_seconds,
-                    parent_job_id=request.parent_job_id,
-                )
+                new_request = cluster_pb2.Controller.LaunchJobRequest()
+                new_request.CopyFrom(request)
+                new_request.ClearField("bundle_blob")
+                new_request.bundle_gcs_path = bundle_path
+                request = new_request
 
             # Submit job via event API
             self._state.handle_event(
@@ -190,6 +186,10 @@ class ControllerServiceImpl:
                 for attempt in task.attempts
             ]
 
+            current_attempt = task.current_attempt
+            task_started_at_ms = current_attempt.started_at_ms or 0 if current_attempt else 0
+            task_finished_at_ms = current_attempt.finished_at_ms or 0 if current_attempt else 0
+
             task_statuses.append(
                 cluster_pb2.TaskStatus(
                     task_id=str(task.task_id),
@@ -198,8 +198,8 @@ class ControllerServiceImpl:
                     state=task.state,
                     worker_id=str(task.worker_id) if task.worker_id else "",
                     worker_address=worker_address,
-                    started_at_ms=task.started_at_ms or 0,
-                    finished_at_ms=task.finished_at_ms or 0,
+                    started_at_ms=task_started_at_ms,
+                    finished_at_ms=task_finished_at_ms,
                     exit_code=task.exit_code or 0,
                     error=task.error or "",
                     current_attempt_id=task.current_attempt_id,
@@ -284,9 +284,14 @@ class ControllerServiceImpl:
                 total_failure_count += task.failure_count
                 total_preemption_count += task.preemption_count
                 state_name = task_state_name(task.state)
-                task_state_counts[state_name] = task_state_counts.get(state_name, 0) + 1
+                friendly_name = state_name.replace("TASK_STATE_", "").lower()
+                task_state_counts[friendly_name] = task_state_counts.get(friendly_name, 0) + 1
                 if state_name in ("TASK_STATE_SUCCEEDED", "TASK_STATE_KILLED"):
                     completed_count += 1
+
+            # Job-level diagnostic uses the job error; per-task scheduling
+            # diagnostics are computed in list_tasks where they belong.
+            pending_reason = j.error or ""
 
             jobs.append(
                 cluster_pb2.JobStatus(
@@ -305,6 +310,7 @@ class ControllerServiceImpl:
                     task_state_counts=task_state_counts,
                     task_count=len(tasks),
                     completed_count=completed_count,
+                    pending_reason=pending_reason,
                 )
             )
         return cluster_pb2.Controller.ListJobsResponse(jobs=jobs)
@@ -329,6 +335,10 @@ class ControllerServiceImpl:
             if worker:
                 worker_address = worker.address
 
+        current_attempt = task.current_attempt
+        started_at_ms = current_attempt.started_at_ms or 0 if current_attempt else 0
+        finished_at_ms = current_attempt.finished_at_ms or 0 if current_attempt else 0
+
         return cluster_pb2.Controller.GetTaskStatusResponse(
             task=cluster_pb2.TaskStatus(
                 task_id=str(task.task_id),
@@ -337,8 +347,8 @@ class ControllerServiceImpl:
                 state=task.state,
                 worker_id=str(task.worker_id) if task.worker_id else "",
                 worker_address=worker_address,
-                started_at_ms=task.started_at_ms or 0,
-                finished_at_ms=task.finished_at_ms or 0,
+                started_at_ms=started_at_ms,
+                finished_at_ms=finished_at_ms,
                 exit_code=task.exit_code or 0,
                 error=task.error or "",
                 current_attempt_id=task.current_attempt_id,
@@ -360,6 +370,10 @@ class ControllerServiceImpl:
             for job in self._state.list_all_jobs():
                 tasks.extend(self._state.get_job_tasks(job.job_id))
 
+        # Build scheduling context once for all pending-task diagnostics
+        workers = self._state.get_available_workers()
+        sched_context = SchedulingContext.from_workers(workers)
+
         task_statuses = []
         for task in tasks:
             # Look up worker address
@@ -371,10 +385,16 @@ class ControllerServiceImpl:
 
             # Add scheduling diagnostics for pending tasks
             pending_reason = ""
-            can_be_scheduled = task.can_be_scheduled()
+            can_be_scheduled = False
             if task.state == cluster_pb2.TASK_STATE_PENDING:
-                schedule_status = self._scheduler.task_schedule_status(task)
+                can_be_scheduled = task.can_be_scheduled()
+                schedule_status = self._scheduler.task_schedule_status(task, sched_context)
                 pending_reason = schedule_status.failure_reason or ""
+
+            # Use attempt timestamps since task-level timestamps are not set
+            current_attempt = task.current_attempt
+            started_at_ms = current_attempt.started_at_ms or 0 if current_attempt else 0
+            finished_at_ms = current_attempt.finished_at_ms or 0 if current_attempt else 0
 
             task_statuses.append(
                 cluster_pb2.TaskStatus(
@@ -384,8 +404,8 @@ class ControllerServiceImpl:
                     state=task.state,
                     worker_id=str(task.worker_id) if task.worker_id else "",
                     worker_address=worker_address,
-                    started_at_ms=task.started_at_ms or 0,
-                    finished_at_ms=task.finished_at_ms or 0,
+                    started_at_ms=started_at_ms,
+                    finished_at_ms=finished_at_ms,
                     exit_code=task.exit_code or 0,
                     error=task.error or "",
                     current_attempt_id=task.current_attempt_id,
@@ -504,18 +524,30 @@ class ControllerServiceImpl:
         ctx: Any,
     ) -> cluster_pb2.Controller.ListWorkersResponse:
         """List all workers with their running task counts."""
-        workers = [
-            cluster_pb2.Controller.WorkerHealthStatus(
-                worker_id=w.worker_id,
-                healthy=w.healthy,
-                consecutive_failures=w.consecutive_failures,
-                last_heartbeat_ms=w.last_heartbeat_ms,
-                running_job_ids=list(w.running_tasks),  # Now contains task IDs
-                address=w.address,
-                metadata=w.metadata,
+        workers = []
+        for w in self._state.list_all_workers():
+            # Generate status message for unhealthy workers
+            status_message = ""
+            if not w.healthy:
+                if w.consecutive_failures > 0:
+                    time_since_last_hb = now_ms() - w.last_heartbeat_ms if w.last_heartbeat_ms else 0
+                    time_since_str = f"{time_since_last_hb // 1000}s ago" if time_since_last_hb else "never"
+                    status_message = f"Heartbeat timeout ({w.consecutive_failures} failures, last seen {time_since_str})"
+                else:
+                    status_message = "Unhealthy (no failures recorded)"
+
+            workers.append(
+                cluster_pb2.Controller.WorkerHealthStatus(
+                    worker_id=w.worker_id,
+                    healthy=w.healthy,
+                    consecutive_failures=w.consecutive_failures,
+                    last_heartbeat_ms=w.last_heartbeat_ms,
+                    running_job_ids=list(w.running_tasks),  # Now contains task IDs
+                    address=w.address,
+                    metadata=w.metadata,
+                    status_message=status_message,
+                )
             )
-            for w in self._state.list_all_workers()
-        ]
         return cluster_pb2.Controller.ListWorkersResponse(workers=workers)
 
     # --- Endpoint Management ---
@@ -638,6 +670,43 @@ class ControllerServiceImpl:
             logs=logs,
             vm_id=vm_info.vm_id,
             state=vm_info.state,
+        )
+
+    # --- Task Logs (proxied to worker) ---
+
+    def get_task_logs(
+        self,
+        request: cluster_pb2.Controller.GetTaskLogsRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Controller.GetTaskLogsResponse:
+        """Get task logs by proxying the request to the worker that owns the task."""
+        job_id = JobId(request.job_id)
+        tasks = self._state.get_job_tasks(job_id)
+        task = next((t for t in tasks if t.task_index == request.task_index), None)
+        if not task:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.job_id}/task-{request.task_index} not found")
+
+        if not task.worker_id:
+            raise ConnectError(Code.FAILED_PRECONDITION, "Task has no assigned worker")
+
+        worker = self._state.get_worker(task.worker_id)
+        if not worker:
+            raise ConnectError(Code.NOT_FOUND, f"Worker {task.worker_id} not found")
+
+        log_filter = cluster_pb2.Worker.FetchLogsFilter(
+            start_ms=request.start_ms,
+            max_lines=request.limit,
+        )
+        worker_client = WorkerServiceClientSync(f"http://{worker.address}")
+        worker_resp = worker_client.fetch_task_logs(
+            cluster_pb2.Worker.FetchTaskLogsRequest(
+                task_id=str(task.task_id),
+                filter=log_filter,
+            )
+        )
+        return cluster_pb2.Controller.GetTaskLogsResponse(
+            logs=list(worker_resp.logs),
+            worker_address=worker.address,
         )
 
     # --- Transactions ---
