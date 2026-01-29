@@ -63,6 +63,7 @@ from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.config import load_config
 from iris.cluster.vm.debug import (
     cleanup_iris_resources,
+    controller_tunnel,
     discover_controller_vm,
     list_docker_containers,
     list_iris_tpus,
@@ -448,6 +449,7 @@ class SmokeTestConfig:
     clean_start: bool = True  # Delete existing resources before starting
     prefix: str | None = None  # Unique prefix for controller VM name (sets label_prefix in config)
     local: bool = False  # Run locally without GCP
+    fast: bool = False  # Fast mode: redeploy containers on existing VMs instead of recreating
 
     @property
     def label_prefix(self) -> str:
@@ -569,7 +571,7 @@ class SmokeTestRunner:
                 self._image_region = zone.rsplit("-", 1)[0]  # "europe-west4-b" -> "europe-west4"
                 self._image_project = project
 
-                # Phase 0a: Build and push images
+                # Phase 0a: Build and push images (always needed for code changes)
                 self.logger.section("PHASE 0a: Building Images")
                 if not self._build_images():
                     self.logger.log("Image build failed!", level="ERROR")
@@ -577,62 +579,38 @@ class SmokeTestRunner:
                 if self._interrupted or self._check_deadline():
                     return False
 
-                # Phase 0b: Clean start (delete existing resources)
-                if self.config.clean_start:
-                    self.logger.section("PHASE 0b: Clean Start")
-                    self._cleanup_existing(zone, project)
+                if self.config.fast:
+                    # Fast mode: reload existing VMs instead of recreating
+                    self.logger.section("FAST MODE: Reloading Cluster")
+                    manager.reload()
+                    self.logger.log("Cluster reloaded successfully")
                     if self._interrupted or self._check_deadline():
                         return False
+                else:
+                    # Normal mode: clean start + create VMs
+                    if self.config.clean_start:
+                        self.logger.section("PHASE 0b: Clean Start")
+                        self._cleanup_existing(zone, project)
+                        if self._interrupted or self._check_deadline():
+                            return False
 
-            # Start cluster and run tests via connect() (handles tunnel for GCP, direct for local)
-            self.logger.section("Starting Cluster")
-            with manager.connect() as url:
-                if self._interrupted or self._check_deadline():
-                    return False
-                self.logger.log(f"Connected to controller at {url}")
+            # Connect to cluster and run tests
+            # In fast mode, we already started the cluster via reload()
+            # In normal mode, connect() will start it
+            if self.config.fast and not manager.is_local:
+                self.logger.section("Connecting to Cluster")
+                # For fast mode, we need to establish tunnel but not start/stop
+                with controller_tunnel(zone, project, label_prefix=self.config.label_prefix) as url:
+                    self._run_cluster_tests(url, manager, zone, project)
+            else:
+                # Normal mode: use connect() context manager
+                self.logger.section("Starting Cluster")
+                with manager.connect() as url:
+                    self._run_cluster_tests(url, manager, zone, project)
 
-                # GCP-only: start log streaming
-                if not manager.is_local:
-                    label_prefix = self.config.label_prefix
-                    self._controller_streamer = DockerLogStreamer(
-                        mode="controller",
-                        zone=zone,
-                        project=project,
-                        log_tree=self.log_tree,
-                        container_name="iris-controller",
-                        label_prefix=label_prefix,
-                    )
-                    self._controller_streamer.start()
-                    self.logger.log("Started controller log streaming")
-
-                    self._worker_streamer = DockerLogStreamer(
-                        mode="workers",
-                        zone=zone,
-                        project=project,
-                        log_tree=self.log_tree,
-                        container_name="iris-worker",
-                        label_prefix=label_prefix,
-                    )
-                    self._worker_streamer.start()
-                    self.logger.log("Started worker log streaming")
-
-                # Start task scheduling monitor
-                self._scheduling_monitor = TaskSchedulingMonitor(
-                    controller_url=url,
-                    log_tree=self.log_tree,
-                    logger=self.logger,
-                )
-                self._scheduling_monitor.start()
-                self.logger.log("Started task scheduling monitor")
-
-                # Run tests
-                self.logger.section("Running Tests")
-                self._run_tests(url)
-
-                # Results
-                self.logger.section("Results Summary")
-                success = self._print_results()
-
+            # Results
+            self.logger.section("Results Summary")
+            success = self._print_results()
             return success
 
         except Exception as e:
@@ -930,6 +908,51 @@ class SmokeTestRunner:
         finally:
             rpc_client.close()
 
+    def _run_cluster_tests(self, url: str, manager: ClusterManager, zone: str, project: str) -> None:
+        """Run tests against the cluster."""
+        if self._interrupted or self._check_deadline():
+            return
+
+        self.logger.log(f"Connected to controller at {url}")
+
+        # GCP-only: start log streaming
+        if not manager.is_local:
+            label_prefix = self.config.label_prefix
+            self._controller_streamer = DockerLogStreamer(
+                mode="controller",
+                zone=zone,
+                project=project,
+                log_tree=self.log_tree,
+                container_name="iris-controller",
+                label_prefix=label_prefix,
+            )
+            self._controller_streamer.start()
+            self.logger.log("Started controller log streaming")
+
+            self._worker_streamer = DockerLogStreamer(
+                mode="workers",
+                zone=zone,
+                project=project,
+                log_tree=self.log_tree,
+                container_name="iris-worker",
+                label_prefix=label_prefix,
+            )
+            self._worker_streamer.start()
+            self.logger.log("Started worker log streaming")
+
+        # Start task scheduling monitor
+        self._scheduling_monitor = TaskSchedulingMonitor(
+            controller_url=url,
+            log_tree=self.log_tree,
+            logger=self.logger,
+        )
+        self._scheduling_monitor.start()
+        self.logger.log("Started task scheduling monitor")
+
+        # Run tests
+        self.logger.section("Running Tests")
+        self._run_tests(url)
+
     def _print_results(self) -> bool:
         """Print final results and return True if all passed."""
         all_passed = True
@@ -966,6 +989,11 @@ class SmokeTestRunner:
         if self._scheduling_monitor:
             self._scheduling_monitor.stop()
         self.logger.log("Stopped background monitoring")
+
+        # In fast mode, skip VM cleanup to preserve VMs for next run
+        if self.config.fast:
+            self.logger.log("Fast mode: keeping VMs running for next iteration")
+            return
 
         should_cleanup = self.config.cleanup_on_failure or all(r.passed for r in self._results)
 
@@ -1048,6 +1076,11 @@ class SmokeTestRunner:
     is_flag=True,
     help="Run locally without GCP (in-process controller and workers)",
 )
+@click.option(
+    "--fast",
+    is_flag=True,
+    help="Fast mode: redeploy containers on existing VMs without recreating",
+)
 def main(
     config_path: Path,
     timeout_seconds: int,
@@ -1058,6 +1091,7 @@ def main(
     no_clean_start: bool,
     prefix: str | None,
     local: bool,
+    fast: bool,
 ):
     """Run Iris cluster autoscaling smoke test.
 
@@ -1067,8 +1101,11 @@ def main(
 
     Examples:
 
-        # Basic smoke test
+        # Basic smoke test (full VM creation)
         uv run python scripts/smoke-test.py --config examples/eu-west4.yaml
+
+        # Fast mode: redeploy containers on existing VMs (much faster for iteration)
+        uv run python scripts/smoke-test.py --config examples/eu-west4.yaml --fast
 
         # With custom log directory
         uv run python scripts/smoke-test.py --config examples/eu-west4.yaml \\
@@ -1095,6 +1132,7 @@ def main(
         clean_start=not no_clean_start,
         prefix=prefix,
         local=local,
+        fast=fast,
     )
 
     runner = SmokeTestRunner(config)
