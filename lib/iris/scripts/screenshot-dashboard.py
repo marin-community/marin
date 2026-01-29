@@ -354,7 +354,7 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
 
         # Screenshot controller logs page
         logger.info("Capturing controller logs page")
-        page.goto(f"{dashboard_url}/logs")
+        page.goto(f"{dashboard_url}#logs")
         page.wait_for_load_state("domcontentloaded")
         page.wait_for_function(
             "() => !document.body.textContent.includes('Loading')",

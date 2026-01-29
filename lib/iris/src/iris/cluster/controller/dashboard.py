@@ -15,7 +15,7 @@
 """HTTP dashboard with Connect RPC and web UI.
 
 The dashboard serves:
-- Web UI at / (main dashboard)
+- Web UI at / (main dashboard with tabs: jobs, workers, endpoints, vms, autoscaler, logs)
 - Web UI at /job/{job_id} (job detail page)
 - Web UI at /vm/{vm_id} (VM detail page)
 - Connect RPC at /iris.cluster.ControllerService/* (called directly by JS)
@@ -75,7 +75,6 @@ class ControllerDashboard:
             Route("/", self._dashboard),
             Route("/job/{job_id}", self._job_detail_page),
             Route("/vm/{vm_id}", self._vm_detail_page),
-            Route("/logs", self._logs_page),
             Route("/health", self._health),
             Mount(rpc_wsgi_app.path, app=rpc_app),
             static_files_mount(),
@@ -90,9 +89,6 @@ class ControllerDashboard:
 
     def _vm_detail_page(self, _request: Request) -> HTMLResponse:
         return HTMLResponse(html_shell("VM Detail", "/static/controller/vm-detail.js"))
-
-    def _logs_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("Iris Logs", "/static/controller/logs-page.js"))
 
     def _health(self, _request: Request) -> JSONResponse:
         """Health check endpoint for controller availability."""
