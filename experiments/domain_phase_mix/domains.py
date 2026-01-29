@@ -541,8 +541,79 @@ EXPANDED_SFT_DOMAIN = register_domain(
 
 
 # ============================================================================
+# DOLMA DOMAINS (for two-stage experiment replication)
+# ============================================================================
+
+# Token counts from GCS caches (gs://marin-us-central1/tokenized/dolma/...)
+# Queried using levanter TreeCache on 2025-01-28
+DOLMA_TOKENS = {
+    "dolma/c4": 134062553328,  # 134.06B tokens
+    "dolma/starcoder": 216567300822,  # 216.57B tokens
+}
+
+_dolma_cache: dict = {}
+
+
+def _dolma_split(split: str):
+    """Get a Dolma split tokenized dataset (lazy).
+
+    Uses existing caches at gs://marin-us-central1/tokenized/dolma/
+    created by experiments/pretraining_datasets/dolma.py.
+    """
+    if split not in _dolma_cache:
+        from experiments.pretraining_datasets import tokenize_dolma
+
+        dolma_components = tokenize_dolma()
+        _dolma_cache[split] = dolma_components[split]
+    return _dolma_cache[split]
+
+
+# C4 Common Crawl domain (~134B tokens)
+C4_DOMAIN = register_domain(
+    Domain(
+        name="c4",
+        components=[
+            DatasetComponent(
+                name="dolma/c4",
+                step_fn=partial(_dolma_split, "dolma/c4"),
+                weight=DOLMA_TOKENS["dolma/c4"],
+            ),
+        ],
+        description="C4 Common Crawl web text from Dolma (~134B tokens)",
+    )
+)
+
+# StarCoder code domain (~217B tokens)
+STARCODER_DOMAIN = register_domain(
+    Domain(
+        name="starcoder",
+        components=[
+            DatasetComponent(
+                name="dolma/starcoder",
+                step_fn=partial(_dolma_split, "dolma/starcoder"),
+                weight=DOLMA_TOKENS["dolma/starcoder"],
+            ),
+        ],
+        description="StarCoder code data from Dolma (~217B tokens)",
+    )
+)
+
+
+# ============================================================================
 # COMPOSITE DOMAIN SETS
 # ============================================================================
+
+
+def get_two_stage_replication_domains() -> list[Domain]:
+    """Get domains for replicating the two-stage code experiment.
+
+    Uses C4 (common web data) and StarCoder (code data) from Dolma,
+    matching the data sources used in experiments/two_stage/.
+
+    Returns:
+        List of [C4_DOMAIN, STARCODER_DOMAIN]
+    """
+    return [C4_DOMAIN, STARCODER_DOMAIN]
 
 
 def get_three_partition_domains() -> list[Domain]:
