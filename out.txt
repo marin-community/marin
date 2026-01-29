@@ -1,86 +1,202 @@
-d with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
-2026-01-29T01:57:04 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:1339 - INFO :: Using cached download at /tmp/levanter_hf_cache/Qwen3-1.7B_8c0686fe4bf5/Qwen3-1.7B
-`rope_scaling`'s original_max_position_embeddings field must be less than max_position_embeddings, got 8192 and max_position_embeddings=2048
-2026-01-29T01:57:07 - 0 - levanter.compat.fsspec_safetensor - fsspec_safetensor.py:238 - INFO :: Reading 751 tensors from marin-us-east1/checkpoints/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/hf/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/step-39061/model.safetensors in 3 chunk(s) (total size: 4.28 GB)
-Reading marin-us-east1/checkpoints/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/hf/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/step-39061/model.safetensors: 100%|▉| 4.28G/4.28G [00:3
-2026-01-29T01:57:45 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:719 - WARNING :: Model vocab size (151936) does not match tokenizer vocab size (151669). Using model vocab size (151936).
-2026-01-29T01:57:46 - 0 - levanter.compat.hf_checkpoints - hf_checkpoints.py:719 - WARNING :: Model vocab size (151936) does not match tokenizer vocab size (151669). Using model vocab size (151936).
-2026-01-29T01:57:53 - 0 - levanter.data.image - image.py:351 - INFO :: Using Qwen3 tokens: image=<|image_pad|>, video=<|video_pad|>
-2026-01-29T01:57:53 - 0 - levanter.data.image - image.py:375 - INFO :: Created CustomVLMProcessor with Qwen2TokenizerFast (vocab_size=151643)
-2026-01-29T01:57:53 - 0 - __main__ - eval_vlm.py:309 - WARNING :: Unknown task: mmmu_val_art, trying lm-eval-harness
-2026-01-29T01:57:53 - 0 - levanter.vlm_eval_harness - vlm_eval_harness.py:622 - INFO :: Registering custom VLM tasks from: /home/ruili/marin_private3/configs/vlm_tasks
-2026-01-29T01:57:57 - 0 - levanter.vlm_eval_harness - vlm_eval_harness.py:644 - INFO :: Running VLM evaluation on tasks: ['mmmu_val_Art']
+COMPILATION_CACHE_DIR': 'gs://marin-us-east1/compilation-cache', 'JAX_PLATFORMS': '', 'FRAY_CLUSTER_SPEC': 'ray?namespace=fray_8a524834', 'PYTHONPATH': 'experiments:lib/fray/src:lib/haliax/src:lib/levanter/src:lib/marin/src:lib/zephyr/src'}, 'pip': {'packages': '/tmp/ray_reqs_f4a581a0e078ab94.txt'}, 'pip_check': False}
+(<lambda> pid=3502, ip=10.142.0.78) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(<lambda> pid=3494, ip=10.142.0.93) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(SliceActor pid=3366, ip=10.142.0.78) Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): ray::<lambda>() (pid=3351, ip=10.142.0.83)
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/requests/models.py", line 1026, in raise_for_status
+(SliceActor pid=3366, ip=10.142.0.78)     raise HTTPError(http_error_msg, response=self)
+(SliceActor pid=3366, ip=10.142.0.78) requests.exceptions.HTTPError: 504 Server Error: Gateway Time-out for url: https://huggingface.co/api/models/llava-hf/llava-onevision-qwen2-0.5b-ov-hf
+(SliceActor pid=3366, ip=10.142.0.78) 
+(SliceActor pid=3366, ip=10.142.0.78) The above exception was the direct cause of the following exception:
+(SliceActor pid=3366, ip=10.142.0.78) 
+(SliceActor pid=3366, ip=10.142.0.78) ray::<lambda>() (pid=3351, ip=10.142.0.83)
+(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda>
+(SliceActor pid=3366, ip=10.142.0.78)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+(SliceActor pid=3366, ip=10.142.0.78)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/main/train_vlm.py", line 525, in main
+(SliceActor pid=3366, ip=10.142.0.78)     tokenizer = config.data.the_tokenizer
+(SliceActor pid=3366, ip=10.142.0.78)                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/functools.py", line 1001, in __get__
+(SliceActor pid=3366, ip=10.142.0.78)     val = self.func(instance)
+(SliceActor pid=3366, ip=10.142.0.78)           ^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/data/image.py", line 2254, in the_tokenizer
+(SliceActor pid=3366, ip=10.142.0.78)     return self.the_processor.tokenizer
+(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/functools.py", line 1001, in __get__
+(SliceActor pid=3366, ip=10.142.0.78)     val = self.func(instance)
+(SliceActor pid=3366, ip=10.142.0.78)           ^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/data/image.py", line 2185, in the_processor
+(SliceActor pid=3366, ip=10.142.0.78)     proc = load_processor(self.processor)
+(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1404, in load_processor
+(SliceActor pid=3366, ip=10.142.0.78)     return _hf_load_with_rank_sync(
+(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1279, in _hf_load_with_rank_sync
+(SliceActor pid=3366, ip=10.142.0.78)     return _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, is_fsspec_path=is_fsspec_path, **kwargs)
+(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1165, in _hf_load_with_retry
+(SliceActor pid=3366, ip=10.142.0.78)     return load_fn(*args, **kwargs)
+(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/models/auto/processing_auto.py", line 396, in from_pretrained
+(SliceActor pid=3366, ip=10.142.0.78)     return processor_class.from_pretrained(
+(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/processing_utils.py", line 1394, in from_pretrained
+(SliceActor pid=3366, ip=10.142.0.78)     args = cls._get_arguments_from_pretrained(pretrained_model_name_or_path, **kwargs)
+(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/processing_utils.py", line 1453, in _get_arguments_from_pretrained
+(SliceActor pid=3366, ip=10.142.0.78)     args.append(attribute_class.from_pretrained(pretrained_model_name_or_path, **kwargs))
+(SliceActor pid=3366, ip=10.142.0.78)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/models/auto/tokenization_auto.py", line 1156, in from_pretrained
+(SliceActor pid=3366, ip=10.142.0.78)     return tokenizer_class.from_pretrained(pretrained_model_name_or_path, *inputs, **kwargs)
+(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2113, in from_pretrained
+(SliceActor pid=3366, ip=10.142.0.78)     return cls._from_pretrained(
+(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2395, in _from_pretrained
+(SliceActor pid=3366, ip=10.142.0.78)     tokenizer = cls._patch_mistral_regex(
+(SliceActor pid=3366, ip=10.142.0.78)                 ^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2442, in _patch_mistral_regex
+(SliceActor pid=3366, ip=10.142.0.78)     _is_local or (not _is_local and is_base_mistral(pretrained_model_name_or_path))
+(SliceActor pid=3366, ip=10.142.0.78)                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2432, in is_base_mistral
+(SliceActor pid=3366, ip=10.142.0.78)     model = model_info(model_id)
+(SliceActor pid=3366, ip=10.142.0.78)             ^^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py", line 114, in _inner_fn
+(SliceActor pid=3366, ip=10.142.0.78)     return fn(*args, **kwargs)
+(SliceActor pid=3366, ip=10.142.0.78)            ^^^^^^^^^^^^^^^^^^^
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/hf_api.py", line 2661, in model_info
+(SliceActor pid=3366, ip=10.142.0.78)     hf_raise_for_status(r)
+(SliceActor pid=3366, ip=10.142.0.78)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_http.py", line 475, in hf_raise_for_status
+(SliceActor pid=3366, ip=10.142.0.78)     raise _format(HfHubHTTPError, str(e), response) from e
+(SliceActor pid=3366, ip=10.142.0.78) huggingface_hub.errors.HfHubHTTPError: 504 Server Error: Gateway Time-out for url: https://huggingface.co/api/models/llava-hf/llava-onevision-qwen2-0.5b-ov-hf
+(<lambda> pid=3352, ip=10.142.0.101) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 29x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93) Task error ray::<lambda>() (pid=3351, ip=10.142.0.83)
+(run_on_pod_ray pid=3284, ip=10.142.0.93) 
+(run_on_pod_ray pid=3284, ip=10.142.0.93) 
+(run_on_pod_ray pid=3284, ip=10.142.0.93) ray::<lambda>() (pid=3351, ip=10.142.0.83)
+(run_on_pod_ray pid=3284, ip=10.142.0.93) Traceback (most recent call last):
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=3284, ip=10.142.0.93)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     return func(*args, **kwargs)
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=3284, ip=10.142.0.93) ray.exceptions.RayTaskError(HfHubHTTPError): ray::<lambda>() (pid=3351, ip=10.142.0.83)
+(run_on_pod_ray pid=3284, ip=10.142.0.93) 
+(run_on_pod_ray pid=3284, ip=10.142.0.93) 
+(run_on_pod_ray pid=3284, ip=10.142.0.93) ray::<lambda>() (pid=3351, ip=10.142.0.83)
+(run_on_pod_ray pid=3284, ip=10.142.0.93) Failed 1 times. Continuing to retry.
+(run_on_pod_ray pid=3284, ip=10.142.0.93) Traceback (most recent call last):
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/fray/src/fray/cluster/ray/tpu/execution.py", line 860, in run_on_pod_ray
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     tpu_results[future_to_index[f]] = TpuSuccess(ray.get(f))
+(run_on_pod_ray pid=3284, ip=10.142.0.93)                                                  ^^^^^^^^^^
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     return func(*args, **kwargs)
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 2967, in get
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     values, debugger_breakpoint = worker.get_objects(
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/worker.py", line 1015, in get_objects
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     raise value.as_instanceof_cause()
+(run_on_pod_ray pid=3284, ip=10.142.0.93) ray.exceptions.RayTaskError(HfHubHTTPError): ray::<lambda>() (pid=3351, ip=10.142.0.83)
+(run_on_pod_ray pid=3284, ip=10.142.0.93) 
+(run_on_pod_ray pid=3284, ip=10.142.0.93) 
+(run_on_pod_ray pid=3284, ip=10.142.0.93) ray::<lambda>() (pid=3351, ip=10.142.0.83)
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/requests/models.py", line 1026, in raise_for_status [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     raise HTTPError(http_error_msg, response=self) [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93) requests.exceptions.HTTPError: 504 Server Error: Gateway Time-out for url: https://huggingface.co/api/models/llava-hf/llava-onevision-qwen2-0.5b-ov-hf [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93) The above exception was the direct cause of the following exception: [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/fray/src/fray/cluster/ray/cluster.py", line 237, in <lambda> [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs) [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/main/train_vlm.py", line 525, in main [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     tokenizer = config.data.the_tokenizer [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)                 ^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/functools.py", line 1001, in __get__ [repeated 6x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     val = self.func(instance) [repeated 6x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^ [repeated 13x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/data/image.py", line 2254, in the_tokenizer [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     return self.the_processor.tokenizer [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/data/image.py", line 2185, in the_processor [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     proc = load_processor(self.processor) [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1404, in load_processor [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     return _hf_load_with_rank_sync( [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 6x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1279, in _hf_load_with_rank_sync [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     return _hf_load_with_retry(load_fn, *args, max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, is_fsspec_path=is_fsspec_path, **kwargs) [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/levanter/src/levanter/compat/hf_checkpoints.py", line 1165, in _hf_load_with_retry [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     return load_fn(*args, **kwargs) [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2113, in from_pretrained [repeated 12x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     return processor_class.from_pretrained( [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     args = cls._get_arguments_from_pretrained(pretrained_model_name_or_path, **kwargs) [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/processing_utils.py", line 1453, in _get_arguments_from_pretrained [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     args.append(attribute_class.from_pretrained(pretrained_model_name_or_path, **kwargs)) [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     return tokenizer_class.from_pretrained(pretrained_model_name_or_path, *inputs, **kwargs) [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     return cls._from_pretrained( [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)            ^^^^^^^^^^^^^^^^^^^^^ [repeated 5x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2395, in _from_pretrained [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     tokenizer = cls._patch_mistral_regex( [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2442, in _patch_mistral_regex [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     _is_local or (not _is_local and is_base_mistral(pretrained_model_name_or_path)) [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/transformers/tokenization_utils_base.py", line 2432, in is_base_mistral [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     model = model_info(model_id) [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)             ^^^^^^^^^^^^^^^^^^^^ [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_validators.py", line 114, in _inner_fn [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     return fn(*args, **kwargs) [repeated 5x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/hf_api.py", line 2661, in model_info [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     hf_raise_for_status(r) [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)   File "/home/ray/anaconda3/lib/python3.11/site-packages/huggingface_hub/utils/_http.py", line 475, in hf_raise_for_status [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93)     raise _format(HfHubHTTPError, str(e), response) from e [repeated 3x across cluster]
+(run_on_pod_ray pid=3284, ip=10.142.0.93) huggingface_hub.errors.HfHubHTTPError: 504 Server Error: Gateway Time-out for url: https://huggingface.co/api/models/llava-hf/llava-onevision-qwen2-0.5b-ov-hf [repeated 3x across cluster]
+(<lambda> pid=3354, ip=10.142.0.88) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(<lambda> pid=3337, ip=10.142.0.90) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+(<lambda> pid=3336, ip=10.142.0.87) Rate limited by HuggingFace Hub, retrying in 2.5s (attempt 1/20)
+(<lambda> pid=3353, ip=10.142.0.101) Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`. [repeated 30x across cluster]
+(<lambda> pid=3352, ip=10.142.0.83) Rate limited by HuggingFace Hub, retrying in 8.7s (attempt 3/20) [repeated 56x across cluster]
+(autoscaler +9m59s) Adding 4 node(s) of type tpu_slice_v6e_128.
+(autoscaler +9m59s) Resized to 960 CPUs, 32 TPUs.
+(<lambda> pid=3352, ip=10.142.0.83) Rate limited by HuggingFace Hub, retrying in 16.3s (attempt 4/20) [repeated 28x across cluster]
+(<lambda> pid=3353, ip=10.142.0.77) Rate limited by HuggingFace Hub, retrying in 16.6s (attempt 4/20) [repeated 25x across cluster]
+(<lambda> pid=3352, ip=10.142.0.83) Rate limited by HuggingFace Hub, retrying in 32.1s (attempt 5/20)
+(<lambda> pid=3354, ip=10.142.0.88) Rate limited by HuggingFace Hub, retrying in 32.1s (attempt 5/20)
+(<lambda> pid=3353, ip=10.142.0.101) Rate limited by HuggingFace Hub, retrying in 32.1s (attempt 5/20) [repeated 20x across cluster]
+(<lambda> pid=3353, ip=10.142.0.77) Rate limited by HuggingFace Hub, retrying in 32.8s (attempt 5/20) [repeated 3x across cluster]
+(<lambda> pid=3353, ip=10.142.0.74) Rate limited by HuggingFace Hub, retrying in 32.1s (attempt 5/20)
+(<lambda> pid=3503, ip=10.142.0.78) Rate limited by HuggingFace Hub, retrying in 32.2s (attempt 5/20)
+(<lambda> pid=3352, ip=10.142.0.83) Rate limited by HuggingFace Hub, retrying in 64.2s (attempt 6/20)
+(<lambda> pid=3354, ip=10.142.0.88) Rate limited by HuggingFace Hub, retrying in 65.0s (attempt 6/20)
+(<lambda> pid=3353, ip=10.142.0.101) Rate limited by HuggingFace Hub, retrying in 64.5s (attempt 6/20) [repeated 20x across cluster]
+(<lambda> pid=3353, ip=10.142.0.77) Rate limited by HuggingFace Hub, retrying in 64.1s (attempt 6/20)
+(<lambda> pid=3353, ip=10.142.0.74) Rate limited by HuggingFace Hub, retrying in 64.6s (attempt 6/20)
+2026-01-28 18:25:48,128 WARNING cluster.py:350 -- Job 126886023333520 failed with message: Task failed because the node it was running on is dead or unavailable. Node IP: 10.142.0.93, node ID: e8f83c910ddd1ddb3c74c3269eabfb47f80523fb7496bbf70f07173f. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=e8f83c910ddd1ddb3c74c3269eabfb47f80523fb7496bbf70f07173f`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.142.0.93`.
+2026-01-28 18:25:48,129 INFO executor.py:796 -- Waiting for 126886023333520 to finish for step checkpoints/vlm-official-qwen3-1.7b-stage3_4096-0
+2026-01-28 18:25:48,129 - INFO - Starting wait for job 126886023333520
+2026-01-28 18:25:48,129 WARNING cluster.py:350 -- Job 126886023333520 failed with message: Task failed because the node it was running on is dead or unavailable. Node IP: 10.142.0.93, node ID: e8f83c910ddd1ddb3c74c3269eabfb47f80523fb7496bbf70f07173f. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=e8f83c910ddd1ddb3c74c3269eabfb47f80523fb7496bbf70f07173f`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.142.0.93`.
+2026-01-28 18:25:48,129 - INFO - Job 126886023333520 completed with status failed
 Traceback (most recent call last):
-  File "<frozen runpy>", line 198, in _run_module_as_main
-  File "<frozen runpy>", line 88, in _run_code
-  File "/home/ruili/marin_private3/lib/levanter/src/levanter/main/eval_vlm.py", line 387, in <module>
-    levanter.config.main(main)()
-  File "/home/ruili/marin_private3/lib/levanter/src/levanter/config.py", line 110, in wrapper_inner
+  File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/experiments/VLM/demo_vlm_train_round3_us_east1.py", line 259, in <module>
+    executor_main(steps=[vlm_training])
+  File "/home/ray/anaconda3/lib/python3.11/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
     response = fn(cfg, *args, **kwargs)
                ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/lib/levanter/src/levanter/main/eval_vlm.py", line 324, in main
-    harness_results = run_vlm_eval_harness(
-                      ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/lib/levanter/src/levanter/vlm_eval_harness.py", line 658, in run_vlm_eval_harness
-    results = evaluator.simple_evaluate(**eval_kwargs)
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/utils.py", line 456, in _wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/evaluator.py", line 288, in simple_evaluate
-    task_dict = get_task_dict(
-                ^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 637, in get_task_dict
-    task_name_from_string_dict = task_manager.load_task_or_group(
-                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 428, in load_task_or_group
-    collections.ChainMap(
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 430, in <lambda>
-    lambda task: self._load_individual_task_or_group(task),
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 328, in _load_individual_task_or_group
-    subtask_list = self._get_tasklist(name_or_config)
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 238, in _get_tasklist
-    return self.task_index[name]["task"]
-           ~~~~~~~~~~~~~~~^^^^^^
-KeyError: 'mmmu_val_Art'
-Traceback (most recent call last):
-  File "<frozen runpy>", line 198, in _run_module_as_main
-  File "<frozen runpy>", line 88, in _run_code
-  File "/home/ruili/marin_private3/lib/levanter/src/levanter/main/eval_vlm.py", line 387, in <module>
-    levanter.config.main(main)()
-  File "/home/ruili/marin_private3/lib/levanter/src/levanter/config.py", line 110, in wrapper_inner
-    response = fn(cfg, *args, **kwargs)
-               ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/lib/levanter/src/levanter/main/eval_vlm.py", line 324, in main
-    harness_results = run_vlm_eval_harness(
-                      ^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/lib/levanter/src/levanter/vlm_eval_harness.py", line 658, in run_vlm_eval_harness
-    results = evaluator.simple_evaluate(**eval_kwargs)
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/utils.py", line 456, in _wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/evaluator.py", line 288, in simple_evaluate
-    task_dict = get_task_dict(
-                ^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 637, in get_task_dict
-    task_name_from_string_dict = task_manager.load_task_or_group(
-                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 428, in load_task_or_group
-    collections.ChainMap(
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 430, in <lambda>
-    lambda task: self._load_individual_task_or_group(task),
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 328, in _load_individual_task_or_group
-    subtask_list = self._get_tasklist(name_or_config)
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/ruili/marin_private3/.venv/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 238, in _get_tasklist
-    return self.task_index[name]["task"]
-           ~~~~~~~~~~~~~~~^^^^^^
-KeyError: 'mmmu_val_Art'
-wandb: 
-wandb: 🚀 View run glorious-valley-22 at: https://wandb.ai/rui_li/levanter/runs/1cnmsf4c
-wandb: Find logs at: wandb/run-20260129_015701-1cnmsf4c/logs
+  File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/marin/src/marin/execution/executor.py", line 1252, in executor_main
+    executor.run(steps=steps, dry_run=config.dry_run, run_only=config.run_only, force_run_failed=config.force_run_failed)
+  File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/marin/src/marin/execution/executor.py", line 743, in run
+    self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
+  File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/marin/src/marin/execution/executor.py", line 797, in _run_steps
+    runner.wait()
+  File "/tmp/ray/session_2026-01-17_16-16-15_548716_657/runtime_resources/working_dir_files/_ray_pkg_355dd941824ddedf/lib/marin/src/marin/execution/executor.py", line 207, in wait
+    raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
+RuntimeError: Job 126886023333520 failed: Task failed because the node it was running on is dead or unavailable. Node IP: 10.142.0.93, node ID: e8f83c910ddd1ddb3c74c3269eabfb47f80523fb7496bbf70f07173f. This can happen if the node was preempted, had a hardware failure, or its raylet crashed unexpectedly. To see node death information, use `ray list nodes --filter node_id=e8f83c910ddd1ddb3c74c3269eabfb47f80523fb7496bbf70f07173f`, check the Ray dashboard cluster page, search the node ID in the GCS logs, or use `ray logs raylet.out -ip 10.142.0.93`.
+(<lambda> pid=3503, ip=10.142.0.78) Rate limited by HuggingFace Hub, retrying in 64.0s (attempt 6/20)
 (base) ruili@t1v-n-e79ac63c-w-0:~/marin_private3$ 

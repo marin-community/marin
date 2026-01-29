@@ -93,7 +93,7 @@ vision_config = SiglipVisionConfig(
 
 # Language model: Qwen3-1.7B
 text_config = Qwen3Config(
-    max_seq_len=2048,
+    max_seq_len=4096,
     hidden_dim=2048,
     intermediate_dim=6144,
     num_heads=16,
@@ -154,13 +154,13 @@ VISION_FEATURE_HEIGHT = vision_config.image_size // vision_config.patch_size  # 
 data_config = ImageMixtureDatasetConfig(
     cache_dir="cache/vlm_demo",
     # Processor for image preprocessing
-    processor="llava-hf/llava-onevision-qwen2-0.5b-ov-hf",
+    processor="gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf",
     # Custom tokenizer for text processing (uses CustomVLMProcessor internally)
     tokenizer="Qwen/Qwen3-1.7B",
     configs={"train": data_source},
     train_weights={"train": 1.0},
     use_cache=False,  # Streaming mode (no disk caching)
-    max_length=2048,  # Match model's max_seq_len to avoid truncation issues
+    max_length=4096,  # Match model's max_seq_len to avoid truncation issues
     vision_feature_height=VISION_FEATURE_HEIGHT,  # Override: use model's actual feature size
     # Disable anyres to match model config (disable_anyres=True sets vision_aspect_ratio="single")
     # Without this, the HF processor uses anyres_max_9 which calculates extra tokens for grid patches

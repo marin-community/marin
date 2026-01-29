@@ -187,6 +187,84 @@ def default_eval(
     )
 
 
+def evaluate_levanter_vlm_evaluation_harness(
+    model_name: str,
+    model_path: str,
+    evals: list[EvalTaskConfig],
+    resource_config: ResourceConfig,
+    max_eval_instances: int | None = None,
+    discover_latest_checkpoint: bool = True,
+) -> ExecutorStep:
+    """
+    Create an ExecutorStep to evaluate a VLM using Levanter VLM Evaluation Harness.
+
+    Args:
+        model_name: Name of the model (for logging/tracking)
+        model_path: Path to the HF checkpoint
+        evals: List of VLM evaluation tasks (e.g., mmmu_val_Art, chartqa)
+        resource_config: TPU resource configuration
+        max_eval_instances: Maximum number of examples per task
+        discover_latest_checkpoint: Whether to discover latest checkpoint from path
+    """
+    logger.info(f"Running VLM evals on the following tasks: {evals}")
+    return ExecutorStep(
+        name=f"evaluation/vlm_evaluation_harness/{model_name}",
+        fn=evaluate,
+        config=EvaluationConfig(
+            evaluator="levanter_vlm_evaluation_harness",
+            model_name=None,  # imputed automatically
+            model_path=model_path,
+            evaluation_path=this_output_path(),
+            evals=versioned(evals),
+            discover_latest_checkpoint=discover_latest_checkpoint,
+            max_eval_instances=versioned(max_eval_instances),
+            resource_config=resource_config,
+            launch_with_ray=True,
+        ),
+    )
+
+
+def default_eval_vlm(
+    step: ExecutorStep | InputName | str,
+    resource_config: ResourceConfig = ResourceConfig.with_tpu("v5p-8"),
+    evals: list[EvalTaskConfig] | None = None,
+    max_eval_instances: int | None = None,
+    discover_latest_checkpoint: bool = True,
+) -> ExecutorStep:
+    """
+    Create an ExecutorStep to evaluate a VLM model.
+
+    Args:
+        step: Training step, InputName, or model path string
+        resource_config: TPU resource configuration (default: v5p-8)
+        evals: List of VLM evaluation tasks (e.g., mmmu_val_Art, chartqa)
+              Defaults to mmmu_val if not specified
+        max_eval_instances: Maximum number of examples per task
+        discover_latest_checkpoint: Whether to discover latest checkpoint from path
+
+    Returns:
+        ExecutorStep configured for VLM evaluation
+    """
+    name, model_step_path = extract_model_name_and_path(step)
+
+    logger.info(f"Creating VLM evaluation step for {name}")
+
+    # Default to MMMU validation set
+    if evals is None:
+        evals = [EvalTaskConfig("mmmu_val", 0)]
+
+    logger.info(f"Running VLM evals on the following tasks: {evals}")
+
+    return evaluate_levanter_vlm_evaluation_harness(
+        name,
+        model_step_path,
+        evals,
+        resource_config,
+        max_eval_instances=max_eval_instances,
+        discover_latest_checkpoint=discover_latest_checkpoint,
+    )
+
+
 def default_base_eval(
     step: ExecutorStep | InputName | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),

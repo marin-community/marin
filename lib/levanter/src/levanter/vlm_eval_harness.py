@@ -98,6 +98,9 @@ class VLMEvalHarnessConfig:
     generation_kwargs: dict = field(
         default_factory=lambda: {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
     )
+    vlm_batch_size: int = 1
+    """Number of VLM requests to process in parallel. Higher values use more memory but improve throughput.
+    Set to -1 to auto-detect based on device count. Default: 1 (sequential processing)."""
 
     def to_task_spec(self) -> list[str | dict]:
         """Convert task specifications to a list of dictionaries or strings."""
@@ -131,6 +134,7 @@ class LevanterVLMHarnessLM(TemplateLM):
         mp: jmp.Policy | None = None,
         generation_kwargs: dict | None = None,
         max_images: int = 10,
+        vlm_batch_size: int = 1,
     ):
         """
         Initialize the VLM harness adapter.
@@ -145,6 +149,7 @@ class LevanterVLMHarnessLM(TemplateLM):
             mp: Mixed precision policy
             generation_kwargs: Default generation parameters
             max_images: Maximum number of images per sample
+            vlm_batch_size: Number of VLM requests to process in parallel (default: 1)
         """
         super().__init__()
         self.model = model
@@ -156,6 +161,7 @@ class LevanterVLMHarnessLM(TemplateLM):
         self.mp = mp
         self._generation_kwargs = generation_kwargs or {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
         self.max_images = max_images
+        self.vlm_batch_size = vlm_batch_size
 
         # Engine will be created lazily
         self._engine: LlavaInferenceEngine | None = None
@@ -230,11 +236,13 @@ class LevanterVLMHarnessLM(TemplateLM):
         """Lazily create and return the inference engine."""
         if self._engine is None:
             max_length = self.EvalPos.size
+            # Use vlm_batch_size for max_seqs to enable batched VLM inference
+            max_seqs = max(1, self.vlm_batch_size)
             self._engine_config = InferenceEngineConfig(
                 max_stop_seqs=4,
                 max_stop_tokens=16,
                 max_seq_len=max_length,
-                max_seqs=1,  # VLM currently supports single request
+                max_seqs=max_seqs,
                 page_size=8,
                 compute_dtype=jnp.bfloat16,
                 hbm_utilization=0.5,
