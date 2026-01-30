@@ -293,6 +293,36 @@ def _wait_for_slice_obj(slice_obj, poll_interval: float = 5.0) -> bool:
         time.sleep(poll_interval)
 
 
+def _validate_cluster_health(config) -> None:
+    """Validate cluster by submitting a test job and waiting for it to complete."""
+    from pathlib import Path
+
+    from iris.cluster.types import ResourceSpec
+
+    zone = config.zone
+    project = config.project_id
+    label_prefix = config.label_prefix or "iris"
+
+    with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
+        click.echo(f"  Connected to controller at {tunnel_url}")
+        client = IrisClient.remote(tunnel_url, workspace=Path.cwd())
+
+        def _validate_hello():
+            print("Reload validation job OK")
+            return 42
+
+        click.echo("  Submitting validation job...")
+        job = client.submit(
+            entrypoint=Entrypoint.from_callable(_validate_hello),
+            name="reload-validate",
+            resources=ResourceSpec(cpu=1),
+        )
+        click.echo(f"  Job submitted: {job.job_id}")
+        click.echo("  Waiting for job (workers may need to scale up)...")
+        status = job.wait(timeout=600, raise_on_failure=True)
+        click.echo(f"  Job completed: {cluster_pb2.JobState.Name(status.state)}")
+
+
 # =============================================================================
 # Main CLI Group
 # =============================================================================
@@ -1212,6 +1242,53 @@ def cluster_restart(ctx):
     ctx.invoke(cluster_stop)
     click.echo("")
     ctx.invoke(cluster_start)
+
+
+@cluster.command("reload")
+@click.option("--no-build", is_flag=True, help="Skip image building (use existing images)")
+@click.option("--validate", is_flag=True, help="Submit a health check after reload")
+@click.pass_context
+def cluster_reload(ctx, no_build: bool, validate: bool):
+    """Reload cluster by rebuilding images and redeploying on existing VMs.
+
+    Faster than a full restart: rebuilds Docker images, SSHs into existing
+    controller and worker VMs, pulls new images, and restarts containers.
+    Existing VMs are preserved.
+
+    Use --validate to verify the reloaded controller is healthy by establishing
+    an SSH tunnel and checking the health endpoint.
+
+    Examples:
+        uv run iris cluster --config=examples/eu-west4.yaml reload
+        uv run iris cluster --config=examples/eu-west4.yaml reload --no-build
+        uv run iris cluster --config=examples/eu-west4.yaml reload --validate
+    """
+    config = ctx.obj.get("config")
+    if not config:
+        click.echo("Error: --config is required", err=True)
+        raise SystemExit(1)
+
+    if not no_build:
+        _build_cluster_images(config)
+
+    manager = ClusterManager(config)
+
+    click.echo("Reloading cluster (controller + workers)...")
+    try:
+        address = manager.reload()
+        click.echo(f"Cluster reloaded. Controller at {address}")
+    except Exception as e:
+        click.echo(f"Failed to reload cluster: {e}", err=True)
+        raise SystemExit(1) from e
+
+    if validate:
+        click.echo("\nValidating cluster health...")
+        try:
+            _validate_cluster_health(config)
+            click.echo("Cluster validation passed.")
+        except Exception as e:
+            click.echo(f"Cluster validation failed: {e}", err=True)
+            raise SystemExit(1) from e
 
 
 @cluster.command("status")
