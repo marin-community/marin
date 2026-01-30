@@ -63,10 +63,15 @@ def test_env_var_ray_returns_ray_client(monkeypatch):
     assert isinstance(client, RayClient)
 
 
-def test_env_var_iris_raises(monkeypatch):
+def test_env_var_iris_creates_client(monkeypatch):
+    from unittest.mock import patch
+
     monkeypatch.setenv("FRAY_CLIENT_SPEC", "iris://host:1234")
-    with pytest.raises(NotImplementedError, match="Iris"):
-        current_client()
+    with patch("fray.v2.iris_backend.IrisClientLib"):
+        from fray.v2.iris_backend import FrayIrisClient
+
+        client = current_client()
+        assert isinstance(client, FrayIrisClient)
 
 
 def test_explicit_client_overrides_env_var(monkeypatch):

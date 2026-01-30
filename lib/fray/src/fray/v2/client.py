@@ -184,7 +184,14 @@ def _parse_client_spec(spec: str) -> Client:
         namespace = params["namespace"][0] if "namespace" in params else None
         return RayClient(namespace=namespace)
     elif scheme == "iris":
-        raise NotImplementedError("Iris client is not yet supported")
+        from pathlib import Path
+
+        from fray.v2.iris_backend import FrayIrisClient
+
+        controller_address = f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname
+        params = parse_qs(parsed.query)
+        workspace = Path(params["ws"][0]) if "ws" in params else None
+        return FrayIrisClient(controller_address, workspace=workspace)
     else:
         raise ValueError(f"Unknown FRAY_CLIENT_SPEC scheme: {scheme!r}")
 
