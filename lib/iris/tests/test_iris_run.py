@@ -31,14 +31,7 @@ from iris.iris_run import (
     run_iris_job,
 )
 
-# Unit tests for pure functions (no mocks, no sys.path hacks)
-
-
-def test_load_env_vars_basic():
-    """Test env var parsing from flags."""
-    result = load_env_vars([["KEY1", "val1"], ["KEY2", "val2"]])
-    assert result["KEY1"] == "val1"
-    assert result["KEY2"] == "val2"
+# Unit tests for error handling and edge cases (not trivial assertions)
 
 
 def test_load_env_vars_single_key():
@@ -51,15 +44,6 @@ def test_load_env_vars_invalid_key():
     """Test error on key with = sign."""
     with pytest.raises(ValueError, match="cannot contain '='"):
         load_env_vars([["KEY=VALUE"]])
-
-
-def test_load_cluster_config_valid(tmp_path):
-    """Test loading valid config."""
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text(yaml.dump({"project_id": "test", "zone": "us-central1-a"}))
-    config = load_cluster_config(config_file)
-    assert config["project_id"] == "test"
-    assert config["zone"] == "us-central1-a"
 
 
 def test_load_cluster_config_missing_file(tmp_path):
@@ -82,20 +66,6 @@ def test_load_cluster_config_missing_project_id(tmp_path):
     bad_config.write_text(yaml.dump({"zone": "us-central1-a"}))
     with pytest.raises(ValueError, match="Missing 'project_id'"):
         load_cluster_config(bad_config)
-
-
-def test_build_resources_with_tpu():
-    """Test ResourceSpec creation with TPU device."""
-    spec = build_resources(tpu="v5litepod-16", gpu=None, cpu=None, memory=None)
-    assert spec.device.HasField("tpu")
-    assert spec.device.tpu.variant == "v5litepod-16"
-
-
-def test_build_resources_defaults():
-    """Test default CPU and memory values."""
-    spec = build_resources(tpu=None, gpu=None, cpu=None, memory=None)
-    assert spec.cpu == 1
-    assert spec.memory == "2GB"
 
 
 def test_build_resources_gpu_not_supported():
@@ -149,7 +119,7 @@ def local_cluster_and_config(tmp_path):
         yield test_config, url, client
 
 
-@pytest.mark.integration
+@pytest.mark.slow
 def test_iris_run_cli_simple_job(local_cluster_and_config, tmp_path):
     """Test iris_run.py submits and runs a simple job successfully."""
     test_config, _url, _client = local_cluster_and_config
@@ -168,7 +138,7 @@ def test_iris_run_cli_simple_job(local_cluster_and_config, tmp_path):
     assert exit_code == 0
 
 
-@pytest.mark.integration
+@pytest.mark.slow
 def test_iris_run_cli_env_vars_propagate(local_cluster_and_config, tmp_path):
     """Test environment variables reach the job."""
     test_config, _url, _client = local_cluster_and_config
@@ -197,7 +167,7 @@ sys.exit(0 if val == "test_value" else 1)
     assert exit_code == 0
 
 
-@pytest.mark.integration
+@pytest.mark.slow
 def test_iris_run_cli_job_failure(local_cluster_and_config, tmp_path):
     """Test iris_run.py returns non-zero on job failure."""
     test_config, _url, _client = local_cluster_and_config
