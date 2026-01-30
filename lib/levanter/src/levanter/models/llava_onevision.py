@@ -1671,9 +1671,6 @@ class _LlavaInferenceWrapper(eqx.Module):
         if self._batched_image_features is None or self._slot_to_segment_map is None:
             raise ValueError("Batched mode data not set. Call set_batched_request_data() first.")
 
-        import logging
-        logger = logging.getLogger(__name__)
-
         lm = self.model.language_model
         num_tokens = tokens.axis_size("position")
 
@@ -1698,22 +1695,8 @@ class _LlavaInferenceWrapper(eqx.Module):
         # so segment_indices directly corresponds to the correct segment for image feature lookup
         segment_ids = segment_indices
 
-        # Diagnostic logging to verify segment count matches
+        # Get number of segments from batched data
         num_batched_segments = len(self._batched_num_patches_per_segment)
-        actual_num_seqs = int(batch_info.num_seqs)
-        if actual_num_seqs != num_batched_segments:
-            logger.error(
-                f"MISMATCH: batch_info.num_seqs={actual_num_seqs} != "
-                f"len(_batched_num_patches_per_segment)={num_batched_segments}"
-            )
-            logger.error(f"batch_info.slot_ids={batch_info.slot_ids.array}")
-            logger.error(f"batch_info.cu_q_lens={batch_info.cu_q_lens.array}")
-        else:
-            logger.debug(f"Segment count OK: num_seqs={actual_num_seqs}, num_segments={num_batched_segments}")
-
-        # Log segment_ids distribution for debugging
-        unique_segments = jnp.unique(segment_ids)
-        logger.debug(f"segment_ids unique values: {unique_segments}, max={jnp.max(segment_ids)}")
 
         # 3. Identify image placeholder tokens
         image_token_id = self.model.config.image_token_index
@@ -1736,16 +1719,8 @@ class _LlavaInferenceWrapper(eqx.Module):
         patches_per_segment = total_patches_axis // num_batched_segments
         features_per_segment_padded = patches_per_segment * features_per_patch
 
-        logger.info(
-            f"Feature layout: total_patches={total_patches_axis}, num_segments={num_batched_segments}, "
-            f"patches_per_segment={patches_per_segment}, features_per_patch={features_per_patch}, "
-            f"features_per_segment={features_per_segment_padded}"
-        )
-        logger.info(f"Original num_patches_per_segment (before padding): {self._batched_num_patches_per_segment}")
-
         # segment_feature_starts[s] = s * features_per_segment_padded
         segment_feature_starts = jnp.arange(num_batched_segments) * features_per_segment_padded
-        logger.info(f"segment_feature_starts: {segment_feature_starts}")
 
         # Compute per-segment cumsum of image placeholders using scan
         def segment_cumsum_fn(carry, x):
