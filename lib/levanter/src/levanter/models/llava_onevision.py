@@ -1690,10 +1690,28 @@ class _LlavaInferenceWrapper(eqx.Module):
         segment_indices = jnp.searchsorted(cu_q_lens, positions, side='right') - 1
         segment_indices = jnp.clip(segment_indices, 0, num_seqs - 1)
 
-        # segment_indices maps each token to its sequence index in the batch (0, 1, 2, ...)
-        # Since we assign slot_ids as 0, 1, 2, ... in the same order as requests,
-        # segment_indices directly corresponds to segment_ids for image feature mapping
-        segment_ids = segment_indices
+        # segment_indices maps each token to its batch position index (0, 1, 2, ...)
+        # We need to convert batch position → slot ID → segment index for image features
+        #
+        # batch_info.slot_ids[batch_pos] gives the actual slot ID for that position
+        # _slot_to_segment_map[slot_id] gives the segment index for image feature lookup
+        #
+        # This is important because the engine might pack sequences in a different order
+        # than how we stored the image features in set_batched_request_data()
+
+        # Step 1: Get the slot ID for each token based on its batch position
+        slot_ids_in_batch = batch_info.slot_ids.array  # shape: (num_seqs,)
+        slot_ids_per_token = slot_ids_in_batch[segment_indices]
+
+        # Step 2: Build a lookup array for slot_id → segment_id mapping
+        # We need to do this as an array operation for JAX compatibility
+        max_slot_id = max(self._slot_to_segment_map.keys()) + 1
+        slot_to_segment_arr = jnp.zeros(max_slot_id, dtype=jnp.int32)
+        for slot_id, seg_idx in self._slot_to_segment_map.items():
+            slot_to_segment_arr = slot_to_segment_arr.at[slot_id].set(seg_idx)
+
+        # Step 3: Map slot IDs to segment IDs for image feature lookup
+        segment_ids = slot_to_segment_arr[slot_ids_per_token]
 
         # 3. Identify image placeholder tokens
         image_token_id = self.model.config.image_token_index
