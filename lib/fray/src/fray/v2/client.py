@@ -16,20 +16,23 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import logging
+import os
 import time
-from collections.abc import Sequence
-from typing import Any, Protocol, runtime_checkable
+from collections.abc import Generator, Sequence
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from urllib.parse import parse_qs, urlparse
 
 from fray.v2.types import JobRequest, JobStatus, ResourceConfig
-
-# TYPE_CHECKING import to avoid circular dependency (actor.py imports from client.py)
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fray.v2.actor import ActorGroup, ActorHandle
 
 logger = logging.getLogger(__name__)
+
+_current_client_var: contextvars.ContextVar[Client | None] = contextvars.ContextVar("_current_client_var", default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -149,3 +152,65 @@ def wait_all(
             sleep_secs = min(sleep_secs * 1.5, max_sleep_secs)
 
     return results  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# current_client / set_current_client
+# ---------------------------------------------------------------------------
+
+
+def _parse_client_spec(spec: str) -> Client:
+    """Parse a FRAY_CLIENT_SPEC string into a Client instance.
+
+    Supported formats:
+        "local"              → LocalClient()
+        "local?threads=4"    → LocalClient(max_threads=4)
+        "ray"                → NotImplementedError
+        "iris://host:port"   → NotImplementedError
+    """
+    from fray.v2.local import LocalClient
+
+    parsed = urlparse(spec if "://" in spec else f"fray://{spec}")
+    scheme = parsed.scheme if "://" in spec else spec.split("?")[0]
+
+    if scheme == "local":
+        params = parse_qs(parsed.query if "://" in spec else (spec.split("?", 1)[1] if "?" in spec else ""))
+        threads = int(params["threads"][0]) if "threads" in params else 8
+        return LocalClient(max_threads=threads)
+    elif scheme == "ray":
+        raise NotImplementedError("Ray client is not yet supported")
+    elif scheme == "iris":
+        raise NotImplementedError("Iris client is not yet supported")
+    else:
+        raise ValueError(f"Unknown FRAY_CLIENT_SPEC scheme: {scheme!r}")
+
+
+def current_client() -> Client:
+    """Return the current fray Client.
+
+    Resolution order:
+        1. Explicitly set client (via set_current_client)
+        2. FRAY_CLIENT_SPEC environment variable
+        3. LocalClient() default
+    """
+    client = _current_client_var.get()
+    if client is not None:
+        return client
+
+    spec = os.environ.get("FRAY_CLIENT_SPEC")
+    if spec is not None:
+        return _parse_client_spec(spec)
+
+    from fray.v2.local import LocalClient
+
+    return LocalClient()
+
+
+@contextlib.contextmanager
+def set_current_client(client: Client) -> Generator[Client, None, None]:
+    """Context manager that sets the current client and restores on exit."""
+    token = _current_client_var.set(client)
+    try:
+        yield client
+    finally:
+        _current_client_var.reset(token)
