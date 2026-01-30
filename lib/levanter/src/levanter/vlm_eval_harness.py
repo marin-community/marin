@@ -372,6 +372,10 @@ class LevanterVLMHarnessLM(TemplateLM):
             max_seqs_in_prefill = max_seqs
             # Ensure queued tokens can hold at least one full prompt per sequence
             max_queued_tokens = max(512, max_seqs * 2)
+            # VLM requests typically have 1000-2000 tokens (including image tokens)
+            # For batch_size=8, need at least 8 * 2000 = 16000 tokens
+            # Set max_prefill_size to accommodate all batched requests
+            max_prefill_size = max_seqs * max_length
             self._engine_config = InferenceEngineConfig(
                 max_stop_seqs=4,
                 max_stop_tokens=16,
@@ -379,6 +383,7 @@ class LevanterVLMHarnessLM(TemplateLM):
                 max_seqs=max_seqs,
                 max_seqs_in_prefill=max_seqs_in_prefill,
                 max_queued_tokens=max_queued_tokens,
+                max_prefill_size=max_prefill_size,
                 page_size=8,
                 compute_dtype=jnp.bfloat16,
                 hbm_utilization=0.5,
