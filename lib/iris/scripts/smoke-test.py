@@ -746,6 +746,7 @@ class SmokeTestRunner:
         resources: ResourceSpec,
         coscheduling: CoschedulingConfig | None = None,
         environment: EnvironmentSpec | None = None,
+        replicas: int = 1,
         timeout: int | None = None,
     ) -> TestResult:
         """Generic job runner that handles submission, waiting, and result collection."""
@@ -758,6 +759,7 @@ class SmokeTestRunner:
                 resources=resources,
                 environment=environment or EnvironmentSpec(),
                 coscheduling=coscheduling,
+                replicas=replicas,
             )
             self.logger.log(f"  Job submitted: {job.job_id}")
 
@@ -858,10 +860,10 @@ class SmokeTestRunner:
             entrypoint=Entrypoint.from_callable(_distributed_work_job),
             job_name=f"smoke-coscheduled-{self._run_id}",
             resources=ResourceSpec(
-                replicas=4,
                 device=tpu_device(self.config.tpu_type),
             ),
             coscheduling=CoschedulingConfig(group_by="tpu-name"),
+            replicas=4,
         )
 
     def _run_jax_tpu_job(self, client: IrisClient) -> TestResult:
@@ -876,11 +878,11 @@ class SmokeTestRunner:
             entrypoint=Entrypoint.from_callable(_jax_tpu_job),
             job_name=f"smoke-jax-tpu-{self._run_id}",
             resources=ResourceSpec(
-                replicas=4,
                 device=tpu_device(self.config.tpu_type),
             ),
             environment=EnvironmentSpec(pip_packages=["jax[tpu]"]),
             coscheduling=CoschedulingConfig(group_by="tpu-name"),
+            replicas=4,
             timeout=300,
         )
 

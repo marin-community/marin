@@ -38,6 +38,7 @@ def make_job_request():
             entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
+            replicas=1,
         )
 
     return _make
@@ -308,7 +309,7 @@ def test_job_on_task_transition_sets_running_on_first_dispatch(make_job_request)
 def test_job_expands_to_correct_number_of_tasks(make_job_request):
     """expand_job_to_tasks creates correct number of tasks based on replicas."""
     request = make_job_request()
-    request.resources.replicas = 3
+    request.replicas = 3
     job = ControllerJob(job_id=JobId("test-job"), request=request)
 
     tasks = expand_job_to_tasks(job)

@@ -44,7 +44,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
 from contextvars import Context, copy_context
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import Enum, auto
 from queue import Empty, Queue
 from typing import Any, Generic, TypeVar
@@ -463,14 +463,14 @@ class WorkerPool:
         # Submit ONE job with replicas=num_workers (co-scheduling)
         # Each replica becomes a task that reads its task_index from the environment
         entrypoint = Entrypoint.from_callable(worker_job_entrypoint, self._pool_id)
-        resources_with_replicas = replace(self._config.resources, replicas=self._config.num_workers)
 
         job = self._client.submit(
             entrypoint=entrypoint,
             name=f"{self._config.name_prefix}-{self._pool_id}",
-            resources=resources_with_replicas,
+            resources=self._config.resources,
             environment=self._config.environment,
             ports=["actor"],
+            replicas=self._config.num_workers,
         )
         self._job = job
 

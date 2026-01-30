@@ -754,7 +754,7 @@ def expand_job_to_tasks(job: ControllerJob) -> list[ControllerTask]:
     Raises:
         ValueError: If replicas is < 1 or exceeds MAX_REPLICAS_PER_JOB
     """
-    num_replicas = job.request.resources.replicas or 1
+    num_replicas = job.request.replicas
 
     if num_replicas < 1:
         raise ValueError(f"Job {job.job_id} has invalid replicas={num_replicas}; must be >= 1")
@@ -1341,7 +1341,7 @@ class ControllerState:
         This method bypasses event logging and is intended for test setup only.
 
         If tasks are not provided, they are automatically created based on
-        the job's resources.replicas field (defaulting to 1). Each task gets
+        the job's replicas field (defaulting to 1). Each task gets
         a unique ID of the form "{job_id}/task-{index}".
 
         Args:

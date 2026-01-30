@@ -203,9 +203,6 @@ message ResourceSpecProto {
   // Device configuration
   DeviceConfig device = 5;
 
-  // Multi-instance configuration
-  int32 replicas = 6;         // Number of replicas/slices
-
   // Scheduling preferences
   reserved 7;                 // was: preemptible (now handled via constraints)
   repeated string regions = 8; // Preferred cloud regions
@@ -378,6 +375,10 @@ message Controller {
     // group_by attribute value. If not enough workers are available in any group,
     // the job stays pending.
     CoschedulingConfig coscheduling = 15;
+
+    // Number of tasks to create for gang scheduling (default: 1).
+    // For multi-host TPU jobs, set to the number of VMs in the slice.
+    int32 replicas = 20;
   }
 
   message LaunchJobResponse {

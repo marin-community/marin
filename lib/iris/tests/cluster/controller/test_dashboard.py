@@ -162,6 +162,7 @@ def job_request():
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
     )
 
 
@@ -277,7 +278,8 @@ def test_list_jobs_includes_task_counts(client, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-replica-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=3,
         environment=cluster_pb2.EnvironmentConfig(),
     )
     job_id = submit_job(state, "multi", request)
@@ -533,7 +535,8 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="cosched-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=2),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=2,
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
             cluster_pb2.Constraint(
@@ -569,7 +572,8 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="big-cosched",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
             cluster_pb2.Constraint(

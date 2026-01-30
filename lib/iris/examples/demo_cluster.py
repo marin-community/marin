@@ -246,11 +246,11 @@ class DemoCluster:
             resources=ResourceSpec(
                 cpu=1,
                 memory="512m",
-                replicas=4,
                 device=tpu_device("v5litepod-16"),
             ),
             environment=EnvironmentSpec(),
             coscheduling=CoschedulingConfig(group_by="tpu-name"),
+            replicas=4,
         )
         status = job.wait()
         results.append((str(job.job_id), cluster_pb2.JobState.Name(status.state)))
@@ -376,7 +376,6 @@ class DemoCluster:
 
 
 @click.command()
-@click.option("--no-browser", is_flag=True, help="Don't auto-open browser for Jupyter")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
 @click.option(
     "--controller-url",
@@ -389,18 +388,17 @@ class DemoCluster:
     help="Workspace directory (default: lib/iris)",
 )
 def main(
-    no_browser: bool,
     verbose: bool,
     controller_url: str | None,
     workspace: Path | None,
 ):
-    """Launch demo cluster with Jupyter notebook.
+    """Launch demo cluster and run notebook test.
 
     Runs in-process (no Docker required), with jobs running in threads.
     Can also connect to a remote controller via SSH tunnel.
 
     Examples:
-        # Launch interactive demo with Jupyter
+        # Run demo with local cluster
         uv run python examples/demo_cluster.py
 
         # Connect to remote controller via SSH tunnel
@@ -450,16 +448,9 @@ def main(
         print("Testing notebook execution...")
         if not demo.run_notebook():
             print("WARNING: Notebook test FAILED!")
+            print("(This may be due to kernel environment issues)")
         else:
             print("Notebook test passed!")
-
-        print()
-        print("Launching Jupyter notebook...")
-        url = demo.launch_jupyter(open_browser=not no_browser)
-        print(f"Notebook: {url}")
-        print()
-        print("Press Ctrl+C to stop.")
-        demo.wait_for_interrupt()
 
     print("Shutting down...")
 

@@ -154,6 +154,7 @@ def job_request():
             resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
             environment=cluster_pb2.EnvironmentConfig(),
             scheduling_timeout_seconds=scheduling_timeout_seconds,
+            replicas=1,
         )
 
     return _make
@@ -173,8 +174,9 @@ def coscheduled_job_request():
         req = cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             entrypoint=_make_test_entrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes, replicas=replicas),
+            resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
             environment=cluster_pb2.EnvironmentConfig(),
+            replicas=replicas,
         )
         req.coscheduling.group_by = group_by
         return req
@@ -338,6 +340,7 @@ def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
         resources=cluster_pb2.ResourceSpecProto(cpu=100, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         scheduling_timeout_seconds=1,
+        replicas=1,
     )
     tasks = submit_job(state, "j1", request, timestamp_ms=now_ms() - 2000)
 
@@ -363,6 +366,7 @@ def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
         resources=cluster_pb2.ResourceSpecProto(cpu=100, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
         scheduling_timeout_seconds=0,  # No timeout
+        replicas=1,
     )
     submit_job(state, "j1", request, timestamp_ms=now_ms() - 10000)
 
@@ -748,7 +752,8 @@ def test_coscheduled_job_assigns_all_tasks_atomically(scheduler, state, worker_m
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = "tpu-name"
@@ -785,7 +790,8 @@ def test_coscheduled_job_waits_when_insufficient_workers(scheduler, state, worke
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = "tpu-name"
@@ -813,7 +819,8 @@ def test_coscheduled_job_chooses_group_with_capacity(scheduler, state, worker_me
     busy_req = cluster_pb2.Controller.LaunchJobRequest(
         name="busy-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3, replicas=2),
+        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3),
+        replicas=2,
         environment=cluster_pb2.EnvironmentConfig(),
     )
     submit_job(state, "busy", busy_req)
@@ -836,7 +843,8 @@ def test_coscheduled_job_chooses_group_with_capacity(scheduler, state, worker_me
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3, replicas=4),
+        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3),
+        replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = "tpu-name"
@@ -867,7 +875,8 @@ def test_coscheduled_job_assigns_tasks_in_order(scheduler, state, worker_metadat
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = "tpu-name"
@@ -910,7 +919,8 @@ def test_coscheduled_job_with_constraints(scheduler, state, worker_metadata):
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = "tpu-name"
@@ -945,7 +955,8 @@ def test_coscheduled_job_with_partial_capacity(scheduler, state, worker_metadata
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3, replicas=4),
+        resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=1024**3),
+        replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = "tpu-name"
@@ -1005,7 +1016,8 @@ def test_tainted_worker_not_used_for_coscheduled_job(scheduler, state, worker_me
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = "tpu-name"
@@ -1056,6 +1068,7 @@ def test_tpu_chip_count_deducted_from_capacity(scheduler, state):
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
         ),
         environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
     )
     tasks1 = submit_job(state, "j1", req1)
 
@@ -1081,6 +1094,7 @@ def test_tpu_chip_count_deducted_from_capacity(scheduler, state):
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
         ),
         environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
     )
     submit_job(state, "j2", req2)
 
@@ -1118,6 +1132,7 @@ def test_tpu_job_rejected_when_insufficient_chips(scheduler, state):
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=8)),
         ),
         environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
     )
     submit_job(state, "j1", req)
 
@@ -1156,6 +1171,7 @@ def test_tpu_chips_released_after_task_completion(scheduler, state):
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
         ),
         environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
     )
     tasks1 = submit_job(state, "j1", req1)
     assign_task_to_worker(state, tasks1[0], WorkerId("w1"))
@@ -1171,6 +1187,7 @@ def test_tpu_chips_released_after_task_completion(scheduler, state):
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
         ),
         environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
     )
     submit_job(state, "j2", req2)
 
