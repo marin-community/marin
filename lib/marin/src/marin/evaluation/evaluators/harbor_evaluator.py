@@ -134,26 +134,47 @@ class HarborEvaluator(Evaluator):
     ) -> dict:
         """Run Harbor trials using CLI."""
 
+        # Find harbor executable (prefer venv installation)
+        import sys
+        import shutil
+
+        harbor_cmd = shutil.which("harbor")
+        if harbor_cmd is None:
+            # Try venv bin directory
+            venv_harbor = os.path.join(sys.prefix, "bin", "harbor")
+            if os.path.exists(venv_harbor):
+                harbor_cmd = venv_harbor
+            else:
+                raise RuntimeError("Harbor CLI not found. Please install harbor package.")
+
         # Build Harbor run command
         cmd = [
-            "harbor", "run",
-            "--dataset", f"{dataset}@{version}",
-            "--agent", agent,
-            "--model", model_name,
-            "--n-concurrent", str(n_concurrent),
+            harbor_cmd,
+            "run",
+            "--dataset",
+            f"{dataset}@{version}",
+            "--agent",
+            agent,
+            "--model",
+            model_name,
+            "--n-concurrent",
+            str(n_concurrent),
         ]
 
+        # Set environment type (default is docker which is "local")
         if env_type != "local":
             cmd.extend(["--env", env_type])
 
-        # Harbor supports task slicing
+        # Limit number of tasks
         if task_limit:
-            cmd.extend(["--tasks", f"0:{task_limit}"])
+            cmd.extend(["--n-tasks", str(task_limit)])
 
         # Create temporary output directory
-        with tempfile.TemporaryDirectory() as tmpdir:
+        # Use a manual temp dir to avoid permission issues with Docker-created files
+        tmpdir = tempfile.mkdtemp(prefix="harbor_eval_")
+        try:
             output_dir = Path(tmpdir) / "harbor_results"
-            cmd.extend(["--output", str(output_dir)])
+            cmd.extend(["--jobs-dir", str(output_dir)])
 
             logger.info(f"Running Harbor command: {' '.join(cmd)}")
 
@@ -165,16 +186,46 @@ class HarborEvaluator(Evaluator):
                     check=True,
                     timeout=7200,  # 2 hour timeout for safety
                 )
-                logger.info(f"Harbor execution completed")
+                logger.info("Harbor execution completed")
                 logger.debug(f"Harbor stdout: {result.stdout}")
 
-                # Read results
-                results_file = output_dir / "results.json"
-                if results_file.exists():
-                    with open(results_file) as f:
-                        return json.load(f)
+                # Harbor creates a timestamped job directory inside jobs-dir
+                # Look for the most recent job directory and read its results
+                job_dirs = sorted(output_dir.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+                if job_dirs:
+                    job_dir = job_dirs[0]
+                    logger.info(f"Reading results from {job_dir}")
+
+                    # Harbor stores results as trial-level files
+                    # Read all result.json files from trial directories
+                    results = {"trials": {}}
+
+                    # Harbor uses pattern: <task_name>__<random_id>
+                    trial_dirs = [d for d in job_dir.iterdir() if d.is_dir()]
+                    for trial_dir in trial_dirs:
+                        result_file = trial_dir / "result.json"
+                        if result_file.exists():
+                            with open(result_file) as f:
+                                trial_result = json.load(f)
+                                trial_id = trial_result.get("task_name", trial_dir.name)
+
+                                # Extract key information
+                                trial_data = {
+                                    "reward": (
+                                        trial_result.get("verifier_result", {}).get("rewards", {}).get("reward", 0.0)
+                                    ),
+                                    "status": "completed" if trial_result.get("exception_info") is None else "failed",
+                                    "trajectory": [],
+                                    "task_name": trial_id,
+                                    "started_at": trial_result.get("started_at"),
+                                    "finished_at": trial_result.get("finished_at"),
+                                }
+
+                                results["trials"][trial_id] = trial_data
+
+                    return results
                 else:
-                    logger.warning("No results.json found, returning empty results")
+                    logger.warning("No job directory found in harbor output")
                     return {"trials": {}}
 
             except subprocess.CalledProcessError as e:
@@ -185,20 +236,33 @@ class HarborEvaluator(Evaluator):
             except subprocess.TimeoutExpired as e:
                 logger.error("Harbor command timed out")
                 raise RuntimeError("Harbor execution timed out after 2 hours") from e
+        finally:
+            # Clean up temp directory, ignoring permission errors from Docker
+            try:
+                import shutil
+
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            except Exception as e:
+                logger.warning(f"Could not fully clean up temp directory {tmpdir}: {e}")
+                # Try using sudo to clean up Docker files if available
+                try:
+                    subprocess.run(["sudo", "rm", "-rf", tmpdir], check=False, capture_output=True)
+                except Exception:
+                    pass
 
     def _parse_results(self, results: dict) -> dict:
         """Parse Harbor results into Marin format."""
 
         trials = results.get("trials", {})
 
-        parsed = {
+        parsed: dict = {
             "trials": {},
             "aggregate": {
                 "total_trials": 0,
                 "successful_trials": 0,
                 "mean_reward": 0.0,
                 "accuracy": 0.0,
-            }
+            },
         }
 
         total_reward = 0.0
@@ -278,7 +342,7 @@ class HarborEvaluator(Evaluator):
                     "model": model_name,
                     "dataset": dataset,
                     "evaluator": "harbor",
-                }
+                },
             )
 
             # Log aggregate metrics
@@ -286,6 +350,7 @@ class HarborEvaluator(Evaluator):
 
             # Log table of per-trial results
             import pandas as pd
+
             trials_df = pd.DataFrame.from_dict(results["trials"], orient="index")
             wandb.log({"trials": wandb.Table(dataframe=trials_df)})
 

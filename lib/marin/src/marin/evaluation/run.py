@@ -80,41 +80,47 @@ def evaluate(config: EvaluationConfig) -> None:
 
 
 def _impute_model_config(config):
-    if config.model_path is None:
+    # For API models (e.g., Claude, GPT-4), we only need model_name
+    if config.model_path is None and config.model_name is None:
         raise ValueError("model_name or model_path must be provided")
 
-    model_path = _normalize_model_path(config.model_path)
-
-    if config.discover_latest_checkpoint:
-        model_path = discover_hf_checkpoints(model_path)[-1]
-
-    if config.model_name is None:
-        if model_path.endswith("/"):
-            model_path = model_path[:-1]
-
-        last_component = model_path.split("/")[-1]
-        if not last_component.startswith("step-"):
-            model_name = last_component
-        else:
-            # Have to impute the model name from the path.
-            model_name_parts = model_path.split("/")
-            # We're looking for something that looks like a run name and something that looks like a step
-            # e.g. $RUN/hf/step-$STEP.
-            step_part = model_name_parts[-1]
-            step_part = step_part.split("-")[1]
-
-            # Don't assume there's an hf. Look for a run name, which probably has a - in it.
-            for part in reversed(model_name_parts[:-1]):
-                if "-" in part:
-                    model_name = part
-                    break
-            else:
-                # just use the penultimate part
-                model_name = model_name_parts[-2]
-
-            model_name = f"{model_name}-{step_part}"
-    else:
+    # Handle API-only models (no local path)
+    if config.model_path is None:
+        model_path = None
         model_name = config.model_name
+    else:
+        model_path = _normalize_model_path(config.model_path)
+
+        if config.discover_latest_checkpoint:
+            model_path = discover_hf_checkpoints(model_path)[-1]
+
+        if config.model_name is None:
+            if model_path.endswith("/"):
+                model_path = model_path[:-1]
+
+            last_component = model_path.split("/")[-1]
+            if not last_component.startswith("step-"):
+                model_name = last_component
+            else:
+                # Have to impute the model name from the path.
+                model_name_parts = model_path.split("/")
+                # We're looking for something that looks like a run name and something that looks like a step
+                # e.g. $RUN/hf/step-$STEP.
+                step_part = model_name_parts[-1]
+                step_part = step_part.split("-")[1]
+
+                # Don't assume there's an hf. Look for a run name, which probably has a - in it.
+                for part in reversed(model_name_parts[:-1]):
+                    if "-" in part:
+                        model_name = part
+                        break
+                else:
+                    # just use the penultimate part
+                    model_name = model_name_parts[-2]
+
+                model_name = f"{model_name}-{step_part}"
+        else:
+            model_name = config.model_name
     generation_params = {}
     engine_kwargs = {}
     if config.generation_params is None:

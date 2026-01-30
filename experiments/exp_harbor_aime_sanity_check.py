@@ -44,7 +44,7 @@ from marin.execution.executor import executor_main
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
 logger = logging.getLogger(__name__)
@@ -53,17 +53,16 @@ logger = logging.getLogger(__name__)
 resource_config = ResourceConfig.with_tpu("v5p-8")
 
 # Model configuration
-# For the sanity check, we'll use Claude Opus 4 since it's well-supported by Harbor
+# For the sanity check, we'll use Claude Haiku 4.5 for faster, cost-effective evaluation
 MODEL = {
-    "name": "anthropic/claude-opus-4-1",
+    "name": "anthropic/claude-haiku-4-5-20251001",
     "path": None,  # API model, no path needed
 }
 
 # Check for API key
 if not os.environ.get("ANTHROPIC_API_KEY"):
     logger.warning(
-        "ANTHROPIC_API_KEY not set! The evaluation will fail without it. "
-        "Set it in your environment or .env file."
+        "ANTHROPIC_API_KEY not set! The evaluation will fail without it. " "Set it in your environment or .env file."
     )
 
 # AIME configuration from Harbor registry
@@ -78,8 +77,8 @@ logger.info("=" * 80)
 logger.info(f"Dataset: {DATASET}@{VERSION}")
 logger.info(f"Model: {MODEL['name']}")
 logger.info(f"Max instances: {MAX_INSTANCES}")
-logger.info(f"Agent: claude-code (Harbor's built-in Claude agent)")
-logger.info(f"Environment: local (Docker)")
+logger.info("Agent: claude-code (Harbor's built-in Claude agent)")
+logger.info("Environment: local (Docker)")
 logger.info("=" * 80)
 
 # Create evaluation step
