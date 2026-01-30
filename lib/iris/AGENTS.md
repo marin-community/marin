@@ -1,7 +1,7 @@
 # Agent Tips
 
 * Use the connect/RPC abstractions to implement and perform RPC calls. DO NOT use httpx or raw HTTP.
-* Use scripts/generate-protos.py to regenerate files after changing the `.proto` files.
+* Use scripts/generate_protos.py to regenerate files after changing the `.proto` files.
 * Prefer _shallow_, _functional_ code which returns control quickly to the user, vs callbacks or inheritance.
 
 ```

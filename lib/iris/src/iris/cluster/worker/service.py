@@ -23,7 +23,8 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
-from iris.cluster.worker.worker_types import Task
+from iris.cluster.worker.worker_types import TaskInfo
+from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
 
@@ -31,11 +32,14 @@ logger = logging.getLogger(__name__)
 
 
 class TaskProvider(Protocol):
-    """Protocol for task management operations."""
+    """Protocol for task management operations.
+
+    Returns TaskInfo (read-only view) to decouple service layer from TaskAttempt internals.
+    """
 
     def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str: ...
-    def get_task(self, task_id: str) -> Task | None: ...
-    def list_tasks(self) -> list[Task]: ...
+    def get_task(self, task_id: str) -> TaskInfo | None: ...
+    def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
     def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]: ...
 
@@ -43,8 +47,9 @@ class TaskProvider(Protocol):
 class WorkerServiceImpl:
     """Implementation of WorkerService RPC interface."""
 
-    def __init__(self, provider: TaskProvider):
+    def __init__(self, provider: TaskProvider, log_buffer: LogBuffer | None = None):
         self._provider = provider
+        self._log_buffer = log_buffer
         self._start_time = time.time()
 
     def run_task(
@@ -170,4 +175,27 @@ class WorkerServiceImpl:
             healthy=True,
             uptime_ms=int((time.time() - self._start_time) * 1000),
             running_tasks=running,
+        )
+
+    def get_process_logs(
+        self,
+        request: cluster_pb2.Worker.GetProcessLogsRequest,
+        _ctx: RequestContext,
+    ) -> cluster_pb2.Worker.GetProcessLogsResponse:
+        """Get worker process logs from the in-memory ring buffer."""
+        if not self._log_buffer:
+            return cluster_pb2.Worker.GetProcessLogsResponse(records=[])
+        prefix = request.prefix or None
+        limit = request.limit if request.limit > 0 else 200
+        records = self._log_buffer.query(prefix=prefix, limit=limit)
+        return cluster_pb2.Worker.GetProcessLogsResponse(
+            records=[
+                cluster_pb2.ProcessLogRecord(
+                    timestamp=r.timestamp,
+                    level=r.level,
+                    logger_name=r.logger_name,
+                    message=r.message,
+                )
+                for r in records
+            ]
         )

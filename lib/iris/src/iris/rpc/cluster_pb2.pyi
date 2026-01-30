@@ -31,6 +31,7 @@ class TaskState(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     TASK_STATE_KILLED: _ClassVar[TaskState]
     TASK_STATE_WORKER_FAILED: _ClassVar[TaskState]
     TASK_STATE_UNSCHEDULABLE: _ClassVar[TaskState]
+    TASK_STATE_ASSIGNED: _ClassVar[TaskState]
 
 class ConstraintOp(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -60,6 +61,7 @@ TASK_STATE_FAILED: TaskState
 TASK_STATE_KILLED: TaskState
 TASK_STATE_WORKER_FAILED: TaskState
 TASK_STATE_UNSCHEDULABLE: TaskState
+TASK_STATE_ASSIGNED: TaskState
 CONSTRAINT_OP_EQ: ConstraintOp
 CONSTRAINT_OP_NE: ConstraintOp
 CONSTRAINT_OP_EXISTS: ConstraintOp
@@ -72,6 +74,18 @@ CONSTRAINT_OP_LE: ConstraintOp
 class Empty(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
+
+class ProcessLogRecord(_message.Message):
+    __slots__ = ("timestamp", "level", "logger_name", "message")
+    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
+    LEVEL_FIELD_NUMBER: _ClassVar[int]
+    LOGGER_NAME_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    timestamp: float
+    level: str
+    logger_name: str
+    message: str
+    def __init__(self, timestamp: _Optional[float] = ..., level: _Optional[str] = ..., logger_name: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
 
 class TaskStatus(_message.Message):
     __slots__ = ("task_id", "job_id", "task_index", "state", "worker_id", "worker_address", "exit_code", "error", "started_at_ms", "finished_at_ms", "ports", "resource_usage", "build_metrics", "current_attempt_id", "attempts", "pending_reason", "can_be_scheduled")
@@ -482,17 +496,24 @@ class Controller(_message.Message):
         metadata: WorkerMetadata
         registered_at_ms: int
         def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ..., registered_at_ms: _Optional[int] = ...) -> None: ...
+    class RunningTaskEntry(_message.Message):
+        __slots__ = ("task_id", "attempt_id")
+        TASK_ID_FIELD_NUMBER: _ClassVar[int]
+        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+        task_id: str
+        attempt_id: int
+        def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ...) -> None: ...
     class RegisterWorkerRequest(_message.Message):
-        __slots__ = ("worker_id", "address", "metadata", "running_task_ids")
+        __slots__ = ("worker_id", "address", "metadata", "running_tasks")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
         ADDRESS_FIELD_NUMBER: _ClassVar[int]
         METADATA_FIELD_NUMBER: _ClassVar[int]
-        RUNNING_TASK_IDS_FIELD_NUMBER: _ClassVar[int]
+        RUNNING_TASKS_FIELD_NUMBER: _ClassVar[int]
         worker_id: str
         address: str
         metadata: WorkerMetadata
-        running_task_ids: _containers.RepeatedScalarFieldContainer[str]
-        def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ..., running_task_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+        running_tasks: _containers.RepeatedCompositeFieldContainer[Controller.RunningTaskEntry]
+        def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ..., running_tasks: _Optional[_Iterable[_Union[Controller.RunningTaskEntry, _Mapping]]] = ...) -> None: ...
     class RegisterWorkerResponse(_message.Message):
         __slots__ = ("accepted", "controller_address", "should_reset")
         ACCEPTED_FIELD_NUMBER: _ClassVar[int]
@@ -684,6 +705,18 @@ class Controller(_message.Message):
         logs: _containers.RepeatedCompositeFieldContainer[Worker.LogEntry]
         worker_address: str
         def __init__(self, logs: _Optional[_Iterable[_Union[Worker.LogEntry, _Mapping]]] = ..., worker_address: _Optional[str] = ...) -> None: ...
+    class GetProcessLogsRequest(_message.Message):
+        __slots__ = ("prefix", "limit")
+        PREFIX_FIELD_NUMBER: _ClassVar[int]
+        LIMIT_FIELD_NUMBER: _ClassVar[int]
+        prefix: str
+        limit: int
+        def __init__(self, prefix: _Optional[str] = ..., limit: _Optional[int] = ...) -> None: ...
+    class GetProcessLogsResponse(_message.Message):
+        __slots__ = ("records",)
+        RECORDS_FIELD_NUMBER: _ClassVar[int]
+        records: _containers.RepeatedCompositeFieldContainer[ProcessLogRecord]
+        def __init__(self, records: _Optional[_Iterable[_Union[ProcessLogRecord, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...
 
 class Worker(_message.Message):
@@ -785,4 +818,16 @@ class Worker(_message.Message):
         uptime_ms: int
         running_tasks: int
         def __init__(self, healthy: _Optional[bool] = ..., uptime_ms: _Optional[int] = ..., running_tasks: _Optional[int] = ...) -> None: ...
+    class GetProcessLogsRequest(_message.Message):
+        __slots__ = ("prefix", "limit")
+        PREFIX_FIELD_NUMBER: _ClassVar[int]
+        LIMIT_FIELD_NUMBER: _ClassVar[int]
+        prefix: str
+        limit: int
+        def __init__(self, prefix: _Optional[str] = ..., limit: _Optional[int] = ...) -> None: ...
+    class GetProcessLogsResponse(_message.Message):
+        __slots__ = ("records",)
+        RECORDS_FIELD_NUMBER: _ClassVar[int]
+        records: _containers.RepeatedCompositeFieldContainer[ProcessLogRecord]
+        def __init__(self, records: _Optional[_Iterable[_Union[ProcessLogRecord, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...

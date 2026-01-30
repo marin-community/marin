@@ -62,7 +62,7 @@ def _make_mock_slice(slice_id: str, scale_group: str = "test-group") -> MagicMoc
 
 def _create_test_autoscaler(scale_group_name: str = "test-group"):
     """Create a test Autoscaler with mock VmManager."""
-    from iris.cluster.vm.autoscaler import Autoscaler, AutoscalerConfig
+    from iris.cluster.vm.autoscaler import Autoscaler
     from iris.cluster.vm.managed_vm import VmRegistry
     from iris.cluster.vm.scaling_group import ScalingGroup
 
@@ -90,7 +90,7 @@ def _create_test_autoscaler(scale_group_name: str = "test-group"):
         Autoscaler(
             scale_groups={scale_group_name: scale_group},
             vm_registry=VmRegistry(),
-            config=AutoscalerConfig(),
+            config=None,
         ),
         mock_manager,
     )

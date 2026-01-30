@@ -25,6 +25,7 @@ from typing import Protocol
 import grpc
 import uvicorn
 
+from iris.chaos import chaos
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import (
     TaskAssignedEvent,
@@ -267,12 +268,12 @@ class Controller:
             self._state,
             self,
             bundle_prefix=config.bundle_prefix,
+            log_buffer=get_global_buffer(),
         )
         self._dashboard = ControllerDashboard(
             self._service,
             host=config.host,
             port=config.port,
-            log_buffer=get_global_buffer(),
         )
 
         # Background loop state
@@ -290,6 +291,7 @@ class Controller:
 
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
+        self._last_autoscaler_run: float = 0.0
 
     def wake(self) -> None:
         """Signal the controller loop to run immediately.
@@ -345,6 +347,10 @@ class Controller:
 
         # Shutdown dispatch executor
         self._dispatch_executor.shutdown(wait=True, cancel_futures=True)
+
+        # Shutdown autoscaler
+        if self._autoscaler:
+            self._autoscaler.shutdown()
 
     def _run_scheduling_loop(self) -> None:
         """Main controller loop running scheduling, autoscaler, and worker timeout checks."""
@@ -523,6 +529,9 @@ class Controller:
                     f"Dispatching task {task.task_id} to worker {worker.worker_id} "
                     f"at {worker.address} (attempt {attempt + 1})"
                 )
+                if rule := chaos("controller.dispatch"):
+                    time.sleep(rule.delay_seconds)
+                    raise Exception("chaos: dispatch unavailable")
                 stub = self._stub_factory.get_stub(worker.address)
                 stub.run_task(request)
                 logger.info(f"Successfully dispatched task {task.task_id} to worker {worker.worker_id}")
@@ -551,6 +560,7 @@ class Controller:
             TaskStateChangedEvent(
                 task_id=task.task_id,
                 new_state=cluster_pb2.TASK_STATE_UNSCHEDULABLE,
+                attempt_id=task.current_attempt_id,
                 error=f"Scheduling timeout exceeded ({timeout_seconds}s)",
             )
         )
@@ -615,9 +625,19 @@ class Controller:
 
         Called from the scheduling loop every cycle. Computes demand from pending
         tasks and worker idle state, then runs the autoscaler.
+
+        Rate-limits evaluations based on the autoscaler's configured evaluation_interval_seconds.
         """
         if not self._autoscaler:
             return
+
+        import time
+
+        now = time.monotonic()
+        interval = self._autoscaler.evaluation_interval_seconds
+        if interval > 0 and now - self._last_autoscaler_run < interval:
+            return
+        self._last_autoscaler_run = now
 
         demand_entries = compute_demand_entries(self._state)
         vm_status_map = self._build_vm_status_map()

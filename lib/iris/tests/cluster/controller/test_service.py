@@ -28,6 +28,7 @@ from iris.cluster.controller.events import TaskAssignedEvent, TaskStateChangedEv
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.state import ControllerState, ControllerTask
 from iris.cluster.types import JobId, WorkerId
+from iris.logging import BufferedLogRecord, LogRingBuffer
 from iris.rpc import cluster_pb2
 
 
@@ -55,6 +56,7 @@ def dispatch_task(state: ControllerState, task: ControllerTask, worker_id: Worke
         TaskStateChangedEvent(
             task_id=task.task_id,
             new_state=cluster_pb2.TASK_STATE_RUNNING,
+            attempt_id=task.current_attempt_id,
         )
     )
 
@@ -65,6 +67,7 @@ def transition_task(state: ControllerState, task: ControllerTask, new_state: int
         TaskStateChangedEvent(
             task_id=task.task_id,
             new_state=new_state,
+            attempt_id=task.current_attempt_id,
             error=error,
         )
     )
@@ -431,13 +434,13 @@ def test_worker_restart_reconciliation_marks_missing_tasks_failed(service, state
     status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="test-job"), None)
     assert status.job.tasks[0].state == cluster_pb2.TASK_STATE_RUNNING
 
-    # Simulate worker restart: re-register with empty running_task_ids
+    # Simulate worker restart: re-register with empty running_tasks
     response = service.register_worker(
         cluster_pb2.Controller.RegisterWorkerRequest(
             worker_id="w1",
             address="host:8080",
             metadata=worker_metadata(),
-            running_task_ids=[],  # Worker lost the task during restart
+            running_tasks=[],  # Worker lost the task during restart
         ),
         None,
     )
@@ -955,3 +958,109 @@ def test_no_kill_rpcs_for_pending_tasks(service, state, mock_scheduler, job_requ
 
     # Only task[1] should be killed (task[2] was never dispatched)
     assert killed_task_ids == {tasks[1].task_id}
+
+
+# =============================================================================
+# Register Worker Stale Attempt Detection Tests
+# =============================================================================
+
+
+def test_register_worker_detects_stale_attempt(service, state, mock_scheduler, job_request, worker_metadata):
+    """Worker heartbeat with stale attempt_id triggers kill of stale task."""
+    # Launch job and register worker
+    service.launch_job(job_request("test-job", max_retries_preemption=2), None)
+    service.register_worker(
+        cluster_pb2.Controller.RegisterWorkerRequest(
+            worker_id="w1",
+            address="host:8080",
+            metadata=worker_metadata(),
+        ),
+        None,
+    )
+
+    # Dispatch task (attempt 0)
+    task = state.get_job_tasks(JobId("test-job"))[0]
+    dispatch_task(state, task, WorkerId("w1"))
+    assert task.current_attempt_id == 0
+
+    # Fail and create new attempt (attempt 1)
+    transition_task(state, task, cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker died")
+    dispatch_task(state, task, WorkerId("w1"))
+    assert task.current_attempt_id == 1
+
+    mock_scheduler.kill_tasks_on_workers.reset_mock()
+
+    # Worker heartbeat reports running the old attempt (0)
+    service.register_worker(
+        cluster_pb2.Controller.RegisterWorkerRequest(
+            worker_id="w1",
+            address="host:8080",
+            metadata=worker_metadata(),
+            running_tasks=[
+                cluster_pb2.Controller.RunningTaskEntry(
+                    task_id=str(task.task_id),
+                    attempt_id=0,  # Stale!
+                ),
+            ],
+        ),
+        None,
+    )
+
+    # The service should have called kill for the stale task
+    mock_scheduler.kill_tasks_on_workers.assert_called_once()
+    killed = mock_scheduler.kill_tasks_on_workers.call_args[0][0]
+    assert task.task_id in killed
+
+
+# =============================================================================
+# Process Log Tests
+# =============================================================================
+
+
+def test_get_process_logs():
+    """Test GetProcessLogs RPC retrieves logs from the buffer."""
+
+    state = ControllerState()
+    mock_scheduler = MockSchedulerWake()
+    log_buffer = LogRingBuffer(maxlen=100)
+
+    # Add some test log records
+    log_buffer.append(BufferedLogRecord(timestamp=1000.0, level="INFO", logger_name="iris.test", message="Test log 1"))
+    log_buffer.append(
+        BufferedLogRecord(timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="Autoscaler log")
+    )
+    log_buffer.append(BufferedLogRecord(timestamp=1002.0, level="ERROR", logger_name="iris.test", message="Test log 2"))
+
+    service = ControllerServiceImpl(
+        state, mock_scheduler, bundle_prefix="file:///tmp/test-bundles", log_buffer=log_buffer
+    )
+
+    # Test: Get all logs
+    response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=0), None)
+    assert len(response.records) == 3
+    assert response.records[0].message == "Test log 1"
+    assert response.records[1].logger_name == "iris.cluster.vm"
+    assert response.records[2].level == "ERROR"
+
+    # Test: Filter by prefix
+    response = service.get_process_logs(
+        cluster_pb2.Controller.GetProcessLogsRequest(prefix="iris.cluster.vm", limit=0), None
+    )
+    assert len(response.records) == 1
+    assert response.records[0].message == "Autoscaler log"
+
+    # Test: Limit results
+    response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=2), None)
+    assert len(response.records) == 2
+    assert response.records[0].message == "Autoscaler log"
+    assert response.records[1].message == "Test log 2"
+
+
+def test_get_process_logs_no_buffer():
+    """Test GetProcessLogs returns empty when buffer is None."""
+    state = ControllerState()
+    mock_scheduler = MockSchedulerWake()
+    service = ControllerServiceImpl(state, mock_scheduler, bundle_prefix="file:///tmp/test-bundles", log_buffer=None)
+
+    response = service.get_process_logs(cluster_pb2.Controller.GetProcessLogsRequest(prefix="", limit=0), None)
+    assert len(response.records) == 0

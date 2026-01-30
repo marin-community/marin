@@ -60,6 +60,7 @@ def dispatch_task(state: ControllerState, task: ControllerTask, worker_id: Worke
         TaskStateChangedEvent(
             task_id=task.task_id,
             new_state=cluster_pb2.TASK_STATE_RUNNING,
+            attempt_id=task.current_attempt_id,
         )
     )
 
@@ -73,10 +74,13 @@ def transition_task(
     exit_code: int | None = None,
 ) -> None:
     """Transition a task to a new state via handle_event."""
+    task = state.get_task(task_id)
+    assert task is not None
     state.handle_event(
         TaskStateChangedEvent(
             task_id=task_id,
             new_state=new_state,
+            attempt_id=task.current_attempt_id,
             error=error,
             exit_code=exit_code,
         )
@@ -327,14 +331,14 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, wor
     tasks = submit_job(state, "j1", req)
     task = tasks[0]
 
-    # Task gets assigned (creates attempt, puts in PENDING state)
+    # Task gets assigned (creates attempt, puts in ASSIGNED state)
     state.handle_event(
         TaskAssignedEvent(
             task_id=task.task_id,
             worker_id=worker_id,
         )
     )
-    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.state == cluster_pb2.TASK_STATE_ASSIGNED
     assert task.current_attempt_id == 0
 
     # Dispatch RPC fails -> WORKER_FAILED event
@@ -832,6 +836,7 @@ def test_coscheduled_task_failure_kills_siblings(worker_metadata):
         TaskStateChangedEvent(
             task_id=tasks[0].task_id,
             new_state=cluster_pb2.TASK_STATE_FAILED,
+            attempt_id=tasks[0].current_attempt_id,
             error="OOM",
         )
     )
@@ -873,6 +878,7 @@ def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
         TaskStateChangedEvent(
             task_id=tasks[0].task_id,
             new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+            attempt_id=tasks[0].current_attempt_id,
             error="Worker crashed (first)",
         )
     )
@@ -891,6 +897,7 @@ def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
         TaskStateChangedEvent(
             task_id=tasks[0].task_id,
             new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+            attempt_id=tasks[0].current_attempt_id,
             error="Worker crashed (second)",
         )
     )
@@ -929,6 +936,7 @@ def test_coscheduled_task_success_does_not_affect_siblings(worker_metadata):
         TaskStateChangedEvent(
             task_id=tasks[0].task_id,
             new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+            attempt_id=tasks[0].current_attempt_id,
         )
     )
 
@@ -967,6 +975,7 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(worker_metadata):
         TaskStateChangedEvent(
             task_id=tasks[0].task_id,
             new_state=cluster_pb2.TASK_STATE_FAILED,
+            attempt_id=tasks[0].current_attempt_id,
             error="OOM",
         )
     )
@@ -1009,6 +1018,7 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
         TaskStateChangedEvent(
             task_id=tasks[0].task_id,
             new_state=cluster_pb2.TASK_STATE_FAILED,
+            attempt_id=tasks[0].current_attempt_id,
             error="OOM",
         )
     )
@@ -1024,6 +1034,87 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
 
     # No tasks marked for kill
     assert len(txn.tasks_to_kill) == 0
+
+
+# =============================================================================
+# compute_demand_entries Tests
+# =============================================================================
+
+
+# =============================================================================
+# Stale Attempt Tracking Tests
+# =============================================================================
+
+
+def test_stale_attempt_ignored(job_request, worker_metadata):
+    """Stale attempt report does not change task state."""
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("job1")
+    req.max_retries_preemption = 2
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    # First attempt: dispatch, then fail via worker failure (retriable)
+    dispatch_task(state, task, worker_id)
+    old_attempt_id = task.current_attempt_id
+    assert old_attempt_id == 0
+
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker died")
+
+    # Second attempt
+    dispatch_task(state, task, worker_id)
+    assert task.current_attempt_id == 1
+    assert task.state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Stale report from old attempt should be ignored
+    state.handle_event(
+        TaskStateChangedEvent(
+            task_id=task.task_id,
+            new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+            attempt_id=old_attempt_id,
+        )
+    )
+
+    # Task should still be RUNNING on the new attempt
+    assert task.state == cluster_pb2.TASK_STATE_RUNNING
+    assert task.current_attempt_id == 1
+
+
+def test_stale_attempt_error_log_for_non_terminal(caplog, job_request, worker_metadata):
+    """Stale attempt report logs ERROR when the old attempt is not terminal."""
+    import logging
+
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("job1")
+    req.max_retries_preemption = 2
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    # First attempt
+    dispatch_task(state, task, worker_id)
+
+    # Manually create a second attempt without properly terminating the first.
+    # This simulates a scenario where the controller created a new attempt
+    # but the old one is still non-terminal (a precondition violation).
+    task.create_attempt(worker_id)
+    assert task.current_attempt_id == 1
+    # The old attempt (0) is still in RUNNING state (non-terminal)
+    assert not task.attempts[0].is_terminal()
+
+    with caplog.at_level(logging.ERROR, logger="iris.cluster.controller.state"):
+        state.handle_event(
+            TaskStateChangedEvent(
+                task_id=task.task_id,
+                new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+                attempt_id=0,
+            )
+        )
+
+    assert any("Stale attempt precondition violation" in r.message for r in caplog.records)
 
 
 # =============================================================================
