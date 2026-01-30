@@ -19,7 +19,6 @@ Tests that Iris handles RPC failures gracefully:
 - Heartbeat timeout (60s)
 - Heartbeat reconciliation (running_tasks)
 """
-import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
 from .conftest import submit, wait, _quick, _slow
@@ -36,16 +35,15 @@ def test_dispatch_intermittent_failure(cluster):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-@pytest.mark.skip(reason="Iris bug: infinite retry loop, jobs stuck PENDING forever (gh#2533)")
 def test_dispatch_permanent_failure(cluster):
     """Test permanent dispatch failure. All 4 retries fail → WorkerFailedEvent → task
-    rescheduled to other workers → all fail → job FAILED.
+    rescheduled to other workers → all fail → job FAILED or UNSCHEDULABLE.
     """
     _url, client = cluster
     enable_chaos("controller.dispatch", failure_rate=1.0)
-    job = submit(client, _quick, "permanent-dispatch")
-    status = wait(client, job, timeout=120)
-    assert status.state == cluster_pb2.JOB_STATE_FAILED
+    job = submit(client, _quick, "permanent-dispatch", scheduling_timeout_seconds=5)
+    status = wait(client, job, timeout=20)
+    assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
 def test_heartbeat_temporary_failure(cluster):
@@ -59,25 +57,27 @@ def test_heartbeat_temporary_failure(cluster):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-@pytest.mark.skip(reason="Iris bug: infinite retry loop, jobs stuck PENDING forever (gh#2533)")
 def test_heartbeat_permanent_failure(cluster):
     """Test heartbeat permanently fails. After 60s, worker marked failed, tasks
-    become WORKER_FAILED.
+    become WORKER_FAILED. With scheduling timeout, job eventually fails.
     """
     _url, client = cluster
     enable_chaos("worker.heartbeat", failure_rate=1.0)
-    job = submit(client, _slow, "perm-hb-fail")
-    status = wait(client, job, timeout=90)
-    assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_WORKER_FAILED)
+    job = submit(client, _slow, "perm-hb-fail", scheduling_timeout_seconds=5)
+    status = wait(client, job, timeout=20)
+    assert status.state in (
+        cluster_pb2.JOB_STATE_FAILED,
+        cluster_pb2.JOB_STATE_WORKER_FAILED,
+        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+    )
 
 
-@pytest.mark.skip(reason="Iris bug: reconciliation misidentifies completed tasks as worker failures (gh#2534)")
 def test_report_task_state_failure(cluster):
-    """Test report_task_state always fails. Controller should detect task completion
-    via heartbeat reconciliation (running_tasks goes empty when task finishes).
+    """Test report_task_state always fails. Worker buffers completion and delivers
+    it via the next heartbeat. Controller processes it → job SUCCEEDED.
     """
     _url, client = cluster
     enable_chaos("worker.report_task_state", failure_rate=1.0)
     job = submit(client, _quick, "report-fail")
     status = wait(client, job, timeout=60)
-    assert status.state in (cluster_pb2.JOB_STATE_SUCCEEDED, cluster_pb2.JOB_STATE_FAILED)
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED

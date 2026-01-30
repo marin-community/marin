@@ -474,6 +474,24 @@ class ControllerServiceImpl:
         """
         worker_id = WorkerId(request.worker_id)
 
+        # Process completed tasks piggybacked on heartbeat (before reconciliation).
+        # This ensures the controller learns about completions even when
+        # report_task_state RPC failed.
+        for entry in request.completed_tasks:
+            task_id = TaskId(entry.task_id)
+            task = self._state.get_task(task_id)
+            if task and not task.is_finished():
+                self._state.handle_event(
+                    TaskStateChangedEvent(
+                        task_id=task_id,
+                        new_state=entry.state,
+                        error=entry.error or None,
+                        exit_code=entry.exit_code,
+                        attempt_id=entry.attempt_id,
+                    )
+                )
+                logger.info("Processed heartbeat-delivered completion for task %s -> %s", task_id, entry.state)
+
         reported_tasks = {entry.task_id for entry in request.running_tasks}
 
         # Case 1: Worker claims unknown tasks (controller restart recovery)

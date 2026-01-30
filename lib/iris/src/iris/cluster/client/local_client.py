@@ -123,6 +123,9 @@ class LocalClusterClient:
         constraints: list[cluster_pb2.Constraint] | None = None,
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
         replicas: int = 1,
+        max_retries_failure: int = 0,
+        max_retries_preemption: int = 100,
+        timeout_seconds: int = 0,
     ) -> None:
         self._remote_client.submit_job(
             job_id=job_id,
@@ -134,6 +137,9 @@ class LocalClusterClient:
             constraints=constraints,
             coscheduling=coscheduling,
             replicas=replicas,
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
+            timeout_seconds=timeout_seconds,
         )
 
     def get_job_status(self, job_id: str) -> cluster_pb2.JobStatus:
