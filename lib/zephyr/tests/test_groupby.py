@@ -17,15 +17,15 @@
 import hashlib
 
 import pytest
-from fray.job import create_job_ctx
+from zephyr.context import create_backend_context
 from zephyr import Backend, Dataset
 
 
 @pytest.fixture(
     params=[
-        pytest.param(create_job_ctx("sync"), id="sync"),
-        pytest.param(create_job_ctx("threadpool", max_workers=2), id="thread"),
-        pytest.param(create_job_ctx("ray"), id="ray"),
+        pytest.param(create_backend_context("sync"), id="sync"),
+        pytest.param(create_backend_context("threadpool", max_workers=2), id="thread"),
+        pytest.param(create_backend_context("ray"), id="ray"),
     ]
 )
 def backend(request):

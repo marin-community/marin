@@ -24,9 +24,9 @@ from dataclasses import dataclass
 from typing import Any, TypeVar
 
 import numpy as np
-from fray.job import JobContext, get_default_job_ctx
 from tqdm_loggable.auto import tqdm
 
+from zephyr.context import BackendContext, create_backend_context
 from zephyr.dataset import Dataset
 from zephyr.plan import (
     Chunk,
@@ -67,7 +67,7 @@ class Shard:
 
     idx: int  # Shard index (e.g., 0 of 50)
     chunks: list[Chunk]
-    context: JobContext
+    context: BackendContext
 
     @property
     def count(self) -> int:
@@ -86,7 +86,7 @@ class Shard:
             yield from chunk_data
 
     @staticmethod
-    def from_single_ref(ref: Any, context: JobContext, idx: int, count: int) -> Shard:
+    def from_single_ref(ref: Any, context: BackendContext, idx: int, count: int) -> Shard:
         """Wrap a single ref as a Shard.
 
         Args:
@@ -147,7 +147,7 @@ def reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
 
 
 class Backend:
-    def __init__(self, context: JobContext, config: BackendConfig):
+    def __init__(self, context: BackendContext, config: BackendConfig):
         """Initialize backend with execution context and configuration.
 
         Args:
@@ -161,7 +161,7 @@ class Backend:
     @staticmethod
     def execute(
         dataset: Dataset[T],
-        context: JobContext | None = None,
+        context: BackendContext | None = None,
         hints: ExecutionHint = ExecutionHint(),
         verbose: bool = False,
         max_parallelism: int = 1024,
@@ -171,7 +171,7 @@ class Backend:
 
         Args:
             dataset: Dataset to execute
-            context: JobContext to use for execution. If None, uses get_default_job_ctx()
+            context: BackendContext to use for execution. If None, uses auto-detected default.
             hints: Execution hints (chunk_size, intra_shard_parallelism, etc.)
             verbose: Print additional logging and optimization stats
             max_parallelism: Maximum number of concurrent tasks
@@ -188,7 +188,7 @@ class Backend:
             [2, 4, 6]
         """
         if context is None:
-            context = get_default_job_ctx()
+            context = create_backend_context()
         config = BackendConfig(max_parallelism=max_parallelism, dry_run=dry_run)
         backend = Backend(context, config)
 

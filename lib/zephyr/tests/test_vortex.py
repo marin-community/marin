@@ -16,7 +16,7 @@
 
 import pytest
 
-from fray.job import create_job_ctx
+from zephyr.context import create_backend_context
 from zephyr import Backend, Dataset
 from zephyr.expr import col
 from zephyr.readers import InputFileSpec, load_vortex
@@ -40,7 +40,7 @@ def vortex_file(tmp_path):
 )
 def sync_backend(request):
     """Backend fixture for sync and threadpool backends."""
-    return create_job_ctx(request.param, max_workers=2)
+    return create_backend_context(request.param, max_workers=2)
 
 
 class TestVortexReader:

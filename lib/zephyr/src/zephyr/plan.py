@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 import fsspec
 import msgspec
-from fray.job import JobContext
+from zephyr.context import BackendContext
 
 from zephyr.dataset import (
     FilterOp,
@@ -887,7 +887,7 @@ class StageContext:
     total_shards: int
     chunk_size: int
     aux_shards: dict[int, list[Any]] = field(default_factory=dict)
-    execution_context: JobContext | None = None
+    execution_context: BackendContext | None = None
 
     def get_right_shard(self, op_index: int) -> Any:
         """Get right shard for join at given op index.

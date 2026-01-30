@@ -26,7 +26,12 @@ from pathlib import Path
 import click
 import humanfriendly
 
-from fray.job.context import create_job_ctx, _job_context
+from zephyr.context import create_backend_context
+
+# Context variable for setting the default backend context
+from contextvars import ContextVar
+
+_backend_context: ContextVar = ContextVar("zephyr_backend_context", default=None)
 
 
 @dataclass
@@ -65,12 +70,12 @@ def run_local(
         if config.memory:
             ray_options["memory"] = humanfriendly.parse_size(config.memory, binary=True)
 
-    job_ctx = create_job_ctx(
+    backend_ctx = create_backend_context(
         context_type=config.backend,
         max_workers=config.max_parallelism,
         **ray_options,
     )
-    _job_context.set(job_ctx)
+    _backend_context.set(backend_ctx)
     sys.argv = [script_path, *script_args]
 
     script_path_obj = Path(script_path).resolve()

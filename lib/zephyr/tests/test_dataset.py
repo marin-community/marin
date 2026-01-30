@@ -20,7 +20,7 @@ from functools import partial
 from pathlib import Path
 
 import pytest
-from fray.job import create_job_ctx
+from zephyr.context import create_backend_context
 from zephyr import Backend, Dataset, load_file, load_parquet
 from zephyr._test_helpers import SampleDataclass
 from zephyr.dataset import FilterOp, MapOp, WindowOp
@@ -183,7 +183,7 @@ def test_bounded_parallelism_ray():
         return x * 2
 
     # With max_parallelism=2, processing 6 items should take ~3*0.2 = 0.6s
-    ctx = create_job_ctx("ray")
+    ctx = create_backend_context("ray")
     ds = Dataset.from_list([1, 2, 3, 4, 5, 6]).map(slow_fn)
 
     start = time.time()
@@ -233,7 +233,7 @@ def test_lazy_evaluation():
     assert call_count == 0
 
     # Now execute - should call function
-    ctx = create_job_ctx("sync")
+    ctx = create_backend_context("sync")
     result = list(Backend.execute(ds, context=ctx))
     assert result == [2, 4, 6]
     assert call_count == 3
@@ -975,7 +975,7 @@ def sample_input_files(tmp_path):
 
 def test_skip_existing_clean_run(tmp_path, sample_input_files):
     """Test skip_existing with no existing files - all shards process."""
-    ctx = create_job_ctx("sync")
+    ctx = create_backend_context("sync")
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -997,7 +997,7 @@ def test_skip_existing_clean_run(tmp_path, sample_input_files):
 
 def test_skip_existing_one_file_exists(tmp_path, sample_input_files):
     """Test skip_existing with one output file existing - only that shard skips."""
-    ctx = create_job_ctx("sync")
+    ctx = create_backend_context("sync")
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -1023,7 +1023,7 @@ def test_skip_existing_one_file_exists(tmp_path, sample_input_files):
 
 def test_skip_existing_all_files_exist(tmp_path, sample_input_files):
     """Test skip_existing with all output files existing - all shards skip."""
-    ctx = create_job_ctx("sync")
+    ctx = create_backend_context("sync")
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 

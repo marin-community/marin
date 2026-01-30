@@ -17,7 +17,7 @@
 import pytest
 import ray
 
-from fray.job import create_job_ctx
+from zephyr.context import create_backend_context
 
 from zephyr import load_file
 
@@ -39,13 +39,13 @@ def sample_data():
 
 @pytest.fixture(
     params=[
-        pytest.param(create_job_ctx("sync"), id="sync"),
-        pytest.param(create_job_ctx("threadpool", max_workers=2), id="thread"),
-        pytest.param(create_job_ctx("ray"), id="ray"),
+        pytest.param(create_backend_context("sync"), id="sync"),
+        pytest.param(create_backend_context("threadpool", max_workers=2), id="thread"),
+        pytest.param(create_backend_context("ray"), id="ray"),
     ]
 )
 def backend(request):
-    """Parametrized fixture providing all job contexts for testing."""
+    """Parametrized fixture providing all backend contexts for testing."""
     return request.param
 
 
