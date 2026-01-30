@@ -333,7 +333,7 @@ def default_train(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                project="marin",
+                project=os.getenv("WANDB_PROJECT", "marin"),
                 tags=[*tags],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
