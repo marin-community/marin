@@ -127,20 +127,24 @@ class ClusterManager:
         return address
 
     def _reload_workers(self) -> None:
-        """Reload all worker VMs by discovering and re-running bootstrap."""
+        """Reload all worker VMs by discovering and re-running bootstrap.
+
+        Waits for each VM to become SSH-reachable before reloading. This
+        handles VMs that are still booting (e.g. TPUs in CREATING state).
+        """
         from iris.cluster.vm.config import _create_manager_from_config
         from iris.cluster.vm.managed_vm import TrackedVmFactory, VmRegistry
+        from iris.cluster.vm.ssh import wait_for_connection
 
-        # Create temporary registry and factory for discovery
         vm_registry = VmRegistry()
         vm_factory = TrackedVmFactory(vm_registry)
+        boot_timeout = self._config.timeouts.boot_timeout_seconds or 300
 
         logger.info("Reloading workers across %d scale group(s)", len(self._config.scale_groups))
 
         for group_name in self._config.scale_groups:
             logger.info("Processing scale group: %s", group_name)
 
-            # Create VmManager for this scale group
             manager = _create_manager_from_config(
                 group_name=group_name,
                 cluster_config=self._config,
@@ -148,7 +152,6 @@ class ClusterManager:
                 dry_run=False,
             )
 
-            # Discover existing VMs
             vm_groups = manager.discover_vm_groups()
 
             if not vm_groups:
@@ -157,12 +160,24 @@ class ClusterManager:
 
             logger.info("Found %d VM group(s) in %s", len(vm_groups), group_name)
 
-            # Reload each VM in each group
+            failed: list[str] = []
             for group in vm_groups:
                 logger.info("Reloading VM group %s", group.group_id)
                 for vm in group.vms():
-                    vm.reload()
-                    logger.info("  ✓ Reloaded VM %s", vm.info.vm_id)
+                    try:
+                        logger.info("Waiting for SSH on %s (timeout=%ds)...", vm.info.vm_id, boot_timeout)
+                        if not wait_for_connection(vm._conn, boot_timeout):
+                            logger.warning("VM %s not reachable after %ds, skipping", vm.info.vm_id, boot_timeout)
+                            failed.append(vm.info.vm_id)
+                            continue
+                        vm.reload()
+                        logger.info("  ✓ Reloaded VM %s", vm.info.vm_id)
+                    except Exception:
+                        logger.warning("Failed to reload VM %s, skipping", vm.info.vm_id, exc_info=True)
+                        failed.append(vm.info.vm_id)
+
+            if failed:
+                logger.warning("Failed to reload %d VM(s): %s", len(failed), ", ".join(failed))
 
         logger.info("Worker reload complete")
 

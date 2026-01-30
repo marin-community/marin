@@ -750,6 +750,9 @@ class IrisClient:
         constraints: list[Constraint] | None = None,
         coscheduling: CoschedulingConfig | None = None,
         replicas: int = 1,
+        max_retries_failure: int = 0,
+        max_retries_preemption: int = 100,
+        timeout_seconds: int = 0,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -763,6 +766,9 @@ class IrisClient:
             constraints: Constraints for filtering workers by attribute
             coscheduling: Configuration for atomic multi-task scheduling
             replicas: Number of tasks to create for gang scheduling (default: 1)
+            max_retries_failure: Max retries per task on failure (default: 0)
+            max_retries_preemption: Max retries per task on preemption (default: 100)
+            timeout_seconds: Per-task timeout in seconds (0 = no timeout)
 
         Returns:
             Job handle for the submitted job
@@ -801,6 +807,9 @@ class IrisClient:
             constraints=constraints_proto,
             coscheduling=coscheduling_proto,
             replicas=replicas,
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
+            timeout_seconds=timeout_seconds,
         )
 
         return Job(self, job_id)
