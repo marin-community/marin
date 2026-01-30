@@ -19,9 +19,14 @@ Supported Benchmarks:
 """
 
 import dataclasses
+import json
 import logging
+import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
+
+import fsspec
 
 import haliax as hax
 import jax.numpy as jnp
@@ -54,6 +59,32 @@ except ImportError:
     handle_stop_sequences = None
 
 logger = logging.getLogger(__name__)
+
+
+def save_results_to_path(results: dict, output_path: str, filename: str = "eval_results"):
+    """Save results to local or GCS path using fsspec.
+
+    Args:
+        results: Dictionary of results to save
+        output_path: Local path or GCS path (gs://bucket/path/)
+        filename: Base filename (timestamp will be appended)
+    """
+    try:
+        # fsspec automatically handles gs:// and local paths
+        fs, plain_path = fsspec.core.url_to_fs(output_path)
+        fs.makedirs(plain_path, exist_ok=True)
+
+        # Generate timestamped filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        full_path = f"{plain_path}/{filename}_{timestamp}.json"
+
+        # Write file
+        with fs.open(full_path, "w") as f:
+            json.dump(results, f, indent=2, default=str)
+
+        logger.info(f"Saved results to {output_path}/{filename}_{timestamp}.json")
+    except Exception as e:
+        logger.warning(f"Failed to save results to {output_path}: {e}")
 
 
 import re
@@ -197,6 +228,9 @@ class VLMEvalHarnessConfig:
     vlm_batch_size: int = 1
     """Number of VLM requests to process in parallel. Higher values use more memory but improve throughput.
     Set to -1 to auto-detect based on device count. Default: 1 (sequential processing)."""
+    output_dir: str | None = None
+    """Output directory for saving evaluation results. Supports local paths or GCS paths (gs://bucket/path/).
+    If None, results are saved to local vlm_eval_results/ directory."""
 
     def to_task_spec(self) -> list[str | dict]:
         """Convert task specifications to a list of dictionaries or strings."""
@@ -906,13 +940,25 @@ def run_vlm_eval_harness(
                         # Use wandb.run.log directly to avoid step conflict issues
                         # Also log to summary for persistent storage
                         table_key = f"vlm_eval/{task_name}/samples"
-                        wandb.run.log({table_key: table})
+                        wandb.run.log({table_key: table}, commit=True)  # commit=True forces immediate upload
                         wandb.run.summary[table_key] = table
                         logger.info(f"Logged {len(samples)} samples for {task_name} to wandb")
             else:
                 logger.warning("wandb.run is None - samples not logged to wandb")
         except Exception as e:
             logger.warning(f"Failed to log samples to wandb: {e}", exc_info=True)
+
+    # Save results to output_dir (supports local or GCS paths via fsspec)
+    # Prepare serializable results
+    serializable_results = {}
+    if results and "results" in results:
+        serializable_results["metrics"] = results["results"]
+    if sample_outputs:
+        serializable_results["samples"] = sample_outputs
+
+    # Use config.output_dir if specified, otherwise use local directory
+    output_path = config.output_dir if config.output_dir else os.path.join(os.getcwd(), "vlm_eval_results")
+    save_results_to_path(serializable_results, output_path, "eval_results")
 
     return results
 
