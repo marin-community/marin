@@ -28,8 +28,25 @@ This same pattern works for ANY Harbor dataset:
 - swebench-verified@1.0 (500 tasks)
 - And 40+ other benchmarks!
 
-Usage:
-    python experiments/exp_harbor_aime_sanity_check.py
+Usage (Local):
+    ANTHROPIC_API_KEY=<key> python experiments/exp_harbor_aime_sanity_check.py
+
+Usage (Ray Cluster):
+    uv run lib/marin/src/marin/run/ray_run.py \
+        --env_vars ANTHROPIC_API_KEY <your-key> \
+        --env_vars WANDB_API_KEY ${WANDB_API_KEY} \
+        --env_vars WANDB_ENTITY marin-community \
+        --env_vars WANDB_PROJECT harbor \
+        --cluster us-central1 \
+        --extra harbor \
+        --no_wait \
+        -- python experiments/exp_harbor_aime_sanity_check.py
+
+Results are saved to:
+    - GCS: gs://marin-us-central1/evaluation/harbor/{dataset}/{model_name_escaped}/
+      - results.json: Aggregated metrics and per-task results
+      - trajectories/*.jsonl: Full agent interaction traces for RL training
+    - W&B: Metrics and trajectory lengths logged to wandb.ai/marin-community/harbor
 
 Note: Requires ANTHROPIC_API_KEY environment variable for Claude agent.
 """
@@ -78,7 +95,7 @@ logger.info(f"Dataset: {DATASET}@{VERSION}")
 logger.info(f"Model: {MODEL['name']}")
 logger.info(f"Max instances: {MAX_INSTANCES}")
 logger.info("Agent: claude-code (Harbor's built-in Claude agent)")
-logger.info("Environment: local (Docker)")
+logger.info("Environment: local (Docker) - use Ray cluster for production runs")
 logger.info("=" * 80)
 
 # Create evaluation step
@@ -101,8 +118,9 @@ if __name__ == "__main__":
         "This will:\n"
         "1. Load AIME@1.0 dataset from Harbor registry (60 tasks total)\n"
         "2. Run first 5 tasks using Claude Code agent\n"
-        "3. Execute in local Docker containers\n"
-        "4. Save results to GCS and log to W&B"
+        "3. Execute in local Docker containers (or Ray cluster if using ray_run.py)\n"
+        "4. Save trajectories and results to GCS\n"
+        "5. Log metrics to W&B"
     )
 
     executor_main(steps=[step])
@@ -110,7 +128,8 @@ if __name__ == "__main__":
     logger.info("=" * 80)
     logger.info("Sanity check complete!")
     logger.info("Next steps:")
-    logger.info("1. Check W&B for results")
-    logger.info("2. If successful, try full 60 tasks: set MAX_INSTANCES=None")
-    logger.info("3. Try other datasets: terminal-bench@2.0, swebench-verified@1.0")
+    logger.info("1. Check W&B for results: https://wandb.ai/marin-community/harbor")
+    logger.info("2. Check GCS for trajectories: gs://marin-us-central1/evaluation/harbor/")
+    logger.info("3. For full evaluation, run on Ray cluster with MAX_INSTANCES=None")
+    logger.info("4. Try other datasets: terminal-bench@2.0, swebench-verified@1.0")
     logger.info("=" * 80)
