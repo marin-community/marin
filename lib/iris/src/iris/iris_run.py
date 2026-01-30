@@ -16,7 +16,7 @@
 """CLI for submitting jobs to Iris clusters.
 
 Usage:
-    uv run lib/iris/scripts/iris_run.py \\
+    uv run iris-run \\
         --config lib/iris/examples/eu-west4.yaml \\
         --tpu v5litepod-16 \\
         -e WANDB_API_KEY $WANDB_API_KEY \\
@@ -42,13 +42,14 @@ logger = logging.getLogger(__name__)
 
 
 def load_cluster_config(config_path: Path) -> dict:
-    """Load cluster config YAML and extract zone/project_id.
+    """Load cluster config YAML and extract connection info.
 
     Args:
         config_path: Path to cluster YAML file
 
     Returns:
-        Dict with 'zone' and 'project_id' keys
+        Dict with 'zone', 'project_id', and optionally 'controller_address' keys.
+        For local clusters, controller_address bypasses SSH tunneling.
 
     Raises:
         FileNotFoundError: If config file doesn't exist
@@ -61,14 +62,17 @@ def load_cluster_config(config_path: Path) -> dict:
         raise ValueError(f"Empty or invalid YAML in {config_path}")
 
     zone = data.get("zone")
-    project_id = data.get("project_id")
+    project_id = data.get("project_id", "")
+    controller_address = data.get("controller_address")
 
     if not zone:
         raise ValueError(f"Missing 'zone' in {config_path}")
-    if not project_id:
-        raise ValueError(f"Missing 'project_id' in {config_path}")
 
-    return {"zone": zone, "project_id": project_id}
+    # For remote clusters, project_id is required for SSH tunneling
+    if not controller_address and not project_id:
+        raise ValueError(f"Missing 'project_id' in {config_path} (required for remote clusters)")
+
+    return {"zone": zone, "project_id": project_id, "controller_address": controller_address}
 
 
 def load_env_vars(env_flags: list[list[str]] | None) -> dict[str, str]:
@@ -200,6 +204,154 @@ def generate_job_name(command: list[str]) -> str:
     return f"iris-run-{username}-{script_name}-{timestamp}"
 
 
+def run_iris_job(
+    config_path: Path,
+    command: list[str],
+    env_vars: dict[str, str],
+    tpu: str | None = None,
+    gpu: int | None = None,
+    cpu: int | None = None,
+    memory: str | None = None,
+    wait: bool = True,
+    job_name: str | None = None,
+    replicas: int = 1,
+    max_retries: int = 0,
+    timeout: int = 0,
+) -> int:
+    """Core job submission logic (testable without CLI).
+
+    Args:
+        config_path: Path to cluster config YAML
+        command: Command to run (argv list)
+        env_vars: Environment variables for the job
+        tpu: TPU type to request (e.g., v5litepod-16)
+        gpu: Number of GPUs to request
+        cpu: Number of CPUs to request
+        memory: Memory size to request (e.g., "8GB")
+        wait: Whether to wait for job completion
+        job_name: Custom job name (auto-generated if None)
+        replicas: Number of tasks for gang scheduling
+        max_retries: Max retries on failure
+        timeout: Job timeout in seconds (0 = no timeout)
+
+    Returns:
+        Exit code: 0 for success, 1 for failure
+
+    Raises:
+        FileNotFoundError: If config file doesn't exist
+        ValueError: If config is invalid or GPU is requested
+        Various exceptions from IrisClient if submission fails
+    """
+    config = load_cluster_config(config_path)
+    env_vars = add_standard_env_vars(env_vars)
+    resources = build_resources(tpu, gpu, cpu, memory)
+    job_name = job_name or generate_job_name(command)
+
+    logger.info(f"Submitting job: {job_name}")
+    logger.info(f"Command: {' '.join(command)}")
+    logger.info(f"Resources: cpu={resources.cpu}, memory={resources.memory}")
+    if resources.device and resources.device.HasField("tpu"):
+        logger.info(f"TPU: {resources.device.tpu.variant}")
+
+    # Check if this is a local cluster with direct controller access
+    if config["controller_address"]:
+        # Local cluster - connect directly without SSH tunnel
+        controller_url = config["controller_address"]
+        logger.info(f"Connecting directly to controller: {controller_url}")
+        return _submit_and_wait_job(
+            controller_url=controller_url,
+            job_name=job_name,
+            command=command,
+            resources=resources,
+            env_vars=env_vars,
+            replicas=replicas,
+            max_retries=max_retries,
+            timeout=timeout,
+            wait=wait,
+        )
+    else:
+        # Remote cluster - use SSH tunnel
+        with controller_tunnel(
+            zone=config["zone"],
+            project=config["project_id"],
+            tunnel_logger=logger,
+        ) as controller_url:
+            logger.info(f"Connected to controller: {controller_url}")
+            return _submit_and_wait_job(
+                controller_url=controller_url,
+                job_name=job_name,
+                command=command,
+                resources=resources,
+                env_vars=env_vars,
+                replicas=replicas,
+                max_retries=max_retries,
+                timeout=timeout,
+                wait=wait,
+            )
+
+
+def _submit_and_wait_job(
+    controller_url: str,
+    job_name: str,
+    command: list[str],
+    resources: ResourceSpec,
+    env_vars: dict[str, str],
+    replicas: int,
+    max_retries: int,
+    timeout: int,
+    wait: bool,
+) -> int:
+    """Submit job and optionally wait for completion.
+
+    Args:
+        controller_url: Controller URL
+        job_name: Name for the job
+        command: Command to run
+        resources: Resource spec
+        env_vars: Environment variables
+        replicas: Number of replicas
+        max_retries: Max retry attempts
+        timeout: Job timeout in seconds
+        wait: Whether to wait for completion
+
+    Returns:
+        Exit code: 0 for success, 1 for failure
+    """
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    entrypoint = Entrypoint.from_command(*command)
+
+    job = client.submit(
+        entrypoint=entrypoint,
+        name=job_name,
+        resources=resources,
+        environment=EnvironmentSpec(env_vars=env_vars),
+        replicas=replicas,
+        max_retries_failure=max_retries,
+        timeout_seconds=timeout,
+    )
+
+    logger.info(f"Job submitted: {job.job_id}")
+
+    if wait:
+        logger.info("Streaming logs (Ctrl+C to detach)...")
+        try:
+            from iris.client.client import JobFailedError
+
+            try:
+                status = job.wait(stream_logs=True, timeout=float("inf"))
+                logger.info(f"Job completed with state: {status.state}")
+                return 0 if status.state == cluster_pb2.JOB_STATE_SUCCEEDED else 1
+            except JobFailedError as e:
+                logger.info(f"Job failed with state: {e.status.state}")
+                return 1
+        except KeyboardInterrupt:
+            logger.info("Detached from job (job continues running)")
+            return 0
+    else:
+        logger.info("Job submitted (not waiting for completion)")
+        return 0
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -290,95 +442,33 @@ Examples:
 
     args = parser.parse_args()
 
-    # Validate and strip -- from command
-    if not args.cmd:
-        logger.error("No command provided. Command must start with --")
-        sys.exit(1)
+    # Validate command format
+    if not args.cmd or args.cmd[0] != "--":
+        parser.error("Command must start with --")
 
-    if args.cmd[0] == "--":
-        command = args.cmd[1:]
-    else:
-        logger.error("Command must start with --")
-        sys.exit(1)
-
+    command = args.cmd[1:]
     if not command:
-        logger.error("No command provided after --")
-        sys.exit(1)
+        parser.error("No command provided after --")
 
-    # Load cluster config
-    try:
-        config = load_cluster_config(args.config)
-    except (FileNotFoundError, ValueError) as e:
-        logger.error(f"Failed to load cluster config: {e}")
-        sys.exit(1)
+    # Load env vars - let exceptions propagate
+    env_vars = load_env_vars(args.env_vars)
 
-    # Load environment variables
-    try:
-        env_vars = load_env_vars(args.env_vars)
-        env_vars = add_standard_env_vars(env_vars)
-    except ValueError as e:
-        logger.error(f"Failed to parse environment variables: {e}")
-        sys.exit(1)
-
-    # Build resources
-    resources = build_resources(
+    # Call core logic - let exceptions propagate
+    exit_code = run_iris_job(
+        config_path=args.config,
+        command=command,
+        env_vars=env_vars,
         tpu=args.tpu,
         gpu=args.gpu,
         cpu=args.cpu,
         memory=args.memory,
+        wait=not args.no_wait,
+        job_name=args.job_name,
+        replicas=args.replicas,
+        max_retries=args.max_retries,
+        timeout=args.timeout,
     )
-
-    # Generate job name
-    job_name = args.job_name or generate_job_name(command)
-
-    logger.info(f"Submitting job: {job_name}")
-    logger.info(f"Command: {' '.join(command)}")
-    logger.info(f"Resources: cpu={resources.cpu}, memory={resources.memory}")
-    if resources.device and resources.device.HasField("tpu"):
-        logger.info(f"TPU: {resources.device.tpu.variant}")
-
-    # Establish tunnel and submit job
-    try:
-        with controller_tunnel(
-            zone=config["zone"],
-            project=config["project_id"],
-            tunnel_logger=logger,
-        ) as controller_url:
-            logger.info(f"Connected to controller: {controller_url}")
-
-            client = IrisClient.remote(controller_url, workspace=Path.cwd())
-
-            # Build entrypoint from command
-            entrypoint = Entrypoint.from_command(*command)
-
-            # Submit job
-            job = client.submit(
-                entrypoint=entrypoint,
-                name=job_name,
-                resources=resources,
-                environment=EnvironmentSpec(env_vars=env_vars),
-                replicas=args.replicas,
-                max_retries_failure=args.max_retries,
-                timeout_seconds=args.timeout,
-            )
-
-            logger.info(f"Job submitted: {job.job_id}")
-
-            if not args.no_wait:
-                logger.info("Streaming logs (Ctrl+C to detach)...")
-                try:
-                    status = job.wait(stream_logs=True, timeout=float("inf"))
-                    logger.info(f"Job completed with state: {status.state}")
-                    if status.state != cluster_pb2.JOB_STATE_SUCCEEDED:
-                        sys.exit(1)
-                except KeyboardInterrupt:
-                    logger.info("Detached from job (job continues running)")
-            else:
-                logger.info("Job submitted (not waiting for completion)")
-
-    except Exception as e:
-        logger.error(f"Failed to submit or run job: {e}", exc_info=True)
-        sys.exit(1)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
