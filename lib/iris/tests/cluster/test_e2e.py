@@ -32,7 +32,7 @@ from iris.client import IrisClient
 from iris.cluster.client import get_job_info
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import EnvironmentSpec, Entrypoint, ResourceSpec
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
+from iris.cluster.vm.cluster_manager import ClusterManager
 from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import DockerRuntime
@@ -54,15 +54,30 @@ def unique_name(prefix: str) -> str:
 
 
 def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
-    """Build an IrisClusterConfig for E2E tests with num_workers."""
+    """Build a fully-configured IrisClusterConfig for E2E tests with num_workers.
+
+    Sets up controller_vm.local, bundle_prefix, scale groups with local provider,
+    and fast autoscaler evaluation for tests.
+    """
     config = config_pb2.IrisClusterConfig()
+
+    # Configure local controller
+    config.controller_vm.local.port = 0  # auto-assign
+    config.controller_vm.bundle_prefix = ""  # LocalController will set temp path
+
+    # Configure scale group with local provider
     sg = config_pb2.ScaleGroupConfig(
         name="local-cpu",
         min_slices=num_workers,
         max_slices=num_workers,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
     )
+    sg.provider.local.SetInParent()
     config.scale_groups["local-cpu"].CopyFrom(sg)
+
+    # Fast autoscaler evaluation for tests
+    config.autoscaler.evaluation_interval_seconds = 0.5
+
     return config
 
 
@@ -91,7 +106,6 @@ class E2ECluster:
         if not self._use_docker:
             # Use ClusterManager for non-Docker path
             config = _make_e2e_config(self._num_workers)
-            config = make_local_config(config)
             self._manager = ClusterManager(config)
             address = self._manager.start()
             # Extract port from address for controller_client
