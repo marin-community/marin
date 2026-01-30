@@ -1,6 +1,6 @@
 # Fray-Lite Design
 
-**Status**: Draft (v2, post-review)
+**Status**: Draft (v4, post-review)
 **Issue**: [#2552](https://github.com/marin-community/marin/issues/2552)
 **Research**: [fray-lite-research.md](fray-lite-research.md)
 **Related**: [#2553](https://github.com/marin-community/marin/issues/2553) — Iris preemptible worker attribute
@@ -17,8 +17,8 @@ backed by either Ray or Iris. It lives in `fray.v2` alongside the existing
 The entire public API consists of:
 
 1. **`Client`** — submit jobs and create actors
-2. **`ActorHandle`** — call actor methods with `.remote()` shim
-3. **`ResourceConfig`** — extended from v1 with `preemptible` field
+2. **`ActorHandle`** — call actor methods with `.remote()` shim (Protocol)
+3. **`ResourceConfig`** — resource requirements per job/actor
 4. **`JobHandle`** — wait for / monitor submitted jobs
 
 ### Client
@@ -39,11 +39,15 @@ class Client(Protocol):
         resources: ResourceConfig = ResourceConfig(),
         **kwargs,
     ) -> ActorHandle:
-        """Create a named actor instance.
+        """Create a named actor instance. Returns a deferred handle immediately.
 
-        Launches a job hosting the actor, waits for it to become available,
-        and returns a handle for RPC calls. The caller is responsible for
-        creating actors — there is no implicit singleton/get-if-exists behavior.
+        The handle is usable right away — the first .remote() call will block
+        until the actor's name is registered (i.e. the actor job has started
+        and the actor server is serving). Internally polls for name registration.
+
+        Sugar for create_actor_group(..., count=1).handles[0].
+        The caller is responsible for creating actors — there is no implicit
+        singleton/get-if-exists behavior.
         """
         ...
 
@@ -58,8 +62,10 @@ class Client(Protocol):
     ) -> ActorGroup:
         """Create N instances of an actor, returning a group handle.
 
-        Each instance runs as a separate job. The group exposes
-        individual handles; callers (e.g. Zephyr) coordinate work
+        Returns immediately. Each instance runs as a separate job (named
+        "{name}-0", "{name}-1", ...). The group exposes individual handles
+        as they become ready; callers use wait_ready() to block until enough
+        actors are available. Callers (e.g. Zephyr) coordinate work
         distribution and fault tolerance themselves.
         """
         ...
@@ -74,28 +80,63 @@ def current_client() -> Client:
 
     Resolution order:
     1. Explicitly set client (via set_current_client or context manager)
-    2. FRAY_CLIENT_SPEC environment variable
+    2. FRAY_CLIENT_SPEC environment variable (see format below)
     3. LocalClient (default)
+
+    FRAY_CLIENT_SPEC format:
+        "local"                             → LocalClient()
+        "local?threads=4"                   → LocalClient(max_threads=4)
+        "ray"                               → RayClient(address="auto")
+        "ray?namespace=my-ns"               → RayClient(namespace="my-ns")
+        "iris://controller:10000"           → FrayIrisClient("controller:10000")
+        "iris://controller:10000?ws=/path"  → FrayIrisClient("controller:10000", workspace="/path")
+    """
+    ...
+
+
+def wait_all(
+    jobs: Sequence[JobHandle],
+    *,
+    timeout: float | None = None,
+    raise_on_failure: bool = True,
+) -> list[JobStatus]:
+    """Wait for all jobs to complete. Returns when all finish or one fails.
+
+    Unlike sequential job.wait() calls, this monitors all jobs concurrently
+    and raises immediately if any job fails (when raise_on_failure=True),
+    without waiting for earlier jobs to finish first.
     """
     ...
 ```
 
 ### ResourceConfig
 
-`ResourceConfig` is extended from v1. The `preemptible` field already exists
-on v1's `ResourceConfig`. Under Iris, `preemptible=False` maps to a constraint
+v2 copies the type definitions from v1 into `fray/v2/types.py`. The following
+files from v1 (`fray.cluster.base`) are copied:
+
+- `ResourceConfig`, `DeviceConfig`, `CpuConfig`, `GpuConfig`, `TpuConfig`
+- `EnvironmentConfig`
+- `Entrypoint`, `BinaryEntrypoint`, `CallableEntrypoint`
+- `JobRequest`, `JobStatus`
+
+These are standalone dataclasses with no v1 backend dependencies, so the copy is
+mechanical. After Phase 6 (cleanup), v1 types are deleted.
+
+`ResourceConfig` describes the resources for a single task/replica. The
+`replicas` field has been moved to `JobRequest` (see below) since it controls
+job-level gang scheduling, not per-task resources.
+
+Under Iris, `preemptible=False` maps to a constraint
 `Constraint(key="preemptible", op=EQ, value="false")` once workers expose
 their preemptibility as an attribute ([#2553](https://github.com/marin-community/marin/issues/2553)).
 
 ```python
-# Unchanged from v1 except emphasis on preemptible field:
 @dataclass
 class ResourceConfig:
     cpu: int = 1
     ram: str = "128m"
     disk: str = "1g"
     device: DeviceConfig = field(default_factory=CpuConfig)
-    replicas: int = 1
     preemptible: bool = True    # Maps to Iris constraint, Ray head_node pinning
     regions: Sequence[str] | None = None
 ```
@@ -111,7 +152,8 @@ class JobRequest:
     entrypoint: Entrypoint
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     environment: EnvironmentConfig | None = None
-    num_tasks: int = 1  # For gang-scheduled multi-task jobs (TPU slices)
+    replicas: int = 1  # Gang-scheduled replicas (TPU slices). Maps to Ray
+                        # run_on_pod num_slices, Iris LaunchJobRequest.replicas.
     max_retries_failure: int = 0
     max_retries_preemption: int = 100
 
@@ -120,7 +162,9 @@ class JobHandle(Protocol):
     @property
     def job_id(self) -> str: ...
 
-    def wait(self, timeout: float = 300.0, *, raise_on_failure: bool = True) -> JobStatus: ...
+    def wait(self, timeout: float | None = None, *, raise_on_failure: bool = True) -> JobStatus:
+        """Block until job completes. Default timeout is None (wait forever)."""
+        ...
 
     def status(self) -> JobStatus: ...
 
@@ -141,17 +185,25 @@ The `ActorHandle` provides a `.remote()` shim so existing RL code needs
 minimal changes. Under the hood, it translates to synchronous RPC calls
 (Iris ActorClient) or Ray actor refs.
 
+Both `ActorHandle` and `ActorMethod` are Protocols so that backend-specific
+implementations (Ray, Iris, Local) can be type-checked without inheritance.
+
 ```python
 # fray/v2/actor.py
 
-class ActorHandle:
-    """Handle to a remote actor with .method.remote() calling convention."""
+class ActorHandle(Protocol):
+    """Handle to a remote actor with .method.remote() calling convention.
+
+    Handles are deferred: they can be created before the actor is ready.
+    The first RPC call blocks until the actor's name is registered.
+    Handles are picklable for passing to worker jobs.
+    """
 
     def __getattr__(self, method_name: str) -> ActorMethod:
         ...
 
 
-class ActorMethod:
+class ActorMethod(Protocol):
     def remote(self, *args, **kwargs) -> ActorFuture:
         """Invoke the method remotely. Returns a future."""
         ...
@@ -170,17 +222,43 @@ class ActorFuture:
 
 
 class ActorGroup:
-    """Group of actor instances. Callers coordinate work distribution themselves."""
+    """Group of actor instances. Callers coordinate work distribution themselves.
+
+    Returned immediately from create_actor_group(). Actors become available
+    asynchronously; use wait_ready() to get a stable snapshot of ready handles.
+    """
 
     @property
-    def handles(self) -> list[ActorHandle]:
-        """Individual actor handles."""
+    def ready_count(self) -> int:
+        """Number of actors that have started and are available for RPC."""
+        ...
+
+    def wait_ready(self, count: int | None = None, timeout: float = 300.0) -> list[ActorHandle]:
+        """Block until `count` actors are ready (default: all).
+
+        Returns a frozen snapshot of ready handles. The returned list is stable
+        — it will not change as more actors come up. Call wait_ready() again
+        to get a new snapshot with additional actors.
+        """
         ...
 
     @property
     def jobs(self) -> list[JobHandle]:
         """Underlying job handles for lifecycle management."""
         ...
+
+    def statuses(self) -> list[JobStatus]:
+        """Return the job status of each actor in the group.
+
+        Useful for detecting dead actors (FAILED/STOPPED) so callers can
+        reassign work or request replacement.
+        """
+        return [job.status() for job in self.jobs]
+
+    def shutdown(self) -> None:
+        """Terminate all actor jobs."""
+        for job in self.jobs:
+            job.terminate()
 ```
 
 Note: `ActorGroup` is intentionally thin — it does NOT provide round-robin or
@@ -208,23 +286,44 @@ class LocalClient(Client):
 
 ### RayClient
 
-Wraps existing Ray cluster functionality. Jobs become Ray jobs, actors become
-Ray actors.
+Wraps Ray cluster functionality. Jobs become Ray jobs, actors become Ray actors.
+
+v2 copies the Ray integration code from v1 into `fray/v2/ray/` as a clean
+break. This avoids a layering violation (v2 depending on v1) and lets us
+mutate freely during migration. The v1 originals are deleted in Phase 6.
+
+**Files copied from v1 → v2:**
+
+| v1 source | v2 destination | What it provides |
+|-----------|---------------|------------------|
+| `fray.cluster.ray.cluster` | `fray.v2.ray.backend` | Job routing (TPU/binary/callable), runtime env setup |
+| `fray.cluster.ray.deps` | `fray.v2.ray.deps` | `build_runtime_env_for_packages`, PYTHONPATH computation |
+| `fray.cluster.ray.resources` | `fray.v2.ray.resources` | `as_remote_kwargs`, scheduling strategy helpers |
+| `fray.cluster.ray.tpu.execution` | `fray.v2.ray.tpu` | `run_on_pod_ray`, `SliceActor`, `TPUHostActor`, retry logic |
+| `fray.fn_thunk` | `fray.v2.ray.fn_thunk` | Callable → pickle → CLI entrypoint serialization |
+| `fray.cluster.ray.auth` | `fray.v2.ray.auth` | Ray token authentication |
+
+**Not copied** (unused by v2): dashboard proxy, cluster config discovery,
+`monitor()` log streaming, `Cluster` base class, `LocalCluster`.
 
 ```python
 class RayClient(Client):
     def submit(self, request: JobRequest) -> JobHandle:
-        # Delegates to existing RayCluster.launch()
+        # Routes to _launch_tpu_job / _launch_binary_job / _launch_callable_job
+        # (logic copied from v1 RayCluster.launch)
         # Handles TPU jobs via run_on_pod
+        # JobRequest.replicas → run_on_pod num_slices
         # max_retries = max_retries_failure + max_retries_preemption
         ...
 
     def create_actor(self, actor_class, *args, name, resources, **kwargs) -> ActorHandle:
+        # Returns a deferred RayActorHandle immediately
+        # Internally: ray.remote(actor_class).options(name=name, ...).remote(...)
+        # The handle wraps the Ray actor ObjectRef; first .remote() call
+        # blocks until the actor is scheduled.
         # Map resources to Ray options:
         #   resources.preemptible=False → {"resources": {"head_node": 0.0001}}
         #   resources.cpu → num_cpus (default 0 for actors)
-        # ray.remote(actor_class).options(name=name, ...).remote(*args, **kwargs)
-        # Wraps ray actor handle in ActorHandle shim
         ...
 ```
 
@@ -233,6 +332,9 @@ class RayClient(Client):
 The fray-lite `IrisClient` sits on top of the existing Iris client library.
 The Iris client already provides job submission, endpoint registry, and
 resolver — we wrap it rather than reimplementing.
+
+`create_actor` delegates to `create_actor_group(..., count=1)`. Only
+`create_actor_group` contains Iris-specific logic.
 
 ```python
 class FrayIrisClient(Client):
@@ -245,15 +347,17 @@ class FrayIrisClient(Client):
         # Convert ResourceConfig → Iris ResourceSpec
         #   resources.preemptible=False → Constraint(key="preemptible", op=EQ, value="false")
         # Convert Entrypoint → Iris Entrypoint
+        # JobRequest.replicas → Iris LaunchJobRequest.replicas
         # Submit via self._iris.submit(...)
         # Return JobHandle wrapping iris.client.Job
         ...
 
-    def create_actor(self, actor_class, *args, name, resources, **kwargs) -> ActorHandle:
-        # 1. Create Entrypoint wrapping _host_actor(actor_class, args, kwargs, name)
-        # 2. Submit as Iris job with ports=["actor"]
-        # 3. Wait for endpoint to appear in self._iris.resolver()
-        # 4. Return ActorHandle wrapping Iris ActorClient
+    def create_actor_group(self, actor_class, *args, name, count, resources, **kwargs) -> ActorGroup:
+        # 1. Submit `count` Iris jobs, each running _host_actor entrypoint
+        #    with ports=["actor"]. Jobs named "{name}-0", "{name}-1", ...
+        # 2. Return ActorGroup immediately
+        # 3. ActorGroup.wait_ready() polls resolver for endpoint availability
+        # 4. As endpoints appear, wait_ready() returns IrisActorHandles
         ...
 ```
 
@@ -261,11 +365,17 @@ The actor hosting entrypoint:
 
 ```python
 def _host_actor(actor_class, args, kwargs, name):
-    """Entrypoint for actor-hosting Iris jobs."""
+    """Entrypoint for actor-hosting Iris jobs.
+
+    If actor_class.__init__ raises, the job exits non-zero immediately
+    rather than blocking forever with a dead actor.
+    """
     from iris.actor import ActorServer
     from iris.client import iris_ctx
 
     ctx = iris_ctx()
+
+    # Init outside try — let failures propagate and kill the job
     instance = actor_class(*args, **kwargs)
 
     server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"))
@@ -276,34 +386,65 @@ def _host_actor(actor_class, args, kwargs, name):
     address = f"{_get_host_ip()}:{server.port}"
     ctx.registry.register(name, address)
 
-    # Block until job is terminated
-    import threading
-    threading.Event().wait()
+    # Actor stays alive until its job is terminated via JobHandle.terminate()
+    # or ActorGroup.shutdown(). No separate control channel needed — job
+    # termination kills the container.
+    server.wait_for_termination()
 ```
 
 The `ActorHandle` for Iris wraps `iris.actor.ActorClient`:
 
 ```python
 class IrisActorHandle(ActorHandle):
-    def __init__(self, client: IrisActorClient):
-        self._client = client
+    """Handle to an Iris-hosted actor.
+
+    Deferred: the handle is created with just a name. On first use, it
+    resolves the name via iris_ctx().resolver to find the actor's address.
+
+    Serialization: pickles as (actor_name,). On unpickle, reconstructs
+    from the current IrisContext (available in any Iris job via iris_ctx()).
+    This means handles are only usable within the same Iris namespace —
+    which is always the case since child jobs inherit the parent's namespace.
+    """
+
+    def __init__(self, actor_name: str, client: IrisActorClient | None = None):
+        self._actor_name = actor_name
+        self._client = client  # Lazily resolved on first use if None
+
+    def _resolve(self) -> IrisActorClient:
+        if self._client is None:
+            from iris.client import iris_ctx
+            from iris.actor import ActorClient
+            ctx = iris_ctx()
+            self._client = ActorClient(ctx.resolver, self._actor_name)
+        return self._client
 
     def __getattr__(self, method_name: str) -> ActorMethod:
-        return _IrisActorMethod(self._client, method_name)
+        return _IrisActorMethod(self, method_name)
+
+    def __getstate__(self):
+        return {"actor_name": self._actor_name}
+
+    def __setstate__(self, state):
+        self._actor_name = state["actor_name"]
+        self._client = None  # Will resolve lazily via iris_ctx()
+
 
 class _IrisActorMethod(ActorMethod):
     def remote(self, *args, **kwargs) -> ActorFuture:
         # Run the synchronous Iris RPC call in a thread pool to return
         # a non-blocking future. The Iris ActorClient already handles
         # timeouts internally; we use its timeout and don't add a second one.
+        client = self._handle._resolve()
         executor = _get_shared_executor()
         future = executor.submit(
-            lambda: getattr(self._client, self._method)(*args, **kwargs)
+            lambda: getattr(client, self._method)(*args, **kwargs)
         )
         return ActorFuture(future)
 
     def __call__(self, *args, **kwargs) -> Any:
-        return getattr(self._client, self._method)(*args, **kwargs)
+        client = self._handle._resolve()
+        return getattr(client, self._method)(*args, **kwargs)
 ```
 
 ## Zephyr Migration
@@ -323,7 +464,13 @@ calls to Ray workers. Under fray-lite, Zephyr will instead:
 
 ```python
 class ActorBackend:
-    """Distributed Zephyr backend using fray-lite actor groups."""
+    """Distributed Zephyr backend using fray-lite actor groups.
+
+    Use as a context manager to ensure actor cleanup:
+
+        with ActorBackend(client, 8, resources) as backend:
+            backend.execute(dataset, hints)
+    """
 
     def __init__(self, client: Client, num_workers: int, resources: ResourceConfig):
         self.group = client.create_actor_group(
@@ -333,19 +480,25 @@ class ActorBackend:
             resources=resources,
         )
 
+    def __enter__(self) -> ActorBackend:
+        return self
+
+    def __exit__(self, *exc):
+        self.group.shutdown()
+
     def execute(self, dataset: Dataset, hints: ExecutionHint) -> Sequence:
+        handles = self.group.wait_ready()
         plan = compute_plan(dataset, hints)
         shards = self._shards_from_source_items(plan.source_items)
         for stage in plan.stages:
-            shards = self._execute_stage(stage, shards, hints)
+            shards = self._execute_stage(stage, shards, hints, handles)
         return list(self._materialize(shards))
 
-    def _execute_stage(self, stage, shards, hints):
+    def _execute_stage(self, stage, shards, hints, handles):
         # Assign shards to workers round-robin
         # Each worker reads shard data from shared storage, processes, writes back
         # On worker failure, reassign shard to another worker
         futures = []
-        handles = self.group.handles
         for i, shard in enumerate(shards):
             worker = handles[i % len(handles)]
             future = worker.run_stage.remote(shard.storage_path, stage.operations)
@@ -406,6 +559,9 @@ result = job_ctx.get(future)
 from fray.v2 import current_client
 
 client = current_client()
+
+# create_actor returns a deferred handle immediately; first .remote()
+# call will block until the actor is registered and serving.
 curriculum_actor = client.create_actor(
     Curriculum, config,
     name="curriculum",
@@ -452,7 +608,7 @@ cluster.wait(jobs, raise_on_failure=True)
 # After
 client = current_client()
 
-# Create shared actors first
+# Create shared actors first (deferred handles — no blocking here)
 curriculum = client.create_actor(Curriculum, config, name="curriculum",
                                   resources=ResourceConfig(preemptible=False))
 weight_coord = client.create_actor(WeightTransferCoordinator, name="wt-coord",
@@ -468,9 +624,8 @@ for i in range(N):
         entrypoint=Entrypoint.from_callable(rollout_task, args=[i, curriculum, weight_coord]),
         resources=rollout_resources)))
 
-# Wait for all
-for job in jobs:
-    job.wait(raise_on_failure=True)
+# Wait for all concurrently — fails fast if any job fails
+wait_all(jobs, raise_on_failure=True)
 ```
 
 ## Levanter Training Migration
@@ -491,26 +646,51 @@ job.wait(raise_on_failure=True)
 
 ## Migration Plan
 
+### Phase 0: Iris Prerequisites
+
+Before fray-lite can use Iris as a backend, two Iris changes are needed:
+
+1. **Preemptible worker attribute** ([#2553](https://github.com/marin-community/marin/issues/2553)) —
+   Workers must expose `preemptible=true|false` as an attribute so that
+   `FrayIrisClient` can map `ResourceConfig(preemptible=False)` to an Iris
+   scheduling constraint. Without this, non-preemptible actors (curriculum,
+   weight coordinator) cannot be placed correctly.
+
+2. **Move `replicas` to `LaunchJobRequest`** — Iris currently has `replicas`
+   on `ResourceSpecProto`. It should be a top-level field on
+   `LaunchJobRequest` since it controls gang scheduling at the job level,
+   not per-task resource requirements. This aligns with how fray-lite's
+   `JobRequest.replicas` maps to the Iris proto.
+
+These can be done in parallel with Phase 1 (core interface + LocalClient).
+
 ### Phase 1: Core Interface + LocalClient
 
 1. Create `fray/v2/` package with `types.py`, `client.py`, `actor.py`
-2. Implement `LocalClient` backend (threads + in-process actors)
-3. Write tests for core API (submit, create_actor, actor group, lifecycle)
+2. Copy type definitions from v1 `fray.cluster.base` into `fray/v2/types.py`
+   — move `replicas` from `ResourceConfig` to `JobRequest`
+3. Implement `LocalClient` backend (threads + in-process actors)
+4. Implement `wait_all()` utility
+5. Write tests for core API (submit, create_actor, actor group, wait_all, lifecycle)
 
 ### Phase 2: Ray Backend
 
-1. Implement `RayClient` wrapping existing `RayCluster`
-2. Ray `ActorHandle` wrapping Ray actor refs with `.remote()` shim
-3. Map `preemptible=False` → `resources={"head_node": 0.0001}`
-4. Map `max_retries_failure + max_retries_preemption` → Ray retry count
-5. Test with existing Ray cluster
+1. Copy Ray integration code from v1 into `fray/v2/ray/` (see table above)
+2. Implement `RayClient` using the copied code
+3. Ray `ActorHandle` wrapping Ray actor refs with `.remote()` shim (deferred)
+4. Map `preemptible=False` → `resources={"head_node": 0.0001}`
+5. Map `JobRequest.replicas` → `run_on_pod num_slices`
+6. Map `max_retries_failure + max_retries_preemption` → Ray retry count
+7. Test with existing Ray cluster
 
 ### Phase 3: Iris Backend
 
 1. Implement `FrayIrisClient` wrapping `iris.client.IrisClient`
 2. Implement actor hosting entrypoint + endpoint registration
-3. Map `preemptible=False` → Iris constraint (requires [#2553](https://github.com/marin-community/marin/issues/2553))
-4. Test with local Iris controller
+3. Implement `IrisActorHandle` with deferred resolution and context-based serialization
+4. Map `preemptible=False` → Iris constraint (requires Phase 0)
+5. Map `JobRequest.replicas` → Iris `LaunchJobRequest.replicas` (requires Phase 0)
+6. Test with local Iris controller
 
 ### Phase 4: Migrate Callers
 
@@ -544,16 +724,49 @@ job.wait(raise_on_failure=True)
 
 ```
 lib/fray/src/fray/v2/
-├── __init__.py          # Re-exports: Client, current_client, JobRequest, etc.
+├── __init__.py          # Re-exports: Client, current_client, wait_all, JobRequest, etc.
 ├── types.py             # JobRequest, JobHandle, JobStatus, Entrypoint, EnvironmentConfig
-├── client.py            # Client protocol, current_client(), set_current_client()
-├── actor.py             # ActorHandle, ActorMethod, ActorFuture, ActorGroup
+│                        # (copied from v1 fray.cluster.base, replicas moved to JobRequest)
+├── client.py            # Client protocol, current_client(), set_current_client(), wait_all()
+├── actor.py             # ActorHandle, ActorMethod, ActorFuture, ActorGroup (all Protocols)
 ├── local.py             # LocalClient implementation
-├── ray_backend.py       # RayClient implementation
+├── ray/
+│   ├── __init__.py
+│   ├── backend.py       # RayClient (copied+adapted from v1 ray.cluster)
+│   ├── deps.py          # Runtime env building (copied from v1 ray.deps)
+│   ├── resources.py     # Resource mapping helpers (copied from v1 ray.resources)
+│   ├── tpu.py           # TPU orchestration (copied from v1 ray.tpu.execution)
+│   ├── fn_thunk.py      # Callable serialization (copied from v1 fn_thunk)
+│   └── auth.py          # Ray token auth (copied from v1 ray.auth)
 └── iris_backend.py      # FrayIrisClient implementation (wraps iris.client.IrisClient)
 ```
 
 ## Design Decisions
+
+### Why `create_actor` and `create_actor_group`?
+
+`create_actor` is sugar for `create_actor_group(..., count=1).wait_ready()[0]`.
+It exists because singleton actors are the common case in RL (curriculum, weight
+coordinator). Forcing `group.wait_ready()[0]` for every singleton would be noisy.
+
+Both return deferred handles — the handle is usable immediately but the first
+RPC call blocks until the actor is registered. This means `create_actor` does
+not block the caller either; it returns a handle that will resolve lazily.
+
+### Why `create_actor_group` returns immediately?
+
+Actor startup is slow (job scheduling + container boot + actor init). Returning
+immediately lets callers overlap actor startup with other work. The group
+exposes `ready_count` and `wait_ready(count)` so callers choose when to block.
+Zephyr can start processing shards as soon as *some* workers are ready rather
+than waiting for all N.
+
+### Why `wait_ready()` returns handles?
+
+`wait_ready()` returns a frozen `list[ActorHandle]` snapshot rather than
+mutating a `.handles` property. This avoids races where a caller iterates
+handles while the list is growing. Callers that need more handles later call
+`wait_ready()` again for a new snapshot.
 
 ### Why `ActorGroup` instead of `ActorPool`?
 
@@ -571,6 +784,26 @@ passes handles to workers explicitly. This:
 - Makes the data flow explicit and debuggable
 - Eliminates the need for `get_if_exists` / singleton semantics
 - Works naturally with Iris (actor = job + endpoint registration)
+
+### Why copy v1 Ray code instead of wrapping it?
+
+Three options were considered:
+
+1. **v2 wraps v1 directly** — fast but creates a layering violation (v2 depends
+   on v1). Deleting v1 in Phase 6 requires untangling.
+2. **Extract shared module** — no duplication, but refactoring overhead for an
+   intermediate state that's deleted in Phase 6 anyway.
+3. **Copy into v2** (chosen) — clean separation, ~6 files of code. v2 can
+   mutate freely. v1 deletion in Phase 6 is just `rm -rf`. The TPU execution
+   code (1000 lines) is the largest piece but is self-contained.
+
+### Why `replicas` on `JobRequest` instead of `ResourceConfig`?
+
+`replicas` controls gang scheduling — how many coordinated instances of a job
+run together (e.g. TPU slices in a multislice training job). This is a job-level
+concern, not a per-task resource requirement. Putting it on `JobRequest` aligns
+with the Iris model (where `replicas` belongs on `LaunchJobRequest`) and avoids
+confusion with `ResourceConfig` which describes what a single replica needs.
 
 ### Why separate `max_retries_failure` and `max_retries_preemption`?
 
@@ -600,3 +833,66 @@ namespace-based resolver, and port allocation. Wrapping it avoids reimplementing
 gRPC plumbing and keeps the fray-lite Iris backend thin. The main work is
 type conversion (`ResourceConfig` → `ResourceSpec`, `Entrypoint` mapping)
 and the actor hosting entrypoint.
+
+### Why IrisActorHandle serializes via context, not controller address?
+
+Actor handles are pickled when passed to worker jobs via `Entrypoint.from_callable`.
+On deserialization, the handle reconstructs its `ActorClient` from `iris_ctx()` —
+the Iris context already available in every Iris job. This avoids baking the
+controller address into the handle and works because child jobs inherit the
+parent's namespace (so the resolver finds the same actors).
+
+### Why no async Iris API?
+
+The `_IrisActorMethod.remote()` wraps synchronous Iris RPC calls in a thread
+pool executor to return non-blocking futures. This is sufficient — Iris's
+`ActorClient` is a simple HTTP call, and the thread pool avoids blocking the
+caller. Adding a native async API to Iris would be more complex for marginal
+benefit. Revisit only if profiling shows thread pool overhead.
+
+### Why actor termination via job kill, not a control channel?
+
+The `_host_actor` entrypoint blocks forever until its job is terminated.
+`ActorGroup.shutdown()` calls `job.terminate()` on each underlying job, which
+kills the container. No separate control RPC is needed — this is simpler and
+works identically across Ray and Iris. A graceful shutdown hook could be added
+later if actors need cleanup logic, but the current workloads don't require it.
+
+## Recommended Issues
+
+The following issues should be filed to begin implementation:
+
+### Iris prerequisites (can start immediately, in parallel)
+
+- **Iris: Move `replicas` from `ResourceSpecProto` to `LaunchJobRequest`** —
+  Gang scheduling is a job-level concern. Move the `replicas` field from
+  `ResourceSpecProto` to `LaunchJobRequest` as a top-level field. Update
+  the controller's scheduling logic and all clients accordingly.
+
+- **Iris: Expose preemptible worker attribute** ([#2553](https://github.com/marin-community/marin/issues/2553)) —
+  Already filed. Workers must report `preemptible=true|false` so the scheduler
+  can enforce `Constraint(key="preemptible", op=EQ, value="false")`.
+
+### Fray-lite core (start after or in parallel with Iris prereqs)
+
+- **Fray-lite: Phase 1 — Core interface + LocalClient** —
+  Create `fray/v2/` package. Define `Client` protocol, `ActorHandle` protocol,
+  `ActorGroup`, `JobHandle`, `wait_all()`. Copy type definitions from v1.
+  Implement `LocalClient`. Write tests.
+
+- **Fray-lite: Phase 2 — Ray backend** —
+  Copy v1 Ray code into `fray/v2/ray/`. Implement `RayClient` with deferred
+  actor handles. Map `JobRequest.replicas` → `run_on_pod num_slices`.
+
+- **Fray-lite: Phase 3 — Iris backend** —
+  Implement `FrayIrisClient` wrapping `iris.client.IrisClient`. Deferred
+  `IrisActorHandle` with context-based serialization. Depends on both Iris
+  prerequisite issues.
+
+- **Fray-lite: Phase 4 — Migrate callers** —
+  Migrate Levanter, RL, Zephyr, and remaining callers from v1 to v2 API.
+  Zephyr is last and largest (new `ActorBackend`).
+
+- **Fray-lite: Phase 6 — Delete v1** —
+  Remove `fray.cluster`, `fray.job`, `fray.queue`. Move `fray.v2` → `fray`.
+  Update all imports.
