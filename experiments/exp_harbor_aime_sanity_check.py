@@ -29,23 +29,25 @@ This same pattern works for ANY Harbor dataset:
 - And 40+ other benchmarks!
 
 Usage (Local):
-    ANTHROPIC_API_KEY=<key> python experiments/exp_harbor_aime_sanity_check.py
+    MARIN_PREFIX=gs://marin-us-central1 ANTHROPIC_API_KEY=<key> python experiments/exp_harbor_aime_sanity_check.py
 
 Usage (Ray Cluster):
     uv run lib/marin/src/marin/run/ray_run.py \
-        --env_vars ANTHROPIC_API_KEY <your-key> \
+        --env_vars MARIN_PREFIX gs://marin-us-central1 \
+        --env_vars ANTHROPIC_API_KEY ${ANTHROPIC_API_KEY} \
         --env_vars WANDB_API_KEY ${WANDB_API_KEY} \
         --env_vars WANDB_ENTITY marin-community \
         --env_vars WANDB_PROJECT harbor \
         --cluster us-central1 \
-        --extra harbor \
+        --extra harbor,cpu \
         --no_wait \
         -- python experiments/exp_harbor_aime_sanity_check.py
 
 Results are saved to:
     - GCS: gs://marin-us-central1/evaluation/harbor/{dataset}/{model_name_escaped}/
-      - results.json: Aggregated metrics and per-task results
-      - trajectories/*.jsonl: Full agent interaction traces for RL training
+      - samples_TIMESTAMP.jsonl: Per-task samples (1 line per task)
+      - results_TIMESTAMP.json: Aggregated metrics and pointer to samples file
+      - trajectories/{task_id}.jsonl: Full agent interaction traces (best-effort)
     - W&B: Metrics and trajectory lengths logged to wandb.ai/marin-community/harbor
 
 Note: Requires ANTHROPIC_API_KEY environment variable for Claude agent.
@@ -66,8 +68,13 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Resource configuration
-resource_config = ResourceConfig.with_tpu("v5p-8")
+
+def _escape_model_name_for_path(model_name: str) -> str:
+    return model_name.replace("://", "__").replace("/", "__")
+
+
+# Resource configuration (Harbor runs via API + containers; no accelerator required)
+resource_config = ResourceConfig.with_cpu()
 
 # Model configuration
 # For the sanity check, we'll use Claude Haiku 4.5 for faster, cost-effective evaluation
@@ -88,6 +95,9 @@ DATASET = "aime"
 VERSION = "1.0"
 MAX_INSTANCES = 5  # Start with just 5 tasks for sanity check
 
+MODEL_NAME_ESCAPED = _escape_model_name_for_path(MODEL["name"])
+OUTPUT_DIR = os.path.join("evaluation", "harbor", DATASET, MODEL_NAME_ESCAPED)
+
 logger.info("=" * 80)
 logger.info("Harbor + AIME Sanity Check")
 logger.info("=" * 80)
@@ -95,7 +105,8 @@ logger.info(f"Dataset: {DATASET}@{VERSION}")
 logger.info(f"Model: {MODEL['name']}")
 logger.info(f"Max instances: {MAX_INSTANCES}")
 logger.info("Agent: claude-code (Harbor's built-in Claude agent)")
-logger.info("Environment: local (Docker) - use Ray cluster for production runs")
+logger.info("Harbor env: local (Docker) - run via Ray for cluster execution")
+logger.info(f"Output dir (under MARIN_PREFIX): {OUTPUT_DIR}")
 logger.info("=" * 80)
 
 # Create evaluation step
@@ -111,6 +122,7 @@ step = evaluate_harbor(
     n_concurrent=5,  # Run all 5 tasks in parallel
     env="local",  # Use local Docker containers
 )
+step = step.with_output_path(OUTPUT_DIR)
 
 if __name__ == "__main__":
     logger.info("Starting Harbor evaluation...")
@@ -129,7 +141,10 @@ if __name__ == "__main__":
     logger.info("Sanity check complete!")
     logger.info("Next steps:")
     logger.info("1. Check W&B for results: https://wandb.ai/marin-community/harbor")
-    logger.info("2. Check GCS for trajectories: gs://marin-us-central1/evaluation/harbor/")
-    logger.info("3. For full evaluation, run on Ray cluster with MAX_INSTANCES=None")
+    logger.info(
+        "2. Check GCS for results: gs://marin-us-central1/"
+        f"{OUTPUT_DIR}/samples_TIMESTAMP.jsonl and gs://marin-us-central1/{OUTPUT_DIR}/results_TIMESTAMP.json"
+    )
+    logger.info("3. For full evaluation, run on Ray cluster with MAX_INSTANCES=None (or set max_eval_instances=None)")
     logger.info("4. Try other datasets: terminal-bench@2.0, swebench-verified@1.0")
     logger.info("=" * 80)

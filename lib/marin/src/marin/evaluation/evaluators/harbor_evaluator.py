@@ -27,13 +27,17 @@ No custom adapters needed - Harbor's registry handles all datasets generically.
 import json
 import logging
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
+import time
 from pathlib import Path
 
+import fsspec
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.utils import is_remote_path, upload_to_gcs
+from marin.evaluation.utils import is_remote_path
 from fray.cluster import ResourceConfig
 from fray.cluster.ray.deps import build_runtime_env_for_packages
 
@@ -118,7 +122,16 @@ class HarborEvaluator(Evaluator):
 
         # Parse and save results
         parsed_results = self._parse_results(results)
-        self._save_results(parsed_results, output_path, wandb_tags, model.name, dataset, job_dir)
+        parsed_results["meta"] = {
+            "dataset": dataset,
+            "version": version,
+            "agent": agent,
+            "n_concurrent": n_concurrent,
+            "env": env_type,
+            "max_eval_instances": max_eval_instances,
+            "model": model.name,
+        }
+        self._save_results(parsed_results, output_path, wandb_tags, model.name, dataset, version, job_dir)
 
         logger.info("Harbor evaluation completed successfully")
 
@@ -135,9 +148,6 @@ class HarborEvaluator(Evaluator):
         """Run Harbor trials using CLI."""
 
         # Find harbor executable (prefer venv installation)
-        import sys
-        import shutil
-
         harbor_cmd = shutil.which("harbor")
         if harbor_cmd is None:
             # Try venv bin directory
@@ -220,16 +230,37 @@ class HarborEvaluator(Evaluator):
                                 trial_id = trial_result.get("task_name", trial_dir.name)
 
                                 # Extract key information
+                                exception_info = trial_result.get("exception_info")
+                                if not isinstance(exception_info, dict):
+                                    exception_info = {}
+                                error = None
+                                exception_type = exception_info.get("exception_type")
+                                exception_message = exception_info.get("exception_message")
+                                if exception_type or exception_message:
+                                    error = {
+                                        "type": exception_type,
+                                        "message": exception_message,
+                                    }
+
+                                verifier_result = trial_result.get("verifier_result")
+                                if not isinstance(verifier_result, dict):
+                                    verifier_result = {}
+                                rewards = verifier_result.get("rewards")
+                                if not isinstance(rewards, dict):
+                                    rewards = {}
+                                reward = rewards.get("reward", 0.0)
+                                if not isinstance(reward, int | float):
+                                    reward = 0.0
+
                                 trial_data = {
-                                    "reward": (
-                                        trial_result.get("verifier_result", {}).get("rewards", {}).get("reward", 0.0)
-                                    ),
+                                    "reward": reward,
                                     "status": "completed" if trial_result.get("exception_info") is None else "failed",
                                     "trajectory": [],
                                     "task_name": trial_id,
                                     "started_at": trial_result.get("started_at"),
                                     "finished_at": trial_result.get("finished_at"),
                                     "trial_dir": str(trial_dir),  # Store directory for trajectory access
+                                    "error": error,
                                 }
 
                                 results["trials"][trial_id] = trial_data
@@ -250,8 +281,6 @@ class HarborEvaluator(Evaluator):
         finally:
             # Clean up temp directory, ignoring permission errors from Docker
             try:
-                import shutil
-
                 shutil.rmtree(tmpdir, ignore_errors=True)
             except Exception as e:
                 logger.warning(f"Could not fully clean up temp directory {tmpdir}: {e}")
@@ -319,22 +348,26 @@ class HarborEvaluator(Evaluator):
         wandb_tags: list[str] | None,
         model_name: str,
         dataset: str,
+        version: str,
         job_dir: Path | None = None,
     ) -> None:
         """Save results to GCS and log to W&B."""
 
-        # Setup local results directory
-        local_results_dir = "/tmp/harbor_results"
-        os.makedirs(local_results_dir, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        results_file_name = f"results_{timestamp}.json"
+        samples_file_name = f"samples_{timestamp}.jsonl"
+
+        # Ensure local output path exists for local filesystem runs.
+        if not is_remote_path(output_path):
+            os.makedirs(output_path, exist_ok=True)
+            os.makedirs(os.path.join(output_path, "trajectories"), exist_ok=True)
+
+        samples_path = os.path.join(output_path, samples_file_name)
+        results_path = os.path.join(output_path, results_file_name)
 
         # Calculate trajectory lengths and save trajectory files FIRST
-        # (before saving results.json so trajectory_length is populated)
+        # (before saving results so trajectory_length is populated)
         if job_dir is not None:
-            import shutil
-
-            trajectories_dir = Path(local_results_dir) / "trajectories"
-            trajectories_dir.mkdir(exist_ok=True)
-
             for trial_id, trial_data in results["trials"].items():
                 trial_dir_str = trial_data.get("trial_dir", "")
                 if trial_dir_str:
@@ -345,47 +378,61 @@ class HarborEvaluator(Evaluator):
                         if trajectory_files:
                             trajectory_file = trajectory_files[0]
                             try:
-                                # Count trajectory length
-                                with open(trajectory_file) as f:
-                                    trajectory_length = sum(1 for _ in f)
-                                results["trials"][trial_id]["trajectory_length"] = trajectory_length
+                                trajectory_length = 0
+                                trajectory_path = os.path.join(output_path, "trajectories", f"{trial_id}.jsonl")
+                                with open(trajectory_file) as src, fsspec.open(trajectory_path, "w") as dst:
+                                    for line in src:
+                                        trajectory_length += 1
+                                        dst.write(line)
 
-                                # Copy trajectory file to local results directory
-                                dest_file = trajectories_dir / f"{trial_id}.jsonl"
-                                shutil.copy2(trajectory_file, dest_file)
-                                logger.info(f"Saved trajectory for {trial_id} to {dest_file}")
+                                results["trials"][trial_id]["trajectory_length"] = trajectory_length
+                                results["trials"][trial_id]["trajectory_path"] = trajectory_path
+                                logger.info(f"Saved trajectory for {trial_id} to {trajectory_path}")
 
                             except Exception as e:
                                 logger.warning(f"Failed to process trajectory for {trial_id}: {e}")
 
-        # Now save results.json with updated trajectory_length values
-        local_results_file = os.path.join(local_results_dir, "results.json")
-        with open(local_results_file, "w") as f:
-            json.dump(results, f, indent=2)
+        trials_for_output = {}
+        for trial_id, trial_data in results["trials"].items():
+            trial_output = dict(trial_data)
+            trial_output.pop("trial_dir", None)
+            trials_for_output[trial_id] = trial_output
 
-        logger.info(f"Saved results locally to {local_results_file}")
+        with fsspec.open(samples_path, "w") as f:
+            for trial_id, trial_data in sorted(trials_for_output.items()):
+                sample = {
+                    "task_id": trial_id,
+                    "dataset": dataset,
+                    "version": version,
+                    "model": model_name,
+                    "timestamp": timestamp,
+                    **trial_data,
+                }
+                f.write(json.dumps(sample, ensure_ascii=False) + "\n")
 
-        # Upload to GCS if remote path
-        if is_remote_path(output_path):
-            logger.info(f"Uploading results to {output_path}")
-            try:
-                upload_to_gcs(local_results_dir, output_path)
-                logger.info(f"Successfully uploaded results to {output_path}")
-            except Exception as e:
-                logger.error(f"Failed to upload to GCS: {e}")
-                # Don't fail the whole eval if upload fails
+        aggregated_results = {
+            "meta": results.get("meta", {}) | {"timestamp": timestamp},
+            "aggregate": results["aggregate"],
+            "samples_path": samples_path,
+        }
+        with fsspec.open(results_path, "w") as f:
+            json.dump(aggregated_results, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"Wrote samples to {samples_path}")
+        logger.info(f"Wrote aggregated results to {results_path}")
 
         # Log to W&B
         try:
             import wandb
 
             wandb.init(
-                project="marin",
+                project=os.environ.get("WANDB_PROJECT") or "harbor",
                 name=f"{model_name}-{dataset}",
                 tags=(wandb_tags or []) + ["harbor", dataset],
                 config={
                     "model": model_name,
                     "dataset": dataset,
+                    "version": version,
                     "evaluator": "harbor",
                 },
             )
@@ -396,7 +443,7 @@ class HarborEvaluator(Evaluator):
             # Log table of per-trial results
             import pandas as pd
 
-            trials_df = pd.DataFrame.from_dict(results["trials"], orient="index")
+            trials_df = pd.DataFrame.from_dict(trials_for_output, orient="index")
             wandb.log({"trials": wandb.Table(dataframe=trials_df)})
 
             wandb.finish()
