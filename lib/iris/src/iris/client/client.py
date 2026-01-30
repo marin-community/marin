@@ -495,11 +495,9 @@ class LocalClientConfig:
 
     Attributes:
         max_workers: Maximum concurrent job threads
-        port_range: Port range for actor servers (inclusive start, exclusive end)
     """
 
     max_workers: int = 4
-    port_range: tuple[int, int] = (50000, 60000)
 
 
 class EndpointRegistry(Protocol):
@@ -673,10 +671,7 @@ class IrisClient:
             IrisClient wrapping LocalClusterClient
         """
         cfg = config or LocalClientConfig()
-        cluster = LocalClusterClient.create(
-            max_workers=cfg.max_workers,
-            port_range=cfg.port_range,
-        )
+        cluster = LocalClusterClient.create(max_workers=cfg.max_workers)
         return cls(cluster)
 
     @classmethod
