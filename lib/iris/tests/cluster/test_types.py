@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for iris.cluster.types — Entrypoint and EnvironmentSpec."""
+"""Tests for iris.cluster.types — Entrypoint, EnvironmentSpec, and constraint helpers."""
 
 from iris.cluster.types import Entrypoint
 

@@ -18,6 +18,7 @@ import logging
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -41,7 +42,7 @@ from iris.cluster.controller.state import (
     get_device_type_enum,
     get_device_variant,
 )
-from iris.cluster.types import JobId, TaskId, VmWorkerStatus, VmWorkerStatusMap
+from iris.cluster.types import JobId, TaskId, VmWorkerStatus, VmWorkerStatusMap, PREEMPTIBLE_ATTRIBUTE_KEY
 from iris.cluster.vm.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
@@ -52,6 +53,19 @@ logger = logging.getLogger(__name__)
 
 # RPC timeout for dispatch - worker should respond immediately since execution is async
 DISPATCH_RPC_TIMEOUT_SECONDS = 5.0
+
+
+def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint]) -> bool | None:
+    """Extract preemptible preference from job constraints.
+
+    Returns True if the job requires preemptible workers, False if it requires
+    non-preemptible workers, or None if no preference is expressed.
+    """
+    for c in constraints:
+        if c.key == PREEMPTIBLE_ATTRIBUTE_KEY and c.op == cluster_pb2.CONSTRAINT_OP_EQ:
+            if c.value.HasField("string_value"):
+                return c.value.string_value == "true"
+    return None
 
 
 def compute_demand_entries(state: ControllerState) -> list:
@@ -79,7 +93,7 @@ def compute_demand_entries(state: ControllerState) -> list:
         total_cpu: int = 0
         total_memory_bytes: int = 0
 
-    demand_by_device: dict[tuple[DeviceType, str | None], DemandAccumulator] = {}
+    demand_by_device: dict[tuple[DeviceType, str | None, bool | None], DemandAccumulator] = {}
     coscheduled_jobs_counted: set[str] = set()
 
     for task in state.peek_pending_tasks():
@@ -96,8 +110,9 @@ def compute_demand_entries(state: ControllerState) -> list:
         device = job.request.resources.device
         device_type = get_device_type_enum(device)
         device_variant = get_device_variant(device) if device_type != DeviceType.CPU else None
+        preemptible_pref = _extract_preemptible_preference(job.request.constraints)
 
-        key = (device_type, device_variant)
+        key = (device_type, device_variant, preemptible_pref)
         if key not in demand_by_device:
             demand_by_device[key] = DemandAccumulator()
         acc = demand_by_device[key]
@@ -112,8 +127,9 @@ def compute_demand_entries(state: ControllerState) -> list:
             count=acc.count,
             total_cpu=acc.total_cpu,
             total_memory_bytes=acc.total_memory_bytes,
+            preemptible=preemptible,
         )
-        for (dt, variant), acc in demand_by_device.items()
+        for (dt, variant, preemptible), acc in demand_by_device.items()
     ]
 
 

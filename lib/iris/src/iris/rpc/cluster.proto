@@ -207,7 +207,7 @@ message ResourceSpecProto {
   int32 replicas = 6;         // Number of replicas/slices
 
   // Scheduling preferences
-  bool preemptible = 7;
+  reserved 7;                 // was: preemptible (now handled via constraints)
   repeated string regions = 8; // Preferred cloud regions
 }
 
