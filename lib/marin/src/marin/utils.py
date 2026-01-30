@@ -375,6 +375,155 @@ def load_tokenizer_with_backoff(
         return tokenizer
 
 
+def save_tokenizer_to_gcs(
+    tokenizer_name: str,
+    gcs_path: str,
+    *,
+    tokenizer_kwargs: dict[str, Any] | None = None,
+    logger: logging.Logger | None = None,
+) -> str:
+    """Save a HuggingFace tokenizer to GCS for distributed access.
+
+    Downloads the tokenizer from HuggingFace Hub (if needed) and saves it to GCS.
+    This allows distributed workers to load from GCS instead of hitting the HF API.
+
+    Args:
+        tokenizer_name: HuggingFace tokenizer name (e.g., "meta-llama/Meta-Llama-3.1-8B").
+        gcs_path: GCS path to save the tokenizer (e.g., "gs://bucket/tokenizers/llama3").
+        tokenizer_kwargs: Additional kwargs to pass to AutoTokenizer.from_pretrained.
+        logger: Logger instance.
+
+    Returns:
+        The GCS path where the tokenizer was saved.
+    """
+    import tempfile
+
+    log_obj = logger or logging.getLogger(__name__)
+    kwargs = tokenizer_kwargs or {}
+
+    # Check if already cached in GCS
+    marker_path = os.path.join(gcs_path, ".tokenizer_cached")
+    if fsspec_exists(marker_path):
+        log_obj.info(f"Tokenizer already cached at {gcs_path}")
+        return gcs_path
+
+    log_obj.info(f"Downloading tokenizer {tokenizer_name} from HuggingFace")
+    tokenizer = call_with_hf_backoff(
+        lambda: transformers.AutoTokenizer.from_pretrained(tokenizer_name, **kwargs),
+        context=f"save tokenizer {tokenizer_name} to GCS",
+        logger=log_obj,
+    )
+
+    # Save to a temporary local directory first, then upload to GCS
+    with tempfile.TemporaryDirectory() as temp_dir:
+        log_obj.info(f"Saving tokenizer to temporary directory {temp_dir}")
+        tokenizer.save_pretrained(temp_dir)
+
+        # Upload all tokenizer files to GCS
+        fs = fsspec.core.url_to_fs(gcs_path)[0]
+        for filename in os.listdir(temp_dir):
+            local_path = os.path.join(temp_dir, filename)
+            remote_path = os.path.join(gcs_path, filename)
+            log_obj.debug(f"Uploading {filename} to {remote_path}")
+            fs.put(local_path, remote_path)
+
+        # Write marker file to indicate successful caching
+        with fsspec.open(marker_path, "w") as f:
+            f.write(tokenizer_name)
+
+    log_obj.info(f"Tokenizer {tokenizer_name} cached to {gcs_path}")
+    return gcs_path
+
+
+def load_tokenizer_from_gcs(
+    gcs_path: str,
+    *,
+    tokenizer_kwargs: dict[str, Any] | None = None,
+    logger: logging.Logger | None = None,
+) -> transformers.PreTrainedTokenizer:
+    """Load a tokenizer from a GCS path.
+
+    Args:
+        gcs_path: GCS path where the tokenizer is stored.
+        tokenizer_kwargs: Additional kwargs to pass to AutoTokenizer.from_pretrained.
+        logger: Logger instance.
+
+    Returns:
+        The loaded tokenizer.
+    """
+    import tempfile
+
+    log_obj = logger or logging.getLogger(__name__)
+    kwargs = tokenizer_kwargs or {}
+
+    log_obj.debug(f"Loading tokenizer from {gcs_path}")
+
+    # Download to a temporary local directory and load from there
+    # This avoids issues with fsspec and transformers compatibility
+    with tempfile.TemporaryDirectory() as temp_dir:
+        fs = fsspec.core.url_to_fs(gcs_path)[0]
+
+        # List and download all files
+        for remote_file in fs.ls(gcs_path, detail=False):
+            filename = os.path.basename(remote_file)
+            if filename.startswith("."):
+                continue  # Skip marker files
+            local_path = os.path.join(temp_dir, filename)
+            fs.get(remote_file, local_path)
+
+        tokenizer = transformers.AutoTokenizer.from_pretrained(temp_dir, local_files_only=True, **kwargs)
+
+    return tokenizer
+
+
+def ensure_tokenizer_cached(
+    tokenizer_name: str,
+    cache_base_path: str,
+    *,
+    tokenizer_kwargs: dict[str, Any] | None = None,
+    logger: logging.Logger | None = None,
+) -> str:
+    """Ensure a tokenizer is cached in GCS, downloading if necessary.
+
+    This is the main entry point for distributed tokenization. It:
+    1. Computes a deterministic GCS path based on the tokenizer name
+    2. Checks if the tokenizer is already cached
+    3. Downloads and caches if not
+
+    Args:
+        tokenizer_name: HuggingFace tokenizer name (e.g., "meta-llama/Meta-Llama-3.1-8B").
+        cache_base_path: Base GCS path for caching (e.g., "gs://bucket/tokenizers").
+        tokenizer_kwargs: Additional kwargs to pass to AutoTokenizer.from_pretrained.
+        logger: Logger instance.
+
+    Returns:
+        The GCS path where the tokenizer is cached.
+    """
+    log_obj = logger or logging.getLogger(__name__)
+
+    # If tokenizer_name is already a GCS path, return it directly
+    if tokenizer_name.startswith("gs://"):
+        log_obj.debug(f"Tokenizer {tokenizer_name} is already a GCS path")
+        return tokenizer_name
+
+    # If tokenizer_name is a local path, return it directly
+    if os.path.exists(tokenizer_name):
+        log_obj.debug(f"Tokenizer {tokenizer_name} is a local path")
+        return tokenizer_name
+
+    # Compute a safe directory name from the tokenizer name
+    # e.g., "meta-llama/Meta-Llama-3.1-8B" -> "meta-llama--Meta-Llama-3.1-8B"
+    safe_name = tokenizer_name.replace("/", "--")
+    gcs_path = os.path.join(cache_base_path, safe_name)
+
+    return save_tokenizer_to_gcs(
+        tokenizer_name,
+        gcs_path,
+        tokenizer_kwargs=tokenizer_kwargs,
+        logger=log_obj,
+    )
+
+
 def fsspec_size(file_path: str) -> int:
     """Get file size (in bytes) of a file on an `fsspec` filesystem."""
     fs = fsspec.core.url_to_fs(file_path)[0]
