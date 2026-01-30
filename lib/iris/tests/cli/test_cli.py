@@ -100,7 +100,8 @@ def _create_test_autoscaler(scale_group_name: str = "test-group"):
 def test_autoscaler():
     """Create a test Autoscaler for CLI testing."""
     autoscaler, fake_manager = _create_test_autoscaler()
-    return autoscaler, fake_manager
+    yield autoscaler, fake_manager
+    autoscaler.shutdown()
 
 
 @pytest.fixture
