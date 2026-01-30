@@ -878,6 +878,7 @@ def run_vlm_eval_harness(
         mp=mp,
         generation_kwargs=config.generation_kwargs,
         max_images=config.max_images,
+        vlm_batch_size=config.vlm_batch_size,
     )
 
     # Run evaluation

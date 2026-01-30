@@ -329,6 +329,7 @@ def main(config: EvalVLMConfig):
                 generation_kwargs=config.eval_harness.generation_kwargs,
                 custom_task_path=config.eval_harness.custom_task_path,
                 output_dir=config.output_dir,  # Pass output_dir for GCS/local saving
+                vlm_batch_size=config.eval_harness.vlm_batch_size,  # Pass vlm_batch_size for batched inference
             )
             harness_results = run_vlm_eval_harness(
                 model=model,
