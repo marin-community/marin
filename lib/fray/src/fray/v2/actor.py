@@ -29,6 +29,25 @@ from fray.v2.types import JobStatus
 
 
 @runtime_checkable
+class ActorFuture(Protocol):
+    """Future for an actor method call."""
+
+    def result(self, timeout: float | None = None) -> Any:
+        """Block until result is available."""
+        ...
+
+
+class FutureActorFuture:
+    """ActorFuture backed by a concurrent.futures.Future."""
+
+    def __init__(self, future: Future[Any]):
+        self._future = future
+
+    def result(self, timeout: float | None = None) -> Any:
+        return self._future.result(timeout=timeout)
+
+
+@runtime_checkable
 class ActorMethod(Protocol):
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         """Invoke the method remotely. Returns a future."""
@@ -44,17 +63,6 @@ class ActorHandle(Protocol):
     """Handle to a remote actor with .method.remote() calling convention."""
 
     def __getattr__(self, method_name: str) -> ActorMethod: ...
-
-
-class ActorFuture:
-    """Future for an actor method call. Wraps concurrent.futures.Future."""
-
-    def __init__(self, future: Future[Any]):
-        self._future = future
-
-    def result(self, timeout: float | None = None) -> Any:
-        """Block until result is available."""
-        return self._future.result(timeout=timeout)
 
 
 class ActorGroup:

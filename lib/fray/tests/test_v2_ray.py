@@ -263,3 +263,24 @@ def test_build_runtime_env_sets_fray_client_spec():
     )
     env = build_runtime_env(request, "ray?namespace=test-ns")
     assert env["env_vars"]["FRAY_CLIENT_SPEC"] == "ray?namespace=test-ns"
+
+
+# ---------------------------------------------------------------------------
+# Actor resource mapping (_actor_ray_options)
+# ---------------------------------------------------------------------------
+
+
+def test_actor_options_default_preemptible():
+    from fray.v2.ray.backend import _actor_ray_options
+
+    options = _actor_ray_options(ResourceConfig())
+    assert options["num_cpus"] == 0
+    assert "resources" not in options
+
+
+def test_actor_options_non_preemptible_pins_head_node():
+    from fray.v2.ray.backend import _actor_ray_options
+
+    options = _actor_ray_options(ResourceConfig(preemptible=False))
+    assert options["num_cpus"] == 0
+    assert options["resources"] == {"head_node": 0.0001}

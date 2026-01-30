@@ -27,6 +27,7 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
+from fray.v2.actor import ActorFuture, ActorGroup
 from fray.v2.ray.deps import build_python_path, build_runtime_env_for_packages
 from fray.v2.ray.tpu import run_on_pod_ray
 from fray.v2.types import (
@@ -350,8 +351,10 @@ class RayClient:
         name: str,
         resources: ResourceConfig = ResourceConfig(),
         **kwargs: Any,
-    ):
-        raise NotImplementedError("RayClient.create_actor is not yet implemented (Phase 2b)")
+    ) -> RayActorHandle:
+        """Create a single Ray actor and return a handle immediately."""
+        group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
+        return group.wait_ready()[0]  # type: ignore[return-value]
 
     def create_actor_group(
         self,
@@ -361,8 +364,85 @@ class RayClient:
         count: int,
         resources: ResourceConfig = ResourceConfig(),
         **kwargs: Any,
-    ):
-        raise NotImplementedError("RayClient.create_actor_group is not yet implemented (Phase 2b)")
+    ) -> RayActorGroup:
+        """Create N Ray actors named "{name}-0", "{name}-1", ..."""
+        ray_options = _actor_ray_options(resources)
+        handles: list[RayActorHandle] = []
+        for i in range(count):
+            actor_name = f"{name}-{i}"
+            remote_cls = ray.remote(actor_class)
+            actor_ref = remote_cls.options(name=actor_name, **ray_options).remote(*args, **kwargs)
+            handles.append(RayActorHandle(actor_ref))
+        return RayActorGroup(handles)
 
     def shutdown(self, wait: bool = True) -> None:
         logger.info("RayClient shutdown (namespace=%s)", self._namespace)
+
+
+def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
+    """Build ray.remote().options() kwargs for an actor.
+
+    Actors default to num_cpus=0 (they don't reserve CPU cores).
+    preemptible=False pins the actor to the head node via a custom resource.
+    """
+    options: dict[str, Any] = {"num_cpus": 0}
+    if not resources.preemptible:
+        options["resources"] = {"head_node": 0.0001}
+    return options
+
+
+class RayActorHandle:
+    """Handle to a Ray actor. Attribute access returns RayActorMethod objects."""
+
+    def __init__(self, actor_ref: ray.actor.ActorHandle):
+        # Store under a mangled name so __getattr__ doesn't recurse
+        object.__setattr__(self, "_actor_ref", actor_ref)
+
+    def __getattr__(self, method_name: str) -> RayActorMethod:
+        if method_name.startswith("_"):
+            raise AttributeError(method_name)
+        ray_method = getattr(self._actor_ref, method_name)
+        return RayActorMethod(ray_method)
+
+
+class RayActorMethod:
+    """Wraps a Ray actor method with .remote() → ActorFuture and __call__ → blocking."""
+
+    def __init__(self, ray_method: Any):
+        self._ray_method = ray_method
+
+    def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
+        object_ref = self._ray_method.remote(*args, **kwargs)
+        return RayActorFuture(object_ref)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        object_ref = self._ray_method.remote(*args, **kwargs)
+        return ray.get(object_ref)
+
+
+class RayActorFuture:
+    """ActorFuture backed by a Ray ObjectRef."""
+
+    def __init__(self, object_ref: ray.ObjectRef):
+        self._object_ref = object_ref
+
+    def result(self, timeout: float | None = None) -> Any:
+        return ray.get(self._object_ref, timeout=timeout)
+
+
+class RayActorGroup(ActorGroup):
+    """ActorGroup for Ray actors. All actors are ready immediately after creation."""
+
+    def __init__(self, handles: list[RayActorHandle]):
+        # Ray actors are usable as soon as ray.remote().remote() returns,
+        # so we pass empty job lists — lifecycle is managed via ray.kill().
+        super().__init__(handles, [])  # type: ignore[arg-type]
+        self._ray_handles = handles
+
+    def shutdown(self) -> None:
+        """Kill all Ray actors."""
+        for handle in self._ray_handles:
+            try:
+                ray.kill(handle._actor_ref)
+            except Exception as e:
+                logger.warning("Failed to kill Ray actor: %s", e)

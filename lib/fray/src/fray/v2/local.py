@@ -23,7 +23,7 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
-from fray.v2.actor import ActorFuture, ActorGroup
+from fray.v2.actor import ActorFuture, ActorGroup, FutureActorFuture
 from fray.v2.types import (
     BinaryEntrypoint,
     CallableEntrypoint,
@@ -179,7 +179,7 @@ class LocalActorMethod:
             with self._lock:
                 return self._method(*args, **kwargs)
 
-        return ActorFuture(self._executor.submit(_call))
+        return FutureActorFuture(self._executor.submit(_call))
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Call method synchronously with lock."""
