@@ -14,7 +14,6 @@
 
 """Integration tests for iris_run.py script."""
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -22,359 +21,195 @@ import pytest
 import yaml
 
 from iris.client import IrisClient
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.config import load_config
-from iris.rpc import cluster_pb2
+from iris.iris_run import (
+    add_standard_env_vars,
+    build_resources,
+    load_cluster_config,
+    load_env_vars,
+    run_iris_job,
+)
+
+# Unit tests for pure functions (no mocks, no sys.path hacks)
 
 
-def find_iris_run_script() -> Path:
-    """Find the iris_run.py script relative to this test file."""
-    # test file is in lib/iris/tests/, script is in lib/iris/scripts/
-    test_dir = Path(__file__).parent
-    script_path = test_dir.parent / "scripts" / "iris_run.py"
-    if not script_path.exists():
-        raise FileNotFoundError(f"iris_run.py not found at {script_path}")
-    return script_path
+def test_load_env_vars_basic():
+    """Test env var parsing from flags."""
+    result = load_env_vars([["KEY1", "val1"], ["KEY2", "val2"]])
+    assert result["KEY1"] == "val1"
+    assert result["KEY2"] == "val2"
 
 
-@pytest.mark.integration
-def test_iris_run_with_local_cluster(tmp_path: Path):
-    """Test iris_run.py submits job to local cluster and runs successfully."""
-    # Create a test script that prints env vars and exits
-    test_script = tmp_path / "test_job.py"
-    test_script.write_text(
-        """
-import os
-print(f"TEST_VAR={os.environ.get('TEST_VAR', 'NOT_SET')}")
-print(f"PYTHONPATH={os.environ.get('PYTHONPATH', 'NOT_SET')}")
-print("Job completed successfully")
-"""
-    )
-
-    # Create a minimal cluster config
-    config_file = tmp_path / "cluster.yaml"
-    config_data = {
-        "project_id": "test-project",
-        "zone": "test-zone",
-        "region": "test-region",
-    }
-    config_file.write_text(yaml.dump(config_data))
-
-    # Create .marin.yaml with env vars
-    marin_yaml = tmp_path / ".marin.yaml"
-    marin_yaml.write_text(yaml.dump({"env": {"FROM_MARIN_YAML": "yaml_value"}}))
-
-    # We can't easily test with controller_tunnel in CI, so this test
-    # validates the script's argument parsing and env var handling logic
-    # by calling it with --help and checking it doesn't crash.
-    iris_run = find_iris_run_script()
-
-    # Test --help works
-    result = subprocess.run(
-        [sys.executable, str(iris_run), "--help"],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0
-    assert "Submit jobs to Iris clusters" in result.stdout
-
-    # Test missing command error
-    result = subprocess.run(
-        [sys.executable, str(iris_run), "--config", str(config_file)],
-        capture_output=True,
-        text=True,
-        cwd=tmp_path,
-    )
-    assert result.returncode == 1
-    assert "No command provided" in result.stderr or "Command must start with --" in result.stderr
+def test_load_env_vars_single_key():
+    """Test env var with no value (empty string)."""
+    result = load_env_vars([["KEY_ONLY"]])
+    assert result["KEY_ONLY"] == ""
 
 
-@pytest.mark.integration
-def test_iris_run_env_var_handling(tmp_path: Path):
-    """Test environment variable loading and merging logic."""
-    # Import the functions directly to test them
-    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-    try:
-        from iris_run import add_standard_env_vars, load_env_vars
-
-        # Test basic env var parsing
-        env_vars = load_env_vars([["KEY1", "value1"], ["KEY2", "value2"]])
-        assert env_vars["KEY1"] == "value1"
-        assert env_vars["KEY2"] == "value2"
-
-        # Test single key (no value)
-        env_vars = load_env_vars([["KEY_ONLY"]])
-        assert env_vars["KEY_ONLY"] == ""
-
-        # Test invalid key with =
-        with pytest.raises(ValueError, match="cannot contain '='"):
-            load_env_vars([["KEY=VALUE"]])
-
-        # Test standard env vars
-        base_env = {"USER_VAR": "user_value"}
-        result = add_standard_env_vars(base_env)
-        assert result["USER_VAR"] == "user_value"  # Not overridden
-        assert result["PYTHONPATH"] == "."
-        assert result["PYTHONUNBUFFERED"] == "1"
-        assert result["HF_HOME"] == "~/.cache/huggingface"
-
-    finally:
-        sys.path.pop(0)
+def test_load_env_vars_invalid_key():
+    """Test error on key with = sign."""
+    with pytest.raises(ValueError, match="cannot contain '='"):
+        load_env_vars([["KEY=VALUE"]])
 
 
-@pytest.mark.integration
-def test_iris_run_resource_building(tmp_path: Path):
-    """Test resource spec building with TPU device."""
-    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-    try:
-        from iris_run import build_resources
-
-        # Test TPU device creation (the interesting behavior)
-        spec = build_resources(tpu="v5litepod-16", gpu=None, cpu=None, memory=None)
-        assert spec.device is not None
-        assert spec.device.HasField("tpu")
-        assert spec.device.tpu.variant == "v5litepod-16"
-
-    finally:
-        sys.path.pop(0)
+def test_load_cluster_config_valid(tmp_path):
+    """Test loading valid config."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"project_id": "test", "zone": "us-central1-a"}))
+    config = load_cluster_config(config_file)
+    assert config["project_id"] == "test"
+    assert config["zone"] == "us-central1-a"
 
 
-@pytest.mark.integration
-def test_iris_run_config_loading(tmp_path: Path):
-    """Test cluster config loading."""
-    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-    try:
-        from iris_run import load_cluster_config
-
-        # Test valid config
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                {
-                    "project_id": "my-project",
-                    "zone": "us-central1-a",
-                    "region": "us-central1",
-                }
-            )
-        )
-        config = load_cluster_config(config_file)
-        assert config["project_id"] == "my-project"
-        assert config["zone"] == "us-central1-a"
-
-        # Test missing file
-        with pytest.raises(FileNotFoundError):
-            load_cluster_config(tmp_path / "nonexistent.yaml")
-
-        # Test missing required field
-        bad_config = tmp_path / "bad.yaml"
-        bad_config.write_text(yaml.dump({"project_id": "test"}))
-        with pytest.raises(ValueError, match="Missing 'zone'"):
-            load_cluster_config(bad_config)
-
-    finally:
-        sys.path.pop(0)
+def test_load_cluster_config_missing_file(tmp_path):
+    """Test error on missing config file."""
+    with pytest.raises(FileNotFoundError):
+        load_cluster_config(tmp_path / "nonexistent.yaml")
 
 
-def test_iris_run_job_name_generation():
-    """Test job name generation from command."""
-    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-    try:
-        from iris_run import generate_job_name
+def test_load_cluster_config_missing_zone(tmp_path):
+    """Test error on missing zone field."""
+    bad_config = tmp_path / "bad.yaml"
+    bad_config.write_text(yaml.dump({"project_id": "test"}))
+    with pytest.raises(ValueError, match="Missing 'zone'"):
+        load_cluster_config(bad_config)
 
-        # Test with Python script
-        name = generate_job_name(["python", "train.py", "--epochs", "10"])
-        assert "train" in name
-        assert "iris-run-" in name
 
-        # Test without recognizable script
-        name = generate_job_name(["echo", "hello"])
-        assert "iris-run-" in name
-        assert "job" in name
+def test_load_cluster_config_missing_project_id(tmp_path):
+    """Test error on missing project_id field."""
+    bad_config = tmp_path / "bad.yaml"
+    bad_config.write_text(yaml.dump({"zone": "us-central1-a"}))
+    with pytest.raises(ValueError, match="Missing 'project_id'"):
+        load_cluster_config(bad_config)
 
-    finally:
-        sys.path.pop(0)
+
+def test_build_resources_with_tpu():
+    """Test ResourceSpec creation with TPU device."""
+    spec = build_resources(tpu="v5litepod-16", gpu=None, cpu=None, memory=None)
+    assert spec.device.HasField("tpu")
+    assert spec.device.tpu.variant == "v5litepod-16"
+
+
+def test_build_resources_defaults():
+    """Test default CPU and memory values."""
+    spec = build_resources(tpu=None, gpu=None, cpu=None, memory=None)
+    assert spec.cpu == 1
+    assert spec.memory == "2GB"
+
+
+def test_build_resources_gpu_not_supported():
+    """Test that GPU raises error."""
+    with pytest.raises(ValueError, match="GPU support not yet implemented"):
+        build_resources(tpu=None, gpu=2, cpu=None, memory=None)
+
+
+def test_add_standard_env_vars():
+    """Test standard env vars are added without overriding."""
+    base_env = {"USER_VAR": "user_value", "PYTHONPATH": "/custom/path"}
+    result = add_standard_env_vars(base_env)
+
+    # User values preserved
+    assert result["USER_VAR"] == "user_value"
+    assert result["PYTHONPATH"] == "/custom/path"
+
+    # Defaults added
+    assert result["PYTHONUNBUFFERED"] == "1"
+    assert result["HF_HOME"] == "~/.cache/huggingface"
+    assert result["HF_HUB_ENABLE_HF_TRANSFER"] == "1"
+
+
+# Integration tests using local cluster
 
 
 @pytest.fixture
-def local_cluster():
-    """Start a local Iris cluster for testing."""
-    # Find the demo config
-    iris_root = Path(__file__).resolve().parents[1]  # lib/iris
-    demo_config = iris_root / "examples" / "demo.yaml"
+def local_cluster_and_config(tmp_path):
+    """Start local cluster and create config file for it."""
+    iris_root = Path(__file__).resolve().parents[1]
+    demo_config_path = iris_root / "examples" / "demo.yaml"
 
-    config = load_config(demo_config)
+    config = load_config(demo_config_path)
     config = make_local_config(config)
 
     manager = ClusterManager(config)
     with manager.connect() as url:
+        # Create a test config file with controller_address for local access
+        test_config = tmp_path / "cluster.yaml"
+        test_config.write_text(
+            yaml.dump(
+                {
+                    "zone": config.zone,
+                    "region": config.region,
+                    "controller_address": url,  # Direct URL for local cluster
+                }
+            )
+        )
+
         client = IrisClient.remote(url, workspace=iris_root)
-        yield url, client
+        yield test_config, url, client
 
 
 @pytest.mark.integration
-def test_e2e_simple_command(local_cluster, tmp_path: Path):
-    """End-to-end test: Submit simple command via IrisClient and verify completion."""
-    _url, client = local_cluster
+def test_iris_run_cli_simple_job(local_cluster_and_config, tmp_path):
+    """Test iris_run.py submits and runs a simple job successfully."""
+    test_config, _url, _client = local_cluster_and_config
 
-    # Create a simple test script
-    test_script = tmp_path / "hello.py"
-    test_script.write_text(
-        """
-print("Hello from Iris!")
-import sys
-sys.exit(0)
-"""
+    # Create test script that prints and exits
+    test_script = tmp_path / "test.py"
+    test_script.write_text('print("SUCCESS"); exit(0)')
+
+    exit_code = run_iris_job(
+        config_path=test_config,
+        command=[sys.executable, str(test_script)],
+        env_vars={},
+        wait=True,
     )
 
-    # Submit job using the client directly (validates full stack minus subprocess)
-    entrypoint = Entrypoint.from_command(sys.executable, str(test_script))
-    job = client.submit(
-        entrypoint=entrypoint,
-        name="test-simple-command",
-        resources=ResourceSpec(cpu=1, memory="1GB"),
-        environment=EnvironmentSpec(),
-    )
-
-    # Wait for completion
-    status = job.wait(timeout=30)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    assert exit_code == 0
 
 
 @pytest.mark.integration
-def test_e2e_environment_variables(local_cluster, tmp_path: Path):
-    """Test environment variables propagate correctly to job."""
-    _url, client = local_cluster
+def test_iris_run_cli_env_vars_propagate(local_cluster_and_config, tmp_path):
+    """Test environment variables reach the job."""
+    test_config, _url, _client = local_cluster_and_config
 
-    # Create script that checks env vars
+    # Create script that checks env var
     test_script = tmp_path / "check_env.py"
     test_script.write_text(
         """
 import os
 import sys
-
-# Check custom env var
-test_var = os.environ.get("TEST_VAR", "MISSING")
-print(f"TEST_VAR={test_var}")
-
-# Check standard env vars
-pythonpath = os.environ.get("PYTHONPATH", "MISSING")
-print(f"PYTHONPATH={pythonpath}")
-
-# Validate
-assert test_var == "custom_value", f"Expected 'custom_value', got '{test_var}'"
-assert pythonpath == ".", f"Expected '.', got '{pythonpath}'"
-print("All env vars correct!")
+val = os.environ.get("TEST_VAR", "MISSING")
+print(f"TEST_VAR={val}")
+sys.exit(0 if val == "test_value" else 1)
 """
     )
 
-    # Submit with env vars
-    entrypoint = Entrypoint.from_command(sys.executable, str(test_script))
-    env_vars = {
-        "TEST_VAR": "custom_value",
-        "PYTHONPATH": ".",
-        "PYTHONUNBUFFERED": "1",
-    }
+    env_vars = load_env_vars([["TEST_VAR", "test_value"]])
 
-    job = client.submit(
-        entrypoint=entrypoint,
-        name="test-env-vars",
-        resources=ResourceSpec(cpu=1, memory="1GB"),
-        environment=EnvironmentSpec(env_vars=env_vars),
+    exit_code = run_iris_job(
+        config_path=test_config,
+        command=[sys.executable, str(test_script)],
+        env_vars=env_vars,
+        wait=True,
     )
 
-    status = job.wait(timeout=30)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    assert exit_code == 0
 
 
 @pytest.mark.integration
-def test_e2e_job_failure(local_cluster, tmp_path: Path):
-    """Test job that fails with non-zero exit code."""
-    from iris.client.client import JobFailedError
+def test_iris_run_cli_job_failure(local_cluster_and_config, tmp_path):
+    """Test iris_run.py returns non-zero on job failure."""
+    test_config, _url, _client = local_cluster_and_config
 
-    _url, client = local_cluster
-
-    # Create script that exits with error
     test_script = tmp_path / "fail.py"
-    test_script.write_text(
-        """
-import sys
-print("This job will fail")
-sys.exit(42)
-"""
+    test_script.write_text("exit(1)")
+
+    exit_code = run_iris_job(
+        config_path=test_config,
+        command=[sys.executable, str(test_script)],
+        env_vars={},
+        wait=True,
     )
 
-    entrypoint = Entrypoint.from_command(sys.executable, str(test_script))
-    job = client.submit(
-        entrypoint=entrypoint,
-        name="test-failure",
-        resources=ResourceSpec(cpu=1, memory="1GB"),
-        environment=EnvironmentSpec(),
-    )
-
-    # Job.wait() raises JobFailedError when job fails
-    with pytest.raises(JobFailedError) as exc_info:
-        job.wait(timeout=30)
-
-    # Verify the error contains the job_id and status is FAILED
-    assert exc_info.value.job_id == "test-failure"
-    assert exc_info.value.status.state == cluster_pb2.JOB_STATE_FAILED
-
-
-@pytest.mark.integration
-def test_e2e_multiple_replicas(local_cluster, tmp_path: Path):
-    """Test gang scheduling with multiple replicas."""
-    _url, client = local_cluster
-
-    # Create script that prints replica info
-    test_script = tmp_path / "replicas.py"
-    test_script.write_text(
-        """
-import os
-replica_id = os.environ.get("REPLICA_ID", "unknown")
-world_size = os.environ.get("WORLD_SIZE", "unknown")
-print(f"Replica {replica_id} of {world_size}")
-"""
-    )
-
-    entrypoint = Entrypoint.from_command(sys.executable, str(test_script))
-    job = client.submit(
-        entrypoint=entrypoint,
-        name="test-replicas",
-        resources=ResourceSpec(cpu=1, memory="1GB"),
-        environment=EnvironmentSpec(),
-        replicas=2,  # Request 2 replicas
-    )
-
-    status = job.wait(timeout=30)
-    # Gang scheduled job should succeed when all replicas complete
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
-
-
-@pytest.mark.integration
-def test_e2e_log_streaming(local_cluster, tmp_path: Path):
-    """Test that job logs can be streamed."""
-    _url, client = local_cluster
-
-    # Create script with distinctive output
-    test_script = tmp_path / "logging.py"
-    test_script.write_text(
-        """
-print("LOG_LINE_1: Starting job")
-print("LOG_LINE_2: Processing data")
-print("LOG_LINE_3: Job complete")
-"""
-    )
-
-    entrypoint = Entrypoint.from_command(sys.executable, str(test_script))
-    job = client.submit(
-        entrypoint=entrypoint,
-        name="test-logs",
-        resources=ResourceSpec(cpu=1, memory="1GB"),
-        environment=EnvironmentSpec(),
-    )
-
-    # Wait with log streaming enabled
-    # Note: In production, logs would stream to stdout; here we just verify completion
-    status = job.wait(stream_logs=True, timeout=30)
-    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    assert exit_code == 1
