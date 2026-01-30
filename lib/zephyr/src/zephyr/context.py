@@ -14,9 +14,12 @@
 
 """Execution contexts for Zephyr backends.
 
-Provides the put/get/run/wait primitives that Backend uses to dispatch
-work. These replace the fray.job.JobContext dependency with lightweight
-implementations that live in Zephyr itself.
+Provides the put/get/run/wait primitives used for intra-shard parallelism
+in ForkChunks operations. SyncBackendContext runs synchronously in-process,
+ThreadBackendContext uses a thread pool.
+
+The distributed execution path (RayBackendContext) has been replaced by
+ZephyrContext in zephyr.execution, which uses fray v2 actors.
 """
 
 from __future__ import annotations

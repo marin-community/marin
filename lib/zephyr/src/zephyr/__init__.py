@@ -18,6 +18,7 @@ import logging
 
 from zephyr.backends import Backend, BackendConfig
 from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr.expr import Expr, col, lit
 from zephyr.plan import ExecutionHint, PhysicalPlan, PhysicalStage, compute_plan
 from zephyr.readers import InputFileSpec, load_file, load_jsonl, load_parquet, load_vortex, load_zip_members
@@ -30,6 +31,7 @@ __all__ = [
     "Backend",
     "BackendConfig",
     "Dataset",
+    "ZephyrContext",
     "ExecutionHint",
     "Expr",
     "InputFileSpec",

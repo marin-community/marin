@@ -24,14 +24,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
-import humanfriendly
 
-from zephyr.context import create_backend_context
-
-# Context variable for setting the default backend context
-from contextvars import ContextVar
-
-_backend_context: ContextVar = ContextVar("zephyr_backend_context", default=None)
+from fray.v2.client import current_client
+from zephyr.execution import ZephyrContext, _default_zephyr_context
 
 
 @dataclass
@@ -39,7 +34,6 @@ class CliConfig:
     memory: str | None = None
     num_cpus: float | None = None
     num_gpus: float | None = None
-    backend: str = "threadpool"
     max_parallelism: int = 100
     cluster: str | None = None
     entry_point: str = "main"
@@ -65,17 +59,11 @@ def run_local(
     Raises:
         SystemExit: If script execution fails
     """
-    ray_options = config.ray_options.copy()
-    if "memory" not in ray_options:
-        if config.memory:
-            ray_options["memory"] = humanfriendly.parse_size(config.memory, binary=True)
-
-    backend_ctx = create_backend_context(
-        context_type=config.backend,
-        max_workers=config.max_parallelism,
-        **ray_options,
+    ctx = ZephyrContext(
+        client=current_client(),
+        num_workers=config.max_parallelism,
     )
-    _backend_context.set(backend_ctx)
+    _default_zephyr_context.set(ctx)
     sys.argv = [script_path, *script_args]
 
     script_path_obj = Path(script_path).resolve()
@@ -151,6 +139,8 @@ def run_cluster(
 
     # Add resource specs as entrypoint-* args
     if config.memory:
+        import humanfriendly
+
         memory_bytes = humanfriendly.parse_size(config.memory, binary=True)
         ray_cmd += ["--entrypoint-memory", str(memory_bytes)]
     if config.num_cpus:
@@ -162,8 +152,6 @@ def run_cluster(
         "python",
         "-m",
         "zephyr.cli",
-        "--backend",
-        config.backend,
         "--max-parallelism",
         str(config.max_parallelism),
     ]
@@ -192,25 +180,17 @@ def run_cluster(
     epilog="""
 Examples:
 
-  # Run locally with sync backend
-
-  zephyr --backend=sync script.py --input=data.jsonl
-
-  # Run locally with Ray backend
-
-  zephyr --backend=ray --max-parallelism=100 --memory=2GB script.py --input=data.jsonl
+  # Run locally
+  zephyr --max-parallelism=100 script.py --input=data.jsonl
 
   # Submit to Ray cluster
-
-  zephyr --backend=ray --cluster=us-central2 --memory=2GB script.py --input=data.jsonl
+  zephyr --cluster=us-central2 --memory=2GB script.py --input=data.jsonl
 
   # Dry-run to show optimization plan
-
-  zephyr --backend=ray --dry-run script.py --input=data.jsonl
+  zephyr --dry-run script.py --input=data.jsonl
 """,
 )
 @click.argument("script", type=click.Path(exists=True, dir_okay=False))
-@click.option("--backend", type=click.Choice(["ray", "threadpool", "sync"]), default="threadpool", help="Backend type")
 @click.option("--max-parallelism", type=int, default=100, help="Maximum concurrent tasks (default: 100)")
 @click.option("--memory", type=str, help="Memory per task (e.g., '2GB', '512MB')")
 @click.option("--num-cpus", type=float, help="Number of CPUs per task")
@@ -222,7 +202,6 @@ Examples:
 def main(
     ctx: click.Context,
     script: str,
-    backend: str,
     max_parallelism: int,
     memory: str | None,
     num_cpus: float | None,
@@ -237,7 +216,7 @@ def main(
     # Resolve script path
     script_path = Path(script).resolve()
 
-    # Build backend config
+    # Build config
     config = CliConfig(
         max_parallelism=max_parallelism,
         dry_run=dry_run,
@@ -246,7 +225,6 @@ def main(
         num_gpus=num_gpus,
         cluster=cluster,
         entry_point=entry_point,
-        backend=backend,
     )
 
     # in cluster mode: submit via ray_run.py

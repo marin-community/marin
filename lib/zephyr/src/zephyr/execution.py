@@ -30,7 +30,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from collections.abc import Sequence
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
@@ -665,6 +665,30 @@ def _materialize(shards: list[list[list]]) -> list:
         for chunk in shard_chunks:
             results.extend(chunk)
     return results
+
+
+_default_zephyr_context: ContextVar[ZephyrContext | None] = ContextVar("zephyr_context", default=None)
+
+
+@contextmanager
+def default_zephyr_context(ctx: ZephyrContext):
+    """Set the default ZephyrContext for the duration of a with-block."""
+    old = _default_zephyr_context.get()
+    _default_zephyr_context.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _default_zephyr_context.set(old)
+
+
+def get_default_zephyr_context() -> ZephyrContext:
+    """Get the current default ZephyrContext, creating one if unset."""
+    ctx = _default_zephyr_context.get()
+    if ctx is None:
+        from fray.v2.client import current_client
+
+        ctx = ZephyrContext(client=current_client(), num_workers=os.cpu_count() or 1)
+    return ctx
 
 
 def _print_plan(original_ops: list, plan: PhysicalPlan) -> None:
