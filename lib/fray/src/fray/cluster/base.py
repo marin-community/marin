@@ -530,6 +530,9 @@ def create_environment(
         "HF_TOKEN": os.getenv("HF_TOKEN"),
         "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
         "MARIN_CI_DISABLE_RUNTIME_ENVS": os.getenv("MARIN_CI_DISABLE_RUNTIME_ENVS"),
+        # Propagate the cache buster so that nested jobs (e.g., TPU evaluations)
+        # also bust the pip environment cache when requested.
+        "RAY_PIP_CACHE_BUSTER": os.getenv("RAY_PIP_CACHE_BUSTER"),
     }
 
     # Filter out None values - Ray requires all env var values to be strings
