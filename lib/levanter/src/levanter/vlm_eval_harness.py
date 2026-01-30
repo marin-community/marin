@@ -442,6 +442,7 @@ class LevanterVLMHarnessLM(TemplateLM):
         prompt: str,
         images: List[Image.Image],
         gen_kwargs: dict,
+        request_id: int = 0,
     ) -> VLMRequest:
         """Create a VLMRequest from prompt and images."""
         # For lm-eval-harness VLM tasks, the prompt already contains <image> placeholders
@@ -539,7 +540,7 @@ class LevanterVLMHarnessLM(TemplateLM):
 
         return VLMRequest(
             prompt_tokens=input_ids_list,
-            request_id=0,
+            request_id=request_id,
             decode_params=seq_params,
             n_generations=1,
             pixel_values=pixel_values_na,
@@ -590,7 +591,7 @@ class LevanterVLMHarnessLM(TemplateLM):
             batch_kwargs = []
             batch_pil_images = []
 
-            for req in batch_requests:
+            for req_idx, req in enumerate(batch_requests):
                 # Extract context, gen_kwargs, and multimodal args
                 args = req.args
                 if len(args) >= 3 and isinstance(args[2], dict):
@@ -625,7 +626,10 @@ class LevanterVLMHarnessLM(TemplateLM):
                 try:
                     if pil_images:
                         # Create VLM request with images
-                        vlm_request = self._create_vlm_request(context, pil_images, processed_kwargs)
+                        # Use req_idx as unique request_id within the batch
+                        vlm_request = self._create_vlm_request(
+                            context, pil_images, processed_kwargs, request_id=req_idx
+                        )
                         vlm_requests.append(vlm_request)
                     else:
                         # No images - append None placeholder
