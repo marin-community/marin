@@ -71,7 +71,11 @@ class RemoteClusterClient:
         scheduling_timeout_seconds: int = 0,
         constraints: list[cluster_pb2.Constraint] | None = None,
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
+        replicas: int = 1,
     ) -> None:
+        if replicas < 1:
+            raise ValueError(f"replicas must be >= 1, got {replicas}")
+
         entrypoint_proto = entrypoint.to_proto()
 
         env_config = cluster_pb2.EnvironmentConfig(
@@ -96,6 +100,7 @@ class RemoteClusterClient:
                 parent_job_id=parent_job_id,
                 scheduling_timeout_seconds=scheduling_timeout_seconds,
                 constraints=constraints or [],
+                replicas=replicas,
             )
             if coscheduling is not None:
                 request.coscheduling.CopyFrom(coscheduling)
@@ -110,6 +115,7 @@ class RemoteClusterClient:
                 parent_job_id=parent_job_id,
                 scheduling_timeout_seconds=scheduling_timeout_seconds,
                 constraints=constraints or [],
+                replicas=replicas,
             )
             if coscheduling is not None:
                 request.coscheduling.CopyFrom(coscheduling)
