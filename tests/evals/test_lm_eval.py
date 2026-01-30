@@ -16,7 +16,7 @@
 import time
 
 import pytest
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.run import evaluate

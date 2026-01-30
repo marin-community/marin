@@ -31,7 +31,7 @@ from datetime import timedelta
 
 import fsspec
 import jmp
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from haliax.partitioning import ResourceAxis
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import DatasetComponent, LMMixtureDatasetConfig

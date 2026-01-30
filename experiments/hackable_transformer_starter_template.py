@@ -51,7 +51,7 @@ import equinox as eqx
 import haliax as hax
 import haliax.nn as hnn
 import jax.random as jrandom
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.nn.scan import ScanCheckpointPolicy, Stacked

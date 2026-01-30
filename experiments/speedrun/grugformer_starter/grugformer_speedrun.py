@@ -32,7 +32,7 @@ import logging
 import os
 from dataclasses import dataclass
 
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from haliax import Axis
 from jaxtyping import PRNGKeyArray
 

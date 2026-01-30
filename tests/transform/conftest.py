@@ -21,13 +21,13 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from fray.job import create_job_ctx, fray_default_job_ctx
+from zephyr.context import create_backend_context, default_backend_context
 
 
 @pytest.fixture(autouse=True)
 def flow_backend_ctx():
     """Set up sync backend for all transform tests."""
-    with fray_default_job_ctx(create_job_ctx("sync")):
+    with default_backend_context(create_backend_context("sync")):
         yield
 
 

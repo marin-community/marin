@@ -27,7 +27,7 @@ By default this uses GPU resource presets. Set SR_USE_TPU=1 for TPU.
 import os
 from dataclasses import dataclass
 
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from haliax import Axis
 from jaxtyping import PRNGKeyArray
 

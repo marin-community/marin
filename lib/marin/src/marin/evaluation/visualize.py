@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from queue import Empty
 
 import tblib
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v2 import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_client
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
 from levanter.main.viz_logprobs import VizLmConfig as LevanterVizLmConfig
@@ -152,6 +152,6 @@ def visualize_lm_log_probs(config: VizLmConfig) -> None:
         environment=EnvironmentConfig.create(),
     )
 
-    cluster = current_cluster()
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    client = current_client()
+    job_handle = client.submit(job_request)
+    job_handle.wait(raise_on_failure=True)

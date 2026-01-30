@@ -20,8 +20,8 @@ import dataclasses
 import os
 from dataclasses import dataclass
 
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
-from fray.cluster.base import TpuConfig
+from fray.v2 import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_client
+from fray.v2.types import TpuConfig
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
@@ -149,12 +149,12 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
 
     assert isinstance(config.resource_config.device, TpuConfig), "evaluate_lm_log_probs requires TPU resource config"
 
-    cluster = current_cluster()
+    client = current_client()
     job_request = JobRequest(
         name=f"eval-lm-{name}",
         resources=config.resource_config,
         entrypoint=Entrypoint.from_callable(do_eval_lm, args=[levanter_config]),
         environment=EnvironmentConfig.create(),
     )
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    job_handle = client.submit(job_request)
+    job_handle.wait(raise_on_failure=True)

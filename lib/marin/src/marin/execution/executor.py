@@ -110,15 +110,15 @@ import draccus
 import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
 
-from fray import (
-    Cluster,
+from fray.v2 import (
+    Client,
     Entrypoint,
     EnvironmentConfig,
-    JobId,
+    JobHandle,
     JobRequest,
     JobStatus,
     ResourceConfig,
-    current_cluster,
+    current_client,
 )
 
 from marin.execution.executor_step_status import (
@@ -182,30 +182,31 @@ class StepRunner:
     executors from running the same step.
     """
 
-    def __init__(self, cluster: Cluster, status_file: StatusFile):
-        self.cluster = cluster
+    def __init__(self, client: Client, status_file: StatusFile):
+        self.client = client
         self._status_file = status_file
-        self._job_id: JobId | None = None
+        self._job_handle: JobHandle | None = None
         self._heartbeat_thread: Thread | None = None
         self._stop_event = Event()
 
     @property
-    def job_id(self) -> JobId | None:
-        return self._job_id
+    def job_id(self) -> str | None:
+        """Return the job ID from the handle, if available."""
+        return self._job_handle.job_id if self._job_handle else None
 
     def launch(self, job_request: JobRequest) -> None:
         """Launch job and start heartbeat thread."""
         self._status_file.write_status(STATUS_RUNNING)
-        self._job_id = self.cluster.launch(job_request)
+        self._job_handle = self.client.submit(job_request)
         self._start_heartbeat()
 
     def wait(self) -> None:
         """Wait for job to complete, stop heartbeat, write final status."""
         try:
-            result = self.cluster.wait(self._job_id)
-            if result.status == JobStatus.FAILED:
+            result = self._job_handle.wait(raise_on_failure=False)
+            if result == JobStatus.FAILED:
                 self._status_file.write_status(STATUS_FAILED)
-                raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
+                raise RuntimeError(f"Job {self.job_id} failed")
             self._status_file.write_status(STATUS_SUCCESS)
         except Exception:
             if self._status_file.status != STATUS_FAILED:
@@ -217,9 +218,9 @@ class StepRunner:
 
     def poll(self) -> bool:
         """Return True if job is finished."""
-        if self._job_id is None:
+        if self._job_handle is None:
             return True
-        return JobStatus.finished(self.cluster.poll(self._job_id).status)
+        return JobStatus.finished(self._job_handle.status())
 
     def _start_heartbeat(self) -> None:
         """Start background thread that periodically refreshes the lease."""
@@ -678,7 +679,7 @@ class Executor:
         executor_info_base_path: str,
         description: str | None = None,
     ):
-        self.cluster = current_cluster()
+        self.client = current_client()
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description
@@ -863,7 +864,7 @@ class Executor:
             environment=EnvironmentConfig.create(extras=step.pip_dependency_groups or []),
         )
 
-        runner = StepRunner(self.cluster, status_file)
+        runner = StepRunner(self.client, status_file)
         runner.launch(fray_job)
         return runner
 

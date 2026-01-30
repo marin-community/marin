@@ -19,7 +19,7 @@ from functools import partial
 import logging
 import os
 from typing import TypedDict
-from fray.job.context import create_job_ctx
+from zephyr.context import create_backend_context
 import humanfriendly
 from marin.utilities.time_logger import log_time
 import pyarrow as pa
@@ -226,7 +226,7 @@ def _load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
             .select("hash", "canonical")
             .filter(col("hash").is_not_null())
             .map(add_to_dup_map),
-            context=create_job_ctx("threadpool"),
+            context=create_backend_context("threadpool"),
         )
 
     return shard_dup_map
@@ -258,7 +258,7 @@ def _compute_dedup_stats(shards: list[str], method: str, level: str) -> DupCount
                 )
             )
             .reduce(partial(sum, start=DupCounters(method=method, level=level))),
-            context=create_job_ctx("threadpool"),
+            context=create_backend_context("threadpool"),
         )[0]
     return result
 

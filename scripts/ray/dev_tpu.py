@@ -64,11 +64,11 @@ import yaml
 import ray.cloudpickle as cloudpickle
 
 import marin.utils
-from fray.cluster import ray as ray_utils
+from fray.v2.ray import dashboard as ray_utils
 from marin.cluster.config import RayClusterConfig, find_config_by_region
 from marin.utils import _hacky_remove_tpu_lockfile
 
-from fray.cluster.ray.auth import maybe_fetch_local_ray_token
+from fray.v2.ray.auth import maybe_fetch_local_ray_token
 
 # Register `marin.utils` by value, so it can work over `ray.remote` without `marin` being installed on the worker.
 # See also #1786 / #1789.
@@ -461,7 +461,7 @@ def hold_tpu_allocation(
     """
     logger.info(f"{tpu_name}: Beginning TPU allocation")
 
-    from fray.cluster.ray import DashboardConfig
+    from fray.v2.ray.dashboard import DashboardConfig
 
     with ray_utils.ray_dashboard(DashboardConfig.from_cluster(config_file, ray_init=True)):
         try:

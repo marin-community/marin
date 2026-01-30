@@ -27,7 +27,7 @@ from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from experiments.llama import llama3_tokenizer
 from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from levanter.infra.cli_helpers import load_config
 from marin.execution.executor import ExecutorStep, InputName, executor_main, output_path_of
 from marin.processing.tokenize import lm_data_config, lm_mixture_data_config

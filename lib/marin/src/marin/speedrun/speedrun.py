@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import fsspec
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
 from marin.execution.executor import ExecutorStep, InputName, output_path_of

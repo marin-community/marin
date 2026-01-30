@@ -18,14 +18,14 @@ from dataclasses import dataclass
 from typing import Any
 
 import levanter.infra.cli_helpers
-from fray.cluster import (
+from fray.v2 import (
     CpuConfig,
     Entrypoint,
     EnvironmentConfig,
     JobRequest,
     ResourceConfig,
     TpuConfig,
-    current_cluster,
+    current_client,
 )
 from levanter.checkpoint import discover_latest_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
@@ -119,9 +119,9 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
         environment=EnvironmentConfig.create(env_vars=env),
     )
 
-    cluster = current_cluster()
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    client = current_client()
+    job_handle = client.submit(job_request)
+    job_handle.wait(raise_on_failure=True)
 
 
 def convert_checkpoint_to_hf_step(

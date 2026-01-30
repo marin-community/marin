@@ -18,7 +18,7 @@ PlantCAD training experiment: A single 600M model pretrained on 16 Angiosperm ge
 
 import jax
 import logging
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
 from marin.execution.executor import executor_main, versioned
 from levanter.models.llama import LlamaConfig

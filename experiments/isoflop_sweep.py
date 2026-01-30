@@ -43,7 +43,7 @@ from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.simple import downloads
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.processing.tokenize import get_vocab_size_for_tokenizer, lm_mixture_data_config
 

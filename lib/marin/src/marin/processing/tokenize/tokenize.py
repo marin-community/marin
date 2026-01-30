@@ -31,11 +31,10 @@ from typing import Any
 import fsspec
 
 import draccus
-from fray.job.context import JobContext
 import humanfriendly
 import transformers
 from datasets import load_dataset_builder
-from fray.job import create_job_ctx
+from zephyr.context import BackendContext, create_backend_context
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -259,7 +258,7 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 
 def _tokenize_batches(
-    *, ctx: JobContext, tokenizer_ref: Any, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]
+    *, ctx: BackendContext, tokenizer_ref: Any, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]
 ) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
     tokenizer: transformers.PreTrainedTokenizer = ctx.get(tokenizer_ref)
@@ -318,7 +317,7 @@ def tokenize(config: TokenizeConfigBase):
             )
             return
 
-        thread_ctx = create_job_ctx("threadpool")
+        thread_ctx = create_backend_context("threadpool")
         file_stats = list(
             Backend.execute(
                 Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
@@ -335,7 +334,9 @@ def tokenize(config: TokenizeConfigBase):
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
-        cluster_ctx = create_job_ctx(context_type="auto", num_cpus=config.zephyr_num_cpus, memory=config.zephyr_memory)
+        cluster_ctx = create_backend_context(
+            context_type="auto", num_cpus=config.zephyr_num_cpus, memory=config.zephyr_memory
+        )
         # NOTE: "broadcast" the tokenizer on the cluster context
         tokenizer_ref = cluster_ctx.put(transformers.AutoTokenizer.from_pretrained(config.tokenizer))
 

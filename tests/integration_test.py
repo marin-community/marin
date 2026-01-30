@@ -18,7 +18,7 @@ import os
 import sys
 
 import draccus
-from fray.cluster import ResourceConfig, create_cluster, set_current_cluster
+from fray.v2 import ResourceConfig, create_cluster, set_current_cluster
 import humanfriendly
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config

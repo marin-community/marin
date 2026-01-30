@@ -31,7 +31,7 @@ from functools import lru_cache
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from experiments.models import ModelConfig as HFModelConfig, download_model_step
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from marin.download.uncheatable_eval.download import make_uncheatable_eval_step
 from marin.evaluation.log_probs import default_lm_log_probs

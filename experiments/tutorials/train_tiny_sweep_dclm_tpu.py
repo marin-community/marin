@@ -18,7 +18,7 @@ on a 30M parameter DCLM model using TPU hardware.
 """
 import dataclasses
 
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3

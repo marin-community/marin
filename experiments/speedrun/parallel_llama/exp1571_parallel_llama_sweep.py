@@ -24,7 +24,7 @@ from experiments.llama import llama_75m, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.parallel_llama.exp1571_parallel_llama import ParallelLlamaConfig
 from marin.execution.executor import executor_main
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 import time
 

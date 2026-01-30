@@ -16,7 +16,7 @@
 
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.custom_mixtral import MixtralConfig
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 

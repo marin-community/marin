@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from levanter.schedule import IntSchedule
 
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 
 
 @dataclass(frozen=True)

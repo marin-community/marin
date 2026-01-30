@@ -29,7 +29,7 @@ from experiments.defaults import default_train
 from experiments.llama import llama_32b
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 

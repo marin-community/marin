@@ -28,7 +28,7 @@ from experiments.tootsie.exp1529_32b_mantis_cooldown import (
     qwen3_32b_remat,
     tootsie_32b_cooldown_mantis,
 )
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main
 
 TRAIN_BATCH_SIZE = 2048

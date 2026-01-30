@@ -25,7 +25,7 @@ Example usage:
   python marin/run/ray_run.py --env_vars WANDB_API_KEY YOUR_WANDB_API_KEY -- python experiments/howto/dclm_7b1x.py
 """
 
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from levanter.models.llama import LlamaConfig
 
 from experiments.defaults import SimpleTrainConfig, default_train

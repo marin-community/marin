@@ -30,7 +30,7 @@ from datetime import datetime
 
 import draccus
 import fsspec
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v2 import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_client
 from marin.processing.classification.dataset_utils import (
     Attribute,
     DatasetConfig,
@@ -382,9 +382,9 @@ def train(cfg: TrainFasttextClassifierConfig):
         ),
         environment=EnvironmentConfig.create(),
     )
-    cluster = current_cluster()
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    client = current_client()
+    job_handle = client.submit(job_request)
+    job_handle.wait(raise_on_failure=True)
 
 
 @draccus.wrap()

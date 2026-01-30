@@ -21,7 +21,7 @@ from experiments.defaults import default_train
 from experiments.llama import llama_1_4b, llama_1_4b_train_config
 from experiments.pretraining_datasets import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config

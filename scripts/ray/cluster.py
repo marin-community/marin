@@ -37,8 +37,8 @@ from typing import Any
 import click
 import yaml
 
-from fray.cluster.ray.auth import ray_auth_secret
-from fray.cluster.ray.dashboard import DashboardConfig, ray_dashboard
+from fray.v2.ray.auth import ray_auth_secret
+from fray.v2.ray.dashboard import DashboardConfig, ray_dashboard
 from marin.cluster import gcp
 from marin.cluster.config import (
     RayClusterConfig,

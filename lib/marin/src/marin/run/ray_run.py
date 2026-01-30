@@ -36,8 +36,8 @@ if _default_token_path.exists() and "RAY_AUTH_TOKEN_PATH" not in os.environ:
 from ray.job_submission import JobSubmissionClient
 
 from marin.cluster.config import find_config_by_region
-from fray.cluster.ray import DashboardConfig, ray_dashboard
-from fray.cluster.ray.deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
+from fray.v2.ray.dashboard import DashboardConfig, ray_dashboard
+from fray.v2.ray.deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
 
 logger = logging.getLogger(__name__)
 

@@ -31,7 +31,7 @@ from experiments.evals.task_configs import (
     TRUTHFULNESS_TASKS,
 )
 from experiments.models import qwen3_32b
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main
 
 from experiments.tootsie.exp1529_32b_mantis_cooldown import tootsie_32b_cooldown_mantis as marin_32b

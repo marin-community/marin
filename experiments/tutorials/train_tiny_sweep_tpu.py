@@ -18,7 +18,7 @@ while training a tiny model on the TinyStories dataset using TPU hardware.
 """
 import dataclasses
 
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main, versioned
 
 from experiments.defaults import default_train

@@ -29,7 +29,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
 from marin.utils import rebase_file_path
 import pyarrow as pa
 import logging
-from fray.job.context import create_job_ctx
+from zephyr.context import create_backend_context
 import wandb
 from zephyr.backends import Backend
 from zephyr.dataset import Dataset
@@ -44,7 +44,7 @@ def dedup_exact_paragraph(config: DedupConfig):
     input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
 
     # TODO(rav): measure and tune the memory limits
-    ctx = create_job_ctx("auto", memory=config.ray_memory, num_cpus=config.ray_num_cpus)
+    ctx = create_backend_context("auto", memory=config.ray_memory, num_cpus=config.ray_num_cpus)
     _init_wandb(config)
 
     def compute_paragraph_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -127,7 +127,7 @@ def dedup_exact_document(config: DedupConfig):
 
     input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
 
-    ctx = create_job_ctx("auto", memory=config.ray_memory, num_cpus=config.ray_num_cpus)
+    ctx = create_backend_context("auto", memory=config.ray_memory, num_cpus=config.ray_num_cpus)
     _init_wandb(config)
 
     def compute_document_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:

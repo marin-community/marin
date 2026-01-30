@@ -34,7 +34,7 @@ import os
 import jax
 import jax.numpy as jnp
 from einops import rearrange
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from haliax import Axis
 from jax.sharding import PartitionSpec
 from jaxtyping import PRNGKeyArray

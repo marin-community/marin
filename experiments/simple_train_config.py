@@ -15,7 +15,7 @@
 import dataclasses
 from dataclasses import dataclass
 
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.optim import OptimizerConfig
 from levanter.schedule import IntSchedule

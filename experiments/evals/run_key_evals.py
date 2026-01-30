@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from experiments.evals.evals import default_key_evals
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main
 
 # Insert your model path here

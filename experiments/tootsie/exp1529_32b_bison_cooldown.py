@@ -39,7 +39,7 @@ from experiments.pretraining_datasets import (
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_components
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 

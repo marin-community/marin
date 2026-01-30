@@ -35,7 +35,7 @@ import fsspec
 import msgspec
 import wandb
 
-from fray.job import get_default_job_ctx
+from zephyr.context import get_default_backend_context
 from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
 
 from marin.utils import fsspec_glob, rebase_file_path
@@ -214,7 +214,7 @@ def build_filter(
     logger.info(f"Building bloom filter from {all_files} into {bloom_path}")
 
     # Build bloom filters for all shards in parallel
-    ctx = get_default_job_ctx()
+    ctx = get_default_backend_context()
     shard_blooms_data = Backend.execute(
         Dataset.from_iterable(all_files)
         .reshard(num_shards=config.processes)
@@ -316,7 +316,7 @@ def mark_duplicates_bloom(
             }
 
     # Use write_jsonl with callable output pattern
-    ctx = get_default_job_ctx()
+    ctx = get_default_backend_context()
     result = list(
         Backend.execute(
             Dataset.from_iterable(all_files)

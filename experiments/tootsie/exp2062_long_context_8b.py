@@ -42,7 +42,7 @@ import dataclasses
 
 from experiments.marin_models import marin_tokenizer
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS
-from fray import ResourceConfig
+from fray.v2 import ResourceConfig
 from levanter.data.text import ChatLmDatasetFormat
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 

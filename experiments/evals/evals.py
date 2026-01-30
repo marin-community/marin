@@ -18,7 +18,7 @@ Canonical set of evals.
 
 import logging
 
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.run import evaluate
 from marin.execution.executor import (

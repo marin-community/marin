@@ -24,7 +24,7 @@ import logging
 from experiments.llama import llama_nano
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")

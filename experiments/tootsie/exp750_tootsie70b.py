@@ -32,7 +32,7 @@ from experiments.llama import llama_70b
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3_old
 from experiments.tootsie.exp859_big_tootsies import dclm_mixture_config_llama3_zoned
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main
 
 llama_70b_train_config_mk6 = SimpleTrainConfig(

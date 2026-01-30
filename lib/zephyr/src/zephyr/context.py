@@ -26,6 +26,8 @@ import logging
 import os
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
@@ -255,3 +257,29 @@ def create_backend_context(
         return RayBackendContext(ray_options=ray_options)
     else:
         raise ValueError(f"Unknown context type: {context_type}. Supported: 'ray', 'threadpool', 'sync'")
+
+
+# ---------------------------------------------------------------------------
+# Default context management
+# ---------------------------------------------------------------------------
+
+_default_backend_context: ContextVar[BackendContext | None] = ContextVar("zephyr_backend_context", default=None)
+
+
+@contextmanager
+def default_backend_context(ctx: BackendContext):
+    """Set the default backend context for the duration of a with-block."""
+    old = _default_backend_context.get()
+    _default_backend_context.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _default_backend_context.set(old)
+
+
+def get_default_backend_context() -> BackendContext:
+    """Get the current default backend context, creating one with 'auto' if unset."""
+    ctx = _default_backend_context.get()
+    if ctx is None:
+        ctx = create_backend_context("auto")
+    return ctx

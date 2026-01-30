@@ -17,7 +17,7 @@ from functools import partial
 import logging
 from marin.utils import rebase_file_path
 import pyarrow as pa
-from fray.job.context import create_job_ctx
+from zephyr.context import create_backend_context
 from marin.processing.classification.deduplication.dedup_commons import (
     DedupConfig,
     DedupMode,
@@ -54,7 +54,7 @@ def _compute_fuzzy_dedup_stats(shards: list[str], method: str, level: str) -> Du
                     dup_clusters=int(total > 1),
                 ),
             ).reduce(partial(sum, start=DupCounters(method=method, level=level))),
-            context=create_job_ctx("threadpool"),
+            context=create_backend_context("threadpool"),
         )[0]
     return result
 
@@ -73,7 +73,7 @@ def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
     with log_time(f"Load fuzzy duplicate map from {len(shards)} shards"):
         Backend.execute(
             Dataset.from_list(shards).load_parquet().map(add_to_dup_map),
-            context=create_job_ctx("threadpool"),
+            context=create_backend_context("threadpool"),
         )
 
     return shard_dup_map
@@ -93,7 +93,7 @@ def dedup_fuzzy_document(config: DedupConfig):
 
     input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
 
-    ctx = create_job_ctx("auto", memory=config.ray_memory, num_cpus=config.ray_num_cpus)
+    ctx = create_backend_context("auto", memory=config.ray_memory, num_cpus=config.ray_num_cpus)
     _init_wandb(config)
 
     def compute_minhash_lsh_batches(batch: pa.RecordBatch) -> Iterator[dict]:

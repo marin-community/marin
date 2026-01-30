@@ -23,7 +23,7 @@ from haliax.jax_utils import maybe_rng_split, shaped_rng_split
 from haliax.nn.scan import BlockSeq, Stacked
 
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from levanter.layers.attention import Attention
 from levanter.models.llama import LlamaEmbedding, LlamaMlp
 from levanter.models.mixtral import (

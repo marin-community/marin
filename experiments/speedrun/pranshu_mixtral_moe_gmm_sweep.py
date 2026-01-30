@@ -20,7 +20,7 @@ from typing import Any
 
 from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 

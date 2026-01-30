@@ -1,9 +1,9 @@
 # Fray-Lite Design
 
-**Status**: Draft (v4, post-review)
+**Status**: Draft (v5, updated migration plan)
 **Issue**: [#2552](https://github.com/marin-community/marin/issues/2552)
 **Research**: [fray-lite-research.md](fray-lite-research.md)
-**Related**: [#2553](https://github.com/marin-community/marin/issues/2553) — Iris preemptible worker attribute
+**Related**: [#2553](https://github.com/marin-community/marin/issues/2553) — Iris preemptible worker attribute (✅ done)
 
 ## Overview
 
@@ -646,74 +646,213 @@ job.wait(raise_on_failure=True)
 
 ## Migration Plan
 
-### Phase 0: Iris Prerequisites
+The plan follows a **spiral** approach: each phase produces independently
+testable, shippable work. We build v2 core + Ray first, migrate all three
+workloads on Ray, then add the Iris backend as a separate track. This lets us
+validate the API surface against real callers before adding a second backend.
 
-Before fray-lite can use Iris as a backend, two Iris changes are needed:
+### Phase 0: Iris Prerequisites ✅ DONE
 
-1. **Preemptible worker attribute** ([#2553](https://github.com/marin-community/marin/issues/2553)) —
-   Workers must expose `preemptible=true|false` as an attribute so that
-   `FrayIrisClient` can map `ResourceConfig(preemptible=False)` to an Iris
-   scheduling constraint. Without this, non-preemptible actors (curriculum,
-   weight coordinator) cannot be placed correctly.
+Both Iris prerequisites are complete:
 
-2. **Move `replicas` to `LaunchJobRequest`** — Iris currently has `replicas`
-   on `ResourceSpecProto`. It should be a top-level field on
-   `LaunchJobRequest` since it controls gang scheduling at the job level,
-   not per-task resource requirements. This aligns with how fray-lite's
-   `JobRequest.replicas` maps to the Iris proto.
+1. **Preemptible worker attribute** ([#2553](https://github.com/marin-community/marin/issues/2553)) ✅ —
+   Workers now expose `preemptible=true|false` via `env_probe.py`. The helper
+   `preemptible_constraint()` in `iris.cluster.types` creates the scheduling
+   constraint. Detection queries GCP metadata, falls back to
+   `IRIS_WORKER_ATTRIBUTES` env var.
 
-These can be done in parallel with Phase 1 (core interface + LocalClient).
+2. **`replicas` on `ResourceSpec`** ✅ — `iris.cluster.types.ResourceSpec` has
+   `replicas: int = 0` which maps to the proto. (Note: Iris keeps `replicas`
+   on `ResourceSpec` rather than `LaunchJobRequest` — fray-lite's
+   `JobRequest.replicas` will map to `ResourceSpec.replicas` during conversion.)
 
-### Phase 1: Core Interface + LocalClient
+### Phase 1: Core Interface + LocalClient + Smoke Test
 
-1. Create `fray/v2/` package with `types.py`, `client.py`, `actor.py`
-2. Copy type definitions from v1 `fray.cluster.base` into `fray/v2/types.py`
-   — move `replicas` from `ResourceConfig` to `JobRequest`
-3. Implement `LocalClient` backend (threads + in-process actors)
-4. Implement `wait_all()` utility
-5. Write tests for core API (submit, create_actor, actor group, wait_all, lifecycle)
+**Goal**: A working `fray.v2` package that passes tests with `LocalClient`.
+This is the foundation everything else builds on.
+
+**Spiral step 1a — Types + Client protocol + LocalClient submit:**
+
+1. Create `fray/v2/` package with `__init__.py`, `types.py`, `client.py`
+2. Copy type definitions from v1 `fray.cluster.base` into `fray/v2/types.py`:
+   - `ResourceConfig` (remove `replicas` field), `DeviceConfig`, `CpuConfig`,
+     `GpuConfig`, `TpuConfig`
+   - `EnvironmentConfig`
+   - `Entrypoint`, `BinaryEntrypoint`, `CallableEntrypoint`
+   - `JobRequest` (add `replicas: int = 1`), `JobStatus`
+3. Define `Client` protocol and `JobHandle` protocol in `client.py`
+4. Implement `LocalClient.submit()` — run `CallableEntrypoint` in a thread,
+   return a `LocalJobHandle` that wraps `concurrent.futures.Future`
+5. Implement `wait_all()`
+6. Write tests: submit callable job, wait, check status transitions, wait_all
+   with mixed success/failure
+
+**Spiral step 1b — Actors:**
+
+1. Create `actor.py` with `ActorHandle`, `ActorMethod`, `ActorFuture`,
+   `ActorGroup` protocols
+2. Implement `LocalClient.create_actor()` — instantiate class in-process,
+   wrap with `threading.Lock` for thread safety, return `LocalActorHandle`
+3. Implement `LocalClient.create_actor_group()` — N in-process instances
+4. Write tests: create actor, call `.method.remote()`, verify result;
+   create group, `wait_ready()`, dispatch to multiple actors
+
+**Spiral step 1c — current_client + FRAY_CLIENT_SPEC:**
+
+1. Implement `current_client()` with context var + env var resolution
+2. Implement `set_current_client()` context manager
+3. Write tests: default → LocalClient, explicit set, env var parsing
+
+**Deliverable**: `LocalClient` passing all protocol tests. Callers can
+`pip install` and use `fray.v2` for local development immediately.
 
 ### Phase 2: Ray Backend
 
-1. Copy Ray integration code from v1 into `fray/v2/ray/` (see table above)
-2. Implement `RayClient` using the copied code
-3. Ray `ActorHandle` wrapping Ray actor refs with `.remote()` shim (deferred)
-4. Map `preemptible=False` → `resources={"head_node": 0.0001}`
-5. Map `JobRequest.replicas` → `run_on_pod num_slices`
-6. Map `max_retries_failure + max_retries_preemption` → Ray retry count
-7. Test with existing Ray cluster
+**Goal**: `RayClient` that can submit jobs and create actors on a Ray cluster.
+Validated against a local Ray cluster.
 
-### Phase 3: Iris Backend
+**Spiral step 2a — Job submission:**
 
-1. Implement `FrayIrisClient` wrapping `iris.client.IrisClient`
-2. Implement actor hosting entrypoint + endpoint registration
-3. Implement `IrisActorHandle` with deferred resolution and context-based serialization
-4. Map `preemptible=False` → Iris constraint (requires Phase 0)
-5. Map `JobRequest.replicas` → Iris `LaunchJobRequest.replicas` (requires Phase 0)
-6. Test with local Iris controller
+1. Copy v1 Ray code into `fray/v2/ray/` (see files table above):
+   `backend.py`, `deps.py`, `resources.py`, `tpu.py`, `fn_thunk.py`, `auth.py`
+2. Implement `RayClient.submit()` — route to TPU/binary/callable launchers
+   based on device type
+3. Map `JobRequest.replicas` → `run_on_pod num_slices`
+4. Map `max_retries_failure + max_retries_preemption` → Ray retry count
+5. Implement `RayJobHandle` wrapping Ray job ID with poll-based `wait()`
+6. Test: submit a callable job to local Ray, verify completion
 
-### Phase 4: Migrate Callers
+**Spiral step 2b — Actor support:**
 
-1. **Levanter training** (`marin.training.training`) — job submission only,
-   simplest migration
-2. **RL job orchestration** (`marin.rl.rl_job`) — job submission + actor
-   creation. Refactor to create actors in controller, pass to workers.
-3. **RL actors** (`marin.rl.curriculum`, `marin.rl.weight_transfer`) — update
-   call sites from `ctx.get(future)` → `future.result()`. Remove
-   `get_or_create_curriculum_actor` in favor of explicit creation in `rl_job.py`.
-4. **Zephyr** (`zephyr.backends`) — implement `ActorBackend` with
-   shared-storage data movement. Run full Zephyr test suite to validate.
-5. **Remaining callers** (evaluation, experiments) — update `current_cluster()`
-   → `current_client()`, `cluster.launch()` → `client.submit()`
+1. Implement `RayClient.create_actor()` — `ray.remote(cls).options(...).remote()`
+2. Implement `RayActorHandle` wrapping Ray actor ObjectRef with `.remote()` shim
+3. Map `preemptible=False` → `resources={"head_node": 0.0001}`
+4. Implement `RayClient.create_actor_group()` — N Ray actors
+5. Test: create actor on local Ray, call methods, verify results
 
-### Phase 5: Testing
+**Spiral step 2c — FRAY_CLIENT_SPEC integration:**
 
-1. Run all Zephyr tests against `ActorBackend` with `LocalClient`
-2. Run RL integration tests with refactored actor creation
-3. Run Levanter training smoke test
-4. Validate Iris backend with Iris integration tests
+1. Wire `"ray"` and `"ray?namespace=..."` into `current_client()` resolution
+2. Test: set env var, get RayClient
 
-### Phase 6: Cleanup
+**Deliverable**: `RayClient` passing the same protocol tests as `LocalClient`,
+plus Ray-specific integration tests.
+
+### Phase 3: Migrate Levanter Training (simplest caller)
+
+**Goal**: `marin.training.training` uses `fray.v2` instead of `fray.cluster`.
+This is the easiest migration — pure job submission, no actors.
+
+1. Update `marin/training/training.py`:
+   - `from fray.cluster import ... current_cluster` → `from fray.v2 import ... current_client`
+   - `cluster = current_cluster()` → `client = current_client()`
+   - `cluster.launch(request)` → `client.submit(request)` (returns `JobHandle`)
+   - `cluster.wait(job_id, ...)` → `job.wait(...)`
+2. Update `ResourceConfig` usage: `replicas` moves from `ResourceConfig` to
+   `JobRequest`. v1's `ResourceConfig.with_tpu(...)` sets `replicas` based on
+   topology — v2 equivalent passes `replicas` to `JobRequest` instead.
+3. Run existing Levanter tests to verify no regression.
+
+**Deliverable**: Levanter training works on Ray via `fray.v2`. Can be tested
+end-to-end with `FRAY_CLIENT_SPEC=ray`.
+
+
+### Phase 4: Migrate Zephyr
+
+**Goal**: Zephyr uses `fray.v2` for distributed execution. `JobContext` is
+deleted — Zephyr moves to the `ActorBackend` model with long-lived worker
+actors that receive shard assignments via RPC.
+
+**Current Zephyr architecture** (from `backends.py`, `plan.py`):
+- `Backend` class wraps a `JobContext` (SyncContext, ThreadContext, or RayContext)
+- `context.put(obj)` / `context.get(ref)` — object store for data references
+- `context.run(fn, *args)` — submit a task, returns a future/generator
+- `context.wait(refs, num_returns=1)` — wait for N results, streaming style
+- `run_stage()` is the worker function that processes shards
+
+**Spiral step 4a — ActorBackend + ZephyrWorker:**
+
+1. Implement `ActorBackend` in `zephyr/backends.py` (as designed in the
+   Zephyr Migration section above) using `client.create_actor_group()`
+2. Implement `ZephyrWorker` actor that runs `run_stage` on storage paths
+3. Replace `Backend._execute_stage()` dispatch logic with actor RPC calls
+4. Wire `ActorBackend` into Zephyr's `cli.py` for distributed backends
+5. Run Zephyr test suite with `ActorBackend` + `LocalClient`
+
+**Spiral step 4b — Delete JobContext:**
+
+1. Remove `fray.job.context` (SyncContext, ThreadContext, RayContext)
+2. Remove all `fray.job` imports from Zephyr
+3. Keep a simple in-process `SyncBackend` / `ThreadBackend` for local
+   testing that doesn't use `JobContext` — these call `run_stage` directly
+4. Run full Zephyr test suite
+
+**Deliverable**: Zephyr works on Ray via `fray.v2` with `ActorBackend`.
+`
+### Phase 5: Migrate RL Training
+
+**Goal**: `marin.rl` fully migrated to `fray.v2` in one shot — job submission,
+actor creation, and all worker call sites. No mixed v1/v2 usage.
+
+**Current RL architecture** (from `rl_job.py`):
+- `RLJob.run()` calls `current_cluster().launch()` for 1 train job + N rollout jobs
+- `cluster.wait(jobs, raise_on_failure=True)` waits for all
+- Workers internally create their own actors via `fray.job.get_default_job_ctx()`
+  for `create_actor(get_if_exists=True)` and `ctx.get(future)`
+
+**All of the following ships as one change:**
+
+1. Update `rl_job.py`:
+   - `from fray.cluster import ...` → `from fray.v2 import ...`
+   - `cluster = current_cluster()` → `client = current_client()`
+   - `cluster.launch(JobRequest(...))` → `client.submit(JobRequest(...))`
+   - `cluster.wait(jobs, raise_on_failure=True)` → `wait_all(jobs, raise_on_failure=True)`
+   - Create curriculum + weight-transfer actors via `client.create_actor()`
+     and pass handles to worker entrypoints
+2. Update `curriculum.py`: remove `get_or_create_curriculum_actor`, accept
+   handle as parameter
+3. Update `weight_transfer/`: same pattern — accept handle, remove
+   `get_if_exists`
+4. Update all worker call sites: `ctx.get(future)` → `future.result()`
+5. Remove all `fray.job` imports from RL code
+6. Run RL integration tests
+
+**Deliverable**: RL training works on Ray via `fray.v2` with explicit actor
+creation from the controller. Zero v1 imports remain in `marin.rl`.JobContext` and `fray.job` are deleted. All Zephyr tests pass.
+
+### Phase 6: Iris Backend
+
+**Goal**: `FrayIrisClient` that can run all three workloads on Iris. Deferred
+until after Ray migration is complete and validated.
+
+**Spiral step 6a — Job submission:**
+
+1. Implement `FrayIrisClient` in `fray/v2/iris_backend.py`
+2. Convert `ResourceConfig` → Iris `ResourceSpec`:
+   - `preemptible=False` → `preemptible_constraint(False)` (from `iris.cluster.types`)
+   - `JobRequest.replicas` → `ResourceSpec.replicas`
+   - Device config → Iris accelerator spec
+3. Convert `Entrypoint` → Iris entrypoint format
+4. Implement `IrisJobHandle` wrapping `iris.client.Job`
+5. Test: submit job to local Iris controller
+
+**Spiral step 6b — Actor support:**
+
+1. Implement `_host_actor` entrypoint (as designed above)
+2. Implement `IrisActorHandle` with deferred name resolution via `iris_ctx()`
+3. Implement context-based pickle serialization
+4. Implement `create_actor_group()` — submit N hosting jobs, return `ActorGroup`
+5. Test: create actor on Iris, call methods
+
+**Spiral step 6c — Integration testing:**
+
+1. Wire `"iris://..."` into `current_client()` resolution
+2. Run Levanter, RL, and Zephyr integration tests against Iris backend
+3. Validate preemptible constraint enforcement
+
+**Deliverable**: All three workloads run on Iris via `fray.v2`.
+
+### Phase 7: Cleanup
 
 1. Delete `fray.cluster`, `fray.job` (v1 code)
 2. Move `fray.v2` → `fray` (top-level)
@@ -860,39 +999,53 @@ later if actors need cleanup logic, but the current workloads don't require it.
 
 ## Recommended Issues
 
-The following issues should be filed to begin implementation:
+### ✅ Completed
 
-### Iris prerequisites (can start immediately, in parallel)
+- **Iris: Expose preemptible worker attribute** ([#2553](https://github.com/marin-community/marin/issues/2553)) — Done.
+- **Iris: `replicas` on `ResourceSpec`** — Done (kept on `ResourceSpec`).
 
-- **Iris: Move `replicas` from `ResourceSpecProto` to `LaunchJobRequest`** —
-  Gang scheduling is a job-level concern. Move the `replicas` field from
-  `ResourceSpecProto` to `LaunchJobRequest` as a top-level field. Update
-  the controller's scheduling logic and all clients accordingly.
-
-- **Iris: Expose preemptible worker attribute** ([#2553](https://github.com/marin-community/marin/issues/2553)) —
-  Already filed. Workers must report `preemptible=true|false` so the scheduler
-  can enforce `Constraint(key="preemptible", op=EQ, value="false")`.
-
-### Fray-lite core (start after or in parallel with Iris prereqs)
+### Ready to start
 
 - **Fray-lite: Phase 1 — Core interface + LocalClient** —
   Create `fray/v2/` package. Define `Client` protocol, `ActorHandle` protocol,
   `ActorGroup`, `JobHandle`, `wait_all()`. Copy type definitions from v1.
-  Implement `LocalClient`. Write tests.
+  Implement `LocalClient`. Write tests. See Phase 1 spiral steps for breakdown.
 
 - **Fray-lite: Phase 2 — Ray backend** —
   Copy v1 Ray code into `fray/v2/ray/`. Implement `RayClient` with deferred
   actor handles. Map `JobRequest.replicas` → `run_on_pod num_slices`.
 
-- **Fray-lite: Phase 3 — Iris backend** —
+### After Ray backend is ready
+
+- **Fray-lite: Phase 3 — Migrate Levanter** —
+  Swap `current_cluster()` → `current_client()` in `marin.training.training`.
+  Simplest caller, validates the API surface.
+
+- **Fray-lite: Phase 4 — Migrate RL** —
+  Single atomic migration: swap all imports, refactor actor creation to
+  controller-only, update all worker call sites. No mixed v1/v2.
+
+- **Fray-lite: Phase 5 — Migrate Zephyr** —
+  Implement `ActorBackend` with `ZephyrWorker` actors. Delete `JobContext`
+  and `fray.job`.
+
+### After all callers migrated on Ray
+
+- **Fray-lite: Phase 6 — Iris backend** —
   Implement `FrayIrisClient` wrapping `iris.client.IrisClient`. Deferred
-  `IrisActorHandle` with context-based serialization. Depends on both Iris
-  prerequisite issues.
+  `IrisActorHandle` with context-based serialization. Run all workloads
+  against Iris.
 
-- **Fray-lite: Phase 4 — Migrate callers** —
-  Migrate Levanter, RL, Zephyr, and remaining callers from v1 to v2 API.
-  Zephyr is last and largest (new `ActorBackend`).
-
-- **Fray-lite: Phase 6 — Delete v1** —
+- **Fray-lite: Phase 7 — Delete v1** —
   Remove `fray.cluster`, `fray.job`, `fray.queue`. Move `fray.v2` → `fray`.
   Update all imports.
+
+## Recommendations
+
+### 1. Iris `replicas` field location differs from original design
+
+The original design called for moving `replicas` from `ResourceSpecProto` to
+`LaunchJobRequest`. In practice, Iris keeps `replicas` on `ResourceSpec`
+(`iris.cluster.types.ResourceSpec.replicas`). This is fine — fray-lite's
+`FrayIrisClient` will map `JobRequest.replicas` → `ResourceSpec.replicas`
+during conversion. No Iris change needed.

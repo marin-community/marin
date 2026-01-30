@@ -19,7 +19,7 @@ import numpy as np
 import pyarrow as pa
 import tensorstore as ts
 from dataclasses_json import dataclass_json
-from fray.job import JobContext
+from zephyr.context import BackendContext
 from fsspec import AbstractFileSystem
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
@@ -292,7 +292,7 @@ def build_cache(
     processor: BatchProcessor[T, U],
     options: CacheOptions,
     metadata: CacheMetadata,
-    context: Optional[JobContext] = None,
+    context: Optional[BackendContext] = None,
 ) -> CacheLedger:
     """
     Build a cache from a sharded data source using a Zephyr backend.
@@ -397,7 +397,7 @@ def consolidate_shard_caches(
     output_path: str,
     exemplar,
     metadata: CacheMetadata | None = None,
-    context: Optional[JobContext] = None,
+    context: Optional[BackendContext] = None,
 ) -> CacheLedger:
     """
     Consolidate multiple shard caches into a single cache directory.
@@ -407,7 +407,7 @@ def consolidate_shard_caches(
         output_path: Destination cache directory.
         exemplar: Output exemplar structure.
         metadata: CacheMetadata to use for the final ledger.
-        context: Optional JobContext for execution.
+        context: Optional BackendContext for execution.
     """
     if metadata is None:
         metadata = CacheMetadata.empty()

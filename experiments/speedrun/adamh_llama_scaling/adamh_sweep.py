@@ -20,7 +20,7 @@ import os
 
 from levanter.optim import AdamHConfig
 from marin.execution.executor import executor_main
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 from experiments.simple_train_config import SimpleTrainConfig

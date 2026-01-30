@@ -33,7 +33,7 @@ from experiments.midtraining_datasets import finemath_3_plus_tokenized, megamath
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 

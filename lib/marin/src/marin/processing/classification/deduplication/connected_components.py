@@ -20,7 +20,7 @@ from typing import Any, TypedDict
 from collections.abc import Sequence
 
 from dupekit import hash_xxh3_128
-from fray.job import JobContext
+from zephyr.context import BackendContext
 from zephyr import Backend, Dataset
 from zephyr.expr import col
 
@@ -85,7 +85,7 @@ class BucketWithIds(TypedDict):
 def connected_components(
     ds: Dataset[CCInput],
     *,
-    ctx: JobContext,
+    ctx: BackendContext,
     output_dir: str,
     max_iterations: int = 10,
     preserve_singletons: bool = True,

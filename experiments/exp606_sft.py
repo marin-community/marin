@@ -19,7 +19,7 @@ This module provides the `tulu3_llama_data_old` dataset configuration and
 `tulu_sft_config` used by various SFT training experiments.
 """
 
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_instruct_chat_format, llama3_instruct_tokenizer

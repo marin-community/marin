@@ -20,7 +20,7 @@ from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
 
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 
 from levanter.data.text import ChatLmDatasetFormat
 

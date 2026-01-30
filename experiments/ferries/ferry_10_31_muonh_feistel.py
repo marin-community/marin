@@ -21,7 +21,7 @@ from levanter.optim import MuonHConfig
 
 from experiments.defaults import SimpleTrainConfig, default_train
 from experiments.qwen3 import qwen3_1_7b, qwen3_8b
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main
 
 from experiments.ferries.initial_ferry import (

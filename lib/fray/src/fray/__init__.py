@@ -14,37 +14,5 @@
 
 """Fray: Execution contexts for distributed and parallel computing."""
 
-from fray.cluster import (
-    Cluster,
-    CpuConfig,
-    Entrypoint,
-    EnvironmentConfig,
-    GpuConfig,
-    JobId,
-    JobInfo,
-    JobRequest,
-    LocalCluster,
-    ResourceConfig,
-    create_cluster,
-    current_cluster,
-)
-from fray.cluster.base import JobStatus
-from fray.isolated_env import JobGroup, TemporaryVenv
-
-__all__ = [
-    "Cluster",
-    "CpuConfig",
-    "Entrypoint",
-    "EnvironmentConfig",
-    "GpuConfig",
-    "JobGroup",
-    "JobId",
-    "JobInfo",
-    "JobRequest",
-    "JobStatus",
-    "LocalCluster",
-    "ResourceConfig",
-    "TemporaryVenv",
-    "create_cluster",
-    "current_cluster",
-]
+# Re-export everything from fray.v2
+from fray.v2 import *  # noqa: F403

@@ -20,7 +20,7 @@ rather than adding custom CLI flags on top of `executor_main`.
 
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main
 
 MODEL_PATH = "gs://marin-us-central1/checkpoints/example/hf/step-0/"

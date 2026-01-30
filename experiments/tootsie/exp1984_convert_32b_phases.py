@@ -30,7 +30,7 @@ from experiments.tootsie.exp1295_32b import llama_32b_remat, llama_32b_tootsie
 from experiments.tootsie.exp1380_muon32b import llama_32b_muon
 from experiments.tootsie.exp1390_32b_necro import marin_32b_necro
 from experiments.tootsie.exp1395_qwen3_32b import marin_32b_qwen, qwen3_32b_remat
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main
 from marin.export import convert_checkpoint_to_hf_step
 

@@ -39,7 +39,7 @@ from experiments.pretraining_datasets.dclm import (
 from experiments.defaults import default_train
 from experiments.llama import llama_13b, llama_24b, llama_56b
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 

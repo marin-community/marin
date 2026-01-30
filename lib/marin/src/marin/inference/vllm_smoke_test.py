@@ -21,7 +21,7 @@ from typing import Literal
 from urllib.parse import urlparse
 
 import requests
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v2 import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_client
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
@@ -236,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
                 print(output)
 
-    cluster = current_cluster()
+    client = current_client()
     resources = ResourceConfig.with_tpu(args.tpu_type)
     job_request = JobRequest(
         name=f"vllm-smoke:{args.tpu_type}",
@@ -248,8 +248,8 @@ def main(argv: list[str] | None = None) -> int:
             env_vars=env_vars or None,
         ),
     )
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    job_handle = client.submit(job_request)
+    job_handle.wait(raise_on_failure=True)
     return 0
 
 

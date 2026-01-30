@@ -23,7 +23,7 @@ import pytest
 
 
 import ray
-from fray.cluster.ray.tpu import run_on_pod
+from fray.v2.ray.tpu import run_on_pod
 from ray.exceptions import RayTaskError
 
 # Mesh axis names

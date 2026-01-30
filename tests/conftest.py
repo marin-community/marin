@@ -14,26 +14,26 @@
 
 
 import pytest
-from fray.cluster import create_cluster, set_current_cluster
-from fray.job.context import _job_context
+from fray.v2.client import set_current_client
+from fray.v2.local import LocalClient
+from zephyr.context import _default_backend_context
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 
 
 @pytest.fixture(autouse=True)
-def reset_fray_context():
-    """Reset fray context between tests for isolation."""
-    _job_context.set(None)
+def reset_backend_context():
+    """Reset backend context between tests for isolation."""
+    _default_backend_context.set(None)
     yield
-    _job_context.set(None)
+    _default_backend_context.set(None)
 
 
 @pytest.fixture(autouse=True)
 def fray_cluster():
-    set_current_cluster(create_cluster("local"))
-    yield
-    set_current_cluster(None)
+    with set_current_client(LocalClient()):
+        yield
 
 
 @pytest.fixture(autouse=True)

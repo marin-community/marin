@@ -48,7 +48,7 @@ from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 
 # Phases/Runs in this file:
 # 1. Kestrel: WSD-S on DCLM+Starcode+Proofpile on 2x v5litepod-256 (from scratch)

@@ -19,7 +19,7 @@ from typing import Optional, Sequence
 
 import draccus
 import ray
-from fray.cluster.ray.tpu import run_on_pod
+from fray.v2.ray.tpu import run_on_pod
 from ray.dashboard.modules.job.sdk import JobSubmissionClient
 
 from levanter.infra.docker import make_docker_run_command

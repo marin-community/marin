@@ -33,7 +33,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, this_output_path
 from levanter.data.text import LMMixtureDatasetConfig
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
-from fray.cluster import ResourceConfig
+from fray.v2 import ResourceConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
