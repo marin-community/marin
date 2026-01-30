@@ -23,6 +23,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
+from iris.chaos import chaos
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2
@@ -42,6 +43,8 @@ class TaskProvider(Protocol):
     def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
     def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]: ...
+    def pop_completed_tasks(self) -> list[cluster_pb2.Controller.CompletedTaskEntry]: ...
+    def on_heartbeat_received(self) -> None: ...
 
 
 class WorkerServiceImpl:
@@ -51,32 +54,6 @@ class WorkerServiceImpl:
         self._provider = provider
         self._log_buffer = log_buffer
         self._start_time = time.time()
-
-    def run_task(
-        self,
-        request: cluster_pb2.Worker.RunTaskRequest,
-        _ctx: RequestContext,
-    ) -> cluster_pb2.Worker.RunTaskResponse:
-        """Start execution of a task."""
-        with rpc_error_handler("running task"):
-            logger.info(
-                f"Received run_task RPC for task {request.task_id} "
-                f"(job={request.job_id}, attempt={request.attempt_id}, "
-                f"cpu={request.resources.cpu}, memory={request.resources.memory_bytes})"
-            )
-
-            task_id = self._provider.submit_task(request)
-            task = self._provider.get_task(task_id)
-
-            if not task:
-                raise ConnectError(Code.INTERNAL, f"Task {task_id} not found after submission")
-
-            logger.info(f"Task {task_id} submitted successfully with state {task.to_proto().state}")
-
-            return cluster_pb2.Worker.RunTaskResponse(
-                task_id=task_id,
-                state=task.to_proto().state,
-            )
 
     def get_task_status(
         self,
@@ -139,29 +116,6 @@ class WorkerServiceImpl:
 
         return cluster_pb2.Worker.FetchTaskLogsResponse(logs=result)
 
-    def kill_task(
-        self,
-        request: cluster_pb2.Worker.KillTaskRequest,
-        _ctx: RequestContext,
-    ) -> cluster_pb2.Empty:
-        """Kill a running task."""
-        task = self._provider.get_task(request.task_id)
-        if not task:
-            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
-
-        success = self._provider.kill_task(
-            request.task_id,
-            term_timeout_ms=request.term_timeout_ms or 5000,
-        )
-        if not success:
-            # Task exists but is already in terminal state
-            state_name = cluster_pb2.TaskState.Name(task.status)
-            raise ConnectError(
-                Code.FAILED_PRECONDITION,
-                f"Task {request.task_id} already completed with state {state_name}",
-            )
-        return cluster_pb2.Empty()
-
     def health_check(
         self,
         _request: cluster_pb2.Empty,
@@ -199,3 +153,63 @@ class WorkerServiceImpl:
                 for r in records
             ]
         )
+
+    def heartbeat(
+        self,
+        request: cluster_pb2.HeartbeatRequest,
+        _ctx: RequestContext,
+    ) -> cluster_pb2.HeartbeatResponse:
+        """Handle controller-initiated heartbeat.
+
+        Processes tasks_to_run and tasks_to_kill, then returns current state.
+        """
+        with rpc_error_handler("heartbeat"):
+            # Chaos injection for testing heartbeat failures and delays
+            if rule := chaos("worker.heartbeat"):
+                if rule.delay_seconds > 0:
+                    time.sleep(rule.delay_seconds)
+                if rule.error:
+                    raise rule.error
+                # If no error specified, raise generic RuntimeError
+                if not rule.delay_seconds:
+                    raise RuntimeError("chaos: worker.heartbeat")
+
+            # Update heartbeat timestamp first
+            self._provider.on_heartbeat_received()
+
+            # Start new tasks
+            for run_req in request.tasks_to_run:
+                try:
+                    self._provider.submit_task(run_req)
+                    logger.info(f"Heartbeat: submitted task {run_req.task_id}")
+                except Exception as e:
+                    logger.warning(f"Heartbeat: failed to submit task {run_req.task_id}: {e}")
+
+            # Kill requested tasks
+            for task_id in request.tasks_to_kill:
+                try:
+                    self._provider.kill_task(task_id)
+                    logger.info(f"Heartbeat: killed task {task_id}")
+                except Exception as e:
+                    logger.warning(f"Heartbeat: failed to kill task {task_id}: {e}")
+
+            # Build response with current running tasks
+            tasks = self._provider.list_tasks()
+            running = []
+            for t in tasks:
+                proto = t.to_proto()
+                if proto.state in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING):
+                    running.append(
+                        cluster_pb2.Controller.RunningTaskEntry(
+                            task_id=proto.task_id,
+                            attempt_id=proto.current_attempt_id,
+                        )
+                    )
+
+            # Completed tasks come from the worker's unreported buffer
+            completed = self._provider.pop_completed_tasks()
+
+            return cluster_pb2.HeartbeatResponse(
+                running_tasks=running,
+                completed_tasks=completed,
+            )

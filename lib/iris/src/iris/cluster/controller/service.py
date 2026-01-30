@@ -31,7 +31,6 @@ from iris.cluster.controller.bundle_store import BundleStore
 from iris.cluster.controller.events import (
     JobCancelledEvent,
     JobSubmittedEvent,
-    TaskStateChangedEvent,
     WorkerRegisteredEvent,
 )
 from iris.cluster.controller.scheduler import SchedulingContext, TaskScheduleResult
@@ -419,138 +418,51 @@ class ControllerServiceImpl:
 
         return cluster_pb2.Controller.ListTasksResponse(tasks=task_statuses)
 
-    def report_task_state(
-        self,
-        request: cluster_pb2.Controller.ReportTaskStateRequest,
-        ctx: Any,
-    ) -> cluster_pb2.Controller.ReportTaskStateResponse:
-        """Handle task state report from a worker.
-
-        Workers report task state changes (BUILDING, RUNNING, SUCCEEDED, FAILED, etc.)
-        via this RPC. The controller updates task state and aggregates to job state.
-        """
-        task_id = TaskId(request.task_id)
-        task = self._state.get_task(task_id)
-        if not task:
-            logger.warning(f"Received task state report for unknown task {task_id}")
-            return cluster_pb2.Controller.ReportTaskStateResponse()
-
-        new_state = request.state
-
-        txn = self._state.handle_event(
-            TaskStateChangedEvent(
-                task_id=task_id,
-                new_state=new_state,
-                error=request.error if request.error else None,
-                exit_code=request.exit_code if request.exit_code else None,
-                attempt_id=request.attempt_id,
-            )
-        )
-
-        logger.debug(f"Task {task_id} reported state {new_state}")
-
-        # Send kill RPCs to workers for any tasks that were killed as a result
-        if txn.tasks_to_kill:
-            self._scheduler.kill_tasks_on_workers(txn.tasks_to_kill)
-
-        # Wake scheduler if task finished (may free capacity)
-        if task.is_finished():
-            self._scheduler.wake()
-
-        return cluster_pb2.Controller.ReportTaskStateResponse()
-
     # --- Worker Management ---
 
-    def register_worker(
+    def register(
         self,
-        request: cluster_pb2.Controller.RegisterWorkerRequest,
+        request: cluster_pb2.Controller.RegisterRequest,
         ctx: Any,
-    ) -> cluster_pb2.Controller.RegisterWorkerResponse:
-        """Register a new worker or process a heartbeat from an existing worker.
+    ) -> cluster_pb2.Controller.RegisterResponse:
+        """One-shot worker registration. Returns worker_id.
 
-        Performs bidirectional reconciliation:
-        1. Worker claims unknown tasks (controller restart) -> signal reset
-        2. Controller expects tasks worker doesn't report (worker restart) -> mark tasks failed
+        This is the new registration path (Step 3). Worker registers once,
+        then waits for heartbeats from the controller.
         """
-        worker_id = WorkerId(request.worker_id)
+        with rpc_error_handler("registering worker"):
+            # Derive worker_id from vm_address if present, otherwise from address
+            worker_id = WorkerId(request.metadata.vm_address or request.address)
 
-        # Process completed tasks piggybacked on heartbeat (before reconciliation).
-        # This ensures the controller learns about completions even when
-        # report_task_state RPC failed.
-        for entry in request.completed_tasks:
-            task_id = TaskId(entry.task_id)
-            task = self._state.get_task(task_id)
-            if task and not task.is_finished():
-                self._state.handle_event(
-                    TaskStateChangedEvent(
-                        task_id=task_id,
-                        new_state=entry.state,
-                        error=entry.error or None,
-                        exit_code=entry.exit_code,
-                        attempt_id=entry.attempt_id,
-                    )
+            self._state.handle_event(
+                WorkerRegisteredEvent(
+                    worker_id=worker_id,
+                    address=request.address,
+                    metadata=request.metadata,
+                    timestamp_ms=now_ms(),
                 )
-                logger.info("Processed heartbeat-delivered completion for task %s -> %s", task_id, entry.state)
-
-        reported_tasks = {entry.task_id for entry in request.running_tasks}
-
-        # Case 1: Worker claims unknown tasks (controller restart recovery)
-        if reported_tasks:
-            unknown_tasks = [tid for tid in reported_tasks if self._state.get_task(TaskId(tid)) is None]
-            if unknown_tasks:
-                logger.warning("Worker %s claims unknown tasks %s, signaling reset", worker_id, unknown_tasks)
-                return cluster_pb2.Controller.RegisterWorkerResponse(
-                    accepted=False,
-                    should_reset=True,
-                )
-
-        # Case 2: Controller expects tasks worker doesn't report (worker restart recovery)
-        existing_worker = self._state.get_worker(worker_id)
-        if existing_worker:
-            expected_tasks = existing_worker.running_tasks
-            missing_tasks = expected_tasks - {TaskId(tid) for tid in reported_tasks}
-            if missing_tasks:
-                logger.warning("Worker %s missing expected tasks %s, marking failed", worker_id, missing_tasks)
-                for task_id in missing_tasks:
-                    task = self._state.get_task(task_id)
-                    if not task:
-                        continue
-                    self._state.handle_event(
-                        TaskStateChangedEvent(
-                            task_id=task_id,
-                            new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
-                            attempt_id=task.current_attempt_id,
-                            error="Worker restarted without task",
-                            exit_code=1,
-                        )
-                    )
-
-        # Case 3: Worker running stale attempt (attempt ID mismatch)
-        if request.running_tasks:
-            for entry in request.running_tasks:
-                task = self._state.get_task(TaskId(entry.task_id))
-                if task and task.current_attempt_id != entry.attempt_id:
-                    logger.error(
-                        "Worker %s running stale attempt of task %s: " "worker_attempt=%d controller_attempt=%d",
-                        worker_id,
-                        entry.task_id,
-                        entry.attempt_id,
-                        task.current_attempt_id,
-                    )
-                    # Kill the stale task on this worker
-                    self._scheduler.kill_tasks_on_workers({TaskId(entry.task_id)})
-
-        # Use WORKER_REGISTERED event for both new and existing workers
-        self._state.handle_event(
-            WorkerRegisteredEvent(
-                worker_id=worker_id,
-                address=request.address,
-                metadata=request.metadata,
-                timestamp_ms=now_ms(),
             )
-        )
+            self._scheduler.wake()
+
+            logger.info("Worker registered: %s at %s", worker_id, request.address)
+            return cluster_pb2.Controller.RegisterResponse(
+                worker_id=str(worker_id),
+                accepted=True,
+            )
+
+    def notify_task_update(
+        self,
+        request: cluster_pb2.Controller.NotifyTaskUpdateRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Empty:
+        """Hint from worker that it has new completions. Triggers priority heartbeat.
+
+        This is a lightweight ping - the actual completion data comes via the next
+        heartbeat response.
+        """
+        # Just wake the scheduler; it will trigger a priority heartbeat for this worker
         self._scheduler.wake()
-        return cluster_pb2.Controller.RegisterWorkerResponse(accepted=True)
+        return cluster_pb2.Empty()
 
     def list_workers(
         self,
@@ -594,7 +506,7 @@ class ControllerServiceImpl:
         """Register a service endpoint.
 
         Endpoints are registered regardless of job state, but only become visible to clients
-        (via lookup/list) when the job is RUNNING.
+        (via lookup/list) when the job is executing (not in a terminal state).
         """
         with rpc_error_handler("registering endpoint"):
             endpoint_id = str(uuid.uuid4())
@@ -630,7 +542,7 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.LookupEndpointRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.LookupEndpointResponse:
-        """Look up a service endpoint by name. Only endpoints for RUNNING jobs are returned."""
+        """Look up a service endpoint by name. Only endpoints for executing jobs are returned."""
         endpoints = self._state.lookup_endpoints(request.name)
         if not endpoints:
             logger.debug("Endpoint lookup found no results: name=%s", request.name)
@@ -652,7 +564,7 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.ListEndpointsRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListEndpointsResponse:
-        """List endpoints by name prefix. Only endpoints for RUNNING jobs are returned."""
+        """List endpoints by name prefix. Only endpoints for executing jobs are returned."""
         endpoints = self._state.list_endpoints_by_prefix(request.prefix)
         return cluster_pb2.Controller.ListEndpointsResponse(
             endpoints=[

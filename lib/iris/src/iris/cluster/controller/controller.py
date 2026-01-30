@@ -16,17 +16,14 @@
 
 import logging
 import threading
-import time
 from collections import defaultdict
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Protocol
 
-import grpc
 import uvicorn
 
-from iris.chaos import chaos
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import (
     TaskAssignedEvent,
@@ -42,17 +39,14 @@ from iris.cluster.controller.state import (
     get_device_type_enum,
     get_device_variant,
 )
-from iris.cluster.types import JobId, TaskId, VmWorkerStatus, VmWorkerStatusMap, PREEMPTIBLE_ATTRIBUTE_KEY
+from iris.cluster.types import JobId, TaskId, WorkerId, VmWorkerStatus, VmWorkerStatusMap, PREEMPTIBLE_ATTRIBUTE_KEY
 from iris.cluster.vm.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import ExponentialBackoff, now_ms
 
 logger = logging.getLogger(__name__)
-
-# RPC timeout for dispatch - worker should respond immediately since execution is async
-DISPATCH_RPC_TIMEOUT_SECONDS = 5.0
 
 
 def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint]) -> bool | None:
@@ -139,11 +133,6 @@ class WorkerClient(Protocol):
     Matches client-side WorkerServiceClientSync signature. The server Protocol has different signatures.
     """
 
-    def run_task(
-        self,
-        request: cluster_pb2.Worker.RunTaskRequest,
-    ) -> cluster_pb2.Worker.RunTaskResponse: ...
-
     def get_task_status(
         self,
         request: cluster_pb2.Worker.GetTaskStatusRequest,
@@ -159,10 +148,10 @@ class WorkerClient(Protocol):
         request: cluster_pb2.Empty,
     ) -> cluster_pb2.Worker.HealthResponse: ...
 
-    def kill_task(
+    def heartbeat(
         self,
-        request: cluster_pb2.Worker.KillTaskRequest,
-    ) -> cluster_pb2.Empty: ...
+        request: cluster_pb2.HeartbeatRequest,
+    ) -> cluster_pb2.HeartbeatResponse: ...
 
 
 class WorkerStubFactory(Protocol):
@@ -216,17 +205,6 @@ class ControllerConfig:
 
     autoscaler_enabled: bool = False
     worker_access_address: str = ""
-
-
-@dataclass
-class DispatchBatch:
-    """Batch of scheduled tasks ready for RPC dispatch to workers.
-
-    Contains tasks that have already had their resources committed (via TaskAssignedEvent).
-    The RPC requests are pre-built so the dispatch phase can run without holding locks.
-    """
-
-    tasks: list[tuple[ControllerTask, ControllerWorker, cluster_pb2.Worker.RunTaskRequest]] = field(default_factory=list)
 
 
 class Controller:
@@ -299,11 +277,16 @@ class Controller:
         self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
 
-        # Thread pool for parallel task dispatch
+        # Thread pool for parallel task dispatch (will be used for heartbeat after Step 2)
         self._dispatch_executor = ThreadPoolExecutor(
             max_workers=config.max_dispatch_parallelism,
             thread_name_prefix="dispatch",
         )
+
+        # Per-worker outboxes for heartbeat-driven dispatch (Step 2)
+        self._dispatch_outbox: dict[WorkerId, list[cluster_pb2.Worker.RunTaskRequest]] = defaultdict(list)
+        self._kill_outbox: dict[WorkerId, list[str]] = defaultdict(list)
+        self._priority_heartbeat: set[WorkerId] = set()
 
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
@@ -369,7 +352,7 @@ class Controller:
             self._autoscaler.shutdown()
 
     def _run_scheduling_loop(self) -> None:
-        """Main controller loop running scheduling, autoscaler, and worker timeout checks."""
+        """Main controller loop running scheduling, heartbeats, autoscaler, and worker timeout checks."""
         while not self._stop:
             self._wake_event.wait(timeout=self._config.scheduler_interval_seconds)
             self._wake_event.clear()
@@ -378,6 +361,7 @@ class Controller:
                 break
 
             self._run_scheduling()
+            self._heartbeat_all_workers()
             self._check_worker_timeouts()
 
             # Run autoscaler if configured
@@ -387,15 +371,12 @@ class Controller:
     def _run_scheduling(self) -> None:
         """Run one scheduling cycle.
 
-        Split into phases:
-        1. Compute assignments and commit resources
-        2. Send dispatch RPCs
-        3. Handle timed-out tasks (send kill RPCs)
+        Computes task assignments and buffers them for heartbeat delivery.
+        No direct dispatch RPCs - tasks are delivered via the next heartbeat cycle.
 
         No lock is needed since only one scheduling thread exists. All state
         reads and writes go through ControllerState which has its own lock.
         """
-        # Phase 1: Compute assignments and commit resources
         pending_tasks = self._state.peek_pending_tasks()
         workers = self._state.get_available_workers()
 
@@ -404,43 +385,35 @@ class Controller:
 
         result = self._scheduler.find_assignments(pending_tasks, workers)
 
-        # Prepare dispatch batches (commits resources via TaskAssignedEvent)
-        dispatch_batches: list[DispatchBatch] = []
+        # Buffer assignments for heartbeat delivery (commits resources via TaskAssignedEvent)
         if result.assignments:
-            dispatch_batches = self._prepare_dispatch_batches(result.assignments)
+            self._buffer_assignments(result.assignments)
 
-        # Phase 2: Send dispatch RPCs
-        if dispatch_batches:
-            self._execute_dispatch_batches(dispatch_batches)
-
-        # Phase 3: Handle timed-out tasks (sends kill RPCs)
+        # Handle timed-out tasks
         for task in result.timed_out_tasks:
             self._mark_task_unschedulable(task)
 
-    def _prepare_dispatch_batches(
+    def _buffer_assignments(
         self,
         assignments: list[tuple[ControllerTask, ControllerWorker]],
-    ) -> list[DispatchBatch]:
-        """Commit resources and prepare RPC requests for dispatch.
+    ) -> None:
+        """Commit resources and buffer task assignments for heartbeat delivery.
 
-        Groups assignments by job and creates DispatchBatch objects with
-        pre-built RPC requests. Resource commitment happens via TaskAssignedEvent.
+        Groups assignments by job and buffers RunTaskRequest protos into per-worker outboxes.
+        Resource commitment happens via TaskAssignedEvent.
         """
         # Group assignments by job for coscheduled handling
         by_job: dict[JobId, list[tuple[ControllerTask, ControllerWorker]]] = defaultdict(list)
         for task, worker in assignments:
             by_job[task.job_id].append((task, worker))
 
-        batches: list[DispatchBatch] = []
         for job_id, job_assignments in by_job.items():
             job = self._state.get_job(job_id)
             if job is None:
                 continue
 
-            batch = DispatchBatch()
-
             for task, worker in job_assignments:
-                # Create attempt BEFORE RPC so worker state reports have a valid attempt_id
+                # Create attempt BEFORE buffering so worker state reports have a valid attempt_id
                 self._state.handle_event(
                     TaskAssignedEvent(
                         task_id=task.task_id,
@@ -461,112 +434,9 @@ class Controller:
                     attempt_id=task.current_attempt_id,
                     timeout_seconds=job.request.timeout_seconds,
                 )
-                batch.tasks.append((task, worker, request))
-
-            if batch.tasks:
-                batches.append(batch)
-
-        return batches
-
-    def _execute_dispatch_batches(self, batches: list[DispatchBatch]) -> None:
-        """Send RPCs for all dispatch batches.
-
-        Handles failures by marking workers as failed (which cascades to tasks).
-        Coscheduled and non-coscheduled jobs are dispatched identically since
-        the all-or-nothing scheduling semantics are already handled during assignment.
-        """
-        for batch in batches:
-            self._dispatch_batch(batch)
-
-    def _dispatch_batch(self, batch: DispatchBatch) -> None:
-        """Dispatch independent tasks in parallel.
-
-        Resources have already been committed. Sends RPCs and handles failures.
-        """
-        if not batch.tasks:
-            return
-
-        # Send RPCs in parallel
-        futures = {
-            self._dispatch_executor.submit(self._send_run_task_rpc, task, worker, request): (task, worker)
-            for task, worker, request in batch.tasks
-        }
-
-        # Collect results and handle failures
-        failed: list[tuple[ControllerTask, ControllerWorker, str]] = []
-        try:
-            for future in as_completed(futures, timeout=DISPATCH_RPC_TIMEOUT_SECONDS + 1):
-                task, worker = futures[future]
-                try:
-                    future.result(timeout=0)
-                except Exception as e:
-                    failed.append((task, worker, str(e)))
-        except TimeoutError:
-            for future, (task, worker) in futures.items():
-                if not future.done():
-                    failed.append((task, worker, "Dispatch RPC timed out"))
-                else:
-                    exc = future.exception()
-                    if exc is not None:
-                        failed.append((task, worker, str(exc)))
-
-        # Handle failures - WorkerFailedEvent cascades to all tasks on the worker
-        all_tasks_to_kill: set[TaskId] = set()
-        for task, worker, error in failed:
-            logger.warning(f"Dispatch failed for {task.task_id}: {error}")
-            txn = self._state.handle_event(
-                WorkerFailedEvent(
-                    worker_id=worker.worker_id,
-                    error=f"Dispatch RPC failed: {error}",
-                )
-            )
-            all_tasks_to_kill.update(txn.tasks_to_kill)
-
-        if all_tasks_to_kill:
-            self.kill_tasks_on_workers(all_tasks_to_kill)
-
-    def _send_run_task_rpc(
-        self,
-        task: ControllerTask,
-        worker: ControllerWorker,
-        request: cluster_pb2.Worker.RunTaskRequest,
-    ) -> None:
-        """Send run_task RPC with exponential backoff retry.
-
-        Retries on UNAVAILABLE and DEADLINE_EXCEEDED errors.
-        Other errors are raised immediately.
-        """
-        backoff = ExponentialBackoff(initial=0.5, maximum=4.0, factor=2.0, jitter=0.1)
-        max_attempts = 4
-        last_error: Exception | None = None
-
-        for attempt in range(max_attempts):
-            try:
-                logger.info(
-                    f"Dispatching task {task.task_id} to worker {worker.worker_id} "
-                    f"at {worker.address} (attempt {attempt + 1})"
-                )
-                if rule := chaos("controller.dispatch"):
-                    time.sleep(rule.delay_seconds)
-                    raise Exception("chaos: dispatch unavailable")
-                stub = self._stub_factory.get_stub(worker.address)
-                stub.run_task(request)
-                logger.info(f"Successfully dispatched task {task.task_id} to worker {worker.worker_id}")
-                return
-            except grpc.RpcError as e:
-                last_error = e
-                # Only retry on transient errors
-                if e.code() not in (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED):
-                    raise
-                if attempt < max_attempts - 1:
-                    sleep_time = backoff.next_interval()
-                    logger.warning(
-                        f"Dispatch attempt {attempt + 1} failed for {task.task_id}: {e}, retrying in {sleep_time:.2f}s"
-                    )
-                    time.sleep(sleep_time)
-
-        # All retries exhausted
-        raise last_error  # type: ignore[misc]
+                # Buffer for delivery via next heartbeat
+                self._dispatch_outbox[worker.worker_id].append(request)
+                self._priority_heartbeat.add(worker.worker_id)
 
     def _mark_task_unschedulable(self, task: ControllerTask) -> None:
         """Mark a task as unschedulable due to timeout."""
@@ -592,39 +462,158 @@ class Controller:
         return self._scheduler.task_schedule_status(task, context)
 
     def kill_tasks_on_workers(self, task_ids: set[TaskId]) -> None:
-        """Send KILL RPCs to workers for tasks that were running.
+        """Buffer kill requests for delivery via next heartbeat.
 
         Called after state has marked tasks as killed. For each task that had
-        a worker assigned, sends a kill RPC to that worker to terminate the
-        task process.
-
-        Kill RPCs are fire-and-forget: we log failures but don't retry since
-        the task is already marked as killed in our state.
+        a worker assigned, buffers the kill request for delivery via the next
+        heartbeat to that worker.
         """
         for task_id in task_ids:
             task = self._state.get_task(task_id)
-            if not task:
+            if not task or not task.worker_id:
                 continue
+            self._kill_outbox[task.worker_id].append(str(task_id))
+            self._priority_heartbeat.add(task.worker_id)
 
-            worker_id = task.worker_id
-            if not worker_id:
-                continue
+    def _heartbeat_all_workers(self) -> None:
+        """Send heartbeats to all registered workers.
 
+        Priority workers (those with pending dispatches/kills) go first.
+        Delivers buffered task assignments and kill requests via heartbeat.
+        """
+        # Get priority workers and clear the set
+        priority = self._priority_heartbeat.copy()
+        self._priority_heartbeat.clear()
+
+        # Heartbeat all healthy workers
+        all_workers = self._state.get_available_workers()
+        worker_ids = priority | {w.worker_id for w in all_workers}
+
+        # Submit heartbeat RPCs in parallel
+        futures = {}
+        for worker_id in worker_ids:
             worker = self._state.get_worker(worker_id)
             if not worker:
                 continue
+            # Pop tasks/kills from outboxes (will put back on failure)
+            tasks_to_run = self._dispatch_outbox.pop(worker_id, [])
+            tasks_to_kill = self._kill_outbox.pop(worker_id, [])
+            future = self._dispatch_executor.submit(self._heartbeat_worker, worker, tasks_to_run, tasks_to_kill)
+            futures[future] = (worker, tasks_to_run, tasks_to_kill)
 
+        # Process results as they complete
+        for future in as_completed(futures, timeout=10):
+            worker, tasks_to_run, tasks_to_kill = futures[future]
             try:
-                stub = self._stub_factory.get_stub(worker.address)
-                request = cluster_pb2.Worker.KillTaskRequest(
-                    task_id=str(task_id),
-                    term_timeout_ms=5000,
-                )
-                logger.info(f"Sending kill RPC for task {task_id} to worker {worker_id}")
-                stub.kill_task(request)
-                logger.info(f"Successfully sent kill RPC for task {task_id}")
+                response = future.result()
+                if response is None:
+                    # Heartbeat failed - put tasks back and handle failure
+                    if tasks_to_run:
+                        self._dispatch_outbox[worker.worker_id].extend(tasks_to_run)
+                    if tasks_to_kill:
+                        self._kill_outbox[worker.worker_id].extend(tasks_to_kill)
+                    self._handle_heartbeat_failure(worker)
+                    continue
+                self._process_heartbeat_response(worker, response)
             except Exception as e:
-                logger.warning(f"Failed to send kill RPC for task {task_id} to worker {worker_id}: {e}")
+                logger.warning(f"Heartbeat error for {worker.worker_id}: {e}")
+                if tasks_to_run:
+                    self._dispatch_outbox[worker.worker_id].extend(tasks_to_run)
+                if tasks_to_kill:
+                    self._kill_outbox[worker.worker_id].extend(tasks_to_kill)
+                self._handle_heartbeat_failure(worker)
+
+    def _heartbeat_worker(
+        self,
+        worker: ControllerWorker,
+        tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest],
+        tasks_to_kill: list[str],
+    ) -> cluster_pb2.HeartbeatResponse | None:
+        """Send a heartbeat to a single worker.
+
+        Args:
+            worker: The worker to heartbeat
+            tasks_to_run: Tasks to start on this worker
+            tasks_to_kill: Task IDs to kill on this worker
+
+        Returns:
+            HeartbeatResponse on success, None on failure
+        """
+        try:
+            from iris.chaos import chaos
+
+            if rule := chaos("controller.heartbeat"):
+                from time import sleep
+
+                sleep(rule.delay_seconds)
+                raise Exception("chaos: heartbeat unavailable")
+            stub = self._stub_factory.get_stub(worker.address)
+            request = cluster_pb2.HeartbeatRequest(
+                tasks_to_run=tasks_to_run,
+                tasks_to_kill=tasks_to_kill,
+            )
+            return stub.heartbeat(request)
+        except Exception as e:
+            logger.warning(f"Heartbeat failed for worker {worker.worker_id}: {e}")
+            return None
+
+    def _process_heartbeat_response(
+        self,
+        worker: ControllerWorker,
+        response: cluster_pb2.HeartbeatResponse,
+    ) -> None:
+        """Process a successful heartbeat response."""
+        # Update heartbeat timestamp
+        from iris.cluster.controller.events import WorkerHeartbeatEvent
+
+        self._state.handle_event(WorkerHeartbeatEvent(worker_id=worker.worker_id, timestamp_ms=now_ms()))
+
+        # Process completed tasks
+        for entry in response.completed_tasks:
+            task_id = TaskId(entry.task_id)
+            task = self._state.get_task(task_id)
+            if task and not task.is_finished():
+                self._state.handle_event(
+                    TaskStateChangedEvent(
+                        task_id=task_id,
+                        new_state=entry.state,
+                        error=entry.error or None,
+                        exit_code=entry.exit_code,
+                        attempt_id=entry.attempt_id,
+                    )
+                )
+
+        # Reconcile running tasks (detect tasks that disappeared from worker)
+        reported_ids = {entry.task_id for entry in response.running_tasks}
+        expected_ids = {str(tid) for tid in worker.running_tasks}
+        missing = expected_ids - reported_ids
+        for tid_str in missing:
+            task = self._state.get_task(TaskId(tid_str))
+            if task and not task.is_finished():
+                self._state.handle_event(
+                    TaskStateChangedEvent(
+                        task_id=TaskId(tid_str),
+                        new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                        attempt_id=task.current_attempt_id,
+                        error="Task missing from worker heartbeat",
+                        exit_code=1,
+                    )
+                )
+
+    def _handle_heartbeat_failure(self, worker: ControllerWorker) -> None:
+        """Handle a failed heartbeat RPC. Increment failure count, potentially mark worker failed."""
+        worker.consecutive_failures += 1
+        if worker.consecutive_failures >= 3:
+            txn = self._state.handle_event(
+                WorkerFailedEvent(
+                    worker_id=worker.worker_id,
+                    error=f"Heartbeat failed {worker.consecutive_failures} times",
+                )
+            )
+            if txn.tasks_to_kill:
+                # Buffer kills for next heartbeat (or abandon if worker is dead)
+                # Tasks are already marked as WORKER_FAILED in state
+                pass
 
     def _check_worker_timeouts(self) -> None:
         """Check for worker timeouts and send kill RPCs for affected tasks."""
@@ -648,9 +637,9 @@ class Controller:
         if not self._autoscaler:
             return
 
-        import time
+        from time import monotonic
 
-        now = time.monotonic()
+        now = monotonic()
         interval = self._autoscaler.evaluation_interval_seconds
         if interval > 0 and now - self._last_autoscaler_run < interval:
             return
@@ -709,13 +698,6 @@ class Controller:
         """Get the status of a job."""
         request = cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         return self._service.get_job_status(request, None)
-
-    def register_worker(
-        self,
-        request: cluster_pb2.Controller.RegisterWorkerRequest,
-    ) -> cluster_pb2.Controller.RegisterWorkerResponse:
-        """Register a worker with the controller."""
-        return self._service.register_worker(request, None)
 
     def terminate_job(
         self,

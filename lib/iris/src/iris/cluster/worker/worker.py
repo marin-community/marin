@@ -53,6 +53,7 @@ class WorkerConfig:
     controller_address: str | None = None
     worker_id: str | None = None
     poll_interval_seconds: float = 5.0
+    heartbeat_timeout_seconds: float = 60.0
 
 
 class Worker:
@@ -114,16 +115,20 @@ class Worker:
         self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
 
-        # Heartbeat/registration thread
-        self._heartbeat_thread: threading.Thread | None = None
-        self._stop_heartbeat = threading.Event()
+        # Lifecycle thread for register + serve loop
+        self._lifecycle_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
         self._worker_id: str | None = config.worker_id
         self._controller_client: ControllerServiceClientSync | None = None
+
+        # Heartbeat tracking for timeout detection
+        self._last_heartbeat_time = time.monotonic()
 
     def start(self) -> None:
         # Clean up any orphaned containers from previous runs
         self._cleanup_all_iris_containers()
 
+        # Start HTTP server
         self._server_thread = threading.Thread(
             target=self._run_server,
             daemon=True,
@@ -136,20 +141,19 @@ class Worker:
             timeout=5.0,
         )
 
-        # Create controller client synchronously (before any tasks can be dispatched)
+        # Create controller client if controller configured
         if self._config.controller_address:
             self._controller_client = ControllerServiceClientSync(
                 address=self._config.controller_address,
                 timeout_ms=5000,
             )
 
-        # Start heartbeat loop if controller configured
-        if self._config.controller_address:
-            self._heartbeat_thread = threading.Thread(
-                target=self._heartbeat_loop,
+            # Start lifecycle thread: register + serve + reset loop
+            self._lifecycle_thread = threading.Thread(
+                target=self._run_lifecycle,
                 daemon=True,
             )
-            self._heartbeat_thread.start()
+            self._lifecycle_thread.start()
 
     def _cleanup_all_iris_containers(self) -> None:
         """Remove all iris-managed containers at startup.
@@ -166,9 +170,9 @@ class Worker:
             self._server_thread.join()
 
     def stop(self) -> None:
-        self._stop_heartbeat.set()
-        if self._heartbeat_thread:
-            self._heartbeat_thread.join(timeout=5.0)
+        self._stop_event.set()
+        if self._lifecycle_thread:
+            self._lifecycle_thread.join(timeout=5.0)
 
         # Stop uvicorn server
         if self._server:
@@ -210,7 +214,64 @@ class Worker:
         except Exception as e:
             print(f"Worker server error: {e}")
 
-    def _heartbeat_loop(self) -> None:
+    def _run_lifecycle(self) -> None:
+        """Main lifecycle: register, serve, reset, repeat.
+
+        This loop runs continuously until shutdown. On each iteration:
+        1. Reset worker state (kill all containers)
+        2. Register with controller (retry until accepted)
+        3. Serve (wait for heartbeats from controller)
+        4. If heartbeat timeout expires, return to step 1
+        """
+        while not self._stop_event.is_set():
+            self._reset_worker_state()
+            worker_id = self._register()
+            if worker_id is None:
+                # Shutdown requested during registration
+                break
+            self._worker_id = worker_id
+            self._serve()
+
+    def _register(self) -> str | None:
+        """Register with controller. Retries until accepted or shutdown.
+
+        Returns the assigned worker_id, or None if shutdown was requested.
+        """
+        metadata = self._worker_metadata
+        address = self._resolve_address()
+
+        # Controller client is created in start() before this thread starts
+        assert self._controller_client is not None
+
+        logger.info("Attempting to register with controller at %s", self._config.controller_address)
+
+        while not self._stop_event.is_set():
+            try:
+                # Chaos injection for testing delayed registration
+                if rule := chaos("worker.register"):
+                    time.sleep(rule.delay_seconds)
+                    if rule.error:
+                        raise rule.error
+
+                response = self._controller_client.register(
+                    cluster_pb2.Controller.RegisterRequest(
+                        address=address,
+                        metadata=metadata,
+                    )
+                )
+                if response.accepted:
+                    logger.info("Registered with controller: %s", response.worker_id)
+                    return response.worker_id
+                else:
+                    logger.warning("Registration rejected by controller, retrying in 5s")
+            except Exception as e:
+                logger.warning("Registration failed: %s, retrying in 5s", e)
+            self._stop_event.wait(5.0)
+
+        return None
+
+    def _resolve_address(self) -> str:
+        """Resolve the address to advertise to the controller."""
         metadata = self._worker_metadata
 
         # Determine the address to advertise to the controller.
@@ -227,109 +288,24 @@ class Worker:
             vm_address = f"{address_host}:{self._config.port}"
             metadata.vm_address = vm_address
 
-        # Derive worker_id from vm_address (no UUID generation)
-        if not self._worker_id:
-            self._worker_id = vm_address
+        return f"{address_host}:{self._config.port}"
 
-        # Controller client is created in start() before this thread starts
-        assert self._controller_client is not None
+    def _serve(self) -> None:
+        """Wait for heartbeats from controller. Returns when heartbeat timeout expires.
 
-        address = f"{address_host}:{self._config.port}"
-
-        # Retry registration until successful (or reset requested)
-        attempt = 0
-        while not self._stop_heartbeat.is_set():
-            attempt += 1
-
-            request, num_completions = self._build_heartbeat_request(address, metadata)
-
-            try:
-                if rule := chaos("worker.heartbeat"):
-                    time.sleep(rule.delay_seconds)
-                    logger.debug("chaos: skipping heartbeat")
-                    continue
-                logger.debug("Registration attempt %d for worker %s", attempt, self._worker_id)
-                response = self._controller_client.register_worker(request)
-                self._clear_delivered_completions(num_completions)
-
-                if response.should_reset:
-                    logger.warning("Controller signaled reset for worker %s, cleaning up", self._worker_id)
-                    self._reset_worker_state()
-                    continue  # Re-register with empty task list
-
-                if response.accepted:
-                    logger.info("Registered with controller: %s", self._worker_id)
-                    break
-            except Exception as e:
-                logger.warning("Registration attempt %d failed, retrying in 5s: %s", attempt, e)
-            self._stop_heartbeat.wait(5.0)
-
-        # Periodic heartbeat (re-registration)
-        heartbeat_interval = 10.0  # seconds
-        while not self._stop_heartbeat.is_set():
-            self._stop_heartbeat.wait(heartbeat_interval)
-            if self._stop_heartbeat.is_set():
-                break
-            try:
-                if rule := chaos("worker.heartbeat"):
-                    time.sleep(rule.delay_seconds)
-                    logger.debug("chaos: skipping heartbeat")
-                    continue
-
-                request, num_completions = self._build_heartbeat_request(address, metadata)
-                response = self._controller_client.register_worker(request)
-                self._clear_delivered_completions(num_completions)
-
-                if response.should_reset:
-                    logger.warning("Controller signaled reset during heartbeat, cleaning up")
-                    self._reset_worker_state()
-            except Exception as e:
-                logger.warning(f"Heartbeat failed: {e}")
-
-    def _build_heartbeat_request(
-        self,
-        address: str,
-        metadata: cluster_pb2.WorkerMetadata,
-    ) -> tuple[cluster_pb2.Controller.RegisterWorkerRequest, int]:
-        """Build a heartbeat request with current task state and pending completions.
-
-        Returns the request and the count of pending completions included,
-        so the caller can clear them after a successful RPC.
+        This method blocks in a loop, checking the time since last heartbeat.
+        When the timeout expires, it returns, triggering a reset and re-registration.
         """
-        with self._lock:
-            active_tasks = [
-                t
-                for t in self._tasks.values()
-                if t.status in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
-            ]
-            running_tasks = [
-                cluster_pb2.Controller.RunningTaskEntry(
-                    task_id=t.task_id,
-                    attempt_id=t.attempt_id,
-                )
-                for t in active_tasks
-            ]
-            num_completions = len(self._unreported_completions)
-            completed_tasks = list(self._unreported_completions)
+        heartbeat_timeout = self._config.heartbeat_timeout_seconds
+        logger.info("Serving (waiting for controller heartbeats)")
 
-        request = cluster_pb2.Controller.RegisterWorkerRequest(
-            worker_id=self._worker_id,
-            address=address,
-            metadata=metadata,
-            running_tasks=running_tasks,
-            completed_tasks=completed_tasks,
-        )
-        return request, num_completions
-
-    def _clear_delivered_completions(self, num_delivered: int) -> None:
-        """Remove completions that were successfully delivered via heartbeat.
-
-        Since completions are only appended, the delivered entries are always
-        a prefix of _unreported_completions.
-        """
-        if num_delivered > 0:
-            with self._lock:
-                self._unreported_completions = self._unreported_completions[num_delivered:]
+        while not self._stop_event.is_set():
+            elapsed = time.monotonic() - self._last_heartbeat_time
+            if elapsed > heartbeat_timeout:
+                logger.warning("No heartbeat from controller for %.0fs, resetting", elapsed)
+                return
+            # Check every second
+            self._stop_event.wait(1.0)
 
     def _reset_worker_state(self) -> None:
         """Reset worker state: wipe all containers and clear tracking.
@@ -351,34 +327,25 @@ class Worker:
     def _report_task_state(self, task: TaskAttempt) -> None:
         """Report task state to controller.
 
-        Terminal completions are always delivered via heartbeat. This RPC is just
-        a ping so the controller processes the next heartbeat sooner.
+        Terminal completions are buffered locally. This method sends a lightweight
+        ping to the controller, triggering a priority heartbeat that will pick up
+        the completion.
         """
         self._buffer_completion_if_terminal(task)
 
         if not self._controller_client or not self._worker_id:
             return
 
-        if rule := chaos("worker.report_task_state"):
-            time.sleep(rule.delay_seconds)
-            logger.debug("chaos: skipping report_task_state")
-            return
-
+        # Send a lightweight ping to trigger priority heartbeat (best-effort)
         try:
-            request = cluster_pb2.Controller.ReportTaskStateRequest(
-                worker_id=self._worker_id,
-                task_id=task.task_id,
-                job_id=task.job_id,
-                task_index=task.task_index,
-                state=task.status,
-                exit_code=task.exit_code or 0,
-                error=task.error or "",
-                finished_at_ms=task.finished_at_ms or 0,
-                attempt_id=task.attempt_id,
+            self._controller_client.notify_task_update(
+                cluster_pb2.Controller.NotifyTaskUpdateRequest(
+                    worker_id=self._worker_id,
+                )
             )
-            self._controller_client.report_task_state(request)
-        except Exception as e:
-            logger.warning(f"Failed to report task state to controller: {e}")
+        except Exception:
+            # Best-effort ping; if it fails, the next regular heartbeat will deliver the completion
+            pass
 
     def _buffer_completion_if_terminal(self, task: TaskAttempt) -> None:
         """Buffer a terminal task completion for heartbeat delivery."""
@@ -478,6 +445,23 @@ class Worker:
         from execution internals.
         """
         return list(self._tasks.values())
+
+    def pop_completed_tasks(self) -> list[cluster_pb2.Controller.CompletedTaskEntry]:
+        """Atomically drain and return the worker's completed-but-unreported task buffer.
+
+        Used by the heartbeat handler to report completions to the controller.
+        """
+        with self._lock:
+            completions = list(self._unreported_completions)
+            self._unreported_completions.clear()
+            return completions
+
+    def on_heartbeat_received(self) -> None:
+        """Update the timestamp of the last received heartbeat.
+
+        Called by the heartbeat service handler to track controller liveness.
+        """
+        self._last_heartbeat_time = time.monotonic()
 
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:
         """Kill a running task."""

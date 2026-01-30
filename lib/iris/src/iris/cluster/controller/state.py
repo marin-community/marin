@@ -125,6 +125,17 @@ TERMINAL_TASK_STATES: frozenset[int] = frozenset(
     }
 )
 
+# Terminal states that originate from worker reports (as opposed to controller
+# decisions like KILLED or UNSCHEDULABLE). Used to detect duplicate completions
+# delivered via both report_task_state RPC and heartbeat.
+WORKER_REPORTED_TERMINAL_STATES: frozenset[int] = frozenset(
+    {
+        cluster_pb2.TASK_STATE_SUCCEEDED,
+        cluster_pb2.TASK_STATE_FAILED,
+        cluster_pb2.TASK_STATE_WORKER_FAILED,
+    }
+)
+
 
 class TaskTransitionResult(Enum):
     """Result of a task state transition."""
@@ -1224,6 +1235,35 @@ class ControllerState:
             )
             return
 
+        # Ignore duplicate worker-reported completions for an attempt already processed.
+        # This happens when both report_task_state RPC and heartbeat deliver the
+        # same completion — the first processes the failure and requeues the task
+        # (state=PENDING), but the attempt_id still matches because no new attempt
+        # exists yet. Without this guard, the retry budget gets consumed twice.
+        # Only guard worker-reported states (FAILED, WORKER_FAILED, SUCCEEDED);
+        # controller-originated states (UNSCHEDULABLE, KILLED) are always allowed.
+        current_attempt = task.current_attempt
+        if (
+            current_attempt
+            and current_attempt.is_terminal()
+            and task.state == cluster_pb2.TASK_STATE_PENDING
+            and event.new_state in WORKER_REPORTED_TERMINAL_STATES
+        ):
+            logger.debug(
+                "Ignoring duplicate terminal report for requeued task: task=%s attempt=%d "
+                "attempt_state=%s, task already requeued to PENDING",
+                event.task_id,
+                event.attempt_id,
+                current_attempt.state,
+            )
+            txn.log(
+                "duplicate_terminal_ignored",
+                event.task_id,
+                attempt=event.attempt_id,
+                existing_state=current_attempt.state,
+            )
+            return
+
         job = self._jobs[task.job_id]
         old_state = task.state
 
@@ -1561,28 +1601,55 @@ class ControllerState:
             return endpoint
 
     def lookup_endpoints(self, name: str) -> list[ControllerEndpoint]:
-        """Find endpoints by exact name match. Only returns endpoints for jobs in RUNNING state."""
+        """Find endpoints by exact name match. Only returns endpoints for jobs that are executing.
+
+        Endpoints are visible for jobs in non-terminal states (PENDING, RUNNING, BUILDING).
+        This includes jobs whose tasks are executing even if the job state hasn't transitioned
+        to RUNNING yet (e.g., task is ASSIGNED and executing in-process).
+        """
         with self._lock:
             results = []
             for ep in self._endpoints.values():
                 if ep.name != name:
                     continue
-                # Only return endpoints for running jobs
+                # Return endpoints for jobs that are executing (not finished)
                 job = self._jobs.get(ep.job_id)
-                if job and job.state == cluster_pb2.JOB_STATE_RUNNING:
+                if job and not job.is_finished():
                     results.append(ep)
             return results
 
     def list_endpoints_by_prefix(self, prefix: str) -> list[ControllerEndpoint]:
-        """List endpoints matching a name prefix. Only returns endpoints for jobs in RUNNING state."""
+        """List endpoints matching a name prefix. Only returns endpoints for jobs that are executing.
+
+        Endpoints are visible for jobs in non-terminal states (PENDING, RUNNING, BUILDING).
+        This includes jobs whose tasks are executing even if the job state hasn't transitioned
+        to RUNNING yet (e.g., task is ASSIGNED and executing in-process).
+        """
         with self._lock:
             results = []
             for ep in self._endpoints.values():
                 if not ep.name.startswith(prefix):
+                    logger.debug("Endpoint %s doesn't match prefix %s (name=%s)", ep.endpoint_id, prefix, ep.name)
                     continue
                 job = self._jobs.get(ep.job_id)
-                if job and job.state == cluster_pb2.JOB_STATE_RUNNING:
-                    results.append(ep)
+                if not job:
+                    logger.debug("Endpoint %s job_id %s not found in jobs", ep.endpoint_id, ep.job_id)
+                    continue
+                if job.is_finished():
+                    logger.debug(
+                        "Endpoint %s job %s is finished (state=%s)",
+                        ep.endpoint_id,
+                        ep.job_id,
+                        cluster_pb2.JobState.Name(job.state),
+                    )
+                    continue
+                logger.debug(
+                    "Endpoint %s included (job=%s, state=%s)",
+                    ep.endpoint_id,
+                    ep.job_id,
+                    cluster_pb2.JobState.Name(job.state),
+                )
+                results.append(ep)
             return results
 
     def list_all_endpoints(self) -> list[ControllerEndpoint]:
