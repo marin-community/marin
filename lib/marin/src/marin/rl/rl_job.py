@@ -27,7 +27,14 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.v2 import (
+    Entrypoint,
+    EnvironmentConfig,
+    JobRequest,
+    ResourceConfig,
+    current_client,
+    wait_all,
+)
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig
@@ -201,6 +208,11 @@ class RLJob:
 
     def run(self, name: str):
         """Run with TPU pod deployment."""
+        from marin.rl.curriculum import Curriculum
+        from marin.rl.weight_transfer import WeightTransferMode
+        from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
+        from marin.rl.weight_transfer.jax import WeightTransferCoordinator
+
         run_config = self.config.run_config
         train_worker_config, rollout_worker_config = self.to_worker_configs()
 
@@ -213,10 +225,40 @@ class RLJob:
         train_resources = ResourceConfig.with_tpu(run_config.train_tpu_type)
         rollout_resources = ResourceConfig.with_tpu(inference_tpu_type)
 
+        client = current_client()
+
+        # Create shared actors in the controller
+        curriculum_actor = client.create_actor(
+            Curriculum,
+            self.config.curriculum,
+            name=self.config.curriculum.actor_name,
+            resources=ResourceConfig(preemptible=False),
+        )
+
+        # Create weight transfer coordinator actor based on mode
+        wt_coordinator = None
+        wt_config = train_worker_config.weight_transfer
+        if wt_config.mode == WeightTransferMode.ARROW_FLIGHT:
+            wt_coordinator = client.create_actor(
+                ArrowFlightCoordinator,
+                name=wt_config.coordinator_name,
+                resources=ResourceConfig(preemptible=False),
+            )
+        elif wt_config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
+            wt_coordinator = client.create_actor(
+                WeightTransferCoordinator,
+                name=wt_config.coordinator_name,
+                resources=ResourceConfig(preemptible=False),
+            )
+
         def train_worker_task():
             with remove_tpu_lockfile_on_exit():
                 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-                worker = TrainWorker(config=train_worker_config)
+                worker = TrainWorker(
+                    config=train_worker_config,
+                    curriculum_actor=curriculum_actor,
+                    wt_coordinator=wt_coordinator,
+                )
                 worker.train()
 
         def make_inference_task(worker_idx: int):
@@ -225,7 +267,6 @@ class RLJob:
                     logging.basicConfig(
                         level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True
                     )
-                    # use deterministic seed based on worker index
 
                     config = dataclasses.replace(
                         rollout_worker_config,
@@ -234,37 +275,42 @@ class RLJob:
                         worker_index=worker_idx,
                     )
 
-                    worker = RolloutWorker(config=config)
+                    worker = RolloutWorker(
+                        config=config,
+                        curriculum_actor=curriculum_actor,
+                        wt_coordinator=wt_coordinator,
+                    )
                     worker.run()
 
             return inference_worker_task
 
-        cluster = current_cluster()
+        environment = EnvironmentConfig.create(env_vars=env, extras=self.config.pip_dependency_groups)
+
         jobs = []
         jobs.append(
-            cluster.launch(
+            client.submit(
                 JobRequest(
                     name=f"rl-train-{name}-train",
                     resources=train_resources,
                     entrypoint=Entrypoint.from_callable(train_worker_task),
-                    environment=EnvironmentConfig.create(env_vars=env, extras=self.config.pip_dependency_groups),
+                    environment=environment,
                 )
             )
         )
 
         for i in range(run_config.num_rollout_workers):
             jobs.append(
-                cluster.launch(
+                client.submit(
                     JobRequest(
                         name=f"rl-train-{name}-rollout-{i}",
                         resources=rollout_resources,
                         entrypoint=Entrypoint.from_callable(make_inference_task(i)),
-                        environment=EnvironmentConfig.create(env_vars=env, extras=self.config.pip_dependency_groups),
+                        environment=environment,
                     )
                 )
             )
 
-        return cluster.wait(jobs, raise_on_failure=True)
+        return wait_all(jobs, raise_on_failure=True)
 
     def to_worker_configs(self) -> tuple[TrainWorkerConfig, RolloutWorkerConfig]:
         """Export worker configurations for inspection/testing.

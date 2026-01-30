@@ -21,6 +21,7 @@ Currently GCS, Ray remoting, and JAX transfer server methods are supported.
 """
 
 import logging
+from typing import TYPE_CHECKING
 
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
@@ -44,6 +45,9 @@ except (ImportError, AttributeError):
     JAXTransferServer = None
     WeightTransferCoordinator = None
 
+if TYPE_CHECKING:
+    from fray.v2.actor import ActorHandle
+
 logger = logging.getLogger(__name__)
 
 # Check if JAX transfer is available
@@ -52,6 +56,7 @@ JAX_TRANSFER_AVAILABLE = JAXTransferClient is not None and JAXTransferServer is 
 
 def create_weight_transfer_server(
     config: WeightTransferConfig,
+    coordinator: "ActorHandle | None" = None,
     mesh: Mesh | None = None,
     axis_mapping: ResourceMapping | None = None,
 ) -> WeightTransferServer:
@@ -59,6 +64,7 @@ def create_weight_transfer_server(
 
     Args:
         config: Weight transfer configuration
+        coordinator: Actor handle for the weight transfer coordinator (required for JAX/Arrow Flight modes)
         mesh: JAX mesh for distributed computation (optional)
         axis_mapping: Levanter axis mapping for sharding (optional)
 
@@ -66,12 +72,16 @@ def create_weight_transfer_server(
         WeightTransferServer instance
     """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
-        return JAXTransferServer(config, mesh, axis_mapping)
+        if coordinator is None:
+            raise ValueError("coordinator handle is required for JAX transfer server mode")
+        return JAXTransferServer(config, coordinator, mesh, axis_mapping)
 
     elif config.mode == WeightTransferMode.ARROW_FLIGHT:
-        return ArrowFlightServer(config, mesh, axis_mapping)
+        if coordinator is None:
+            raise ValueError("coordinator handle is required for Arrow Flight mode")
+        return ArrowFlightServer(config, coordinator, mesh, axis_mapping)
 
-    # Default to GCS checkpoint mode
+    # Default to GCS checkpoint mode (no coordinator needed)
     return GCSCheckpointServer(
         config,
         axis_mapping=axis_mapping,
@@ -81,6 +91,7 @@ def create_weight_transfer_server(
 
 def create_weight_transfer_client(
     config: WeightTransferConfig,
+    coordinator: "ActorHandle | None" = None,
     mesh: Mesh | None = None,
     axis_mapping: ResourceMapping | None = None,
 ) -> WeightTransferClient:
@@ -88,6 +99,7 @@ def create_weight_transfer_client(
 
     Args:
         config: Weight transfer configuration
+        coordinator: Actor handle for the weight transfer coordinator (required for JAX/Arrow Flight modes)
         mesh: JAX mesh for distributed computation (optional)
         axis_mapping: Levanter axis mapping for sharding (optional)
 
@@ -95,12 +107,16 @@ def create_weight_transfer_client(
         WeightTransferClient instance
     """
     if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
-        return JAXTransferClient(config, mesh, axis_mapping)
+        if coordinator is None:
+            raise ValueError("coordinator handle is required for JAX transfer server mode")
+        return JAXTransferClient(config, coordinator, mesh, axis_mapping)
 
     elif config.mode == WeightTransferMode.ARROW_FLIGHT:
-        return ArrowFlightClient(config, mesh, axis_mapping)
+        if coordinator is None:
+            raise ValueError("coordinator handle is required for Arrow Flight mode")
+        return ArrowFlightClient(config, coordinator, mesh, axis_mapping)
 
-    # Default to GCS checkpoint mode
+    # Default to GCS checkpoint mode (no coordinator needed)
     return GCSCheckpointClient(
         config,
         axis_mapping=axis_mapping,
@@ -126,5 +142,4 @@ __all__ = [
     "WeightUpdate",
     "create_weight_transfer_client",
     "create_weight_transfer_server",
-    "get_or_create_actor",
 ]

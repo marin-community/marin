@@ -28,13 +28,13 @@ import jax.random as jrandom
 import jmp
 import levanter
 import numpy
-from fray.cluster import (
+from fray.v2 import (
     CpuConfig,
     EnvironmentConfig,
     Entrypoint,
     JobRequest,
     ResourceConfig,
-    current_cluster,
+    current_client,
 )
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.inference.engine import InferenceEngineConfig
@@ -216,6 +216,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
                 policy_ctx = create_inference_context(
                     inference_type="levanter",
                     inference_config=inference_server_config,
+                    inflight_weight_updates=False,
                 )
 
                 # Sample examples, generate responses, and create rollouts from selected lesson
@@ -249,7 +250,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
             logger.info(f"Saved metrics to {metrics_file}")
 
     if config.tpu_type is None:
-        resources = ResourceConfig(device=CpuConfig(), replicas=1)
+        resources = ResourceConfig(device=CpuConfig())
     else:
         resources = ResourceConfig.with_tpu(config.tpu_type)
 
@@ -263,13 +264,11 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
         ),
     )
 
-    cluster = current_cluster()
-    job_id = cluster.launch(job_request)
-    logger.info(f"Launched evaluation job: {job_id}")
-    job_info = cluster.monitor(job_id)
-    logger.info(f"Evaluation job completed with status: {job_info.status}")
-    if job_info.status != "succeeded":
-        raise RuntimeError(f"Evaluation job failed with status: {job_info.status}")
+    client = current_client()
+    job = client.submit(job_request)
+    logger.info(f"Launched evaluation job: {job.job_id}")
+    status = job.wait(raise_on_failure=True)
+    logger.info(f"Evaluation job completed with status: {status}")
 
     logger.info("Evaluation completed successfully")
     return None

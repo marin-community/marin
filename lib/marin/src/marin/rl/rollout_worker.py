@@ -45,8 +45,7 @@ from transformers import PreTrainedTokenizer
 from typing import Literal
 
 from levanter.utils.mesh import MeshConfig
-from fray.job import get_default_job_ctx
-from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
+from marin.rl.curriculum import CurriculumConfig
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
 from marin.rl.environments.inference_ctx import (
@@ -279,7 +278,7 @@ class RolloutWorker:
     _environments: dict[str, MarinEnv]
     tracker: Any  # levanter.Tracker or RolloutTracker
 
-    def __init__(self, config: RolloutWorkerConfig):
+    def __init__(self, config: RolloutWorkerConfig, curriculum_actor=None, wt_coordinator=None):
         config.trainer.id = f"{config.run_id}-rollout"
 
         # Infer model_axis_size from the actual TPU configuration now that JAX is initialized.
@@ -316,6 +315,7 @@ class RolloutWorker:
 
         self._transfer_client = create_weight_transfer_client(
             config.weight_transfer,
+            coordinator=wt_coordinator,
             mesh=self._policy_ctx.mesh,
             axis_mapping=self._policy_ctx.axis_mapping,
         )
@@ -325,8 +325,7 @@ class RolloutWorker:
 
         self._environments = {}
 
-        # Create curriculum actor (no checkpoint path for rollout workers)
-        self._curriculum_actor = get_or_create_curriculum_actor(self.config.curriculum_config)
+        self._curriculum_actor = curriculum_actor
 
         self.weight_transfer_thread: threading.Thread | None = None
         if self.config.inflight_weight_updates:
@@ -610,7 +609,7 @@ class RolloutWorker:
             future = self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
                 stats.rollout_stats, mode="eval", current_step=self._current_weight_step
             )
-            get_default_job_ctx().get(future)
+            future.result()
         return stats
 
     def _evaluate_curriculum(self, rng, step: int) -> dict:
@@ -689,7 +688,7 @@ class RolloutWorker:
 
             try:
                 future = self._curriculum_actor.sample_lesson.remote(seed)
-                lesson_id = get_default_job_ctx().get(future)
+                lesson_id = future.result()
             except Exception as e:
                 logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
                 time.sleep(10.0)
@@ -762,7 +761,7 @@ class RolloutWorker:
             future = self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
                 stats.rollout_stats, mode="training", current_step=self._current_weight_step
             )
-            get_default_job_ctx().get(future)
+            future.result()
             eval_metrics = self._build_eval_metrics(
                 prefix="rollout",
                 lesson_id=lesson_id,
@@ -778,9 +777,7 @@ class RolloutWorker:
                 log_metrics = eval_metrics
                 log_metrics.update(self._transfer_client.get_metrics())
                 log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
-                # Add storage metrics if available
-                if hasattr(self._rollout_writer, "get_metrics"):
-                    log_metrics.update(self._rollout_writer.get_metrics())
+                log_metrics.update(self._rollout_writer.get_metrics())
                 log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                 # Add throughput metrics (already prefixed with "inference.throughput/")
                 log_metrics.update(throughput_metrics)
