@@ -16,7 +16,7 @@
 Fine-tunes Qwen3-8B-Base (Qwen/Qwen3-8B-Base) on the Mixture-of-Thoughts Math dataset
 (open-r1/Mixture-of-Thoughts, math subset).
 
-This experiment is based on the Open-R1 distillation recipe, adapted for TPU v5p-8.
+This experiment is adapted from the Open-R1 distillation recipe.
 """
 import dataclasses
 import math
@@ -31,7 +31,7 @@ from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
     get_instruction_dataset,
 )
-from experiments.simple_sft_config import SimpleSFTConfig
+from experiments.simple_sft_config import SimpleSFTConfig, compute_per_device_parallelism
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
@@ -55,19 +55,22 @@ tokenized_datasets = {DATASET_SHORT_NAME: tokenized_mot_math}
 mixture_weights = {DATASET_SHORT_NAME: DATASET_SIZE}
 
 # Training configuration
-# Adapted from Open-R1 recipe (originally for 1x H200, now for v5p-8)
-# Batch size increased to 512 with linear LR scaling (4x batch -> 4x LR)
+# Using v5p-16 for 32K context with cross_entropy_block_size for memory efficiency
 TARGET_EPOCHS = 8
-TRAIN_BATCH_SIZE = 512  # 128 -> 512
+TRAIN_BATCH_SIZE = 128  # Matches Open-R1 recipe effective batch size
+MICROBATCH_SIZE = 32  # 4 per device on v5p-16 (8 chips)
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * DATASET_SIZE / TRAIN_BATCH_SIZE)
 
+RESOURCES = ResourceConfig.with_tpu("v5p-16")
+
 mixture_sft_config = SimpleSFTConfig(
-    resources=ResourceConfig.with_tpu("v5p-8"),
+    resources=RESOURCES,
     tokenizer=qwen3_8b_tokenizer,
     model_name_or_path="Qwen/Qwen3-8B-Base",
     train_batch_size=TRAIN_BATCH_SIZE,
+    per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=8e-5,  # Linear scaling: 2e-5 * 4 (batch 128->512)
+    learning_rate=2e-5,  # Matches Open-R1 recipe (batch size 128)
     max_seq_len=32768,  # 32K context length
     seed=42,
     steps_per_checkpoint=(DATASET_SIZE / TRAIN_BATCH_SIZE) // 4,  # Every quarter epoch
@@ -96,6 +99,7 @@ qwen3_8b_base_32k_tokens = dataclasses.replace(
     qwen3_8b,
     max_seq_len=32768,
     rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),
+    cross_entropy_block_size=32000,  # Process vocab in chunks to reduce memory during loss computation
 )
 
 exp_instilloracle_sft_qwen3_8b_mot_math = default_sft(
