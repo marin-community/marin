@@ -30,19 +30,14 @@ import pytest
 
 from iris.client import IrisClient
 from iris.cluster.client import get_job_info
-from iris.cluster.client.local_client import (
-    LocalEnvironmentProvider,
-    _LocalBundleProvider,
-    _LocalContainerRuntime,
-    _LocalImageProvider,
-)
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import EnvironmentSpec, Entrypoint, ResourceSpec
+from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import DockerRuntime
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
 
@@ -58,6 +53,19 @@ def unique_name(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
 
+def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
+    """Build an IrisClusterConfig for E2E tests with num_workers."""
+    config = config_pb2.IrisClusterConfig()
+    sg = config_pb2.ScaleGroupConfig(
+        name="local-cpu",
+        min_slices=num_workers,
+        max_slices=num_workers,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    config.scale_groups["local-cpu"].CopyFrom(sg)
+    return config
+
+
 class E2ECluster:
     """Synchronous context manager running a controller + worker cluster.
 
@@ -66,10 +74,11 @@ class E2ECluster:
     """
 
     def __init__(self, num_workers: int = 1, use_docker: bool = False):
-        self._controller_port = find_free_port()
         self._num_workers = num_workers
         self._use_docker = use_docker
-
+        self._manager: ClusterManager | None = None
+        self._controller_port: int | None = None
+        # Docker-specific fields
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._controller: Controller | None = None
         self._workers: list[Worker] = []
@@ -79,6 +88,23 @@ class E2ECluster:
         self._rpc_client: IrisClient | None = None
 
     def __enter__(self):
+        if not self._use_docker:
+            # Use ClusterManager for non-Docker path
+            config = _make_e2e_config(self._num_workers)
+            config = make_local_config(config)
+            self._manager = ClusterManager(config)
+            address = self._manager.start()
+            # Extract port from address for controller_client
+            self._controller_port = int(address.rsplit(":", 1)[1])
+            self._controller_client = ControllerServiceClientSync(
+                address=address,
+                timeout_ms=30000,
+            )
+            self._wait_for_workers(timeout=10.0)
+            return self
+
+        # Docker path: manual Controller + Worker setup
+        self._controller_port = find_free_port()
         self._temp_dir = tempfile.TemporaryDirectory(prefix="test_cluster_")
         temp_path = Path(self._temp_dir.name)
         bundle_dir = temp_path / "bundles"
@@ -109,18 +135,11 @@ class E2ECluster:
             timeout_ms=30000,
         )
 
-        # Select providers based on use_docker flag
-        if self._use_docker:
-            bundle_provider = BundleCache(cache_path, max_bundles=10)
-            image_provider = ImageCache(cache_path, registry="", max_images=10)
-            container_runtime = DockerRuntime()
-            environment_provider = None  # Use default (probe real system)
-        else:
-            bundle_provider = _LocalBundleProvider(fake_bundle)
-            image_provider = _LocalImageProvider()
-            container_runtime = _LocalContainerRuntime()
-            # 4 CPUs to match test expectations for resource scheduling tests
-            environment_provider = LocalEnvironmentProvider(cpu=4, memory_gb=8)
+        # Docker providers
+        bundle_provider = BundleCache(cache_path, max_bundles=10)
+        image_provider = ImageCache(cache_path, registry="", max_images=10)
+        container_runtime = DockerRuntime()
+        environment_provider = None  # Use default (probe real system)
 
         # Start Workers
         for i in range(self._num_workers):
@@ -167,16 +186,19 @@ class E2ECluster:
 
     def __exit__(self, *args):
         if self._rpc_client:
-            # RpcClusterClient doesn't have close method, just drop reference
             self._rpc_client = None
         if self._controller_client:
             self._controller_client.close()
-        for worker in self._workers:
-            worker.stop()
-        if self._controller:
-            self._controller.stop()
-        if self._temp_dir:
-            self._temp_dir.cleanup()
+        if self._manager:
+            self._manager.stop()
+        else:
+            # Docker path cleanup
+            for worker in self._workers:
+                worker.stop()
+            if self._controller:
+                self._controller.stop()
+            if self._temp_dir:
+                self._temp_dir.cleanup()
 
     def submit(
         self,
@@ -368,8 +390,8 @@ class TestResourceScheduling:
 
     def test_small_job_skips_oversized_job(self, test_cluster):
         """Small job scheduled even when large job is waiting."""
-        # Submit job requiring 100 CPUs (won't fit on 4-CPU worker)
-        big_job_id = test_cluster.submit(lambda: None, name=unique_name("big-job"), cpu=100)
+        # Submit job requiring 10000 CPUs (won't fit on worker)
+        big_job_id = test_cluster.submit(lambda: None, name=unique_name("big-job"), cpu=10000)
 
         # Submit small job
         small_job_id = test_cluster.submit(lambda: "done", name=unique_name("small-job"), cpu=1)
@@ -384,11 +406,11 @@ class TestResourceScheduling:
 
     def test_scheduling_timeout(self, test_cluster):
         """Job that can't be scheduled times out."""
-        # Submit job requiring 100 CPUs with 1 second timeout
+        # Submit job requiring 10000 CPUs with 1 second timeout
         job_id = test_cluster.submit(
             lambda: None,
             name=unique_name("impossible-job"),
-            cpu=100,
+            cpu=10000,
             scheduling_timeout_seconds=1,
         )
 

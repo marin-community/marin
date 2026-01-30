@@ -339,5 +339,5 @@ def _create_local_autoscaler(
     return Autoscaler(
         scale_groups=scale_groups,
         vm_registry=vm_registry,
-        config=config_pb2.AutoscalerConfig(evaluation_interval_seconds=2.0),
+        config=config.autoscaler,
     )

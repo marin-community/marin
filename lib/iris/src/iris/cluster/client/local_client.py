@@ -20,8 +20,6 @@ as production cluster execution.
 """
 
 import io
-import socket
-import tempfile
 import threading
 import time
 import uuid
@@ -32,13 +30,12 @@ from pathlib import Path
 from typing import Self
 
 from iris.cluster.client.remote_client import RemoteClusterClient
-from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import Entrypoint
+from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
-from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
 
@@ -76,12 +73,6 @@ class _StreamingCapture(io.StringIO):
                 )
             )
             self._buffer = ""
-
-
-def _find_free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
 
 
 # =============================================================================
@@ -297,6 +288,19 @@ class _LocalImageProvider:
         del tag
 
 
+def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
+    """Build a minimal IrisClusterConfig for local execution."""
+    config = config_pb2.IrisClusterConfig()
+    sg = config_pb2.ScaleGroupConfig(
+        name="local-cpu",
+        min_slices=1,
+        max_slices=max_workers,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    config.scale_groups["local-cpu"].CopyFrom(sg)
+    return config
+
+
 class LocalClusterClient:
     """Local cluster client using real Controller/Worker with in-process execution.
 
@@ -309,95 +313,30 @@ class LocalClusterClient:
         client.shutdown()
     """
 
-    def __init__(
-        self,
-        temp_dir: tempfile.TemporaryDirectory,
-        controller: Controller,
-        worker: Worker,
-        remote_client: RemoteClusterClient,
-    ):
-        self._temp_dir = temp_dir
-        self._controller = controller
-        self._worker = worker
+    def __init__(self, manager: ClusterManager, remote_client: RemoteClusterClient):
+        self._manager = manager
         self._remote_client = remote_client
 
     @classmethod
-    def create(
-        cls,
-        max_workers: int = 4,
-        port_range: tuple[int, int] = (50000, 60000),
-    ) -> Self:
+    def create(cls, max_workers: int = 4) -> Self:
         """Create and start a local cluster client.
 
         Args:
             max_workers: Maximum concurrent job threads
-            port_range: Port range for actor servers (inclusive start, exclusive end)
 
         Returns:
             A fully initialized LocalClusterClient ready for use
         """
-        temp_dir = tempfile.TemporaryDirectory(prefix="iris_local_")
-        temp_path = Path(temp_dir.name)
-        bundle_path = temp_path / "bundles"
-        bundle_path.mkdir()
-        cache_path = temp_path / "cache"
-        cache_path.mkdir()
-
-        # Create fake bundle with minimal structure
-        fake_bundle = temp_path / "fake_bundle"
-        fake_bundle.mkdir()
-        (fake_bundle / "pyproject.toml").write_text("[project]\nname = 'local'\n")
-
-        # Start Controller
-        controller_port = _find_free_port()
-        controller_config = ControllerConfig(
-            host="127.0.0.1",
-            port=controller_port,
-            bundle_prefix=f"file://{bundle_path}",
-        )
-        controller = Controller(
-            config=controller_config,
-            worker_stub_factory=RpcWorkerStubFactory(),
-        )
-        controller.start()
-
-        controller_address = f"http://127.0.0.1:{controller_port}"
-
-        # Start Worker with local providers
-        # Worker identity = vm_address = host:port (consistent with cloud workers)
-        worker_port = _find_free_port()
-        worker_config = WorkerConfig(
-            host="127.0.0.1",
-            port=worker_port,
-            cache_dir=cache_path,
-            controller_address=controller_address,
-            worker_id=f"127.0.0.1:{worker_port}",
-            poll_interval_seconds=0.1,  # Fast polling for local
-            port_range=port_range,
-        )
-        worker = Worker(
-            worker_config,
-            cache_dir=cache_path,
-            bundle_provider=_LocalBundleProvider(fake_bundle),
-            image_provider=_LocalImageProvider(),
-            container_runtime=_LocalContainerRuntime(),
-            environment_provider=LocalEnvironmentProvider(cpu=1000, memory_gb=1000),
-        )
-        worker.start()
-
-        # Wait for worker registration using a temporary RPC client
-        cls._wait_for_worker_registration(controller_address)
-
-        # Create RemoteClusterClient for all subsequent operations
-        remote_client = RemoteClusterClient(
-            controller_address=controller_address,
-            timeout_ms=30000,
-        )
-
-        return cls(temp_dir, controller, worker, remote_client)
+        config = _make_local_cluster_config(max_workers)
+        config = make_local_config(config)
+        manager = ClusterManager(config)
+        address = manager.start()
+        cls._wait_for_worker_registration(address)
+        remote_client = RemoteClusterClient(controller_address=address, timeout_ms=30000)
+        return cls(manager, remote_client)
 
     @staticmethod
-    def _wait_for_worker_registration(controller_address: str, timeout: float = 5.0) -> None:
+    def _wait_for_worker_registration(controller_address: str, timeout: float = 10.0) -> None:
         temp_client = ControllerServiceClientSync(
             address=controller_address,
             timeout_ms=30000,
@@ -416,9 +355,7 @@ class LocalClusterClient:
     def shutdown(self, wait: bool = True) -> None:
         del wait
         self._remote_client.shutdown()
-        self._worker.stop()
-        self._controller.stop()
-        self._temp_dir.cleanup()
+        self._manager.stop()
 
     def submit_job(
         self,
