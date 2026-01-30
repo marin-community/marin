@@ -196,6 +196,16 @@ class HarborEvaluator(Evaluator):
                     job_dir = job_dirs[0]
                     logger.info(f"Reading results from {job_dir}")
 
+                    # Fix permissions on Docker-created files so we can read them
+                    try:
+                        subprocess.run(
+                            ["sudo", "chmod", "-R", "755", str(job_dir)],
+                            check=False,
+                            capture_output=True,
+                        )
+                    except Exception:
+                        pass  # Continue even if chmod fails
+
                     # Harbor stores results as trial-level files
                     # Read all result.json files from trial directories
                     results = {"trials": {}}
@@ -282,7 +292,8 @@ class HarborEvaluator(Evaluator):
                 "reward": reward,
                 "correct": reward >= 0.99,
                 "status": trial_data.get("status", "unknown"),
-                "trajectory_length": len(trial_data.get("trajectory", [])),
+                "trajectory_length": 0,  # Will be updated in _save_results
+                "trial_dir": trial_data.get("trial_dir"),  # Preserve for trajectory reading
                 "error": trial_data.get("error"),
             }
 
@@ -312,11 +323,43 @@ class HarborEvaluator(Evaluator):
     ) -> None:
         """Save results to GCS and log to W&B."""
 
-        # Save to local first
+        # Setup local results directory
         local_results_dir = "/tmp/harbor_results"
         os.makedirs(local_results_dir, exist_ok=True)
-        local_results_file = os.path.join(local_results_dir, "results.json")
 
+        # Calculate trajectory lengths and save trajectory files FIRST
+        # (before saving results.json so trajectory_length is populated)
+        if job_dir is not None:
+            import shutil
+
+            trajectories_dir = Path(local_results_dir) / "trajectories"
+            trajectories_dir.mkdir(exist_ok=True)
+
+            for trial_id, trial_data in results["trials"].items():
+                trial_dir_str = trial_data.get("trial_dir", "")
+                if trial_dir_str:
+                    trial_dir_path = Path(trial_dir_str)
+                    session_dir = trial_dir_path / "agent" / "sessions" / "projects" / "-app"
+                    if session_dir.exists():
+                        trajectory_files = list(session_dir.glob("*.jsonl"))
+                        if trajectory_files:
+                            trajectory_file = trajectory_files[0]
+                            try:
+                                # Count trajectory length
+                                with open(trajectory_file) as f:
+                                    trajectory_length = sum(1 for _ in f)
+                                results["trials"][trial_id]["trajectory_length"] = trajectory_length
+
+                                # Copy trajectory file to local results directory
+                                dest_file = trajectories_dir / f"{trial_id}.jsonl"
+                                shutil.copy2(trajectory_file, dest_file)
+                                logger.info(f"Saved trajectory for {trial_id} to {dest_file}")
+
+                            except Exception as e:
+                                logger.warning(f"Failed to process trajectory for {trial_id}: {e}")
+
+        # Now save results.json with updated trajectory_length values
+        local_results_file = os.path.join(local_results_dir, "results.json")
         with open(local_results_file, "w") as f:
             json.dump(results, f, indent=2)
 
@@ -346,39 +389,6 @@ class HarborEvaluator(Evaluator):
                     "evaluator": "harbor",
                 },
             )
-
-            # Upload trajectories and fix trajectory_length
-            if job_dir is not None:
-                logger.info("Processing trajectories for W&B upload...")
-                for trial_id, trial_data in results["trials"].items():
-                    trial_dir_str = trial_data.get("trial_dir", "")
-                    if trial_dir_str:
-                        trial_dir_path = Path(trial_dir_str)
-                        if trial_dir_path.exists():
-                            # Find trajectory .jsonl file
-                            # Harbor stores trajectories in agent/sessions/projects/-app/*.jsonl
-                            session_dir = trial_dir_path / "agent" / "sessions" / "projects" / "-app"
-                            if session_dir.exists():
-                                trajectory_files = list(session_dir.glob("*.jsonl"))
-                                if trajectory_files:
-                                    trajectory_file = trajectory_files[0]
-                                    logger.info(f"Found trajectory for {trial_id}: {trajectory_file}")
-
-                                    # Calculate actual trajectory length
-                                    try:
-                                        with open(trajectory_file) as f:
-                                            trajectory_length = sum(1 for _ in f)
-                                        results["trials"][trial_id]["trajectory_length"] = trajectory_length
-                                        logger.info(f"  Trajectory length: {trajectory_length}")
-
-                                        # Upload to W&B as artifact
-                                        artifact_name = f"trajectory-{trial_id}"
-                                        artifact = wandb.Artifact(artifact_name, type="trajectory")
-                                        artifact.add_file(str(trajectory_file), name=f"{trial_id}.jsonl")
-                                        wandb.log_artifact(artifact)
-                                        logger.info(f"  Uploaded trajectory artifact: {artifact_name}")
-                                    except Exception as e:
-                                        logger.warning(f"Failed to process trajectory for {trial_id}: {e}")
 
             # Log aggregate metrics
             wandb.log(results["aggregate"])
