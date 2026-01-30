@@ -28,7 +28,6 @@ from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import (
     TaskAssignedEvent,
     TaskStateChangedEvent,
-    WorkerFailedEvent,
 )
 from iris.cluster.controller.scheduler import Scheduler, SchedulingContext, TaskScheduleResult
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -502,26 +501,24 @@ class Controller:
             futures[future] = (worker, tasks_to_run, tasks_to_kill)
 
         # Process results as they complete
-        for future in as_completed(futures, timeout=10):
-            worker, tasks_to_run, tasks_to_kill = futures[future]
-            try:
-                response = future.result()
-                if response is None:
-                    # Heartbeat failed - put tasks back and handle failure
-                    if tasks_to_run:
-                        self._dispatch_outbox[worker.worker_id].extend(tasks_to_run)
-                    if tasks_to_kill:
-                        self._kill_outbox[worker.worker_id].extend(tasks_to_kill)
-                    self._handle_heartbeat_failure(worker)
-                    continue
-                self._process_heartbeat_response(worker, response)
-            except Exception as e:
-                logger.warning(f"Heartbeat error for {worker.worker_id}: {e}")
-                if tasks_to_run:
-                    self._dispatch_outbox[worker.worker_id].extend(tasks_to_run)
-                if tasks_to_kill:
-                    self._kill_outbox[worker.worker_id].extend(tasks_to_kill)
-                self._handle_heartbeat_failure(worker)
+        try:
+            for future in as_completed(futures, timeout=10):
+                worker, tasks_to_run, tasks_to_kill = futures[future]
+                try:
+                    response = future.result()
+                    if response is None:
+                        self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
+                        continue
+                    self._process_heartbeat_response(worker, response)
+                except Exception as e:
+                    logger.warning(f"Heartbeat error for {worker.worker_id}: {e}")
+                    self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
+        except TimeoutError:
+            for future, (worker, tasks_to_run, tasks_to_kill) in futures.items():
+                if not future.done():
+                    logger.warning(f"Heartbeat timed out for {worker.worker_id}")
+                    self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
+                    future.cancel()
 
     def _heartbeat_worker(
         self,
@@ -583,9 +580,11 @@ class Controller:
                     )
                 )
 
-        # Reconcile running tasks (detect tasks that disappeared from worker)
+        # Reconcile running tasks
         reported_ids = {entry.task_id for entry in response.running_tasks}
         expected_ids = {str(tid) for tid in worker.running_tasks}
+
+        # Detect tasks that disappeared from worker (e.g. worker restarted mid-task)
         missing = expected_ids - reported_ids
         for tid_str in missing:
             task = self._state.get_task(TaskId(tid_str))
@@ -600,20 +599,38 @@ class Controller:
                     )
                 )
 
+        # Detect tasks the worker is running that the controller doesn't know about
+        # (e.g. controller restarted while worker had tasks). Send kill requests.
+        unknown = reported_ids - expected_ids
+        for tid_str in unknown:
+            task = self._state.get_task(TaskId(tid_str))
+            if task is None or task.is_finished():
+                self._kill_outbox[worker.worker_id].append(tid_str)
+                logger.warning(f"Unknown task {tid_str} on worker {worker.worker_id}, sending kill")
+
+    def _requeue_and_fail(
+        self,
+        worker: ControllerWorker,
+        tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest],
+        tasks_to_kill: list[str],
+    ) -> None:
+        """Re-queue outbox entries and record a heartbeat failure for a worker."""
+        if tasks_to_run:
+            self._dispatch_outbox[worker.worker_id].extend(tasks_to_run)
+        if tasks_to_kill:
+            self._kill_outbox[worker.worker_id].extend(tasks_to_kill)
+        self._handle_heartbeat_failure(worker)
+
     def _handle_heartbeat_failure(self, worker: ControllerWorker) -> None:
-        """Handle a failed heartbeat RPC. Increment failure count, potentially mark worker failed."""
-        worker.consecutive_failures += 1
-        if worker.consecutive_failures >= 3:
-            txn = self._state.handle_event(
-                WorkerFailedEvent(
-                    worker_id=worker.worker_id,
-                    error=f"Heartbeat failed {worker.consecutive_failures} times",
-                )
+        """Handle a failed heartbeat RPC via the state layer."""
+        from iris.cluster.controller.events import WorkerHeartbeatFailedEvent
+
+        self._state.handle_event(
+            WorkerHeartbeatFailedEvent(
+                worker_id=worker.worker_id,
+                error=f"Heartbeat failed for worker {worker.worker_id}",
             )
-            if txn.tasks_to_kill:
-                # Buffer kills for next heartbeat (or abandon if worker is dead)
-                # Tasks are already marked as WORKER_FAILED in state
-                pass
+        )
 
     def _check_worker_timeouts(self) -> None:
         """Check for worker timeouts and send kill RPCs for affected tasks."""

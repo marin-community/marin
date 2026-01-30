@@ -296,6 +296,7 @@ class Worker:
         This method blocks in a loop, checking the time since last heartbeat.
         When the timeout expires, it returns, triggering a reset and re-registration.
         """
+        self._last_heartbeat_time = time.monotonic()
         heartbeat_timeout = self._config.heartbeat_timeout_seconds
         logger.info("Serving (waiting for controller heartbeats)")
 
@@ -343,9 +344,11 @@ class Worker:
                     worker_id=self._worker_id,
                 )
             )
-        except Exception:
+        except Exception as e:
             # Best-effort ping; if it fails, the next regular heartbeat will deliver the completion
-            pass
+            logger.debug(
+                "notify_task_update failed (completion will be delivered via next heartbeat): %s", e, exc_info=True
+            )
 
     def _buffer_completion_if_terminal(self, task: TaskAttempt) -> None:
         """Buffer a terminal task completion for heartbeat delivery."""

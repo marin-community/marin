@@ -439,9 +439,8 @@ message Controller {
     int32 attempt_id = 2;
   }
 
-  // A task completion that the worker is reporting via heartbeat.
-  // Used when report_task_state RPC fails — the worker buffers completions
-  // and piggybacks them on the next successful heartbeat.
+  // A task completion reported by the worker via heartbeat response.
+  // Workers buffer completions and deliver them in the next heartbeat.
   message CompletedTaskEntry {
     string task_id = 1;
     string job_id = 2;

@@ -41,6 +41,7 @@ from iris.cluster.controller.events import (
     TransactionLog,
     WorkerFailedEvent,
     WorkerHeartbeatEvent,
+    WorkerHeartbeatFailedEvent,
     WorkerRegisteredEvent,
 )
 from iris.cluster.types import AttributeValue, DeviceType, JobId, TaskId, WorkerId
@@ -125,9 +126,9 @@ TERMINAL_TASK_STATES: frozenset[int] = frozenset(
     }
 )
 
-# Terminal states that originate from worker reports (as opposed to controller
-# decisions like KILLED or UNSCHEDULABLE). Used to detect duplicate completions
-# delivered via both report_task_state RPC and heartbeat.
+# Terminal states that originate from worker reports via heartbeat (as opposed to
+# controller decisions like KILLED or UNSCHEDULABLE). Used to detect duplicate
+# completions across multiple heartbeats.
 WORKER_REPORTED_TERMINAL_STATES: frozenset[int] = frozenset(
     {
         cluster_pb2.TASK_STATE_SUCCEEDED,
@@ -986,6 +987,8 @@ class ControllerState:
                     self._on_worker_registered(txn, event)
                 case WorkerHeartbeatEvent():
                     self._on_worker_heartbeat(txn, event)
+                case WorkerHeartbeatFailedEvent():
+                    self._on_worker_heartbeat_failed(txn, event)
                 case WorkerFailedEvent():
                     self._on_worker_failed(txn, event)
                 case JobSubmittedEvent():
@@ -1080,6 +1083,15 @@ class ControllerState:
         worker.healthy = True
         worker.consecutive_failures = 0
         txn.log("heartbeat", event.worker_id)
+
+    def _on_worker_heartbeat_failed(self, txn: TransactionLog, event: WorkerHeartbeatFailedEvent) -> None:
+        worker = self._workers.get(event.worker_id)
+        if not worker:
+            return
+        worker.consecutive_failures += 1
+        txn.log("heartbeat_failed", event.worker_id, consecutive=worker.consecutive_failures)
+        if worker.consecutive_failures >= 3:
+            self._on_worker_failed(txn, WorkerFailedEvent(worker_id=event.worker_id, error=event.error))
 
     def _on_worker_failed(self, txn: TransactionLog, event: WorkerFailedEvent) -> None:
         worker = self._workers[event.worker_id]
