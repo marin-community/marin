@@ -36,7 +36,7 @@ from iris.cluster.vm.ssh import (
     run_streaming_with_retry,
     wait_for_connection,
 )
-from iris.rpc import config_pb2, vm_pb2
+from iris.rpc import common_pb2, config_pb2, vm_pb2
 from iris.rpc.proto_utils import vm_state_name
 from iris.time_utils import now_ms
 
@@ -330,8 +330,8 @@ class ManagedVm:
             state=vm_pb2.VM_STATE_BOOTING,
             address=address or "",
             zone=zone,
-            created_at_ms=now,
-            state_changed_at_ms=now,
+            created_at=common_pb2.Timestamp(epoch_ms=now),
+            state_changed_at=common_pb2.Timestamp(epoch_ms=now),
             labels=labels or {},
         )
         self._conn = conn
@@ -475,7 +475,7 @@ class ManagedVm:
         """Update state with timestamp and log the transition."""
         old_state = self.info.state
         self.info.state = new_state
-        self.info.state_changed_at_ms = now_ms()
+        self.info.state_changed_at.CopyFrom(common_pb2.Timestamp(epoch_ms=now_ms()))
         if self._phase:
             self.info.init_phase = self._phase
         logger.info("VM %s: %s -> %s", self.info.vm_id, vm_state_name(old_state), vm_state_name(new_state))
