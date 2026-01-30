@@ -1232,10 +1232,10 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         resources=cluster_pb2.ResourceSpecProto(
             cpu=1,
             memory_bytes=1024**3,
-            replicas=1,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
         ),
         environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
         constraints=[
             cluster_pb2.Constraint(
                 key="preemptible",
@@ -1253,10 +1253,10 @@ def test_compute_demand_entries_separates_by_preemptible_constraint():
         resources=cluster_pb2.ResourceSpecProto(
             cpu=1,
             memory_bytes=1024**3,
-            replicas=1,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
         ),
         environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
         constraints=[
             cluster_pb2.Constraint(
                 key="preemptible",
@@ -1287,10 +1287,10 @@ def test_compute_demand_entries_no_preemptible_constraint_gives_none():
         resources=cluster_pb2.ResourceSpecProto(
             cpu=1,
             memory_bytes=1024**3,
-            replicas=1,
             device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
         ),
         environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
     )
     submit_job(state, "j1", req)
 
