@@ -1100,7 +1100,7 @@ class ControllerState:
 
         # Read retry limits from request, using defaults if not set
         max_retries_failure = event.request.max_retries_failure  # proto default: 0
-        max_retries_preemption = event.request.max_retries_preemption or DEFAULT_MAX_RETRIES_PREEMPTION
+        max_retries_preemption = event.request.max_retries_preemption
 
         job = ControllerJob(
             job_id=event.job_id,
@@ -1236,9 +1236,6 @@ class ControllerState:
 
         # Handle side effects based on result
         if result == TaskTransitionResult.SHOULD_RETRY:
-            # Reset task state to PENDING so job-level aggregation doesn't
-            # count it as a terminal failure while retries remain.
-            task.state = cluster_pb2.TASK_STATE_PENDING
             self._requeue_task(task, txn)
             self._cleanup_task_resources(task, job, txn)
         elif task.is_finished():
@@ -1288,6 +1285,7 @@ class ControllerState:
 
     def _requeue_task(self, task: ControllerTask, txn: TransactionLog) -> None:
         """Put task back on scheduling queue for retry."""
+        task.state = cluster_pb2.TASK_STATE_PENDING
         if task.task_id not in self._task_queue:
             self._task_queue.append(task.task_id)
         txn.log("task_requeued", task.task_id)

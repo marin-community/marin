@@ -351,16 +351,17 @@ class Worker:
     def _report_task_state(self, task: TaskAttempt) -> None:
         """Report task state to controller.
 
-        If the RPC fails, terminal states are buffered in _unreported_completions
-        and piggybacked on the next successful heartbeat.
+        Terminal completions are always delivered via heartbeat. This RPC is just
+        a ping so the controller processes the next heartbeat sooner.
         """
+        self._buffer_completion_if_terminal(task)
+
         if not self._controller_client or not self._worker_id:
             return
 
         if rule := chaos("worker.report_task_state"):
             time.sleep(rule.delay_seconds)
             logger.debug("chaos: skipping report_task_state")
-            self._buffer_completion_if_terminal(task)
             return
 
         try:
@@ -378,7 +379,6 @@ class Worker:
             self._controller_client.report_task_state(request)
         except Exception as e:
             logger.warning(f"Failed to report task state to controller: {e}")
-            self._buffer_completion_if_terminal(task)
 
     def _buffer_completion_if_terminal(self, task: TaskAttempt) -> None:
         """Buffer a terminal task completion for heartbeat delivery."""
