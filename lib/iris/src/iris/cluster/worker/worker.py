@@ -100,6 +100,9 @@ class Worker:
         # Task state
         self._tasks: dict[str, TaskAttempt] = {}
         self._lock = threading.Lock()
+        # Completions that failed to report via report_task_state RPC.
+        # Piggybacked on the next successful heartbeat.
+        self._unreported_completions: list[cluster_pb2.Controller.CompletedTaskEntry] = []
 
         self._service = WorkerServiceImpl(self, log_buffer=get_global_buffer())
         self._dashboard = WorkerDashboard(
@@ -231,32 +234,14 @@ class Worker:
         # Controller client is created in start() before this thread starts
         assert self._controller_client is not None
 
+        address = f"{address_host}:{self._config.port}"
+
         # Retry registration until successful (or reset requested)
         attempt = 0
         while not self._stop_heartbeat.is_set():
             attempt += 1
 
-            # Get active task IDs for controller restart recovery (RUNNING or BUILDING)
-            with self._lock:
-                active_tasks = [
-                    t
-                    for t in self._tasks.values()
-                    if t.status in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
-                ]
-                running_tasks = [
-                    cluster_pb2.Controller.RunningTaskEntry(
-                        task_id=t.task_id,
-                        attempt_id=t.attempt_id,
-                    )
-                    for t in active_tasks
-                ]
-
-            request = cluster_pb2.Controller.RegisterWorkerRequest(
-                worker_id=self._worker_id,
-                address=f"{address_host}:{self._config.port}",
-                metadata=metadata,
-                running_tasks=running_tasks,
-            )
+            request, num_completions = self._build_heartbeat_request(address, metadata)
 
             try:
                 if rule := chaos("worker.heartbeat"):
@@ -265,6 +250,7 @@ class Worker:
                     continue
                 logger.debug("Registration attempt %d for worker %s", attempt, self._worker_id)
                 response = self._controller_client.register_worker(request)
+                self._clear_delivered_completions(num_completions)
 
                 if response.should_reset:
                     logger.warning("Controller signaled reset for worker %s, cleaning up", self._worker_id)
@@ -289,33 +275,61 @@ class Worker:
                     time.sleep(rule.delay_seconds)
                     logger.debug("chaos: skipping heartbeat")
                     continue
-                # Update active task IDs for each heartbeat
-                with self._lock:
-                    active_tasks = [
-                        t
-                        for t in self._tasks.values()
-                        if t.status in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
-                    ]
-                    running_tasks = [
-                        cluster_pb2.Controller.RunningTaskEntry(
-                            task_id=t.task_id,
-                            attempt_id=t.attempt_id,
-                        )
-                        for t in active_tasks
-                    ]
-                request = cluster_pb2.Controller.RegisterWorkerRequest(
-                    worker_id=self._worker_id,
-                    address=f"{address_host}:{self._config.port}",
-                    metadata=metadata,
-                    running_tasks=running_tasks,
-                )
+
+                request, num_completions = self._build_heartbeat_request(address, metadata)
                 response = self._controller_client.register_worker(request)
+                self._clear_delivered_completions(num_completions)
 
                 if response.should_reset:
                     logger.warning("Controller signaled reset during heartbeat, cleaning up")
                     self._reset_worker_state()
             except Exception as e:
                 logger.warning(f"Heartbeat failed: {e}")
+
+    def _build_heartbeat_request(
+        self,
+        address: str,
+        metadata: cluster_pb2.WorkerMetadata,
+    ) -> tuple[cluster_pb2.Controller.RegisterWorkerRequest, int]:
+        """Build a heartbeat request with current task state and pending completions.
+
+        Returns the request and the count of pending completions included,
+        so the caller can clear them after a successful RPC.
+        """
+        with self._lock:
+            active_tasks = [
+                t
+                for t in self._tasks.values()
+                if t.status in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
+            ]
+            running_tasks = [
+                cluster_pb2.Controller.RunningTaskEntry(
+                    task_id=t.task_id,
+                    attempt_id=t.attempt_id,
+                )
+                for t in active_tasks
+            ]
+            num_completions = len(self._unreported_completions)
+            completed_tasks = list(self._unreported_completions)
+
+        request = cluster_pb2.Controller.RegisterWorkerRequest(
+            worker_id=self._worker_id,
+            address=address,
+            metadata=metadata,
+            running_tasks=running_tasks,
+            completed_tasks=completed_tasks,
+        )
+        return request, num_completions
+
+    def _clear_delivered_completions(self, num_delivered: int) -> None:
+        """Remove completions that were successfully delivered via heartbeat.
+
+        Since completions are only appended, the delivered entries are always
+        a prefix of _unreported_completions.
+        """
+        if num_delivered > 0:
+            with self._lock:
+                self._unreported_completions = self._unreported_completions[num_delivered:]
 
     def _reset_worker_state(self) -> None:
         """Reset worker state: wipe all containers and clear tracking.
@@ -335,7 +349,13 @@ class Worker:
         logger.info("Worker state reset complete")
 
     def _report_task_state(self, task: TaskAttempt) -> None:
-        """Report task state to controller."""
+        """Report task state to controller.
+
+        Terminal completions are always delivered via heartbeat. This RPC is just
+        a ping so the controller processes the next heartbeat sooner.
+        """
+        self._buffer_completion_if_terminal(task)
+
         if not self._controller_client or not self._worker_id:
             return
 
@@ -359,6 +379,30 @@ class Worker:
             self._controller_client.report_task_state(request)
         except Exception as e:
             logger.warning(f"Failed to report task state to controller: {e}")
+
+    def _buffer_completion_if_terminal(self, task: TaskAttempt) -> None:
+        """Buffer a terminal task completion for heartbeat delivery."""
+        terminal_states = {
+            cluster_pb2.TASK_STATE_SUCCEEDED,
+            cluster_pb2.TASK_STATE_FAILED,
+            cluster_pb2.TASK_STATE_KILLED,
+            cluster_pb2.TASK_STATE_WORKER_FAILED,
+        }
+        if task.status not in terminal_states:
+            return
+        with self._lock:
+            self._unreported_completions.append(
+                cluster_pb2.Controller.CompletedTaskEntry(
+                    task_id=task.task_id,
+                    job_id=task.job_id,
+                    task_index=task.task_index,
+                    state=task.status,
+                    exit_code=task.exit_code or 0,
+                    error=task.error or "",
+                    finished_at_ms=task.finished_at_ms or 0,
+                    attempt_id=task.attempt_id,
+                )
+            )
 
     # Task management methods
 

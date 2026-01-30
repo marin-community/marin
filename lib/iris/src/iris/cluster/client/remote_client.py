@@ -72,6 +72,9 @@ class RemoteClusterClient:
         constraints: list[cluster_pb2.Constraint] | None = None,
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
         replicas: int = 1,
+        max_retries_failure: int = 0,
+        max_retries_preemption: int = 100,
+        timeout_seconds: int = 0,
     ) -> None:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -101,6 +104,9 @@ class RemoteClusterClient:
                 scheduling_timeout_seconds=scheduling_timeout_seconds,
                 constraints=constraints or [],
                 replicas=replicas,
+                max_retries_failure=max_retries_failure,
+                max_retries_preemption=max_retries_preemption,
+                timeout_seconds=timeout_seconds,
             )
             if coscheduling is not None:
                 request.coscheduling.CopyFrom(coscheduling)
@@ -116,6 +122,9 @@ class RemoteClusterClient:
                 scheduling_timeout_seconds=scheduling_timeout_seconds,
                 constraints=constraints or [],
                 replicas=replicas,
+                max_retries_failure=max_retries_failure,
+                max_retries_preemption=max_retries_preemption,
+                timeout_seconds=timeout_seconds,
             )
             if coscheduling is not None:
                 request.coscheduling.CopyFrom(coscheduling)

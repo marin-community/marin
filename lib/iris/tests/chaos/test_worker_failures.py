@@ -17,7 +17,6 @@
 Tests worker crashes, delayed registration, stale state, and task-level retries.
 All chaos is injected inline in worker.py.
 """
-import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
 from .conftest import submit, wait, _quick, _slow
@@ -54,30 +53,19 @@ def test_worker_sequential_jobs(cluster):
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-@pytest.mark.skip(reason="Iris bug: infinite retry loop, jobs stuck PENDING forever (gh#2533)")
 def test_all_workers_fail(cluster):
-    """All workers' heartbeats fail permanently. Tasks eventually FAILED after
-    heartbeat timeout (workers become unreachable from controller's perspective).
-
-    CURRENT BEHAVIOR: Job stays PENDING when workers never register.
-    EXPECTED BEHAVIOR: Job should transition to FAILED after scheduling timeout.
-    This test documents the gap - Iris doesn't fail jobs when no workers ever register.
+    """All workers' heartbeats fail permanently. With scheduling timeout,
+    job transitions to FAILED/UNSCHEDULABLE when no workers register.
     """
     _url, client = cluster
     enable_chaos("worker.heartbeat", failure_rate=1.0)
-    job = submit(client, _slow, "all-workers-fail")
-    status = wait(client, job, timeout=90)
-    # Current behavior: job stays PENDING when workers never register
-    # Expected: should become FAILED after timeout
-    assert status.state in (cluster_pb2.JOB_STATE_PENDING, cluster_pb2.JOB_STATE_FAILED)
+    job = submit(client, _slow, "all-workers-fail", scheduling_timeout_seconds=15)
+    status = wait(client, job, timeout=30)
+    assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
 def test_task_fails_once_then_succeeds(cluster):
-    """Container creation fails once, succeeds on retry.
-
-    Note: max_retries_failure parameter not yet exposed in IrisClient API.
-    Relying on Iris default retry behavior (if any).
-    """
+    """Container creation fails once, succeeds on retry."""
     _url, client = cluster
     enable_chaos(
         "worker.create_container",
@@ -85,8 +73,6 @@ def test_task_fails_once_then_succeeds(cluster):
         max_failures=1,
         error=RuntimeError("chaos: transient container failure"),
     )
-    job = submit(client, _quick, "retry-once")
+    job = submit(client, _quick, "retry-once", max_retries_failure=2)
     status = wait(client, job, timeout=60)
-    # If Iris has retry logic, this should succeed. If not, it will fail.
-    # Either outcome documents current behavior.
-    assert status.state in (cluster_pb2.JOB_STATE_SUCCEEDED, cluster_pb2.JOB_STATE_FAILED)
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED

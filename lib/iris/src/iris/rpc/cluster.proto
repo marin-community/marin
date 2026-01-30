@@ -379,6 +379,10 @@ message Controller {
     // Number of tasks to create for gang scheduling (default: 1).
     // For multi-host TPU jobs, set to the number of VMs in the slice.
     int32 replicas = 20;
+
+    // Per-task timeout in seconds. Task is killed if it runs longer than this.
+    // 0 means no timeout.
+    int32 timeout_seconds = 21;
   }
 
   message LaunchJobResponse {
@@ -435,6 +439,20 @@ message Controller {
     int32 attempt_id = 2;
   }
 
+  // A task completion that the worker is reporting via heartbeat.
+  // Used when report_task_state RPC fails — the worker buffers completions
+  // and piggybacks them on the next successful heartbeat.
+  message CompletedTaskEntry {
+    string task_id = 1;
+    string job_id = 2;
+    int32 task_index = 3;
+    TaskState state = 4;
+    int32 exit_code = 5;
+    string error = 6;
+    int64 finished_at_ms = 7;
+    int32 attempt_id = 8;
+  }
+
   message RegisterWorkerRequest {
     string worker_id = 1;
     string address = 2;
@@ -442,6 +460,8 @@ message Controller {
     reserved 4;  // was running_task_ids
     // Tasks the worker is currently running, with attempt IDs for stale detection.
     repeated RunningTaskEntry running_tasks = 5;
+    // Completed tasks piggybacked on heartbeat when report_task_state RPC failed.
+    repeated CompletedTaskEntry completed_tasks = 6;
   }
 
   message RegisterWorkerResponse {

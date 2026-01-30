@@ -248,8 +248,8 @@ def test_task_failure_with_retry_requeues(job_request, worker_metadata):
     dispatch_task(state, task, worker_id)
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_FAILED)
 
-    # Verify: task requeued, job still running
-    assert task.state == cluster_pb2.TASK_STATE_FAILED
+    # Verify: task requeued (back to PENDING), job still running
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
     assert task.can_be_scheduled()
     assert job.state == cluster_pb2.JOB_STATE_RUNNING
     pending = state.peek_pending_tasks()
@@ -313,9 +313,9 @@ def test_worker_failure_cascades_to_running_tasks(job_request, worker_metadata):
         )
     )
 
-    # Verify: worker unhealthy, task WORKER_FAILED and requeued
+    # Verify: worker unhealthy, task requeued (back to PENDING)
     assert worker.healthy is False
-    assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
     assert task.can_be_scheduled()
     pending = state.peek_pending_tasks()
     assert len(pending) == 1
@@ -355,8 +355,8 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, wor
     # 1. Worker marked unhealthy
     assert worker.healthy is False
 
-    # 2. Task marked as WORKER_FAILED (retriable)
-    assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    # 2. Task requeued (back to PENDING for retry)
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
     assert task.preemption_count == 1
     assert task.can_be_scheduled()
 
@@ -459,8 +459,8 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
     dispatch_task(state, tasks[0], worker_id)
     transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker died")
 
-    # Preemption doesn't count toward failure threshold
-    assert tasks[0].state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    # Preemption doesn't count toward failure threshold; task requeued to PENDING
+    assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
     assert tasks[0].can_be_scheduled()
     assert job.state == cluster_pb2.JOB_STATE_RUNNING
 
@@ -1034,8 +1034,8 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
         )
     )
 
-    # Task-0 failed but is retriable (not terminal)
-    assert tasks[0].state == cluster_pb2.TASK_STATE_FAILED
+    # Task-0 failed but is retriable, requeued to PENDING
+    assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
     assert tasks[0].can_be_scheduled()  # Can retry
     assert not tasks[0].is_finished()  # Not terminal
 

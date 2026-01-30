@@ -711,10 +711,9 @@ def test_killing_job_with_retrying_task(service, state, job_request, worker_meta
     dispatch_task(state, task, WorkerId("w1"))
     transition_task(state, task, cluster_pb2.TASK_STATE_WORKER_FAILED)
 
-    # Verify task is in WORKER_FAILED state (last attempt failed) but has retries available
-    # The task can still be scheduled even though its state shows the last attempt's failure
+    # Task was requeued for retry, so it should be back to PENDING
     status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="test-job"), None)
-    assert status.job.tasks[0].state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert status.job.tasks[0].state == cluster_pb2.TASK_STATE_PENDING
     assert status.job.preemption_count == 1  # One failure so far
 
     # Kill the job
@@ -769,11 +768,10 @@ def test_full_lifecycle_submit_fail_retry_succeed(service, state, job_request, w
     )
     service.report_task_state(request, None)
 
-    # Verify retry was triggered via RPC - task shows WORKER_FAILED (last attempt state)
-    # but can still be scheduled for retry
+    # Verify retry was triggered - task is back to PENDING awaiting reschedule
     status = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="lifecycle-job"), None)
     assert status.job.preemption_count == 1
-    assert status.job.tasks[0].state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert status.job.tasks[0].state == cluster_pb2.TASK_STATE_PENDING
 
     # Second attempt - dispatch again (dispatch is internal scheduler operation)
     dispatch_task(state, task, WorkerId("w1"))

@@ -459,6 +459,7 @@ class Controller:
                     resources=job.request.resources,
                     ports=list(job.request.ports),
                     attempt_id=task.current_attempt_id,
+                    timeout_seconds=job.request.timeout_seconds,
                 )
                 batch.tasks.append((task, worker, request))
 
