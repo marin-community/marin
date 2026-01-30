@@ -1,6 +1,6 @@
 # Zephyr Fray v2 Migration Design
 
-**Status**: Draft
+**Status**: Complete
 **Related**: [fray-lite-design.md](../../../lib/fray/docs/fray-lite-design.md)
 
 ## Problem
