@@ -106,7 +106,7 @@ class HarborEvaluator(Evaluator):
             logger.info(f"Limiting to first {max_eval_instances} tasks")
 
         # Run Harbor trials
-        results = self._run_harbor_trials(
+        results, job_dir = self._run_harbor_trials(
             dataset=dataset,
             version=version,
             model_name=model.name,
@@ -118,7 +118,7 @@ class HarborEvaluator(Evaluator):
 
         # Parse and save results
         parsed_results = self._parse_results(results)
-        self._save_results(parsed_results, output_path, wandb_tags, model.name, dataset)
+        self._save_results(parsed_results, output_path, wandb_tags, model.name, dataset, job_dir)
 
         logger.info("Harbor evaluation completed successfully")
 
@@ -131,7 +131,7 @@ class HarborEvaluator(Evaluator):
         n_concurrent: int,
         env_type: str,
         task_limit: int | None = None,
-    ) -> dict:
+    ) -> tuple[dict, Path | None]:
         """Run Harbor trials using CLI."""
 
         # Find harbor executable (prefer venv installation)
@@ -219,14 +219,15 @@ class HarborEvaluator(Evaluator):
                                     "task_name": trial_id,
                                     "started_at": trial_result.get("started_at"),
                                     "finished_at": trial_result.get("finished_at"),
+                                    "trial_dir": str(trial_dir),  # Store directory for trajectory access
                                 }
 
                                 results["trials"][trial_id] = trial_data
 
-                    return results
+                    return results, job_dir
                 else:
                     logger.warning("No job directory found in harbor output")
-                    return {"trials": {}}
+                    return {"trials": {}}, None
 
             except subprocess.CalledProcessError as e:
                 logger.error(f"Harbor command failed with exit code {e.returncode}")
@@ -307,6 +308,7 @@ class HarborEvaluator(Evaluator):
         wandb_tags: list[str] | None,
         model_name: str,
         dataset: str,
+        job_dir: Path | None = None,
     ) -> None:
         """Save results to GCS and log to W&B."""
 
@@ -344,6 +346,39 @@ class HarborEvaluator(Evaluator):
                     "evaluator": "harbor",
                 },
             )
+
+            # Upload trajectories and fix trajectory_length
+            if job_dir is not None:
+                logger.info("Processing trajectories for W&B upload...")
+                for trial_id, trial_data in results["trials"].items():
+                    trial_dir_str = trial_data.get("trial_dir", "")
+                    if trial_dir_str:
+                        trial_dir_path = Path(trial_dir_str)
+                        if trial_dir_path.exists():
+                            # Find trajectory .jsonl file
+                            # Harbor stores trajectories in agent/sessions/projects/-app/*.jsonl
+                            session_dir = trial_dir_path / "agent" / "sessions" / "projects" / "-app"
+                            if session_dir.exists():
+                                trajectory_files = list(session_dir.glob("*.jsonl"))
+                                if trajectory_files:
+                                    trajectory_file = trajectory_files[0]
+                                    logger.info(f"Found trajectory for {trial_id}: {trajectory_file}")
+
+                                    # Calculate actual trajectory length
+                                    try:
+                                        with open(trajectory_file) as f:
+                                            trajectory_length = sum(1 for _ in f)
+                                        results["trials"][trial_id]["trajectory_length"] = trajectory_length
+                                        logger.info(f"  Trajectory length: {trajectory_length}")
+
+                                        # Upload to W&B as artifact
+                                        artifact_name = f"trajectory-{trial_id}"
+                                        artifact = wandb.Artifact(artifact_name, type="trajectory")
+                                        artifact.add_file(str(trajectory_file), name=f"{trial_id}.jsonl")
+                                        wandb.log_artifact(artifact)
+                                        logger.info(f"  Uploaded trajectory artifact: {artifact_name}")
+                                    except Exception as e:
+                                        logger.warning(f"Failed to process trajectory for {trial_id}: {e}")
 
             # Log aggregate metrics
             wandb.log(results["aggregate"])
