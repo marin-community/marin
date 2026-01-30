@@ -23,6 +23,12 @@ from typing import Any, Protocol, runtime_checkable
 
 from fray.v2.types import JobRequest, JobStatus, ResourceConfig
 
+# TYPE_CHECKING import to avoid circular dependency (actor.py imports from client.py)
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fray.v2.actor import ActorGroup, ActorHandle
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,7 +69,7 @@ class Client(Protocol):
         name: str,
         resources: ResourceConfig = ResourceConfig(),
         **kwargs: Any,
-    ) -> Any:
+    ) -> ActorHandle:
         """Create a named actor instance. Returns a handle immediately."""
         ...
 
@@ -75,7 +81,7 @@ class Client(Protocol):
         count: int,
         resources: ResourceConfig = ResourceConfig(),
         **kwargs: Any,
-    ) -> Any:
+    ) -> ActorGroup:
         """Create N instances of an actor, returning a group handle."""
         ...
 

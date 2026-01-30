@@ -14,8 +14,9 @@
 
 """Fray v2: minimal job and actor scheduling interface."""
 
+from fray.v2.actor import ActorFuture, ActorGroup, ActorHandle, ActorMethod
 from fray.v2.client import Client, JobFailed, JobHandle, wait_all
-from fray.v2.local import LocalClient, LocalJobHandle
+from fray.v2.local import LocalActorHandle, LocalActorMethod, LocalClient, LocalJobHandle
 from fray.v2.types import (
     BinaryEntrypoint,
     CallableEntrypoint,
@@ -37,6 +38,10 @@ from fray.v2.types import (
 )
 
 __all__ = [
+    "ActorFuture",
+    "ActorGroup",
+    "ActorHandle",
+    "ActorMethod",
     "BinaryEntrypoint",
     "CallableEntrypoint",
     "Client",
@@ -51,6 +56,8 @@ __all__ = [
     "JobHandle",
     "JobRequest",
     "JobStatus",
+    "LocalActorHandle",
+    "LocalActorMethod",
     "LocalClient",
     "LocalJobHandle",
     "ResourceConfig",

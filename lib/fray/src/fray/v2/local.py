@@ -23,6 +23,7 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
+from fray.v2.actor import ActorFuture, ActorGroup
 from fray.v2.types import (
     BinaryEntrypoint,
     CallableEntrypoint,
@@ -114,8 +115,10 @@ class LocalClient:
         name: str,
         resources: ResourceConfig = ResourceConfig(),
         **kwargs: Any,
-    ) -> Any:
-        raise NotImplementedError("LocalClient.create_actor is implemented in Phase 1b")
+    ) -> LocalActorHandle:
+        """Create an in-process actor, returning a handle immediately."""
+        group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
+        return group.wait_ready()[0]  # type: ignore[return-value]
 
     def create_actor_group(
         self,
@@ -125,8 +128,60 @@ class LocalClient:
         count: int,
         resources: ResourceConfig = ResourceConfig(),
         **kwargs: Any,
-    ) -> Any:
-        raise NotImplementedError("LocalClient.create_actor_group is implemented in Phase 1b")
+    ) -> ActorGroup:
+        """Create N in-process actor instances, returning a group handle."""
+        handles: list[LocalActorHandle] = []
+        jobs: list[LocalJobHandle] = []
+        for i in range(count):
+            instance = actor_class(*args, **kwargs)
+            handle = LocalActorHandle(instance)
+            handles.append(handle)
+            # Create a synthetic job handle that is immediately succeeded
+            future: Future[None] = Future()
+            future.set_result(None)
+            job_id = f"local-actor-{name}-{i}-{uuid.uuid4().hex[:8]}"
+            jobs.append(LocalJobHandle(job_id, future))
+        return ActorGroup(handles, jobs)  # type: ignore[arg-type]
 
     def shutdown(self, wait: bool = True) -> None:
         self._executor.shutdown(wait=wait)
+
+
+class LocalActorHandle:
+    """In-process actor handle. Thread-safe via a lock around all method calls."""
+
+    def __init__(self, instance: Any):
+        self._instance = instance
+        self._lock = threading.Lock()
+        self._executor = ThreadPoolExecutor(max_workers=1)
+
+    def __getattr__(self, method_name: str) -> LocalActorMethod:
+        if method_name.startswith("_"):
+            raise AttributeError(method_name)
+        method = getattr(self._instance, method_name)
+        if not callable(method):
+            raise AttributeError(f"{method_name} is not callable on {type(self._instance).__name__}")
+        return LocalActorMethod(method, self._lock, self._executor)
+
+
+class LocalActorMethod:
+    """Wraps a method on a local actor with lock-based thread safety."""
+
+    def __init__(self, method: Any, lock: threading.Lock, executor: ThreadPoolExecutor):
+        self._method = method
+        self._lock = lock
+        self._executor = executor
+
+    def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
+        """Submit method call to thread pool, returning a future."""
+
+        def _call():
+            with self._lock:
+                return self._method(*args, **kwargs)
+
+        return ActorFuture(self._executor.submit(_call))
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Call method synchronously with lock."""
+        with self._lock:
+            return self._method(*args, **kwargs)
