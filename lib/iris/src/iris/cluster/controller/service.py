@@ -113,7 +113,7 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.LaunchJobResponse:
         """Submit a new job to the controller.
 
-        The job is expanded into tasks based on the resources.replicas field
+        The job is expanded into tasks based on the replicas field
         (defaulting to 1). Each task has ID "{job_id}/task-{index}".
         """
         with rpc_error_handler("launching job"):

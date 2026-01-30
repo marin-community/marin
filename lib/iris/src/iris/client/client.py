@@ -749,6 +749,7 @@ class IrisClient:
         scheduling_timeout_seconds: int = 0,
         constraints: list[Constraint] | None = None,
         coscheduling: CoschedulingConfig | None = None,
+        replicas: int = 1,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -761,15 +762,18 @@ class IrisClient:
             scheduling_timeout_seconds: Maximum time to wait for scheduling (0 = no timeout)
             constraints: Constraints for filtering workers by attribute
             coscheduling: Configuration for atomic multi-task scheduling
+            replicas: Number of tasks to create for gang scheduling (default: 1)
 
         Returns:
             Job handle for the submitted job
 
         Raises:
-            ValueError: If name contains '/'
+            ValueError: If name contains '/' or replicas < 1
         """
         if "/" in name:
             raise ValueError("Job name cannot contain '/'")
+        if replicas < 1:
+            raise ValueError(f"replicas must be >= 1, got {replicas}")
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
@@ -796,6 +800,7 @@ class IrisClient:
             scheduling_timeout_seconds=scheduling_timeout_seconds,
             constraints=constraints_proto,
             coscheduling=coscheduling_proto,
+            replicas=replicas,
         )
 
         return Job(self, job_id)
@@ -936,6 +941,7 @@ def _print_log_entry(job_id: JobId, entry: LogEntry, task_index: int | None = No
     Uses sys.__stdout__ directly instead of print() to avoid being captured
     by redirect_stdout in local in-process containers.
     """
+    assert sys.__stdout__ is not None, "sys.__stdout__ is None"
     ts = datetime.fromtimestamp(entry.timestamp_ms / 1000, tz=timezone.utc)
     ts_str = ts.strftime("%H:%M:%S")
     if task_index is not None:

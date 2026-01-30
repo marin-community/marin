@@ -165,12 +165,13 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-coscheduled",
-        resources=ResourceSpec(cpu=1, memory="2g", replicas=4),
+        resources=ResourceSpec(cpu=1, memory="2g"),
         environment=EnvironmentSpec(),
         constraints=[
             Constraint(key="tpu-name", op=ConstraintOp.EQ, value="nonexistent-tpu-xyz"),
         ],
         coscheduling=CoschedulingConfig(group_by="tpu-name"),
+        replicas=4,
     )
     job_ids["coscheduled"] = str(job.job_id)
     logger.info("Submitted coscheduled job: %s", job.job_id)
@@ -205,9 +206,10 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-insufficient-capacity",
-        resources=ResourceSpec(cpu=1, memory="1g", replicas=100),
+        resources=ResourceSpec(cpu=1, memory="1g"),
         environment=EnvironmentSpec(),
         coscheduling=CoschedulingConfig(group_by="scale-group"),
+        replicas=100,
     )
     job_ids["insufficient-capacity"] = str(job.job_id)
     logger.info("Submitted insufficient-capacity job: %s", job.job_id)
