@@ -570,6 +570,14 @@ class ScalingGroup:
         """Whether this group can accept demand for waterfall routing."""
         return self.availability(timestamp_ms).status == GroupAvailability.AVAILABLE
 
+    def terminate_all(self) -> None:
+        """Terminate all VM groups in this scale group."""
+        with self._vm_groups_lock:
+            snapshot = list(self._vm_groups.values())
+            self._vm_groups.clear()
+        for vm_group in snapshot:
+            vm_group.terminate()
+
     def to_status(self) -> vm_pb2.ScaleGroupStatus:
         """Build a ScaleGroupStatus proto for the status API."""
         with self._vm_groups_lock:
