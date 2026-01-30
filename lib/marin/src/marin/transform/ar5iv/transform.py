@@ -29,7 +29,8 @@ from dataclasses import dataclass
 import draccus
 from bs4 import BeautifulSoup
 from marin import markdown
-from zephyr import Backend, Dataset, load_jsonl
+from zephyr import Dataset, load_jsonl
+from zephyr.execution import get_default_zephyr_context
 
 
 def transform_abstract(html: BeautifulSoup):
@@ -282,7 +283,7 @@ def main(cfg: Config) -> None:
         .map(clean_ar5iv_record)
         .write_jsonl(f"{cfg.output_path}/html_clean/{{shard:05d}}.jsonl.gz", skip_existing=True)
     )
-    Backend.execute(clean_pipeline)
+    get_default_zephyr_context().execute(clean_pipeline)
 
     # Stage 2: Convert to Markdown
     print("Stage 2: Converting to markdown...")
@@ -292,6 +293,6 @@ def main(cfg: Config) -> None:
         .map(markdownify_ar5iv_record)
         .write_jsonl(f"{cfg.output_path}/md/{{shard:05d}}.jsonl.gz", skip_existing=True)
     )
-    Backend.execute(markdown_pipeline)
+    get_default_zephyr_context().execute(markdown_pipeline)
 
     print("Transformation complete!")

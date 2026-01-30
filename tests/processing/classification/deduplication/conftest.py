@@ -15,13 +15,14 @@
 from pathlib import Path
 
 import pytest
-from zephyr.context import create_backend_context, default_backend_context
+from fray.v2.local import LocalClient
+from zephyr.execution import ZephyrContext, default_zephyr_context
 from zephyr.readers import load_jsonl
 
 
 @pytest.fixture(scope="module")
 def sync_backend(request):
-    with default_backend_context(create_backend_context("sync")):
+    with default_zephyr_context(ZephyrContext(LocalClient(), num_workers=1)):
         yield
 
 

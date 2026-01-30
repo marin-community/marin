@@ -19,11 +19,11 @@ import numpy as np
 import pyarrow as pa
 import tensorstore as ts
 from dataclasses_json import dataclass_json
-from zephyr.context import BackendContext
 from fsspec import AbstractFileSystem
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
-from zephyr import Backend, Dataset
+from zephyr import Dataset
+from zephyr.execution import ZephyrContext, get_default_zephyr_context
 from zephyr.writers import write_levanter_cache
 
 from levanter.data.dataset import AsyncDataset
@@ -292,7 +292,7 @@ def build_cache(
     processor: BatchProcessor[T, U],
     options: CacheOptions,
     metadata: CacheMetadata,
-    context: Optional[BackendContext] = None,
+    context: Optional[ZephyrContext] = None,
 ) -> CacheLedger:
     """
     Build a cache from a sharded data source using a Zephyr backend.
@@ -327,7 +327,9 @@ def build_cache(
             metadata=metadata,
         )
 
-    shard_results = Backend.execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False, context=context)
+    shard_results = (context or get_default_zephyr_context()).execute(
+        Dataset.from_list(shard_jobs).map(process_shard), verbose=False
+    )
     shard_results = sorted(shard_results, key=lambda r: r["index"])
 
     shard_cache_paths = [s["path"] for s in shard_results]
@@ -397,7 +399,7 @@ def consolidate_shard_caches(
     output_path: str,
     exemplar,
     metadata: CacheMetadata | None = None,
-    context: Optional[BackendContext] = None,
+    context: Optional[ZephyrContext] = None,
 ) -> CacheLedger:
     """
     Consolidate multiple shard caches into a single cache directory.
@@ -407,7 +409,7 @@ def consolidate_shard_caches(
         output_path: Destination cache directory.
         exemplar: Output exemplar structure.
         metadata: CacheMetadata to use for the final ledger.
-        context: Optional BackendContext for execution.
+        context: Optional ZephyrContext for execution.
     """
     if metadata is None:
         metadata = CacheMetadata.empty()
@@ -460,10 +462,9 @@ def consolidate_shard_caches(
             )
         )
 
-    Backend.execute(
+    (context or get_default_zephyr_context()).execute(
         Dataset.from_list(shard_info).map(_copy_shard),
         verbose=False,
-        context=context,
     )
 
     # do metadata serially b/c of write amplification concerns

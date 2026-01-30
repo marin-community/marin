@@ -16,7 +16,6 @@
 
 import logging
 
-from zephyr.backends import Backend, BackendConfig
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 from zephyr.expr import Expr, col, lit
@@ -28,15 +27,13 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = [
-    "Backend",
-    "BackendConfig",
     "Dataset",
-    "ZephyrContext",
     "ExecutionHint",
     "Expr",
     "InputFileSpec",
     "PhysicalPlan",
     "PhysicalStage",
+    "ZephyrContext",
     "atomic_rename",
     "col",
     "compute_plan",

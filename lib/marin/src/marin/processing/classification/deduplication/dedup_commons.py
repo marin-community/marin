@@ -19,7 +19,7 @@ from functools import partial
 import logging
 import os
 from typing import TypedDict
-from zephyr.context import create_backend_context
+from zephyr.execution import get_default_zephyr_context
 import humanfriendly
 from marin.utilities.time_logger import log_time
 import pyarrow as pa
@@ -28,7 +28,6 @@ import pyarrow.json as pa_json
 from marin.utilities.wandb_utils import init_wandb
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utils import fsspec_glob
-from zephyr.backends import Backend
 from zephyr.dataset import Dataset
 from zephyr.expr import col
 from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
@@ -220,13 +219,12 @@ def _load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
         shard_dup_map[record["hash"]] = {"canonical": record["canonical"]}
 
     with log_time(f"Load duplicate map from {len(shards)} shards"):
-        Backend.execute(
+        get_default_zephyr_context().execute(
             Dataset.from_list(shards)
             .load_parquet()
             .select("hash", "canonical")
             .filter(col("hash").is_not_null())
             .map(add_to_dup_map),
-            context=create_backend_context("threadpool"),
         )
 
     return shard_dup_map
@@ -243,7 +241,7 @@ def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
 
 def _compute_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:
     with log_time(f"Compute deduplication stats from {len(shards)} shards"):
-        result: DupCounters = Backend.execute(  # type: ignore[bad-assignment]
+        result: DupCounters = get_default_zephyr_context().execute(  # type: ignore[bad-assignment]
             Dataset.from_list(shards)
             .load_parquet()
             .select("cnt")
@@ -258,7 +256,6 @@ def _compute_dedup_stats(shards: list[str], method: str, level: str) -> DupCount
                 )
             )
             .reduce(partial(sum, start=DupCounters(method=method, level=level))),
-            context=create_backend_context("threadpool"),
         )[0]
     return result
 

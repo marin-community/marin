@@ -17,7 +17,7 @@ from functools import partial
 import logging
 from marin.utils import rebase_file_path
 import pyarrow as pa
-from zephyr.context import create_backend_context
+from zephyr.execution import get_default_zephyr_context
 from marin.processing.classification.deduplication.dedup_commons import (
     DedupConfig,
     DedupMode,
@@ -31,8 +31,7 @@ from marin.processing.classification.deduplication.dedup_commons import (
 from marin.processing.classification.deduplication.connected_components import connected_components
 from marin.utilities.time_logger import log_time
 import wandb
-from zephyr.backends import Backend
-from zephyr.dataset import Dataset
+from zephyr import Dataset
 from zephyr.readers import InputFileSpec, load_file
 
 logger = logging.getLogger(__name__)
@@ -40,8 +39,10 @@ logger = logging.getLogger(__name__)
 
 def _compute_fuzzy_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:
     with log_time(f"Compute fuzzy deduplication stats from {len(shards)} shards"):
-        result: DupCounters = Backend.execute(  # type: ignore[bad-assignment]
-            Dataset.from_list(shards).load_parquet(columns=["component_id"])
+        ctx = get_default_zephyr_context()
+        result: DupCounters = ctx.execute(  # type: ignore[bad-assignment]
+            Dataset.from_list(shards)
+            .load_parquet(columns=["component_id"])
             # Compute the per-component statistics and then roll them up into a single counter group
             .group_by(
                 key=lambda r: r["component_id"],
@@ -53,8 +54,8 @@ def _compute_fuzzy_dedup_stats(shards: list[str], method: str, level: str) -> Du
                     unique=1,
                     dup_clusters=int(total > 1),
                 ),
-            ).reduce(partial(sum, start=DupCounters(method=method, level=level))),
-            context=create_backend_context("threadpool"),
+            )
+            .reduce(partial(sum, start=DupCounters(method=method, level=level))),
         )[0]
     return result
 
@@ -71,9 +72,9 @@ def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
         shard_dup_map[record["id"]] = record["fuzzy_duplicate"]
 
     with log_time(f"Load fuzzy duplicate map from {len(shards)} shards"):
-        Backend.execute(
+        ctx = get_default_zephyr_context()
+        ctx.execute(
             Dataset.from_list(shards).load_parquet().map(add_to_dup_map),
-            context=create_backend_context("threadpool"),
         )
 
     return shard_dup_map
@@ -93,7 +94,7 @@ def dedup_fuzzy_document(config: DedupConfig):
 
     input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
 
-    ctx = create_backend_context("auto", memory=config.ray_memory, num_cpus=config.ray_num_cpus)
+    ctx = get_default_zephyr_context()
     _init_wandb(config)
 
     def compute_minhash_lsh_batches(batch: pa.RecordBatch) -> Iterator[dict]:
@@ -139,7 +140,7 @@ def dedup_fuzzy_document(config: DedupConfig):
     if not converged:
         # TODO (rav): log the number of changed nodes?
         logger.warning("Connected components did not converge")
-    fuzzy_dup_shards = Backend.execute(
+    fuzzy_dup_shards = ctx.execute(
         Dataset.from_list(cc_files)
         .flat_map(load_file)
         .map(
@@ -150,7 +151,6 @@ def dedup_fuzzy_document(config: DedupConfig):
         )
         .reshard(num_shards=42)
         .write_parquet(f"{config.output_path}/metadata/fuzzy-dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
-        context=ctx,
         verbose=True,
     )
 
@@ -171,7 +171,7 @@ def dedup_fuzzy_document(config: DedupConfig):
             yield doc
 
     base_path = _find_base_path(config.input_paths, input_files)
-    Backend.execute(
+    ctx.execute(
         Dataset.from_list(input_files).flat_map(lambda p: load_file(InputFileSpec(path=p, columns=["id"])))
         # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
         # the shards of the input files for rebase_file_path to work correctly.
@@ -185,7 +185,6 @@ def dedup_fuzzy_document(config: DedupConfig):
             ),
             skip_existing=True,
         ),
-        context=ctx,
         verbose=True,
     )
 

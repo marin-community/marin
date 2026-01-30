@@ -26,7 +26,8 @@ import logging
 from dataclasses import dataclass, field
 
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
-from zephyr import Backend, Dataset, load_jsonl
+from zephyr import Dataset, load_jsonl
+from zephyr.execution import get_default_zephyr_context
 
 logger = logging.getLogger("ray")
 
@@ -96,4 +97,4 @@ def html_to_md(cfg: SimpleHtmlToMdConfig):
         .map(lambda data: _html_to_md(data, cfg.extract_method, cfg.config))
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    list(Backend.execute(pipeline))
+    list(get_default_zephyr_context().execute(pipeline))

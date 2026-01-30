@@ -48,7 +48,8 @@ import fsspec
 import requests
 from marin.utils import fsspec_size
 from tqdm_loggable.auto import tqdm
-from zephyr import Backend, Dataset, atomic_rename, load_jsonl
+from zephyr import Dataset, atomic_rename, load_jsonl
+from zephyr.execution import get_default_zephyr_context
 
 logger = logging.getLogger("ray")
 
@@ -117,16 +118,17 @@ def download(cfg: DownloadConfig) -> None:
     logger.info("Starting transfer of Wikipedia dump...")
     output_base = os.path.join(cfg.output_path, cfg.revision)
 
-    download_metrics = Backend.execute(
+    ctx = get_default_zephyr_context()
+    download_metrics = ctx.execute(
         Dataset.from_list(cfg.input_urls)
         .map(lambda url: download_tar(url, output_base))
         .write_jsonl(f"{output_base}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True),
     )
 
     # load all of the output filenames to process
-    downloads = Backend.execute(Dataset.from_list(download_metrics).flat_map(load_jsonl))
+    downloads = ctx.execute(Dataset.from_list(download_metrics).flat_map(load_jsonl))
 
-    extracted = Backend.execute(
+    extracted = ctx.execute(
         Dataset.from_list(downloads)
         .flat_map(lambda file: process_file(file, output_base))
         .write_jsonl(f"{output_base}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True),

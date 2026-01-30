@@ -35,11 +35,11 @@ import fsspec
 import msgspec
 import wandb
 
-from zephyr.context import get_default_backend_context
+from zephyr.execution import get_default_zephyr_context
 from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
 
 from marin.utils import fsspec_glob, rebase_file_path
-from zephyr import Backend, Dataset
+from zephyr import Dataset
 from zephyr.readers import load_file, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
@@ -214,16 +214,15 @@ def build_filter(
     logger.info(f"Building bloom filter from {all_files} into {bloom_path}")
 
     # Build bloom filters for all shards in parallel
-    ctx = get_default_backend_context()
-    shard_blooms_data = Backend.execute(
+    ctx = get_default_zephyr_context()
+    ctx.max_parallelism = config.processes
+    shard_blooms_data = ctx.execute(
         Dataset.from_iterable(all_files)
         .reshard(num_shards=config.processes)
         .load_file()
         .select(config.text_field)
         .map_shard(build_shard_bloom)
         .write_binary(f"{bloom_path}-{{shard:05d}}-of-{{total:05d}}.bin", skip_existing=True),
-        context=ctx,
-        max_parallelism=config.processes,
     )
 
     if len(shard_blooms_data) == 1:
@@ -241,12 +240,11 @@ def build_filter(
             merged_bloom.update(shard_bloom)
         yield merged_bloom.save_bytes()
 
-    merged_bloom = Backend.execute(
+    merged_bloom = ctx.execute(
         Dataset.from_iterable(shard_blooms_data)
         .reshard(num_shards=1)
         .map_shard(_merge_bloom)
         .write_binary(bloom_path, skip_existing=True),
-        context=ctx,
     )
 
     return merged_bloom[0]
@@ -316,9 +314,10 @@ def mark_duplicates_bloom(
             }
 
     # Use write_jsonl with callable output pattern
-    ctx = get_default_backend_context()
+    ctx = get_default_zephyr_context()
+    ctx.max_parallelism = config.processes
     result = list(
-        Backend.execute(
+        ctx.execute(
             Dataset.from_iterable(all_files)
             .flat_map(load_file)
             .map_shard(process_shard_with_bloom)
@@ -328,8 +327,6 @@ def mark_duplicates_bloom(
                 ),
                 skip_existing=True,
             ),
-            context=ctx,
-            max_parallelism=config.processes,
         )
     )
     return result

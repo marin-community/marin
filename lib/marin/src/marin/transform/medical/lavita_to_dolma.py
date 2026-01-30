@@ -31,7 +31,8 @@ import os
 from dataclasses import dataclass
 
 import draccus
-from zephyr import Backend, Dataset, load_parquet
+from zephyr import Dataset, load_parquet
+from zephyr.execution import get_default_zephyr_context
 
 
 @dataclass
@@ -157,7 +158,7 @@ def convert_lavita_split_to_dolma(cfg: LavitaToDolmaConfig) -> None:
         .filter(lambda record: record is not None)
         .write_parquet(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
-    list(Backend.execute(pipeline))
+    list(get_default_zephyr_context().execute(pipeline))
 
 
 if __name__ == "__main__":

@@ -34,7 +34,7 @@ import draccus
 import humanfriendly
 import transformers
 from datasets import load_dataset_builder
-from zephyr.context import BackendContext, create_backend_context
+from zephyr.execution import ZephyrContext, get_default_zephyr_context
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -44,7 +44,7 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.store.cache import consolidate_shard_caches
-from zephyr import Backend, Dataset
+from zephyr import Dataset
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
@@ -258,10 +258,13 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 
 def _tokenize_batches(
-    *, ctx: BackendContext, tokenizer_ref: Any, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]
+    *, ctx: ZephyrContext, tokenizer_ref: Any, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]
 ) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer: transformers.PreTrainedTokenizer = ctx.get(tokenizer_ref)
+    from zephyr.execution import shard_ctx
+
+    worker = shard_ctx()
+    tokenizer: transformers.PreTrainedTokenizer = worker.get_shared(tokenizer_ref)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     for batch in batches:
@@ -317,11 +320,10 @@ def tokenize(config: TokenizeConfigBase):
             )
             return
 
-        thread_ctx = create_backend_context("threadpool")
+        thread_ctx = get_default_zephyr_context()
         file_stats = list(
-            Backend.execute(
+            thread_ctx.execute(
                 Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
-                context=thread_ctx,
                 verbose=False,
             )
         )
@@ -334,11 +336,10 @@ def tokenize(config: TokenizeConfigBase):
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
-        cluster_ctx = create_backend_context(
-            context_type="auto", num_cpus=config.zephyr_num_cpus, memory=config.zephyr_memory
-        )
+        cluster_ctx = get_default_zephyr_context()
         # NOTE: "broadcast" the tokenizer on the cluster context
-        tokenizer_ref = cluster_ctx.put(transformers.AutoTokenizer.from_pretrained(config.tokenizer))
+        tokenizer_ref = "tokenizer"
+        cluster_ctx.put(tokenizer_ref, transformers.AutoTokenizer.from_pretrained(config.tokenizer))
 
         temp_shards = (
             ds.window(64)
@@ -350,10 +351,10 @@ def tokenize(config: TokenizeConfigBase):
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
 
-        shard_paths = Backend.execute(temp_shards, context=cluster_ctx)
+        shard_paths = cluster_ctx.execute(temp_shards)
 
         logger.info("Computing exemplar for cache consolidation")
-        exemplar = Backend.execute(
+        exemplar = cluster_ctx.execute(
             Dataset.from_list(paths[0:1])
             .flat_map(load_file)
             .take_per_shard(1)
@@ -362,7 +363,6 @@ def tokenize(config: TokenizeConfigBase):
                     ctx=cluster_ctx, tokenizer_ref=tokenizer_ref, config=config, batches=[example]
                 )
             ),
-            context=cluster_ctx,
             verbose=False,
         )[0]
 

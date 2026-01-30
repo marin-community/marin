@@ -26,7 +26,8 @@ import dataclasses
 
 import draccus
 from marin.execution.executor import THIS_OUTPUT_PATH
-from zephyr import Backend, Dataset, load_jsonl
+from zephyr import Dataset, load_jsonl
+from zephyr.execution import get_default_zephyr_context
 
 
 @dataclasses.dataclass
@@ -57,7 +58,7 @@ def process_dataset(config: ConversationToDolmaConfig):
         .map(transform_conversation_to_dolma)
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    Backend.execute(pipeline)
+    get_default_zephyr_context().execute(pipeline)
 
 
 # Alias for other callers

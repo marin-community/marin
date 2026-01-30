@@ -38,7 +38,6 @@ from typing import Any
 import numpy as np
 
 from fray.v2 import ActorHandle, Client, ResourceConfig
-from zephyr.context import SyncBackendContext
 from zephyr.dataset import Dataset
 from zephyr.plan import (
     ChunkHeader,
@@ -365,7 +364,6 @@ class ZephyrWorker:
             total_shards=task.total_shards,
             chunk_size=task.chunk_size,
             aux_shards=aux_shards,
-            execution_context=SyncBackendContext(),
         )
 
         results: list[tuple[dict, list]] = []

@@ -31,7 +31,8 @@ from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, ensu
 from marin.utils import fsspec_mkdirs
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
-from zephyr import Backend, Dataset
+from zephyr import Dataset
+from zephyr.execution import get_default_zephyr_context
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger("ray")
@@ -336,7 +337,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
         .map(lambda task: _download_and_convert_single(task))
         .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
     )
-    output_paths = Backend.execute(pipeline, max_parallelism=cfg.max_concurrent_downloads)
+    output_paths = get_default_zephyr_context().execute(pipeline)
 
     for dataset, metadata_file in zip(filtered_datasets, output_paths, strict=True):
         with fsspec.open(metadata_file, "r", encoding="utf-8") as meta_file:

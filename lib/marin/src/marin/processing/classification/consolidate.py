@@ -43,7 +43,8 @@ from marin.utils import (
     fsspec_glob,
     rebase_file_path,
 )
-from zephyr import Backend, Dataset
+from zephyr import Dataset
+from zephyr.execution import get_default_zephyr_context
 from zephyr.readers import InputFileSpec, load_file
 
 
@@ -203,7 +204,8 @@ def _compute_percentile_threshold(
             combined.merge(sketch)
         return combined
 
-    result = Backend.execute(
+    ctx = get_default_zephyr_context()
+    result = ctx.execute(
         Dataset.from_list(attr_paths)
         .load_file()
         .select("attributes")
@@ -332,7 +334,8 @@ def consolidate(config: ConsolidateConfig):
 
     output_pattern = f"{config.output_path}/part-{{shard:04d}}.parquet"
 
-    results = Backend.execute(
+    ctx = get_default_zephyr_context()
+    results = ctx.execute(
         Dataset.from_list(input_paths)
         .map_shard(
             lambda shard: process_file_shard(

@@ -29,10 +29,9 @@ from marin.processing.classification.deduplication.dedup_commons import (
 from marin.utils import rebase_file_path
 import pyarrow as pa
 import logging
-from zephyr.context import create_backend_context
+from zephyr.execution import get_default_zephyr_context
 import wandb
-from zephyr.backends import Backend
-from zephyr.dataset import Dataset
+from zephyr import Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +43,8 @@ def dedup_exact_paragraph(config: DedupConfig):
     input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
 
     # TODO(rav): measure and tune the memory limits
-    ctx = create_backend_context("auto", memory=config.ray_memory, num_cpus=config.ray_num_cpus)
+    ctx = get_default_zephyr_context()
+    ctx.max_parallelism = config.processes
     _init_wandb(config)
 
     def compute_paragraph_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -58,7 +58,7 @@ def dedup_exact_paragraph(config: DedupConfig):
 
     # first compute the full set of duplicate keys.
     duplicate_key_shards = list(
-        Backend.execute(
+        ctx.execute(
             Dataset.from_list(input_files)
             .flat_map(_load_batches)
             .map(compute_paragraph_hashes)
@@ -69,8 +69,6 @@ def dedup_exact_paragraph(config: DedupConfig):
                 num_output_shards=42,
             )
             .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
-            context=ctx,
-            max_parallelism=config.processes,
             verbose=True,
         ),
     )
@@ -95,7 +93,7 @@ def dedup_exact_paragraph(config: DedupConfig):
             )
 
     base_path = _find_base_path(config.input_paths, input_files)
-    Backend.execute(
+    ctx.execute(
         Dataset.from_list(input_files)
         .flat_map(_load_batches)
         .map_shard(mark_exact_dups_paragraphs)
@@ -110,7 +108,6 @@ def dedup_exact_paragraph(config: DedupConfig):
             ),
             skip_existing=True,
         ),
-        context=ctx,
         verbose=True,
     )
 
@@ -127,7 +124,8 @@ def dedup_exact_document(config: DedupConfig):
 
     input_files = _collect_input_files(input_paths=config.input_paths, filetypes=config.filetypes)
 
-    ctx = create_backend_context("auto", memory=config.ray_memory, num_cpus=config.ray_num_cpus)
+    ctx = get_default_zephyr_context()
+    ctx.max_parallelism = config.processes
     _init_wandb(config)
 
     def compute_document_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -140,7 +138,7 @@ def dedup_exact_document(config: DedupConfig):
 
     # first compute the full set of duplicate keys.
     duplicate_key_shards = list(
-        Backend.execute(
+        ctx.execute(
             Dataset.from_list(input_files)
             .flat_map(_load_batches)
             .map(compute_document_hashes)
@@ -151,8 +149,6 @@ def dedup_exact_document(config: DedupConfig):
                 num_output_shards=42,
             )
             .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
-            context=ctx,
-            max_parallelism=config.processes,
             verbose=True,
         )
     )
@@ -186,7 +182,7 @@ def dedup_exact_document(config: DedupConfig):
             yield from b.to_pylist()
 
     base_path = _find_base_path(config.input_paths, input_files)
-    Backend.execute(
+    ctx.execute(
         Dataset.from_list(input_files).flat_map(_load_batches)
         # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
         # the shards of the input files for rebase_file_path to work correctly.
@@ -200,7 +196,6 @@ def dedup_exact_document(config: DedupConfig):
             ),
             skip_existing=True,
         ),
-        context=ctx,
         verbose=True,
     )
 

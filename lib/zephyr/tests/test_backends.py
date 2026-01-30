@@ -18,7 +18,7 @@ import gzip
 import io
 import json
 
-from zephyr.backends import format_shard_path
+from zephyr.dataset import format_shard_path
 from zephyr.writers import write_jsonl_file
 
 

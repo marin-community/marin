@@ -20,8 +20,8 @@ from typing import Any, TypedDict
 from collections.abc import Sequence
 
 from dupekit import hash_xxh3_128
-from zephyr.context import BackendContext
-from zephyr import Backend, Dataset
+from zephyr.execution import ZephyrContext
+from zephyr import Dataset
 from zephyr.expr import col
 
 logger = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ class BucketWithIds(TypedDict):
 def connected_components(
     ds: Dataset[CCInput],
     *,
-    ctx: BackendContext,
+    ctx: ZephyrContext,
     output_dir: str,
     max_iterations: int = 10,
     preserve_singletons: bool = True,
@@ -101,7 +101,7 @@ def connected_components(
         preserve_singletons: Whether to preserve single-node buckets in the output
     """
 
-    curr_it = Backend.execute(
+    curr_it = ctx.execute(
         ds
         # Group nodes in buckets
         .group_by(
@@ -117,14 +117,13 @@ def connected_components(
             lambda x: x[0]["record_id_norm"],
             _build_adjacency,
         ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
-        context=ctx,
         verbose=True,
     )
 
     converged = False
     for i in range(1, max_iterations + 1):  # type: ignore[bad-assignment]
         logger.info(f"Connected components iteration {i}...")
-        curr_it = Backend.execute(
+        curr_it = ctx.execute(
             Dataset.from_list(curr_it)
             .load_parquet()
             .map(lambda record: CCNode(**record))
@@ -132,14 +131,12 @@ def connected_components(
             .group_by(key=lambda x: x[0], reducer=_reduce_node_step)
             # NOTE: parquet built-in does not support list of int :/
             .write_parquet(f"{output_dir}/it_{i}/part-{{shard:05d}}.parquet"),
-            context=ctx,
             verbose=True,
         )
 
         # Check for convergence
-        changes = Backend.execute(
+        changes = ctx.execute(
             Dataset.from_list(curr_it).load_parquet(columns=["changed"]).filter(col("changed")).count(),
-            context=ctx,
         )
 
         num_changes = changes[0]

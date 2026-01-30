@@ -47,7 +47,8 @@ from datasets import get_dataset_config_names, load_dataset
 from google.cloud import storage
 from marin.core.data import QAExample, QAExampleMetadata
 from marin.utilities.dataclass_utils import asdict_without_nones
-from zephyr import Backend, Dataset
+from zephyr import Dataset
+from zephyr.execution import get_default_zephyr_context
 
 logger = logging.getLogger(__name__)
 
@@ -600,7 +601,7 @@ def hf_dataset_to_jsonl(cfg: DatasetConversionConfig) -> None:
             .write_jsonl(output_pattern)  # Compression auto-detected from .gz extension
         )
 
-        Backend.execute(pipeline)
+        get_default_zephyr_context().execute(pipeline)
         logger.info(f"Wrote to {output_pattern}")
 
 

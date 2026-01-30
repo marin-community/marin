@@ -18,7 +18,8 @@ import time
 from dataclasses import dataclass
 
 import fsspec
-from zephyr import Backend, Dataset
+from zephyr import Dataset
+from zephyr.execution import get_default_zephyr_context
 
 from marin.utils import fsspec_exists, fsspec_glob
 
@@ -72,7 +73,7 @@ def transfer_files(config: TransferConfig) -> None:
 
     # Always use parallel copying via zephyr
     pipeline = Dataset.from_list(selected_files).map(copy_file)
-    Backend.execute(pipeline)
+    get_default_zephyr_context().execute(pipeline)
 
     elapsed_time_seconds: float = time.time() - start_time
     print(f"Downloaded {input_path} to {config.output_path} ({elapsed_time_seconds}s).")

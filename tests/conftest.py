@@ -16,7 +16,7 @@
 import pytest
 from fray.v2.client import set_current_client
 from fray.v2.local import LocalClient
-from zephyr.context import _default_backend_context
+from zephyr.execution import _default_zephyr_context
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
@@ -25,9 +25,9 @@ DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 @pytest.fixture(autouse=True)
 def reset_backend_context():
     """Reset backend context between tests for isolation."""
-    _default_backend_context.set(None)
+    _default_zephyr_context.set(None)
     yield
-    _default_backend_context.set(None)
+    _default_zephyr_context.set(None)
 
 
 @pytest.fixture(autouse=True)
