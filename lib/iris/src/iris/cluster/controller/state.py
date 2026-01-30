@@ -1236,6 +1236,9 @@ class ControllerState:
 
         # Handle side effects based on result
         if result == TaskTransitionResult.SHOULD_RETRY:
+            # Reset task state to PENDING so job-level aggregation doesn't
+            # count it as a terminal failure while retries remain.
+            task.state = cluster_pb2.TASK_STATE_PENDING
             self._requeue_task(task, txn)
             self._cleanup_task_resources(task, job, txn)
         elif task.is_finished():

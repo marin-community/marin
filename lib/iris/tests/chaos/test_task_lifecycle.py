@@ -17,7 +17,7 @@
 Tests task-level failure modes, timeouts, capacity, and scheduling behavior.
 """
 import time
-import pytest
+
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
 from iris.cluster.types import ResourceSpec, CoschedulingConfig
@@ -25,26 +25,18 @@ from .conftest import submit, wait, _quick
 
 
 def test_bundle_download_intermittent(cluster):
-    """Bundle download fails intermittently, task retries handle it.
-
-    NOTE: max_retries_failure not exposed in IrisClient API yet - test disabled.
-    """
+    """Bundle download fails intermittently, task retries handle it."""
     _url, client = cluster
     enable_chaos(
         "worker.bundle_download", failure_rate=0.5, max_failures=2, error=RuntimeError("chaos: download failed")
     )
-    # TODO: Add max_retries_failure=3 once API supports it
-    job = submit(client, _quick, "bundle-fail")
+    job = submit(client, _quick, "bundle-fail", max_retries_failure=3)
     status = wait(client, job, timeout=60)
-    # Without retry support, chaos may cause failure
-    assert status.state in (cluster_pb2.JOB_STATE_SUCCEEDED, cluster_pb2.JOB_STATE_FAILED)
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_task_timeout(cluster):
-    """Task times out, marked FAILED.
-
-    NOTE: timeout_seconds not exposed in IrisClient API yet - test disabled.
-    """
+    """Task times out, marked FAILED."""
     _url, client = cluster
 
     def hang():
@@ -52,25 +44,20 @@ def test_task_timeout(cluster):
 
         time.sleep(300)
 
-    # TODO: Add timeout_seconds=5 once API supports it
-    job = submit(client, hang, "timeout-test")
-    status = wait(client, job, timeout=10)
-    # Without timeout support, task will run indefinitely - just check it starts
-    assert status.state in (cluster_pb2.JOB_STATE_RUNNING, cluster_pb2.JOB_STATE_PENDING)
+    job = submit(client, hang, "timeout-test", timeout_seconds=5)
+    status = wait(client, job, timeout=30)
+    assert status.state == cluster_pb2.JOB_STATE_FAILED
 
 
-@pytest.mark.skip(reason="Iris bug: coscheduling constraints unmet in local cluster, job stuck PENDING (gh#2533)")
 def test_coscheduled_sibling_failure(cluster):
     """Coscheduled job: one replica fails → all siblings killed.
 
-    NOTE: Coscheduling with group_by="worker" requires multiple workers with
-    matching attributes. In local test cluster, this may not be satisfied,
-    causing job to remain PENDING.
+    Uses group_by="tpu-name" which is the production pattern. All local workers
+    from the same slice share the same tpu-name attribute value.
     """
     _url, client = cluster
     # Fail container creation once — hits one replica, sibling cascade kills all
     enable_chaos("worker.create_container", failure_rate=0.5, max_failures=1, error=RuntimeError("chaos: replica fail"))
-    # Use client.submit directly to pass resources with replicas
     from iris.cluster.types import Entrypoint, EnvironmentSpec
 
     job = client.submit(
@@ -78,27 +65,21 @@ def test_coscheduled_sibling_failure(cluster):
         name="cosched-fail",
         resources=ResourceSpec(cpu=1, memory="1g"),
         environment=EnvironmentSpec(),
-        coscheduling=CoschedulingConfig(group_by="worker"),
+        coscheduling=CoschedulingConfig(group_by="tpu-name"),
         replicas=2,
+        scheduling_timeout_seconds=30,
     )
     status = wait(client, job, timeout=60)
-    # Expected: FAILED when coscheduling works and one replica fails
-    # Actual in local cluster: PENDING because coscheduling constraints not met
-    assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_PENDING)
+    assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
 def test_retry_budget_exact(cluster):
-    """Task fails exactly N-1 times, succeeds on last attempt.
-
-    NOTE: max_retries_failure not exposed in IrisClient API yet - test disabled.
-    """
+    """Task fails exactly N-1 times, succeeds on last attempt."""
     _url, client = cluster
     enable_chaos("worker.create_container", failure_rate=1.0, max_failures=2, error=RuntimeError("chaos: transient"))
-    # TODO: Add max_retries_failure=2 once API supports it
-    job = submit(client, _quick, "exact-retry")
+    job = submit(client, _quick, "exact-retry", max_retries_failure=2)
     status = wait(client, job, timeout=60)
-    # Without retry support, task will fail on first attempt
-    assert status.state == cluster_pb2.JOB_STATE_FAILED
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_capacity_wait(cluster):
