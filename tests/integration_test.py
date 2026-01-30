@@ -18,7 +18,8 @@ import os
 import sys
 
 import draccus
-from fray.v2 import ResourceConfig, create_cluster, set_current_cluster
+from fray.v2 import ResourceConfig, set_current_client
+from fray.v2.ray.backend import RayClient
 import humanfriendly
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
@@ -276,7 +277,7 @@ def main(config: ExecutorMainConfig):
         import ray
 
         ray.init(resources={"head_node": 1}, runtime_env={"working_dir": None}, num_cpus=os.cpu_count())
-        set_current_cluster(create_cluster("ray"))
+        set_current_client(RayClient())
 
         # path to synthetic test data
         synth_data: str = "./tests/quickstart-data"
