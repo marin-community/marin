@@ -91,7 +91,7 @@ step = evaluate_harbor(
     resource_config=resource_config,
     wandb_tags=["harbor", "aime", "sanity-check", "claude"],
     agent="claude-code",  # Use Harbor's built-in Claude Code agent
-    n_concurrent=2,  # Run 2 tasks in parallel for sanity check
+    n_concurrent=5,  # Run all 5 tasks in parallel
     env="local",  # Use local Docker containers
 )
 
