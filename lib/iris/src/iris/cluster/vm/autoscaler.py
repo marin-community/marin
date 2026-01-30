@@ -202,11 +202,29 @@ class Autoscaler:
             thread_name_prefix="scale-up",
         )
 
-    def shutdown(self) -> None:
-        """Shutdown the autoscaler and wait for in-flight scale-ups to complete."""
-        logger.info("Shutting down autoscaler, waiting for in-flight scale-ups...")
+    def _wait_for_inflight(self) -> None:
+        """Wait for in-flight scale-ups to complete without terminating anything.
+
+        Test-only: not concurrency-safe with concurrent execute() calls.
+        """
         self._scale_up_executor.shutdown(wait=True)
-        logger.info("Autoscaler shutdown complete")
+        # Re-create executor so the autoscaler remains usable after waiting
+        self._scale_up_executor = ThreadPoolExecutor(
+            max_workers=max(len(self._groups), 4),
+            thread_name_prefix="scale-up",
+        )
+
+    def shutdown(self) -> None:
+        """Shutdown the autoscaler, terminate all VM groups, and wait for in-flight scale-ups."""
+        self._scale_up_executor.shutdown(wait=True)
+        for group in self._groups.values():
+            group.terminate_all()
+
+    def __enter__(self) -> Autoscaler:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.shutdown()
 
     def reconcile(self) -> None:
         """Reconcile all groups (discover existing slices from cloud).
