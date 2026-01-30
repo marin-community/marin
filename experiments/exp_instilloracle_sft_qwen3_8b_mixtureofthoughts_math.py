@@ -55,13 +55,12 @@ tokenized_datasets = {DATASET_SHORT_NAME: tokenized_mot_math}
 mixture_weights = {DATASET_SHORT_NAME: DATASET_SIZE}
 
 # Training configuration
-# Using v5p-16 for 32K context with cross_entropy_block_size for memory efficiency
 TARGET_EPOCHS = 8
-TRAIN_BATCH_SIZE = 128  # Matches Open-R1 recipe effective batch size
-MICROBATCH_SIZE = 32  # 4 per device on v5p-16 (8 chips)
+TRAIN_BATCH_SIZE = 128  # Matches Open-R1 recipe
+MICROBATCH_SIZE = 128  # 4 per device on v5p-64 (32 chips), no grad accumulation
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * DATASET_SIZE / TRAIN_BATCH_SIZE)
 
-RESOURCES = ResourceConfig.with_tpu("v5p-16")
+RESOURCES = ResourceConfig.with_tpu("v5p-64")
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
