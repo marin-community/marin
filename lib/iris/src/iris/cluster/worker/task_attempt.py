@@ -35,10 +35,10 @@ from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, Docker
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.worker_types import TaskLogs
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, common_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
-from iris.time_utils import now_ms
+from iris.time_utils import Deadline, now_ms
 
 logger = logging.getLogger(__name__)
 
@@ -199,8 +199,8 @@ class TaskAttempt:
         self.status: TaskState = cluster_pb2.TASK_STATE_PENDING
         self.exit_code: int | None = None
         self.error: str | None = None
-        self.started_at_ms: int | None = None
-        self.finished_at_ms: int | None = None
+        self.started_at: common_pb2.Timestamp | None = None
+        self.finished_at: common_pb2.Timestamp | None = None
         self.status_message: str = ""
 
         # Resource tracking
@@ -211,8 +211,8 @@ class TaskAttempt:
         self.disk_mb: int = 0
 
         # Build tracking
-        self.build_started_ms: int | None = None
-        self.build_finished_ms: int | None = None
+        self.build_started: common_pb2.Timestamp | None = None
+        self.build_finished: common_pb2.Timestamp | None = None
         self.build_from_cache: bool = False
         self.image_tag: str = ""
 
@@ -238,7 +238,7 @@ class TaskAttempt:
         self.status = state
         self.status_message = message
         if is_task_finished(state):
-            self.finished_at_ms = now_ms()
+            self.finished_at = common_pb2.Timestamp(epoch_ms=now_ms())
             if error:
                 self.error = error
             if exit_code is not None:
@@ -252,8 +252,8 @@ class TaskAttempt:
             state=self.status,
             exit_code=self.exit_code or 0,
             error=self.error or "",
-            started_at_ms=self.started_at_ms or 0,
-            finished_at_ms=self.finished_at_ms or 0,
+            started_at_ms=self.started_at.epoch_ms if self.started_at else 0,
+            finished_at_ms=self.finished_at.epoch_ms if self.finished_at else 0,
             ports=self.ports,
             current_attempt_id=self.attempt_id,
             resource_usage=cluster_pb2.ResourceUsage(
@@ -265,8 +265,8 @@ class TaskAttempt:
                 process_count=self.process_count,
             ),
             build_metrics=cluster_pb2.BuildMetrics(
-                build_started_ms=self.build_started_ms or 0,
-                build_finished_ms=self.build_finished_ms or 0,
+                build_started_ms=self.build_started.epoch_ms if self.build_started else 0,
+                build_finished_ms=self.build_finished.epoch_ms if self.build_finished else 0,
                 from_cache=self.build_from_cache,
                 image_tag=self.image_tag,
             ),
@@ -296,7 +296,7 @@ class TaskAttempt:
         for testing delayed builds.
         """
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
-        self.started_at_ms = now_ms()
+        self.started_at = common_pb2.Timestamp(epoch_ms=now_ms())
         self._report_state(self)  # Report BUILDING state to controller
 
         # Chaos injection for testing failures during download
@@ -323,7 +323,7 @@ class TaskAttempt:
         and base image selection.
         """
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="building image")
-        self.build_started_ms = now_ms()
+        self.build_started = common_pb2.Timestamp(epoch_ms=now_ms())
 
         # Periodically check should_stop during build to support kill during BUILDING
         # (RF-3: Similar to bundle download, we defer kill handling for now since
@@ -362,7 +362,7 @@ class TaskAttempt:
             pip_packages=pip_packages,
         )
 
-        self.build_finished_ms = now_ms()
+        self.build_finished = common_pb2.Timestamp(epoch_ms=now_ms())
         self.build_from_cache = build_result.from_cache
         self.image_tag = build_result.image_tag
 
@@ -466,7 +466,7 @@ class TaskAttempt:
             container_id: Container to monitor
         """
         timeout_seconds = self.request.timeout_seconds or None
-        start_time = time.time()
+        deadline = Deadline.from_seconds(timeout_seconds) if timeout_seconds else None
 
         while True:
             if rule := chaos("worker.task_monitor"):
@@ -480,7 +480,7 @@ class TaskAttempt:
                 break
 
             # Check timeout
-            if timeout_seconds and (time.time() - start_time) > timeout_seconds:
+            if deadline and deadline.expired():
                 self._runtime.kill(container_id, force=True)
                 self.transition_to(
                     cluster_pb2.TASK_STATE_FAILED,
