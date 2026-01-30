@@ -45,7 +45,7 @@ import jax.numpy as jnp
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
-from fray.job.context import get_default_job_ctx
+from fray.v2.actor import ActorHandle
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
@@ -370,6 +370,7 @@ class ArrowFlightServer(WeightTransferServer):
     def __init__(
         self,
         config: WeightTransferConfig,
+        coordinator: ActorHandle,
         mesh: Mesh | None = None,
         axis_mapping: ResourceMapping | None = None,
         num_servers: int = NUM_PARALLEL_SERVERS,
@@ -406,14 +407,7 @@ class ArrowFlightServer(WeightTransferServer):
             logger.info(f"Arrow Flight server {i} started at {server_location}")
 
         self.metrics = WeightTransferServerMetrics()
-        self._ctx = get_default_job_ctx()
-        self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator,
-            name=self.config.coordinator_name,
-            get_if_exists=True,
-            preemptible=False,
-            num_cpus=0,
-        )
+        self._coordinator = coordinator
         logger.info("Started Arrow Flight weight transfer with config: %s", self.config)
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
@@ -447,7 +441,7 @@ class ArrowFlightServer(WeightTransferServer):
                 param_names = list(params_dict.keys())
                 actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
                 server_locations = [(actual_host, server.port) for server in self._flight_servers]
-                self._ctx.get(self._coordinator.update_server.remote(weight_id, param_names, server_locations))
+                self._coordinator.update_server.remote(weight_id, param_names, server_locations).result()
                 update_time = time.time()
 
                 self.metrics.successful_transfers += 1
@@ -495,7 +489,11 @@ class ArrowFlightClient(WeightTransferClient):
     _receive_pool: ThreadPoolExecutor
 
     def __init__(
-        self, config: WeightTransferConfig, mesh: Mesh | None = None, axis_mapping: ResourceMapping | None = None
+        self,
+        config: WeightTransferConfig,
+        coordinator: ActorHandle,
+        mesh: Mesh | None = None,
+        axis_mapping: ResourceMapping | None = None,
     ):
         self.config = config
         self.mesh = mesh
@@ -507,14 +505,7 @@ class ArrowFlightClient(WeightTransferClient):
 
         self.metrics = WeightTransferClientMetrics()
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
-        self._ctx = get_default_job_ctx()
-        self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator,
-            name=self.config.coordinator_name,
-            get_if_exists=True,
-            preemptible=False,
-            num_cpus=0,
-        )
+        self._coordinator = coordinator
 
     def _connect_to_servers(self, new_locations) -> bool:
         """Connect to all Arrow Flight servers."""
@@ -571,7 +562,7 @@ class ArrowFlightClient(WeightTransferClient):
             start_time = time.time()
 
             # Fetch server info from coordinator
-            server_info = self._ctx.get(self._coordinator.fetch_server.remote())
+            server_info = self._coordinator.fetch_server.remote().result()
 
             if not server_info:
                 logger.info("No Arrow Flight server info available from coordinator.")
