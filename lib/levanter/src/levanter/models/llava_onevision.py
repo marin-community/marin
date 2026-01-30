@@ -1679,8 +1679,15 @@ class _LlavaInferenceWrapper(eqx.Module):
 
         # 2. Compute per-token segment_ids from batch_info
         # batch_info.cu_q_lens: cumulative token counts [0, n0, n0+n1, ...]
-        cu_q_lens = batch_info.cu_q_lens.array  # (seq,)
+        # IMPORTANT: cu_q_lens has max_seqs+1 elements, but only the first num_seqs+1 are valid!
+        # The rest are zeros, which breaks searchsorted (it assumes sorted array).
+        cu_q_lens_full = batch_info.cu_q_lens.array  # (max_seqs+1,)
         num_seqs = batch_info.num_seqs
+
+        # Only use the valid portion of cu_q_lens for searchsorted
+        # This is critical - using the full array with trailing zeros causes ALL tokens
+        # to be incorrectly assigned to the last segment!
+        cu_q_lens = cu_q_lens_full[:num_seqs + 1]  # (num_seqs+1,) - properly sorted
 
         # For each position, find which sequence it belongs to
         # segment_indices[i] = j means token i belongs to sequence j (not slot j!)

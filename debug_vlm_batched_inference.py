@@ -72,14 +72,53 @@ def test_batched_embeddings_calculation():
 
     # Compute segment_indices for each position
     positions = jnp.arange(total_tokens)
+
+    # BUG INVESTIGATION: searchsorted assumes sorted array!
+    # cu_q_lens = [0, 100, 180, 300, 0, 0, 0, 0, 0] is NOT sorted after position 3!
+    logger.info(f"\n⚠ BUG INVESTIGATION: searchsorted on unsorted array")
+    logger.info(f"  cu_q_lens is sorted? {bool(jnp.all(jnp.diff(cu_q_lens) >= 0))}")
+    logger.info(f"  Valid portion cu_q_lens[:4]: {cu_q_lens[:4]}")
+
+    # Test searchsorted behavior
+    test_positions = jnp.array([0, 50, 100, 150, 180, 250])
+    for pos in test_positions.tolist():
+        raw_result = jnp.searchsorted(cu_q_lens, pos, side='right')
+        expected_segment = 0 if pos < 100 else (1 if pos < 180 else 2)
+        actual_segment = raw_result - 1
+        status = "✓" if actual_segment == expected_segment else "✗ WRONG"
+        logger.info(f"  pos={pos}: searchsorted={raw_result}, segment={actual_segment}, expected={expected_segment} {status}")
+
+    # FIX: Only use valid portion of cu_q_lens
+    valid_cu_q_lens = cu_q_lens[:num_requests + 1]
+    logger.info(f"\n✓ FIX: Use valid cu_q_lens[:num_requests+1] = {valid_cu_q_lens}")
+
+    for pos in test_positions.tolist():
+        raw_result = jnp.searchsorted(valid_cu_q_lens, pos, side='right')
+        expected_segment = 0 if pos < 100 else (1 if pos < 180 else 2)
+        actual_segment = raw_result - 1
+        status = "✓" if actual_segment == expected_segment else "✗ WRONG"
+        logger.info(f"  pos={pos}: searchsorted={raw_result}, segment={actual_segment}, expected={expected_segment} {status}")
+
     segment_indices = jnp.searchsorted(cu_q_lens, positions, side='right') - 1
     segment_indices_clipped = jnp.clip(segment_indices, 0, num_requests - 1)
 
+    # Also compute with fixed version
+    segment_indices_fixed = jnp.searchsorted(valid_cu_q_lens, positions, side='right') - 1
+    segment_indices_fixed_clipped = jnp.clip(segment_indices_fixed, 0, num_requests - 1)
+
     # Check unique segment_ids
+    logger.info(f"\nSegment assignment (BUGGY - full cu_q_lens):")
     unique_segments, counts = jnp.unique(segment_indices_clipped, return_counts=True)
-    logger.info(f"\nSegment assignment:")
     for seg, count in zip(unique_segments.tolist(), counts.tolist()):
         logger.info(f"  Segment {seg}: {count} tokens")
+
+    logger.info(f"\nSegment assignment (FIXED - valid cu_q_lens only):")
+    unique_segments_fixed, counts_fixed = jnp.unique(segment_indices_fixed_clipped, return_counts=True)
+    for seg, count in zip(unique_segments_fixed.tolist(), counts_fixed.tolist()):
+        logger.info(f"  Segment {seg}: {count} tokens")
+
+    # Use the FIXED segment indices for the rest of the test
+    segment_indices_clipped = segment_indices_fixed_clipped
 
     # Simulate image token mask (some positions are image placeholders)
     # Let's say every other token in each sequence is an image placeholder
