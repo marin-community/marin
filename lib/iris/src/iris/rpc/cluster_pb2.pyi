@@ -31,6 +31,7 @@ class TaskState(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     TASK_STATE_KILLED: _ClassVar[TaskState]
     TASK_STATE_WORKER_FAILED: _ClassVar[TaskState]
     TASK_STATE_UNSCHEDULABLE: _ClassVar[TaskState]
+    TASK_STATE_ASSIGNED: _ClassVar[TaskState]
 
 class ConstraintOp(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -60,6 +61,7 @@ TASK_STATE_FAILED: TaskState
 TASK_STATE_KILLED: TaskState
 TASK_STATE_WORKER_FAILED: TaskState
 TASK_STATE_UNSCHEDULABLE: TaskState
+TASK_STATE_ASSIGNED: TaskState
 CONSTRAINT_OP_EQ: ConstraintOp
 CONSTRAINT_OP_NE: ConstraintOp
 CONSTRAINT_OP_EXISTS: ConstraintOp
@@ -494,17 +496,24 @@ class Controller(_message.Message):
         metadata: WorkerMetadata
         registered_at_ms: int
         def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ..., registered_at_ms: _Optional[int] = ...) -> None: ...
+    class RunningTaskEntry(_message.Message):
+        __slots__ = ("task_id", "attempt_id")
+        TASK_ID_FIELD_NUMBER: _ClassVar[int]
+        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
+        task_id: str
+        attempt_id: int
+        def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ...) -> None: ...
     class RegisterWorkerRequest(_message.Message):
-        __slots__ = ("worker_id", "address", "metadata", "running_task_ids")
+        __slots__ = ("worker_id", "address", "metadata", "running_tasks")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
         ADDRESS_FIELD_NUMBER: _ClassVar[int]
         METADATA_FIELD_NUMBER: _ClassVar[int]
-        RUNNING_TASK_IDS_FIELD_NUMBER: _ClassVar[int]
+        RUNNING_TASKS_FIELD_NUMBER: _ClassVar[int]
         worker_id: str
         address: str
         metadata: WorkerMetadata
-        running_task_ids: _containers.RepeatedScalarFieldContainer[str]
-        def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ..., running_task_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+        running_tasks: _containers.RepeatedCompositeFieldContainer[Controller.RunningTaskEntry]
+        def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[WorkerMetadata, _Mapping]] = ..., running_tasks: _Optional[_Iterable[_Union[Controller.RunningTaskEntry, _Mapping]]] = ...) -> None: ...
     class RegisterWorkerResponse(_message.Message):
         __slots__ = ("accepted", "controller_address", "should_reset")
         ACCEPTED_FIELD_NUMBER: _ClassVar[int]

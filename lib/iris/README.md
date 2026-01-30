@@ -131,7 +131,7 @@ Workers communicate with the controller using internal VPC IPs. External clients
 ### Registration and Reconciliation
 
 Workers register with the controller via heartbeat (every 10 seconds). The registration
-includes `running_task_ids` - the list of tasks the worker believes it's running.
+includes `running_tasks` - the list of tasks the worker believes it's running, with attempt IDs.
 
 The controller performs bidirectional reconciliation:
 

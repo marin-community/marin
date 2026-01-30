@@ -160,7 +160,7 @@ class ControllerTaskAttempt:
 
     attempt_id: int
     worker_id: WorkerId | None = None
-    state: int = cluster_pb2.TASK_STATE_PENDING
+    state: int = cluster_pb2.TASK_STATE_ASSIGNED
 
     # Timing
     created_at_ms: int = 0
@@ -214,6 +214,13 @@ class ControllerTask:
                             +-----+-----+                  |
                                   |                        |
                             dispatch to worker             |
+                                  |                        |
+                                  v                        |
+                            +-----------+                  |
+                            | ASSIGNED  |                  |
+                            +-----+-----+                  |
+                                  |                        |
+                          worker starts task               |
                                   |                        |
                                   v                        |
                             +-----------+                  |
@@ -308,17 +315,17 @@ class ControllerTask:
         self,
         worker_id: WorkerId,
         *,
-        initial_state: int = cluster_pb2.TASK_STATE_PENDING,
+        initial_state: int = cluster_pb2.TASK_STATE_ASSIGNED,
     ) -> ControllerTaskAttempt:
         """Create a new attempt for this task.
 
         Called when the scheduler assigns this task to a worker. The attempt
-        starts in PENDING state by default - the worker will report RUNNING
+        starts in ASSIGNED state by default - the worker will report RUNNING
         when execution actually begins.
 
         Args:
             worker_id: The worker this attempt is assigned to
-            initial_state: Starting state for the attempt (default: PENDING)
+            initial_state: Starting state for the attempt (default: ASSIGNED)
 
         Returns:
             The new attempt so caller can track it.
@@ -336,17 +343,6 @@ class ControllerTask:
         self.state = initial_state
 
         return attempt
-
-    def revert_attempt(self) -> None:
-        """Remove the current attempt if dispatch RPC fails.
-
-        Called when we created an attempt but the RPC to dispatch
-        to the worker failed, so we need to undo. Resets state to PENDING
-        since create_attempt() set it to RUNNING.
-        """
-        if self.attempts:
-            self.attempts.pop()
-            self.state = cluster_pb2.TASK_STATE_PENDING
 
     def handle_attempt_result(
         self,
@@ -1079,7 +1075,7 @@ class ControllerState:
         worker.healthy = False
         txn.log("worker_failed", event.worker_id, error=event.error)
 
-        # Cascade to all tasks on this worker (RUNNING or PENDING) - call handler directly, same transaction
+        # Cascade to all tasks on this worker (RUNNING, ASSIGNED, or BUILDING) - call handler directly, same transaction
         for task_id in list(worker.running_tasks):
             task = self._tasks[task_id]
             assert task.worker_id == event.worker_id
@@ -1090,6 +1086,7 @@ class ControllerState:
             cascade_event = TaskStateChangedEvent(
                 task_id=task_id,
                 new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                attempt_id=task.current_attempt_id,
                 error=f"Worker {event.worker_id} failed: {event.error or 'unknown'}",
             )
             self._on_task_state_changed(txn, cascade_event)
@@ -1153,6 +1150,7 @@ class ControllerState:
             cascade_event = TaskStateChangedEvent(
                 task_id=task_id,
                 new_state=cluster_pb2.TASK_STATE_KILLED,
+                attempt_id=task.current_attempt_id,
                 error=event.reason,
             )
             self._on_task_state_changed(txn, cascade_event)
@@ -1171,7 +1169,7 @@ class ControllerState:
 
         Called AFTER successful dispatch RPC. Commits resources and creates attempt.
 
-        Creates an attempt in PENDING state. The task transitions to RUNNING
+        Creates an attempt in ASSIGNED state. The task transitions to RUNNING
         when the worker reports TASK_STATE_CHANGED with RUNNING.
         """
         task = self._tasks[event.task_id]
@@ -1179,7 +1177,7 @@ class ControllerState:
         worker = self._workers[event.worker_id]
 
         old_state = task.state
-        task.create_attempt(event.worker_id, initial_state=cluster_pb2.TASK_STATE_PENDING)
+        task.create_attempt(event.worker_id, initial_state=cluster_pb2.TASK_STATE_ASSIGNED)
 
         # Commit resources and add to running_tasks
         worker.assign_task(event.task_id, job.request.resources)
@@ -1198,6 +1196,34 @@ class ControllerState:
         state transition logic including retry budget management.
         """
         task = self._tasks[event.task_id]
+
+        # Validate attempt_id matches the current attempt
+        if event.attempt_id != task.current_attempt_id:
+            stale_attempt = task.attempts[event.attempt_id] if 0 <= event.attempt_id < len(task.attempts) else None
+            if stale_attempt and not stale_attempt.is_terminal():
+                logger.error(
+                    "Stale attempt precondition violation: task=%s received attempt=%d "
+                    "but current is %d and stale attempt state is %s (not terminal)",
+                    event.task_id,
+                    event.attempt_id,
+                    task.current_attempt_id,
+                    stale_attempt.state,
+                )
+            else:
+                logger.warning(
+                    "Ignoring stale task state report: task=%s attempt=%d current=%d",
+                    event.task_id,
+                    event.attempt_id,
+                    task.current_attempt_id,
+                )
+            txn.log(
+                "stale_attempt_ignored",
+                event.task_id,
+                reported_attempt=event.attempt_id,
+                current_attempt=task.current_attempt_id,
+            )
+            return
+
         job = self._jobs[task.job_id]
         old_state = task.state
 
@@ -1280,7 +1306,7 @@ class ControllerState:
                 continue
 
             sibling = self._tasks[sibling_id]
-            if sibling.state != cluster_pb2.TASK_STATE_RUNNING:
+            if sibling.state not in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_ASSIGNED):
                 continue
 
             sibling_old = sibling.state

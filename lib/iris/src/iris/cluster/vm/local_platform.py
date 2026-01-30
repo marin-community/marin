@@ -36,7 +36,7 @@ from iris.cluster.client.local_client import (
     _LocalImageProvider,
 )
 from iris.cluster.types import get_tpu_topology, tpu_device
-from iris.cluster.vm.autoscaler import Autoscaler, AutoscalerConfig
+from iris.cluster.vm.autoscaler import Autoscaler
 from iris.cluster.vm.managed_vm import ManagedVm, VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmGroupStatus, VmSnapshot
@@ -233,11 +233,11 @@ class LocalVmManager:
         worker_ids: list[str] = []
         worker_ports: list[int] = []
 
-        bundle_provider = _LocalBundleProvider(self._fake_bundle)
-        image_provider = _LocalImageProvider()
-        container_runtime = _LocalContainerRuntime()
-
         for tpu_worker_id in range(worker_count):
+            # Each worker needs its own runtime to avoid container dict conflicts
+            bundle_provider = _LocalBundleProvider(self._fake_bundle)
+            image_provider = _LocalImageProvider()
+            container_runtime = _LocalContainerRuntime()
             worker_id = f"worker-{slice_id}-{tpu_worker_id}-{uuid.uuid4().hex[:8]}"
             worker_port = find_free_port()
 
@@ -339,5 +339,5 @@ def _create_local_autoscaler(
     return Autoscaler(
         scale_groups=scale_groups,
         vm_registry=vm_registry,
-        config=AutoscalerConfig(evaluation_interval_seconds=2.0),
+        config=config_pb2.AutoscalerConfig(evaluation_interval_seconds=2.0),
     )
