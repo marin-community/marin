@@ -202,6 +202,7 @@ def simulated_epoching_train(
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
+    eval_datasets_cache_path: str | None = None,
 ) -> ExecutorStep:
     """
     Simulates the number of epochs seen in a full training run by sub-sampling individual datasets.
@@ -217,6 +218,8 @@ def simulated_epoching_train(
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
         wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
+        eval_datasets_cache_path: Optional GCS path to pre-cached evaluation datasets. If provided, datasets will be
+            synced from GCS to local cache before evaluation to avoid HuggingFace API rate limiting.
     """
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
@@ -247,6 +250,7 @@ def simulated_epoching_train(
         use_default_validation,
         eval_harness_tasks,
         wandb_name=wandb_name,
+        eval_datasets_cache_path=eval_datasets_cache_path,
     )
 
 
@@ -261,6 +265,7 @@ def default_train(
     wandb_name: str | None = None,
     wandb_group: str | None = None,
     override_output_path: str | None = None,
+    eval_datasets_cache_path: str | None = None,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -275,6 +280,8 @@ def default_train(
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
         wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
         wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
+        eval_datasets_cache_path: Optional GCS path to pre-cached evaluation datasets. If provided, datasets will be
+            synced from GCS to local cache before evaluation to avoid HuggingFace API rate limiting.
     """
 
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
@@ -303,7 +310,10 @@ def default_train(
         logger.warning(f"Truncated name from {old_name} to {name} to fit within WANDB limits.")
 
     if eval_harness_tasks:
-        harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
+        harness_config = LmEvalHarnessConfig(
+            task_spec=convert_to_levanter_task_config(eval_harness_tasks),
+            eval_datasets_cache_path=eval_datasets_cache_path,
+        )
     else:
         harness_config = None
 

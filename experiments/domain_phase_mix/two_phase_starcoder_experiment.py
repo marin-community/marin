@@ -39,6 +39,7 @@ Usage:
 import logging
 import os
 
+from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import executor_main
 
 from experiments.domain_phase_mix.analysis import create_analysis_step
@@ -59,7 +60,7 @@ logger = logging.getLogger("ray")
 # EXPERIMENT CONFIGURATION
 # ============================================================================
 
-NAME = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_2"
+NAME = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_3"
 
 # Token budget: 1B tokens (as specified in RegMix paper)
 EXPERIMENT_BUDGET = 1_000_000_000  # Actual tokens we train with
@@ -80,6 +81,10 @@ DOMAIN_NAMES = ["nemotron_full", "starcoder"]
 
 # Combine CORE_TASKS + CODE_TASKS for evaluation
 EVAL_TASKS = CORE_TASKS + CODE_TASKS
+
+# GCS path for pre-cached evaluation datasets to avoid HuggingFace rate limiting
+# Use us-central1 to match the cluster region
+EVAL_DATASETS_CACHE_PATH = "gs://marin-us-central1/raw/eval-datasets/code-tasks"
 
 # Use uniform sampling strategy for weight exploration
 SAMPLING_PARAMS = DirichletSamplingParams(
@@ -172,6 +177,7 @@ def create_two_phase_experiment(
         target_budget=target_budget,
         eval_harness_tasks=EVAL_TASKS,
         sampling_params=SAMPLING_PARAMS,
+        eval_datasets_cache_path=EVAL_DATASETS_CACHE_PATH,
     )
 
 
@@ -283,6 +289,13 @@ def main(
 
     experiment = create_two_phase_experiment(name=name_prefix)
 
+    # Create step to pre-cache eval datasets to GCS (runs once before training)
+    cache_eval_datasets_step = create_cache_eval_datasets_step(
+        eval_tasks=EVAL_TASKS,
+        gcs_path=EVAL_DATASETS_CACHE_PATH,
+        name_prefix=name_prefix,
+    )
+
     weight_configs_step, training_steps = experiment.create_swarm_steps(
         n_runs=n_runs, seed=seed, name_prefix=name_prefix
     )
@@ -325,11 +338,12 @@ def main(
     logger.info(f"Total steps per run: {total_steps:,}")
     logger.info(f"Phase boundary: step {phase1_end} (50%)")
     logger.info(f"Target budget (simulated epoching): {TARGET_BUDGET:,}")
-    logger.info(f"Max epoching on smallest dataset: 32x")
+    logger.info("Max epoching on smallest dataset: 32x")
 
     # Run all steps through executor_main, which handles --max_concurrent and
     # --force_run_failed via draccus CLI parsing
-    all_steps = [weight_configs_step, *training_steps, analysis_step]
+    # cache_eval_datasets_step runs first to pre-cache datasets before training
+    all_steps = [cache_eval_datasets_step, weight_configs_step, *training_steps, analysis_step]
     executor_main(
         steps=all_steps,
         description=f"Two-phase starcoder experiment: {n_runs} runs",

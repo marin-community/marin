@@ -43,7 +43,6 @@ from experiments.domain_phase_mix.config import (
 )
 from experiments.domain_phase_mix.weight_sampler import WeightSampler, DirichletSamplingParams
 
-
 # Default MuonH optimizer configuration from proxy_sweep.py
 # This is adapted from 130M Qwen3 config for small models
 DEFAULT_MUON_CONFIG = MuonHConfig(
@@ -133,6 +132,7 @@ class MixtureExperiment:
         sampling_params: DirichletSamplingParams | None = None,
         mixture_block_size: int = 2048,
         optimizer_config: MuonHConfig | None = None,
+        eval_datasets_cache_path: str | None = None,
     ):
         """Initialize the experiment.
 
@@ -154,6 +154,8 @@ class MixtureExperiment:
                 occur at block boundaries. Default 2048.
             optimizer_config: Optimizer configuration. Defaults to MuonH optimizer
                 with hyperparameters from proxy_sweep.py.
+            eval_datasets_cache_path: Optional GCS path to pre-cached evaluation datasets.
+                If provided, datasets will be synced from GCS to avoid HuggingFace rate limiting.
         """
         self.name = name
         self.domains = domains
@@ -168,6 +170,7 @@ class MixtureExperiment:
         self.sampling_params = sampling_params or DirichletSamplingParams()
         self.mixture_block_size = mixture_block_size
         self.optimizer_config = optimizer_config or DEFAULT_MUON_CONFIG
+        self.eval_datasets_cache_path = eval_datasets_cache_path
 
         # Compute training steps and budget
         self.tokens_per_step = batch_size * seq_len
@@ -227,9 +230,7 @@ class MixtureExperiment:
             component_weights = self.experiment_config.expand_domain_weights(domain_weights)
 
             # Get step index for phase start (aligned for block_size constraints)
-            start_step = phase.get_start_step_aligned(
-                self.num_train_steps, self.batch_size, self.mixture_block_size
-            )
+            start_step = phase.get_start_step_aligned(self.num_train_steps, self.batch_size, self.mixture_block_size)
 
             weights_list.append((start_step, component_weights))
 
@@ -300,6 +301,7 @@ class MixtureExperiment:
                 use_default_validation=True,
                 eval_harness_tasks=self.eval_harness_tasks,
                 wandb_name=full_name,
+                eval_datasets_cache_path=self.eval_datasets_cache_path,
             )
         else:
             from experiments.defaults import default_train
@@ -313,6 +315,7 @@ class MixtureExperiment:
                 use_default_validation=True,
                 eval_harness_tasks=self.eval_harness_tasks,
                 wandb_name=full_name,
+                eval_datasets_cache_path=self.eval_datasets_cache_path,
             )
 
     def create_weight_configs_step(
