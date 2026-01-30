@@ -1,7 +1,7 @@
+import dataclasses
 import gc
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
 import equinox as eqx
 import jax
@@ -13,18 +13,13 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
-from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
-from levanter.data.text import LMMixtureDatasetConfig, SingleDatasetLMConfigBase
+from levanter.data.text import LmDataConfig
 from levanter.eval import TaggedEvaluator, eval_model
 from levanter.models.gpt2 import Gpt2Config
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import use_cpu_device
-from levanter.utils.tree_utils import inference_mode
-import dataclasses
-import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
 
 
@@ -140,7 +135,7 @@ class EvalEnsembleConfig:
     checkpoint_paths: list[str] = field(default_factory=list)
     hf_checkpoints: list[RepoRef] = field(default_factory=list)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
-    data: SingleDatasetLMConfigBase | LMMixtureDatasetConfig = field(default_factory=SingleDatasetLMConfigBase)
+    data: LmDataConfig = field(default_factory=LmDataConfig)
     model: LmConfig = field(default_factory=Gpt2Config)
 
     eval_on_train: bool = False

@@ -23,6 +23,7 @@ from datetime import timedelta
 import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.compat.hf_checkpoints import HFCompatConfig
+from levanter.data.text import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.optim import AdamConfig
@@ -35,11 +36,7 @@ from experiments.data_efficiency.models import model_dict
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.log_probs import default_lm_log_probs, default_ensemble_log_probs
 from marin.execution.executor import ExecutorStep, this_output_path, output_path_of
-from marin.processing.tokenize.data_configs import (
-    LMMixtureDatasetConfig,
-    add_validation_sets_to_mixture,
-    lm_mixture_data_config,
-)
+from marin.processing.tokenize.data_configs import add_validation_sets_to_mixture, lm_mixture_data_config
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from fray.cluster import ResourceConfig
 
@@ -143,7 +140,7 @@ class DataEfficiencyConfig:
         assert len(name) <= 64, f"Name is too long with length {len(name)}: {name}"
         return name
 
-    def build_data_config(self) -> LMMixtureDatasetConfig:
+    def build_data_config(self) -> LmDataConfig:
         components = {self.data_name: self.data}
         weights = {self.data_name: 1.0}
         num_validation_sequences = {self.data_name: 1024}
