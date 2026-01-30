@@ -25,7 +25,7 @@ from levanter.data.text import ChatLmDatasetFormat
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 
 from experiments.defaults import default_sft, default_tokenize
-from experiments.qwen3 import qwen3_8b, qwen3_8b_tokenizer
+from experiments.qwen3 import qwen3_8b_base, qwen3_8b_base_tokenizer
 from experiments.qwen3_base_template import QWEN_3_BASE_TEMPLATE
 from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
@@ -47,7 +47,7 @@ dataset = get_instruction_dataset(DATASET_ID, splits=dataset_config.splits)
 tokenized_mot_math = default_tokenize(
     name=f"{DATASET_SHORT_NAME}_qwen3_8b_base_tokenizer",
     dataset=dataset / "**/*.jsonl.gz",
-    tokenizer=qwen3_8b_tokenizer,
+    tokenizer=qwen3_8b_base_tokenizer,
     format=ChatLmDatasetFormat(chat_template=QWEN_3_BASE_TEMPLATE),
 )
 
@@ -64,7 +64,7 @@ RESOURCES = ResourceConfig.with_tpu("v5p-64")
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
-    tokenizer=qwen3_8b_tokenizer,
+    tokenizer=qwen3_8b_base_tokenizer,
     model_name_or_path="Qwen/Qwen3-8B-Base",
     train_batch_size=TRAIN_BATCH_SIZE,
     per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
@@ -95,7 +95,7 @@ mixture_config = lm_mixture_data_config(
 
 # Model config with 32K context length
 qwen3_8b_base_32k_tokens = dataclasses.replace(
-    qwen3_8b,
+    qwen3_8b_base,
     max_seq_len=32768,
     rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),
     cross_entropy_block_size=32000,  # Process vocab in chunks to reduce memory during loss computation

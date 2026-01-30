@@ -101,6 +101,27 @@ qwen3_8b = Qwen3Config(
     ),
 )
 
+qwen3_8b_base_tokenizer = "Qwen/Qwen3-8B-Base"
+qwen3_8b_base = Qwen3Config(
+    # Matching defaults in https://huggingface.co/Qwen/Qwen3-8B-Base/blob/main/config.json
+    # Same architecture as Qwen3-8B, but this is the pretrained base model (no instruction tuning)
+    max_seq_len=32768,
+    hidden_dim=4096,
+    intermediate_dim=12288,
+    num_heads=32,
+    num_kv_heads=8,
+    num_layers=36,
+    activation_function=ActivationFunctionEnum.silu,
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-6,
+    tie_word_embeddings=False,
+    reference_checkpoint="Qwen/Qwen3-8B-Base",
+    rope=DefaultRotaryEmbeddingsConfig(
+        theta=1000000.0,
+        factor=1.0
+    ),
+)
+
 # same as olmo 32b
 qwen3_32b = Qwen3Config(
     max_seq_len=4096,
