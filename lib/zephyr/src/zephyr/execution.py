@@ -223,9 +223,6 @@ class ZephyrCoordinator:
         self._in_flight.pop(worker_id, None)
         self._worker_states[worker_id] = WorkerState.READY
 
-        if self._completed_shards >= self._total_shards:
-            self._done = True
-
     def report_error(self, worker_id: str, shard_idx: int, error_info: str, is_transient: bool) -> None:
         """Worker reports a task failure.
 
@@ -267,6 +264,7 @@ class ZephyrCoordinator:
             "retries": self._retries,
             "in_flight": len(self._in_flight),
             "queue_depth": len(self._task_queue),
+            "done": self._done,
             "fatal_error": self._fatal_error,
             "workers": {
                 wid: {
@@ -330,7 +328,7 @@ class ZephyrWorker:
             task = coordinator.pull_task.remote(worker_id).result()
             if task is None:
                 status = coordinator.get_status.remote().result()
-                if status["completed"] >= status["total"] or status.get("fatal_error"):
+                if status.get("done") or status.get("fatal_error"):
                     break
                 time.sleep(0.1)
                 continue
@@ -471,6 +469,15 @@ class ZephyrContext:
 
         # Signal workers we're done so they exit their run_loop
         coordinator.signal_done.remote()
+
+        # Wait for workers to finish so the context can be reused for the next execute()
+        for f in self._worker_futures:
+            with suppress(Exception):
+                f.result(timeout=10.0)
+        self._worker_futures = []
+        # Reset coordinator so next execute() creates fresh actors
+        self._coordinator = None
+        self._workers = []
 
         return _materialize(shards)
 
@@ -628,21 +635,26 @@ def _compute_join_aux(
 def _results_to_shards(raw_results: dict[int, list], input_shard_count: int) -> list[list[list]]:
     """Convert coordinator results back into shard format.
 
-    raw_results maps shard_idx -> list of (header_dict, data) tuples.
+    raw_results maps input_shard_idx -> list of (header_dict, data) tuples.
+    Each header_dict contains the actual output shard_idx (which may differ
+    from the input shard_idx when a Scatter operation redistributes items).
     """
+    # Regroup by the header's shard_idx (the output shard)
+    output_by_shard: dict[int, list[list]] = defaultdict(list)
+    for _input_idx, result_pairs in raw_results.items():
+        for header, data in result_pairs:
+            output_shard = header["shard_idx"]
+            output_by_shard[output_shard].append(data)
+
     num_output_shards = input_shard_count
-    if raw_results:
-        max_idx = max(raw_results.keys())
+    if output_by_shard:
+        max_idx = max(output_by_shard.keys())
         if max_idx >= num_output_shards:
             num_output_shards = max_idx + 1
 
     shards: list[list[list]] = []
     for idx in range(num_output_shards):
-        if idx not in raw_results:
-            shards.append([])
-        else:
-            chunks = [data for _header, data in raw_results[idx]]
-            shards.append(chunks)
+        shards.append(output_by_shard.get(idx, []))
     return shards
 
 

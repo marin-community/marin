@@ -15,20 +15,10 @@
 """Pytest fixtures for zephyr tests."""
 
 import pytest
-import ray
 
-from zephyr.context import create_backend_context
-
+from fray.v2.local import LocalClient
 from zephyr import load_file
-
-
-@pytest.fixture(scope="module")
-def ray_cluster():
-    """Start Ray cluster for tests."""
-    if not ray.is_initialized():
-        ray.init(ignore_reinit_error=True)
-    yield
-    # Don't shutdown - let pytest handle cleanup
+from zephyr.execution import ZephyrContext
 
 
 @pytest.fixture
@@ -37,16 +27,13 @@ def sample_data():
     return list(range(1, 11))  # [1, 2, 3, ..., 10]
 
 
-@pytest.fixture(
-    params=[
-        pytest.param(create_backend_context("sync"), id="sync"),
-        pytest.param(create_backend_context("threadpool", max_workers=2), id="thread"),
-        pytest.param(create_backend_context("ray"), id="ray"),
-    ]
-)
-def backend(request):
-    """Parametrized fixture providing all backend contexts for testing."""
-    return request.param
+@pytest.fixture
+def zephyr_ctx():
+    """ZephyrContext fixture using LocalClient for testing."""
+    client = LocalClient()
+    ctx = ZephyrContext(client=client, num_workers=2)
+    yield ctx
+    ctx.shutdown()
 
 
 class CallCounter:
