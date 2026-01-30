@@ -33,7 +33,7 @@ import haliax as hax
 import jax
 import jax.experimental.transfer as jax_transfer
 import numpy as np
-from fray.job.context import get_default_job_ctx
+from fray.v2.actor import ActorHandle
 from haliax.jax_utils import is_jax_array_like
 from jax.sharding import Mesh
 from jaxtyping import PyTree
@@ -348,19 +348,15 @@ def num_bytes(model: PyTree):
 class JAXTransferServer(WeightTransferServer):
     """JAX transfer server-based weight transfer server."""
 
-    def __init__(self, config: WeightTransferConfig, mesh, params_sharding_rules=None):
+    def __init__(self, config: WeightTransferConfig, coordinator: ActorHandle, mesh=None, params_sharding_rules=None):
         self.config = config
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
-
-        self._ctx = get_default_job_ctx()
-        self.coordinator = self._ctx.create_actor(
-            WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True, preemptible=False, num_cpus=0
-        )
+        self.coordinator = coordinator
 
         # Start transfer server and register its address with coordinator
         self.transfer_server = start_transfer_server()
-        self._ctx.get(self.coordinator.register_transfer_server.remote(self.transfer_server.address()))
+        self.coordinator.register_transfer_server.remote(self.transfer_server.address()).result()
         self._setup_cpu_transfer()
 
         # Single-item queue for polling
@@ -440,15 +436,11 @@ class JAXTransferServer(WeightTransferServer):
 class JAXTransferClient(WeightTransferClient):
     """JAX transfer server-based weight transfer client."""
 
-    def __init__(self, config: WeightTransferConfig, mesh, params_sharding_rules=None):
+    def __init__(self, config: WeightTransferConfig, coordinator: ActorHandle, mesh=None, params_sharding_rules=None):
         self.config = config
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
-
-        self._ctx = get_default_job_ctx()
-        self.coordinator = self._ctx.create_actor(
-            WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True, preemptible=False, num_cpus=0
-        )
+        self.coordinator = coordinator
 
         # Start transfer server for client (doesn't register address with coordinator)
         self.transfer_server = start_transfer_server()
@@ -494,7 +486,7 @@ class JAXTransferClient(WeightTransferClient):
 
         # First check if new weights are available without blocking
         try:
-            latest_weight_id, server_address = self._ctx.get(self.coordinator.get_transfer_info.remote())
+            latest_weight_id, server_address = self.coordinator.get_transfer_info.remote().result()
             logger.info(
                 "Current weight id %s, Latest weight ID: %s, Server address: %s",
                 self._last_received_weight_id,

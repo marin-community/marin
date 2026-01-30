@@ -24,11 +24,13 @@ import jax.numpy as jnp
 import jmp
 import numpy as np
 import pytest
+from fray.v2 import LocalClient, set_current_client
 from jax.sharding import Mesh
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.models.llama import LlamaConfig
 from marin.rl.environments.inference_ctx import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 from marin.rl.weight_transfer import (
+    ArrowFlightCoordinator,
     WeightTransferConfig,
     WeightTransferMode,
     create_weight_transfer_client,
@@ -99,8 +101,23 @@ def sample_params():
     return create_sample_pytree(seed=42)
 
 
+def _create_coordinator(client, config):
+    """Create a coordinator actor if needed for the transfer mode."""
+    if config.mode == WeightTransferMode.ARROW_FLIGHT:
+        return client.create_actor(
+            ArrowFlightCoordinator,
+            name=config.coordinator_name,
+        )
+    return None
+
+
 def create_test_weight_transfer_pair(weight_transfer_config):
-    """Helper function to create server/client pairs for testing with simplified Levanter API."""
+    """Helper function to create server/client pairs for testing with simplified Levanter API.
+
+    Returns (server, client, coordinator) so that additional clients can share the coordinator.
+    """
+    from fray.v2 import current_client
+
     # Set unique coordinator name for distributed modes
     coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
     weight_transfer_config.coordinator_name = coordinator_name
@@ -113,19 +130,24 @@ def create_test_weight_transfer_pair(weight_transfer_config):
         "layers": None,
     }
 
+    v2_client = current_client()
+    coordinator = _create_coordinator(v2_client, weight_transfer_config)
+
     server = create_weight_transfer_server(
         config=weight_transfer_config,
+        coordinator=coordinator,
         mesh=mesh,
         axis_mapping=axis_mapping,
     )
 
     client = create_weight_transfer_client(
         config=weight_transfer_config,
+        coordinator=coordinator,
         mesh=mesh,
         axis_mapping=axis_mapping,
     )
 
-    return server, client
+    return server, client, coordinator
 
 
 @pytest.fixture
@@ -141,19 +163,16 @@ def weight_transfer_config(transfer_mode):
 
 
 @pytest.fixture(autouse=True)
-def job_context():
-    """Ensure a shared job context for all tests."""
-    from fray.job.context import create_job_ctx, fray_default_job_ctx
-
-    # Use threadpool context for tests to avoid Ray overhead unless needed
-    ctx = create_job_ctx("threadpool")
-    with fray_default_job_ctx(ctx):
-        yield ctx
+def v2_client():
+    """Set up a local fray v2 client for tests."""
+    client = LocalClient()
+    with set_current_client(client):
+        yield client
 
 
 def test_multiple_weight_updates(weight_transfer_config, sample_params):
     """Test multiple sequential weight updates."""
-    server, client = create_test_weight_transfer_pair(weight_transfer_config)
+    server, client, _coordinator = create_test_weight_transfer_pair(weight_transfer_config)
 
     # First weight transfer
     server.serve_weights(1, sample_params)
@@ -183,10 +202,11 @@ def test_multiple_weight_updates(weight_transfer_config, sample_params):
 
 
 def test_concurrent_clients(weight_transfer_config, sample_params):
-    server, client_1 = create_test_weight_transfer_pair(weight_transfer_config)
+    server, client_1, coordinator = create_test_weight_transfer_pair(weight_transfer_config)
 
     client_2 = create_weight_transfer_client(
         config=weight_transfer_config,
+        coordinator=coordinator,
         mesh=client_1.mesh,
         axis_mapping=client_1.axis_mapping,
     )

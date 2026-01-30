@@ -28,7 +28,6 @@ from dataclasses import dataclass, field
 
 import fsspec
 import numpy as np
-from fray.job import get_default_job_ctx
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 
@@ -618,18 +617,14 @@ class Curriculum:
         logger.info("Restored curriculum checkpoint from %s at step %d", checkpoint_path, self.current_step)
 
 
-def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
-    job_ctx = get_default_job_ctx()
-    actor = job_ctx.create_actor(
-        Curriculum, config, name=config.actor_name, get_if_exists=True, preemptible=False, num_cpus=0
-    )
+def restore_curriculum_checkpoint(actor, checkpoint_path: str) -> None:
+    """Restore curriculum state from checkpoint if available.
 
-    # Auto-restore from checkpoint if path provided
-    if checkpoint_path:
-        try:
-            future = actor.restore_checkpoint.remote(checkpoint_path)
-            job_ctx.get(future)
-        except Exception as e:
-            logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")
-
-    return actor
+    Args:
+        actor: Handle to the curriculum actor (fray.v2 ActorHandle).
+        checkpoint_path: Path to the checkpoint directory.
+    """
+    try:
+        actor.restore_checkpoint.remote(checkpoint_path).result()
+    except Exception as e:
+        logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")

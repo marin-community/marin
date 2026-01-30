@@ -39,8 +39,7 @@ from levanter.trainer import Trainer, TrainerConfig
 from transformers import PreTrainedTokenizer
 
 from marin.rl import weight_transfer
-from fray.job import get_default_job_ctx
-from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
+from marin.rl.curriculum import CurriculumConfig, restore_curriculum_checkpoint
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_transfer import WeightTransferConfig
 
@@ -181,11 +180,15 @@ class TrainWorker:
     def __init__(
         self,
         config: TrainWorkerConfig,
+        curriculum_actor=None,
+        wt_coordinator=None,
     ):
         """Initialize training worker.
 
         Args:
             config: Training worker configuration with Levanter components.
+            curriculum_actor: Actor handle for the curriculum (passed from controller).
+            wt_coordinator: Actor handle for the weight transfer coordinator (passed from controller).
         """
 
         print("Run id: ", config.run_id)
@@ -220,15 +223,17 @@ class TrainWorker:
         )
         self.transfer_server = weight_transfer.create_weight_transfer_server(
             config.weight_transfer,
+            coordinator=wt_coordinator,
             mesh=self.config.trainer.device_mesh,
             axis_mapping=self.config.trainer.compute_axis_mapping,
         )
 
-        # Create curriculum actor with auto-restore from checkpoint
-        checkpoint_dir = config.trainer.checkpointer.expanded_path(config.run_id)
-        self._curriculum_actor = get_or_create_curriculum_actor(
-            self.config.curriculum_config, checkpoint_path=checkpoint_dir
-        )
+        self._curriculum_actor = curriculum_actor
+
+        # Auto-restore curriculum from checkpoint if we have a curriculum actor
+        if self._curriculum_actor is not None:
+            checkpoint_dir = config.trainer.checkpointer.expanded_path(config.run_id)
+            restore_curriculum_checkpoint(self._curriculum_actor, checkpoint_dir)
 
         logger.info("Connected to curriculum actor: %s", config.curriculum_config.actor_name)
 
@@ -392,10 +397,11 @@ class TrainWorker:
         )
 
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
+            if self._curriculum_actor is None:
+                return
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
             try:
-                future = self._curriculum_actor.save_checkpoint.remote(checkpoint_dir)
-                get_default_job_ctx().get(future)
+                self._curriculum_actor.save_checkpoint.remote(checkpoint_dir).result()
             except Exception as e:
                 logger.error(f"Failed to save curriculum checkpoint: {e}")
 
