@@ -76,9 +76,10 @@ def test_coscheduled_sibling_failure(cluster):
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_quick),
         name="cosched-fail",
-        resources=ResourceSpec(cpu=1, memory="1g", replicas=2),
+        resources=ResourceSpec(cpu=1, memory="1g"),
         environment=EnvironmentSpec(),
         coscheduling=CoschedulingConfig(group_by="worker"),
+        replicas=2,
     )
     status = wait(client, job, timeout=60)
     # Expected: FAILED when coscheduling works and one replica fails

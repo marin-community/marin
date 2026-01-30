@@ -87,11 +87,12 @@ def job_request():
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             entrypoint=_make_test_entrypoint(),
-            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=replicas),
+            resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
             environment=cluster_pb2.EnvironmentConfig(),
             parent_job_id=parent_job_id or "",
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
+            replicas=replicas,
         )
 
     return _make
@@ -817,7 +818,8 @@ def test_task_failure_causing_job_failure_sends_kill_rpcs(service, state, mock_s
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="kill-rpc-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=3,
         environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
     )
@@ -910,7 +912,8 @@ def test_no_kill_rpcs_for_pending_tasks(service, state, mock_scheduler, job_requ
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="partial-dispatch-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=3,
         environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
     )

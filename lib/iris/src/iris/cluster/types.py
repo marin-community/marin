@@ -268,7 +268,7 @@ class ResourceSpec:
     memory: str | int = 0  # "8g" or bytes
     disk: str | int = 0
     device: cluster_pb2.DeviceConfig | None = None
-    replicas: int = 0
+    preemptible: bool = False
     regions: Sequence[str] | None = None
 
     def to_proto(self) -> cluster_pb2.ResourceSpecProto:
@@ -279,7 +279,7 @@ class ResourceSpec:
             cpu=self.cpu,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
-            replicas=self.replicas,
+            preemptible=self.preemptible,
             regions=list(self.regions or []),
         )
         if self.device is not None:
