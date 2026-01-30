@@ -82,6 +82,7 @@ class DemandEntry:
     count: int = 0
     total_cpu: int = 0
     total_memory_bytes: int = 0
+    preemptible: bool | None = None  # None = no preference
 
 
 @dataclass
@@ -112,6 +113,8 @@ def route_demand(
 
     for entry in demand_entries:
         matching = [g for g in groups if g.matches_device_requirement(entry.device_type, entry.device_variant)]
+        if entry.preemptible is not None:
+            matching = [g for g in matching if g.config.preemptible == entry.preemptible]
         # Sort by priority (lower = higher priority). Default to 100 if not set (proto3 defaults to 0).
         matching.sort(key=lambda g: g.config.priority or 100)
 

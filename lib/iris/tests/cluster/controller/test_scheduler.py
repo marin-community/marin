@@ -1197,3 +1197,48 @@ def test_tpu_chips_released_after_task_completion(scheduler, state):
     )
     assert len(result.assignments) == 1
     assert result.assignments[0][0].job_id == JobId("j2")
+
+
+# =============================================================================
+# Preemptible Constraint Tests
+# =============================================================================
+
+
+def test_preemptible_constraint_routes_to_matching_worker(scheduler, state, job_request, worker_metadata):
+    """Job constrained to non-preemptible workers is only scheduled on a matching worker.
+
+    Users construct preemptible constraints via the helper::
+
+        from iris.cluster.types import preemptible_constraint
+        job = client.launch(
+            ...,
+            constraints=[preemptible_constraint(False)],
+        )
+
+    This test exercises the wire format directly (attribute key + EQ op) to
+    verify the scheduler routes correctly regardless of how the constraint
+    is constructed.
+    """
+    # Preemptible worker
+    meta_preemptible = worker_metadata()
+    meta_preemptible.attributes["preemptible"].string_value = "true"
+    register_worker(state, "w-preemptible", "addr1", meta_preemptible)
+
+    # On-demand worker
+    meta_ondemand = worker_metadata()
+    meta_ondemand.attributes["preemptible"].string_value = "false"
+    register_worker(state, "w-ondemand", "addr2", meta_ondemand)
+
+    # Job requiring non-preemptible worker
+    req = job_request()
+    constraint = req.constraints.add()
+    constraint.key = "preemptible"
+    constraint.op = cluster_pb2.CONSTRAINT_OP_EQ
+    constraint.value.string_value = "false"
+    tasks = submit_job(state, "j1", req)
+
+    result = scheduler.find_assignments(state.peek_pending_tasks(), state.get_available_workers())
+
+    assert len(result.assignments) == 1
+    assert result.assignments[0][0] == tasks[0]
+    assert result.assignments[0][1].worker_id == WorkerId("w-ondemand")

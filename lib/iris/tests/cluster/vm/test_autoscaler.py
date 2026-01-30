@@ -29,6 +29,7 @@ from iris.cluster.vm.autoscaler import (
     DemandEntry,
     ScalingAction,
     ScalingDecision,
+    route_demand,
 )
 from iris.cluster.vm.managed_vm import VmRegistry
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
@@ -960,6 +961,92 @@ class TestWaterfallRouting:
         assert "v5lite-group" in groups_in_decisions
 
 
+class TestPreemptibleRouting:
+    """Tests for preemptible demand routing."""
+
+    def test_route_demand_filters_by_preemptible_true(self):
+        """Demand with preemptible=True only routes to preemptible groups."""
+        config_preemptible = config_pb2.ScaleGroupConfig(
+            name="preemptible-group",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            max_slices=5,
+            priority=10,
+            preemptible=True,
+        )
+        config_on_demand = config_pb2.ScaleGroupConfig(
+            name="on-demand-group",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            max_slices=5,
+            priority=10,
+        )
+
+        group_preemptible = ScalingGroup(config_preemptible, make_mock_vm_manager())
+        group_on_demand = ScalingGroup(config_on_demand, make_mock_vm_manager())
+
+        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2, preemptible=True)]
+        result = route_demand([group_preemptible, group_on_demand], demand)
+
+        assert result.allocations["preemptible-group"] == 2
+        assert result.allocations["on-demand-group"] == 0
+
+    def test_route_demand_filters_by_preemptible_false(self):
+        """Demand with preemptible=False only routes to non-preemptible groups."""
+        config_preemptible = config_pb2.ScaleGroupConfig(
+            name="preemptible-group",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            max_slices=5,
+            priority=10,
+            preemptible=True,
+        )
+        config_on_demand = config_pb2.ScaleGroupConfig(
+            name="on-demand-group",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            max_slices=5,
+            priority=10,
+        )
+
+        group_preemptible = ScalingGroup(config_preemptible, make_mock_vm_manager())
+        group_on_demand = ScalingGroup(config_on_demand, make_mock_vm_manager())
+
+        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2, preemptible=False)]
+        result = route_demand([group_preemptible, group_on_demand], demand)
+
+        assert result.allocations["preemptible-group"] == 0
+        assert result.allocations["on-demand-group"] == 2
+
+    def test_route_demand_no_preference_routes_to_any(self):
+        """Demand with preemptible=None routes to any matching group."""
+        config_preemptible = config_pb2.ScaleGroupConfig(
+            name="preemptible-group",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            max_slices=5,
+            priority=10,
+            preemptible=True,
+        )
+        config_on_demand = config_pb2.ScaleGroupConfig(
+            name="on-demand-group",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            max_slices=5,
+            priority=20,
+        )
+
+        group_preemptible = ScalingGroup(config_preemptible, make_mock_vm_manager())
+        group_on_demand = ScalingGroup(config_on_demand, make_mock_vm_manager())
+
+        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=3, preemptible=None)]
+        result = route_demand([group_preemptible, group_on_demand], demand)
+
+        # Both groups are eligible; preemptible has higher priority (10 < 20)
+        assert result.allocations["preemptible-group"] == 3
+        assert result.unmet_demand == 0
+
+
 class TestAutoscalerWaterfallEndToEnd:
     """End-to-end tests for waterfall routing with FakeVmManager.
 
@@ -1609,7 +1696,6 @@ class TestScalingGroupRequestingState:
 
     def test_demand_routing_skips_requesting_groups(self):
         """route_demand() skips groups in REQUESTING state."""
-        from iris.cluster.vm.autoscaler import route_demand
         from iris.time_utils import now_ms
 
         config1 = config_pb2.ScaleGroupConfig(
