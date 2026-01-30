@@ -264,7 +264,7 @@ class GpuConfig:
         return self.count
 
     def device_flops(self, dtype: str = "bf16") -> float:
-        from fray.cluster.device_flops import device_flops
+        from fray.v2.device_flops import device_flops
 
         flops = device_flops(self.variant, dtype)
         if flops is None:
@@ -295,7 +295,7 @@ class TpuConfig:
         return get_tpu_topology(self.variant).vm_count
 
     def device_flops(self, dtype: str = "bf16") -> float:
-        from fray.cluster.device_flops import device_flops
+        from fray.v2.device_flops import device_flops
 
         flops = device_flops(self.variant, dtype)
         if flops is None:

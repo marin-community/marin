@@ -55,10 +55,12 @@ def test_env_var_local_with_threads(monkeypatch):
     assert client._executor._max_workers == 4
 
 
-def test_env_var_ray_raises(monkeypatch):
+def test_env_var_ray_returns_ray_client(monkeypatch):
+    from fray.v2.ray.backend import RayClient
+
     monkeypatch.setenv("FRAY_CLIENT_SPEC", "ray")
-    with pytest.raises(NotImplementedError, match="Ray"):
-        current_client()
+    client = current_client()
+    assert isinstance(client, RayClient)
 
 
 def test_env_var_iris_raises(monkeypatch):

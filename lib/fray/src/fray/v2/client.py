@@ -178,7 +178,11 @@ def _parse_client_spec(spec: str) -> Client:
         threads = int(params["threads"][0]) if "threads" in params else 8
         return LocalClient(max_threads=threads)
     elif scheme == "ray":
-        raise NotImplementedError("Ray client is not yet supported")
+        from fray.v2.ray.backend import RayClient
+
+        params = parse_qs(parsed.query if "://" in spec else (spec.split("?", 1)[1] if "?" in spec else ""))
+        namespace = params["namespace"][0] if "namespace" in params else None
+        return RayClient(namespace=namespace)
     elif scheme == "iris":
         raise NotImplementedError("Iris client is not yet supported")
     else:
