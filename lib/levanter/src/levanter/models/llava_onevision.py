@@ -1689,21 +1689,37 @@ class _LlavaInferenceWrapper(eqx.Module):
         # to be incorrectly assigned to the last segment!
         cu_q_lens = cu_q_lens_full[:num_seqs + 1]  # (num_seqs+1,) - properly sorted
 
-        # For each position, find which sequence it belongs to
-        # segment_indices[i] = j means token i belongs to sequence j (not slot j!)
+        # For each position, find which sequence it belongs to in the current batch
+        # batch_seq_indices[i] = j means token i belongs to sequence j in this batch
         positions = jnp.arange(num_tokens)
         # searchsorted gives index where position would be inserted to keep sorted order
-        # We use 'right' and subtract 1 to get the segment containing each position
-        segment_indices = jnp.searchsorted(cu_q_lens, positions, side='right') - 1
-        segment_indices = jnp.clip(segment_indices, 0, num_seqs - 1)
-
-        # segment_indices maps tokens to their batch position (0, 1, 2, ...)
-        # Image features are stored in request order (segment 0 = request 0's features),
-        # so segment_indices directly corresponds to the correct segment for image feature lookup
-        segment_ids = segment_indices
+        # We use 'right' and subtract 1 to get the batch sequence index containing each position
+        batch_seq_indices = jnp.searchsorted(cu_q_lens, positions, side='right') - 1
+        batch_seq_indices = jnp.clip(batch_seq_indices, 0, num_seqs - 1)
 
         # Get number of segments from batched data
         num_batched_segments = len(self._batched_num_patches_per_segment)
+
+        # Map batch sequence indices to segment indices in stored image features
+        # batch_info.slot_ids[batch_seq_idx] -> slot_id for that batch position
+        # _slot_to_segment_map[slot_id] -> segment index in stored features
+        #
+        # Create a lookup table: slot_id -> segment_index
+        # We need max_slot_id to size the array; use batch_info's max_seqs as upper bound
+        max_slots = batch_info.slot_ids.axis_size("seq")
+        slot_to_segment_array = jnp.zeros(max_slots, dtype=jnp.int32)
+        for slot_id, segment_idx in self._slot_to_segment_map.items():
+            slot_to_segment_array = slot_to_segment_array.at[slot_id].set(segment_idx)
+
+        # Get slot_ids for each batch sequence position
+        batch_slot_ids = batch_info.slot_ids.array  # (max_seqs,)
+
+        # Map: token position -> batch_seq_idx -> slot_id -> segment_idx
+        slot_ids_per_token = batch_slot_ids[batch_seq_indices]
+        segment_ids = slot_to_segment_array[slot_ids_per_token]
+
+        # Ensure segment_ids are valid (within num_batched_segments)
+        segment_ids = jnp.clip(segment_ids, 0, num_batched_segments - 1)
 
         # 3. Identify image placeholder tokens
         image_token_id = self.model.config.image_token_index
@@ -1744,15 +1760,44 @@ class _LlavaInferenceWrapper(eqx.Module):
             (is_image_token.astype(jnp.int32), segment_ids)
         )
 
+        # DEBUG: Check for mismatch between image placeholders and features
+        image_token_count = jnp.sum(is_image_token)
+        # Only count within_seg for image tokens to get accurate max
+        max_within_seg_image_only = jnp.max(within_seg_counts * is_image_token.astype(jnp.int32))
+        total_features_computed = total_patches_axis * features_per_patch
+        jax.debug.print(
+            "Batched embeddings debug: "
+            "num_seqs={ns}, num_batched_segments={nbs}, "
+            "image_token_count={itc}, total_features={tf}, "
+            "max_within_seg_count={mwsc}, features_per_segment={fps}, "
+            "slot_to_segment_map_size={stsm}",
+            ns=num_seqs, nbs=num_batched_segments,
+            itc=image_token_count, tf=total_features_computed,
+            mwsc=max_within_seg_image_only, fps=features_per_segment_padded,
+            stsm=len(self._slot_to_segment_map)
+        )
+        # Check for out-of-bounds (only considering image tokens)
+        potential_max_idx = jnp.max(segment_feature_starts) + max_within_seg_image_only
+        # Print whether there's potential overflow
+        jax.debug.print(
+            "Feature bounds check: potential_max_idx={mpi}, total_features={tf}, overflow={of}",
+            mpi=potential_max_idx, tf=total_features_computed,
+            of=potential_max_idx >= total_features_computed
+        )
+
         # Compute final feature indices
         # For each image placeholder at position i with segment s:
         # feature_index = segment_feature_starts[s] + within_seg_counts[i]
         segment_starts_per_token = segment_feature_starts[segment_ids]
         feature_indices = segment_starts_per_token + within_seg_counts
 
-        # Clamp to valid range
-        total_features = self._batched_image_features.axis_size("TotalPatches") * features_per_patch
-        feature_indices = jnp.clip(feature_indices, 0, total_features - 1)
+        # DEBUG: Print more details about the mismatch
+        jax.debug.print(
+            "Feature index debug: max_feature_idx={mfi}, segment_starts={ss}, patches_per_seg={pps}",
+            mfi=jnp.max(feature_indices * is_image_token.astype(jnp.int32)),
+            ss=segment_feature_starts,
+            pps=patches_per_segment
+        )
 
         # 5. Flatten image features to (total_features, embed)
         # _batched_image_features: (total_patches, features_per_patch, embed)
