@@ -46,10 +46,10 @@ def fix_imports(file_path: Path) -> None:
 
 
 def run_buf_generate(root_dir: Path) -> None:
-    """Run buf generate."""
-    print("Running buf generate...")
+    """Run buf generate using npx."""
+    print("Running npx buf generate...")
     result = subprocess.run(
-        ["buf", "generate"],
+        ["npx", "--yes", "@bufbuild/buf", "generate"],
         cwd=root_dir,
         capture_output=True,
         text=True,
