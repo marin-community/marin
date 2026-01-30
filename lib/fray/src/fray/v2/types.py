@@ -313,8 +313,11 @@ DeviceConfig = CpuConfig | GpuConfig | TpuConfig
 class ResourceConfig:
     """Resource requirements for a single task/replica.
 
-    Note: `replicas` is on JobRequest, not here. ResourceConfig describes
-    what a single replica needs; JobRequest.replicas controls gang scheduling.
+    `replicas` specifies gang-scheduled replica count (e.g. TPU slices for
+    multislice training). It is also on JobRequest; when both are set,
+    JobRequest.replicas takes precedence. This field exists here so that
+    convenience builders like `with_tpu(..., slice_count=4)` can carry the
+    replica count alongside the resource spec.
     """
 
     cpu: int = 1
@@ -323,6 +326,7 @@ class ResourceConfig:
     device: DeviceConfig = field(default_factory=CpuConfig)
     preemptible: bool = True
     regions: Sequence[str] | None = None
+    replicas: int = 1
 
     def chip_count(self) -> int:
         return self.device.chip_count()
@@ -336,9 +340,9 @@ class ResourceConfig:
         return self.device_flops(dtype) * self.chip_count()
 
     @staticmethod
-    def with_tpu(tpu_type: str, **kwargs: Any) -> ResourceConfig:
+    def with_tpu(tpu_type: str, *, slice_count: int = 1, **kwargs: Any) -> ResourceConfig:
         device = TpuConfig(variant=tpu_type)
-        return ResourceConfig(device=device, **kwargs)
+        return ResourceConfig(device=device, replicas=slice_count, **kwargs)
 
     @staticmethod
     def with_gpu(gpu_type: str = "auto", count: int = 1, **kwargs: Any) -> ResourceConfig:
@@ -473,13 +477,16 @@ class JobRequest:
     entrypoint: Entrypoint
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     environment: EnvironmentConfig | None = None
-    replicas: int = 1
+    replicas: int | None = None
     max_retries_failure: int = 0
     max_retries_preemption: int = 100
 
     def __post_init__(self):
         if " " in self.name:
             raise ValueError("Job name must not contain spaces")
+        if self.replicas is None:
+            # Pick up replicas from ResourceConfig (set by e.g. with_tpu slice_count)
+            self.replicas = self.resources.replicas
 
 
 class JobStatus(StrEnum):

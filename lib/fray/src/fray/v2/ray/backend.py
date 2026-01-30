@@ -190,6 +190,12 @@ def build_runtime_env(request: JobRequest, cluster_spec: str) -> dict:
 
     env_vars["FRAY_CLIENT_SPEC"] = cluster_spec
 
+    if os.environ.get("MARIN_CI_DISABLE_RUNTIME_ENVS", "").lower() in ("1", "true") or os.environ.get(
+        "PYTEST_CURRENT_TEST"
+    ):
+        logger.info("Skipping runtime_env construction for job: %s", request.name)
+        return {"env_vars": env_vars}
+
     logger.info(
         "Building environment with %s, extras %s for job: %s",
         environment.pip_packages,
