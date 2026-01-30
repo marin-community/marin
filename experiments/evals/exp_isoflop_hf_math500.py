@@ -29,7 +29,7 @@ logging.getLogger().setLevel(logging.ERROR)  # Root logger
 import os
 
 from experiments.isoflop_sweep import MARIN_SCALING_SUITES
-from marin.execution.executor import executor_main, output_path_of
+from marin.execution.executor import executor_main, output_path_of, versioned
 from marin.execution.executor import Executor, ExecutorStep, this_output_path
 from marin.evaluation.utils import discover_hf_checkpoints
 from fray.cluster import ResourceConfig
@@ -47,53 +47,67 @@ logger = logging.getLogger(__name__)
 DEFAULT_CHAT_TEMPLATE = "{{messages[0]['content']}}{% generation %} {{messages[1]['content']}}{% endgeneration %}"
 
 
-hf_steps = []
-for model_config in models:
-    model_instance = download_model_step(
-        HFModelConfig(hf_repo_id=model_config.model_name, hf_revision=model_config.revision)
-    )
-    directory_friendly_name = get_directory_friendly_name(model_config.model_name)
-    name = f"{directory_friendly_name}"
-    hf_steps.append(
-        ExecutorStep(
-            name=f"analysis/math500/{name}",
-            fn=run_math500_eval,
-            config=Math500EvalConfig(
-                model_path=output_path_of(model_instance),
-                output_path=this_output_path(),
-            ),
-            resources=ResourceConfig.with_tpu("v5p-8"),
-            pip_dependency_groups=["vllm", "math"],
+def build_hf_steps(prompt_format: str = "question_only"):
+    steps = []
+    for model_config in models:
+        model_instance = download_model_step(
+            HFModelConfig(hf_repo_id=model_config.model_name, hf_revision=model_config.revision)
         )
-    )
+        directory_friendly_name = get_directory_friendly_name(model_config.model_name)
+        name = f"{directory_friendly_name}"
+        steps.append(
+            ExecutorStep(
+                name=f"analysis/math500/{name}",
+                fn=run_math500_eval,
+                config=Math500EvalConfig(
+                    model_path=output_path_of(model_instance),
+                    output_path=this_output_path(),
+                    prompt_format=versioned(prompt_format),
+                ),
+                resources=ResourceConfig.with_tpu("v5p-8"),
+                pip_dependency_groups=["vllm", "math"],
+            )
+        )
+    
+    return steps
 
+def build_isoflop_steps(prompt_format: str = "question_only"):
+    isoflop_steps, isoflop_candidates = MARIN_SCALING_SUITES["nemotron"]
 
-def build_steps(model_types: list[str]):
+    steps = []
+    for isoflop_step, candidate in zip(isoflop_steps, isoflop_candidates, strict=False):
+        experiment_name = isoflop_step.name.split("/")[-1]
+        checkpoint_path = get_isoflop_hf_model(
+            isoflop_step=isoflop_step,
+            prefix="gs://marin-us-central1"
+        )
+        name = f"{experiment_name}"
+        steps.append(
+            ExecutorStep(
+                name=f"analysis/math500/{name}",
+                fn=run_math500_eval,
+                config=Math500EvalConfig(
+                    model_path=checkpoint_path,
+                    output_path=this_output_path(),
+                    prompt_format=versioned(prompt_format),
+                ),
+                resources=ResourceConfig.with_tpu("v5p-8"),
+                pip_dependency_groups=["vllm", "math"],
+            )
+        )
+    
+    return steps
+
+def build_steps(model_types: list[str], prompt_format: str = "question_only"):
     isoflop_steps, isoflop_candidates = MARIN_SCALING_SUITES["nemotron"]
 
     steps = []
     if "iso" in model_types:
-        for isoflop_step, candidate in zip(isoflop_steps, isoflop_candidates, strict=False):
-            experiment_name = isoflop_step.name.split("/")[-1]
-            checkpoint_path = get_isoflop_hf_model(
-                isoflop_step=isoflop_step,
-                prefix="gs://marin-us-central1"
-            )
-            name = f"{experiment_name}"
-            steps.append(
-                ExecutorStep(
-                    name=f"analysis/math500/{name}",
-                    fn=run_math500_eval,
-                    config=Math500EvalConfig(
-                        model_path=checkpoint_path,
-                        output_path=this_output_path(),
-                    ),
-                    resources=ResourceConfig.with_tpu("v5p-8"),
-                    pip_dependency_groups=["vllm", "math"],
-                )
-            )
+        isoflop_steps = build_isoflop_steps(prompt_format=prompt_format)
+        steps.extend(isoflop_steps)
     
     if "hf" in model_types:
+        hf_steps = build_hf_steps(prompt_format=prompt_format)
         steps.extend(hf_steps)
 
     return steps
@@ -131,9 +145,10 @@ def get_isoflop_hf_model(isoflop_step: ExecutorStep, prefix: str):
     return sorted(checkpoints, key=get_step)[-1]
 
 
-def math500_rollouts_tokenized(tokenizer: str) -> dict[str, ExecutorStep]:
+def math500_rollouts_tokenized(tokenizer: str, prompt_format: str = "question_only") -> dict[str, ExecutorStep]:
     result = {}
 
+    hf_steps = build_hf_steps(prompt_format=prompt_format)
     for eval_step in hf_steps:
         name = eval_step.name.split("/")[-1]
 
@@ -149,7 +164,7 @@ def math500_rollouts_tokenized(tokenizer: str) -> dict[str, ExecutorStep]:
             )
 
             tokenized_step = default_tokenize(
-                name=f"{name}_{filter_type}",
+                name=f"math500_rollouts/{name}/{filter_type}",
                 dataset=output_path_of(process_step),
                 tokenizer=tokenizer,
                 is_validation=True,
@@ -172,8 +187,9 @@ def main():
     import logging
     logging.getLogger("marin.execution.executor").setLevel(logging.ERROR)
 
-    model_types = ["hf"]
-    steps = build_steps(model_types=model_types)
+    model_types = ["iso","hf"]
+    prompt_format = "standard_fewshot"
+    steps = build_steps(model_types=model_types, prompt_format=prompt_format)
 
     executor_main(
         steps=steps,
