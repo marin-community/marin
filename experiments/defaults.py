@@ -465,11 +465,16 @@ def default_sft(
     initialize_from_hf = sft_config.initialize_from_hf
 
     if initialize_from_hf is None:
-        initialize_from_hf = (
-            sft_config.model_name_or_path is not None and sft_config.initialize_from_checkpoint_path is None
-        )
-    elif initialize_from_hf is True and sft_config.model_name_or_path is None:
-        raise ValueError("initialize_from_hf is True but model_name_or_path is not set")
+        # Pass the actual model path (string) to levanter, not just True/False
+        if sft_config.model_name_or_path is not None and sft_config.initialize_from_checkpoint_path is None:
+            initialize_from_hf = sft_config.model_name_or_path
+        else:
+            initialize_from_hf = False
+    elif initialize_from_hf is True:
+        if sft_config.model_name_or_path is None:
+            raise ValueError("initialize_from_hf is True but model_name_or_path is not set")
+        # Convert True to the actual path
+        initialize_from_hf = sft_config.model_name_or_path
     elif initialize_from_hf is False and sft_config.initialize_from_checkpoint_path is None:
         raise ValueError("initialize_from_hf is False but initialize_from_checkpoint_path is not set")
 
