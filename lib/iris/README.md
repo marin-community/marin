@@ -201,6 +201,7 @@ uv run iris cluster controller run-local --bundle-prefix file:///var/cache/iris/
 iris cluster --config=cluster.yaml start
 iris cluster --config=cluster.yaml stop
 iris cluster --config=cluster.yaml restart
+iris cluster --config=cluster.yaml reload       # Rebuild images + redeploy on existing VMs
 iris cluster --config=cluster.yaml status
 
 # Controller subcommands (for GCE-managed controller)
