@@ -14,7 +14,6 @@
 
 """Tests for WorkerDashboard HTTP/RPC endpoints and WorkerService implementation."""
 
-import asyncio
 import socket
 from pathlib import Path
 from unittest.mock import Mock
@@ -33,7 +32,6 @@ from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRu
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2
-from iris.rpc.cluster_connect import WorkerServiceClient
 from starlette.testclient import TestClient
 
 # ============================================================================
@@ -435,76 +433,59 @@ def test_get_task_status_completed_task(service, worker, request_context):
 # ============================================================================
 
 
-@pytest.mark.asyncio
-async def test_rpc_heartbeat_via_connect_client(service):
+def test_rpc_heartbeat_via_connect_client(service):
     """Test calling heartbeat via Connect RPC client."""
+    import threading
+    import time
+
+    import uvicorn
+    from iris.rpc.cluster_connect import WorkerServiceClientSync
+
     # Find a free port
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         s.listen(1)
         port = s.getsockname()[1]
 
-    # Create server on ephemeral port
-    server = WorkerDashboard(service=service, host="127.0.0.1", port=0)
+    # Create server
+    server = WorkerDashboard(service=service, host="127.0.0.1", port=port)
 
-    # Run server in background
-    async def run_server():
-        import uvicorn
+    # Run server in background thread (sync version)
+    config = uvicorn.Config(server._app, host="127.0.0.1", port=port, log_level="error")
+    uvicorn_server = uvicorn.Server(config)
 
-        config = uvicorn.Config(server._app, host="127.0.0.1", port=port)
-        server_obj = uvicorn.Server(config)
-        await server_obj.serve()
+    def run_server():
+        uvicorn_server.run()
 
-    server_task = asyncio.create_task(run_server())
+    server_thread = threading.Thread(target=run_server, daemon=True)
+    server_thread.start()
 
     try:
-        # Give server time to start with retry logic
+        # Wait for server to start with retry logic
         max_retries = 10
         for i in range(max_retries):
-            await asyncio.sleep(0.2)
-
-            # Check if server task failed - must await to retrieve exception properly
-            if server_task.done():
-                try:
-                    await server_task
-                except asyncio.CancelledError:
-                    pass  # Normal cancellation, continue waiting
-                except Exception as server_exc:
-                    # Server failed to start, raise with context
-                    raise RuntimeError(f"Server failed to start on port {port}") from server_exc
+            time.sleep(0.2)
 
             try:
-                async with httpx.AsyncClient(timeout=2.0) as test_client:
-                    await test_client.get(f"http://127.0.0.1:{port}/")
+                with httpx.Client(timeout=2.0) as test_client:
+                    test_client.get(f"http://127.0.0.1:{port}/")
                 break
             except (httpx.ConnectError, httpx.TimeoutException) as e:
                 if i == max_retries - 1:
-                    # Final check: did server task fail?
-                    if server_task.done():
-                        try:
-                            await server_task
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception as server_exc:
-                            raise RuntimeError(f"Server failed to start on port {port}: {server_exc}") from server_exc
-                    # Server didn't fail, but we couldn't connect
                     raise TimeoutError(f"Could not connect to server on port {port} after {max_retries} retries") from e
                 continue
 
-        async with httpx.AsyncClient(timeout=5.0) as http_client:
-            client = WorkerServiceClient(address=f"http://127.0.0.1:{port}", session=http_client)
+        # Call heartbeat via sync Connect client
+        client = WorkerServiceClientSync(address=f"http://127.0.0.1:{port}", timeout_ms=5000)
 
-            run_req = create_run_task_request(task_id="rpc-test-task", job_id="rpc-test-job")
-            heartbeat_req = cluster_pb2.HeartbeatRequest(tasks_to_run=[run_req])
-            response = await client.heartbeat(heartbeat_req)
+        run_req = create_run_task_request(task_id="rpc-test-task", job_id="rpc-test-job")
+        heartbeat_req = cluster_pb2.HeartbeatRequest(tasks_to_run=[run_req])
+        response = client.heartbeat(heartbeat_req)
 
-            # Heartbeat response should have the task in running or completed
-            all_task_ids = {t.task_id for t in response.running_tasks} | {t.task_id for t in response.completed_tasks}
-            assert "rpc-test-task" in all_task_ids
+        # Heartbeat response should have the task in running or completed
+        all_task_ids = {t.task_id for t in response.running_tasks} | {t.task_id for t in response.completed_tasks}
+        assert "rpc-test-task" in all_task_ids
 
     finally:
-        server_task.cancel()
-        try:
-            await server_task
-        except asyncio.CancelledError:
-            pass
+        uvicorn_server.should_exit = True
+        server_thread.join(timeout=2.0)
