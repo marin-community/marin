@@ -19,11 +19,13 @@ Tests that Iris handles RPC failures gracefully:
 - Heartbeat timeout (60s)
 - Heartbeat reconciliation (running_tasks)
 """
+import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
 from .conftest import submit, wait, _quick, _slow
 
 
+@pytest.mark.chaos
 def test_dispatch_intermittent_failure(cluster):
     """Test intermittent heartbeat failure during dispatch (30%). Task assignments are
     buffered and retried on next heartbeat cycle. Task should eventually succeed.
@@ -35,6 +37,7 @@ def test_dispatch_intermittent_failure(cluster):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
+@pytest.mark.chaos
 def test_dispatch_permanent_failure(cluster):
     """Test permanent heartbeat failure. After 3 consecutive failures → WorkerFailedEvent →
     task marked WORKER_FAILED → rescheduled → all workers fail → job FAILED or UNSCHEDULABLE.
@@ -46,6 +49,7 @@ def test_dispatch_permanent_failure(cluster):
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
+@pytest.mark.chaos
 def test_heartbeat_temporary_failure(cluster):
     """Test heartbeat fails 3 times (30s gap), but worker timeout is 60s. Worker should
     NOT be marked failed. Task should still succeed.
@@ -57,6 +61,7 @@ def test_heartbeat_temporary_failure(cluster):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
+@pytest.mark.chaos
 def test_heartbeat_permanent_failure(cluster):
     """Test heartbeat permanently fails. After 60s, worker marked failed, tasks
     become WORKER_FAILED. With scheduling timeout, job eventually fails.
@@ -72,6 +77,7 @@ def test_heartbeat_permanent_failure(cluster):
     )
 
 
+@pytest.mark.chaos
 def test_notify_task_update_failure(cluster):
     """Test notify_task_update always fails. Worker buffers completion and delivers
     it via the next heartbeat response. Controller processes it → job SUCCEEDED.
