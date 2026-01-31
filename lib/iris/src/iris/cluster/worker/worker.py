@@ -204,6 +204,11 @@ class Worker:
                 except RuntimeError:
                     pass
 
+        # Wait for all TaskAttempt threads to finish to prevent logging after stdout/stderr closed
+        for task in tasks:
+            if task.thread and task.thread.is_alive():
+                task.thread.join()
+
         # Cleanup temp directory (best-effort)
         if self._temp_dir:
             try:

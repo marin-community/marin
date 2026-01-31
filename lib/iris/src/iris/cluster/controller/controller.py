@@ -536,6 +536,10 @@ class Controller:
         Uses a lock-copy-unlock-send-lock-apply pattern: snapshots dispatch outboxes
         under lock, sends RPCs without holding the lock, then re-locks to apply results.
         """
+        # Skip heartbeats if shutdown is in progress
+        if self._stop:
+            return
+
         # Phase 1: snapshot worker list (no lock), then drain outboxes (under lock)
         all_workers = self._state.get_available_workers()
         with self._dispatch_lock:
