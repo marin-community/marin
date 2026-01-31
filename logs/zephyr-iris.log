@@ -1,0 +1,324 @@
+# Zephyr Iris Tokenization - Debug Log
+
+## Goal
+
+Run tokenization on Iris cluster:
+```bash
+uv run python -m zephyr.cli \
+  --backend=iris \
+  --cluster=lib/iris/examples/eu-west4.yaml \
+  --max-parallelism=1000 \
+  --memory=16GB \
+  lib/marin/src/marin/processing/tokenize/tokenize.py \
+  --train_paths '["gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem-d1522a/99*.jsonl.gz"]' \
+  --cache_path gs://marin-us-central2/tmp/zephyr/test-tokenize \
+  --tokenizer gpt2 \
+  --window_size_bytes=100000000 \
+  --validation_paths '[]' \
+  --format.text_key content
+```
+
+## Problem: Docker Build Failures
+
+### Root Cause
+The Iris worker Dockerfile tried to run `uv sync` before copying source code, causing build failures:
+1. Local packages (levanter, zephyr) need source files to build
+2. Rust packages (dupekit) need Cargo.toml and source code
+3. The workspace bundle only contains metadata files during the initial RUN step
+
+### Solution: Copy Source Before uv sync
+
+Restructured Dockerfile in `lib/iris/src/iris/cluster/worker/builder.py`:
+
+1. Install Rust toolchain (rustup) for dupekit
+2. Install build-essential for compilation
+3. **COPY . . FIRST** - source code now available
+4. Run `uv sync` with access to all source files
+5. Add Cargo cache mounts for faster Rust builds
+
+**Result**: ✅ Docker builds succeed, jobs run
+
+## Problem: PyTorch CUDA on CPU Workers
+
+Jobs fail with `ValueError: libcublas.so.*[0-9] not found in the system path`
+
+PyTorch CUDA build tries to load CUDA libraries on CPU-only workers.
+
+### Solution: Use --extra marin:cpu
+
+The `lib/marin/pyproject.toml` defines `extra = "cpu"` that selects CPU-only PyTorch. Need to pass `--package marin --extra cpu` to `uv sync`.
+
+**Changes**:
+1. `lib/iris/src/iris/iris_run.py`: Thread `extras` parameter to `EnvironmentSpec(extras=...)`
+2. `lib/iris/src/iris/cluster/worker/builder.py`: Parse `package:extra` syntax (e.g., `marin:cpu` → `--package marin --extra cpu`)
+3. `lib/zephyr/src/zephyr/cli.py`: Pass `--extra marin:cpu` to iris_cmd
+
+**Status**: 🔄 Code ready, needs cluster restart to pick up new worker image
+
+## Current Status
+
+- ✅ Docker builds work (source code copied before uv sync)
+- ✅ Rust packages compile (dupekit)
+- ✅ Python dependencies install
+- 🔄 CPU-only PyTorch: code ready, needs `iris cluster restart` to deploy
+
+## Hypothesis: Cluster Restart Required
+
+The CPU-only PyTorch changes have been implemented but the cluster is still running the old worker image. Need to restart the cluster to force fresh image pull.
+
+### Changes to make
+
+Restart the cluster to deploy the new worker image with CPU-only PyTorch support.
+
+### Results
+
+**Failed**: Docker daemon error when attempting cluster restart:
+```
+ERROR: request returned 500 Internal Server Error for API route and version http://%2FUsers%2Fpower%2F.docker%2Frun%2Fdocker.sock/_ping
+```
+
+This is a local Docker daemon issue - the cluster restart process tries to build the worker image locally before pushing to GCR. The Docker daemon appears to be in a bad state (API version mismatch).
+
+**PR Created**: Iris changes extracted to separate PR: https://github.com/marin-community/marin/pull/2581
+- `lib/iris/src/iris/cluster/worker/builder.py`: Dockerfile restructure + package:extra parsing
+- `lib/iris/src/iris/iris_run.py`: extras parameter threading
+- `lib/iris/scripts/cluster-tools.py`: show-task-logs command
+
+## Key Commands
+
+### Submit job:
+```bash
+uv run python -m zephyr.cli \
+  --backend=iris \
+  --cluster=lib/iris/examples/eu-west4.yaml \
+  --max-parallelism=1000 \
+  --memory=16GB \
+  lib/marin/src/marin/processing/tokenize/tokenize.py \
+  --train_paths '[...]' --cache_path gs://... --tokenizer gpt2
+```
+
+### Rebuild worker image:
+```bash
+uv run iris cluster build --config lib/iris/examples/eu-west4.yaml
+```
+
+### Restart controller (force fresh image pull):
+```bash
+uv run iris cluster reload --config lib/iris/examples/eu-west4.yaml
+```
+
+### Restart cluster (tears down everything and rebuilds):
+```bash
+uv run iris cluster restart --config lib/iris/examples/eu-west4.yaml
+```
+
+### Fetch task logs:
+```bash
+uv run python lib/iris/scripts/cluster-tools.py \
+  --zone europe-west4-b \
+  --project hai-gcp-models \
+  show-task-logs <JOB_ID> \
+  --category build
+```
+
+## Session 2: Fixes Applied (2026-01-31)
+
+### Fix 1: Click `--` separator consumed by parser
+
+`iris_run.py` line 466 checked `cmd[0] != "--"` but Click with `ignore_unknown_options=True` and `type=click.UNPROCESSED` still consumes the `--` separator. So `cmd` never starts with `--`.
+
+**Fix**: Removed the `--` check entirely. `cmd` already contains only the user command.
+**File**: `lib/iris/src/iris/iris_run.py`
+
+### Fix 2: Extras flags not parsed correctly
+
+`builder.py` was passing `--extra marin:cpu` directly to `uv sync`, but UV expects `--package marin --extra cpu`. The `package:extra` syntax is our convention, not UV's.
+
+**Fix**: Added `_build_extras_flags()` to parse `marin:cpu` → `--package marin --extra cpu`.
+**File**: `lib/iris/src/iris/cluster/worker/builder.py`
+
+### Fix 3: Log streaming crash on connection timeout
+
+`client.py` only caught `ValueError` during log polling, but `fetch_task_logs` can throw `ConnectError` when workers are busy building Docker images.
+
+**Fix**: Broadened exception catch to `Exception` for both poll loop and final drain.
+**File**: `lib/iris/src/iris/client/client.py`
+
+### Important Lessons
+
+1. **Worker code != bundle code**: The iris worker process runs from the controller's Docker image, not the workspace bundle. Changes to `builder.py` require `iris cluster reload` to deploy. The bundle only provides workspace files for the job's Docker build.
+
+2. **Image cache hash doesn't include builder code**: The Docker image tag hash covers `pyproject.toml`, `uv.lock`, base image, pip packages, and extras strings — but NOT the Dockerfile template or builder logic. If the builder changes but extras don't, a cached (stale) image may be reused.
+
+3. **`--config` flag position matters**: `iris cluster --config=... reload` (config on `cluster` subcommand, not `reload`).
+
+4. **Click consumes `--`**: Even with `ignore_unknown_options=True` and `type=click.UNPROCESSED`, Click consumes the `--` separator. Never check for `--` in variadic UNPROCESSED arguments.
+
+5. **UV extras syntax**: `uv sync --extra <name>` applies to the root project. For workspace packages, use `--package <pkg> --extra <name>`.
+
+### Problem: `iris cluster reload` doesn't update workers
+
+The `reload` command (after commit 2f6388840 "let controller re-bootstrap VMs on reload") only
+restarts the controller. Workers continue running the old Docker image. The controller accepts
+workers via heartbeat-based registration without checking whether they're running the latest image.
+
+**Root cause**: When the controller restarts, existing workers immediately re-register via heartbeats.
+The controller has no way to distinguish "old image" workers from "new image" workers and accepts
+them all. The controller's lifecycle thread is supposed to re-bootstrap VMs by SSHing in, but by
+the time it starts, workers are already registered as healthy.
+
+**Workaround**: Use `iris cluster restart` (full stop/start) instead of `reload` to force
+all workers to pull the latest image.
+
+**Proposed fix (filed as GitHub issue)**: Workers should send a version identifier (e.g. image
+digest or build timestamp) in their heartbeat/register event. The controller should:
+1. Know the expected worker image version (from its config)
+2. Reject or evict workers with stale versions
+3. Trigger re-bootstrap for stale workers
+
+Alternative: Controller could actively SSH into registered workers and compare their running
+image digest against the expected version, then force-restart mismatched workers.
+
+### Status
+
+- Full cluster restart completed (stop/start cycle)
+- Controller now at http://10.164.0.8:10000
+- Next step: resubmit tokenization job
+
+### Fix 4 (CRITICAL): Extras not passed in remote cluster path
+
+The `run_iris_job()` function in `iris_run.py` has two code paths: local cluster (direct connect) and remote cluster (SSH tunnel). The local path passed `extras=extras` to `_submit_and_wait_job()`, but the remote path **did not**. This meant extras were silently dropped for all remote cluster jobs.
+
+**Root cause**: Copy-paste oversight — the remote path was missing `extras=extras` in the kwargs.
+
+**Fix**: Added `extras=extras` to the `_submit_and_wait_job()` call in the remote cluster path (line ~293).
+
+**File**: `lib/iris/src/iris/iris_run.py`
+
+**Verification**: After fix, build logs showed `uv sync --package marin --extra cpu` — correct.
+
+### Current Status (after all 4 fixes)
+
+- ✅ CUDA PyTorch error resolved (CPU-only torch installed correctly)
+- ✅ Build logs show correct `uv sync --package marin --extra cpu`
+- ❌ Job `iris-run-power-tokenize-20260131-190504` still fails with exit code 1
+
+## Problem: Workers run as in-process threads, not separate Iris jobs
+
+### Root Cause
+
+The zephyr CLI on Iris uses `--backend local` (line 263 of `cli.py:run_iris_cluster()`):
+```python
+entrypoint = [
+    "python", "-m", "zephyr.cli",
+    "--backend", "local",  # <-- THIS IS THE PROBLEM
+    "--max-parallelism", str(config.max_parallelism),
+]
+```
+
+With `--backend local`, `current_client()` returns `LocalClient()` (from `fray.v2.local`), which creates all actors as in-process threads. This means:
+
+1. **1000 worker threads** all run inside a **single Docker container** on one Iris worker
+2. The coordinator actor is also an in-process thread with a **single-threaded executor**
+3. All coordinator calls (pull_task, report_result, get_status, heartbeat) go through one executor thread
+4. 1000 workers + coordinator + main thread all compete for **1 CPU core** (resource spec: `cpu=1`)
+5. No separate Iris jobs appear on the dashboard for workers
+
+### Why This Fails
+
+Analysis of job `iris-run-power-tokenize-20260131-190504`:
+- Stderr: 3796 lines, ALL are worker startup/heartbeat messages
+- "Starting stage stage0-Map with 12 tasks" appears at 19:08:27 (near end of logs)
+- Logs stop at 19:08:28, job fails at 19:10:05 with exit code 1
+- NO traceback visible in stderr despite `PYTHONUNBUFFERED=1`
+- No "Executing task" messages — workers never pick up any tasks
+- The coordinator's single-thread executor is overwhelmed by 1000 workers polling `pull_task`
+
+With 1000 threads on 1 CPU, the system is thread-starved. The main thread's `start_stage` call queues behind hundreds of worker `pull_task` calls. Even after tasks are assigned, the coordinator executor is the bottleneck for all communication.
+
+The process likely exits with code 1 due to either:
+1. Thread starvation causing the coordinator to appear unresponsive
+2. Memory pressure from 1000+ threads with Python objects
+3. An exception that gets lost in the thread noise
+
+### Fix Required
+
+Instead of `--backend local`, the inner zephyr.cli invocation on Iris should use `FRAY_CLIENT_SPEC=iris://controller:port` so that:
+1. Workers are separate Iris jobs (visible on dashboard)
+2. Each worker gets its own container with dedicated resources
+3. The coordinator is a separate Iris job
+4. Communication happens over the network (via `IrisActorHandle` → `ActorClient` → `ActorServer`)
+
+The Iris container already has `IRIS_CONTROLLER_ADDRESS` set in its environment. The zephyr CLI needs to detect this and set `FRAY_CLIENT_SPEC` accordingly, OR we change the `--backend` from `local` to `iris`.
+
+### Key Files
+
+- `lib/zephyr/src/zephyr/cli.py:263` — where `--backend local` is hardcoded
+- `lib/fray/src/fray/v2/client.py:162-217` — `current_client()` and `FRAY_CLIENT_SPEC` parsing
+- `lib/fray/src/fray/v2/iris_backend.py` — `FrayIrisClient` that creates actors as Iris jobs
+- `lib/fray/src/fray/v2/local.py` — `LocalClient` that creates actors as in-process threads
+- `lib/iris/src/iris/cluster/worker/task_attempt.py:73-130` — `build_iris_env()` sets `IRIS_CONTROLLER_ADDRESS` but NOT `FRAY_CLIENT_SPEC`
+
+### Important: Actor Hosting via Iris
+
+When `FrayIrisClient.create_actor_group()` is used:
+1. Each actor is submitted as a separate Iris job
+2. The job runs `_host_actor()` which instantiates the actor class and starts an `ActorServer`
+3. The actor registers its address via `iris_ctx().registry.register(name, address)`
+4. `IrisActorGroup.wait_ready()` polls the resolver to discover actor endpoints
+5. `IrisActorHandle` communicates with actors over the network via `ActorClient`
+
+This is the correct architecture for Iris — actors as separate jobs, not in-process threads.
+
+### Fix 5: Inject FRAY_CLIENT_SPEC in Iris container environment
+
+**Changes made:**
+
+1. **`lib/iris/src/iris/cluster/worker/task_attempt.py:build_iris_env()`**
+   - Now sets `FRAY_CLIENT_SPEC=iris://<controller:port>` in the container environment
+   - Strips `http://` prefix from controller address since FRAY_CLIENT_SPEC uses its own `iris://` scheme
+   - Added logging: `Injecting FRAY_CLIENT_SPEC=... for task ...`
+
+2. **`lib/fray/src/fray/v2/client.py:_parse_client_spec()`**
+   - Changed iris:// parsing to prepend `http://` to controller address (IrisClient.remote expects URL format)
+   - Added `bundle_gcs_path=os.environ.get("IRIS_BUNDLE_GCS_PATH")` to inherit parent job's bundle
+
+3. **`lib/fray/src/fray/v2/iris_backend.py:FrayIrisClient.__init__()`**
+   - Added `bundle_gcs_path` parameter
+   - Passes it to `IrisClientLib.remote(controller_address, workspace=workspace, bundle_gcs_path=bundle_gcs_path)`
+   - Added logging: `FrayIrisClient connecting to ... (workspace=..., bundle_gcs_path=...)`
+
+4. **`lib/zephyr/src/zephyr/cli.py:run_local()`**
+   - Added logging: `Zephyr using fray client: <type> (FRAY_CLIENT_SPEC=<value>)`
+   - Added `import os`
+
+5. **`lib/fray/tests/test_v2_iris.py`**
+   - Updated `TestIrisClientSpec` tests to expect `http://` prefix and `bundle_gcs_path=None`
+
+**How it works:**
+1. Iris worker starts a Docker container for a task
+2. `build_iris_env()` sets `FRAY_CLIENT_SPEC=iris://10.164.0.8:10000` (or `host.docker.internal:10000` for Docker)
+3. Inside the container, `python -m zephyr.cli --backend local ...` calls `run_local()`
+4. `run_local()` calls `current_client()` which reads `FRAY_CLIENT_SPEC`
+5. `_parse_client_spec("iris://10.164.0.8:10000")` creates `FrayIrisClient("http://10.164.0.8:10000", bundle_gcs_path=<inherited>)`
+6. `ZephyrContext(client=FrayIrisClient(...), num_workers=1000)` creates actors as separate Iris jobs
+7. Each worker actor gets its own container, own resources, visible on dashboard
+
+**Tests:** All 29 relevant tests pass (`test_v2_iris.py` + `test_v2_current_client.py`)
+
+**Status:** Code ready. Needs:
+- `iris cluster reload` to deploy new worker image (build_iris_env changes)
+- Then resubmit tokenization job
+- NOTE: reload only updates the controller, not workers. May need `iris cluster restart` (full stop/start) per the stale worker issue (#2592)
+
+## Files Changed
+
+- `lib/iris/src/iris/cluster/worker/builder.py`: Restructured Dockerfile, added package:extra parsing
+- `lib/iris/src/iris/iris_run.py`: Added extras parameter threading, fixed extras in remote path
+- `lib/zephyr/src/zephyr/cli.py`: Pass marin:cpu extra for CPU workers, added fray client logging
+- `lib/iris/scripts/cluster-tools.py`: Added show-task-logs command
+- `lib/iris/src/iris/cluster/worker/task_attempt.py`: Inject FRAY_CLIENT_SPEC in container env
+- `lib/fray/src/fray/v2/client.py`: Parse iris:// with http:// prefix, inherit bundle_gcs_path
+- `lib/fray/src/fray/v2/iris_backend.py`: Added bundle_gcs_path to FrayIrisClient, logging
+- `lib/fray/tests/test_v2_iris.py`: Updated tests for new behavior
+- `lib/iris/src/iris/client/client.py`: Broadened exception handling in log streaming

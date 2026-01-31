@@ -240,22 +240,35 @@ class IrisActorHandle:
     Deferred: created with just an actor name. On first use, resolves the
     name via iris_ctx().resolver to find the actor's address.
 
-    Picklable: serializes as (actor_name,) and reconstructs from the current
+    Picklable: serializes as (actor_name, job_id) and reconstructs from the current
     IrisContext on the receiving end. This works because child jobs inherit
     the parent's namespace.
     """
 
-    def __init__(self, actor_name: str, client: Any = None):
+    def __init__(
+        self, actor_name: str, client: Any = None, job_id: str | None = None, iris_client: IrisClientLib | None = None
+    ):
         self._actor_name = actor_name
         self._client = client
+        self._job_id = job_id
+        self._iris_client = iris_client
 
     def _resolve(self) -> Any:
         if self._client is None:
             from iris.actor.client import ActorClient
             from iris.client.client import iris_ctx
 
-            ctx = iris_ctx()
-            self._client = ActorClient(ctx.resolver, self._actor_name)
+            # If we have an explicit IrisClient and job_id, use that (for external calls)
+            if self._iris_client is not None and self._job_id is not None:
+                resolver = self._iris_client.resolver_for_job(self._job_id)
+            else:
+                # Otherwise use the context's resolver (for calls within jobs)
+                ctx = iris_ctx()
+                if self._job_id is not None and ctx.client is not None:
+                    resolver = ctx.client.resolver_for_job(self._job_id)
+                else:
+                    resolver = ctx.resolver
+            self._client = ActorClient(resolver, self._actor_name)
         return self._client
 
     def __getattr__(self, method_name: str) -> _IrisActorMethod:
@@ -264,11 +277,14 @@ class IrisActorHandle:
         return _IrisActorMethod(self, method_name)
 
     def __getstate__(self) -> dict:
-        return {"actor_name": self._actor_name}
+        # Don't serialize iris_client - it will be reconstructed from context
+        return {"actor_name": self._actor_name, "job_id": self._job_id}
 
     def __setstate__(self, state: dict) -> None:
         self._actor_name = state["actor_name"]
+        self._job_id = state.get("job_id")
         self._client = None
+        self._iris_client = None
 
 
 class _IrisActorMethod:
@@ -323,16 +339,18 @@ class IrisActorGroup(ActorGroup):
         sleep_secs = 0.5
 
         while True:
-            # Check resolver for each actor name
-            resolver = self._iris_client.resolver()
+            # Check resolver for each actor - each actor is in its own job's namespace
             for i in range(self._count):
                 actor_name = f"{self._name}-{i}"
                 if actor_name in self._discovered_names:
                     continue
+                # Get resolver for this actor's job namespace
+                job = self._jobs[i]
+                resolver = self._iris_client.resolver_for_job(job.job_id)
                 result = resolver.resolve(actor_name)
                 if not result.is_empty:
                     self._discovered_names.add(actor_name)
-                    handle = IrisActorHandle(actor_name)
+                    handle = IrisActorHandle(actor_name, job_id=job.job_id, iris_client=self._iris_client)
                     self._handles.append(handle)
 
             if len(self._discovered_names) >= target:
@@ -358,8 +376,19 @@ class FrayIrisClient:
     registration for discovery.
     """
 
-    def __init__(self, controller_address: str, workspace: Path | None = None):
-        self._iris = IrisClientLib.remote(controller_address, workspace=workspace)
+    def __init__(
+        self,
+        controller_address: str,
+        workspace: Path | None = None,
+        bundle_gcs_path: str | None = None,
+    ):
+        logger.info(
+            "FrayIrisClient connecting to %s (workspace=%s, bundle_gcs_path=%s)",
+            controller_address,
+            workspace,
+            bundle_gcs_path,
+        )
+        self._iris = IrisClientLib.remote(controller_address, workspace=workspace, bundle_gcs_path=bundle_gcs_path)
 
     def submit(self, request: JobRequest) -> IrisJobHandle:
         iris_resources = convert_resources(request.resources)

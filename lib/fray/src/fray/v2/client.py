@@ -188,10 +188,13 @@ def _parse_client_spec(spec: str) -> Client:
 
         from fray.v2.iris_backend import FrayIrisClient
 
-        controller_address = f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname
+        host_port = f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname
+        controller_address = f"http://{host_port}"
         params = parse_qs(parsed.query)
         workspace = Path(params["ws"][0]) if "ws" in params else None
-        return FrayIrisClient(controller_address, workspace=workspace)
+        # Inside an Iris job, inherit the parent's bundle for sub-job code
+        bundle_gcs_path = os.environ.get("IRIS_BUNDLE_GCS_PATH")
+        return FrayIrisClient(controller_address, workspace=workspace, bundle_gcs_path=bundle_gcs_path)
     else:
         raise ValueError(f"Unknown FRAY_CLIENT_SPEC scheme: {scheme!r}")
 
