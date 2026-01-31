@@ -22,6 +22,7 @@ def linear_softmax_cross_entropy_loss_reference(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    block_sizes: Optional[object] = None,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
     """Reference loss + logsumexp for linear softmax cross-entropy.
 
@@ -31,11 +32,14 @@ def linear_softmax_cross_entropy_loss_reference(
         w: [H, V] projection weights.
         dtype: Optional dtype for logits/softmax.
         logit_soft_cap: Optional tanh soft cap for logits.
+        precision: Optional matmul precision override.
+        block_sizes: Ignored (for API compatibility).
 
     Returns:
         loss: [B] per-example cross-entropy loss.
         lse: [B] logsumexp of logits.
     """
+    del block_sizes  # unused in reference implementation
     logits = jax.lax.dot_general(
         x,
         w,

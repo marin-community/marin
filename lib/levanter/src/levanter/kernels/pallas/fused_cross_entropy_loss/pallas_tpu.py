@@ -226,6 +226,10 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
             pltpu.VMEM((block_sizes.b_block_size,), dtype=out_dtype),  # b_block_loss
         ),
         grid=(num_b_blocks, num_v_blocks, num_h_blocks),
+        compiler_params=pltpu.CompilerParams(
+            # Megacore (v4/v5p) requires parallel semantics to use both TensorCores.
+            dimension_semantics=("parallel", "parallel", "arbitrary"),
+        ),
     )(x, labels, w)
 
     return loss, lse
@@ -504,6 +508,7 @@ def _make_custom_vjp(
         h_block_size=h_block_size,
         v_block_size=v_block_size,
     )
+    print(f"Creating custom VJP with block sizes: {block_sizes}")
 
     @jax.custom_vjp
     def _fn(x: jax.Array, labels: jax.Array, w: jax.Array):

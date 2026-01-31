@@ -86,7 +86,6 @@ def test_linear_softmax_cross_entropy_jittable():
                 w,
                 y,
                 reduction="none",
-                block_size=4,
                 dtype=jnp.float32,
                 precision=jax.lax.Precision.HIGHEST,
             )

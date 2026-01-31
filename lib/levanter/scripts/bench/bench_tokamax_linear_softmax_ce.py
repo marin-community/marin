@@ -6,6 +6,8 @@ import time
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+from jax.sharding import Mesh, PartitionSpec as P
 
 
 def main() -> None:
@@ -25,6 +27,9 @@ def main() -> None:
     dtype_name = os.getenv("TOKAMAX_DTYPE", "f32").lower()
     dtype = jnp.bfloat16 if dtype_name in {"bf16", "bfloat16"} else jnp.float32
 
+    use_shard_map = os.getenv("TOKAMAX_SHARD_MAP", "0").lower() in {"1", "true", "yes"}
+    data_shards = int(os.getenv("TOKAMAX_DATA_SHARDS", "0")) or len(jax.devices())
+
     key = jax.random.PRNGKey(0)
     key_x, key_w, key_y = jax.random.split(key, 3)
 
@@ -41,19 +46,85 @@ def main() -> None:
             implementation="mosaic_tpu",
         )
 
-    loss_jit = jax.jit(loss_fn)
+    if use_shard_map:
+        if data_shards <= 0:
+            raise ValueError("TOKAMAX_DATA_SHARDS must be positive when TOKAMAX_SHARD_MAP is enabled.")
+        devices = jax.devices()[:data_shards]
+        mesh = Mesh(np.array(devices), ("data",))
 
-    start = time.perf_counter()
-    out = loss_jit(x_raw, w_raw, y_raw)
-    out.block_until_ready()
-    compile_time = time.perf_counter() - start
+        def shard_loss(x_in, w_in, y_in):
+            loss = linear_softmax_cross_entropy_loss(
+                x_in,
+                y_in,
+                w_in,
+                reduction=None,
+                implementation="mosaic_tpu",
+            )
+            local_sum = jnp.sum(loss)
+            total_sum = jax.lax.psum(local_sum, "data")
+            total_denom = jax.lax.psum(x_in.shape[0], "data")
+            return total_sum / total_denom
 
-    steps = 3
-    start = time.perf_counter()
-    for _ in range(steps):
+        loss_jit = jax.jit(
+            jax.shard_map(
+                shard_loss,
+                in_specs=(P("data", None), P(None, None), P("data")),
+                out_specs=P(),
+                check_vma=False,
+            )
+        )
+    else:
+        loss_jit = jax.jit(loss_fn)
+
+    if use_shard_map:
+        set_mesh = getattr(jax, "set_mesh", None)
+        token = None
+        if set_mesh is None:
+            token = mesh
+        else:
+            set_mesh(mesh)
+
+        try:
+            if token is None:
+                start = time.perf_counter()
+                out = loss_jit(x_raw, w_raw, y_raw)
+                out.block_until_ready()
+                compile_time = time.perf_counter() - start
+
+                steps = 3
+                start = time.perf_counter()
+                for _ in range(steps):
+                    out = loss_jit(x_raw, w_raw, y_raw)
+                    out.block_until_ready()
+                steady_time = (time.perf_counter() - start) / steps
+            else:
+                with token:
+                    start = time.perf_counter()
+                    out = loss_jit(x_raw, w_raw, y_raw)
+                    out.block_until_ready()
+                    compile_time = time.perf_counter() - start
+
+                    steps = 3
+                    start = time.perf_counter()
+                    for _ in range(steps):
+                        out = loss_jit(x_raw, w_raw, y_raw)
+                        out.block_until_ready()
+                    steady_time = (time.perf_counter() - start) / steps
+        finally:
+            if set_mesh is not None:
+                pass
+    else:
+        start = time.perf_counter()
         out = loss_jit(x_raw, w_raw, y_raw)
         out.block_until_ready()
-    steady_time = (time.perf_counter() - start) / steps
+        compile_time = time.perf_counter() - start
+
+        steps = 3
+        start = time.perf_counter()
+        for _ in range(steps):
+            out = loss_jit(x_raw, w_raw, y_raw)
+            out.block_until_ready()
+        steady_time = (time.perf_counter() - start) / steps
 
     tokens = batch
     print("loss", float(out))

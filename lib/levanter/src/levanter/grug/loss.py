@@ -10,12 +10,14 @@ reference implementation on non-TPU backends.
 import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
+
+from haliax.jax_utils import named_call
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
-    BlockSizes,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
 
 
+@named_call
 def fused_linear_softmax_cross_entropy_loss(
     hidden: jax.Array,
     lm_head: jax.Array,
@@ -24,7 +26,6 @@ def fused_linear_softmax_cross_entropy_loss(
     weight: jax.Array | None = None,
     reduction: str = "mean",
     logsumexp_weight: float | None = None,
-    block_size: int | None = None,
     dtype: jnp.dtype = jnp.float32,
     precision: jax.lax.PrecisionLike = None,
 ) -> jax.Array:
@@ -37,7 +38,6 @@ def fused_linear_softmax_cross_entropy_loss(
         weight: Optional per-example weights with shape matching labels.
         reduction: One of {"mean", "sum", "none"}.
         logsumexp_weight: Optional z-loss weight (logsumexp^2 term).
-        block_size: Optional vocab block size (used as v_block_size).
         dtype: Accumulator dtype for logits/logsumexp.
         precision: Optional matmul precision override for XLA/reference paths.
 
@@ -59,7 +59,6 @@ def fused_linear_softmax_cross_entropy_loss(
     else:
         raise ValueError(f"Unknown reduction: {reduction}")
 
-    block_sizes = BlockSizes(v_block_size=block_size) if block_size is not None else None
     weight_array = weight if weight is not None else jnp.ones_like(labels, dtype=dtype)
 
     def _loss_shard(
@@ -68,10 +67,12 @@ def fused_linear_softmax_cross_entropy_loss(
         shard_labels: jax.Array,
         shard_weight: jax.Array,
     ) -> jax.Array:
-        block_sizes_local = block_sizes if jax.default_backend() == "tpu" else None
+        print(f"hid sharding: {jax.typeof(shard_hidden)}")
         flat_hidden = shard_hidden.reshape((-1, hidden_dim))
         flat_labels = shard_labels.reshape((-1,)).astype(jnp.int32)
         flat_weight = shard_weight.reshape((-1,))
+        print(f"flat sharding: {jax.typeof(flat_hidden)}")
+        print(flat_hidden.shape, flat_labels.shape, flat_weight.shape)
 
         loss = fused_cross_entropy_loss_and_logsumexp_penalty(
             flat_hidden,
@@ -80,10 +81,10 @@ def fused_linear_softmax_cross_entropy_loss(
             reduction=None,
             weight=flat_weight,
             logsumexp_weight=logsumexp_weight,
-            block_sizes=block_sizes_local,
             dtype=dtype,
             logit_soft_cap=None,
             precision=precision,
+            # implementation="reference"
         )
 
         if reduction_mode is None:

@@ -35,13 +35,25 @@ class ShapeBucket:
 # value:
 #   - BlockSizes
 TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
+    DEFAULT_DEVICE_KEY: {
+        ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
+        ("float32", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
+    },
     "TPU v5e": {
+        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
+        ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
+        ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
         ("float32", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
         ("float32", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
+        ("float32", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
     },
     "TPU v5p": {
+        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
+        ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
+        ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
         ("float32", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
         ("float32", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
+        ("float32", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
     },
 }
 
@@ -62,6 +74,15 @@ SHAPE_BUCKETS: list[ShapeBucket] = [
         b_max=16384,
         h_min=4096,
         h_max=4096,
+        v_min=120000,
+        v_max=131072,
+    ),
+    ShapeBucket(
+        name="large-batch-small-h",
+        b_min=32768,
+        b_max=131072,
+        h_min=256,
+        h_max=1024,
         v_min=120000,
         v_max=131072,
     ),

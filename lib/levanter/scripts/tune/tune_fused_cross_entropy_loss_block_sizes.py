@@ -1,6 +1,7 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
 import time
 
 import jax
@@ -12,12 +13,37 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import (
 )
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Tune block sizes for fused cross-entropy kernel.")
+    parser.add_argument("--batch", type=int, default=128, help="Global batch size.")
+    parser.add_argument("--seq-len", type=int, default=2048, help="Sequence length.")
+    parser.add_argument("--data-shards", type=int, default=4, help="Data-parallel shards to divide batch*seq.")
+    parser.add_argument("--embed", type=int, default=512, help="Hidden dimension (H).")
+    parser.add_argument("--vocab", type=int, default=128256, help="Vocabulary size (V).")
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = _parse_args()
     print("devices:", jax.devices())
 
-    batch = 8192
-    embed = 4096
-    vocab = 128256
+    tokens = args.batch * args.seq_len
+    if tokens % args.data_shards != 0:
+        raise ValueError(f"batch*seq ({tokens}) must be divisible by data_shards ({args.data_shards}).")
+    batch = tokens // args.data_shards
+    embed = args.embed
+    vocab = args.vocab
+    print(
+        "shape",
+        {
+            "global_batch": args.batch,
+            "seq_len": args.seq_len,
+            "data_shards": args.data_shards,
+            "kernel_batch": batch,
+            "embed": embed,
+            "vocab": vocab,
+        },
+    )
 
     key = jax.random.PRNGKey(0)
     key_x, key_w, key_y = jax.random.split(key, 3)
@@ -27,11 +53,17 @@ def main() -> None:
     y_raw = jax.random.randint(key_y, (batch,), 0, vocab, dtype=jnp.int32)
 
     configs = [
-        # v5p labels are tiled at 1024, so keep b_block_size aligned.
-        BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=512),
-        BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
-        BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=512),
-        BlockSizes(b_block_size=1024, h_block_size=1024, v_block_size=1024),
+        # Keep b*v roughly <= 4M (float32 scratch) to stay within TPU scoped vmem.
+        BlockSizes(b_block_size=512, h_block_size=256, v_block_size=4096),
+        BlockSizes(b_block_size=512, h_block_size=512, v_block_size=4096),
+        BlockSizes(b_block_size=512, h_block_size=256, v_block_size=8192),
+        BlockSizes(b_block_size=512, h_block_size=512, v_block_size=8192),
+        BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=2048),
+        BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
+        BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=4096),
+        BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=4096),
+        BlockSizes(b_block_size=2048, h_block_size=256, v_block_size=2048),
+        BlockSizes(b_block_size=2048, h_block_size=512, v_block_size=2048),
     ]
 
     def make_loss_fn(block_sizes: BlockSizes):
@@ -49,8 +81,6 @@ def main() -> None:
             )
 
         return loss_fn
-
-    tokens = batch
 
     for cfg in configs:
         print("config", cfg)
