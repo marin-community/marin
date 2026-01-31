@@ -6,5 +6,5 @@ trainer:
 eval_harness:
   task_spec:
     - "mmmu_val"
-  max_examples: 2
-  vlm_batch_size: 1  # Reduced for 4-chip TPU (v4-8)
+  max_examples: 1  # Use 1 example to test with smaller batch
+  vlm_batch_size: 1  # Sequential processing required for 4-chip TPU (not enough memory for batched prefill)

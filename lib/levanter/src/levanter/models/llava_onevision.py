@@ -2005,14 +2005,21 @@ class LlavaInferenceEngine:
             self._base_engine.reset()
 
             # Get the actual free_slots order from the engine to match slot_ids
-            # Engine uses free_slots.pop() which pops from the END
+            # Engine uses free_slots.pop() which pops from the END of the list
+            # After reset(), free_slots = [0, 1, 2, ..., max_seqs-1]
+            # So pop() returns: max_seqs-1, max_seqs-2, ..., 1, 0
             engine_free_slots = list(self._base_engine.free_slots)  # Copy the list
             num_requests = len(requests)
 
+            if len(engine_free_slots) < num_requests:
+                logger.warning(f"Not enough free slots: {len(engine_free_slots)} < {num_requests}")
+                return None
+
             # Predict which slot_ids the engine will assign (pop from end)
+            # First request gets engine_free_slots[-1], second gets engine_free_slots[-2], etc.
             predicted_slot_ids = [engine_free_slots[-(i+1)] for i in range(num_requests)]
 
-            logger.info(f"Engine free_slots: {engine_free_slots[:16]}, predicted slot_ids: {predicted_slot_ids}")
+            logger.info(f"Engine free_slots (first 16): {engine_free_slots[:16]}, predicted slot_ids: {predicted_slot_ids}")
 
             # Use the predicted slot_ids for our mapping
             slot_ids = predicted_slot_ids

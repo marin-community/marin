@@ -578,8 +578,8 @@ class LevanterVLMHarnessLM(TemplateLM):
         engine = self._get_engine()
         results: List[str] = []
 
-        # Batch size for processing (can be tuned based on memory)
-        batch_size = 8
+        # Use vlm_batch_size for grouping requests (must match engine's max_seqs)
+        batch_size = max(1, self.vlm_batch_size)
 
         # Process requests in batches
         num_batches = (len(requests) + batch_size - 1) // batch_size
