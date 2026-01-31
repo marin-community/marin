@@ -60,7 +60,6 @@ class WorkerDispatch:
 
     dispatch_outbox: list[cluster_pb2.Worker.RunTaskRequest] = field(default_factory=list)
     kill_outbox: list[str] = field(default_factory=list)
-    needs_priority_heartbeat: bool = False
 
 
 def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint]) -> bool | None:
@@ -224,11 +223,11 @@ class ControllerConfig:
 class Controller:
     """Unified controller managing all components and lifecycle.
 
-    Owns a single background loop that periodically:
-    1. Runs the scheduler to find task assignments
-    2. Dispatches assigned tasks to workers
-    3. Checks worker health via heartbeats
-    4. Applies state changes from heartbeat results
+    Runs two background loops:
+    - Scheduling loop: finds task assignments, checks worker timeouts, runs autoscaler
+    - Heartbeat loop: sends heartbeat RPCs to workers, delivering buffered dispatches/kills
+
+    Separating these ensures slow heartbeat RPCs don't block scheduling and vice versa.
 
     When an autoscaler is provided, manages it in a background thread that
     provisions/terminates VM slices based on demand.
@@ -287,12 +286,16 @@ class Controller:
         # Background loop state
         self._stop = False
         self._wake_event = threading.Event()
+        self._heartbeat_event = threading.Event()
         self._scheduling_loop_thread: threading.Thread | None = None
+        self._heartbeat_loop_thread: threading.Thread | None = None
         self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
 
-        # Per-worker dispatch state (outboxes, priority flags)
+        # Per-worker dispatch state (outboxes). Protected by _dispatch_lock since
+        # the scheduling thread writes and the heartbeat thread reads+drains.
         self._dispatch: dict[WorkerId, WorkerDispatch] = {}
+        self._dispatch_lock = threading.Lock()
 
         # Thread pool for parallel heartbeat dispatch
         self._dispatch_executor = ThreadPoolExecutor(
@@ -325,6 +328,13 @@ class Controller:
         )
         self._scheduling_loop_thread.start()
 
+        # Start heartbeat loop (separate from scheduling so slow RPCs don't block scheduling)
+        self._heartbeat_loop_thread = threading.Thread(
+            target=self._run_heartbeat_loop,
+            daemon=True,
+        )
+        self._heartbeat_loop_thread.start()
+
         # Start dashboard server in background thread
         self._server_thread = threading.Thread(
             target=self._run_server,
@@ -346,9 +356,12 @@ class Controller:
         """Stop all background components gracefully."""
         self._stop = True
         self._wake_event.set()
+        self._heartbeat_event.set()
 
         if self._scheduling_loop_thread:
             self._scheduling_loop_thread.join(timeout=5.0)
+        if self._heartbeat_loop_thread:
+            self._heartbeat_loop_thread.join(timeout=5.0)
 
         # Stop uvicorn server
         if self._server:
@@ -364,7 +377,7 @@ class Controller:
             self._autoscaler.shutdown()
 
     def _run_scheduling_loop(self) -> None:
-        """Main controller loop running scheduling, heartbeats, autoscaler, and worker timeout checks."""
+        """Main controller loop running scheduling, autoscaler, and worker timeout checks."""
         while not self._stop:
             self._wake_event.wait(timeout=self._config.scheduler_interval_seconds)
             self._wake_event.clear()
@@ -373,12 +386,19 @@ class Controller:
                 break
 
             self._run_scheduling()
-            self._heartbeat_all_workers()
             self._check_worker_timeouts()
 
-            # Run autoscaler if configured
             if self._autoscaler:
                 self._run_autoscaler_once()
+
+    def _run_heartbeat_loop(self) -> None:
+        """Heartbeat loop running on its own thread so slow RPCs don't block scheduling."""
+        while not self._stop:
+            self._heartbeat_event.wait(timeout=self._config.scheduler_interval_seconds)
+            self._heartbeat_event.clear()
+            if self._stop:
+                break
+            self._heartbeat_all_workers()
 
     def _run_scheduling(self) -> None:
         """Run one scheduling cycle.
@@ -425,31 +445,32 @@ class Controller:
                 continue
 
             for task, worker in job_assignments:
-                # Create attempt BEFORE buffering so worker state reports have a valid attempt_id
-                self._state.handle_event(
-                    TaskAssignedEvent(
-                        task_id=task.task_id,
-                        worker_id=worker.worker_id,
+                # Commit resources and buffer dispatch atomically under _dispatch_lock.
+                # This prevents the heartbeat thread from seeing the task in
+                # worker.running_tasks (via TaskAssignedEvent) before the
+                # RunTaskRequest is in the outbox.
+                with self._dispatch_lock:
+                    self._state.handle_event(
+                        TaskAssignedEvent(
+                            task_id=task.task_id,
+                            worker_id=worker.worker_id,
+                        )
                     )
-                )
-
-                request = cluster_pb2.Worker.RunTaskRequest(
-                    job_id=str(task.job_id),
-                    task_id=str(task.task_id),
-                    task_index=task.task_index,
-                    num_tasks=len(self._state.get_job_tasks(task.job_id)),
-                    entrypoint=job.request.entrypoint,
-                    environment=job.request.environment,
-                    bundle_gcs_path=job.request.bundle_gcs_path,
-                    resources=job.request.resources,
-                    ports=list(job.request.ports),
-                    attempt_id=task.current_attempt_id,
-                    timeout_seconds=job.request.timeout_seconds,
-                )
-                # Buffer for delivery via next heartbeat
-                wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
-                wd.dispatch_outbox.append(request)
-                wd.needs_priority_heartbeat = True
+                    request = cluster_pb2.Worker.RunTaskRequest(
+                        job_id=str(task.job_id),
+                        task_id=str(task.task_id),
+                        task_index=task.task_index,
+                        num_tasks=len(self._state.get_job_tasks(task.job_id)),
+                        entrypoint=job.request.entrypoint,
+                        environment=job.request.environment,
+                        bundle_gcs_path=job.request.bundle_gcs_path,
+                        resources=job.request.resources,
+                        ports=list(job.request.ports),
+                        attempt_id=task.current_attempt_id,
+                        timeout_seconds=job.request.timeout_seconds,
+                    )
+                    wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
+                    wd.dispatch_outbox.append(request)
 
     def _mark_task_unschedulable(self, task: ControllerTask) -> None:
         """Mark a task as unschedulable due to timeout."""
@@ -488,40 +509,31 @@ class Controller:
             worker = self._state.get_worker(task.worker_id)
             if not worker:
                 continue
-            wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
-            wd.kill_outbox.append(str(task_id))
-            wd.needs_priority_heartbeat = True
+            with self._dispatch_lock:
+                wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
+                wd.kill_outbox.append(str(task_id))
 
     def _heartbeat_all_workers(self) -> None:
         """Send heartbeats to all registered workers.
 
-        Priority workers (those with pending dispatches/kills) go first.
-        Delivers buffered task assignments and kill requests via heartbeat.
+        Uses a lock-copy-unlock-send-lock-apply pattern: snapshots dispatch outboxes
+        under lock, sends RPCs without holding the lock, then re-locks to apply results.
         """
+        # Phase 1: snapshot worker list (no lock), then drain outboxes (under lock)
         all_workers = self._state.get_available_workers()
+        with self._dispatch_lock:
+            worker_dispatches: dict[WorkerId, tuple[ControllerWorker, list, list]] = {}
+            for w in all_workers:
+                wd = self._dispatch.pop(w.worker_id, WorkerDispatch())
+                worker_dispatches[w.worker_id] = (w, wd.dispatch_outbox, wd.kill_outbox)
 
-        # Priority workers (those with pending dispatches/kills) go first
-        priority_ids = {
-            w.worker_id
-            for w in all_workers
-            if self._dispatch.get(w.worker_id, WorkerDispatch()).needs_priority_heartbeat
-        }
-        worker_ids = priority_ids | {w.worker_id for w in all_workers}
-
-        # Submit heartbeat RPCs in parallel
+        # Phase 2: send RPCs (no lock held)
         futures = {}
-        for worker_id in worker_ids:
-            worker = self._state.get_worker(worker_id)
-            if not worker:
-                continue
-            # Take outbox contents (will put back on failure)
-            wd = self._dispatch.pop(worker_id, WorkerDispatch())
-            tasks_to_run = wd.dispatch_outbox
-            tasks_to_kill = wd.kill_outbox
+        for _worker_id, (worker, tasks_to_run, tasks_to_kill) in worker_dispatches.items():
             future = self._dispatch_executor.submit(self._heartbeat_worker, worker, tasks_to_run, tasks_to_kill)
             futures[future] = (worker, tasks_to_run, tasks_to_kill)
 
-        # Process results as they complete
+        # Phase 3: process results, requeue failures
         try:
             for future in as_completed(futures, timeout=10):
                 worker, tasks_to_run, tasks_to_kill = futures[future]
@@ -536,7 +548,16 @@ class Controller:
                     self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
         except TimeoutError:
             for future, (worker, tasks_to_run, tasks_to_kill) in futures.items():
-                if not future.done():
+                if future.done():
+                    try:
+                        response = future.result()
+                        if response is None:
+                            self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
+                        else:
+                            self._process_heartbeat_response(worker, response)
+                    except Exception:
+                        self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
+                else:
                     logger.warning(f"Heartbeat timed out for {worker.worker_id}")
                     self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
                     future.cancel()
@@ -614,11 +635,12 @@ class Controller:
         tasks_to_kill: list[str],
     ) -> None:
         """Re-queue outbox entries and record a heartbeat failure for a worker."""
-        wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
-        if tasks_to_run:
-            wd.dispatch_outbox.extend(tasks_to_run)
-        if tasks_to_kill:
-            wd.kill_outbox.extend(tasks_to_kill)
+        with self._dispatch_lock:
+            wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
+            if tasks_to_run:
+                wd.dispatch_outbox.extend(tasks_to_run)
+            if tasks_to_kill:
+                wd.kill_outbox.extend(tasks_to_kill)
         self._handle_heartbeat_failure(worker)
 
     def _handle_heartbeat_failure(self, worker: ControllerWorker) -> None:

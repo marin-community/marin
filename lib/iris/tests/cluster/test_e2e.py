@@ -223,6 +223,7 @@ class E2ECluster:
         memory: str = "1g",
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,
+        replicas: int = 1,
         **kwargs,
     ):
         """Submit a job and return a Job handle."""
@@ -236,6 +237,7 @@ class E2ECluster:
             environment=environment,
             ports=ports,
             scheduling_timeout_seconds=scheduling_timeout_seconds,
+            replicas=replicas,
         )
 
     def _to_job_id_str(self, job_or_id) -> str:
@@ -442,23 +444,35 @@ class TestMultiWorker:
     """Tests requiring multiple workers."""
 
     def test_multi_worker_execution(self, multi_worker_cluster):
-        """Jobs distributed across multiple workers."""
+        """Jobs with multiple tasks distribute across workers.
+
+        Submits a single job with multiple replicas. All tasks are pending
+        simultaneously, triggering the scheduler's capacity-based distribution.
+        Even with large local worker capacity (cpu=1000), the scheduler should
+        distribute tasks when they're batched in one cycle.
+        """
         run_id = uuid.uuid4().hex[:8]
-        job_ids = [multi_worker_cluster.submit(lambda n=n: n * 2, name=f"mw-job-{run_id}-{n}", cpu=2) for n in range(6)]
 
-        # Wait for all to complete
-        for job_id in job_ids:
-            status = multi_worker_cluster.wait(job_id, timeout=30)
-            assert status["state"] == "JOB_STATE_SUCCEEDED"
+        # Submit one job with 6 replicas - all tasks pending simultaneously
+        job_id = multi_worker_cluster.submit(
+            lambda: 42,
+            name=f"mw-job-{run_id}",
+            cpu=5,
+            replicas=6,
+        )
 
-        # Verify jobs ran on different workers (via task-level worker info)
+        # Wait for completion
+        status = multi_worker_cluster.wait(job_id, timeout=30)
+        assert status["state"] == "JOB_STATE_SUCCEEDED"
+
+        # Verify tasks ran on different workers
         workers_used = set()
-        for job_id in job_ids:
-            task_status = multi_worker_cluster.task_status(job_id, task_index=0)
+        for task_idx in range(6):
+            task_status = multi_worker_cluster.task_status(job_id, task_index=task_idx)
             if task_status["workerId"]:
                 workers_used.add(task_status["workerId"])
 
-        assert len(workers_used) > 1, "Jobs should run on multiple workers"
+        assert len(workers_used) > 1, f"Tasks should distribute across workers, but all ran on: {workers_used}"
 
 
 # =============================================================================
