@@ -17,6 +17,7 @@
 Tests task-level failure modes, timeouts, capacity, and scheduling behavior.
 """
 import time
+import pytest
 
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
@@ -24,6 +25,7 @@ from iris.cluster.types import ResourceSpec, CoschedulingConfig
 from .conftest import submit, wait, _quick
 
 
+@pytest.mark.chaos
 def test_bundle_download_intermittent(cluster):
     """Bundle download fails intermittently, task retries handle it."""
     _url, client = cluster
@@ -35,6 +37,7 @@ def test_bundle_download_intermittent(cluster):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
+@pytest.mark.chaos
 def test_task_timeout(cluster):
     """Task times out, marked FAILED."""
     _url, client = cluster
@@ -49,6 +52,7 @@ def test_task_timeout(cluster):
     assert status.state == cluster_pb2.JOB_STATE_FAILED
 
 
+@pytest.mark.chaos
 def test_coscheduled_sibling_failure(cluster):
     """Coscheduled job: one replica fails → all siblings killed.
 
@@ -74,6 +78,7 @@ def test_coscheduled_sibling_failure(cluster):
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
+@pytest.mark.chaos
 def test_retry_budget_exact(cluster):
     """Task fails exactly N-1 times, succeeds on last attempt."""
     _url, client = cluster
@@ -83,6 +88,7 @@ def test_retry_budget_exact(cluster):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
+@pytest.mark.chaos
 def test_capacity_wait(cluster):
     """Workers at capacity, task pends, schedules when capacity frees."""
     _url, client = cluster
@@ -115,6 +121,7 @@ def test_capacity_wait(cluster):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
+@pytest.mark.chaos
 def test_scheduling_timeout(cluster):
     """Scheduling timeout exceeded → UNSCHEDULABLE."""
     _url, client = cluster
@@ -132,6 +139,7 @@ def test_scheduling_timeout(cluster):
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
+@pytest.mark.chaos
 def test_dispatch_delayed(cluster):
     """Dispatch delayed by chaos (via heartbeat), but eventually goes through."""
     _url, client = cluster
