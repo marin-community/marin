@@ -6,7 +6,7 @@ import gc
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional, cast
+from typing import Optional, Union, cast
 
 import equinox as eqx
 import haliax as hax
