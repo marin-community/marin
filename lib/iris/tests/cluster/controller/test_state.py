@@ -501,7 +501,8 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
 
 
 def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
-    """E2E: Endpoints only visible for RUNNING jobs."""
+    """Endpoints are visible for all non-terminal job states (PENDING, RUNNING, BUILDING)
+    and hidden once the job reaches a terminal state."""
     state = ControllerState()
 
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
@@ -519,15 +520,15 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
     )
     state.add_endpoint(ep)
 
-    # Not visible while pending
-    assert len(state.lookup_endpoints("ns-1/actor")) == 0
+    # Visible while pending (task may be executing before job state updates)
+    assert len(state.lookup_endpoints("ns-1/actor")) == 1
 
-    # Transition to running by dispatching task
+    # Still visible after transition to running
     dispatch_task(state, task, worker_id)
     assert job.state == cluster_pb2.JOB_STATE_RUNNING
     assert len(state.lookup_endpoints("ns-1/actor")) == 1
 
-    # Not visible after completion
+    # Not visible after completion (terminal state)
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
     assert len(state.lookup_endpoints("ns-1/actor")) == 0

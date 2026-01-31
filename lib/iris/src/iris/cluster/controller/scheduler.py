@@ -224,7 +224,7 @@ class SchedulingContext:
     # Worker capacities indexed by worker ID
     capacities: dict[WorkerId, WorkerCapacity]
 
-    # Workers already assigned a task this cycle (for round-robin)
+    # Workers that have already been assigned a task this cycle
     scheduled_workers: set[WorkerId] = field(default_factory=set)
 
     @classmethod
@@ -577,6 +577,7 @@ class Scheduler:
             assignments: list[tuple[ControllerTask, ControllerWorker]] = []
             for task, worker_id in zip(sorted_tasks, available[:num_tasks], strict=False):
                 context.capacities[worker_id].deduct(job)
+                context.scheduled_workers.add(worker_id)
                 assignments.append((task, context.capacities[worker_id].worker))
 
             logger.debug(

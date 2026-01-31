@@ -230,7 +230,12 @@ def test_list_workers_returns_healthy_status(client, state, make_worker_metadata
 
 
 def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
-    """ListEndpoints filters out endpoints for non-running jobs."""
+    """ListEndpoints filters out endpoints for terminal jobs.
+
+    Endpoints are visible for jobs in non-terminal states (PENDING, BUILDING, RUNNING)
+    to support the case where tasks are executing but the job hasn't transitioned to
+    RUNNING yet due to controller-worker communication delay.
+    """
     # Create jobs in various states
     pending_id = submit_job(state, "pending", job_request)
 
@@ -248,8 +253,10 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
     endpoints = resp.get("endpoints", [])
 
-    assert len(endpoints) == 1
-    assert endpoints[0]["name"] == "running-svc"
+    # Both pending and running endpoints should be visible (terminal state filtered out)
+    assert len(endpoints) == 2
+    endpoint_names = {ep["name"] for ep in endpoints}
+    assert endpoint_names == {"pending-svc", "running-svc"}
 
 
 def test_list_jobs_includes_retry_counts(client, state, job_request):
