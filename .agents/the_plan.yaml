@@ -1,0 +1,3594 @@
+# This is a dag structured plan formatted as a yaml file. It is not actually code but high-level instructions for us as a team
+# Vaguely top-down
+
+# Schema:
+# id:
+# issue: int | str | None
+# candidate_id: int | None  # best-guess issue match; verify before copying into issue:
+# candidate_score: float | None  # match confidence (0..1)
+#  title: <string>
+#  type: literal[epic, task, experiment, milestone] | None
+#  status: literal[planned, active, done] | None
+#  owners: list[str] | None  # GitHub handles
+#  owner_names: list[str] | None  # free-form names when handle unknown
+#  target_date: YYYY-MM-DD | None
+#  labels: list[str] | None
+#  description: <string>
+#  dependencies:
+#    - <id>
+#  definition_of_done: <string>
+
+meta:
+  owner_aliases:
+    abhi: abhinavg4
+    abhinav: abhinavg4
+    ahmed: ahmeda14960
+    chris: BabyChouSr
+    david: dlwh
+    kevin: AlienKevin
+    percy: percyliang
+    will: Helw150
+    rohith: RohithKuditipudi
+    rafal: ravwojdyla
+    rav: ravwojdyla
+    romain: yonromai
+    russell: rjpower
+    rui: ruili33
+    calvin: Calvin-Xu
+    "moo jin": moojink
+
+milestone_2025_12_basic_ingredients:
+  title: "December 2025: Basic ingredients (evals, scaling laws, MoEs, long-context, SFT, RL)"
+  type: milestone
+  status: planned
+  target_date: "2025-12-31"
+  labels: [timeline]
+  dependencies:
+    - pretraining_evals_and_models
+    - dense_scaling_laws
+    - moe_scaling_laws_issue
+    - long_context_data_training_evals
+    - sft_existing_datasets_models
+    - dedup_pipeline_robust
+    - fluster_design_doc
+    - speedrun_polish
+    - marin_paper
+    - ferry_muonh_feistel_comparison
+    - rl_math_llama_qwen_8b
+    - release_multilingual_8b
+
+
+milestone_2026_01_scaling_up:
+  title: "January 2026: Scaling up MoEs, new architectures, aggressive data mixing, SFT + RL"
+  type: milestone
+  status: planned
+  target_date: "2026-01-31"
+  labels: [timeline]
+  dependencies:
+    - modernized_pythia
+    - data_curation_100_experiments
+    - train_8x7b
+    - moe_mfu_match_maxtext_8x7b
+    - attention_sinks
+    - effective_gdn_implementation
+    - posttraining_evals_and_models
+    - sft_synthetic_datasets
+    - rl_marin_32b_more_envs
+    - vlms_multimodality
+    - support_nvidia_gpu_clusters
+    - fluster_scheduler_mvp
+    - data_ingestion_pipeline_scale
+    - rl_moes_multi_environment
+    - openthoughts_4_dataset
+    - gruggpt_experiment
+    - speedrun_multiple_tracks
+    - rl_speedrun
+    - data_efficiency_speedrun
+
+
+milestone_2026_02_beat_nemotron_3:
+  title: "February 2026: Beat Nemotron 3"
+  type: milestone
+  status: planned
+  target_date: "2026-02-28"
+  labels: [timeline]
+  dependencies:
+    - train_50b_moe
+
+
+milestone_2026_03_long_running_automation:
+  title: "March 2026: Large-model consistency + automated long-running experiments"
+  type: milestone
+  status: planned
+  target_date: "2026-03-31"
+  labels: [timeline]
+  dependencies:
+    - regression_mix_optimization
+    - rl_on_50b_moe
+    - beat_qwen3_32b_with_32b
+    - automated_ingestion_datasets_environments
+    - automated_ingestion_architectures_algorithms
+    - agent_driven_parameter_sweep_demo
+
+
+milestone_2026_05_100b_moe:
+  title: "May 2026: Train and RL 100B MoE"
+  type: milestone
+  status: planned
+  target_date: "2026-05-31"
+  labels: [timeline]
+  dependencies:
+    - train_100b_moe
+    - data_tools_and_mixture_ready
+    - rl_100b_moe
+
+
+pretraining_evals_and_models:
+  title: "Comprehensive pretraining evals + models (blog post)"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-01-15"
+  issue: 1602
+  labels: [timeline, evals, pretraining, agent_friendly]
+
+
+dense_scaling_laws:
+  title: "Stable and usable scaling laws for dense models"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2025-12-16"
+  issue: 2166
+  labels: [timeline, scaling_laws, pretraining, agent_friendly]
+
+
+moe_scaling_laws_issue:
+  title: "Stable scaling laws for MoE"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2025-12-28"
+  issue: 2167
+  labels: [timeline, scaling_laws, moe, agent_friendly]
+
+
+ferry_muonh_feistel_comparison:
+  title: "Ferry: comparison between 8B baseline and MuonH+feistel"
+  type: task
+  status: done
+  owners: [Helw150]
+  target_date: "2025-12-08"
+  issue: 1839
+  labels: [timeline, ferry]
+
+
+long_context_data_training_evals:
+  title: "Initial long context data + training + evals"
+  type: epic
+  status: active
+  owners: [dlwh]
+  target_date: "2025-12-10"
+  issue: 2062
+  labels: [timeline, long_context, posttraining]
+  dependencies:
+    - long_context_data
+    - long_context_evals
+
+
+sft_existing_datasets_models:
+  title: "SFT model on {Marin,Llama,Qwen} {8B,32B} on best existing datasets"
+  type: epic
+  status: planned
+  owners: [dlwh, moojink]
+  target_date: "2025-12-15"
+  issue: 2198
+  labels: [timeline, sft, posttraining]
+
+
+rl_math_llama_qwen_8b:
+  title: "RL Llama/Qwen 8B on math (match Tinker/verl)"
+  type: task
+  status: done
+  owners: [dlwh, AlienKevin]
+  target_date: "2025-12-15"
+  issue: 2169
+  labels: [timeline, rl]
+
+
+dedup_pipeline_robust:
+  title: "Dedup pipeline works robustly for basic configurations"
+  type: task
+  status: planned
+  target_date: "2025-12-31"
+  labels: [timeline, data_pipeline]
+
+
+fluster_design_doc:
+  title: "Design doc for Fluster cluster platform"
+  type: task
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-01-07"
+  labels: [timeline, infra]
+
+
+speedrun_polish:
+  title: "Polished speedrun experience"
+  type: epic
+  status: planned
+  owners: [Calvin-Xu, Helw150]
+  target_date: "2025-12-08"
+  labels: [timeline, community, speedrun]
+  dependencies:
+    - speedrun_polish_issue_2153
+    - speedrun_polish_issue_1981
+
+
+speedrun_polish_issue_2153:
+  title: "Speedrun polish (#2153)"
+  type: task
+  status: planned
+  owners: [Helw150]
+  issue: 2153
+  labels: [timeline, community, speedrun]
+
+
+speedrun_polish_issue_1981:
+  title: "Speedrun polish (#1981)"
+  type: task
+  status: planned
+  owners: [Helw150]
+  issue: 1981
+  labels: [timeline, community, speedrun]
+
+
+marin_paper:
+  title: "Marin paper"
+  type: epic
+  status: planned
+  owners: [percyliang]
+  target_date: "2025-12-31"
+  labels: [timeline, community]
+
+
+release_multilingual_8b:
+  title: "Release multilingual 8B"
+  type: task
+  status: done
+  owners: [Helw150]
+  target_date: "2025-12-08"
+  issue: 1457
+  labels: [timeline, release]
+
+
+modernized_pythia:
+  title: "Modernized Pythia"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-01-05"
+  issue: 1337
+  labels: [timeline, pretraining]
+
+
+data_curation_100_experiments:
+  title: "Run 100 data curation experiments, fit regression"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-01-31"
+  labels: [timeline, data, scaling_laws, agent_friendly]
+
+
+train_8x7b:
+  title: "Train 8x7B"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-01-31"
+  issue: 2165
+  labels: [timeline, pretraining, moe]
+
+
+moe_mfu_match_maxtext_8x7b:
+  title: "MoE MFU matches MaxText on 8x7B"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-01-15"
+  issue: 1608
+  labels: [timeline, moe, infra]
+
+
+attention_sinks:
+  title: "Attention sinks"
+  type: task
+  status: closed
+  owners: [Calvin-Xu]
+  target_date: "2026-01-15"
+  issue: 1593
+  labels: [timeline, architecture, speedrun]
+
+
+effective_gdn_implementation:
+  title: "Effective Gated DeltaNet (GDN) implementation"
+  type: epic
+  status: planned
+  owners: [Calvin-Xu]
+  target_date: "2026-01-15"
+  issue: 2109
+  labels: [timeline, architecture, agent_friendly]
+  description: |
+    Make a high-performance, correct Gated DeltaNet implementation suitable for training runs and speedruns.
+
+    Key performance bottleneck tracking issue: #1884.
+  dependencies:
+    - gdn_perf_bottleneck
+
+
+gdn_perf_bottleneck:
+  title: "GDN pallas tpu kernel"
+  type: task
+  status: planned
+  owners: [Calvin-Xu]
+  issue: 1884
+  labels: [architecture, performance, agent_friendly]
+
+
+posttraining_evals_and_models:
+  title: "Comprehensive post-training evals + models"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-01-15"
+  issue: 1601
+  labels: [timeline, evals, posttraining, agent_friendly]
+
+
+sft_synthetic_datasets:
+  title: "SFT on new synthetic datasets"
+  type: epic
+  status: planned
+  owners: [dlwh, moojink]
+  target_date: "2026-01-15"
+  issue: 2277
+  labels: [timeline, sft, synthetic_data, agent_friendly]
+
+
+rl_marin_32b_more_envs:
+  title: "RL works on Marin 32B with more environments"
+  type: epic
+  status: planned
+  owners: [dlwh, AlienKevin]
+  target_date: "2026-01-15"
+  labels: [timeline, rl]
+
+
+vlms_multimodality:
+  title: "Multimodality - VLMs"
+  type: epic
+  status: planned
+  owners: [dlwh, ruili33]
+  target_date: "2026-01-31"
+  labels: [timeline, multimodal]
+
+
+support_nvidia_gpu_clusters:
+  title: "Support NVIDIA GPU clusters"
+  type: epic
+  status: planned
+  target_date: "2026-01-31"
+  issue: null
+  labels: [timeline, infra]
+  description: |
+    Support running Marin training and inference jobs on NVIDIA GPU clusters, especially backed by SLURM.
+    Single node works already, but we need to support multi-node training jobs and rl.
+
+fluster_scheduler_mvp:
+  title: "Fluster: central scheduler; users request resources on any cluster"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-01-31"
+  labels: [timeline, infra, fluster]
+
+
+data_ingestion_pipeline_scale:
+  title: "Data ingestion pipeline works reliably & at scale"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-01-31"
+  labels: [timeline, infra, data_pipeline]
+
+
+rl_moes_multi_environment:
+  title: "RL using MoEs, multi-environment"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-01-31"
+  labels: [timeline, rl, infra]
+
+
+openthoughts_4_dataset:
+  title: "New OpenThoughts 4 dataset"
+  type: epic
+  status: planned
+  owners: [dlwh, moojink]
+  target_date: "2026-01-15"
+  issue: null
+  labels: [timeline, data, community]
+
+
+gruggpt_experiment:
+  title: "GrugGPT experiment"
+  type: experiment
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-01-31"
+  labels: [timeline, grug, community]
+
+
+speedrun_multiple_tracks:
+  title: "Generalize speedrun to multiple tracks"
+  type: epic
+  status: planned
+  owners: [Calvin-Xu, Helw150]
+  target_date: "2026-01-31"
+  labels: [timeline, community, speedrun]
+
+
+rl_speedrun:
+  title: "RL speedrun"
+  type: epic
+  status: planned
+  owners: [Calvin-Xu, Helw150]
+  target_date: "2026-01-31"
+  labels: [timeline, community, speedrun, rl]
+
+
+data_efficiency_speedrun:
+  title: "Data efficiency speedrun"
+  type: epic
+  status: planned
+  owners: [Calvin-Xu, Helw150]
+  target_date: "2026-01-31"
+  labels: [timeline, community, speedrun, data]
+
+
+train_50b_moe:
+  title: "Train 50B MoE"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-02-28"
+  labels: [timeline, pretraining, moe]
+
+
+regression_mix_optimization:
+  title: "Regression-based data mix optimization based on ablations"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-03-15"
+  labels: [timeline, data, scaling_laws, agent_friendly]
+
+
+rl_on_50b_moe:
+  title: "RL on 50B MoE"
+  type: epic
+  status: planned
+  owners: [dlwh, AlienKevin]
+  target_date: "2026-03-15"
+  labels: [timeline, rl, moe]
+  dependencies:
+    - train_50b_moe
+
+
+beat_qwen3_32b_with_32b:
+  title: "Beat Qwen 3 32B at standard benchmarks with our 32B"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-03-15"
+  labels: [timeline, evals, posttraining]
+
+
+automated_ingestion_datasets_environments:
+  title: "Automated ingestion of new datasets and environments"
+  type: epic
+  status: planned
+  target_date: "2026-03-31"
+  labels: [timeline, infra, data_pipeline, agent_friendly]
+  description: |
+    Turn “someone found a dataset / env we should use” into a repeatable workflow that produces ready-to-train
+    artifacts *with a durable paper trail* (provenance + transforms + stats), so we can trust, reproduce, and compare
+    data across runs.
+
+    This should codify and automate the workflow in `docs/recipes/add_dataset.md`, including the *schema inspection*
+    first step, and extend it to cover:
+    - dataset ingestion (download/import), validation, and publishing in our preferred format
+    - environment ingestion (RL environments and other task envs), including a minimal contract and test harness
+
+    The point is not “datasets are uniform so ingestion can be fully automated”. Datasets are special snowflakes.
+    The goal is to make the *repeatable parts* easy and to make the “snowflake” decisions explicit and reviewable,
+    while ensuring every ingestion produces consistent artifacts and metadata.
+  definition_of_done: |
+    - A single documented “intake” workflow exists for datasets that follows `docs/recipes/add_dataset.md` but is mostly
+      runnable end-to-end (CLI/recipe), producing:
+      - a dataset manifest (schema, licensing, source pointers, token counts)
+      - validation reports (sampling sanity, corruption checks)
+      - train/eval splits or slices when applicable
+    - A parallel “intake” workflow exists for environments that:
+      - defines a minimal environment contract
+      - runs contract tests in CI on new/changed envs
+    - Ingestion outputs are standard artifacts that can be consumed by ferries/pipelines without manual glue.
+  dependencies:
+    - automate_add_dataset_recipe
+    - dataset_ingestion_artifact_manifest
+    - dataset_ingestion_validation_gates
+    - environment_ingestion_contract
+    - environment_ingestion_ci_gates
+    - data_validation
+
+
+automate_add_dataset_recipe:
+  title: "Agent-in-the-loop dataset intake scaffold (encode `docs/recipes/add_dataset.md`)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, data_pipeline, agent_friendly, help-wanted]
+  description: |
+    The purpose of `docs/recipes/add_dataset.md` is not “fully automated dataset addition” — datasets are special
+    snowflakes and require intelligence/iteration.
+
+    The goal here is to automate the *repeatable scaffolding* and make the “snowflake” parts explicit, interactive,
+    and reviewable:
+    - scaffold a new dataset addition with the right files/structure and a manifest stub
+    - run schema inspection and emit a summary that an agent can reason about
+    - run standard validation gates and produce a report
+    - provide explicit checkpoints where an agent/human must decide:
+      normalization/mapping, filtering, licensing constraints, splitting strategy, dedupe strategy, etc.
+
+    In other words: encode the recipe as an agent-friendly workflow that is fast to iterate on, without pretending that
+    datasets are uniform.
+  definition_of_done: |
+    - Given a dataset source (HF dataset, GCS bucket, local files, etc.), we can run a documented workflow that:
+      - generates a dataset addition scaffold (files + manifest stub)
+      - runs schema inspection and writes a machine-readable + human-readable summary
+      - runs standard validations and writes a report
+    - The workflow makes “agent decisions” explicit checkpoints (it should pause/fail with actionable guidance rather
+      than silently guessing).
+
+
+dataset_ingestion_artifact_manifest:
+  title: "Dataset manifests for doc + tokenized artifacts (linked provenance)"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, data_pipeline, agent_friendly, help-wanted]
+  description: |
+    Standardize the metadata we emit for every ingested dataset so downstream pipelines can trust and reason about it.
+
+    This is closely related to what `lib/marin/tools/get_hf_dataset_schema.py` already produces (schema inspection),
+    but the “manifest” is the durable, versioned paper trail that we *store alongside the dataset artifact* and keep
+    stable across time.
+
+    Because we separate “doc” artifacts (jsonl/parquet/untokenized) from “tokenized” artifacts, we need manifests for
+    both, with explicit linkage:
+
+    - Doc manifest (source-of-truth provenance for the raw/normalized dataset):
+      - dataset name/version/source pointers (and commit hashes where applicable)
+      - license and usage constraints
+      - schema (fields + types) and any normalization performed
+      - split/slice definitions
+      - basic quality stats (language, length distributions, corruption rate)
+
+    - Tokenized manifest (tokenization-specific paper trail):
+      - tokenizer identity + revision (and any special tokenization settings)
+      - token counts and length distribution stats per split
+      - pointer to the exact doc-manifest version/hash it was tokenized from
+      - (optional) pointer to tokenization logs / validation reports
+  definition_of_done: |
+    - A versioned doc-manifest format exists and is produced by ingestion, stored alongside the doc artifact.
+    - A versioned tokenized-manifest format exists and is produced by tokenization, stored alongside the tokenized
+      artifact, and references the doc-manifest it was derived from.
+    - Pipelines reference the correct manifest(s) for the artifact they consume.
+
+
+dataset_ingestion_validation_gates:
+  title: "Dataset ingestion validation gates (sanity checks + reports)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, data_pipeline, testing, agent_friendly]
+  description: |
+    Add validation steps that run automatically during ingestion so we catch problems before training:
+    - schema and invariants
+    - empty/corrupted samples and encoding issues
+    - tokenization sanity (e.g. pathological length spikes)
+    - dedupe verification and token count stats where relevant
+
+    This should build on `data_validation` and produce agent-readable reports.
+  dependencies:
+    - data_validation
+
+
+environment_ingestion_contract:
+  title: "Environment contract: minimal interface + fixtures for RL/task environments"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, rl, environments, testing, agent_friendly]
+  description: |
+    Define a minimal contract for “environment plugins” so we can add environments without bespoke wiring.
+
+    Current state: we already have a minimal `MarinEnv` interface (`sample(...) -> (rollouts, metrics)`) and an
+    environment loader via `EnvConfig` in `lib/marin/src/marin/rl/environments/base.py`.
+
+    We also have an explicit plan to standardize on Prime Intellect / Verifiers “hub environments”, with a wrapper
+    implementation in `lib/marin/src/marin/rl/environments/prime_intellect_env.py`. That wrapper is a *great* direction
+    for reducing bespoke per-env code, but it does not fully replace the need for an explicit contract and test harness.
+
+    The contract is the “quality bar” we enforce for *any* environment source (hub-backed or local):
+    determinism/seeding, bounded episode length, metadata, and a minimal regression slice for CI.
+
+    Examples (exact contract tbd):
+    - deterministic seeding
+    - bounded episode length / max tokens
+    - structured outputs (reward, termination reason, metadata)
+    - a small fixed eval slice for regression tests
+  definition_of_done: |
+    - Contract is written down and enforced in code with a shared test harness/fixtures (ideally runnable without
+      network access).
+    - Prime Intellect hub environments (via `PrimeIntellectEnv`) are either:
+      - demonstrated to satisfy the contract (with shims where needed), or
+      - explicitly documented as “best-effort” with clear gaps (e.g. non-deterministic datasets) and mitigations.
+    - At least one existing environment (not `MockEnv`) is migrated to the contract as proof.
+
+
+environment_ingestion_ci_gates:
+  title: "CI gates for environment additions (contract tests + minimal integration)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, rl, environments, testing, agent_friendly]
+  description: |
+    When a new environment is added or changed, CI should run:
+    - contract tests (fast, deterministic)
+    - a minimal integration test that exercises rollout + scoring (CPU-only if possible)
+
+    This is meant to keep environment quality high while enabling rapid additions.
+  dependencies:
+    - environment_ingestion_contract
+
+
+automated_ingestion_architectures_algorithms:
+  title: "Automated ingestion of new architectures and training algorithms"
+  type: epic
+  status: planned
+  target_date: "2026-03-31"
+  labels: [timeline, infra, agent_friendly]
+  description: |
+    Make it easy (and safe) to add “new architecture” or “new training algorithm/optimizer” to Marin/Levanter without
+    bespoke glue each time.
+
+    This is not about pretending architectures/algorithms are uniform. It’s about:
+    - a standard *intake scaffold* (where to put code/config, what metadata to record, how to run a minimal test)
+    - explicit “contract tests” and preflight checks (compile, shapes, sharding) so failures happen early
+    - a durable paper trail of what changed and how it was evaluated
+
+    Related foundation:
+    - overall repo structure and executor pattern: `docs/recipes/architecture.md`
+    - this should eventually align with the “gruggification” work on experiment structure.
+
+    Concrete example to emulate:
+    - The Grug/Grugformer project doc (PR #2171) describes a “canonical core + hackable speedrun edit surface +
+      upstreaming agreement” workflow. That is exactly the style we want for architecture/algorithm intake:
+      experiments happen in copy-pasteable speedrun files with a standard gauntlet, and successful changes get upstreamed
+      into the canonical library with tests.
+  definition_of_done: |
+    - There is a documented workflow for adding an architecture or algorithm that produces:
+      - a standardized config entry (or plugin registration)
+      - a minimal smoke benchmark run (train step + eval step) with logged metrics
+      - a machine-readable manifest recording what was run (code version, config hash, hardware, compile status)
+    - CI runs contract tests for new/changed components and rejects changes that break:
+      - compilation (where applicable) or basic shape/sharding invariants
+      - minimal correctness checks on a tiny model
+    - At least one “external” architecture/algorithm is added end-to-end using this workflow as proof.
+  dependencies:
+    - architecture_algorithm_intake_scaffold
+    - architecture_contract_tests
+    - algorithm_contract_tests
+    - benchmark_smoke_suite
+    - aot_compilation
+    - test_cluster
+    - experiment_structure_overhaul
+
+
+architecture_algorithm_intake_scaffold:
+  title: "Intake scaffold for architectures/algorithms (where to put things, what to record)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, developer_experience, grug]
+  description: |
+    Provide a clear, repeatable “how to add X” scaffold for:
+    - new model architecture variants (attention, MoE variants, Mamba-like, etc.)
+    - new training algorithms (loss variants, optimizer variants, schedule variants)
+
+    This should include:
+    - recommended directory layout / naming
+    - minimal metadata/manifest expectations
+    - a small example/template that adds a toy architecture/algorithm as a starting point
+
+    We should explicitly support the “canonical core + speedrun edit surface” pattern described in the Grug/Grugformer
+    project doc (PR #2171):
+    - canonical implementation lives in the library
+    - speedrun scripts are the copy/paste surface for A/B experiments (explicit hack points)
+    - upstreaming a win updates the library + tests (speedruns remain snapshots)
+  definition_of_done: |
+    - We write down the canonical “where does this go” guidance (doc + template).
+    - An example/template exists that newcomers and agents can copy.
+
+
+architecture_contract_tests:
+  title: "Contract tests for architecture changes (shapes, sharding, compilation, numerics)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, testing, performance, agent_friendly]
+  description: |
+    Add tests that catch common failure modes when changing model architecture:
+    - shape mismatches / incorrect parameter initialization
+    - sharding rules that fail on common meshes
+    - compilation failures (ideally via preflight)
+    - obvious numeric instability (NaNs, divergence on tiny runs)
+  dependencies:
+    - aot_compilation
+
+
+algorithm_contract_tests:
+  title: "Contract tests for training algorithm changes (optimizer/loss/schedule invariants)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, testing, agent_friendly]
+  description: |
+    Add tests that catch common failure modes when changing training algorithms:
+    - optimizer state shape/type mismatches
+    - loss scaling / KL/regularization invariants
+    - schedule changes that produce invalid values
+    - convergence sanity on tiny runs (not “good”, just “not broken”)
+
+
+benchmark_smoke_suite:
+  title: "Smoke benchmark suite for new architectures/algorithms"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, testing, performance, agent_friendly]
+  description: |
+    A minimal, reproducible benchmark suite (“gauntlet”) that is used for architecture/algorithm intake.
+
+    This should look like the Grug/Grugformer “hackable speedrun gauntlet” idea (PR #2171):
+    - a standard set of checks that every change runs through
+    - a clear edit surface in a speedrun file (copy/paste-friendly) for rapid experimentation
+
+    Minimum gauntlet checks:
+    - correctness sanity (when there is a reference path, compare reference vs fast kernels on tiny shapes)
+    - compile sanity (TTFS for `train_step`, ideally via `aot_compilation` preflight)
+    - throughput sanity (tokens/sec, step time on a fixed micro-benchmark)
+    - memory sanity (best-effort capture of max HBM/VMEM if available)
+
+    Goal is not to predict final quality, but to make it easy to validate:
+    - it compiles
+    - it runs end-to-end
+    - performance is not obviously terrible
+  dependencies:
+    - test_cluster
+    - aot_compilation
+
+
+agent_driven_parameter_sweep_demo:
+  title: "Demo: agent drives iterative parameter sweep across a 100M parameter model"
+  type: experiment
+  status: planned
+  target_date: "2026-03-31"
+  labels: [timeline, infra, agent_friendly]
+
+
+pallas_kernel_agent_workflow:
+  title: "Agent-driven Pallas kernel development workflow"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, performance, kernels, agent_friendly]
+  description: |
+    Establish a repeatable workflow for agents to develop and land Pallas (TPU) kernels safely:
+    1) start from a reference implementation (pseudocode, PyTorch, or a slow JAX baseline)
+    2) produce a “vanilla JAX” implementation with clear shapes/dtypes and reference numerics
+    3) implement a Pallas kernel + wrapper API
+    4) build a test harness that checks correctness *and* speed (microbench) across a grid of shapes/dtypes
+    5) iterate using profiling evidence (xprof) and a clear edit surface
+
+    This should pair with:
+    - `agent_driven_profiling` (so agents can “see” profile evidence)
+    - `aot_compilation` (so compilation failures happen early)
+  definition_of_done: |
+    - We add a recipe + starter template for “add a Pallas kernel” that agents can follow.
+    - We land at least one kernel end-to-end using this workflow (starting with fused softmax loss).
+    - The test harness catches numeric regressions and reports speed regressions.
+  dependencies:
+    - add_pallas_kernel_recipe
+    - pallas_kernel_starter_template
+    - pallas_fused_softmax_loss_kernel
+    - agent_driven_profiling
+    - aot_compilation
+
+
+pallas_fused_softmax_loss_kernel:
+  title: "Pallas fused softmax cross-entropy (z-loss, optional unreduced)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [kernels, performance, levanter, agent_friendly]
+  description: |
+    Implement a fused softmax cross-entropy kernel (TPU/Pallas) that supports:
+    - optional z-loss (logsumexp penalty / stabilization)
+    - optional unreduced output (per-token/per-example loss) as well as reduced loss
+
+    Reference implementations to start from:
+    - existing blockwise/logsumexp-friendly cross entropy in Levanter/Grug (e.g. `levanter.grug.loss` and
+      `levanter.models.loss`)
+    - optax cross-entropy for correctness reference on small logits
+
+    The “agent workflow” should explicitly include:
+    - vanilla JAX baseline (clear, readable, correct)
+    - Pallas kernel wrapper with a stable API
+    - correctness tests (value + grad) and speed microbench
+  definition_of_done: |
+    - Correctness: matches baseline within tolerance across a representative grid of shapes/dtypes, including z-loss on/off.
+    - Gradients: gradient matches baseline on small shapes (or a reference autograd path).
+    - Flexibility: supports both reduced and unreduced loss output.
+    - Performance: measurable speedup vs baseline on at least one realistic shape.
+  dependencies:
+    - benchmark_smoke_suite
+    - agent_driven_profiling
+
+
+add_pallas_kernel_recipe:
+  title: "Recipe: add a Pallas kernel (agent-oriented)"
+  type: task
+  status: planned
+  issue: null
+  labels: [process, docs, kernels, agent_friendly, newbie_friendly]
+  description: |
+    Write and maintain the canonical workflow for adding Pallas kernels:
+    `docs/recipes/add_pallas_kernel.md`.
+
+    This should explicitly cover:
+    - reference impl -> vanilla JAX -> Pallas kernel
+    - value + grad tests
+    - microbench + profiling hooks
+  definition_of_done: |
+    The recipe exists at `docs/recipes/add_pallas_kernel.md` and is followed successfully for at least one kernel
+    addition (starting with fused softmax loss).
+
+
+pallas_kernel_starter_template:
+  title: "Starter template for new Pallas kernels (baseline + kernel + tests)"
+  type: task
+  status: planned
+  issue: null
+  labels: [kernels, testing, agent_friendly, newbie_friendly]
+  description: |
+    Provide a minimal, copy/paste-friendly starter for new kernels:
+    - `lib/levanter/src/levanter/kernels/pallas/template_kernel.py`
+    - `lib/levanter/tests/kernels/test_pallas_template_kernel.py`
+  definition_of_done: |
+    - Template code exists and passes unit tests.
+    - Template demonstrates the expected structure (baseline, kernel wrapper, value+grad tests).
+
+
+train_100b_moe:
+  title: "Train 100B MoE"
+  type: epic
+  status: planned
+  owners: [dlwh, Helw150]
+  target_date: "2026-05-15"
+  labels: [timeline, pretraining, moe]
+
+
+data_tools_and_mixture_ready:
+  title: "Really good data tools and resulting mixture"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-05-15"
+  labels: [timeline, data_pipeline, data]
+
+
+data_alpha_attribution:
+  title: "Quantify alpha: new data vs mixing vs synthetic math/code"
+  type: epic
+  status: planned
+  issue: null
+  labels: [data, evals, scaling_laws, agent_friendly]
+  description: |
+    Decide where to invest effort by quantifying the marginal returns from:
+    - adding genuinely new data sources
+    - changing mixture weights / curriculum schedules
+    - adding “more of the same” synthetic math/code data
+
+    Deliverable is a small set of controlled ablations and a simple model of expected gains that is used to guide
+    monthly data work (and to justify “no” on low-upside data requests).
+  definition_of_done: |
+    - We run a small, controlled suite of data/mix ablations with consistent evals and report results.
+    - We produce a short “alpha budget” summary (what helps most, and why) and update the plan accordingly.
+    - The methodology is repeatable by an agent (inputs: configs + data handles; outputs: plots + summary).
+  dependencies:
+    - data_curation_100_experiments
+    - regression_mix_optimization
+    - loss_datasets
+
+
+rl_100b_moe:
+  title: "RL 100B MoE"
+  type: epic
+  status: planned
+  owners: [dlwh, Helw150]
+  target_date: "2026-05-31"
+  labels: [timeline, rl, moe]
+
+
+frontier:
+  title: "Get to the mid-2025 open weight frontier"
+  type: milestone
+  status: planned
+  labels: [north_star]
+  dependencies:
+    - mega_reasoning_model
+
+
+mega_reasoning_model:
+  title: "have a deepseek v3 tier model"
+  type: milestone
+  status: planned
+  labels: [north_star]
+  dependencies:
+    - rl_big_model
+    - eval_big_model
+
+
+eval_big_model:
+  title: "be ~SOTA on same benchmarks as ~deepseek v3"
+  type: milestone
+  status: planned
+  labels: [north_star]
+  dependencies:
+    - rl_big_model
+    - frontier_evals_wired
+
+
+rl_big_model:
+  title: "RL a pretrained model on a bunch of agentic reasoning tasks"
+  type: milestone
+  status: planned
+  labels: [north_star, rl]
+  dependencies:
+    - trained_base_model
+    - scalable_rl_framework
+    - full_rl_environments
+    - rl_recipe
+
+
+scalable_rl_framework:
+  title: "have a framework for scalable RL"
+  type: epic
+  status: planned
+  labels: [rl, infra]
+  issue: 1738
+  description: |
+    Make RL training and rollout generation reliable, testable, and scalable across clusters.
+    The codebase already has a functional RL stack (see `lib/marin/src/marin/rl/`), but key missing pieces are:
+    - productionization/reliability (failure handling, determinism, serialization)
+    - multi-env orchestration + observability
+    - throughput measurement + scaling work (async RL)
+    - local/test harnesses to iterate quickly
+  dependencies:
+    - rl_job_api
+    - rl_rollout_system
+    - rl_training_system
+    - rl_inference_backends
+    - rl_weight_transfer_system
+    - rl_storage_and_serialization
+    - rl_multi_env_and_curriculum
+    - rl_observability
+    - rl_throughput_and_scaling
+    - rl_algorithms_and_losses
+
+
+rl_job_api:
+  title: "RL job API + local test harness"
+  type: epic
+  status: planned
+  labels: [rl, infra, agent_friendly]
+  description: |
+    Current state: `RLJob`/`RLJobConfig` exist in `lib/marin/src/marin/rl/rl_job.py`, and we have multiple
+    RL integration tests under `tests/rl/integration/`.
+
+    Make it easy to run and test RL without deploying a full cluster job:
+    - A minimal local/dev workflow for rollouts + training
+    - Config validation and sharp error messages
+    - Small reproducible example runs
+  dependencies:
+    - rl_rollout_manager
+    - rl_rollout_callbacks
+    - rl_max_token_management
+
+
+rl_rollout_manager:
+  title: "RolloutManager for testing rollouts without worker overhead"
+  type: epic
+  status: planned
+  issue: 1746
+  labels: [rl, testing, agent_friendly]
+
+
+rl_rollout_callbacks:
+  title: "Hook/callback mechanism for rollout workers"
+  type: epic
+  status: planned
+  issue: 1740
+  labels: [rl, infra, agent_friendly]
+
+
+rl_max_token_management:
+  title: "Make RL max-token management less error-prone"
+  type: epic
+  status: planned
+  issue: 1707
+  labels: [rl, infra, agent_friendly, help-wanted]
+
+
+rl_rollout_system:
+  title: "Rollout generation system (workers, environments, sampling)"
+  type: epic
+  status: planned
+  labels: [rl, infra]
+  description: |
+    Current state: `RolloutWorker` exists in `lib/marin/src/marin/rl/rollout_worker.py`, environments are
+    loaded from specs, and we have unit + integration tests for envs and rollout worker behavior.
+
+    Hardening and scaling of rollout generation, including multi-env support and inference backends.
+  dependencies:
+    - rl_multi_env_rollout_support
+    - rl_vllm_rollout_worker
+    - rl_separate_inference_server
+    - rl_inference_ctx_refactor
+
+
+rl_multi_env_rollout_support:
+  title: "Multi-environment rollout support"
+  type: epic
+  status: done
+  issue: 1677
+  labels: [rl, environments]
+
+
+rl_vllm_rollout_worker:
+  title: "vLLM inference backend for rollout workers"
+  type: epic
+  status: done
+  issue: 1782
+  labels: [rl, inference]
+
+
+rl_separate_inference_server:
+  title: "Support separate inference server for RL training"
+  type: epic
+  status: planned
+  issue: 1633
+  labels: [rl, inference, infra]
+
+
+rl_inference_ctx_refactor:
+  title: "Refactor InferenceContext for easier OpenAI API usage"
+  type: task
+  status: done
+  issue: 1744
+  labels: [rl, inference]
+
+
+rl_training_system:
+  title: "Training worker system (replay, batching, training loop)"
+  type: epic
+  status: planned
+  labels: [rl, infra]
+  description: |
+    Current state: `TrainWorker` exists in `lib/marin/src/marin/rl/train_worker.py`, with replay buffer
+    integration, periodic weight transfer, and curriculum checkpointing.
+
+    Remaining work is mainly hardening and performance (TPU copies, failure modes, monitoring, etc.).
+  dependencies:
+    - rl_sync_mode
+    - rl_actor_failures
+    - rl_eval_response_logging
+    - rl_slow_tpu_copy
+
+
+rl_sync_mode:
+  title: "Sync-mode RL training"
+  type: task
+  status: done
+  issue: 1704
+  labels: [rl]
+
+
+rl_actor_failures:
+  title: "Handle actor failures in RL framework"
+  type: task
+  status: done
+  issue: 1719
+  labels: [rl, infra]
+
+
+rl_eval_response_logging:
+  title: "Add evaluation response logging to RL training"
+  type: task
+  status: done
+  issue: 1703
+  labels: [rl, evals]
+
+
+rl_slow_tpu_copy:
+  title: "Investigate slow copies off of TPU in training worker"
+  type: epic
+  status: planned
+  issue: 1747
+  labels: [rl, performance, infra]
+
+
+rl_inference_backends:
+  title: "Inference backends and serving for RL"
+  type: epic
+  status: planned
+  labels: [rl, inference, infra]
+  description: |
+    Current state: RL supports both Levanter inference server and vLLM inference contexts under
+    `lib/marin/src/marin/rl/environments/inference_ctx/`.
+
+    Ensure inference is fast and reliable across backends (Levanter inference server, vLLM, etc.).
+    Includes correctness (logprobs), determinism, and cluster compatibility.
+
+
+rl_weight_transfer_system:
+  title: "Weight transfer for RL (training -> rollout)"
+  type: epic
+  status: planned
+  labels: [rl, infra]
+  description: |
+    Current state: weight transfer implementations exist under `lib/marin/src/marin/rl/weight_transfer/`
+    (Arrow Flight and JAX paths), and are exercised in RL integration tests.
+
+    Remaining work is robustness, observability, and scaling behavior across different cluster settings.
+  definition_of_done: |
+    - Supported modes (Arrow Flight, JAX transfer server, and checkpoint-based transfer) all work end-to-end with `RLJob`.
+    - Integration tests cover each supported mode and assert that rollouts see at least one successful weight update
+      (e.g. via `tests/rl/integration/test_weight_sync.py` and `tests/rl/integration/test_cats_integration.py`).
+    - Weight transfer metrics (success/failure counts, bytes/sec, and latency breakdown) are emitted in a way we can
+      track over time (logs + tracker integration).
+    - Clear, documented behavior for common failure modes (server restart, partial update, timeout): either retry with
+      backoff or proceed with last-known-good weights without corrupting training state.
+  dependencies:
+    - rl_arrow_flight_bug
+
+
+rl_arrow_flight_bug:
+  title: "Arrow Flight model update bug"
+  type: task
+  status: done
+  issue: 1761
+  labels: [rl, infra]
+
+
+rl_storage_and_serialization:
+  title: "Stable rollout storage and datatypes"
+  type: epic
+  status: planned
+  labels: [rl, infra, agent_friendly, help-wanted]
+  description: |
+    Current state: rollout storage exists in `lib/marin/src/marin/rl/rollout_storage.py` with file and
+    in-memory backends, and core rollout types live in `lib/marin/src/marin/rl/types.py`.
+
+    Remaining work is to replace brittle serialization (e.g. pickle) with stable, versioned formats and
+    add compatibility tests.
+  dependencies:
+    - rl_stable_serialization
+
+
+rl_stable_serialization:
+  title: "RL datatypes should use stable serialization"
+  type: epic
+  status: planned
+  issue: 1689
+  labels: [rl, infra, agent_friendly]
+
+
+rl_multi_env_and_curriculum:
+  title: "Multi-env curriculum + environment suite"
+  type: epic
+  status: planned
+  labels: [rl, environments]
+  description: |
+    Current state: curriculum logic exists in `lib/marin/src/marin/rl/curriculum.py` and environments are
+    configured per-lesson via `EnvConfig`, with env loader tests under `tests/rl/environments/`.
+
+    Remaining work is expanding the environment suite and improving curriculum observability and control.
+  dependencies:
+    - full_rl_environments
+    - curriculum_env_observability
+
+
+curriculum_env_observability:
+  title: "Improve observability of environments in curriculum"
+  type: epic
+  status: planned
+  issue: 1808
+  labels: [rl, environments, infra, agent_friendly]
+
+
+rl_observability:
+  title: "RL observability (metrics, debugging, determinism)"
+  type: epic
+  status: planned
+  labels: [rl, infra]
+  description: |
+    Current state: both rollout and training workers log metrics via Levanter trackers, and curriculum exposes
+    summary metrics (`Curriculum.get_metrics()`).
+
+    Remaining work is to make it easy to answer: what envs are we sampling, what’s reward distribution, and
+    why did training regress?
+
+
+rl_throughput_and_scaling:
+  title: "RL throughput measurement + async scaling"
+  type: epic
+  status: planned
+  labels: [rl, performance, infra, agent_friendly]
+  issue: 1966
+  dependencies:
+    - rl_throughput_measurement
+    - rl_throughput_scaling_study
+    - rl_in_flight_update_impact
+    - rl_profile_sync_overhead
+
+
+rl_throughput_measurement:
+  title: "Robust measurement method for e2e on-policy RL throughput"
+  type: epic
+  status: planned
+  issue: 1965
+  labels: [rl, performance, infra]
+
+
+rl_throughput_scaling_study:
+  title: "Study how e2e RL throughput scales with number of inference workers"
+  type: epic
+  status: planned
+  issue: 1964
+  labels: [rl, performance, infra]
+
+
+rl_in_flight_update_impact:
+  title: "Measure performance impact of in-flight updates in async RL"
+  type: epic
+  status: planned
+  issue: 2253
+  labels: [rl, performance, infra]
+
+
+rl_profile_sync_overhead:
+  title: "Profile RL communication and synchronization overhead"
+  type: task
+  status: done
+  issue: 1823
+  labels: [rl, performance]
+
+
+rl_algorithms_and_losses:
+  title: "RL losses + algorithmic improvements"
+  type: epic
+  status: planned
+  labels: [rl, algorithms]
+  description: |
+    Current state: RLOO loss exists in `lib/marin/src/marin/rl/rl_losses.py` with importance sampling and KL
+    regularization, and is exercised in RL integration tests.
+
+    Remaining work is algorithmic improvement, ablations, and better evaluation of off-policy behavior.
+  dependencies:
+    - rl_loss_ablations
+    - rl_importance_sampling_fix
+    - rl_off_policy_eval
+    - rl_kl_penalty_fix
+
+
+rl_loss_ablations:
+  title: "RL loss ablations (DAPO, FlashRL)"
+  type: epic
+  status: planned
+  issue: 2043
+  labels: [rl, algorithms]
+
+
+rl_importance_sampling_fix:
+  title: "Fix importance sampling to compensate for temperature"
+  type: epic
+  status: planned
+  issue: 1741
+  labels: [rl, algorithms]
+
+
+rl_off_policy_eval:
+  title: "Evaluation of off-policy performance and parameter tuning"
+  type: epic
+  status: planned
+  issue: 1745
+  labels: [rl, algorithms, evals]
+
+
+rl_kl_penalty_fix:
+  title: "Fix incorrect KL penalty in RL loss"
+  type: task
+  status: done
+  issue: 1708
+  labels: [rl, algorithms]
+
+
+# Pretraining
+
+# three phase pre-training process
+# 1. broad coverage web etc base training. probably 80% english web, 10% other language web, 5% code, 5% hq data
+# 2. HQ data training ~60% english web, ~10% other language web, ~15% english HQ, 5% code/reasoning HQ, 10% other language HQ
+# 3. SFT/Length extension. ~80% previous mix, 20% reasoning/length/chat data.
+trained_base_model:
+  title: "Have a very large pretrained model that is a good base for agentic/reasoning RL"
+  type: milestone
+  status: planned
+  labels: [pretraining, north_star]
+  description: |
+    Our major milestone for 2026 is to make a competitive-with-best-2025-open-weights model.
+    This issue is for building the base model.
+
+    These days "base model" as distinct from "SFTed model" doesn't really mean anything.
+    Instead, we should aim to build a model using ~the next token objective that has:
+
+    - Excellent performance on base model tasks (like MMLU, MMLU PRO, etc)
+    - Good performance on chat tasks (alpaca eval, if-eval)
+    - Good at prompt following and tool-calling.
+    - Safe on critical safety issues (biological, nuclear, etc)
+    - not too toxic otherwise
+
+    More over (and more importantly), it should serve as a strong base for RL and last-mile SFT.
+
+    In broad strokes, we're talking a large MOE-style model trained on ~1-3e24 flops (~15T tokens).
+
+    ## Pre-Training Phases
+
+    As a strawman of a recipe, we're planning something like:
+
+    - [Phase 1](#pt_data): Broad coverage web etc base training. probably 80% english web, 10% other language web, 5% code, 5% hq data (~11T tokens)
+    - [Phase 2](#hq_data): HQ data training ~60% english web, ~10% other language web, ~15% english HQ, 5% code/reasoning HQ, 10% other language HQ (~3T tokens)
+    - [Phase 3](#sft_data): SFT/Length extension. ~80% previous mix, 20% reasoning/length/chat data (~2T tokens)
+
+    The SFT'd model is not intended to be a fully aligned chat model, but rather one that is aware of chat templates and can follow them and other tasks.
+
+    This splits the data into three broad groups:
+    - Phase 1: ["Pretraining data"](#pt_data):
+    - Phase 2:["HQ data"](#hq_data)
+    - Phase 3:["SFT data"](#sft_data)
+
+    We should plan to release checkpoints for each phase, but only the final will be cooled down.
+
+    ## Architecture
+
+    Strawman architecture is a big ol MOE balanced in terms of training and inference throughput.
+    Because we're aiming to do substantial RL on the model, inference throughput matters a lot.
+    Training throughput is still more important for this model.
+
+
+  dependencies:
+    - moe_training_recipe
+    - base_model_evals
+    - sft_evals
+    - sft_big_model
+
+sft_big_model:
+  title: "SFT a pretrained model on a bunch of agentic, long-context, and high quality data"
+  type: epic
+  status: planned
+  labels: [posttraining, sft]
+  dependencies:
+    - midtrain_model
+    - sft_data
+    - sft_evals
+
+
+midtrain_model:
+  title: "high quality model pretrained on HQ data"
+  type: milestone
+  status: planned
+  labels: [pretraining]
+  dependencies:
+    - pretrained_model
+    - hq_data
+
+
+pretrained_model:
+  title: "have a pretrained model"
+  type: milestone
+  status: planned
+  labels: [pretraining]
+  dependencies:
+    - pt_data
+    - pretraining_evals
+    - model_architecture
+    - pt_recipe
+
+
+## Datasets
+sft_data:
+  title: "Make a Stage 3 training mixture"
+  type: epic
+  status: planned
+  labels: [data, sft]
+  description: |
+    We need to make a Stage 3 training mixture.
+    We should consider the following datasets:
+    - chat_data
+    - reasoning_data
+    - long_context_data
+    - format_following_data
+
+  dependencies:
+     - chat_data
+     - reasoning_data
+     - long_context_data
+     - format_following_data
+
+
+chat_data:
+  title: "Decide on a moderate collection of chat data"
+  type: epic
+  status: planned
+  labels: [data, sft, chat]
+  description: |
+    Perhaps this will be mainly handled by #1880 and related work.
+
+    We need to decide on a moderate collection of chat data to be used for the "SFT" phase of training.
+    We should consider the following datasets:
+
+    - smoltalk v2 (the chat portions)
+    - llama-nemotron posttraining datasets (the chat portions)
+    - tulu v3 (once we remove the AllenAI branding parts)
+
+    Most likely, we can just use smoltalk v2 + llama-nemotron posttraining datasets. We should also investigate the data from Olmo 3.
+  definition_of_done: |
+    We've wired up the datasets (See #1880)
+
+
+midtrain_data:
+   title: "Mid-train data"
+   type: epic
+   status: planned
+   labels: [data, pretraining]
+   issue: null
+   description: |
+      We need ~3-4T tokens of midtraining data. Olmo 3 has roughly 2 and is a good starting point!
+
+      If we look at its gaps compared to say Qwen 2.5 it's mostly:
+
+      - Some math
+      - Code: BigCodeBench, MultiPL HumanEval, DeepSeek Leetcode
+      - Medical knowledge: MedQA, MedMCQA
+      - Reasoning tasks (ANLI, MUSR)
+
+      We should focus our efforts on extending Olmo 3's data with these gaps in mind, and also look for other gaps.
+   dependencies:
+    - medical_data
+    - code_data
+    - reasoning_data
+
+long_context_data:
+    title: "Decide on a moderate collection of long context data"
+    type: epic
+    status: planned
+    labels: [data, sft, long_context]
+    description: |
+        We need to decide on a moderate collection of long context data to be used for the "SFT" phase of training.
+        We should consider the following datasets:
+
+        In #2062, I wired up olmo3 longmino and hf finepdfs. We should also consider:
+        - [institutional books](#institutional_books)
+        - [long code bases (stitched together)](#long_code_data)
+
+    dependencies:
+        - institutional_books
+        - long_code_data
+
+long_code_data:
+    title: "Long code data"
+    type: epic
+    status: planned
+    labels: [data, long_context, code, help-wanted, agent_friendly]
+    description: |
+        We need to stitch together some long code bases to get long context code data.
+        We can look at bigcodebench repos, github repos, etc.
+
+        First step is a survey of existing code datasets to see how best to stitch them together.
+        I think also going through and making a coarse/pre-training version of SWEBench or similar would be good.
+        (The idea there is to take GH issues and pair them with code repo and patches).
+
+
+pt_data:
+  title: "Large collection of pretraining data covering web, code, and HQ data"
+  type: epic
+  status: planned
+  labels: [data, pretraining]
+  description: |
+    For our larger models, we need to scale up the pretraining data.
+    Right now, we have, generously, ~6-7T tokens of pretraining data for English, and maybe 3-4T tokens of other language data.
+    (FineWeb nominally has more but it has a ton of duplicates.)
+
+    We'd like to get to 15-20T, split roughly as:
+
+    - 10T english web data
+      - of which 500B focused on math
+    - 2T other language web data (might be set here? need to dedupe)
+    - 2T code data (~stack v2, but maybe do some quality work)
+    - 1T HQ data (including ~)
+
+    We need to dedupe this data and ideally get to a point where it is ~on par with nemotron-cc. (We're including nemo)
+
+  dependencies:
+    - web_data
+    - code_data
+    - hq_data
+    - data_pipeline
+
+web_data:
+  title: "12T tokens of ~good web data. ~85% english, ~15% other languages"
+  type: epic
+  status: planned
+  labels: [data, pretraining, web]
+  description: |
+    See also [#pt_data] for more details.
+
+    We need to get to 12T tokens of web data, split roughly as:
+      - 10T english web data
+      - 2T other language web data
+
+    We need to [dedupe this data](#scalable_dedupe) and ideally get to a point where it is ~on par with nemotron-cc. (We're including nemotron-cc as well, but we want our additional data to be at least as good.)
+
+    We may need to do some [crawling](#crawl_data) or [rephrasing](#rephrasing_pipeline) to get to this goal.
+  dependencies:
+    - union_existing_web_data
+    - crawl_data
+    - rephrasing_pipeline
+
+union_existing_web_data:
+  title: "union/dedupe existing web data from various sources"
+  type: task
+  status: planned
+  labels: [data, pretraining, web, agent_friendly]
+  description: |
+    See also [#pt_data] for more details.
+    This isn't particularly deep: there are a bunch of web datasets:
+
+    - GneissWeb
+    - Nemotron-CC (v1 and v2)
+    - Comma
+    - DCLM
+    - FineWeb-EDU
+    - Olmo 3
+
+    We need to union/dedupe these datasets into a single dataset. Then:
+
+    1) see how many tokens we actually have
+    2) compare the quality of the unioned data to nemotron-cc with an isoflop suite.
+  dependencies:
+    - scalable_dedupe
+
+
+data_pipeline:
+  title: "have a pipeline for data curation and preprocessing"
+  type: milestone
+  status: planned
+  labels: [data_pipeline, infra]
+  dependencies:
+    - scalable_dedupe
+
+
+scalable_dedupe:
+  title: "build a scalable inexact deduplication pipeline"
+  type: epic
+  status: planned
+  labels: [data_pipeline, infra]
+  issue: 2091
+
+# evals
+frontier_evals:
+  title: "have a set of evals for the final rl model"
+  type: epic
+  status: planned
+  labels: [evals, rl]
+
+sft_evals:
+  title: "have a set of evals for SFTed models"
+  type: epic
+  status: planned
+  labels: [evals, sft]
+  dependencies:
+    - chat_evals
+    - reasoning_evals
+    - long_context_evals
+
+pretraining_evals:
+  title: "have a set of evals for pretrained models"
+  type: epic
+  status: planned
+  labels: [evals, pretraining]
+  issue: null
+  dependencies:
+    - chat_evals
+    - reasoning_evals
+    - long_context_evals
+
+
+loss_datasets:
+  title: Fill out our perplexity loss datasets
+  type: epic
+  status: planned
+  labels: [evals, scaling_laws]
+  issue: null
+  description: |
+    We currently use the following datasets for perplexity loss:
+    - a good chunk of paloma (including c4en)
+    - uncheatable eval (a fixed snapshot)
+
+    This provides decent coverage of:
+
+    - english web
+    - other language web
+    - code
+    - arxiv/academic articles
+    - wiki
+    - stack exchange
+
+    This is pretty good but we need more. In general, we want PPL proxies for any conceivable eval or use case.
+    As a general principle, we want to avoid using actual evals as ppl proxies, but we do we want a loss
+    dataset that is correlated with any conceivable eval or use case.
+
+    A surely incomplete list of things we want to add:
+
+    - [natural long context data](#natural_long_context_ppl_data)
+    - [reasoning data](#reasoning_ppl_data)
+    - [format following data](#format_following_ppl_data)
+    - [chat data](#chat_ppl_data)
+
+    Generally speaking, we should [establish a process for supporting new tasks](#task_support_process).
+
+  dependencies:
+    - natural_long_context_ppl_data
+    - reasoning_ppl_data
+    - format_following_ppl_data
+    - chat_ppl_data
+    - task_support_process
+
+
+natural_long_context_ppl_data:
+  title: "natural long context ppl eval data"
+  type: task
+  status: planned
+  labels: [evals, long_context, help-wanted]
+  description: |
+    We need to find a good collection of natural long context ppl eval data.
+    Obvious sources include books, scientific articles, stitched together code bases, wikipedia articles, etc.
+
+    The challenge with long context is that almost all generation is in fact local. NIAH and other tasks are fairly synthetic retrieval tasks.
+    Olmo 3 has a simple heuristic for filtering: use gzip compressibility (which we have also looked at in #633, though not for long context), preferring
+    data in the middle of the distribution.
+
+    In particular, we should consider the following datasets:
+
+    - Olmo 3's ocr data
+    - institutional books
+    - stitch together some code bases
+    - FinePDFs Eval sets (wired up in #2148)
+
+    32K context is about 50 pages of text. This is a lot! Longer than most academic articles.
+
+    We may also need to use synthetic data to supplement this.
+
+  dependencies:
+    - olmo_3_ocr_data
+    - institutional_books
+    - long_code_data
+
+reasoning_ppl_data:
+  title: "reasoning ppl eval data"
+  type: task
+  status: planned
+  labels: [evals, reasoning, help-wanted]
+  description: |
+    We need to find a good collection of reasoning ppl eval data. Ideally this would be natural data that correlates reasonably with ANLI, MUSR, etc.
+
+    It's not obvious to me what natural data would be good here and we may need to lean on synthetic/task data.
+
+
+institutional_books:
+  title: "Add Harvard Institutional Books dataset"
+  type: task
+  status: planned
+  labels: [data, long_context]
+  issue: 1394
+
+
+task_support_process:
+  title: "Establish a process for supporting new tasks/use cases"
+  type: task
+  status: planned
+  labels: [process, docs, agent_friendly]
+  description: |
+    On an ongoing basis, the model development process should look like this:
+
+    1. A new use-case/task comes in. Pick some development data.
+    2. We take our existing scaling suites and see if any of our existing ppl datasets correlate with the new task.
+    3. If there's strong correlation, we're done.
+    4. If there's no strong correlation, we need to add a new ppl dataset to our scaling suites.
+    5. (the hard part): source ppl data for the new task.
+    6. Add the new ppl dataset to our scaling suites.
+
+    We should make a recipe for this process (similar to our other agent recipes) and exercise it.
+
+  definition_of_done: |
+    We have added a recipe for this process and followed it for a new task, adding a new ppl dataset and getting good correlation with the new task.
+
+
+# Architecture
+model_architecture:
+  title: "Settle on MoE architecture"
+  type: milestone
+  status: planned
+  labels: [architecture, moe]
+  description: |
+    We know we want to use an MOE architecture for our next series of models.
+
+    Desiderata:
+      - Fast enough MFU for training
+      - Fast enough inference throughput for inference. Ideally on multiple hardware platforms.
+      - Amenability to param transfer
+
+  dependencies:
+    - fast_moe
+    - moe_scaling_laws
+
+
+moe_scaling_laws:
+  title: "apply the scaling laws framework to find the optimal configuration for a 1e24 flop model"
+  type: epic
+  status: planned
+  labels: [scaling_laws, moe]
+  dependencies:
+    - scaling_law_framework
+
+fast_moe:
+  title: "Fast enough MFU training for MOEs"
+  type: epic
+  status: planned
+  labels: [moe, infra]
+  description: |
+    We need to profile our existing MOE implementation and MaxText's and identify suboptimalities in ours.
+    Then, we should consider ways to improve throughput through architectural changes without compromising quality.
+    To do that, we'll want to study the existing TPU inference kernels for MOEs and see what changes we could
+    make to the architecture to alleviate bottlenecks.
+
+    We also need to consider inference throughput. But, as a starting point, we should focus on training throughput.
+  dependencies:
+    - profile_existing_moes
+    - moe_mlp_kernel
+
+
+fast_inference_architectures:
+  title: "Fast inference architectures (local/global attention, linear attention, Mamba-like)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [architecture, inference, performance, agent_friendly]
+  description: |
+    Evaluate and (selectively) implement architectures that materially improve inference throughput and/or
+    token-efficiency without tanking quality.
+
+    This is intentionally a “try a few things fast” epic: we want a repeatable harness and a small set of candidate
+    architectures that we can compare apples-to-apples on:
+    - quality (reasoning / code / math / chat)
+    - MFU + inference throughput / latency on our common hardware
+    - training stability and simplicity
+  definition_of_done: |
+    - A small, documented benchmark harness exists to compare candidate architectures (training + inference).
+    - At least 2 candidate architectures are evaluated end-to-end with results logged and reproducible.
+    - We make an explicit decision: adopt one path for “mainline” exploration, and park the rest with notes.
+
+
+low_precision_training:
+  title: "Lower precision training/inference (FP4/FP6/FP8) where it matters"
+  type: epic
+  status: planned
+  issue: null
+  labels: [performance, infra, architecture, agent_friendly]
+  description: |
+    Explore and support lower-precision paths to improve throughput and cost, especially on GPUs.
+
+    Scope includes:
+    - identifying which parts of the stack benefit (weights, activations, optimizer states, KV cache)
+    - correctness tests and numeric stability constraints
+    - hardware-specific implementations (TPU vs NVIDIA GPU)
+  definition_of_done: |
+    - One lower-precision configuration is supported end-to-end for a representative model with clear docs.
+    - Regression tests catch obvious numeric issues (divergence/NaNs) and performance regressions.
+    - We have a measured speed/cost win on at least one real cluster.
+
+
+distillation_program:
+  title: "Distill big models into smaller, fine-tuning-friendly models"
+  type: epic
+  status: planned
+  issue: null
+  labels: [posttraining, community, agent_friendly]
+  description: |
+    Provide a repeatable distillation workflow so the community can produce smaller models (e.g. 8B/1.7B/0.6B)
+    that inherit useful behaviors from larger Marin models.
+
+    This should focus on being easy to run and easy to evaluate, with strong provenance (exact teacher checkpoint,
+    data recipe, and eval set versioning).
+  definition_of_done: |
+    - A documented recipe exists (teacher -> student) with a small “starter” run that fits modest compute.
+    - At least one distilled model is produced with evals showing meaningful transfer (and no obvious regressions).
+    - Artifacts are easy to reproduce and compare (teacher/student checkpoints + configs + eval reports).
+  dependencies:
+    - trained_base_model
+
+profile_existing_moes:
+  title: "Profile our existing MOE implementation and MaxText's and identify suboptimalities in ours"
+  type: task
+  status: planned
+  labels: [moe, infra, agent_friendly]
+  dependencies:
+    - profile_maxtext_moe
+    - profile_levanter_moe
+
+
+moe_mlp_kernel:
+  title: "implement a custom MLP kernel for our MOE architecture"
+  type: epic
+  status: planned
+  labels: [moe, kernels]
+  dependencies:
+    - understand_existing_moe_kernels
+
+
+understand_inference_moe_kernels:
+  title: "understand the inference kernels for MOEs"
+  type: task
+  status: planned
+  labels: [moe, kernels, agent_friendly]
+  description: |
+    We should look at existing inference kernels for MOEs and see what we can learn from them.
+
+    Things to look at
+       -  https://github.com/vllm-project/tpu-inference/tree/main/tpu_inference/kernels/fused_moe
+       - MaxText's kernel
+       - ejkernel's GMM
+
+    Goals are to understand what makes it fast and where we can make architectural changes to make things faster. We don't
+    need to tie ourselves to existing architectures, though obviously we should take them very seriously.
+
+
+
+# Scaling Laws
+
+scaling_law_framework:
+  title: "Scaling Law Framework"
+  type: epic
+  status: planned
+  labels: [scaling_laws, infra]
+  issue: null
+  description: |
+    Our goal is  XXX
+  dependencies:
+    - reliable_training_infra
+    - loss_datasets
+
+
+# Process
+ferries:
+  title: "train models regularly of increasing scale and quality."
+  type: epic
+  status: planned
+  labels: [process, infra]
+  description: |
+    Daily 1e17, Weekly 1e21 models, monthly 1e22 models, quarterly 1e23 models, yearly 1e24 models.
+  dependencies:
+    - ferry_framework
+    - reliable_training_infra
+    - automated_daily_ferry_launch
+    - automated_weekly_ferry_launch
+    - automated_monthly_ferry_launch
+
+
+hparam_transfer:
+  title: "Reliable hparam transfer across scales"
+  type: epic
+  status: planned
+  labels: [process, infra]
+  description: |
+    XXX
+  dependencies:
+    - reliable_training_infra
+
+## Leverage Community
+
+midtraining_dataset_flow:
+  title: "Establish a flow for community contributions of midtraining datasets"
+  type: epic
+  status: planned
+  labels: [community, data]
+  description: |
+    We should establish a flow for community contributions of midtraining datasets.
+    This should include:
+
+    - A clear specification of the data format and quality requirements
+    - A process for submitting datasets
+    - A review process for evaluating and accepting datasets
+    - A way to track contributions and give credit to contributors
+
+    Key challenge is how do we know the data is good quality and high value? Various checks:
+    To first order, it seems like most specific natural datasets are likely to be more valuable than web data.
+    But we should have some process for evaluating the data.
+
+
+## Grug
+
+grugformer:
+    title: 'Grugformer: "pure JAX" transformer implementation'
+    type: epic
+    status: planned
+    labels: [grug, architecture]
+    description: |
+
+      I (@dlwh) like my named tensors and stuff, but increasingly I think that the overhead of nn libraries isn't
+      worth it in JAX. Gotta use kernels, of course, but the need for Linear, Conv, etc abstractions seems less
+      important, and coding agents don't seem to care.
+
+      Haliax was designed around named axes, with the idea that every array should have semantic names. Partially
+      this was about "legibility" (I get confused about what `.sum(axis=1)` means, and have been bitten
+      by positional axes before), but also about making it easier to do complex sharding. In Haliax,
+      array axis names can be mapped to JAX's mesh axes, making it easier to reason about sharding. These
+      names get mapped to different mesh axes in different contexts (computation, parameters, etc).
+      Crucially, this meant that all arrays knew their "correct" sharding at all times.
+      At the time I thought it would be natural to experiment with different sharding strategies by remapping
+      axes. Now I understand that usually you just want to create a physical mesh axis for each kind of parallelism
+      you might want, and "logical" axes always map to the same physical axis (during computation, at least.)
+
+      But now that JAX has added [explicit mesh axes](https://docs.jax.dev/en/latest/notebooks/explicit-sharding.html),
+      that latter case for named axes seems less important: arrays will always know their shardings.
+
+      In #2171, I started a "pure JAX" transformer implementation that doesn't use any nn library.
+
+      We need to finish fitting it into the framework.
+
+    definition_of_done: |
+      We have a grugformer model that can be trained and evaluated in the levanter training framework.
+
+
+grugformer_speedrun:
+    title: "[Grug] speedrun grugformer"
+    type: task
+    status: planned
+    labels: [grug, speedrun]
+    description: |
+      We need to do a speedrun of [grugformer](#grugformer) to make sure it works end to end.
+    dependencies:
+        - grugformer
+
+
+grug_attention:
+    title: "[Grug] wire up attention kernels"
+    type: epic
+    status: planned
+    labels: [grug, kernels]
+    description: |
+      We need to wire up attention kernels for grugformer.
+
+      We need to wire up a GPU kernel.
+    dependencies:
+        - grugformer
+
+
+grug_moe:
+    title: "[Grug] wire up MOE for grugformer"
+    type: epic
+    status: planned
+    labels: [grug, moe]
+    description: |
+      We need to wire up MOE for grugformer. Goal is high MFU, load balancing, etc.
+    dependencies:
+        - grugformer
+        - fast_moe
+
+
+# ---- Stub nodes to make the DAG well-formed ----
+
+lots:
+  title: "Scalable RL framework prerequisites"
+  type: epic
+  status: planned
+  labels: [rl, infra]
+  description: |
+    Placeholder for the (many) concrete pieces needed for scalable RL.
+    This exists so the DAG is well-formed; expand into concrete deps over time.
+
+
+reliable_training_infra:
+  title: "Reliable training infrastructure"
+  type: epic
+  status: planned
+  labels: [infra]
+  description: |
+    Placeholder for whatever we need so training runs are stable, restartable, observable, and reproducible.
+
+
+moe_training_recipe:
+  title: "Training recipe for large MoE base model"
+  type: epic
+  status: planned
+  labels: [pretraining, recipe]
+  description: |
+    Define (and document) the end-to-end recipe for Phase 1/2/3 training, including LR schedules,
+    tokenizer, packing, checkpoint cadence, eval cadence, and cluster assumptions.
+
+
+pt_recipe:
+  title: "Pretraining recipe (Phase 1)"
+  type: epic
+  status: planned
+  labels: [pretraining, recipe]
+
+
+base_model_evals:
+  title: "Base model eval suite"
+  type: epic
+  status: planned
+  labels: [evals, pretraining]
+  description: |
+    Define what we consider the base-model gates (e.g. MMLU/MMLU-Pro, etc.) and keep them tracked over time.
+
+
+frontier_evals_wired:
+  title: "Wire frontier eval suite into training/RL runs"
+  type: epic
+  status: planned
+  labels: [evals, rl, agent_friendly]
+
+
+full_rl_environments:
+  title: "Full set of RL environments for agentic reasoning"
+  type: epic
+  status: planned
+  labels: [rl]
+  description: |
+    A curated environment suite that supports training and evaluation of agentic reasoning.
+    This includes task definitions, reward functions, anti-cheating checks, and Train/Eval splits.
+  dependencies:
+    - rl_env_math
+    - rl_env_aime
+    - rl_env_swe_bench
+    - rl_env_ctf
+    - rl_env_lean
+    - rl_env_hub
+    - rl_env_prime_intellect_modes
+    - rl_env_prime_intellect_logprobs
+
+
+rl_recipe:
+  title: "RL recipe for big model"
+  type: epic
+  status: planned
+  labels: [rl, recipe]
+  description: |
+    A playbook-level recipe for doing RL on large models:
+    - success criteria and eval gates (agentic, math, tool use, etc.)
+    - which environments to run, with what curricula
+    - how we measure throughput and stability
+    - how we decide the next experiment
+  dependencies:
+    - rl_capability_playbook
+    - scalable_rl_framework
+    - full_rl_environments
+    - frontier_evals_wired
+
+
+rl_capability_playbook:
+  title: "Playbook: what does it mean to be good at agents/RL?"
+  type: task
+  status: planned
+  issue: null
+  labels: [process, docs, rl, agent_friendly]
+  definition_of_done: |
+    We have a written playbook that defines:
+    - target agentic capabilities and corresponding evals
+    - the RL environment suite and how each env maps to capabilities
+    - an experiment protocol (baselines, ablations, regression tests)
+    - success criteria for \"RL works\" at a given scale
+
+
+rl_env_math:
+  title: "Fix and test RL with the Math environment"
+  type: epic
+  status: planned
+  issue: 1743
+  labels: [rl, environments]
+
+
+rl_env_aime:
+  title: "AIME 2024/25 environment + reproduce DAPO on Qwen2.5-32B"
+  type: epic
+  status: planned
+  issue: 2241
+  labels: [rl, environments]
+
+
+rl_env_swe_bench:
+  title: "Adopt SWE-Bench single-step env for RL training"
+  type: task
+  status: done
+  issue: 1423
+  labels: [rl, environments, code]
+
+
+rl_env_ctf:
+  title: "Create a CTF RL env"
+  type: task
+  status: done
+  issue: 1439
+  labels: [rl, environments, security]
+
+
+rl_env_lean:
+  title: "Add interactive Lean environment"
+  type: task
+  status: done
+  issue: 1438
+  labels: [rl, environments]
+
+
+rl_env_hub:
+  title: "Integrate Environment Hub to Marin"
+  type: task
+  status: done
+  issue: 1623
+  labels: [rl, environments, infra]
+
+
+rl_env_prime_intellect_modes:
+  title: "Validate Train/Eval modes in Prime Intellect env and others"
+  type: task
+  status: done
+  issue: 1653
+  labels: [rl, environments]
+
+
+rl_env_prime_intellect_logprobs:
+  title: "PrimeIntellect env computes logprobs"
+  type: task
+  status: done
+  issue: 1684
+  labels: [rl, environments]
+
+
+
+hq_data:
+  title: "HQ / midtraining data mixture (Phase 2)"
+  type: epic
+  status: planned
+  labels: [data, pretraining]
+  dependencies:
+    - midtrain_data
+
+
+reasoning_data:
+  title: "Reasoning datasets"
+  type: epic
+  status: planned
+  labels: [data, reasoning]
+
+
+code_data:
+  title: "Code datasets"
+  type: epic
+  status: planned
+  labels: [data, code]
+  issue: null
+  dependencies:
+    - code_capability_playbook
+    - code_data_stack_v2
+
+
+code_capability_playbook:
+  title: "Playbook: what does it mean to be good at code?"
+  type: task
+  status: planned
+  issue: null
+  labels: [process, docs, code, agent_friendly]
+  definition_of_done: |
+    We have a written playbook that defines:
+    - code eval suite / metrics we care about
+    - code data strategy and how we measure quality
+    - minimal ablation plan to validate improvements
+
+
+code_data_stack_v2:
+  title: "Add more code data (The Stack v2)"
+  type: task
+  status: done
+  issue: 1752
+  labels: [data, code]
+
+
+medical_data:
+  title: "Medical datasets"
+  type: epic
+  status: planned
+  labels: [data, medical]
+  issue: null
+  dependencies:
+    - medical_data_quality_process
+    - medical_data_datashop
+
+
+medical_data_quality_process:
+  title: "Medical data: define quality checks and evaluation plan"
+  type: task
+  status: planned
+  issue: 1652
+  labels: [data, medical, evals, process]
+
+
+medical_data_datashop:
+  title: "Datashop for medical data"
+  type: task
+  status: planned
+  issue: 1361
+  labels: [data, medical]
+
+
+format_following_data:
+  title: "Format-following datasets"
+  type: epic
+  status: planned
+  labels: [data, sft]
+
+
+chat_evals:
+  title: "Chat evals"
+  type: epic
+  status: planned
+  labels: [evals, chat]
+
+
+reasoning_evals:
+  title: "Reasoning evals"
+  type: epic
+  status: planned
+  labels: [evals, reasoning]
+
+
+long_context_evals:
+  title: "Long-context evals"
+  type: epic
+  status: planned
+  labels: [evals, long_context]
+  description: |
+    Candidate long-context evals to wire up:
+    - Ruler (see #2064)
+    - ∞Bench
+    - HELMET
+    - OpenAI-MRCR
+    - NoCHA
+
+    Suggested initial scope: Ruler + HELMET.
+
+  issue: 2025
+
+  dependencies:
+    - ruler_eval
+    - helmet_eval
+
+
+ruler_eval:
+  title: "Wire up Ruler long-context eval"
+  type: task
+  status: planned
+  issue: 2064
+  labels: [evals, long_context]
+
+
+helmet_eval:
+  title: "Wire up HELMET long-context eval"
+  type: task
+  status: planned
+  issue: null
+  labels: [evals, long_context]
+
+
+
+chat_ppl_data:
+  title: "Chat perplexity-loss dataset"
+  type: task
+  status: planned
+  labels: [evals, data]
+
+
+format_following_ppl_data:
+  title: "Format-following perplexity-loss dataset"
+  type: task
+  status: planned
+  labels: [evals, data]
+
+
+olmo_3_ocr_data:
+  title: "Olmo 3 OCR data"
+  type: epic
+  status: planned
+  labels: [data, long_context]
+
+
+understand_existing_moe_kernels:
+  title: "Understand existing MoE kernels (training + inference)"
+  type: task
+  status: planned
+  labels: [moe, kernels, agent_friendly]
+
+
+profile_maxtext_moe:
+  title: "Profile MaxText MoE"
+  type: task
+  status: planned
+  labels: [moe, infra, agent_friendly]
+
+
+profile_levanter_moe:
+  title: "Profile Levanter MoE"
+  type: task
+  status: planned
+  labels: [moe, infra, agent_friendly]
+
+
+crawl_data:
+  title: "Crawl additional web data"
+  type: epic
+  status: planned
+  labels: [data, web]
+
+
+rephrasing_pipeline:
+  title: "Rephrasing pipeline for web data"
+  type: epic
+  status: planned
+  labels: [data, web, synthetic_data]
+  description: |
+    Build a rephrasing pipeline to augment web data.
+    This could involve using LLMs to paraphrase existing web content to create new, diverse training examples.
+
+  dependencies:
+    - inference_workers
+
+
+inference_workers:
+  title: "Fray Inference workers for data processing"
+  type: task
+  status: planned
+  labels: [data, infra]
+  description: |
+    Set up Fray inference workers to handle data processing tasks such as rephrasing web data.
+  dependencies:
+    - vllm_inference_service_rewrite
+
+
+vllm_inference_service:
+  title: "vLLM inference service (non-RL) for eval + data rewriting"
+  type: epic
+  status: in_progress
+  owners: [dlwh]
+  labels: [infra, infra2026, inference, data, agent_friendly]
+  description: |
+    RL rollout workers are working; focus on vLLM as a standalone inference service for:
+    - evaluation (VllmTpuEvaluator / BaseVllmEvaluator)
+    - large-scale data rewriting
+
+    Finish the in-flight PRs, then factor out a clean service boundary between evaluator logic and the
+    inference server logic. Track compilation caching fixes for vLLM sidecar as part of this stream.
+
+    PR context:
+    - PR 2336 refactors VllmTpuEvaluator into BaseVllmEvaluator and adds GPU/TPU docker sidecar options.
+    - PR 2320 runs vLLM as a docker sidecar via docker-along-docker to avoid tight version pins and improve
+      reliability.
+
+    References:
+    ```
+    https://github.com/marin-community/marin/pull/2336
+    https://github.com/marin-community/marin/pull/2320
+    https://github.com/marin-community/marin/issues/2318
+    ```
+  dependencies:
+    - rl_vllm_rollout_worker
+
+
+vllm_inference_service_eval:
+  title: "vLLM inference service: evaluation path (BaseVllmEvaluator)"
+  type: task
+  status: planned
+  labels: [infra, infra2026, inference]
+  description: |
+    Land PRs 2320/2336 and split evaluator logic from the vLLM server lifecycle into a clean service boundary.
+    This builds on the BaseVllmEvaluator refactor and TPU/GPU sidecar support from PR 2336.
+  dependencies:
+    - vllm_inference_service
+
+
+vllm_inference_service_rewrite:
+  title: "vLLM inference service: bulk data rewriting"
+  type: task
+  status: planned
+  labels: [infra, infra2026, inference, data]
+  description: |
+    Define and implement a reusable vLLM inference service interface for large-scale data rewriting jobs.
+  dependencies:
+    - vllm_inference_service
+
+
+vllm_container_selection:
+  title: "Auto-select vLLM docker image by resource (GPU vs TPU)"
+  type: task
+  status: in_progress
+  labels: [infra, infra2026, inference]
+  description: |
+    Automatically select the appropriate vLLM docker container based on requested resources
+    (e.g., NVIDIA GPU vs TPU) when launching the inference service.
+    Likely addressed by PR 2336.
+  dependencies:
+    - vllm_inference_service
+
+
+ferry_framework:
+  title: "Ferry framework (repeatable vertical training cadence)"
+  type: epic
+  status: planned
+  labels: [process, infra, infra2026, agent_friendly]
+  description: |
+    In #ferries, we propose training models on a regular cadence of increasing scale and quality.
+    The ferry framework is the process + tooling that makes those launches repeatable, observable, and easy
+    to run across daily/weekly/monthly cadences.
+
+    Contrary to current (~2026-01-01) practice, each scale's ferry experiment should be a "living" experiment
+    where we update it with our best / most promising / highest-value-of-information experiment
+
+    The ferry framework should handle:
+      - creating an issue for the ferry launch, following a naming scheme (e.g. `Ferry: daily 1e17 model - 2024-09-01`)
+        and any reasonable tags
+      - creating a branch for this particular ferry with the particular configuration to run in a predictable place.
+      - launch the run on the appropriate cluster
+      - update the issue with a wandb link, key metrics, and pass/fail signals
+      - maybe also update discord.
+
+    All of this should be automated via a CLI tool.
+
+    The ferry launch process should be encoded as a recipe (in `docs/recipes/ferries/`)
+  definition_of_done: |
+    - There is a single documented “how to run a ferry” entrypoint (manual + scheduled).
+    - Each ferry run creates/updates a GitHub issue as the canonical record (links, metrics, outcomes, next steps).
+    - Each ferry run has a reproducible config location (branch + config path) and a predictable naming scheme.
+    - It’s easy to run the same ferry locally (tiny) and on cluster (small/real) without changing the workflow.
+  dependencies:
+    - experiment_updates_bot
+
+
+
+automated_daily_ferry_launch:
+  title: "Automated daily ferry launch (daily regression run)"
+  type: task
+  status: planned
+  labels: [process, infra, infra2026, testing, agent_friendly]
+  description: |
+    Daily scheduled ferry run (this is our “daily regression”).
+
+    This should be the lowest-friction way to catch cluster + pipeline regressions early, and it should always
+    produce a canonical GitHub issue record via `ferry_framework`.
+  definition_of_done: |
+    - A single daily job (cron-style) launches a small end-to-end run (e.g. 10–100M params).
+    - The run creates/updates a GitHub issue with links, key metrics, and pass/fail signals.
+    - Failures trigger an alert and make it obvious what component regressed.
+  dependencies:
+    - ferry_framework
+    - model_pipeline_v0
+    - test_cluster
+
+
+automated_weekly_ferry_launch:
+  title: "Automated weekly ferry launch"
+  type: task
+  status: planned
+  labels: [process, infra, agent_friendly]
+  description: |
+    Weekly scheduled ferry run with a larger model and more tokens than the daily regression.
+
+    This should validate that the pipeline is healthy at a medium scale and that longer token runs
+    do not regress throughput or stability.
+  definition_of_done: |
+    - A weekly scheduled run launches a medium-scale job (larger params + more tokens than daily).
+    - The run creates/updates a GitHub issue with links, metrics, and pass/fail signals.
+    - Failures trigger alerts and include a short diagnosis summary.
+  dependencies:
+    - automated_daily_ferry_launch
+
+
+automated_monthly_ferry_launch:
+  title: "Automated monthly ferry launch"
+  type: task
+  status: planned
+  labels: [process, infra, agent_friendly]
+  description: |
+    Monthly scheduled ferry run with the largest routine model and token budget we can support.
+
+    This should be the closest thing to “real” training cadence and is expected to surface
+    long-horizon stability issues.
+  definition_of_done: |
+    - A monthly scheduled run launches a large-scale job (bigger params + more tokens than weekly).
+    - The run creates/updates a GitHub issue with links, metrics, and pass/fail signals.
+    - Failures trigger alerts and include a clear root-cause link or follow-up issue.
+  dependencies:
+    - automated_weekly_ferry_launch
+
+
+# -----------------------------------------------------------------------------
+# Marin Infrastructure 2026 (imported from `Marin Infrastructure 2026)
+# -----------------------------------------------------------------------------
+
+# this section is a bit dated. working on updating
+
+infra2026_program:
+  title: "Marin Infrastructure 2026 program"
+  type: epic
+  status: planned
+  owners: [rjpower, dlwh]
+  target_date: "2026-12-31"
+  labels: [infra, infra2026]
+  description: |
+    Master tracking node for the 2026 infrastructure roadmap.
+
+    This section is imported from `.agents/Marin Infrastructure 2026.md` and is intended to cover:
+    - cluster and job management beyond Ray
+    - robustness to preemption and global resource availability
+    - data movement and validation
+    - end-to-end model pipelines (pretrain → SFT → RL → eval)
+    - observability, alerting, and cost tracking
+    - developer experience for human + agent automation
+  dependencies:
+    - llm_guided_research
+    - model_pipeline_v1
+    - global_dashboard
+    - monitoring
+    - cost_tracking
+
+
+llm_guided_research:
+  title: "LLM-guided research automation (10% paper→implementation success)"
+  type: epic
+  status: planned
+  owners: [rjpower, dlwh]
+  target_date: "2026-12-31"
+  labels: [infra, infra2026, automation, agent_friendly]
+  description: |
+    End-of-2026 goal: a frontier model can take a paper and, with >10% likelihood, implement and validate
+    the idea using the Marin codebase with minimal/no supervision.
+
+    This implies:
+    - strong scaffolding docs and discoverability
+    - vertical end-to-end examples at multiple scales
+    - programmatic visibility into execution (no SSH required)
+    - robust alerting + automatic termination / recovery
+    - ability to scale from tiny to large models without rewriting user code
+  dependencies:
+    - model_pipeline
+    - staged_validation
+    - robust_alerting
+    - cli_tools
+    - cli_logging
+
+devops_automation:
+  title: "DevOps automation: rebuild/refresh clusters on cadence"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  labels: [infra, infra2026, devops]
+  description: |
+    Make cluster provisioning, updates, and refreshes routine and reproducible rather than ad-hoc.
+
+    Goals:
+    - reduce “it broke again” incidents
+    - keep package caches warm and environments consistent
+    - keep cluster launch/playbooks fresh and documented
+  dependencies:
+
+
+fray:
+  title: "Fray (Ray abstraction / migration layer)"
+  type: epic
+  status: planned
+  labels: [infra, infra2026]
+  description: |
+    Backend abstraction that retains a Ray-like interface while we migrate the underlying execution and
+    cluster management system away from Ray.
+
+
+resource_manager:
+  title: "Resource manager (scheduler-facing API + accounting)"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, scheduling]
+  description: |
+    Provide a backend-neutral resource management layer to:
+    - accept user/job resource requests
+    - schedule / allocate resources fairly
+    - track quotas/credits and usage over time
+
+    This should integrate with the Fluster direction where relevant.
+  dependencies:
+    - fluster_scheduler_mvp
+
+
+cluster_manager:
+  title: "Cluster manager: manage multi-tenant cluster resources"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  labels: [infra, infra2026, cluster]
+  description: |
+    Replace Ray’s cluster management with a system that supports multi-tenancy and robust scheduling.
+
+    Wishlist:
+    - gang scheduling and slice-aware placement
+    - fair sharing / credit system
+    - job isolation (no shared Python env surprise)
+    - good monitoring + dashboard + programmatic API
+    - robust preemptible support (auto-restart and recovery)
+
+    Overlaps with Fluster: this should either be Fluster itself, or share components with it.
+  dependencies:
+    - cluster_manager_v0
+    - cluster_manager_v1
+
+
+cluster_manager_v0:
+  title: "Cluster manager v0: stop using Ray for cluster lifecycle"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  labels: [infra, infra2026, cluster]
+  description: |
+    First milestone: replace Ray cluster lifecycle with an alternative (e.g. Monarch + Slurm/K8s),
+    update scripts and docs, and ensure jobs can launch reliably.
+
+    Include basic log collection so failures are visible without SSH.
+  dependencies:
+    - devops_automation
+    - fluster_design_doc
+    - fluster_scheduler_mvp
+
+
+cluster_manager_v1:
+  title: "Cluster manager v1: multi-region scheduling + visibility + fair sharing"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  labels: [infra, infra2026, cluster]
+  description: |
+    Expand v0 with multi-region scheduling, per-user/per-job dashboards, and a credit/quota system.
+  dependencies:
+    - cluster_manager_v0
+
+
+global_cluster_v0:
+  title: "Global cluster v0: schedule to first available cluster"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, cluster]
+  description: |
+    Allow a job to run on any available cluster (first-fit), without moving it once placed.
+
+    If the chosen cluster loses capacity, the job waits until resources return (no repositioning yet).
+  dependencies:
+    - region_caching_fs
+    - resource_manager
+
+
+global_cluster_v1:
+  title: "Global cluster v1: reposition stalled jobs across clusters"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, cluster]
+  description: |
+    Add cost/benefit awareness to global scheduling:
+    - detect stalled jobs
+    - terminate and reposition to better resources
+    - prefer cheaper capacity when appropriate
+  dependencies:
+    - global_cluster_v0
+
+
+global_dashboard:
+  title: "Global dashboard: see what we're running, where"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, observability]
+  description: |
+    A single view to answer:
+    - what jobs/workers are running on which clusters
+    - what is queued and why it’s waiting
+    - (for pipelines) what step is blocked on which dependency
+    - where datasets live (region/cache state)
+  dependencies:
+    - global_cluster_v0
+    - cluster_manager
+    - region_caching_fs
+
+
+multi_slice_training:
+  title: "Multi-slice training: scale jobs up/down with available slices"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, training]
+  description: |
+    Flex multislice already kind of exists, but we need to test it more and improve robustness.
+  dependencies:
+    - resource_manager
+    - aot_compilation
+    - batch_size_calc
+
+
+region_caching_fs:
+  title: "Region caching filesystem: move data to where we train"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, data]
+  description: |
+    Provide filesystem-level or fsspec-level support so checkpoints and datasets are staged into the region
+    where compute runs, with clear cost tradeoffs and documentation.
+
+    This should:
+    - hide cross-region latency/egress surprises
+    - support automatic caching and/or replication policies
+    - integrate cleanly into existing fsspec usage
+
+
+dataset_storage_backend:
+  title: "Dataset/checkpoint storage backend strategy (reduce GCS dependence)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, data, cost, agent_friendly]
+  description: |
+    We currently lean heavily on GCS-style object storage in a way that can create cost/egress surprises and single-cloud
+    coupling.
+
+    Make an explicit, documented choice for storage backends for:
+    - long-lived datasets
+    - caches / regional mirrors
+    - checkpoints (training + RL)
+
+    Candidates include: GCS, S3-compatible stores, Cloudflare R2, and/or per-region caches coordinated by
+    #region_caching_fs.
+  definition_of_done: |
+    - We write down a recommended “default storage” for each artifact type (datasets, checkpoints, caches) with cost
+      and reliability tradeoffs.
+    - The recommended path is supported in code (fsspec URLs, auth/docs) and used by at least one pipeline end-to-end.
+    - We have basic monitoring/alerting for storage failures and egress regressions.
+  dependencies:
+    - region_caching_fs
+
+
+data_validation:
+  title: "Data validation: quality checks and pipeline correctness"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, data_pipeline]
+  description: |
+    Validate dataset quality and detect pipeline correctness issues before training.
+
+    Examples:
+    - schema and invariants for structured data
+    - corrupted/empty/encoding checks
+    - distribution drift and sampling sanity checks
+    - dedupe verification and token count statistics
+    - generate human/agent-readable reports and fail fast when needed
+  dependencies:
+
+model_loading_without_hf:
+  title: "Model loading without HuggingFace dependency"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, modeling, reliability, levanter]
+  description: |
+    Make it possible to build/train/eval without touching HuggingFace services.
+
+    Goals:
+    - remove “HF is down” as a training failure mode
+    - clarify separation between internal formats and HF compatibility
+    - avoid implicit network requests during checkpoint/tokenizer loading
+
+
+dependency_manager:
+  title: "Dependency manager: experiment dependency graphs + status queries"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, developer_experience, executor, agent_friendly, help-wanted]
+  description: |
+    Improve experiment dependency management (building on Executor) so we can:
+    - visualize the dependency graph
+    - see status and failure reasons programmatically
+    - support agent tooling to query and repair experiment state
+  dependencies:
+    - visualize_executor_graph
+    - dynamic_executor_graphs
+    - cli_tools
+
+
+visualize_executor_graph:
+  title: "Visualize Executor dependency graph"
+  type: task
+  status: planned
+  labels: [infra, infra2026, developer_experience]
+  description: |
+    Provide a visualization of the Executor dependency graph for a given experiment,
+    showing step status, failures, and dependencies.
+
+
+dynamic_executor_graphs:
+  title: "Dynamic Executor graphs via artifacts"
+  type: task
+  status: planned
+  labels: [infra, infra2026, developer_experience, executor]
+  description: |
+    Add `use_artifact` / `save_artifact` helpers that emit artifacts directly and include the
+    necessary Executor metadata so the dependency graph can be reconstructed on the fly.
+  definition_of_done: |
+    - `use_artifact` / `save_artifact` capture executor_info metadata when writing artifacts.
+    - The dependency graph can be rebuilt from stored artifacts without rerunning steps.
+
+
+experiments_outside_marin:
+  title: "Experiments outside Marin: develop with Marin without forking"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, developer_experience]
+  description: |
+    Support a workflow where users build experiments using Marin as a dependency, without landing every
+    experiment inside the Marin repo.
+  dependencies:
+    - cluster_manager
+    - dependency_manager
+
+
+aot_compilation:
+  title: "AOT compilation as a pipeline step"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Make compilation a first-class pipeline step so accelerators aren’t stranded waiting for XLA.
+
+    Goals:
+    - fail fast on OOM/HBM problems via AOT compile+export using an “abstract mesh”?
+    - cache compile artifacts and reuse them in the subsequent training job
+    - integrate into Executor / standard training recipes
+    - support an “extended dry run” that actually compiles critical steps (train step, eval step, rollout step)
+      without running a full training job
+
+    This should be thought of as a *preflight check*:
+    - If compilation fails, we want the failure on cheap/short-lived resources.
+    - If compilation succeeds, the subsequent training job should be able to reuse artifacts and start quickly.
+  definition_of_done: |
+    - Users can run a Levanter preflight command that compiles the key kernels for a given training config and produces
+      a compile artifact (or a clear failure report).
+    - The compile artifact is cacheable/reusable across jobs with a well-defined cache key and can optionally be staged
+      to a shared object store (via fsspec paths, e.g. GCS/S3-compatible).
+    - Executor/pipelines can include “compile” as an explicit step before training so ferries don’t burn accelerator
+      time waiting for XLA.
+    - We have at least one regression test / smoke workflow that ensures the preflight path stays working.
+  dependencies:
+    - executor_step_preflight
+    - levanter_compile_preflight
+    - compile_artifact_cache
+    - compile_cache_retention
+    - pipeline_compile_gate
+
+
+executor_step_preflight:
+  title: "Executor: step preflight hooks (compile checks, manifests, etc.)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, developer_experience, executor, agent_friendly]
+  description: |
+    Today `Executor` supports `dry_run`, which plans work without executing steps.
+
+    Add a first-class *step preflight* hook that can run short, bounded checks prior to launching the long-running
+    step. This is not a replacement for `dry_run`; it’s a way to fail fast (and produce artifacts) for things that
+    cannot be validated by static planning (notably compilation).
+
+    Principles:
+    - `dry_run` stays as-is (planning only).
+    - Preflight is opt-in per step and should be safe + bounded.
+    - Preflight outputs are treated as step artifacts (manifest, compile artifacts, reports) and can be surfaced to
+      pipelines and agents.
+  definition_of_done: |
+    - Executor exposes a supported API for steps to declare a preflight action (and its outputs) and to mark it as
+      required/optional.
+    - Pipelines can run preflight for a subset of steps (by name or tags like `compile`) without running the full job.
+    - Preflight results are recorded in a machine-readable way (so agents/pipelines can react) and in a human-readable
+      way (so developers can debug quickly).
+
+
+levanter_compile_preflight:
+  title: "Levanter: compile preflight utility for training/eval steps"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, levanter, agent_friendly]
+  description: |
+    Implement a Levanter utility that compiles the train step (and optionally eval step) for a given config, without
+    running a full training job.
+
+    See [JAX's export API](https://docs.jax.dev/en/latest/export/export.html) for one approach to producing reusable
+    compiled artifacts.
+
+    Key idea: extend “dry run” into something that *actually compiles*:
+    - run enough of the model forward/backward once to force compilation
+    - use an “abstract mesh” / representative shapes to surface HBM/OOM and sharding errors early
+    - emit a compile report (time, memory estimates, compilation cache hits)
+    - optionally stage compilation cache artifacts to a shared object store so a subsequent training job can start fast
+  definition_of_done: |
+    - A preflight command exists that compiles the Levanter train step for a representative batch and exits.
+    - Common failure modes produce actionable errors (sharding mismatch, OOM, unsupported dtype, etc.).
+    - The resulting compiled artifacts can be reused by the actual training job when possible, including in a
+      “compile-first, train-second” pipeline.
+
+
+compile_artifact_cache:
+  title: "Compile artifact cache: store and reuse compiled executables"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, data, agent_friendly]
+  description: |
+    Persist compilation outputs (and associated metadata) so they can be reused by subsequent jobs.
+
+    Current state: we already enable JAX's compilation cache in training when possible by setting
+    `JAX_COMPILATION_CACHE_DIR` to `${MARIN_PREFIX}/compilation-cache` (see `lib/marin/src/marin/training/training.py`).
+    This is useful, but it’s mostly a local/per-run cache and not yet a first-class pipeline artifact.
+
+    Requirements:
+    - artifact storage works with our filesystem story (fsspec paths; integrates with `region_caching_fs`)
+    - artifacts are immutable and content-addressed (or keyed by a stable cache key)
+    - supports inspection/debugging (what config produced this artifact; when; on what hardware)
+
+    Design goal:
+    - make compilation caches and/or exported executables a durable artifact that can be staged to/from an object store
+      (GCS/S3-compatible/etc.) and hydrated onto local disk at job start (since JAX compilation cache expects a local
+      directory)
+  definition_of_done: |
+    - A “compile cache artifact” (directory + manifest) can be produced from a successful compile preflight and/or a
+      training run and stored in an artifact store path.
+    - A subsequent run can hydrate that cache onto local disk and set `JAX_COMPILATION_CACHE_DIR` appropriately so we
+      observe faster time-to-first-step when the cache key matches.
+    - Basic retention/cleanup policy exists (avoid unbounded growth).
+  dependencies:
+    - region_caching_fs
+
+
+compile_cache_retention:
+  title: "Compilation cache retention policy"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    JAX compilation cache keys are already correct. We need to set up a retention policy for compilation cache
+    directories so they do not grow without bound.
+  definition_of_done: |
+    - A retention policy is defined and documented (time-based, size-based, or both).
+    - Cache directories are cleaned up automatically (periodic cleanup or at job start).
+
+
+pipeline_compile_gate:
+  title: "Pipeline compile gate: compile before launching expensive training jobs"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, pipeline, performance, agent_friendly]
+  description: |
+    Wire the compile preflight into our pipeline conventions so ferries can:
+    1) run compile preflight on cheap/short resources
+    2) only then schedule long-running accelerator jobs
+
+    The gate should:
+    - record compile results in the pipeline UI/status (success/failure, artifact location)
+    - make it easy to retry compilation with debug settings
+  definition_of_done: |
+    - At least one ferry/pipeline uses compile as an explicit step before training.
+    - If compile fails, the pipeline fails early without burning long-running accelerator time.
+
+
+batch_size_calc:
+  title: "Batch size calculator (fit prediction + micro-batch auto-choice)"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, performance]
+  description: |
+    Automate batch-size decisions, especially on TPUs where padding can cause large memory blowups.
+
+    Intended workflow:
+    - user picks effective batch size
+    - system picks micro-batch size that fits (based on compilation/estimation)
+    - cache results between runs
+
+  dependencies:
+    - aot_compilation
+
+
+jax_gpu_performance:
+  title: "JAX performance on NVIDIA GPUs (kernels, sharding, comms)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Improve the GPU path so running Marin on NVIDIA clusters is not “second class”.
+
+    This is a grab-bag but should be driven by profiling and concrete bottlenecks, e.g.:
+    - collective communication overhead
+    - slow sharding / resharding
+    - kernel fusion gaps / custom kernels where needed
+    - host<->device transfer overhead and pipeline stalls
+  definition_of_done: |
+    - We pick 1–2 representative workloads (training + inference) and publish a profiling report.
+    - We land fixes that improve throughput by a measurable amount and add regression checks for the bottleneck(s).
+    - The workload runs reliably on a GPU cluster as part of `test_cluster`.
+  dependencies:
+    - support_nvidia_gpu_clusters
+    - test_cluster
+
+
+agent_driven_profiling:
+  title: "Agent-driven profiling (xprof/TensorBoard/Perfetto -> actionable optimization)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly, help-wanted]
+  description: |
+    Make profiling data *machine-usable* so agents can automatically improve utilization of specific kernels and the
+    full training/inference pipeline.
+
+    The end state is:
+    - a standard way to capture profiles for representative workloads (train/eval/inference/RL)
+    - a parser that turns profiles (e.g. xprof) into structured data and summaries
+    - agent tooling that can answer: “what’s slow, why, and what should we try next?”
+  definition_of_done: |
+    - We have a documented workflow to collect profiles for at least one representative workload.
+    - Agents can ingest a profile artifact and produce a deterministic, structured summary:
+      hot ops, time breakdown (compute/comm/host stalls), and top candidates for optimization.
+    - We run at least one “agent-driven optimization loop” end-to-end (measure -> propose -> patch/flag -> re-measure)
+      and demonstrate a measurable throughput win or a clear root-cause report.
+  dependencies:
+    - agent_profiling_research
+    - xprof_profile_ingestion
+    - profile_summary_schema
+    - agent_profile_query_tooling
+    - profiling_regression_tracking
+
+
+agent_profiling_research:
+  title: "Decide xprof as the profiling source and parse it"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly, help-wanted]
+  description: |
+    We will use xprof as the source of truth. Focus on parsing xprof artifacts into a structured summary.
+
+    Deliverable should include:
+    - how to generate xprof profiles for our common TPU workloads
+    - what artifacts are produced and how to access them
+    - a concrete parsing plan (xprof trace -> structured summary)
+  definition_of_done: |
+    - A short plan document is written (in an issue or in-repo doc) naming:
+      1) the xprof artifacts we will parse, 2) the ingestion approach, 3) the first workload(s), and 4) success metrics.
+
+
+xprof_profile_ingestion:
+  title: "Ingest xprof (and friends) into a structured profile artifact"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Implement ingestion of at least xprof outputs into a normalized, versioned internal representation so we can:
+    - store profiles alongside experiment artifacts
+    - compare profiles across runs
+    - build stable tooling for agents and dashboards
+
+    Non-goals for MVP:
+    - perfect support for every profiler format
+    - fancy UI (we can start with CLI + JSON summaries)
+  dependencies:
+    - profile_summary_schema
+
+
+profile_summary_schema:
+  title: "Profile summary schema (normalized timeline + aggregates)"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Define a stable, versioned schema for “profile summaries” that agents can consume.
+
+    Minimum fields we likely want:
+    - run metadata: hardware type, mesh/topology, git SHA, config hash
+    - time breakdown: step time, compile time, compute/comm/host waits
+    - hot ops: top-k by time, plus callsite/module attribution when possible
+    - comm breakdown: all-reduce/all-gather/etc time and volume if available
+  definition_of_done: |
+    - A JSON schema (or equivalent) is defined with a version tag.
+    - At least one real profile can be summarized into this schema reproducibly.
+
+
+agent_profile_query_tooling:
+  title: "Agent tooling: query profiles and propose optimizations"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Build the agent-facing interface that turns profile summaries into actions.
+
+    Example queries:
+    - “What are the top 10 ops by exclusive time?”
+    - “Is comm or compute dominating? Which collective is worst?”
+    - “Did this change improve step time? What regressed?”
+    - “Which kernels are memory-bound vs compute-bound (when inferable)?”
+
+    Output should be actionable:
+    - targeted hypotheses (e.g. fusion opportunity, sharding change, kernel selection, host->device stall)
+    - small, testable patches or config tweaks
+    - links back to the exact profile evidence (op name, time range, source module)
+  dependencies:
+    - profile_summary_schema
+
+
+profiling_regression_tracking:
+  title: "Profiling regression tracking: store/compare profiles over time"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, observability, agent_friendly]
+  description: |
+    Make it easy to detect regressions and validate improvements.
+
+    This should integrate with `test_cluster` over time:
+    - periodically profile a small representative workload
+    - store summaries as artifacts
+    - alert on regressions in step time or key bottlenecks
+  dependencies:
+    - test_cluster
+    - profile_summary_schema
+
+test_cluster:
+  title: "Test cluster: run accelerator regression tests regularly"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, testing]
+  description: |
+    Run representative training/inference/RL workloads on real accelerators routinely (not just unit tests),
+    and wire results into CI/alerts.
+  dependencies:
+    - cluster_manager_v0
+
+
+levanter_inference:
+  title: "Levanter inference (service + evaluation hooks)"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, inference, p3]
+  description: |
+    Dependency anchor for inference serving and evaluation integration used by continuous eval and pipelines.
+
+
+continuous_eval:
+  title: "Continuous eval: periodic eval during training + alerts"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, evals]
+  description: |
+    Focus on stabilizing lm_eval loading and adding alerting. Perplexity evals are already solid.
+
+    Key needs:
+    - Fix lm_eval task loading: HF downloads are flaky and we lack a stable cache of tasks.
+    - Establish a durable cache/mirror for lm_eval task assets so evals are reproducible.
+    - Add alerting on regressions, garbage output/stuck behavior, and unexpected performance drops.
+  definition_of_done: |
+    - lm_eval tasks load reliably without depending on flaky HF downloads.
+    - A stable cache/mirror is in place for lm_eval task assets.
+    - Alerts fire for eval regressions or stalled/garbage outputs.
+  dependencies:
+    - levanter_inference
+
+
+staged_validation:
+  title: "Staged validation: tiny→small→large vertical examples"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, testing, agent_friendly]
+  description: |
+    Provide staged, vertical examples that progress from small to large models when the previous stage
+    succeeds past a given target. This supports both human and agent-driven iteration.
+  dependencies:
+    - model_pipeline_v0
+
+
+robust_alerting:
+  title: "Robust alerting beyond W&B defaults"
+  type: task
+  status: planned
+  labels: [infra, infra2026, observability]
+  description: |
+    Improve alerting reliability and richness (crash detection, soft alerts, and instrumentation checks),
+    avoiding "alerts silently stopped" failure modes. Alerts should ping Discord.
+  dependencies:
+    - monitoring
+    - alerting
+
+
+cli_tools:
+  title: "CLI tools for pipeline/job introspection"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, developer_experience, agent_friendly]
+  description: |
+    Provide a stable CLI surface to query:
+    - running jobs and where they’re scheduled
+    - pipeline step status and failures
+    - dataset locations and cache state
+    so both humans and agents can operate the system without SSH.
+    Outputs should be structured (JSON-friendly) for tooling/agent use, with a human-readable view too.
+  dependencies:
+    - cluster_manager_v0
+
+
+cli_logging:
+  title: "Structured CLI/logging for machine-readable failures"
+  type: task
+  status: planned
+  labels: [infra, infra2026, developer_experience, agent_friendly]
+  description: |
+    Standardize logging/events so failures are easy for tools (including agents) to detect and diagnose.
+  dependencies:
+    - monitoring
+
+rl:
+  title: "RL pipeline"
+  type: epic
+  status: planned
+  labels: [rl, infra2026]
+  description: |
+    End-to-end RL pipeline support (envs, grading, curricula, monitoring, and scalable execution).
+  dependencies:
+    - scalable_rl_framework
+    - rl_recipe
+    - full_rl_environments
+    - frontier_evals_wired
+
+
+rl_environments:
+  title: "RL environments: make it easy to add/test new envs"
+  type: epic
+  status: planned
+  labels: [rl, environments, infra2026]
+  description: |
+    Support a wide range of standard RL environments and make it easy to add and test new ones locally
+    and at scale.
+  dependencies:
+    - full_rl_environments
+
+
+rl_rubrics:
+  title: "RL rubrics: composable reward/grading components"
+  type: epic
+  status: planned
+  labels: [rl, infra2026]
+  description: |
+    Introduce shared, composable grading “rubrics” so reward computation can be reused across environments
+    (e.g. thinking tokens, non-verifiable rewards, shared anti-cheating checks).
+  dependencies:
+    - scalable_rl_framework
+
+
+cluster_alerts:
+  title: "Cluster alerts: surface failures and soft alerts programmatically"
+  type: task
+  status: planned
+  labels: [infra, infra2026, observability]
+  description: |
+    Provide a consistent “alerts” surface (API + CLI + optional notifications) for job/pipeline failures and
+    important warnings, so users/agents don’t need to poll dashboards.
+  dependencies:
+    - alerting
+
+
+rl_progress_alerts:
+  title: "RL progress alerts: detect when RL has gone off the rails"
+  type: epic
+  status: planned
+  labels: [rl, infra2026, observability]
+  description: |
+    Conservative automatic alerts when RL training is stuck or regressing:
+    - curriculum not progressing
+    - reward spikes/drops
+    - throughput collapses
+    - determinism violations
+  dependencies:
+    - cluster_alerts
+    - rl_observability
+
+
+rl_curriculum:
+  title: "RL curriculum: robustly train any model through RL"
+  type: epic
+  status: planned
+  labels: [rl, infra2026]
+  description: |
+    Curriculum learning support so users specify “what to train on” and the framework handles “when/how long”.
+
+    Includes:
+    - progressive unlocking of environments
+    - staged strategies (e.g. brief SFT/teacher forcing before RL)
+    - monitoring and recovery hooks
+  dependencies:
+    - rl_progress_alerts
+    - rl_multi_env_and_curriculum
+
+
+#rl_soft_sft:
+#  title: "RL + soft SFT: mix token loss on successful rollouts"
+#  type: task
+#  status: planned
+#  labels: [rl, posttraining, infra2026]
+#  description: |
+#    Mix RL loss with a token-level next-token loss on successful samples to speed up learning for tasks with
+#    binary success criteria, while preserving diversity.
+#  dependencies:
+#    - rl
+#    - rl_curriculum
+
+
+model_pipeline:
+  title: "Model pipeline: pretrain→SFT→RL with automated notification"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, pipeline]
+  description: |
+    End-to-end pipeline where the user defines model + data, and the system runs pretraining + posttraining,
+    providing programmatic status, resumability, and failure visibility.
+  dependencies:
+    - scalable_rl_framework
+    - sft_big_model
+    - cluster_manager
+    - region_caching_fs
+    - experiment_updates_bot
+
+
+model_pipeline_v0:
+  title: "Model pipeline v0: stitch existing pieces with monitoring"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, pipeline]
+  description: |
+    First vertical pipeline built from existing components (ExecutorSteps), plus basic robustness/monitoring
+    (timeouts, progress visibility).
+
+    Reference: Marino-chat (#1775).
+  dependencies:
+    - sft_big_model
+    - scalable_rl_framework
+    - continuous_eval
+    - experiment_updates_bot
+
+
+model_pipeline_v1:
+  title: "Model pipeline v1: daily runs + global resources"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, pipeline]
+  description: |
+    Schedule the pipeline regularly (cron-style), find resources across the fleet, and transition between
+    stages robustly in the presence of preemption and capacity variability.
+  dependencies:
+    - model_pipeline_v0
+    - global_cluster_v1
+    - region_caching_fs
+    - alerting
+    - multi_slice_training
+
+
+monitoring:
+  title: "Monitoring: centralized metrics + logs + APIs + dashboard"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, observability]
+  description: |
+    Centralized monitoring across training, RL, and infra:
+    - metrics (loss, throughput, HBM, compilation time)
+    - system metrics (CPU/mem/network/accelerator)
+    - job lifecycle events
+    - log aggregation and search
+    - APIs for programmatic access and automation
+    - historical storage for performance analysis
+  dependencies:
+    - cluster_manager
+
+
+alerting:
+  title: "Alerting: notify on errors and soft alerts"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, observability]
+  description: |
+    Alerts for important events (task failures, stuck pipelines, suspicious metrics), with API access so tools
+    can query and act on alert state.
+  dependencies:
+    - cluster_manager_v0
+
+
+cost_tracking:
+  title: "Cost tracking: per-job/user/experiment costs across regions"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, cost]
+  description: |
+    Track and optimize infrastructure cost:
+    - real-time per-job/user cost estimates
+    - breakdown by resource type (TPU/GPU/storage/egress)
+    - historical analysis and budgets/alerts
+    - inputs to global scheduler placement decisions
+  dependencies:
+    - monitoring
+    - global_cluster_v0
+
+
+experiment_updates_bot:
+  title: "Experiment updates bot: GitHub → Discord (and optional Discord → GitHub summaries)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, developer_experience, process, automation, help-wanted, agent_friendly]
+  description: |
+    We want GitHub issues to be the single source of truth for experiment results and discussion, but in
+    practice people often post updates only in Discord.
+
+    Build a bot/workflow that makes this easy by:
+    - automatically mirroring key GitHub issue updates into a Discord channel/thread
+    - (optional) summarizing Discord discussion back into GitHub as a comment or a draft PR comment
+
+    The design goal is to remove the “do I have to update two places?” friction while keeping the canonical
+    record in GitHub.
+  definition_of_done: |
+    - GitHub → Discord mirroring is enabled for a configured set of repos/issues/labels and is low-noise.
+    - The bot posts context-rich updates (issue title + link + who + what changed) and threads updates per issue.
+    - There is a documented workflow for enabling/disabling mirroring per issue (e.g. label or checkbox).
+    - (Optional) A summarizer can propose GitHub comments from Discord, with a human-in-the-loop approval step.
+  dependencies:
+    - cli_logging
+    - alerting
+
+
+experiment_updates_github_to_discord:
+  title: "Bot: mirror GitHub issue updates to Discord"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, developer_experience, process, automation, help-wanted, agent_friendly]
+  description: |
+    Implement the minimal, high-value integration: when an issue changes in GitHub, post a message to Discord.
+
+    Suggested events:
+    - issue opened/closed/reopened
+    - labels changed (especially experiment/result labels)
+    - new comments (with a short excerpt)
+    - status-style edits (e.g. checklists, title edits)
+
+    Suggested routing:
+    - one Discord channel for “experiment-updates”
+    - each issue maps to a dedicated Discord thread (created on first event)
+  definition_of_done: |
+    - Uses a GitHub App/webhook (or Actions) to detect events and post to Discord.
+    - Includes basic dedupe so edits/bot loops don’t spam.
+    - Includes a simple allowlist mechanism (label-based or explicit list) to keep noise under control.
+    - Includes docs for setup and local testing.
+  dependencies:
+    - experiment_updates_bot
+
+
+experiment_updates_discord_to_github_summaries:
+  title: "Bot: propose Discord → GitHub summaries (human-approved)"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, developer_experience, process, automation, agent_friendly]
+  description: |
+    Optional “round-trip” improvement: periodically summarize Discord discussion back into the canonical
+    GitHub issue.
+
+    Key requirement: avoid surprising writes. Prefer:
+    - bot posts a proposed summary as a *draft* (e.g. in Discord) and a human clicks approve
+    - or bot opens a PR / creates a GitHub comment in “pending” state
+  definition_of_done: |
+    - There is a safe human-in-the-loop workflow to publish summaries into GitHub issues.
+    - Summaries include: decisions, current state, next steps, links to relevant logs/PRs.
+    - It’s easy to disable per issue/thread if it’s not useful.
+  dependencies:
+    - experiment_updates_bot
+
+
+experiment_structure_overhaul:
+  title: "Gruggify experiment structure (taxonomy + templates + migration plan)"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  issue: null
+  labels: [process, infra, infra2026, developer_experience]
+  description: |
+    Establish a new, simpler, more legible structure for how we organize “experiments” vs “dependencies”
+    vs “recipes/templates/ferries” vs “artifacts” in Marin.
+
+    Motivation:
+    - Experiments should test a hypothesis and be easy to write/read/modify (often as notebooks).
+    - Dependencies should be reusable producers of artifacts (datasets, model checkpoints, sweeps) that can be
+      resolved from an artifact without necessarily re-running the original code.
+    - Prefer fewer magic defaults/abstractions; favor copy-pasteable templates that make “how it works” obvious.
+    - Improve interactive control (run pieces locally / in notebooks) vs only async background jobs.
+
+    This is the meta-issue to define the directory layout/taxonomy and the migration strategy.
+  definition_of_done: |
+    - We identify ~10 archetypes of experiments we want to run (optimizer swap, datamix change, etc.).
+    - For each archetype, we draft a notebook-style skeleton that uses the intended APIs.
+    - We write a concrete directory taxonomy for Marin: experiments / ferries / templates / recipes / artifacts /
+      libraries / dependency pipelines (with examples).
+    - We list the minimum required API changes (with owners) to make those notebooks feasible.
+    - We define a migration plan (what moves, what stays, compatibility approach) with incremental milestones.
+  dependencies:
+    - ferry_framework
+    - dependency_manager
+    - cli_tools
