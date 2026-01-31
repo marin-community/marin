@@ -388,6 +388,11 @@ def main(config: EvalVLMConfig):
                         mp=mp,
                         max_examples=config.eval_harness.max_examples,
                         generation_kwargs=config.eval_harness.generation_kwargs,
+                        checkpoint_interval=config.eval_harness.checkpoint_interval,
+                        checkpoint_dir=config.eval_harness.checkpoint_dir,
+                        resume_from_checkpoint=config.eval_harness.resume_from_checkpoint,
+                        auto_resume=config.eval_harness.auto_resume,
+                        output_dir=config.eval_harness.output_dir or config.output_dir,
                     )
                     all_results[task_name] = {
                         "accuracy": task_results.get("accuracy", 0.0),

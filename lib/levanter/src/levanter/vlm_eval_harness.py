@@ -24,7 +24,10 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+
+if TYPE_CHECKING:
+    from levanter.vlm_eval_checkpoint import VLMCheckpointManager
 
 import fsspec
 
@@ -232,6 +235,16 @@ class VLMEvalHarnessConfig:
     """Output directory for saving evaluation results. Supports local paths or GCS paths (gs://bucket/path/).
     If None, results are saved to local vlm_eval_results/ directory."""
 
+    # Checkpoint configuration
+    checkpoint_interval: int = 100
+    """Save checkpoint every N examples. Set to 0 to disable checkpointing."""
+    checkpoint_dir: str | None = None
+    """Directory for checkpoint files. Defaults to {output_dir}/checkpoints/."""
+    resume_from_checkpoint: str | None = None
+    """Path to checkpoint file to resume from. If None, starts fresh or uses auto_resume."""
+    auto_resume: bool = True
+    """If True, automatically detect and resume from the latest checkpoint for this task."""
+
     def to_task_spec(self) -> list[str | dict]:
         """Convert task specifications to a list of dictionaries or strings."""
         result = []
@@ -265,6 +278,7 @@ class LevanterVLMHarnessLM(TemplateLM):
         generation_kwargs: dict | None = None,
         max_images: int = 10,
         vlm_batch_size: int = 1,
+        checkpoint_manager: "VLMCheckpointManager | None" = None,
     ):
         """
         Initialize the VLM harness adapter.
@@ -280,6 +294,7 @@ class LevanterVLMHarnessLM(TemplateLM):
             generation_kwargs: Default generation parameters
             max_images: Maximum number of images per sample
             vlm_batch_size: Number of VLM requests to process in parallel (default: 1)
+            checkpoint_manager: Optional checkpoint manager for saving predictions
         """
         super().__init__()
         self.model = model
@@ -292,6 +307,7 @@ class LevanterVLMHarnessLM(TemplateLM):
         self._generation_kwargs = generation_kwargs or {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
         self.max_images = max_images
         self.vlm_batch_size = vlm_batch_size
+        self._checkpoint_manager = checkpoint_manager
 
         # Engine will be created lazily
         self._engine: LlavaInferenceEngine | None = None
@@ -300,6 +316,9 @@ class LevanterVLMHarnessLM(TemplateLM):
         # Sample logging
         self.sample_outputs: dict[str, list[dict]] = {}
         self._current_task = "vlm_task"
+
+        # Counter for checkpoint indices
+        self._prediction_counter = 0
 
     @property
     def tokenizer(self):
@@ -676,92 +695,105 @@ class LevanterVLMHarnessLM(TemplateLM):
             for i, text in enumerate(batch_results):
                 results.append(text)
 
-                # Log sample if enabled
+                # Log all samples (no limit)
                 bucket = self.sample_outputs.get(self._current_task, [])
-                if len(bucket) < 100:  # Limit samples
-                    req = batch_requests[i]
-                    sample_data = {
-                        "prompt": batch_contexts[i],
-                        "generation": text,
-                        "num_images": len(batch_pil_images[i]) if batch_pil_images[i] else 0,
-                    }
+                req = batch_requests[i]
+                sample_data = {
+                    "prompt": batch_contexts[i],
+                    "generation": text,
+                    "num_images": len(batch_pil_images[i]) if batch_pil_images[i] else 0,
+                }
 
-                    # Try to get expected answer and choices from the request's doc
-                    expected_answer = None
-                    all_choices = None
-                    index2ans = None
+                # Try to get expected answer and choices from the request's doc
+                expected_answer = None
+                all_choices = None
+                index2ans = None
 
-                    if hasattr(req, 'doc') and req.doc is not None:
-                        doc = req.doc
-                        # Common answer field names in VLM benchmarks
-                        for key in ['answer', 'target', 'gold', 'label', 'response']:
-                            if key in doc:
-                                expected_answer = str(doc[key])
-                                sample_data["expected"] = expected_answer
-                                break
-                        # Also capture question if available
-                        for key in ['question', 'query', 'text']:
-                            if key in doc and key not in sample_data:
-                                sample_data["question"] = str(doc[key])[:200]
-                                break
+                if hasattr(req, 'doc') and req.doc is not None:
+                    doc = req.doc
+                    # Common answer field names in VLM benchmarks
+                    for key in ['answer', 'target', 'gold', 'label', 'response']:
+                        if key in doc:
+                            expected_answer = str(doc[key])
+                            sample_data["expected"] = expected_answer
+                            break
+                    # Also capture question if available
+                    for key in ['question', 'query', 'text']:
+                        if key in doc and key not in sample_data:
+                            sample_data["question"] = str(doc[key])[:200]
+                            break
 
-                        # Try to get choices for better answer extraction (MMMU format)
-                        if 'options' in doc:
-                            try:
-                                import ast
-                                options = doc['options']
-                                if isinstance(options, str):
-                                    options = ast.literal_eval(options)
-                                if isinstance(options, list):
-                                    option_letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
-                                    all_choices = option_letters[:len(options)]
-                                    index2ans = {letter: ans for letter, ans in zip(option_letters, options)}
-                            except Exception:
-                                pass  # Failed to parse options, use defaults
-
-                    # Extract answer option from generation (using MMMU-style logic)
-                    extracted = _extract_answer_option(text, all_choices, index2ans)
-                    sample_data["extracted_answer"] = extracted
-
-                    # Determine correctness (matching MMMU eval_multi_choice logic)
-                    if extracted is not None and expected_answer is not None:
-                        # Expected answer should be a single letter like "A", "B", "C", "D"
-                        expected_normalized = expected_answer.strip().upper()
-                        # If expected is already a single letter, use it directly
-                        if len(expected_normalized) == 1 and expected_normalized in "ABCDEFGHI":
-                            sample_data["correct"] = (extracted == expected_normalized)
-                        else:
-                            # Try to extract from expected answer string
-                            expected_option = _extract_answer_option(expected_answer, all_choices, index2ans)
-                            if expected_option:
-                                sample_data["correct"] = (extracted == expected_option)
-                            else:
-                                sample_data["correct"] = None
-                    else:
-                        sample_data["correct"] = None
-
-                    # Capture task/subset name
-                    if hasattr(req, 'task_name'):
-                        sample_data["task"] = req.task_name
-                        sample_data["subset"] = req.task_name
-                    else:
-                        sample_data["subset"] = self._current_task
-
-                    bucket.append(sample_data)
-                    self.sample_outputs[self._current_task] = bucket
-
-                    # Incremental log to wandb (every 10 samples)
-                    if len(bucket) % 10 == 0:
+                    # Try to get choices for better answer extraction (MMMU format)
+                    if 'options' in doc:
                         try:
-                            levanter.tracker.log({
-                                f"vlm_eval/{self._current_task}/progress": len(bucket),
-                                f"vlm_eval/{self._current_task}/latest_prompt": sample_data.get("prompt", "")[:100],
-                                f"vlm_eval/{self._current_task}/latest_generation": text[:200],
-                                f"vlm_eval/{self._current_task}/latest_expected": sample_data.get("expected", "N/A"),
-                            }, step=len(bucket))
-                            logger.info(f"[{self._current_task}] Progress: {len(bucket)} samples evaluated")
-                        except Exception as e:
-                            logger.debug(f"Failed to log incremental progress: {e}")
+                            import ast
+                            options = doc['options']
+                            if isinstance(options, str):
+                                options = ast.literal_eval(options)
+                            if isinstance(options, list):
+                                option_letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
+                                all_choices = option_letters[:len(options)]
+                                index2ans = {letter: ans for letter, ans in zip(option_letters, options)}
+                        except Exception:
+                            pass  # Failed to parse options, use defaults
+
+                # Extract answer option from generation (using MMMU-style logic)
+                extracted = _extract_answer_option(text, all_choices, index2ans)
+                sample_data["extracted_answer"] = extracted
+
+                # Determine correctness (matching MMMU eval_multi_choice logic)
+                if extracted is not None and expected_answer is not None:
+                    # Expected answer should be a single letter like "A", "B", "C", "D"
+                    expected_normalized = expected_answer.strip().upper()
+                    # If expected is already a single letter, use it directly
+                    if len(expected_normalized) == 1 and expected_normalized in "ABCDEFGHI":
+                        sample_data["correct"] = (extracted == expected_normalized)
+                    else:
+                        # Try to extract from expected answer string
+                        expected_option = _extract_answer_option(expected_answer, all_choices, index2ans)
+                        if expected_option:
+                            sample_data["correct"] = (extracted == expected_option)
+                        else:
+                            sample_data["correct"] = None
+                else:
+                    sample_data["correct"] = None
+
+                # Capture task/subset name
+                if hasattr(req, 'task_name'):
+                    sample_data["task"] = req.task_name
+                    sample_data["subset"] = req.task_name
+                else:
+                    sample_data["subset"] = self._current_task
+
+                bucket.append(sample_data)
+                self.sample_outputs[self._current_task] = bucket
+
+                # Save to checkpoint manager if available
+                if self._checkpoint_manager is not None:
+                    checkpoint_result = {
+                        "prompt": sample_data.get("prompt", "")[:500],
+                        "generation": text,
+                        "expected": sample_data.get("expected"),
+                        "extracted_answer": sample_data.get("extracted_answer"),
+                        "correct": sample_data.get("correct"),
+                        "num_images": sample_data.get("num_images", 0),
+                    }
+                    self._checkpoint_manager.add_result(self._prediction_counter, checkpoint_result)
+
+                self._prediction_counter += 1
+
+                # Incremental log to wandb (every 100 samples)
+                if len(bucket) % 100 == 0:
+                    try:
+                        levanter.tracker.log({
+                            f"vlm_eval/{self._current_task}/progress": len(bucket),
+                            f"vlm_eval/{self._current_task}/latest_prompt": sample_data.get("prompt", "")[:100],
+                            f"vlm_eval/{self._current_task}/latest_generation": text[:200],
+                            f"vlm_eval/{self._current_task}/latest_expected": sample_data.get("expected", "N/A"),
+                        }, step=len(bucket))
+                        logger.info(f"[{self._current_task}] Progress: {len(bucket)} samples evaluated")
+                    except Exception as e:
+                        logger.debug(f"Failed to log incremental progress: {e}")
 
         return results
 
@@ -862,6 +894,8 @@ def run_vlm_eval_harness(
     from lm_eval import evaluator
     from lm_eval.tasks import TaskManager
 
+    from levanter.vlm_eval_checkpoint import VLMCheckpointManager
+
     # Register custom VLM tasks
     custom_task_path = config.custom_task_path or _get_default_vlm_tasks_path()
     if os.path.exists(custom_task_path):
@@ -871,6 +905,41 @@ def run_vlm_eval_harness(
     else:
         logger.warning(f"Custom task path not found: {custom_task_path}")
         task_manager = None
+
+    # Setup checkpoint manager for lm-eval harness path
+    checkpoint_manager = None
+    if config.checkpoint_interval > 0:
+        actual_checkpoint_dir = config.checkpoint_dir or os.path.join(
+            config.output_dir or "./vlm_eval_results", "checkpoints"
+        )
+
+        # Create a combined task name for checkpoint
+        task_names_for_checkpoint = []
+        for task in config.task_spec:
+            if isinstance(task, str):
+                task_names_for_checkpoint.append(task)
+            elif hasattr(task, "task"):
+                task_names_for_checkpoint.append(str(task.task))
+        combined_task_name = "_".join(task_names_for_checkpoint[:3]) or "vlm_eval"
+
+        # Try to resume from checkpoint
+        if config.resume_from_checkpoint:
+            checkpoint_manager = VLMCheckpointManager.load_checkpoint(config.resume_from_checkpoint)
+        elif config.auto_resume:
+            latest_checkpoint = VLMCheckpointManager.find_latest_checkpoint(
+                actual_checkpoint_dir, combined_task_name
+            )
+            if latest_checkpoint:
+                checkpoint_manager = VLMCheckpointManager.load_checkpoint(latest_checkpoint)
+
+        # Create new checkpoint manager if not resuming
+        if checkpoint_manager is None:
+            checkpoint_manager = VLMCheckpointManager(
+                task_name=combined_task_name,
+                checkpoint_dir=actual_checkpoint_dir,
+                checkpoint_interval=config.checkpoint_interval,
+                config_snapshot={"task_spec": [str(t) for t in config.task_spec]},
+            )
 
     # Create the VLM harness adapter
     vlm_lm = LevanterVLMHarnessLM(
@@ -884,6 +953,7 @@ def run_vlm_eval_harness(
         generation_kwargs=config.generation_kwargs,
         max_images=config.max_images,
         vlm_batch_size=config.vlm_batch_size,
+        checkpoint_manager=checkpoint_manager,
     )
 
     # Run evaluation
@@ -970,6 +1040,11 @@ def run_vlm_eval_harness(
     output_path = config.output_dir if config.output_dir else os.path.join(os.getcwd(), "vlm_eval_results")
     save_results_to_path(serializable_results, output_path, "eval_results")
 
+    # Finalize checkpoint
+    if checkpoint_manager is not None:
+        checkpoint_manager.finalize()
+        logger.info(f"Finalized checkpoint with {len(checkpoint_manager.checkpoint.completed_indices)} predictions")
+
     return results
 
 
@@ -984,12 +1059,19 @@ def run_vlm_benchmark_direct(
     mp: jmp.Policy | None = None,
     max_examples: int | None = None,
     generation_kwargs: dict | None = None,
+    checkpoint_interval: int = 100,
+    checkpoint_dir: str | None = None,
+    resume_from_checkpoint: str | None = None,
+    auto_resume: bool = True,
+    output_dir: str | None = None,
 ) -> dict:
     """
     Run a single VLM benchmark directly without lm-eval-harness task definitions.
 
     This is useful for benchmarks not included in lm-eval-harness (MME, GQA,
     RealWorldQA, SEED, MMStar, AI2D, OCRBench).
+
+    Supports checkpoint saving and resume functionality for long-running evaluations.
 
     Args:
         model: The LlavaOnevision model
@@ -1002,12 +1084,21 @@ def run_vlm_benchmark_direct(
         mp: Mixed precision policy
         max_examples: Maximum examples to evaluate
         generation_kwargs: Generation parameters
+        checkpoint_interval: Save checkpoint every N examples. Set to 0 to disable.
+        checkpoint_dir: Directory for checkpoint files. Defaults to {output_dir}/checkpoints/.
+        resume_from_checkpoint: Path to checkpoint file to resume from.
+        auto_resume: If True, automatically detect and resume from latest checkpoint.
+        output_dir: Output directory for results and checkpoints.
 
     Returns:
         Dictionary with evaluation results
     """
+    import os
+
     from datasets import load_dataset
     from tqdm import tqdm
+
+    from levanter.vlm_eval_checkpoint import VLMCheckpointManager
 
     # Benchmark configurations
     BENCHMARK_CONFIGS = {
@@ -1091,6 +1182,43 @@ def run_vlm_benchmark_direct(
     if max_examples:
         dataset = dataset.select(range(min(max_examples, len(dataset))))
 
+    # Setup checkpoint manager
+    actual_checkpoint_dir = checkpoint_dir or os.path.join(output_dir or "./vlm_eval_results", "checkpoints")
+    actual_benchmark_name = benchmark_name.lower()
+
+    checkpoint_manager = None
+
+    # Try to resume from checkpoint
+    if resume_from_checkpoint:
+        checkpoint_manager = VLMCheckpointManager.load_checkpoint(resume_from_checkpoint)
+    elif auto_resume:
+        latest_checkpoint = VLMCheckpointManager.find_latest_checkpoint(actual_checkpoint_dir, actual_benchmark_name)
+        if latest_checkpoint:
+            checkpoint_manager = VLMCheckpointManager.load_checkpoint(latest_checkpoint)
+
+    # Create new checkpoint manager if not resuming
+    if checkpoint_manager is None:
+        checkpoint_manager = VLMCheckpointManager(
+            task_name=actual_benchmark_name,
+            checkpoint_dir=actual_checkpoint_dir,
+            checkpoint_interval=checkpoint_interval,
+            config_snapshot={
+                "max_examples": max_examples,
+                "generation_kwargs": gen_kwargs,
+            },
+        )
+
+    checkpoint_manager.checkpoint.total_examples = len(dataset)
+
+    # Get remaining indices to evaluate
+    remaining_indices = checkpoint_manager.get_remaining_indices(len(dataset))
+
+    if len(remaining_indices) < len(dataset):
+        logger.info(
+            f"Resuming evaluation: {len(dataset) - len(remaining_indices)} already completed, "
+            f"{len(remaining_indices)} remaining"
+        )
+
     # Create VLM adapter
     vlm_lm = LevanterVLMHarnessLM(
         model=model,
@@ -1103,12 +1231,10 @@ def run_vlm_benchmark_direct(
         generation_kwargs=gen_kwargs,
     )
 
-    # Run evaluation
-    correct = 0
-    total = 0
-    results_list = []
+    # Run evaluation on remaining indices only
+    for idx in tqdm(remaining_indices, desc=f"Evaluating {benchmark_name}"):
+        example = dataset[idx]
 
-    for example in tqdm(dataset, desc=f"Evaluating {benchmark_name}"):
         # Get image
         image = example.get(config["image_key"])
         if image is None:
@@ -1144,15 +1270,21 @@ def run_vlm_benchmark_direct(
 
         # Evaluate
         is_correct = _evaluate_answer(prediction, reference, benchmark_name)
-        if is_correct:
-            correct += 1
-        total += 1
 
-        results_list.append({
+        # Save result to checkpoint manager
+        result = {
             "prediction": prediction,
             "reference": str(reference),
             "correct": is_correct,
-        })
+            "index": idx,
+        }
+        checkpoint_manager.add_result(idx, result)
+
+    # Finalize checkpoint and get aggregated results
+    final_results = checkpoint_manager.finalize()
+    correct = final_results["correct"]
+    total = final_results["total"]
+    results_list = list(final_results["predictions"].values())
 
     accuracy = correct / total if total > 0 else 0.0
     logger.info(f"{benchmark_name} accuracy: {accuracy:.4f} ({correct}/{total})")
@@ -1183,7 +1315,7 @@ def run_vlm_benchmark_direct(
         "accuracy": accuracy,
         "correct": correct,
         "total": total,
-        "results": results_list[:100],  # Sample results
+        "results": results_list,  # All results
     }
 
 
