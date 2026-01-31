@@ -38,8 +38,8 @@ TPU_CONFIGS = {
     "v5p-8": {
         "resources": ResourceConfig.with_tpu("v5p-8"),
         "train_batch_size": 128,  # Keep global batch size constant
-        "per_device_parallelism": 16,  # 4 devices: 128/4=32 per device, 32/16=2 microbatch
-        "per_device_eval_parallelism": 16,
+        "per_device_parallelism": 4,  # 4 devices: 128/4=32 per device, 32/16=2 microbatch
+        "per_device_eval_parallelism": 6,
     },
     "v5p-16": {
         "resources": ResourceConfig.with_tpu("v5p-16"),
@@ -62,11 +62,15 @@ TPU_CONFIGS = {
 }
 
 # Select TPU type here
-TPU_TYPE = "v5p-64"  # Change to "v5p-8", "v5p-32", "v5p-64", etc.
+TPU_TYPE = "v5p-8"  # Change to "v5p-8", "v5p-32", "v5p-64", etc.
+
+# Set to True to run only one config (first beta, gamma, lr) for debugging
+DEBUG = False
 
 # Sweep configuration.
 BETAS = [0.1, 1.0, 2.0]
 GAMMA_BETA_RATIOS = [0.2, 0.5, 0.8]
+LEARNING_RATES = [1e-7, 6e-7, 1e-6]
 
 
 def _format_float(value: float) -> str:
@@ -83,6 +87,7 @@ def _validate_sweep_values(values: list[float], name: str) -> None:
 
 _validate_sweep_values(BETAS, "BETAS")
 _validate_sweep_values(GAMMA_BETA_RATIOS, "GAMMA_BETA_RATIOS")
+_validate_sweep_values(LEARNING_RATES, "LEARNING_RATES")
 
 preference_dataset = get_preference_dataset(DATASET_NAME, splits=["train_prefs", "test_prefs"])
 
@@ -108,11 +113,11 @@ tokenized_preferences = lm_data_config(
 
 BASE_SIMPO_KWARGS = dict(
     **TPU_CONFIGS[TPU_TYPE],
-    num_train_steps=2150,
-    learning_rate=6e-7,
+    num_train_steps=478,  # One epoch over Ultrafeedback
     lr_schedule="linear",
     warmup=0.1,
     cooldown=None,
+    max_grad_norm=1.0,
     wandb_project="dpo",
     tokenizer=marin_tokenizer,
     model_name_or_path=LLAMA3_8B_HF_PATH,
@@ -126,30 +131,37 @@ BASE_SIMPO_KWARGS = dict(
 )
 
 training_steps = []
-for beta in BETAS:
-    for gamma_beta_ratio in GAMMA_BETA_RATIOS:
-        beta_tag = _format_float(beta)
-        gamma_tag = _format_float(gamma_beta_ratio)
-        run_name = f"simpo/ultrafeedback_llama3_8b_beta{beta_tag}_gamma{gamma_tag}"
-        simpo_config = SimpleSimPOConfig(
-            **BASE_SIMPO_KWARGS,
-            beta=beta,
-            gamma_beta_ratio=gamma_beta_ratio,
-        )
-        training_steps.append(
-            default_simpo(
-                name=run_name,
-                tokenized=tokenized_preferences,
-                model_config=llama_8b,
-                simpo_config=simpo_config,
-                tags=[
-                    "ultrafeedback",
-                    "llama3",
-                    f"beta={beta:g}",
-                    f"gamma_beta_ratio={gamma_beta_ratio:g}",
-                ],
+sweep_betas = BETAS[:1] if DEBUG else BETAS
+sweep_gammas = GAMMA_BETA_RATIOS[:1] if DEBUG else GAMMA_BETA_RATIOS
+sweep_lrs = LEARNING_RATES[:1] if DEBUG else LEARNING_RATES
+for beta in sweep_betas:
+    for gamma_beta_ratio in sweep_gammas:
+        for learning_rate in sweep_lrs:
+            beta_tag = _format_float(beta)
+            gamma_tag = _format_float(gamma_beta_ratio)
+            lr_tag = _format_float(learning_rate)
+            run_name = f"simpo_fixed/ultrafeedback_llama3_8b_beta{beta_tag}_gamma{gamma_tag}_lr{lr_tag}"
+            simpo_config = SimpleSimPOConfig(
+                **BASE_SIMPO_KWARGS,
+                beta=beta,
+                gamma_beta_ratio=gamma_beta_ratio,
+                learning_rate=learning_rate,
             )
-        )
+            training_steps.append(
+                default_simpo(
+                    name=run_name,
+                    tokenized=tokenized_preferences,
+                    model_config=llama_8b,
+                    simpo_config=simpo_config,
+                    tags=[
+                        "ultrafeedback",
+                        "llama3",
+                        f"beta={beta:g}",
+                        f"gamma_beta_ratio={gamma_beta_ratio:g}",
+                        f"lr={learning_rate:g}",
+                    ],
+                )
+            )
 
 
 if __name__ == "__main__":
