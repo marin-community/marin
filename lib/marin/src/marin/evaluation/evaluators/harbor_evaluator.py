@@ -216,54 +216,54 @@ class HarborEvaluator(Evaluator):
                     except Exception:
                         pass  # Continue even if chmod fails
 
-                    # Harbor stores results as trial-level files
-                    # Read all result.json files from trial directories
+                    # Read trial results from Harbor's result.json files
                     results = {"trials": {}}
 
-                    # Harbor uses pattern: <task_name>__<random_id>
                     trial_dirs = [d for d in job_dir.iterdir() if d.is_dir()]
                     for trial_dir in trial_dirs:
                         result_file = trial_dir / "result.json"
-                        if result_file.exists():
-                            with open(result_file) as f:
-                                trial_result = json.load(f)
-                                trial_id = trial_result.get("task_name", trial_dir.name)
+                        if not result_file.exists():
+                            continue
 
-                                # Extract key information
-                                exception_info = trial_result.get("exception_info")
-                                if not isinstance(exception_info, dict):
-                                    exception_info = {}
-                                error = None
-                                exception_type = exception_info.get("exception_type")
-                                exception_message = exception_info.get("exception_message")
-                                if exception_type or exception_message:
-                                    error = {
-                                        "type": exception_type,
-                                        "message": exception_message,
-                                    }
+                        trial_result = json.loads(result_file.read_text())
+                        trial_id = trial_result.get("task_name", trial_dir.name)
 
-                                verifier_result = trial_result.get("verifier_result")
-                                if not isinstance(verifier_result, dict):
-                                    verifier_result = {}
-                                rewards = verifier_result.get("rewards")
-                                if not isinstance(rewards, dict):
-                                    rewards = {}
-                                reward = rewards.get("reward", 0.0)
-                                if not isinstance(reward, int | float):
-                                    reward = 0.0
+                        # Extract reward from verifier_result.rewards.reward
+                        verifier_result = trial_result.get("verifier_result") or {}
+                        rewards = verifier_result.get("rewards") or {}
+                        reward = rewards.get("reward", 0.0)
 
-                                trial_data = {
-                                    "reward": reward,
-                                    "status": "completed" if trial_result.get("exception_info") is None else "failed",
-                                    "trajectory": [],
-                                    "task_name": trial_id,
-                                    "started_at": trial_result.get("started_at"),
-                                    "finished_at": trial_result.get("finished_at"),
-                                    "trial_dir": str(trial_dir),  # Store directory for trajectory access
-                                    "error": error,
-                                }
+                        # Extract error info if present
+                        error = None
+                        exception_info = trial_result.get("exception_info")
+                        if exception_info:
+                            error = {
+                                "type": exception_info.get("exception_type"),
+                                "message": exception_info.get("exception_message"),
+                            }
 
-                                results["trials"][trial_id] = trial_data
+                        # Read trajectory from agent/trajectory.json if it exists
+                        trajectory_file = trial_dir / "agent" / "trajectory.json"
+                        trajectory_content = None
+                        trajectory_length = 0
+                        if trajectory_file.exists():
+                            try:
+                                trajectory_content = trajectory_file.read_text()
+                                trajectory_data = json.loads(trajectory_content)
+                                trajectory_length = len(trajectory_data.get("steps", []))
+                            except Exception as e:
+                                logger.warning(f"Failed to read trajectory for {trial_id}: {e}")
+
+                        results["trials"][trial_id] = {
+                            "reward": reward,
+                            "status": "completed" if not exception_info else "failed",
+                            "task_name": trial_id,
+                            "started_at": trial_result.get("started_at"),
+                            "finished_at": trial_result.get("finished_at"),
+                            "error": error,
+                            "trajectory_content": trajectory_content,
+                            "trajectory_length": trajectory_length,
+                        }
 
                     return results, job_dir
                 else:
@@ -321,8 +321,8 @@ class HarborEvaluator(Evaluator):
                 "reward": reward,
                 "correct": reward >= 0.99,
                 "status": trial_data.get("status", "unknown"),
-                "trajectory_length": 0,  # Will be updated in _save_results
-                "trial_dir": trial_data.get("trial_dir"),  # Preserve for trajectory reading
+                "trajectory_length": trial_data.get("trajectory_length", 0),  # Already extracted
+                "trajectory_content": trial_data.get("trajectory_content"),  # Already extracted
                 "error": trial_data.get("error"),
             }
 
@@ -365,37 +365,34 @@ class HarborEvaluator(Evaluator):
         samples_path = os.path.join(output_path, samples_file_name)
         results_path = os.path.join(output_path, results_file_name)
 
-        # Calculate trajectory lengths and save trajectory files FIRST
-        # (before saving results so trajectory_length is populated)
-        if job_dir is not None:
-            for trial_id, trial_data in results["trials"].items():
-                trial_dir_str = trial_data.get("trial_dir", "")
-                if trial_dir_str:
-                    trial_dir_path = Path(trial_dir_str)
-                    session_dir = trial_dir_path / "agent" / "sessions" / "projects" / "-app"
-                    if session_dir.exists():
-                        trajectory_files = list(session_dir.glob("*.jsonl"))
-                        if trajectory_files:
-                            trajectory_file = trajectory_files[0]
-                            try:
-                                trajectory_length = 0
-                                trajectory_path = os.path.join(output_path, "trajectories", f"{trial_id}.jsonl")
-                                with open(trajectory_file) as src, fsspec.open(trajectory_path, "w") as dst:
-                                    for line in src:
-                                        trajectory_length += 1
-                                        dst.write(line)
+        # Save trajectory files that were already extracted (before temp dir cleanup)
+        for trial_id, trial_data in results["trials"].items():
+            trajectory_content = trial_data.get("trajectory_content")
+            if trajectory_content:
+                try:
+                    # Determine file extension based on content format
+                    # If it looks like JSON (starts with {), save as .json, otherwise as .jsonl
+                    ext = ".json" if trajectory_content.strip().startswith("{") else ".jsonl"
+                    trajectory_path = os.path.join(output_path, "trajectories", f"{trial_id}{ext}")
 
-                                results["trials"][trial_id]["trajectory_length"] = trajectory_length
-                                results["trials"][trial_id]["trajectory_path"] = trajectory_path
-                                logger.info(f"Saved trajectory for {trial_id} to {trajectory_path}")
+                    with fsspec.open(trajectory_path, "w") as dst:
+                        dst.write(trajectory_content)
 
-                            except Exception as e:
-                                logger.warning(f"Failed to process trajectory for {trial_id}: {e}")
+                    results["trials"][trial_id]["trajectory_path"] = trajectory_path
+                    logger.info(
+                        f"Saved trajectory for {trial_id} to {trajectory_path} "
+                        f"(length: {trial_data.get('trajectory_length', 0)})"
+                    )
+
+                except Exception as e:
+                    logger.warning(f"Failed to save trajectory for {trial_id}: {e}")
 
         trials_for_output = {}
         for trial_id, trial_data in results["trials"].items():
             trial_output = dict(trial_data)
+            # Remove internal fields that shouldn't be in the output
             trial_output.pop("trial_dir", None)
+            trial_output.pop("trajectory_content", None)  # Already saved to file
             trials_for_output[trial_id] = trial_output
 
         with fsspec.open(samples_path, "w") as f:
