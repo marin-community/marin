@@ -57,7 +57,7 @@ trainer:
     tags: ["dpo", "ultrafeedback", "llama3", "simpo"]
   mp: p=f32,c=bfloat16
   train_batch_size: 128
-  num_train_steps: 2150
+  num_train_steps: 478
   steps_per_eval: 200
   model_averaging: null
   checkpointer:
