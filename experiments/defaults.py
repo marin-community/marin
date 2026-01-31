@@ -583,6 +583,30 @@ def default_simpo(
     schedule = BatchSchedule(unwrap_versioned_value(simpo_config.train_batch_size))
     total_examples = schedule.global_data_offset_by_step(simpo_config.num_train_steps)
 
+    if simpo_config.per_device_eval_parallelism is None:
+        per_device_eval_parallelism = -1
+    else:
+        per_device_eval_parallelism = simpo_config.per_device_eval_parallelism
+
+    if simpo_config.per_device_parallelism is None:
+        per_device_parallelism = -1
+    else:
+        per_device_parallelism = simpo_config.per_device_parallelism
+
+    # For automatic resumption: point trainer.initialize_from to the output directory.
+    # Levanter will automatically find the latest checkpoint there on restart.
+    # However, we can't set BOTH initialize_from and initialize_from_hf (Levanter restriction).
+    # So only set trainer.initialize_from when NOT loading from HF initially.
+    checkpoint_output_path = this_output_path()
+    checkpoint_path_to_load_from = simpo_config.initialize_from_checkpoint_path
+
+    # If loading from HF initially, can't also set initialize_from
+    # The checkpointer base_path will handle auto-resume via a different mechanism
+    if initialize_from_hf and simpo_config.model_name_or_path:
+        trainer_initialize_from = None
+    else:
+        trainer_initialize_from = checkpoint_path_to_load_from or checkpoint_output_path
+
     inner_config = TrainSimpoConfig(
         data=pretraining_data,
         trainer=TrainerConfig(
@@ -592,11 +616,14 @@ def default_simpo(
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=simpo_config.train_batch_size,
+            per_device_parallelism=per_device_parallelism,
+            per_device_eval_parallelism=per_device_eval_parallelism,
             num_train_steps=simpo_config.num_train_steps,
             steps_per_eval=simpo_config.steps_per_eval,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
                 keep=[dict(every=steps_per_export)],
+                base_path=checkpoint_output_path,
             ),
             model_averaging=None,
             mesh=MeshConfig(
@@ -608,9 +635,9 @@ def default_simpo(
             allow_partial_checkpoint=simpo_config.allow_partial_checkpoint,
             allow_nondivisible_batch_size=True,
             quantization=QuantizationConfig(int8=simpo_config.int8) if simpo_config.int8 else None,
-            initialize_from=None,
+            initialize_from=trainer_initialize_from,
         ),
-        initialize_from_checkpoint_path=simpo_config.initialize_from_checkpoint_path,
+        initialize_from_checkpoint_path=None,
         initialize_from_hf=simpo_config.model_name_or_path if initialize_from_hf else False,
         train_seq_len=train_length,
         model=model_config,

@@ -27,6 +27,8 @@ class SimpleSimPOConfig:
     resources: ResourceConfig
 
     train_batch_size: int | IntSchedule = 128
+    per_device_parallelism: int | None = None
+    per_device_eval_parallelism: int | None = None
     num_train_steps: int = 10000
     learning_rate: float = 6e-7
     wandb_project: str | None = None
