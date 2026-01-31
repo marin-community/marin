@@ -354,24 +354,30 @@ class Controller:
         )
 
     def stop(self) -> None:
-        """Stop all background components gracefully."""
+        """Stop all background components gracefully.
+
+        Waits for all threads to complete naturally. If shutdown hangs,
+        test framework timeout will kill the process.
+        """
         self._stop = True
         self._wake_event.set()
         self._heartbeat_event.set()
 
+        # Wait for threads to exit - no timeout, let pytest-timeout handle hangs
         if self._scheduling_loop_thread:
-            self._scheduling_loop_thread.join(timeout=5.0)
+            self._scheduling_loop_thread.join()
         if self._heartbeat_loop_thread:
-            self._heartbeat_loop_thread.join(timeout=5.0)
+            self._heartbeat_loop_thread.join()
 
         # Stop uvicorn server
         if self._server:
             self._server.should_exit = True
         if self._server_thread:
-            self._server_thread.join(timeout=5.0)
+            self._server_thread.join()
 
-        # Shutdown dispatch executor
-        self._dispatch_executor.shutdown(wait=True, cancel_futures=True)
+        # Shutdown dispatch executor - wait for in-flight requests to complete
+        # Don't cancel futures to avoid httpx logging to closed stdout/stderr
+        self._dispatch_executor.shutdown(wait=True, cancel_futures=False)
 
         # Shutdown autoscaler
         if self._autoscaler:

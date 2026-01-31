@@ -17,6 +17,7 @@
 Tests worker crashes, delayed registration, stale state, and task-level retries.
 All chaos is injected inline in worker.py.
 """
+import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
 from .conftest import submit, wait, _quick, _slow
@@ -53,6 +54,7 @@ def test_worker_sequential_jobs(cluster):
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
+@pytest.mark.timeout(60)
 def test_all_workers_fail(cluster):
     """All workers' registration fails permanently. With scheduling timeout,
     job transitions to FAILED/UNSCHEDULABLE when no workers register.
