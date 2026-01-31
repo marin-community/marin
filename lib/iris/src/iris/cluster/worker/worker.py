@@ -400,7 +400,7 @@ class Worker:
             worker_id=self._worker_id,
             controller_address=self._config.controller_address,
             port_allocator=self._port_allocator,
-            report_state=self._notify_task_update,
+            report_state=lambda: self._notify_task_update(attempt),
             poll_interval_seconds=self._config.poll_interval_seconds,
         )
 
