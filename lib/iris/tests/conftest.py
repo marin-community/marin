@@ -100,7 +100,8 @@ def docker_cleanup_session(use_docker):
 
 @pytest.fixture(autouse=True)
 def _thread_registry():
-    """Swap in a fresh ThreadRegistry for each test, shut it down after."""
+    """Per-test ThreadRegistry: every test gets a clean registry, all threads
+    are shut down (blocking) before the next test starts."""
     registry = ThreadRegistry()
     old = set_thread_registry(registry)
     yield registry

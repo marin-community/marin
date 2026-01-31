@@ -264,7 +264,7 @@ def test_dispatch_retries_on_infrastructure_failure():
 # =============================================================================
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def local_client():
     """Create a LocalClusterClient-backed IrisClient for true E2E testing.
 
