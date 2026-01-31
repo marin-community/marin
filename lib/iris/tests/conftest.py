@@ -14,6 +14,7 @@
 
 # Test configuration for iris
 
+import logging
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -95,6 +96,38 @@ def docker_cleanup_session(use_docker):
     else:
         # Skip Docker cleanup when not using Docker
         yield
+
+
+class _SafeStreamHandler(logging.StreamHandler):
+    """StreamHandler that silently ignores writes to closed streams.
+
+    Background threads may continue running briefly after pytest closes
+    stdout/stderr during test cleanup. This handler prevents
+    "ValueError: I/O operation on closed file" errors from third-party
+    library logging (httpx, uvicorn, etc.) that happens in those threads.
+    """
+
+    def emit(self, record):
+        try:
+            super().emit(record)
+        except ValueError as e:
+            if "I/O operation on closed file" not in str(e):
+                raise
+            # Silently ignore - pytest closed our streams during cleanup
+
+
+def pytest_configure(config):
+    """Install safe stream handler to prevent closed file errors during cleanup."""
+    # Replace all StreamHandlers with SafeStreamHandler in root logger
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, _SafeStreamHandler):
+            # Preserve handler configuration
+            safe_handler = _SafeStreamHandler(handler.stream)
+            safe_handler.setLevel(handler.level)
+            safe_handler.setFormatter(handler.formatter)
+            root_logger.removeHandler(handler)
+            root_logger.addHandler(safe_handler)
 
 
 def pytest_sessionfinish(session, exitstatus):
