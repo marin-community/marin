@@ -198,7 +198,7 @@ class TestIrisClientSpec:
 
             client = _parse_client_spec("iris://controller:10000")
             assert isinstance(client, FrayIrisClient)
-            mock_iris.remote.assert_called_once_with("controller:10000", workspace=None)
+            mock_iris.remote.assert_called_once_with("http://controller:10000", workspace=None, bundle_gcs_path=None)
 
     def test_iris_spec_with_workspace(self):
         from pathlib import Path
@@ -210,4 +210,24 @@ class TestIrisClientSpec:
 
             client = _parse_client_spec("iris://controller:10000?ws=/tmp/my-workspace")
             assert isinstance(client, FrayIrisClient)
-            mock_iris.remote.assert_called_once_with("controller:10000", workspace=Path("/tmp/my-workspace"))
+            mock_iris.remote.assert_called_once_with(
+                "http://controller:10000", workspace=Path("/tmp/my-workspace"), bundle_gcs_path=None
+            )
+
+    def test_iris_spec_inherits_bundle_gcs_path(self, monkeypatch):
+        """When IRIS_BUNDLE_GCS_PATH is set, FrayIrisClient inherits it for sub-job code."""
+        from unittest.mock import patch
+
+        monkeypatch.setenv("IRIS_BUNDLE_GCS_PATH", "gs://bucket/bundles/abc123.zip")
+
+        with patch("fray.v2.iris_backend.IrisClientLib") as mock_iris:
+            from fray.v2.client import _parse_client_spec
+            from fray.v2.iris_backend import FrayIrisClient
+
+            client = _parse_client_spec("iris://10.164.0.8:10000")
+            assert isinstance(client, FrayIrisClient)
+            mock_iris.remote.assert_called_once_with(
+                "http://10.164.0.8:10000",
+                workspace=None,
+                bundle_gcs_path="gs://bucket/bundles/abc123.zip",
+            )

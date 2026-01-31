@@ -290,6 +290,7 @@ def run_iris_job(
                 max_retries=max_retries,
                 timeout=timeout,
                 wait=wait,
+                extras=extras,
             )
 
 

@@ -376,8 +376,19 @@ class FrayIrisClient:
     registration for discovery.
     """
 
-    def __init__(self, controller_address: str, workspace: Path | None = None):
-        self._iris = IrisClientLib.remote(controller_address, workspace=workspace)
+    def __init__(
+        self,
+        controller_address: str,
+        workspace: Path | None = None,
+        bundle_gcs_path: str | None = None,
+    ):
+        logger.info(
+            "FrayIrisClient connecting to %s (workspace=%s, bundle_gcs_path=%s)",
+            controller_address,
+            workspace,
+            bundle_gcs_path,
+        )
+        self._iris = IrisClientLib.remote(controller_address, workspace=workspace, bundle_gcs_path=bundle_gcs_path)
 
     def submit(self, request: JobRequest) -> IrisJobHandle:
         iris_resources = convert_resources(request.resources)

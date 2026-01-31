@@ -19,6 +19,7 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import logging
+import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -96,8 +97,14 @@ def run_local(
         resources = dataclasses.replace(resources, cpu=int(config.num_cpus))
     # Note: num_gpus would require DeviceConfig, skipping for now
 
+    client = current_client()
+    logger.info(
+        "Zephyr using fray client: %s (FRAY_CLIENT_SPEC=%s)",
+        type(client).__name__,
+        os.environ.get("FRAY_CLIENT_SPEC", "<unset>"),
+    )
     ctx = ZephyrContext(
-        client=current_client(),
+        client=client,
         num_workers=config.max_parallelism,
         resources=resources,
     )
