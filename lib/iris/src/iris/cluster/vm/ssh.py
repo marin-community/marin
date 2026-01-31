@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import Deadline, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -264,12 +264,12 @@ def wait_for_connection(
     or the timeout expires. Logs prominently on first failure and
     periodically during the wait to help diagnose connection issues.
     """
-    deadline = time.time() + timeout_seconds
-    start_time = deadline - timeout_seconds
+    deadline = Deadline.from_seconds(float(timeout_seconds))
+    start_time = time.time()
     attempt = 0
     first_failure_logged = False
 
-    while time.time() < deadline:
+    while not deadline.expired():
         if stop_event and stop_event.is_set():
             return False
         attempt += 1
@@ -288,8 +288,8 @@ def wait_for_connection(
             first_failure_logged = True
         elif attempt % 6 == 0:  # Every 30 seconds at 5-second intervals
             elapsed = int(time.time() - start_time)
-            remaining = timeout_seconds - elapsed
-            logger.info("SSH: Still waiting for %s (%ds elapsed, %ds remaining)", conn.address, elapsed, remaining)
+            remaining_seconds = int(deadline.remaining_seconds())
+            logger.info("SSH: Still waiting for %s (%ds elapsed, %ds remaining)", conn.address, elapsed, remaining_seconds)
 
         time.sleep(poll_interval)
 

@@ -373,7 +373,7 @@ class Worker:
                 state=task.status,
                 exit_code=task.exit_code or 0,
                 error=task.error or "",
-                finished_at_ms=task.finished_at_ms or 0,
+                finished_at_ms=task.finished_at.epoch_ms if task.finished_at else 0,
                 attempt_id=task.attempt_id,
             )
             self._controller_client.report_task_state(request)
@@ -399,7 +399,7 @@ class Worker:
                     state=task.status,
                     exit_code=task.exit_code or 0,
                     error=task.error or "",
-                    finished_at_ms=task.finished_at_ms or 0,
+                    finished_at_ms=task.finished_at.epoch_ms if task.finished_at else 0,
                     attempt_id=task.attempt_id,
                 )
             )

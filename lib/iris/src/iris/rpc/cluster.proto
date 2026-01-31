@@ -16,6 +16,7 @@ edition = "2023";
 
 package iris.cluster;
 
+import "common.proto";
 import "vm.proto";
 
 // ============================================================================
@@ -70,8 +71,8 @@ message TaskStatus {
   int32 exit_code = 7;
   string error = 8;
 
-  int64 started_at_ms = 9;
-  int64 finished_at_ms = 10;
+  iris.common.Timestamp started_at = 9;
+  iris.common.Timestamp finished_at = 10;
 
   map<string, int32> ports = 11;      // Per-task port allocations
   ResourceUsage resource_usage = 12;
@@ -92,8 +93,8 @@ message TaskAttempt {
   TaskState state = 3;
   int32 exit_code = 4;
   string error = 5;
-  int64 started_at_ms = 6;
-  int64 finished_at_ms = 7;
+  iris.common.Timestamp started_at = 6;
+  iris.common.Timestamp finished_at = 7;
   bool is_worker_failure = 8;
 }
 
@@ -107,8 +108,8 @@ message ResourceUsage {
 }
 
 message BuildMetrics {
-  int64 build_started_ms = 1;
-  int64 build_finished_ms = 2;
+  iris.common.Timestamp build_started = 1;
+  iris.common.Timestamp build_finished = 2;
   bool from_cache = 3;
   string image_tag = 4;
 }
@@ -118,8 +119,8 @@ message JobStatus {
   JobState state = 2;
   int32 exit_code = 3;
   string error = 4;
-  int64 started_at_ms = 5;
-  int64 finished_at_ms = 6;
+  iris.common.Timestamp started_at = 5;
+  iris.common.Timestamp finished_at = 6;
 
   // Port allocations
   map<string, int32> ports = 7;
@@ -143,7 +144,7 @@ message JobStatus {
 
   // Job metadata from request (for dashboard display)
   string name = 25;                        // Job name from request
-  int64 submitted_at_ms = 26;              // Submission timestamp
+  iris.common.Timestamp submitted_at = 26;
 
   // Resource specification from job request (for dashboard display)
   ResourceSpecProto resources = 27;
@@ -431,7 +432,7 @@ message Controller {
     string worker_id = 1;
     string address = 2;              // host:port for WorkerService
     WorkerMetadata metadata = 3;
-    int64 registered_at_ms = 4;
+    iris.common.Timestamp registered_at = 4;
   }
 
   message RunningTaskEntry {
@@ -449,7 +450,7 @@ message Controller {
     TaskState state = 4;
     int32 exit_code = 5;
     string error = 6;
-    int64 finished_at_ms = 7;
+    iris.common.Timestamp finished_at = 7;
     int32 attempt_id = 8;
   }
 
@@ -476,7 +477,7 @@ message Controller {
     string worker_id = 1;
     bool healthy = 2;
     int32 consecutive_failures = 3;
-    int64 last_heartbeat_ms = 4;
+    iris.common.Timestamp last_heartbeat = 4;
     repeated string running_job_ids = 5;
     string address = 6;                    // Worker RPC address (host:port)
     WorkerMetadata metadata = 7;           // Full worker metadata
@@ -498,7 +499,7 @@ message Controller {
     TaskState state = 5;
     int32 exit_code = 6;
     string error = 7;
-    int64 finished_at_ms = 8;
+    iris.common.Timestamp finished_at = 8;
     int32 attempt_id = 9;
   }
 
@@ -566,7 +567,7 @@ message Controller {
 
   // --- Transactions / Actions Log ---
   message TransactionAction {
-    int64 timestamp_ms = 1;
+    iris.common.Timestamp timestamp = 1;
     string action = 2;
     string entity_id = 3;
     string details = 4;
@@ -641,7 +642,7 @@ message Worker {
   }
 
   message LogEntry {
-    int64 timestamp_ms = 1;
+    iris.common.Timestamp timestamp = 1;
     string source = 2;  // "stdout", "stderr", or "build"
     string data = 3;    // Log line content
   }
