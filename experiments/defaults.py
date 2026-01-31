@@ -534,6 +534,29 @@ def default_sft(
 
 @lru_cache
 def _cached_load_tokenizer(tokenizer_name: str):
+    """Load a tokenizer, using GCS cache if available to avoid HuggingFace API rate limiting."""
+    # Check if there's a GCS cache path set via environment variable
+    tokenizer_cache_base = os.environ.get("MARIN_TOKENIZER_CACHE_PATH")
+
+    if tokenizer_cache_base:
+        # Import here to avoid circular dependency
+        from marin.utils import ensure_tokenizer_cached, load_tokenizer_from_gcs
+
+        try:
+            # Ensure tokenizer is cached in GCS (idempotent)
+            gcs_path = ensure_tokenizer_cached(
+                tokenizer_name,
+                tokenizer_cache_base,
+                logger=logger,
+            )
+
+            # Load from GCS cache instead of hitting HF API
+            logger.info(f"Loading tokenizer {tokenizer_name} from GCS cache at {gcs_path}")
+            return load_tokenizer_from_gcs(gcs_path, logger=logger)
+        except Exception as e:
+            logger.warning(f"Failed to load tokenizer from GCS cache: {e}. Falling back to HuggingFace Hub.")
+
+    # Fall back to direct HF Hub download
     return load_tokenizer(tokenizer_name)
 
 

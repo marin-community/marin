@@ -41,8 +41,10 @@ import os
 
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import executor_main
+from marin.utils import create_cache_tokenizer_step
 
 from experiments.domain_phase_mix.analysis import create_analysis_step
+from experiments.llama import llama3_tokenizer
 from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig
 from experiments.domain_phase_mix.domains import (
     NEMOTRON_FULL_DOMAIN,
@@ -82,9 +84,13 @@ DOMAIN_NAMES = ["nemotron_full", "starcoder"]
 # Combine CORE_TASKS + CODE_TASKS for evaluation
 EVAL_TASKS = CORE_TASKS + CODE_TASKS
 
-# GCS path for pre-cached evaluation datasets to avoid HuggingFace rate limiting
+# GCS paths for pre-cached data to avoid HuggingFace rate limiting
 # Use us-central1 to match the cluster region
 EVAL_DATASETS_CACHE_PATH = "gs://marin-us-central1/raw/eval-datasets/code-tasks"
+TOKENIZER_CACHE_BASE = "gs://marin-us-central1/raw/tokenizers"
+
+# Tokenizer used by regmix_60m_proxy and all domains
+TOKENIZER_NAME = llama3_tokenizer  # "meta-llama/Meta-Llama-3.1-8B"
 
 # Use uniform sampling strategy for weight exploration
 SAMPLING_PARAMS = DirichletSamplingParams(
@@ -235,6 +241,23 @@ def run_baselines(
     baselines = baselines or BASELINES
     experiment = create_two_phase_experiment(name=name_prefix)
 
+    # Set environment variable for tokenizer GCS caching (used by defaults.py)
+    os.environ["MARIN_TOKENIZER_CACHE_PATH"] = TOKENIZER_CACHE_BASE
+
+    # Create step to pre-cache tokenizer to GCS (runs once before training)
+    cache_tokenizer_step = create_cache_tokenizer_step(
+        tokenizer_name=TOKENIZER_NAME,
+        gcs_path=os.path.join(TOKENIZER_CACHE_BASE, TOKENIZER_NAME.replace("/", "--")),
+        name_prefix=name_prefix,
+    )
+
+    # Create step to pre-cache eval datasets to GCS (runs once before training)
+    cache_eval_datasets_step = create_cache_eval_datasets_step(
+        eval_tasks=EVAL_TASKS,
+        gcs_path=EVAL_DATASETS_CACHE_PATH,
+        name_prefix=name_prefix,
+    )
+
     # Create weight configs from baselines
     weight_configs = create_baseline_weight_configs(baselines)
 
@@ -253,7 +276,7 @@ def run_baselines(
         training_steps.append(step)
 
     executor_main(
-        steps=training_steps,
+        steps=[cache_tokenizer_step, cache_eval_datasets_step, *training_steps],
         description=f"Baseline runs for {name_prefix}",
     )
 
@@ -288,6 +311,16 @@ def main(
         return
 
     experiment = create_two_phase_experiment(name=name_prefix)
+
+    # Set environment variable for tokenizer GCS caching (used by defaults.py)
+    os.environ["MARIN_TOKENIZER_CACHE_PATH"] = TOKENIZER_CACHE_BASE
+
+    # Create step to pre-cache tokenizer to GCS (runs once before training)
+    cache_tokenizer_step = create_cache_tokenizer_step(
+        tokenizer_name=TOKENIZER_NAME,
+        gcs_path=os.path.join(TOKENIZER_CACHE_BASE, TOKENIZER_NAME.replace("/", "--")),
+        name_prefix=name_prefix,
+    )
 
     # Create step to pre-cache eval datasets to GCS (runs once before training)
     cache_eval_datasets_step = create_cache_eval_datasets_step(
@@ -333,7 +366,10 @@ def main(
     total_steps = EXPERIMENT_BUDGET // tokens_per_step
     phase1_end = int(total_steps * PHASE_BOUNDARIES[0])
 
-    logger.info(f"Created {len(training_steps)} training steps + 1 weight configs step + 1 analysis step")
+    logger.info(
+        f"Created {len(training_steps)} training steps + 1 tokenizer cache step + "
+        f"1 eval datasets cache step + 1 weight configs step + 1 analysis step"
+    )
     logger.info(f"Total tokens per run: {EXPERIMENT_BUDGET:,}")
     logger.info(f"Total steps per run: {total_steps:,}")
     logger.info(f"Phase boundary: step {phase1_end} (50%)")
@@ -342,8 +378,14 @@ def main(
 
     # Run all steps through executor_main, which handles --max_concurrent and
     # --force_run_failed via draccus CLI parsing
-    # cache_eval_datasets_step runs first to pre-cache datasets before training
-    all_steps = [cache_eval_datasets_step, weight_configs_step, *training_steps, analysis_step]
+    # Cache steps run first to pre-cache tokenizer and datasets before training
+    all_steps = [
+        cache_tokenizer_step,
+        cache_eval_datasets_step,
+        weight_configs_step,
+        *training_steps,
+        analysis_step,
+    ]
     executor_main(
         steps=all_steps,
         description=f"Two-phase starcoder experiment: {n_runs} runs",

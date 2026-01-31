@@ -21,7 +21,7 @@ import re
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime
 from typing import Any, TypeVar
 
@@ -521,6 +521,73 @@ def ensure_tokenizer_cached(
         gcs_path,
         tokenizer_kwargs=tokenizer_kwargs,
         logger=log_obj,
+    )
+
+
+# ============================================================================
+# EXECUTOR STEP FOR TOKENIZER CACHING
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class CacheTokenizerConfig:
+    """Configuration for the tokenizer caching executor step."""
+
+    tokenizer_name: str
+    gcs_path: str
+
+
+def _cache_tokenizer(config: CacheTokenizerConfig) -> str:
+    """ExecutorStep function to cache a tokenizer to GCS.
+
+    This is idempotent - if the tokenizer is already cached, it returns immediately.
+    """
+    return save_tokenizer_to_gcs(
+        tokenizer_name=config.tokenizer_name,
+        gcs_path=config.gcs_path,
+        logger=logger,
+    )
+
+
+def create_cache_tokenizer_step(
+    tokenizer_name: str,
+    gcs_path: str,
+    name_prefix: str,
+):
+    """Create an ExecutorStep to pre-cache a tokenizer to GCS.
+
+    This step should run before training steps to ensure the tokenizer is
+    available in GCS. Workers will then load from GCS instead of hitting
+    the HuggingFace API, avoiding rate limiting.
+
+    Args:
+        tokenizer_name: HuggingFace tokenizer name (e.g., "meta-llama/Meta-Llama-3.1-8B").
+        gcs_path: GCS path to cache the tokenizer (e.g., "gs://bucket/tokenizers/llama3").
+        name_prefix: Experiment name prefix for the step name.
+
+    Returns:
+        ExecutorStep that caches the tokenizer to GCS.
+
+    Example:
+        cache_step = create_cache_tokenizer_step(
+            tokenizer_name="meta-llama/Meta-Llama-3.1-8B",
+            gcs_path="gs://marin-us-central1/raw/tokenizers/meta-llama--Meta-Llama-3.1-8B",
+            name_prefix="my_experiment",
+        )
+        training_steps = [...]
+        all_steps = [cache_step, *training_steps]
+    """
+    # Import here to avoid circular dependency
+    from marin.execution.executor import ExecutorStep
+
+    return ExecutorStep(
+        name=f"{name_prefix}/cache_tokenizer",
+        description=f"Pre-cache tokenizer {tokenizer_name} to GCS to avoid HuggingFace rate limiting",
+        fn=_cache_tokenizer,
+        config=CacheTokenizerConfig(
+            tokenizer_name=tokenizer_name,
+            gcs_path=gcs_path,
+        ),
     )
 
 
