@@ -1704,12 +1704,25 @@ class _LlavaInferenceWrapper(eqx.Module):
         # Get number of segments from batched data
         num_batched_segments = len(self._batched_num_patches_per_segment)
 
-        # Use batch_seq_indices directly as segment_ids
-        # This works because:
-        # 1. Storage: set_batched_request_data() stores features in order [0, 1, 2...]
-        # 2. Retrieval: batch_seq_indices gives us 0, 1, 2... for each token's request
-        # The indices match directly - no slot_id lookup needed!
-        segment_ids = jnp.clip(batch_seq_indices, 0, num_batched_segments - 1)
+        # Map batch sequence indices to segment indices in stored image features
+        # The slot_ids in _slot_to_segment_map match the engine's allocation order
+        # (engine uses free_slots.pop() which pops from the END, so [7,6,5,...,0])
+        #
+        # Create a lookup table: slot_id -> segment_index
+        max_slots = batch_info.slot_ids.axis_size("seq")
+        slot_to_segment_array = jnp.zeros(max_slots, dtype=jnp.int32)
+        for slot_id, segment_idx in self._slot_to_segment_map.items():
+            slot_to_segment_array = slot_to_segment_array.at[slot_id].set(segment_idx)
+
+        # Get slot_ids for each batch sequence position
+        batch_slot_ids = batch_info.slot_ids.array  # (max_seqs,)
+
+        # Map: token position -> batch_seq_idx -> slot_id -> segment_idx
+        slot_ids_per_token = batch_slot_ids[batch_seq_indices]
+        segment_ids = slot_to_segment_array[slot_ids_per_token]
+
+        # Ensure segment_ids are valid (within num_batched_segments)
+        segment_ids = jnp.clip(segment_ids, 0, num_batched_segments - 1)
 
         # 3. Identify image placeholder tokens
         image_token_id = self.model.config.image_token_index
@@ -1988,8 +2001,21 @@ class LlavaInferenceEngine:
         logger = logging.getLogger(__name__)
 
         try:
-            # Assign slot IDs to requests (0, 1, 2, ...)
-            slot_ids = list(range(len(requests)))
+            # Reset the engine first to ensure clean state
+            self._base_engine.reset()
+
+            # Get the actual free_slots order from the engine to match slot_ids
+            # Engine uses free_slots.pop() which pops from the END
+            engine_free_slots = list(self._base_engine.free_slots)  # Copy the list
+            num_requests = len(requests)
+
+            # Predict which slot_ids the engine will assign (pop from end)
+            predicted_slot_ids = [engine_free_slots[-(i+1)] for i in range(num_requests)]
+
+            logger.info(f"Engine free_slots: {engine_free_slots[:16]}, predicted slot_ids: {predicted_slot_ids}")
+
+            # Use the predicted slot_ids for our mapping
+            slot_ids = predicted_slot_ids
 
             # Set up batched mode on the wrapper
             self._base_engine.model = self._wrapper.set_batched_request_data(requests, slot_ids)
