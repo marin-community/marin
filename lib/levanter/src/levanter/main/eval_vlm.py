@@ -48,8 +48,10 @@ from levanter.models.qwen import Qwen3Config
 from levanter.models.siglip import SiglipVisionConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
+from levanter.utils.mesh import MeshConfig
 from levanter.utils.tree_utils import inference_mode
 from levanter.vlm_eval_harness import VLMEvalHarnessConfig, run_vlm_eval_harness, run_vlm_benchmark_direct
+from haliax.partitioning import ResourceAxis
 
 
 # Benchmarks that are in lm-eval-harness
@@ -112,6 +114,24 @@ DEFAULT_VISION_FEATURE_HEIGHT = DEFAULT_VISION_CONFIG.image_size // DEFAULT_VISI
 DEFAULT_PROCESSOR_PATH = "gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf"
 DEFAULT_TOKENIZER_PATH = "gs://marin-vlm/tokenizers/Qwen3-1.7B"
 
+# Default mesh config with vision_batch sharding (critical for VLM inference)
+# Without this, the vision encoder's attention runs OOM because vision_batch
+# axis is not sharded across devices. This matches the training config.
+DEFAULT_MESH_CONFIG = MeshConfig(
+    axes={"data": -1, "replica": 1, "model": 1},
+    compute_mapping={
+        # vision_batch is created by flattening (batch, num_patches) in get_image_features
+        # Must be sharded to avoid OOM in vision encoder's splash attention
+        "vision_batch": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+    },
+    param_mapping={"embed": "data"},
+)
+
+
+def _default_trainer_config():
+    """Create a TrainerConfig with VLM-specific mesh settings."""
+    return TrainerConfig(mesh=DEFAULT_MESH_CONFIG)
+
 
 @dataclass
 class EvalVLMConfig:
@@ -130,7 +150,8 @@ class EvalVLMConfig:
     """HuggingFace checkpoint reference (e.g., 'lmms-lab/llava-onevision-qwen2-7b-ov')."""
 
     # Model config - defaults to LLaVA-OneVision (SigLIP + Qwen3-1.7B)
-    trainer: TrainerConfig = field(default_factory=TrainerConfig)
+    # Uses VLM-specific mesh config with vision_batch sharding to avoid OOM
+    trainer: TrainerConfig = field(default_factory=_default_trainer_config)
     model: LlavaOnevisionConfig = field(default_factory=lambda: DEFAULT_VLM_CONFIG)
 
     # VLM Evaluation config

@@ -1,5 +1,8 @@
 hf_checkpoint: "gs://marin-us-east1/checkpoints/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/hf/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/step-39061/"
 tokenizer_path: "gs://marin-vlm/tokenizers/Qwen3-1.7B"
+trainer:
+  ray:
+    auto_start_cluster: false
 eval_harness:
   task_spec:
     - "mmmu_val"

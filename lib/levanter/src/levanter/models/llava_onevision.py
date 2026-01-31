@@ -1684,10 +1684,14 @@ class _LlavaInferenceWrapper(eqx.Module):
         cu_q_lens_full = batch_info.cu_q_lens.array  # (max_seqs+1,)
         num_seqs = batch_info.num_seqs
 
-        # Only use the valid portion of cu_q_lens for searchsorted
-        # This is critical - using the full array with trailing zeros causes ALL tokens
-        # to be incorrectly assigned to the last segment!
-        cu_q_lens = cu_q_lens_full[:num_seqs + 1]  # (num_seqs+1,) - properly sorted
+        # Fix: Replace invalid (zero) entries beyond num_seqs+1 with a large value
+        # so searchsorted works correctly. This is JIT-compatible because we use
+        # jnp.where with a mask rather than Python slicing.
+        max_seqs_static = cu_q_lens_full.shape[0] - 1  # max_seqs from shape
+        valid_mask = jnp.arange(max_seqs_static + 1) <= num_seqs
+        # Replace invalid entries with a large value (larger than any token position)
+        large_value = num_tokens + 1000
+        cu_q_lens = jnp.where(valid_mask, cu_q_lens_full, large_value)
 
         # For each position, find which sequence it belongs to in the current batch
         # batch_seq_indices[i] = j means token i belongs to sequence j in this batch
