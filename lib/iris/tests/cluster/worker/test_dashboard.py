@@ -15,6 +15,7 @@
 """Tests for WorkerDashboard HTTP/RPC endpoints and WorkerService implementation."""
 
 import asyncio
+import socket
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -437,6 +438,12 @@ def test_get_task_status_completed_task(service, worker, request_context):
 @pytest.mark.asyncio
 async def test_rpc_heartbeat_via_connect_client(service):
     """Test calling heartbeat via Connect RPC client."""
+    # Find a free port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        s.listen(1)
+        port = s.getsockname()[1]
+
     # Create server on ephemeral port
     server = WorkerDashboard(service=service, host="127.0.0.1", port=0)
 
@@ -444,18 +451,28 @@ async def test_rpc_heartbeat_via_connect_client(service):
     async def run_server():
         import uvicorn
 
-        config = uvicorn.Config(server._app, host="127.0.0.1", port=18080)
+        config = uvicorn.Config(server._app, host="127.0.0.1", port=port)
         server_obj = uvicorn.Server(config)
         await server_obj.serve()
 
     server_task = asyncio.create_task(run_server())
 
     try:
-        # Give server time to start
-        await asyncio.sleep(0.5)
+        # Give server time to start with retry logic
+        max_retries = 10
+        for i in range(max_retries):
+            await asyncio.sleep(0.2)
+            try:
+                async with httpx.AsyncClient(timeout=2.0) as test_client:
+                    await test_client.get(f"http://127.0.0.1:{port}/")
+                break
+            except (httpx.ConnectError, httpx.TimeoutException):
+                if i == max_retries - 1:
+                    raise
+                continue
 
-        async with httpx.AsyncClient() as http_client:
-            client = WorkerServiceClient(address="http://127.0.0.1:18080", session=http_client)
+        async with httpx.AsyncClient(timeout=5.0) as http_client:
+            client = WorkerServiceClient(address=f"http://127.0.0.1:{port}", session=http_client)
 
             run_req = create_run_task_request(task_id="rpc-test-task", job_id="rpc-test-job")
             heartbeat_req = cluster_pb2.HeartbeatRequest(tasks_to_run=[run_req])
