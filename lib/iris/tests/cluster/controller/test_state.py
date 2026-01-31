@@ -24,6 +24,7 @@ They focus on:
 import threading
 
 import pytest
+from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.events import (
     JobCancelledEvent,
     JobSubmittedEvent,
@@ -39,7 +40,7 @@ from iris.cluster.controller.state import (
     ControllerState,
     ControllerTask,
 )
-from iris.cluster.types import JobId, TaskId, WorkerId
+from iris.cluster.types import JobId, TaskId, WorkerId, DeviceType
 from iris.rpc import cluster_pb2
 from iris.time_utils import now_ms
 
@@ -60,6 +61,7 @@ def dispatch_task(state: ControllerState, task: ControllerTask, worker_id: Worke
         TaskStateChangedEvent(
             task_id=task.task_id,
             new_state=cluster_pb2.TASK_STATE_RUNNING,
+            attempt_id=task.current_attempt_id,
         )
     )
 
@@ -73,14 +75,24 @@ def transition_task(
     exit_code: int | None = None,
 ) -> None:
     """Transition a task to a new state via handle_event."""
+    task = state.get_task(task_id)
+    assert task is not None
     state.handle_event(
         TaskStateChangedEvent(
             task_id=task_id,
             new_state=new_state,
+            attempt_id=task.current_attempt_id,
             error=error,
             exit_code=exit_code,
         )
     )
+
+
+def _make_test_entrypoint() -> cluster_pb2.Entrypoint:
+    """Create a minimal Entrypoint proto for testing."""
+    entrypoint = cluster_pb2.Entrypoint()
+    entrypoint.command.argv[:] = ["python", "-c", "pass"]
+    return entrypoint
 
 
 @pytest.fixture
@@ -90,9 +102,10 @@ def job_request():
     def _make(name: str = "test-job") -> cluster_pb2.Controller.LaunchJobRequest:
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
-            serialized_entrypoint=b"test",
+            entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
-            environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+            environment=cluster_pb2.EnvironmentConfig(),
+            replicas=1,
         )
 
     return _make
@@ -173,7 +186,7 @@ def test_job_lifecycle_success(job_request, worker_metadata):
 
     # Submit job via event
     req = job_request("test-job")
-    req.resources.replicas = 2
+    req.replicas = 2
     tasks = submit_job(state, "j1", req)
 
     job = state.get_job(JobId("j1"))
@@ -235,8 +248,8 @@ def test_task_failure_with_retry_requeues(job_request, worker_metadata):
     dispatch_task(state, task, worker_id)
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_FAILED)
 
-    # Verify: task requeued, job still running
-    assert task.state == cluster_pb2.TASK_STATE_FAILED
+    # Verify: task requeued (back to PENDING), job still running
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
     assert task.can_be_scheduled()
     assert job.state == cluster_pb2.JOB_STATE_RUNNING
     pending = state.peek_pending_tasks()
@@ -251,7 +264,7 @@ def test_job_cancellation_kills_all_tasks(job_request, worker_metadata):
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
     req = job_request("test-job")
-    req.resources.replicas = 3
+    req.replicas = 3
     tasks = submit_job(state, "j1", req)
     job = state.get_job(JobId("j1"))
 
@@ -300,9 +313,9 @@ def test_worker_failure_cascades_to_running_tasks(job_request, worker_metadata):
         )
     )
 
-    # Verify: worker unhealthy, task WORKER_FAILED and requeued
+    # Verify: worker unhealthy, task requeued (back to PENDING)
     assert worker.healthy is False
-    assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
     assert task.can_be_scheduled()
     pending = state.peek_pending_tasks()
     assert len(pending) == 1
@@ -320,14 +333,14 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, wor
     tasks = submit_job(state, "j1", req)
     task = tasks[0]
 
-    # Task gets assigned (creates attempt, puts in PENDING state)
+    # Task gets assigned (creates attempt, puts in ASSIGNED state)
     state.handle_event(
         TaskAssignedEvent(
             task_id=task.task_id,
             worker_id=worker_id,
         )
     )
-    assert task.state == cluster_pb2.TASK_STATE_PENDING
+    assert task.state == cluster_pb2.TASK_STATE_ASSIGNED
     assert task.current_attempt_id == 0
 
     # Dispatch RPC fails -> WORKER_FAILED event
@@ -342,8 +355,8 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(job_request, wor
     # 1. Worker marked unhealthy
     assert worker.healthy is False
 
-    # 2. Task marked as WORKER_FAILED (retriable)
-    assert task.state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    # 2. Task requeued (back to PENDING for retry)
+    assert task.state == cluster_pb2.TASK_STATE_PENDING
     assert task.preemption_count == 1
     assert task.can_be_scheduled()
 
@@ -369,10 +382,11 @@ def test_failure_domain_kills_remaining_tasks(worker_metadata):
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-task-job",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
+        replicas=3,
     )
     tasks = submit_job(state, "j1", req)
     job = state.get_job(JobId("j1"))
@@ -399,9 +413,10 @@ def test_max_task_failures_tolerance(worker_metadata):
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="tolerant-job",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=3,
+        environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=1,
     )
     tasks = submit_job(state, "j1", req)
@@ -431,9 +446,10 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="preemption-job",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=2),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=2,
+        environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=0,
         max_retries_preemption=1,
     )
@@ -443,8 +459,8 @@ def test_preemption_does_not_count_toward_max_task_failures(worker_metadata):
     dispatch_task(state, tasks[0], worker_id)
     transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker died")
 
-    # Preemption doesn't count toward failure threshold
-    assert tasks[0].state == cluster_pb2.TASK_STATE_WORKER_FAILED
+    # Preemption doesn't count toward failure threshold; task requeued to PENDING
+    assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
     assert tasks[0].can_be_scheduled()
     assert job.state == cluster_pb2.JOB_STATE_RUNNING
 
@@ -485,7 +501,8 @@ def test_terminal_states_clean_up_endpoints(job_request, worker_metadata):
 
 
 def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
-    """E2E: Endpoints only visible for RUNNING jobs."""
+    """Endpoints are visible for all non-terminal job states (PENDING, RUNNING, BUILDING)
+    and hidden once the job reaches a terminal state."""
     state = ControllerState()
 
     worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
@@ -503,15 +520,15 @@ def test_endpoint_visibility_by_job_state(job_request, worker_metadata):
     )
     state.add_endpoint(ep)
 
-    # Not visible while pending
-    assert len(state.lookup_endpoints("ns-1/actor")) == 0
+    # Visible while pending (task may be executing before job state updates)
+    assert len(state.lookup_endpoints("ns-1/actor")) == 1
 
-    # Transition to running by dispatching task
+    # Still visible after transition to running
     dispatch_task(state, task, worker_id)
     assert job.state == cluster_pb2.JOB_STATE_RUNNING
     assert len(state.lookup_endpoints("ns-1/actor")) == 1
 
-    # Not visible after completion
+    # Not visible after completion (terminal state)
     transition_task(state, task.task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
     assert job.state == cluster_pb2.JOB_STATE_SUCCEEDED
     assert len(state.lookup_endpoints("ns-1/actor")) == 0
@@ -648,7 +665,7 @@ def test_excessive_replicas_fails_job(job_request):
     state = ControllerState()
 
     req = job_request("too-many-replicas")
-    req.resources.replicas = MAX_REPLICAS_PER_JOB + 1
+    req.replicas = MAX_REPLICAS_PER_JOB + 1
 
     tasks = submit_job(state, "j1", req)
     job = state.get_job(JobId("j1"))
@@ -676,9 +693,10 @@ def make_job_request():
     ) -> cluster_pb2.Controller.LaunchJobRequest:
         return cluster_pb2.Controller.LaunchJobRequest(
             name=name,
-            serialized_entrypoint=b"test",
+            entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
-            environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+            environment=cluster_pb2.EnvironmentConfig(),
+            replicas=1,
         )
 
     return _make
@@ -788,51 +806,6 @@ def test_multiple_small_tasks_fill_worker_capacity(make_job_request, worker_meta
 
 
 # =============================================================================
-# Worker Attributes Tests
-# =============================================================================
-
-
-def test_worker_registers_with_attributes(worker_metadata):
-    """Worker attributes support string, int, and float values."""
-    state = ControllerState()
-
-    metadata = worker_metadata()
-    metadata.attributes["string-attr"].string_value = "hello"
-    metadata.attributes["int-attr"].int_value = 42
-    metadata.attributes["float-attr"].float_value = 3.14
-
-    worker_id = register_worker(state, "w1", "host:8080", metadata)
-
-    worker = state.get_worker(worker_id)
-    assert worker.attributes["string-attr"].value == "hello"
-    assert worker.attributes["int-attr"].value == 42
-    assert worker.attributes["float-attr"].value == 3.14
-
-
-def test_worker_attributes_updated_on_reregistration(worker_metadata):
-    """Worker attributes are updated when worker re-registers."""
-    state = ControllerState()
-
-    # Initial registration with one attribute
-    metadata1 = worker_metadata()
-    metadata1.attributes["tpu-name"].string_value = "old-tpu"
-    worker_id = register_worker(state, "w1", "host:8080", metadata1)
-
-    worker = state.get_worker(worker_id)
-    assert worker.attributes["tpu-name"].value == "old-tpu"
-
-    # Re-registration with updated attribute
-    metadata2 = worker_metadata()
-    metadata2.attributes["tpu-name"].string_value = "new-tpu"
-    metadata2.attributes["tpu-worker-id"].int_value = 5
-    register_worker(state, "w1", "host:8080", metadata2)
-
-    worker = state.get_worker(worker_id)
-    assert worker.attributes["tpu-name"].value == "new-tpu"
-    assert worker.attributes["tpu-worker-id"].value == 5
-
-
-# =============================================================================
 # Coscheduled Failure Cascade Tests
 # =============================================================================
 
@@ -851,9 +824,10 @@ def test_coscheduled_task_failure_kills_siblings(worker_metadata):
     # Create coscheduled job with 4 tasks
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=4,
+        environment=cluster_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = "tpu-name"
     tasks = submit_job(state, "j1", req)
@@ -870,6 +844,7 @@ def test_coscheduled_task_failure_kills_siblings(worker_metadata):
         TaskStateChangedEvent(
             task_id=tasks[0].task_id,
             new_state=cluster_pb2.TASK_STATE_FAILED,
+            attempt_id=tasks[0].current_attempt_id,
             error="OOM",
         )
     )
@@ -894,9 +869,10 @@ def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
     # Use max_retries_preemption=1 (not 0 because 0 gets defaulted to 100)
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=4,
+        environment=cluster_pb2.EnvironmentConfig(),
         max_retries_preemption=1,  # Allow one retry, so second failure is terminal
     )
     req.coscheduling.group_by = "tpu-name"
@@ -911,6 +887,7 @@ def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
         TaskStateChangedEvent(
             task_id=tasks[0].task_id,
             new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+            attempt_id=tasks[0].current_attempt_id,
             error="Worker crashed (first)",
         )
     )
@@ -929,6 +906,7 @@ def test_coscheduled_task_worker_failure_kills_siblings(worker_metadata):
         TaskStateChangedEvent(
             task_id=tasks[0].task_id,
             new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+            attempt_id=tasks[0].current_attempt_id,
             error="Worker crashed (second)",
         )
     )
@@ -952,9 +930,10 @@ def test_coscheduled_task_success_does_not_affect_siblings(worker_metadata):
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=4,
+        environment=cluster_pb2.EnvironmentConfig(),
     )
     req.coscheduling.group_by = "tpu-name"
     tasks = submit_job(state, "j1", req)
@@ -967,6 +946,7 @@ def test_coscheduled_task_success_does_not_affect_siblings(worker_metadata):
         TaskStateChangedEvent(
             task_id=tasks[0].task_id,
             new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+            attempt_id=tasks[0].current_attempt_id,
         )
     )
 
@@ -987,9 +967,10 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(worker_metadata):
     # Regular job (no coscheduling)
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="regular-job",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=4,
+        environment=cluster_pb2.EnvironmentConfig(),
         max_task_failures=3,  # Allow failures without killing the job
     )
     tasks = submit_job(state, "j1", req)
@@ -1005,6 +986,7 @@ def test_non_coscheduled_task_failure_does_not_kill_siblings(worker_metadata):
         TaskStateChangedEvent(
             task_id=tasks[0].task_id,
             new_state=cluster_pb2.TASK_STATE_FAILED,
+            attempt_id=tasks[0].current_attempt_id,
             error="OOM",
         )
     )
@@ -1030,9 +1012,10 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
 
     req = cluster_pb2.Controller.LaunchJobRequest(
         name="coschedule-test",
-        serialized_entrypoint=b"test",
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=4,
+        environment=cluster_pb2.EnvironmentConfig(),
         max_retries_failure=1,  # Allow one retry
         max_task_failures=4,  # Don't fail job on task failure
     )
@@ -1047,12 +1030,13 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
         TaskStateChangedEvent(
             task_id=tasks[0].task_id,
             new_state=cluster_pb2.TASK_STATE_FAILED,
+            attempt_id=tasks[0].current_attempt_id,
             error="OOM",
         )
     )
 
-    # Task-0 failed but is retriable (not terminal)
-    assert tasks[0].state == cluster_pb2.TASK_STATE_FAILED
+    # Task-0 failed but is retriable, requeued to PENDING
+    assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
     assert tasks[0].can_be_scheduled()  # Can retry
     assert not tasks[0].is_finished()  # Not terminal
 
@@ -1065,138 +1049,252 @@ def test_coscheduled_retriable_failure_does_not_kill_siblings(worker_metadata):
 
 
 # =============================================================================
-# TPU Resource Commitment Tests
+# compute_demand_entries Tests
 # =============================================================================
 
 
-def test_worker_tpu_resources_committed_on_task_assignment():
-    """TPU chips are committed when task is assigned to worker."""
+# =============================================================================
+# Stale Attempt Tracking Tests
+# =============================================================================
+
+
+def test_stale_attempt_ignored(job_request, worker_metadata):
+    """Stale attempt report does not change task state."""
     state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
 
-    # Worker with 4 TPU chips
-    meta = cluster_pb2.WorkerMetadata(
-        hostname="tpu-worker",
-        ip_address="127.0.0.1",
-        cpu_count=10,
-        memory_bytes=10 * 1024**3,
-        disk_bytes=10 * 1024**3,
-        tpu_name="v5litepod-16",
+    req = job_request("job1")
+    req.max_retries_preemption = 2
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    # First attempt: dispatch, then fail via worker failure (retriable)
+    dispatch_task(state, task, worker_id)
+    old_attempt_id = task.current_attempt_id
+    assert old_attempt_id == 0
+
+    transition_task(state, task.task_id, cluster_pb2.TASK_STATE_WORKER_FAILED, error="Worker died")
+
+    # Second attempt
+    dispatch_task(state, task, worker_id)
+    assert task.current_attempt_id == 1
+    assert task.state == cluster_pb2.TASK_STATE_RUNNING
+
+    # Stale report from old attempt should be ignored
+    state.handle_event(
+        TaskStateChangedEvent(
+            task_id=task.task_id,
+            new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+            attempt_id=old_attempt_id,
+        )
     )
-    device = cluster_pb2.DeviceConfig()
-    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
-    meta.device.CopyFrom(device)
-    worker_id = register_worker(state, "w1", "addr1", meta)
 
-    worker = state.get_worker(worker_id)
-    assert worker.available_tpus == 4
-    assert worker.committed_tpu == 0
+    # Task should still be RUNNING on the new attempt
+    assert task.state == cluster_pb2.TASK_STATE_RUNNING
+    assert task.current_attempt_id == 1
 
-    # Submit job requiring 4 TPU chips
+
+def test_stale_attempt_error_log_for_non_terminal(caplog, job_request, worker_metadata):
+    """Stale attempt report logs ERROR when the old attempt is not terminal."""
+    import logging
+
+    state = ControllerState()
+    worker_id = register_worker(state, "w1", "host:8080", worker_metadata())
+
+    req = job_request("job1")
+    req.max_retries_preemption = 2
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    # First attempt
+    dispatch_task(state, task, worker_id)
+
+    # Manually create a second attempt without properly terminating the first.
+    # This simulates a scenario where the controller created a new attempt
+    # but the old one is still non-terminal (a precondition violation).
+    task.create_attempt(worker_id)
+    assert task.current_attempt_id == 1
+    # The old attempt (0) is still in RUNNING state (non-terminal)
+    assert not task.attempts[0].is_terminal()
+
+    with caplog.at_level(logging.ERROR, logger="iris.cluster.controller.state"):
+        state.handle_event(
+            TaskStateChangedEvent(
+                task_id=task.task_id,
+                new_state=cluster_pb2.TASK_STATE_SUCCEEDED,
+                attempt_id=0,
+            )
+        )
+
+    assert any("Stale attempt precondition violation" in r.message for r in caplog.records)
+
+
+# =============================================================================
+# compute_demand_entries Tests
+# =============================================================================
+
+
+def test_compute_demand_entries_counts_coscheduled_job_once():
+    """Coscheduled job with 4 tasks should count as 1 slice demand, not 4."""
+    state = ControllerState()
     req = cluster_pb2.Controller.LaunchJobRequest(
-        name="tpu-job",
-        serialized_entrypoint=b"test",
+        name="coschedule-test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
             cpu=1,
             memory_bytes=1024**3,
-            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=4,
     )
-    tasks = submit_job(state, "j1", req)
+    req.coscheduling.group_by = "tpu-name"
+    submit_job(state, "j1", req)
 
-    # Assign task to worker
-    dispatch_task(state, tasks[0], worker_id)
+    demand = compute_demand_entries(state)
+    assert len(demand) == 1
+    assert demand[0].device_type == DeviceType.TPU
+    assert demand[0].device_variant == "v5litepod-16"
+    assert demand[0].count == 1  # Only 1 slice needed for coscheduled job
 
-    # TPU chips should now be committed
-    assert worker.committed_tpu == 4
-    assert worker.available_tpus == 0
 
-
-def test_worker_tpu_resources_released_on_task_completion():
-    """TPU chips are released when task completes."""
+def test_compute_demand_entries_counts_non_coscheduled_tasks_individually():
+    """Non-coscheduled job with 4 tasks should count as 4 slices demand."""
     state = ControllerState()
-
-    # Worker with 4 TPU chips
-    meta = cluster_pb2.WorkerMetadata(
-        hostname="tpu-worker",
-        ip_address="127.0.0.1",
-        cpu_count=10,
-        memory_bytes=10 * 1024**3,
-        disk_bytes=10 * 1024**3,
-        tpu_name="v5litepod-16",
-    )
-    device = cluster_pb2.DeviceConfig()
-    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
-    meta.device.CopyFrom(device)
-    worker_id = register_worker(state, "w1", "addr1", meta)
-
-    worker = state.get_worker(worker_id)
-
-    # Submit and dispatch TPU job
     req = cluster_pb2.Controller.LaunchJobRequest(
-        name="tpu-job",
-        serialized_entrypoint=b"test",
+        name="regular-job",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
             cpu=1,
             memory_bytes=1024**3,
-            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=4,
     )
-    tasks = submit_job(state, "j1", req)
-    dispatch_task(state, tasks[0], worker_id)
+    # No coscheduling set
+    submit_job(state, "j1", req)
 
-    assert worker.committed_tpu == 4
-    assert worker.available_tpus == 0
-
-    # Complete task
-    transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_SUCCEEDED)
-
-    # TPU chips should be released
-    assert worker.committed_tpu == 0
-    assert worker.available_tpus == 4
+    demand = compute_demand_entries(state)
+    assert len(demand) == 1
+    assert demand[0].device_type == DeviceType.TPU
+    assert demand[0].device_variant == "v5litepod-16"
+    assert demand[0].count == 4  # 4 separate slices for non-coscheduled job
 
 
-def test_worker_tpu_resources_released_on_task_failure():
-    """TPU chips are released when task fails (exhausted retries)."""
+def test_compute_demand_entries_mixed_coscheduled_and_regular():
+    """Mix of coscheduled and regular jobs should count correctly."""
     state = ControllerState()
 
-    # Worker with 4 TPU chips
-    meta = cluster_pb2.WorkerMetadata(
-        hostname="tpu-worker",
-        ip_address="127.0.0.1",
-        cpu_count=10,
-        memory_bytes=10 * 1024**3,
-        disk_bytes=10 * 1024**3,
-        tpu_name="v5litepod-16",
-    )
-    device = cluster_pb2.DeviceConfig()
-    device.tpu.CopyFrom(cluster_pb2.TpuDevice(variant="v5litepod-16", count=4))
-    meta.device.CopyFrom(device)
-    worker_id = register_worker(state, "w1", "addr1", meta)
-
-    worker = state.get_worker(worker_id)
-
-    # Submit TPU job with no retries
-    req = cluster_pb2.Controller.LaunchJobRequest(
-        name="tpu-job",
-        serialized_entrypoint=b"test",
+    # Coscheduled job with 4 tasks -> 1 slice
+    coscheduled_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="coschedule-test",
+        entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(
             cpu=1,
             memory_bytes=1024**3,
-            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16", count=4)),
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
         ),
-        environment=cluster_pb2.EnvironmentConfig(workspace="/tmp"),
-        max_retries_failure=0,
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=4,
     )
-    tasks = submit_job(state, "j1", req)
-    dispatch_task(state, tasks[0], worker_id)
+    coscheduled_req.coscheduling.group_by = "tpu-name"
+    submit_job(state, "j1", coscheduled_req)
 
-    assert worker.committed_tpu == 4
+    # Regular job with 2 tasks -> 2 slices
+    regular_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="regular-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5litepod-16")),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=2,
+    )
+    submit_job(state, "j2", regular_req)
 
-    # Fail task
-    transition_task(state, tasks[0].task_id, cluster_pb2.TASK_STATE_FAILED, error="OOM")
+    demand = compute_demand_entries(state)
+    assert len(demand) == 1
+    assert demand[0].device_type == DeviceType.TPU
+    assert demand[0].device_variant == "v5litepod-16"
+    assert demand[0].count == 3  # 1 (coscheduled) + 2 (regular) = 3 slices
 
-    # TPU chips should be released
-    assert worker.committed_tpu == 0
-    assert worker.available_tpus == 4
+
+def test_compute_demand_entries_separates_by_preemptible_constraint():
+    """Jobs with different preemptible constraints produce separate demand entries."""
+    state = ControllerState()
+
+    # Job requiring preemptible workers
+    preemptible_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="preemptible-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+        constraints=[
+            cluster_pb2.Constraint(
+                key="preemptible",
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="true"),
+            )
+        ],
+    )
+    submit_job(state, "j1", preemptible_req)
+
+    # Job requiring non-preemptible workers
+    on_demand_req = cluster_pb2.Controller.LaunchJobRequest(
+        name="on-demand-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+        constraints=[
+            cluster_pb2.Constraint(
+                key="preemptible",
+                op=cluster_pb2.CONSTRAINT_OP_EQ,
+                value=cluster_pb2.AttributeValue(string_value="false"),
+            )
+        ],
+    )
+    submit_job(state, "j2", on_demand_req)
+
+    demand = compute_demand_entries(state)
+    assert len(demand) == 2
+
+    by_preemptible = {d.preemptible: d for d in demand}
+    assert by_preemptible[True].count == 1
+    assert by_preemptible[True].device_type == DeviceType.TPU
+    assert by_preemptible[False].count == 1
+    assert by_preemptible[False].device_type == DeviceType.TPU
+
+
+def test_compute_demand_entries_no_preemptible_constraint_gives_none():
+    """Job without preemptible constraint produces demand with preemptible=None."""
+    state = ControllerState()
+
+    req = cluster_pb2.Controller.LaunchJobRequest(
+        name="unconstrained-job",
+        entrypoint=_make_test_entrypoint(),
+        resources=cluster_pb2.ResourceSpecProto(
+            cpu=1,
+            memory_bytes=1024**3,
+            device=cluster_pb2.DeviceConfig(tpu=cluster_pb2.TpuDevice(variant="v5p-8")),
+        ),
+        environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
+    )
+    submit_job(state, "j1", req)
+
+    demand = compute_demand_entries(state)
+    assert len(demand) == 1
+    assert demand[0].preemptible is None

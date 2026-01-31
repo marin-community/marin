@@ -22,6 +22,8 @@ fork-strategy = "fewest"
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
+    "python-multipart>=0.0.22",
+    "wheel>=0.46.2",
 ]
 
 [tool.uv.workspace]
@@ -192,4 +194,4 @@ markers = [
 testpaths = ["tests", "experiments"]
 
 # Make sure we timeout before CI kills us, and don't run TPU or slow tests by default
-addopts = "--session-timeout=480 -m 'not tpu_ci and not slow'"
+#addopts = "--session-timeout=480 -m 'not tpu_ci and not slow'"

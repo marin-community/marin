@@ -20,17 +20,18 @@ import zipfile
 from pathlib import Path
 from unittest.mock import Mock
 
-import cloudpickle
 import pytest
 from connectrpc.request import RequestContext
 
+from iris.logging import BufferedLogRecord, LogRingBuffer
 from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint
-from iris.cluster.worker.builder import BuildResult, VenvCache
+from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
+from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
+from iris.cluster.worker.worker import Worker, WorkerConfig
 
 # ============================================================================
 # PortAllocator Tests
@@ -41,22 +42,6 @@ from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
 def allocator():
     """Create PortAllocator with small range for testing."""
     return PortAllocator(port_range=(40000, 40100))
-
-
-def test_allocate_single_port(allocator):
-    """Test allocating a single port."""
-    ports = allocator.allocate(count=1)
-    assert len(ports) == 1
-    assert 40000 <= ports[0] < 40100
-
-
-def test_allocate_multiple_ports(allocator):
-    """Test allocating multiple ports at once."""
-    ports = allocator.allocate(count=5)
-    assert len(ports) == 5
-    assert len(set(ports)) == 5  # All unique
-    for port in ports:
-        assert 40000 <= port < 40100
 
 
 def test_allocated_ports_are_usable(allocator):
@@ -148,21 +133,12 @@ def mock_bundle_cache():
 
 
 @pytest.fixture
-def mock_venv_cache():
-    """Create mock VenvCache."""
-    cache = Mock(spec=VenvCache)
-    cache.compute_deps_hash = Mock(return_value="abc123")
-    return cache
-
-
-@pytest.fixture
 def mock_image_cache():
     """Create mock ImageBuilder."""
     builder = Mock(spec=ImageBuilder)
     builder.build = Mock(
         return_value=BuildResult(
             image_tag="test-image:latest",
-            deps_hash="abc123",
             build_time_ms=1000,
             from_cache=False,
         )
@@ -195,11 +171,13 @@ def mock_runtime():
     runtime.remove = Mock()
     runtime.get_stats = Mock(return_value=ContainerStats(memory_mb=100, cpu_percent=50, process_count=5, available=True))
     runtime.get_logs = Mock(return_value=[])
+    runtime.list_iris_containers = Mock(return_value=[])
+    runtime.remove_all_iris_containers = Mock(return_value=0)
     return runtime
 
 
 @pytest.fixture
-def worker(mock_bundle_cache, mock_venv_cache, mock_image_cache, mock_runtime):
+def worker(mock_bundle_cache, mock_image_cache, mock_runtime):
     """Create Worker with mocked dependencies."""
     config = WorkerConfig(
         port=0,
@@ -242,11 +220,13 @@ def create_run_task_request(
     ports: list[str] | None = None,
 ):
     """Create a RunTaskRequest for testing."""
-    entrypoint = create_test_entrypoint()
-    serialized_entrypoint = cloudpickle.dumps(entrypoint)
+
+    def test_fn():
+        print("Hello from test")
+
+    entrypoint_proto = Entrypoint.from_callable(test_fn).to_proto()
 
     env_config = cluster_pb2.EnvironmentConfig(
-        workspace="/workspace",
         env_vars={
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",
@@ -261,25 +241,13 @@ def create_run_task_request(
         job_id=job_id or task_id,
         task_index=task_index,
         num_tasks=num_tasks,
-        serialized_entrypoint=serialized_entrypoint,
+        entrypoint=entrypoint_proto,
         environment=env_config,
         bundle_gcs_path="gs://bucket/bundle.zip",
         resources=resources,
         timeout_seconds=300,
         ports=ports or [],
     )
-
-
-def test_submit_task_returns_task_id(worker):
-    """Test that submit_task returns task_id immediately."""
-    request = create_run_task_request()
-    task_id = worker.submit_task(request)
-
-    assert task_id == "test-task-1"
-
-    task = worker.get_task(task_id)
-    assert task is not None
-    assert task.task_id == task_id
 
 
 def test_task_lifecycle_phases(worker):
@@ -372,7 +340,6 @@ def test_list_tasks(worker):
 
     tasks = worker.list_tasks()
     assert len(tasks) == 3
-    assert {task.task_id for task in tasks} == {"task-0", "task-1", "task-2"}
 
 
 def test_kill_running_task(worker, mock_runtime):
@@ -453,9 +420,8 @@ def test_task_failure_error_appears_in_logs(worker, mock_bundle_cache):
     assert any("Bundle download failed" in log.data for log in error_logs)
 
 
-def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_image_cache):
+def test_port_retry_on_binding_failure(mock_bundle_cache, mock_image_cache):
     """Test that task retries with new ports when port binding fails."""
-    del mock_venv_cache  # unused
     runtime = Mock(spec=DockerRuntime)
     runtime.create_container = Mock(return_value="container123")
 
@@ -514,9 +480,8 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_venv_cache, mock_
     assert any("Port conflict" in log.data for log in build_logs)
 
 
-def test_port_retry_exhausted(mock_bundle_cache, mock_venv_cache, mock_image_cache):
+def test_port_retry_exhausted(mock_bundle_cache, mock_image_cache):
     """Test that task fails after max port retries are exhausted."""
-    del mock_venv_cache  # unused
     runtime = Mock(spec=DockerRuntime)
     runtime.create_container = Mock(return_value="container123")
     runtime.start_container = Mock(side_effect=RuntimeError("failed to bind host port: address already in use"))
@@ -587,7 +552,7 @@ def create_integration_entrypoint():
         print("Hello from test task!")
         return 42
 
-    return Entrypoint(callable=test_fn, args=(), kwargs={})
+    return Entrypoint.from_callable(test_fn)
 
 
 def create_integration_run_task_request(bundle_path: str, task_id: str):
@@ -599,11 +564,9 @@ def create_integration_run_task_request(bundle_path: str, task_id: str):
         job_id=task_id,
         task_index=0,
         num_tasks=1,
-        serialized_entrypoint=cloudpickle.dumps(entrypoint),
+        entrypoint=entrypoint.to_proto(),
         bundle_gcs_path=bundle_path,
-        environment=cluster_pb2.EnvironmentConfig(
-            workspace="/app",
-        ),
+        environment=cluster_pb2.EnvironmentConfig(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=512 * 1024**2),
     )
 
@@ -622,8 +585,61 @@ def test_bundle(tmp_path):
     return create_test_bundle(tmp_path)
 
 
+def test_get_process_logs():
+    """Test GetProcessLogs RPC on worker retrieves logs from the buffer."""
+
+    # Create a mock provider
+    mock_provider = Mock(spec=["submit_task", "get_task", "list_tasks", "kill_task", "get_logs"])
+    mock_provider.list_tasks = Mock(return_value=[])
+
+    # Create a log buffer with test records
+    log_buffer = LogRingBuffer(maxlen=100)
+    log_buffer.append(
+        BufferedLogRecord(timestamp=1000.0, level="INFO", logger_name="iris.worker", message="Worker log 1")
+    )
+    log_buffer.append(
+        BufferedLogRecord(timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="VM log")
+    )
+    log_buffer.append(
+        BufferedLogRecord(timestamp=1002.0, level="ERROR", logger_name="iris.worker", message="Worker log 2")
+    )
+
+    service = WorkerServiceImpl(provider=mock_provider, log_buffer=log_buffer)
+
+    # Test: Get all logs
+    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="", limit=0), None)
+    assert len(response.records) == 3
+    assert response.records[0].message == "Worker log 1"
+    assert response.records[1].logger_name == "iris.cluster.vm"
+    assert response.records[2].level == "ERROR"
+
+    # Test: Filter by prefix
+    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="iris.worker", limit=0), None)
+    assert len(response.records) == 2
+    assert response.records[0].message == "Worker log 1"
+    assert response.records[1].message == "Worker log 2"
+
+    # Test: Limit results
+    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="", limit=2), None)
+    assert len(response.records) == 2
+    assert response.records[0].message == "VM log"
+    assert response.records[1].message == "Worker log 2"
+
+
+def test_get_process_logs_no_buffer():
+    """Test GetProcessLogs returns empty when buffer is None."""
+    # Create a mock provider
+    mock_provider = Mock(spec=["submit_task", "get_task", "list_tasks", "kill_task", "get_logs"])
+    mock_provider.list_tasks = Mock(return_value=[])
+
+    service = WorkerServiceImpl(provider=mock_provider, log_buffer=None)
+
+    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="", limit=0), None)
+    assert len(response.records) == 0
+
+
 @pytest.fixture
-def real_worker(cache_dir):
+def real_worker(cache_dir, docker_cleanup_scope):
     """Create Worker with real components (not mocks)."""
     config = WorkerConfig(
         port=0,

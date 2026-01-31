@@ -30,19 +30,14 @@ import pytest
 
 from iris.client import IrisClient
 from iris.cluster.client import get_job_info
-from iris.cluster.client.local_client import (
-    LocalEnvironmentProvider,
-    _LocalBundleProvider,
-    _LocalContainerRuntime,
-    _LocalImageProvider,
-)
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import EnvironmentSpec, Entrypoint, ResourceSpec
+from iris.cluster.vm.cluster_manager import ClusterManager
 from iris.cluster.worker.builder import ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import DockerRuntime
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import cluster_pb2
+from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 
 
@@ -58,6 +53,34 @@ def unique_name(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
 
+def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
+    """Build a fully-configured IrisClusterConfig for E2E tests with num_workers.
+
+    Sets up controller_vm.local, bundle_prefix, scale groups with local provider,
+    and fast autoscaler evaluation for tests.
+    """
+    config = config_pb2.IrisClusterConfig()
+
+    # Configure local controller
+    config.controller_vm.local.port = 0  # auto-assign
+    config.controller_vm.bundle_prefix = ""  # LocalController will set temp path
+
+    # Configure scale group with local provider
+    sg = config_pb2.ScaleGroupConfig(
+        name="local-cpu",
+        min_slices=num_workers,
+        max_slices=num_workers,
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+    )
+    sg.provider.local.SetInParent()
+    config.scale_groups["local-cpu"].CopyFrom(sg)
+
+    # Fast autoscaler evaluation for tests
+    config.autoscaler.evaluation_interval_seconds = 0.5
+
+    return config
+
+
 class E2ECluster:
     """Synchronous context manager running a controller + worker cluster.
 
@@ -66,10 +89,11 @@ class E2ECluster:
     """
 
     def __init__(self, num_workers: int = 1, use_docker: bool = False):
-        self._controller_port = find_free_port()
         self._num_workers = num_workers
         self._use_docker = use_docker
-
+        self._manager: ClusterManager | None = None
+        self._controller_port: int | None = None
+        # Docker-specific fields
         self._temp_dir: tempfile.TemporaryDirectory | None = None
         self._controller: Controller | None = None
         self._workers: list[Worker] = []
@@ -79,6 +103,22 @@ class E2ECluster:
         self._rpc_client: IrisClient | None = None
 
     def __enter__(self):
+        if not self._use_docker:
+            # Use ClusterManager for non-Docker path
+            config = _make_e2e_config(self._num_workers)
+            self._manager = ClusterManager(config)
+            address = self._manager.start()
+            # Extract port from address for controller_client
+            self._controller_port = int(address.rsplit(":", 1)[1])
+            self._controller_client = ControllerServiceClientSync(
+                address=address,
+                timeout_ms=30000,
+            )
+            self._wait_for_workers(timeout=10.0)
+            return self
+
+        # Docker path: manual Controller + Worker setup
+        self._controller_port = find_free_port()
         self._temp_dir = tempfile.TemporaryDirectory(prefix="test_cluster_")
         temp_path = Path(self._temp_dir.name)
         bundle_dir = temp_path / "bundles"
@@ -95,7 +135,7 @@ class E2ECluster:
         controller_config = ControllerConfig(
             host="127.0.0.1",
             port=self._controller_port,
-            bundle_dir=bundle_dir,
+            bundle_prefix=f"file://{bundle_dir}",
         )
         self._controller = Controller(
             config=controller_config,
@@ -109,18 +149,11 @@ class E2ECluster:
             timeout_ms=30000,
         )
 
-        # Select providers based on use_docker flag
-        if self._use_docker:
-            bundle_provider = BundleCache(cache_path, max_bundles=10)
-            image_provider = ImageCache(cache_path, registry="", max_images=10)
-            container_runtime = DockerRuntime()
-            environment_provider = None  # Use default (probe real system)
-        else:
-            bundle_provider = _LocalBundleProvider(fake_bundle)
-            image_provider = _LocalImageProvider()
-            container_runtime = _LocalContainerRuntime()
-            # 4 CPUs to match test expectations for resource scheduling tests
-            environment_provider = LocalEnvironmentProvider(cpu=4, memory_gb=8)
+        # Docker providers
+        bundle_provider = BundleCache(cache_path, max_bundles=10)
+        image_provider = ImageCache(cache_path, registry="", max_images=10)
+        container_runtime = DockerRuntime()
+        environment_provider = None  # Use default (probe real system)
 
         # Start Workers
         for i in range(self._num_workers):
@@ -167,16 +200,19 @@ class E2ECluster:
 
     def __exit__(self, *args):
         if self._rpc_client:
-            # RpcClusterClient doesn't have close method, just drop reference
             self._rpc_client = None
         if self._controller_client:
             self._controller_client.close()
-        for worker in self._workers:
-            worker.stop()
-        if self._controller:
-            self._controller.stop()
-        if self._temp_dir:
-            self._temp_dir.cleanup()
+        if self._manager:
+            self._manager.stop()
+        else:
+            # Docker path cleanup
+            for worker in self._workers:
+                worker.stop()
+            if self._controller:
+                self._controller.stop()
+            if self._temp_dir:
+                self._temp_dir.cleanup()
 
     def submit(
         self,
@@ -187,11 +223,12 @@ class E2ECluster:
         memory: str = "1g",
         ports: list[str] | None = None,
         scheduling_timeout_seconds: int = 0,
+        replicas: int = 1,
         **kwargs,
     ):
         """Submit a job and return a Job handle."""
         entrypoint = Entrypoint.from_callable(fn, *args, **kwargs)
-        environment = EnvironmentSpec(workspace="/app")
+        environment = EnvironmentSpec()
         resources = ResourceSpec(cpu=cpu, memory=memory)
         return self.get_client().submit(
             entrypoint=entrypoint,
@@ -200,6 +237,7 @@ class E2ECluster:
             environment=environment,
             ports=ports,
             scheduling_timeout_seconds=scheduling_timeout_seconds,
+            replicas=replicas,
         )
 
     def _to_job_id_str(self, job_or_id) -> str:
@@ -275,14 +313,14 @@ class E2ECluster:
 
 
 @pytest.fixture(scope="session")
-def test_cluster(use_docker):
+def test_cluster(use_docker, docker_cleanup_session):
     """Provide a running test cluster for E2E tests (session-scoped)."""
     with E2ECluster(use_docker=use_docker) as cluster:
         yield cluster
 
 
 @pytest.fixture(scope="session")
-def multi_worker_cluster(use_docker):
+def multi_worker_cluster(use_docker, docker_cleanup_session):
     """Provide a cluster with multiple workers (session-scoped)."""
     with E2ECluster(num_workers=3, use_docker=use_docker) as cluster:
         yield cluster
@@ -368,8 +406,8 @@ class TestResourceScheduling:
 
     def test_small_job_skips_oversized_job(self, test_cluster):
         """Small job scheduled even when large job is waiting."""
-        # Submit job requiring 100 CPUs (won't fit on 4-CPU worker)
-        big_job_id = test_cluster.submit(lambda: None, name=unique_name("big-job"), cpu=100)
+        # Submit job requiring 10000 CPUs (won't fit on worker)
+        big_job_id = test_cluster.submit(lambda: None, name=unique_name("big-job"), cpu=10000)
 
         # Submit small job
         small_job_id = test_cluster.submit(lambda: "done", name=unique_name("small-job"), cpu=1)
@@ -384,11 +422,11 @@ class TestResourceScheduling:
 
     def test_scheduling_timeout(self, test_cluster):
         """Job that can't be scheduled times out."""
-        # Submit job requiring 100 CPUs with 1 second timeout
+        # Submit job requiring 10000 CPUs with 1 second timeout
         job_id = test_cluster.submit(
             lambda: None,
             name=unique_name("impossible-job"),
-            cpu=100,
+            cpu=10000,
             scheduling_timeout_seconds=1,
         )
 
@@ -406,23 +444,39 @@ class TestMultiWorker:
     """Tests requiring multiple workers."""
 
     def test_multi_worker_execution(self, multi_worker_cluster):
-        """Jobs distributed across multiple workers."""
+        """Jobs with multiple tasks distribute across workers.
+
+        Submits a single job with multiple replicas. All tasks are pending
+        simultaneously, triggering the scheduler's capacity-based distribution.
+        Even with large local worker capacity (cpu=1000), the scheduler should
+        distribute tasks when they're batched in one cycle.
+        """
         run_id = uuid.uuid4().hex[:8]
-        job_ids = [multi_worker_cluster.submit(lambda n=n: n * 2, name=f"mw-job-{run_id}-{n}", cpu=2) for n in range(6)]
 
-        # Wait for all to complete
-        for job_id in job_ids:
-            status = multi_worker_cluster.wait(job_id, timeout=30)
-            assert status["state"] == "JOB_STATE_SUCCEEDED"
+        # Submit one job with 6 replicas - all tasks pending simultaneously.
+        # cpu=5 is arbitrary (local test workers have cpu=1000, so capacity
+        # is not the distribution mechanism). The scheduler's round-robin
+        # scheduled_workers set distributes tasks across workers when they're
+        # batched in one cycle.
+        job_id = multi_worker_cluster.submit(
+            lambda: 42,
+            name=f"mw-job-{run_id}",
+            cpu=5,
+            replicas=6,
+        )
 
-        # Verify jobs ran on different workers (via task-level worker info)
+        # Wait for completion
+        status = multi_worker_cluster.wait(job_id, timeout=30)
+        assert status["state"] == "JOB_STATE_SUCCEEDED"
+
+        # Verify tasks ran on different workers
         workers_used = set()
-        for job_id in job_ids:
-            task_status = multi_worker_cluster.task_status(job_id, task_index=0)
+        for task_idx in range(6):
+            task_status = multi_worker_cluster.task_status(job_id, task_index=task_idx)
             if task_status["workerId"]:
                 workers_used.add(task_status["workerId"])
 
-        assert len(workers_used) > 1, "Jobs should run on multiple workers"
+        assert len(workers_used) > 1, f"Tasks should distribute across workers, but all ran on: {workers_used}"
 
 
 # =============================================================================
@@ -459,53 +513,72 @@ class TestPorts:
 
 
 class TestJobInfo:
-    """Test JobInfo contextvar is available in jobs."""
+    """Test JobInfo contextvar is available in jobs and provides runtime context."""
 
-    def test_job_info_contextvar(self, test_cluster):
-        """JobInfo is available via contextvar with correct job_id and worker_id."""
+    def test_job_info_provides_context(self, test_cluster):
+        """JobInfo is available and provides job_id, worker_id, and ports during execution."""
         job_name = unique_name("test-job-info")
 
         def test_fn(expected_job_id):
             info = get_job_info()
-            assert info is not None
-            assert info.job_id == expected_job_id
-            assert info.worker_id is not None
-            assert "actor" in info.ports
-            return info.job_id
+            # Verify JobInfo is available and provides expected context
+            if info is None:
+                raise ValueError("JobInfo not available")
+            if info.job_id != expected_job_id:
+                raise ValueError(f"JobInfo has wrong job_id: {info.job_id}")
+            if info.worker_id is None:
+                raise ValueError("JobInfo missing worker_id")
+            if "actor" not in info.ports:
+                raise ValueError("JobInfo missing expected port 'actor'")
+            return "success"
 
         job_id = test_cluster.submit(test_fn, job_name, name=job_name, ports=["actor"])
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
-    def test_job_info_with_multiple_ports(self, test_cluster):
-        """JobInfo contains all allocated ports and they are unique."""
+    def test_job_info_port_allocation(self, test_cluster):
+        """JobInfo provides all requested ports and they are unique."""
 
         def test_fn():
             info = get_job_info()
-            assert info is not None
-            assert "actor" in info.ports
-            assert "metrics" in info.ports
-            assert "custom" in info.ports
-            # Ports should be unique
+            if info is None:
+                raise ValueError("JobInfo not available")
+
+            # Verify all ports are present
+            required_ports = {"actor", "metrics", "custom"}
+            if not required_ports.issubset(info.ports.keys()):
+                raise ValueError(f"Missing ports. Expected {required_ports}, got {info.ports.keys()}")
+
+            # Verify ports are unique
             port_values = list(info.ports.values())
-            assert len(port_values) == len(set(port_values))
-            return info.ports
+            if len(port_values) != len(set(port_values)):
+                raise ValueError(f"Ports are not unique: {port_values}")
+
+            return "success"
 
         job_id = test_cluster.submit(test_fn, name=unique_name("test-job-ports"), ports=["actor", "metrics", "custom"])
         status = test_cluster.wait(job_id, timeout=30)
         assert status["state"] == "JOB_STATE_SUCCEEDED"
 
-    def test_job_info_task_fields(self, test_cluster):
-        """JobInfo contains task fields (task_id, task_index, num_tasks)."""
+    def test_job_info_task_context(self, test_cluster):
+        """JobInfo provides task-specific context (task_id, task_index, num_tasks)."""
         job_name = unique_name("test-task-fields")
 
         def test_fn(expected_job_name):
             info = get_job_info()
-            assert info is not None
-            assert info.task_id == f"{expected_job_name}/task-0"
-            assert info.task_index == 0
-            assert info.num_tasks == 1
-            return info.task_id
+            if info is None:
+                raise ValueError("JobInfo not available")
+
+            # Verify task context is correct
+            expected_task_id = f"{expected_job_name}/task-0"
+            if info.task_id != expected_task_id:
+                raise ValueError(f"Expected task_id {expected_task_id}, got {info.task_id}")
+            if info.task_index != 0:
+                raise ValueError(f"Expected task_index 0, got {info.task_index}")
+            if info.num_tasks != 1:
+                raise ValueError(f"Expected num_tasks 1, got {info.num_tasks}")
+
+            return "success"
 
         job_id = test_cluster.submit(test_fn, job_name, name=job_name)
         status = test_cluster.wait(job_id, timeout=30)

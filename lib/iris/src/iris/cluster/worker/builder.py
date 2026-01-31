@@ -15,6 +15,9 @@
 """Virtual environment and Docker image caching with UV support."""
 
 import hashlib
+import logging
+import random
+import string
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,32 +26,16 @@ from typing import Protocol
 from iris.cluster.worker.docker import DockerImageBuilder
 from iris.cluster.worker.worker_types import TaskLogs
 
+logger = logging.getLogger(__name__)
 
-class VenvCache:
-    """Utility for computing dependency hashes for cache invalidation.
 
-    UV handles dependency caching natively via BuildKit cache mounts with
-    explicit global cache ID (iris-uv-global). This ensures all workspaces
-    share the same BuildKit-managed cache for dependency reuse.
-
-    This class provides utilities for computing dependency hashes from
-    pyproject.toml and uv.lock files to determine when Docker image layers
-    can be reused.
-    """
-
-    def compute_deps_hash(self, bundle_path: Path) -> str:
-        h = hashlib.sha256()
-        for fname in ["pyproject.toml", "uv.lock"]:
-            fpath = bundle_path / fname
-            if fpath.exists():
-                h.update(fpath.read_bytes())
-        return h.hexdigest()
+def _find_all_recursive(bundle_path: Path, pattern: str) -> list[Path]:
+    return list(bundle_path.rglob(pattern))
 
 
 @dataclass
 class BuildResult:
     image_tag: str
-    deps_hash: str
     build_time_ms: int
     from_cache: bool
 
@@ -62,8 +49,8 @@ class ImageProvider(Protocol):
         base_image: str,
         extras: list[str],
         job_id: str,
-        deps_hash: str,
         task_logs: TaskLogs | None = None,
+        pip_packages: list[str] | None = None,
     ) -> BuildResult: ...
 
     def protect(self, tag: str) -> None:
@@ -86,43 +73,39 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # We could pre-build something similar or at least fetch Rust deps to cache?
 
 # Configure UV
-# TODO, is this wasting disk space maybe we don't care
 ENV UV_CACHE_DIR=/opt/uv-cache
 ENV UV_LINK_MODE=copy
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv
 WORKDIR /app
 
-# TODO cache dependencies once across jobs just for usefulness
+RUN --mount=type=cache,id=iris-uv-global,sharing=shared,target=/opt/uv-cache \\
+    {pyproject_mounts} \\
+    uv sync {extras_flags}
 
 # Copy workspace contents
-# Path dependencies referenced in [tool.uv.sources] must be present before uv sync.
-# We copy everything upfront to support workspaces with local path dependencies.
 COPY . .
-
-# Install all dependencies and project
-RUN --mount=type=cache,id=iris-uv-global,sharing=locked,target=/opt/uv-cache \\
-    uv sync {extras_flags}
 
 # Use the venv python
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Always install cloudpickle - required by iris to unpickle job entrypoints
-RUN uv pip install cloudpickle
-"""
+# Install the workspace project in editable mode (so imports work)
+# and ensure cloudpickle is available (required by iris to unpickle job entrypoints)
+RUN uv pip install -e . cloudpickle
+{pip_install_step}"""
 
 
 class ImageCache:
     """Manages Docker image building with caching.
 
-    Image tag: {registry}/iris-job-{job_id}:{deps_hash[:8]}
+    Image tag: {registry}/iris-job-{job_id}:{uv_locks_hash[:8]}
     Uses Docker BuildKit cache mounts with explicit global cache ID
     (iris-uv-global) to ensure all workspaces share the same UV cache.
 
     Cache behavior:
     - All builds use id=iris-uv-global for the UV cache mount
-    - sharing=locked prevents concurrent access issues during UV operations
     - Different workspaces reuse cached dependencies automatically
     - BuildKit manages cache storage in /var/lib/buildkit/
+    - If there's no uv lock files (pyproject, uv.lock), use random image tag
 
     Delegates actual Docker operations to DockerImageBuilder, keeping
     caching logic separate from container runtime specifics.
@@ -159,13 +142,32 @@ class ImageCache:
         base_image: str,
         extras: list[str],
         job_id: str,
-        deps_hash: str,
         task_logs: TaskLogs | None = None,
+        pip_packages: list[str] | None = None,
     ) -> BuildResult:
-        if self._registry:
-            image_tag = f"{self._registry}/iris-job-{job_id}:{deps_hash[:8]}"
+        uv_locks_files = _find_all_recursive(bundle_path, "pyproject.toml") + _find_all_recursive(bundle_path, "uv.lock")
+
+        tag_len = 8
+        if not uv_locks_files:
+            tag = "".join(random.choices(string.ascii_lowercase, k=tag_len))
+            logger.warning(f"No pyproject.toml or uv.lock files found in the bundle path, using tag: {tag}")
         else:
-            image_tag = f"iris-job-{job_id}:{deps_hash[:8]}"
+            h = hashlib.sha256()
+            for f in uv_locks_files:
+                with open(f, "rb") as fd:
+                    h.update(fd.read())
+            # Include base image and pip_packages in hash so different configurations
+            # get different images
+            h.update(base_image.encode())
+            if pip_packages:
+                for pkg in sorted(pip_packages):
+                    h.update(pkg.encode())
+            tag = h.hexdigest()[:tag_len]
+
+        if self._registry:
+            image_tag = f"{self._registry}/iris-job-{job_id}:{tag}"
+        else:
+            image_tag = f"iris-job-{job_id}:{tag}"
 
         # Check if image exists locally
         if self._docker.exists(image_tag):
@@ -173,7 +175,6 @@ class ImageCache:
                 task_logs.add("build", f"Using cached image: {image_tag}")
             return BuildResult(
                 image_tag=image_tag,
-                deps_hash=deps_hash,
                 build_time_ms=0,
                 from_cache=True,
             )
@@ -181,10 +182,25 @@ class ImageCache:
         # Build image
         start = time.time()
         extras_flags = " ".join(f"--extra {e}" for e in extras) if extras else ""
+
+        pyproject_mounts = " \\\n".join(
+            f"--mount=type=bind,source={f.relative_to(bundle_path)},target={f.relative_to(bundle_path)}"
+            for f in uv_locks_files
+        )
+
+        # Build pip install step if packages are specified
+        pip_install_step = ""
+        if pip_packages:
+            packages_str = " ".join(f'"{pkg}"' for pkg in pip_packages)
+            pip_install_step = f"\n# Install additional pip packages\nRUN uv pip install {packages_str}\n"
+
         dockerfile = DOCKERFILE_TEMPLATE.format(
             base_image=base_image,
             extras_flags=extras_flags,
+            pyproject_mounts=pyproject_mounts,
+            pip_install_step=pip_install_step,
         )
+        # TODO (rav): does there need to be a lock around docker build?
         self._docker.build(bundle_path, dockerfile, image_tag, task_logs)
         build_time_ms = int((time.time() - start) * 1000)
 
@@ -192,7 +208,6 @@ class ImageCache:
 
         return BuildResult(
             image_tag=image_tag,
-            deps_hash=deps_hash,
             build_time_ms=build_time_ms,
             from_cache=False,
         )
