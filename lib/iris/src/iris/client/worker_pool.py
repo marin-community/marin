@@ -616,12 +616,12 @@ class WorkerPool:
         for dispatcher in self._dispatchers:
             dispatcher.stop()
 
-        # Always join dispatchers to prevent orphaned threads logging after stdout/stderr closed
-        # No timeout to ensure complete cleanup - if a thread hangs, pytest-timeout will handle it
         if wait:
             self._task_queue.join()
-        for dispatcher in self._dispatchers:
-            dispatcher.join(timeout=None)
+            # Join dispatchers to prevent orphaned threads logging after stdout/stderr closed
+            # No timeout to ensure complete cleanup - if a thread hangs, pytest-timeout will handle it
+            for dispatcher in self._dispatchers:
+                dispatcher.join(timeout=None)
 
         # Terminate worker job
         if self._job:
