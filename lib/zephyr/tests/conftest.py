@@ -14,21 +14,77 @@
 
 """Pytest fixtures for zephyr tests."""
 
+import logging
+from pathlib import Path
+
 import pytest
 import ray
 
-from fray.job import create_job_ctx
-
+from fray.v2 import ResourceConfig
+from fray.v2.iris_backend import FrayIrisClient
+from fray.v2.local import LocalClient
+from fray.v2.ray.backend import RayClient
 from zephyr import load_file
+from zephyr.execution import ZephyrContext
+
+# Path to zephyr root (from tests/conftest.py -> tests -> lib/zephyr)
+ZEPHYR_ROOT = Path(__file__).resolve().parents[1]
+
+# Use Iris demo config as base
+IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "demo.yaml"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
+def iris_cluster():
+    """Start local Iris cluster for testing - reused across all tests."""
+    from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
+    from iris.cluster.vm.config import load_config
+
+    try:
+        config = load_config(IRIS_CONFIG)
+        config = make_local_config(config)
+        manager = ClusterManager(config)
+        with manager.connect() as url:
+            yield url
+    except Exception as e:
+        pytest.skip(f"Failed to start local Iris cluster: {e}")
+
+
+@pytest.fixture(scope="session")
 def ray_cluster():
-    """Start Ray cluster for tests."""
+    """Initialize Ray cluster for testing - reused across all tests."""
     if not ray.is_initialized():
-        ray.init(ignore_reinit_error=True)
+        logging.info("Initializing Ray cluster for zephyr tests")
+        # Initialize Ray without runtime_env to prevent automatic working_dir packaging
+        ray.init(
+            address="local",
+            num_cpus=8,
+            ignore_reinit_error=True,
+            logging_level="info",
+            log_to_driver=True,
+            resources={"head_node": 1},
+            runtime_env={},  # Empty runtime_env to prevent inheritance
+        )
     yield
-    # Don't shutdown - let pytest handle cleanup
+    # Don't shutdown - Ray will be reused across test sessions
+
+
+@pytest.fixture(params=["local", "iris", "ray"])
+def fray_client(request, iris_cluster, ray_cluster):
+    """Parametrized fixture providing Local, Iris, and Ray clients."""
+    if request.param == "local":
+        client = LocalClient()
+    elif request.param == "iris":
+        # iris_cluster is session-scoped, so this creates a new client per test
+        client = FrayIrisClient(controller_address=iris_cluster, workspace=ZEPHYR_ROOT)
+    elif request.param == "ray":
+        # ray_cluster ensures Ray is initialized
+        client = RayClient()
+    else:
+        raise ValueError(f"Unknown backend: {request.param}")
+
+    yield client
+    client.shutdown(wait=True)
 
 
 @pytest.fixture
@@ -37,16 +93,30 @@ def sample_data():
     return list(range(1, 11))  # [1, 2, 3, ..., 10]
 
 
-@pytest.fixture(
-    params=[
-        pytest.param(create_job_ctx("sync"), id="sync"),
-        pytest.param(create_job_ctx("threadpool", max_workers=2), id="thread"),
-        pytest.param(create_job_ctx("ray"), id="ray"),
-    ]
-)
-def backend(request):
-    """Parametrized fixture providing all job contexts for testing."""
-    return request.param
+@pytest.fixture
+def zephyr_ctx(fray_client, tmp_path):
+    """ZephyrContext running on all backends with temp chunk storage."""
+    chunk_prefix = str(tmp_path / "chunks")
+    with ZephyrContext(
+        client=fray_client,
+        num_workers=2,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=chunk_prefix,
+        preserve_chunks=False,
+    ) as ctx:
+        yield ctx
+
+
+@pytest.fixture
+def ctx(zephyr_ctx):
+    """Alias for backward compatibility with existing tests."""
+    return zephyr_ctx
+
+
+@pytest.fixture
+def client(fray_client):
+    """Alias for backward compatibility with existing tests."""
+    return fray_client
 
 
 class CallCounter:
