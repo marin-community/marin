@@ -56,6 +56,14 @@ class WorkerHeartbeatEvent(Event):
 
 
 @dataclass(frozen=True)
+class WorkerHeartbeatFailedEvent(Event):
+    """Single heartbeat failure for a worker. State layer tracks consecutive count."""
+
+    worker_id: WorkerId
+    error: str
+
+
+@dataclass(frozen=True)
 class WorkerFailedEvent(Event):
     """Worker marked as failed."""
 
