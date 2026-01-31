@@ -217,6 +217,7 @@ def run_iris_job(
     replicas: int = 1,
     max_retries: int = 0,
     timeout: int = 0,
+    extras: list[str] | None = None,
 ) -> int:
     """Core job submission logic (testable without CLI).
 
@@ -246,6 +247,7 @@ def run_iris_job(
     env_vars = add_standard_env_vars(env_vars)
     resources = build_resources(tpu, gpu, cpu, memory)
     job_name = job_name or generate_job_name(command)
+    extras = extras or []
 
     logger.info(f"Submitting job: {job_name}")
     logger.info(f"Command: {' '.join(command)}")
@@ -268,6 +270,7 @@ def run_iris_job(
             max_retries=max_retries,
             timeout=timeout,
             wait=wait,
+            extras=extras,
         )
     else:
         # Remote cluster - use SSH tunnel
@@ -300,6 +303,7 @@ def _submit_and_wait_job(
     max_retries: int,
     timeout: int,
     wait: bool,
+    extras: list[str] | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -324,7 +328,7 @@ def _submit_and_wait_job(
         entrypoint=entrypoint,
         name=job_name,
         resources=resources,
-        environment=EnvironmentSpec(env_vars=env_vars),
+        environment=EnvironmentSpec(env_vars=env_vars, extras=extras or []),
         replicas=replicas,
         max_retries_failure=max_retries,
         timeout_seconds=timeout,
@@ -435,6 +439,12 @@ Examples:
         help="Job timeout in seconds (default: 0 = no timeout)",
     )
     parser.add_argument(
+        "--extra",
+        action="append",
+        default=[],
+        help="UV extras to install (e.g., --extra cpu). Can be repeated.",
+    )
+    parser.add_argument(
         "cmd",
         nargs=argparse.REMAINDER,
         help="Command to run (must start with --)",
@@ -467,6 +477,7 @@ Examples:
         replicas=args.replicas,
         max_retries=args.max_retries,
         timeout=args.timeout,
+        extras=args.extra,
     )
     sys.exit(exit_code)
 
