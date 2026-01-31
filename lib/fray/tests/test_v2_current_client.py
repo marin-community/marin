@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from fray.v2.client import current_client, set_current_client
-from fray.v2.local import LocalClient
+from fray.v2.local_backend import LocalClient
 
 
 def test_default_returns_local_client():

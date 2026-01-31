@@ -12,14 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Iterator
+import logging
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from functools import partial
-import logging
 from typing import Any, TypedDict
-from collections.abc import Sequence
 
-from dupekit import hash_xxh3_128
+try:
+    from dupekit import hash_xxh3_128
+except ModuleNotFoundError:
+    raise ModuleNotFoundError(
+        "dupekit is required for deduplication. Install it with: pip install marin[dedup]"
+    ) from None
+
 from fray.job import JobContext
 from zephyr import Backend, Dataset
 from zephyr.expr import col
