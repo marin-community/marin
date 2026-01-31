@@ -505,21 +505,23 @@ class Worker:
                         )
                     )
                 else:
-                    # Task is running/building - include in running_tasks
+                    # Task is running/building - include in running_tasks with current state
                     running_tasks.append(
                         cluster_pb2.Controller.RunningTaskEntry(
                             task_id=task_id,
                             attempt_id=task.to_proto().current_attempt_id,
+                            state=task.status,
                         )
                     )
 
-            # Report all non-terminal tasks (including unexpected ones)
+            # Report all non-terminal tasks (including unexpected ones) with current state
             for task_id, task in self._tasks.items():
                 if task_id not in expected_task_ids and task.status not in terminal_states:
                     running_tasks.append(
                         cluster_pb2.Controller.RunningTaskEntry(
                             task_id=task_id,
                             attempt_id=task.to_proto().current_attempt_id,
+                            state=task.status,
                         )
                     )
 

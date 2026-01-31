@@ -635,10 +635,27 @@ class Controller:
     ) -> None:
         """Process a successful heartbeat response.
 
-        Updates heartbeat timestamp and processes completed tasks. Reconciliation
-        of running vs expected tasks is handled worker-side using expected_tasks.
+        Updates heartbeat timestamp and processes running task state updates and completed tasks.
+        Reconciliation of running vs expected tasks is handled worker-side using expected_tasks.
         """
         self._state.handle_event(WorkerHeartbeatEvent(worker_id=worker.worker_id, timestamp_ms=now_ms()))
+
+        # Process running task state updates (BUILDING, RUNNING, etc.)
+        for entry in response.running_tasks:
+            task_id = TaskId(entry.task_id)
+            task = self._state.get_task(task_id)
+            if task and not task.is_finished():
+                # Only update state if it's different and not terminal
+                if task.state != entry.state:
+                    self._state.handle_event(
+                        TaskStateChangedEvent(
+                            task_id=task_id,
+                            new_state=entry.state,
+                            error=None,
+                            exit_code=None,
+                            attempt_id=entry.attempt_id,
+                        )
+                    )
 
         for entry in response.completed_tasks:
             task_id = TaskId(entry.task_id)
