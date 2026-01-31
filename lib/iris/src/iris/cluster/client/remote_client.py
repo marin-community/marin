@@ -16,8 +16,6 @@
 
 import time
 
-import cloudpickle
-
 from iris.cluster.types import Entrypoint, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
@@ -73,11 +71,17 @@ class RemoteClusterClient:
         scheduling_timeout_seconds: int = 0,
         constraints: list[cluster_pb2.Constraint] | None = None,
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
+        replicas: int = 1,
+        max_retries_failure: int = 0,
+        max_retries_preemption: int = 100,
+        timeout_seconds: int = 0,
     ) -> None:
-        serialized = cloudpickle.dumps(entrypoint)
+        if replicas < 1:
+            raise ValueError(f"replicas must be >= 1, got {replicas}")
+
+        entrypoint_proto = entrypoint.to_proto()
 
         env_config = cluster_pb2.EnvironmentConfig(
-            workspace=environment.workspace if environment else "/app",
             pip_packages=list(environment.pip_packages) if environment else [],
             env_vars=dict(environment.env_vars) if environment else {},
             extras=list(environment.extras) if environment else [],
@@ -91,7 +95,7 @@ class RemoteClusterClient:
         if self._bundle_gcs_path:
             request = cluster_pb2.Controller.LaunchJobRequest(
                 name=job_id,
-                serialized_entrypoint=serialized,
+                entrypoint=entrypoint_proto,
                 resources=resources,
                 environment=env_config,
                 bundle_gcs_path=self._bundle_gcs_path,
@@ -99,13 +103,17 @@ class RemoteClusterClient:
                 parent_job_id=parent_job_id,
                 scheduling_timeout_seconds=scheduling_timeout_seconds,
                 constraints=constraints or [],
+                replicas=replicas,
+                max_retries_failure=max_retries_failure,
+                max_retries_preemption=max_retries_preemption,
+                timeout_seconds=timeout_seconds,
             )
             if coscheduling is not None:
                 request.coscheduling.CopyFrom(coscheduling)
         else:
             request = cluster_pb2.Controller.LaunchJobRequest(
                 name=job_id,
-                serialized_entrypoint=serialized,
+                entrypoint=entrypoint_proto,
                 resources=resources,
                 environment=env_config,
                 bundle_blob=self._bundle_blob or b"",
@@ -113,6 +121,10 @@ class RemoteClusterClient:
                 parent_job_id=parent_job_id,
                 scheduling_timeout_seconds=scheduling_timeout_seconds,
                 constraints=constraints or [],
+                replicas=replicas,
+                max_retries_failure=max_retries_failure,
+                max_retries_preemption=max_retries_preemption,
+                timeout_seconds=timeout_seconds,
             )
             if coscheduling is not None:
                 request.coscheduling.CopyFrom(coscheduling)

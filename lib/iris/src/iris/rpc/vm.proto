@@ -29,6 +29,7 @@ enum VmState {
   VM_STATE_TERMINATED = 6;   // VM deleted
   VM_STATE_FAILED = 7;       // Boot or init failed
   VM_STATE_PREEMPTED = 8;    // Spot/preemptible VM reclaimed
+  VM_STATE_REQUESTING = 9;   // GCP API call in progress
 }
 
 // Scaling action types

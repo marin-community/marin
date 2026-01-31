@@ -35,7 +35,8 @@ def scale_group_config() -> config_pb2.ScaleGroupConfig:
         name="test-group",
         min_slices=1,
         max_slices=5,
-        accelerator_type="v5p-8",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5p-8",
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )
@@ -48,7 +49,8 @@ def unbounded_config() -> config_pb2.ScaleGroupConfig:
         name="unbounded-group",
         min_slices=0,
         max_slices=100,
-        accelerator_type="v5p-8",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5p-8",
         runtime_version="v2-alpha-tpuv5",
         zones=["us-central1-a"],
     )
@@ -505,9 +507,10 @@ class TestScalingGroupIdleTracking:
 
         group.update_slice_activity(vm_status_map, timestamp_ms=5000)
 
-        # Verify internal tracking to ensure only active slices are tracked (memory leak prevention)
-        assert group._slice_last_active.get("slice-001") == 5000
-        assert "slice-002" not in group._slice_last_active
+        # Observable behavior: slice-001 should not be eligible for scaledown (recently active)
+        # slice-002 should remain eligible (no activity tracked)
+        assert not group.is_slice_eligible_for_scaledown("slice-001", timestamp_ms=5000)
+        assert group.is_slice_eligible_for_scaledown("slice-002", timestamp_ms=5000)
 
     def test_scale_down_if_idle_terminates_eligible_slice(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """scale_down_if_idle terminates an eligible idle slice."""
@@ -586,8 +589,8 @@ class TestScalingGroupIdleTracking:
         # Scale down
         group.scale_down("slice-001")
 
-        # Verify internal cleanup to prevent memory leaks from stale slice tracking
-        assert "slice-001" not in group._slice_last_active
+        # Observable behavior: slice should be removed (already verified by assertion above)
+        assert group.get_slice("slice-001") is None
 
 
 class TestScalingGroupVmGroupStateCounts:
@@ -676,7 +679,8 @@ class TestScalingGroupAvailability:
             name="test-group",
             min_slices=0,
             max_slices=2,
-            accelerator_type="v5p-8",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
         )
         discovered = [make_mock_vm_group(f"slice-{i}") for i in range(2)]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
@@ -712,7 +716,8 @@ class TestScalingGroupAvailability:
             name="test-group",
             min_slices=0,
             max_slices=1,
-            accelerator_type="v5p-8",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
         )
         discovered = [make_mock_vm_group("slice-0")]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
@@ -783,14 +788,25 @@ class TestScalingGroupAvailability:
         state = group.availability(timestamp_ms=2000)
         assert state.status == GroupAvailability.QUOTA_EXCEEDED
 
-    def test_matches_requirements_filters_by_accelerator_type(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """matches_requirements filters groups by accelerator type."""
-        manager = make_mock_vm_manager()
-        group = ScalingGroup(scale_group_config, manager)  # has accelerator_type="v5p-8"
+    def test_matches_device_requirement_filters_by_type_and_variant(
+        self, scale_group_config: config_pb2.ScaleGroupConfig
+    ):
+        """matches_device_requirement filters groups by device type and variant."""
+        from iris.cluster.types import DeviceType
 
-        assert group.matches_requirements("v5p-8")
-        assert not group.matches_requirements("v5litepod-4")
-        assert group.matches_requirements(None)  # None matches any
+        manager = make_mock_vm_manager()
+        group = ScalingGroup(scale_group_config, manager)  # TPU with accelerator_variant="v5p-8"
+
+        # CPU matches any group
+        assert group.matches_device_requirement(DeviceType.CPU, None)
+
+        # TPU with matching variant
+        assert group.matches_device_requirement(DeviceType.TPU, "v5p-8")
+        assert group.matches_device_requirement(DeviceType.TPU, None)  # None = any TPU
+        assert not group.matches_device_requirement(DeviceType.TPU, "v5litepod-4")
+
+        # GPU doesn't match TPU group
+        assert not group.matches_device_requirement(DeviceType.GPU, None)
 
 
 class TestScalingGroupFailedSliceCleanup:
@@ -870,8 +886,8 @@ class TestScalingGroupFailedSliceCleanup:
 
         group.cleanup_failed_slices(timestamp_ms=2000)
 
-        # Verify internal cleanup to prevent memory leaks from stale slice tracking
-        assert "slice-001" not in group._slice_last_active
+        # Observable behavior: slice should be removed (already verified by cleanup return value)
+        assert group.get_slice("slice-001") is None
 
     def test_cleanup_failed_slices_ignores_cooldown(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """cleanup_failed_slices() does not respect scale_down_cooldown."""

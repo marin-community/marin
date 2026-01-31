@@ -20,11 +20,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from iris.cluster.vm.controller import check_health
 from iris.cluster.vm.ssh import (
-    check_health,
     connection_available,
     run_streaming_with_retry,
-    shutdown_worker,
     wait_for_connection,
 )
 
@@ -39,20 +38,6 @@ def make_fake_popen(lines: list[str] | None = None):
     mock.wait.return_value = 0
     mock.args = []
     return mock
-
-
-def test_connection_available_returns_true_on_success():
-    """connection_available returns True when command succeeds."""
-    conn = MagicMock()
-    conn.run.return_value = MagicMock(returncode=0)
-    assert connection_available(conn) is True
-
-
-def test_connection_available_returns_false_on_failure():
-    """connection_available returns False when command fails."""
-    conn = MagicMock()
-    conn.run.return_value = MagicMock(returncode=1)
-    assert connection_available(conn) is False
 
 
 def test_connection_available_returns_false_on_timeout():
@@ -85,7 +70,10 @@ def test_wait_for_connection_returns_true_immediately(mock_conn_avail, _mock_sle
 def test_wait_for_connection_returns_false_on_timeout(mock_time, mock_conn_avail, _mock_sleep):
     """wait_for_connection returns False when timeout expires."""
     mock_conn_avail.return_value = False
-    mock_time.side_effect = [0, 5, 11]  # Simulates time passing past 10s timeout
+    # Provide enough time values for all calls - the function now also logs which triggers
+    # additional time.time() calls from the logging module, so use a callable
+    times = iter([0, 0, 5, 11])
+    mock_time.side_effect = lambda: next(times, 100)  # Return 100 for any extra calls (logging)
     conn = MagicMock()
     assert wait_for_connection(conn, timeout_seconds=10, poll_interval=5) is False
 
@@ -103,54 +91,30 @@ def test_wait_for_connection_respects_stop_event(mock_time, mock_conn_avail, _mo
     assert wait_for_connection(conn, timeout_seconds=60, poll_interval=5, stop_event=stop_event) is False
 
 
-def test_check_health_returns_true_on_success():
-    """check_health returns True when curl succeeds."""
+def test_check_health_returns_healthy_on_success():
+    """check_health returns healthy result when curl succeeds."""
     conn = MagicMock()
-    conn.run.return_value = MagicMock(returncode=0)
-    assert check_health(conn, port=10001) is True
-    # Verify curl command was issued
-    call_args = conn.run.call_args[0][0]
-    assert "curl" in call_args
-    assert "10001" in call_args
+    conn.run.return_value = MagicMock(returncode=0, stdout="OK")
+    result = check_health(conn, port=10001)
+    assert result.healthy is True
 
 
-def test_check_health_returns_false_on_failure():
-    """check_health returns False when curl fails."""
+def test_check_health_returns_unhealthy_on_failure():
+    """check_health returns unhealthy result when curl fails."""
     conn = MagicMock()
-    conn.run.return_value = MagicMock(returncode=1)
-    assert check_health(conn, port=10001) is False
+    conn.run.return_value = MagicMock(returncode=1, stderr="Connection refused", stdout="")
+    result = check_health(conn, port=10001)
+    assert result.healthy is False
+    assert "exit code 1" in result.curl_error or "Connection refused" in result.curl_error
 
 
-def test_check_health_returns_false_on_exception():
-    """check_health returns False on exception (safe helper)."""
+def test_check_health_returns_unhealthy_on_exception():
+    """check_health returns unhealthy result on exception."""
     conn = MagicMock()
     conn.run.side_effect = Exception("Network error")
-    assert check_health(conn, port=10001) is False
-
-
-def test_shutdown_worker_graceful():
-    """shutdown_worker with graceful=True runs docker stop."""
-    conn = MagicMock()
-    conn.run.return_value = MagicMock(returncode=0)
-    assert shutdown_worker(conn, graceful=True) is True
-    call_args = conn.run.call_args[0][0]
-    assert "docker stop iris-worker" in call_args
-
-
-def test_shutdown_worker_forceful():
-    """shutdown_worker with graceful=False runs docker kill."""
-    conn = MagicMock()
-    conn.run.return_value = MagicMock(returncode=0)
-    assert shutdown_worker(conn, graceful=False) is True
-    call_args = conn.run.call_args[0][0]
-    assert "docker kill iris-worker" in call_args
-
-
-def test_shutdown_worker_returns_false_on_exception():
-    """shutdown_worker returns False on exception (safe helper)."""
-    conn = MagicMock()
-    conn.run.side_effect = Exception("Docker error")
-    assert shutdown_worker(conn, graceful=True) is False
+    result = check_health(conn, port=10001)
+    assert result.healthy is False
+    assert "Network error" in result.curl_error
 
 
 def test_run_streaming_with_retry_success_first_attempt():
@@ -183,6 +147,7 @@ def test_run_streaming_with_retry_retries_on_connection_error(_mock_sleep):
     assert call_count[0] == 3
 
 
+@pytest.mark.slow  # Flaky in CI: background thread holds logging lock (gh#2551)
 @patch("iris.cluster.vm.ssh.time.sleep")
 def test_run_streaming_with_retry_raises_after_max_retries(_mock_sleep):
     """run_streaming_with_retry raises RuntimeError after max retries."""

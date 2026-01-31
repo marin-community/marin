@@ -24,9 +24,10 @@ Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.pr
 """
 
 import os
+import sys
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
-from enum import IntEnum
+from dataclasses import dataclass
+from enum import Enum, IntEnum
 from typing import Any, NewType
 
 import humanfriendly
@@ -34,6 +35,16 @@ import humanfriendly
 from iris.rpc import cluster_pb2
 
 JobId = NewType("JobId", str)
+
+
+class DeviceType(Enum):
+    """Device type for demand routing."""
+
+    CPU = "cpu"
+    GPU = "gpu"
+    TPU = "tpu"
+
+
 TaskId = NewType("TaskId", str)
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
@@ -257,8 +268,6 @@ class ResourceSpec:
     memory: str | int = 0  # "8g" or bytes
     disk: str | int = 0
     device: cluster_pb2.DeviceConfig | None = None
-    replicas: int = 0
-    preemptible: bool = False
     regions: Sequence[str] | None = None
 
     def to_proto(self) -> cluster_pb2.ResourceSpecProto:
@@ -269,8 +278,6 @@ class ResourceSpec:
             cpu=self.cpu,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
-            replicas=self.replicas,
-            preemptible=self.preemptible,
             regions=list(self.regions or []),
         )
         if self.device is not None:
@@ -287,17 +294,16 @@ class EnvironmentSpec:
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
+
+    Note: To specify workspace for bundle creation, use IrisClient.remote(workspace=...).
     """
 
-    workspace: str | None = None
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
 
     def to_proto(self) -> cluster_pb2.EnvironmentConfig:
         """Convert to wire format with sensible defaults applied."""
-        workspace = self.workspace if self.workspace is not None else os.getcwd()
-
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
@@ -308,10 +314,10 @@ class EnvironmentSpec:
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
         return cluster_pb2.EnvironmentConfig(
-            workspace=workspace,
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
+            python_version=f"{sys.version_info.major}.{sys.version_info.minor}",
         )
 
 
@@ -358,6 +364,14 @@ class Namespace(str):
         return cls(job_id.split("/")[0])
 
 
+PREEMPTIBLE_ATTRIBUTE_KEY = "preemptible"
+
+
+def preemptible_constraint(preemptible: bool = True) -> Constraint:
+    """Constraint requiring workers to be preemptible (or not)."""
+    return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
+
+
 def is_job_finished(state: int) -> bool:
     return state in (
         cluster_pb2.JOB_STATE_SUCCEEDED,
@@ -385,28 +399,6 @@ def is_task_finished(state: int) -> bool:
         }
     )
     return state in terminal_states
-
-
-def job_task_counts(job: cluster_pb2.JobStatus) -> dict[str, int]:
-    """Compute task state counts from tasks[] in JobStatus proto.
-
-    Returns a dict with keys: pending, running, succeeded, failed.
-    """
-    counts = {"pending": 0, "running": 0, "succeeded": 0, "failed": 0}
-    for task in job.tasks:
-        if task.state == cluster_pb2.TASK_STATE_PENDING:
-            counts["pending"] += 1
-        elif task.state == cluster_pb2.TASK_STATE_RUNNING:
-            counts["running"] += 1
-        elif task.state == cluster_pb2.TASK_STATE_SUCCEEDED:
-            counts["succeeded"] += 1
-        elif task.state in (
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
-        ):
-            counts["failed"] += 1
-    return counts
 
 
 JobState = cluster_pb2.JobState
@@ -479,21 +471,105 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
-@dataclass
 class Entrypoint:
     """Job entrypoint specification.
 
-    A callable with args/kwargs that will be executed by the worker.
-    The callable must be picklable (via cloudpickle).
+    Supports two execution modes:
+    1. Callable: A Python function with args/kwargs (cloudpickled)
+    2. Command: A command-line invocation (e.g., ["python", "train.py", "--epochs", "10"])
 
-    Example:
+    Callable entrypoints are stored as cloudpickle bytes. The bytes are the
+    single source of truth — they pass from client to worker to task container
+    without deserialization, avoiding Python version mismatches between the
+    client and worker processes.
+
+    Examples:
+        # Callable entrypoint
         entrypoint = Entrypoint.from_callable(my_func, arg1, arg2, key=val)
+
+        # Command entrypoint
+        entrypoint = Entrypoint.from_command("python", "train.py", "--epochs", "10")
     """
 
-    callable: Callable[..., Any]
-    args: tuple = ()
-    kwargs: dict[str, Any] = field(default_factory=dict)
+    def __init__(
+        self,
+        *,
+        callable_bytes: bytes | None = None,
+        command: list[str] | None = None,
+    ):
+        has_callable = callable_bytes is not None
+        has_command = command is not None
+        if has_callable == has_command:
+            raise ValueError("Exactly one of 'callable_bytes' or 'command' must be set")
+        self._callable_bytes = callable_bytes
+        self.command = command
+
+    @property
+    def callable_bytes(self) -> bytes | None:
+        return self._callable_bytes
+
+    @property
+    def is_callable(self) -> bool:
+        return self._callable_bytes is not None
+
+    @property
+    def is_command(self) -> bool:
+        return self.command is not None
+
+    def resolve(self) -> tuple[Callable[..., Any], tuple, dict[str, Any]]:
+        """Deserialize the callable, args, kwargs from pickle bytes.
+
+        Only call this when you need to actually invoke the function locally
+        (e.g. local_client). Avoid on the worker — use callable_bytes directly
+        to pass through to the task container without version-sensitive unpickling.
+        """
+        if self._callable_bytes is None:
+            raise ValueError("Not a callable entrypoint")
+        import cloudpickle
+
+        return cloudpickle.loads(self._callable_bytes)
 
     @classmethod
     def from_callable(cls, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "Entrypoint":
-        return cls(callable=fn, args=args, kwargs=kwargs)
+        import cloudpickle
+
+        return cls(callable_bytes=cloudpickle.dumps((fn, args, kwargs)))
+
+    @classmethod
+    def from_command(cls, *argv: str) -> "Entrypoint":
+        """Create a command-line entrypoint.
+
+        Args:
+            *argv: Command and arguments (e.g., "python", "train.py", "--epochs", "10")
+
+        Returns:
+            Entrypoint configured for command execution
+        """
+        if not argv:
+            raise ValueError("Command must have at least one argument")
+        return cls(command=list(argv))
+
+    def to_proto(self) -> cluster_pb2.Entrypoint:
+        """Convert to protobuf representation."""
+        proto = cluster_pb2.Entrypoint()
+        if self._callable_bytes is not None:
+            proto.callable = self._callable_bytes
+        elif self.command is not None:
+            proto.command.argv[:] = self.command
+        return proto
+
+    @classmethod
+    def from_proto(cls, proto: cluster_pb2.Entrypoint) -> "Entrypoint":
+        """Create from protobuf representation.
+
+        For callable entrypoints, stores the raw pickle bytes without
+        deserializing. This avoids Python version mismatches when the
+        worker runs a different Python than the client.
+        """
+        kind = proto.WhichOneof("kind")
+        if kind == "callable":
+            return cls(callable_bytes=proto.callable)
+        elif kind == "command":
+            return cls(command=list(proto.command.argv))
+        else:
+            raise ValueError(f"Unknown entrypoint kind: {kind}")

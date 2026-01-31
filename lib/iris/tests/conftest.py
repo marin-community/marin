@@ -15,6 +15,7 @@
 # Test configuration for iris
 
 import subprocess
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -27,6 +28,12 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Use real Docker containers instead of in-process mocks",
+    )
+    parser.addoption(
+        "--update-snapshots",
+        action="store_true",
+        default=False,
+        help="Update golden snapshot files instead of comparing",
     )
 
 
@@ -80,7 +87,19 @@ def docker_cleanup_scope():
 
 
 @pytest.fixture(scope="session")
-def docker_cleanup_session():
+def docker_cleanup_session(use_docker):
     """Session-scoped cleanup for e2e tests that use real Docker."""
-    with _docker_cleanup(cleanup_images=True):
+    if use_docker:
+        with _docker_cleanup(cleanup_images=True):
+            yield
+    else:
+        # Skip Docker cleanup when not using Docker
         yield
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Hook to debug pytest exit status - helps diagnose silent failures."""
+    if exitstatus == 0:
+        print("\nPytest thinks everything is fine...", file=sys.stderr)
+    else:
+        print(f"\nPytest is exiting with status {exitstatus}", file=sys.stderr)

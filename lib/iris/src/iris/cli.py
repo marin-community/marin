@@ -20,28 +20,37 @@ organized into subcommand groups for cluster operations and image builds.
 
 import concurrent.futures
 import datetime
+import importlib.util
 import json
 import logging
 import signal
+import sys
 import threading
 import time
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import click
 from connectrpc.errors import ConnectError
 
 from iris.build import build_image, push_to_registries
+from iris.client import IrisClient
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
+from iris.cluster.types import Entrypoint
 from iris.cluster.vm.config import (
     create_autoscaler_from_config,
     create_manual_autoscaler,
     load_config,
 )
+from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.controller import create_controller
+from iris.cluster.vm.debug import controller_tunnel
 from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
+from iris.logging import configure_logging as _configure_logging
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
-from iris.rpc.proto_utils import vm_state_name
+from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.rpc_cli import ServiceCommands
 
 # =============================================================================
@@ -123,6 +132,132 @@ def _require_config(ctx: click.Context) -> str:
     return config_file
 
 
+def _parse_artifact_registry_tag(image_tag: str) -> tuple[str, str, str, str] | None:
+    """Parse a GCP Artifact Registry image tag into components.
+
+    Args:
+        image_tag: Full image tag like "europe-west4-docker.pkg.dev/project/repo/image:version"
+
+    Returns:
+        Tuple of (region, project, image_name, version) or None if not a valid AR tag.
+    """
+    if "-docker.pkg.dev/" not in image_tag:
+        return None
+
+    # Parse: region-docker.pkg.dev/project/repo/image:version
+    parts = image_tag.split("/")
+    if len(parts) < 4:
+        return None
+
+    # Extract region from "region-docker.pkg.dev"
+    registry = parts[0]
+    if not registry.endswith("-docker.pkg.dev"):
+        return None
+    region = registry.replace("-docker.pkg.dev", "")
+
+    project = parts[1]
+    # repo is parts[2] (e.g., "marin")
+    image_and_version = parts[3]
+
+    if ":" in image_and_version:
+        image_name, version = image_and_version.split(":", 1)
+    else:
+        image_name = image_and_version
+        version = "latest"
+
+    return region, project, image_name, version
+
+
+@dataclass
+class ImageBuildParams:
+    """Parameters extracted from config for building an image."""
+
+    image_type: Literal["worker", "controller"]
+    region: str
+    project: str
+    image_name: str
+    version: str
+
+    @property
+    def local_tag(self) -> str:
+        return f"{self.image_name}:{self.version}"
+
+
+def _extract_worker_image_params(config) -> ImageBuildParams | None:
+    """Extract worker image build params from config.bootstrap.docker_image."""
+    if not config.bootstrap.docker_image:
+        return None
+
+    parsed = _parse_artifact_registry_tag(config.bootstrap.docker_image)
+    if not parsed:
+        return None
+
+    region, project, image_name, version = parsed
+    return ImageBuildParams(
+        image_type="worker",
+        region=region,
+        project=project,
+        image_name=image_name,
+        version=version,
+    )
+
+
+def _extract_controller_image_params(config) -> ImageBuildParams | None:
+    """Extract controller image build params from config.controller_vm.image."""
+    if not config.controller_vm.image:
+        return None
+
+    parsed = _parse_artifact_registry_tag(config.controller_vm.image)
+    if not parsed:
+        return None
+
+    region, project, image_name, version = parsed
+    return ImageBuildParams(
+        image_type="controller",
+        region=region,
+        project=project,
+        image_name=image_name,
+        version=version,
+    )
+
+
+def _build_and_push_image(params: ImageBuildParams) -> None:
+    """Build and push a single image using params."""
+    click.echo(f"Building {params.image_type} image: {params.local_tag}")
+    click.echo(f"  Region: {params.region}")
+    click.echo(f"  Project: {params.project}")
+    click.echo()
+
+    build_image(
+        image_type=params.image_type,
+        tag=params.local_tag,
+        push=False,
+        dockerfile=None,
+        context=None,
+        platform="linux/amd64",
+        region=(),
+        project=params.project,
+    )
+
+    click.echo()
+    push_to_registries(
+        source_tag=params.local_tag,
+        regions=(params.region,),
+        project=params.project,
+        image_name=params.image_name,
+        version=params.version,
+    )
+
+
+def _build_cluster_images(config) -> None:
+    """Build and push all cluster images (worker and controller)."""
+    for extract_fn in [_extract_worker_image_params, _extract_controller_image_params]:
+        params = extract_fn(config)
+        if params:
+            _build_and_push_image(params)
+            click.echo()
+
+
 def _wait_for_slice_obj(slice_obj, poll_interval: float = 5.0) -> bool:
     """Poll until slice reaches terminal state (all READY or any FAILED).
 
@@ -158,6 +293,36 @@ def _wait_for_slice_obj(slice_obj, poll_interval: float = 5.0) -> bool:
         time.sleep(poll_interval)
 
 
+def _validate_cluster_health(config) -> None:
+    """Validate cluster by submitting a test job and waiting for it to complete."""
+    from pathlib import Path
+
+    from iris.cluster.types import ResourceSpec
+
+    zone = config.zone
+    project = config.project_id
+    label_prefix = config.label_prefix or "iris"
+
+    with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
+        click.echo(f"  Connected to controller at {tunnel_url}")
+        client = IrisClient.remote(tunnel_url, workspace=Path.cwd())
+
+        def _validate_hello():
+            print("Reload validation job OK")
+            return 42
+
+        click.echo("  Submitting validation job...")
+        job = client.submit(
+            entrypoint=Entrypoint.from_callable(_validate_hello),
+            name="reload-validate",
+            resources=ResourceSpec(cpu=1),
+        )
+        click.echo(f"  Job submitted: {job.job_id}")
+        click.echo("  Waiting for job (workers may need to scale up)...")
+        status = job.wait(timeout=600, raise_on_failure=True)
+        click.echo(f"  Job completed: {cluster_pb2.JobState.Name(status.state)}")
+
+
 # =============================================================================
 # Main CLI Group
 # =============================================================================
@@ -173,17 +338,9 @@ def iris(ctx, verbose: bool, show_traceback: bool):
     ctx.obj["traceback"] = show_traceback
 
     if verbose:
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
+        _configure_logging(level=logging.DEBUG)
     else:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
+        _configure_logging(level=logging.INFO)
 
 
 # =============================================================================
@@ -227,8 +384,24 @@ def controller(ctx):
 @controller.command("start")
 @click.pass_context
 def controller_start(ctx):
-    """Boot controller GCE VM and wait for health."""
+    """Boot controller GCE VM and wait for health.
+
+    Automatically builds and pushes the controller image before starting.
+    """
     config = ctx.obj["config"]
+
+    params = _extract_controller_image_params(config)
+    if not params:
+        raise click.ClickException(
+            "Cannot extract controller image params from config. "
+            "config.controller_vm.image must be a valid Artifact Registry tag.\n"
+            "Expected format: REGION-docker.pkg.dev/PROJECT/REPO/IMAGE:VERSION\n"
+            f"Got: {config.controller_vm.image or 'None'}"
+        )
+
+    _build_and_push_image(params)
+    click.echo()
+
     ctrl = create_controller(config)
 
     click.echo("Starting controller...")
@@ -274,11 +447,24 @@ def controller_restart(ctx):
 def controller_reload(ctx):
     """Reload controller by re-running bootstrap on existing VM.
 
-    Unlike restart, this does not delete/recreate the VM - it SSHs into
+    Automatically builds and pushes the controller image, then SSHs into
     the existing VM and re-runs the bootstrap script to pull the latest
     image and restart the container. Faster than a full restart.
     """
     config = ctx.obj["config"]
+
+    params = _extract_controller_image_params(config)
+    if not params:
+        raise click.ClickException(
+            "Cannot extract controller image params from config. "
+            "config.controller_vm.image must be a valid Artifact Registry tag.\n"
+            "Expected format: REGION-docker.pkg.dev/PROJECT/REPO/IMAGE:VERSION\n"
+            f"Got: {config.controller_vm.image or 'None'}"
+        )
+
+    _build_and_push_image(params)
+    click.echo()
+
     ctrl = create_controller(config)
 
     click.echo("Reloading controller...")
@@ -311,7 +497,11 @@ def controller_status(ctx):
 @controller.command("run-local")
 @click.option("--host", default="0.0.0.0", help="Bind host")
 @click.option("--port", default=10000, type=int, help="Bind port")
-@click.option("--bundle-dir", default="/var/cache/iris/bundles", help="Directory for job bundles")
+@click.option(
+    "--bundle-prefix",
+    default=None,
+    help="URI prefix for job bundles (e.g., gs://bucket/path or file:///path). Required.",
+)
 @click.option("--scheduler-interval", default=0.5, type=float, help="Scheduler loop interval (seconds)")
 @click.option("--worker-timeout", default=60.0, type=float, help="Worker heartbeat timeout (seconds)")
 @click.pass_context
@@ -319,7 +509,7 @@ def controller_run_local(
     ctx,
     host: str,
     port: int,
-    bundle_dir: str,
+    bundle_prefix: str | None,
     scheduler_interval: float,
     worker_timeout: float,
 ):
@@ -329,18 +519,31 @@ def controller_run_local(
     The autoscaler provisions/terminates VMs based on pending task demand.
 
     Examples:
-        # Run local controller with autoscaler
-        uv run iris cluster --config=examples/demo.yaml controller run-local
+        # Run local controller with autoscaler and bundle storage
+        uv run iris cluster --config=examples/demo.yaml controller run-local --bundle-prefix gs://my-bucket/iris/bundles
 
-        # Custom port
-        uv run iris cluster --config=examples/demo.yaml controller run-local --port 8080
+        # Custom port with file system storage
+        uv run iris cluster --config=examples/demo.yaml controller run-local --port 8080 --bundle-prefix file:///tmp/iris/bundles
     """
     cluster_config = ctx.obj["config"]
+
+    # Require bundle_prefix - check CLI option or config
+    effective_bundle_prefix = bundle_prefix or (
+        cluster_config.controller_vm.bundle_prefix if cluster_config.controller_vm else None
+    )
+
+    if not effective_bundle_prefix:
+        click.echo(
+            "Error: bundle_prefix is required. Set via --bundle-prefix or controller_vm.bundle_prefix in config.\n"
+            "Example: --bundle-prefix gs://my-bucket/iris/bundles",
+            err=True,
+        )
+        raise SystemExit(1)
 
     controller_config = ControllerConfig(
         host=host,
         port=port,
-        bundle_dir=Path(bundle_dir),
+        bundle_prefix=effective_bundle_prefix,
         scheduler_interval_seconds=scheduler_interval,
         worker_timeout_seconds=worker_timeout,
     )
@@ -358,7 +561,7 @@ def controller_run_local(
     )
 
     click.echo(f"Starting Iris controller on {host}:{port}")
-    click.echo(f"  Bundle dir: {controller_config.bundle_dir}")
+    click.echo(f"  Bundle prefix: {effective_bundle_prefix}")
     click.echo(f"  Scheduler interval: {scheduler_interval}s")
     click.echo(f"  Worker timeout: {worker_timeout}s")
     if autoscaler:
@@ -420,7 +623,9 @@ def autoscaler_status_cmd(ctx, controller_url: str):
         counts = compute_slice_state_counts(group.slices)
         total = sum(counts.values())
         click.echo(f"\n  {group.name}:")
-        click.echo(f"    Type: {group.config.accelerator_type}")
+        click.echo(
+            f"    Type: {format_accelerator_display(group.config.accelerator_type, group.config.accelerator_variant)}"
+        )
         click.echo(f"    Min/Max slices: {group.config.min_slices}/{group.config.max_slices}")
         click.echo(
             f"    Current slices: {total} "
@@ -690,7 +895,8 @@ def _status_via_controller(controller_url: str, scale_group: str | None):
         counts = compute_slice_state_counts(group.slices)
         total = sum(counts.values())
         click.echo(f"\nScale Group: {group.name}")
-        click.echo(f"  Accelerator: {group.config.accelerator_type}")
+        accel_display = format_accelerator_display(group.config.accelerator_type, group.config.accelerator_variant)
+        click.echo(f"  Accelerator: {accel_display}")
         click.echo(f"  Slices: {counts.get('ready', 0)}/{total} ready")
         click.echo(f"    Booting: {counts.get('booting', 0)}")
         click.echo(f"    Initializing: {counts.get('initializing', 0)}")
@@ -732,7 +938,8 @@ def _status_via_autoscaler(config_file: str, scale_group: str | None):
     for name, group in groups.items():
         vm_groups = group.vm_groups()
         click.echo(f"\nScale Group: {name}")
-        click.echo(f"  Accelerator: {group.config.accelerator_type}")
+        accel_display = format_accelerator_display(group.config.accelerator_type, group.config.accelerator_variant)
+        click.echo(f"  Accelerator: {accel_display}")
         click.echo(f"  Slices: {len(vm_groups)}")
 
         for vm_group in vm_groups:
@@ -923,25 +1130,33 @@ def cluster_init(
 
 
 @cluster.command("start")
+@click.option("--local", is_flag=True, help="Run locally without GCP")
 @click.pass_context
-def cluster_start(ctx):
+def cluster_start(ctx, local: bool):
     """Start controller VM and wait for health.
 
-    Boots the controller GCE VM which runs the autoscaler internally.
+    Automatically builds and pushes both worker and controller images, then
+    boots the controller GCE VM which runs the autoscaler internally.
     The autoscaler provisions/terminates worker VMs based on task demand.
 
-    Examples:
-        uv run iris cluster --config=examples/demo.yaml start
+    Use --local to run entirely on the local machine without GCP.
     """
     config = ctx.obj.get("config")
     if not config:
         click.echo("Error: --config is required", err=True)
         raise SystemExit(1)
 
-    ctrl = create_controller(config)
+    if local:
+        config = make_local_config(config)
+
+    manager = ClusterManager(config)
+
+    if not manager.is_local:
+        _build_cluster_images(config)
+
     click.echo("Starting controller...")
     try:
-        address = ctrl.start()
+        address = manager.start()
         click.echo(f"Controller started at {address}")
         click.echo("\nController is running with integrated autoscaler.")
         click.echo("Use 'iris cluster --config=... status' to check cluster state.")
@@ -1029,6 +1244,53 @@ def cluster_restart(ctx):
     ctx.invoke(cluster_start)
 
 
+@cluster.command("reload")
+@click.option("--no-build", is_flag=True, help="Skip image building (use existing images)")
+@click.option("--validate", is_flag=True, help="Submit a health check after reload")
+@click.pass_context
+def cluster_reload(ctx, no_build: bool, validate: bool):
+    """Reload cluster by rebuilding images and redeploying on existing VMs.
+
+    Faster than a full restart: rebuilds Docker images, SSHs into existing
+    controller and worker VMs, pulls new images, and restarts containers.
+    Existing VMs are preserved.
+
+    Use --validate to verify the reloaded controller is healthy by establishing
+    an SSH tunnel and checking the health endpoint.
+
+    Examples:
+        uv run iris cluster --config=examples/eu-west4.yaml reload
+        uv run iris cluster --config=examples/eu-west4.yaml reload --no-build
+        uv run iris cluster --config=examples/eu-west4.yaml reload --validate
+    """
+    config = ctx.obj.get("config")
+    if not config:
+        click.echo("Error: --config is required", err=True)
+        raise SystemExit(1)
+
+    if not no_build:
+        _build_cluster_images(config)
+
+    manager = ClusterManager(config)
+
+    click.echo("Reloading cluster (controller + workers)...")
+    try:
+        address = manager.reload()
+        click.echo(f"Cluster reloaded. Controller at {address}")
+    except Exception as e:
+        click.echo(f"Failed to reload cluster: {e}", err=True)
+        raise SystemExit(1) from e
+
+    if validate:
+        click.echo("\nValidating cluster health...")
+        try:
+            _validate_cluster_health(config)
+            click.echo("Cluster validation passed.")
+        except Exception as e:
+            click.echo(f"Cluster validation failed: {e}", err=True)
+            raise SystemExit(1) from e
+
+
 @cluster.command("status")
 @click.pass_context
 def cluster_status_cmd(ctx):
@@ -1093,6 +1355,7 @@ def build():
 @click.option("--platform", default="linux/amd64", help="Target platform (e.g., linux/amd64, linux/arm64)")
 @click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to (can be repeated)")
 @click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
+@click.option("--no-cache", is_flag=True, help="Build without using cache")
 def build_worker_image(
     tag: str,
     push: bool,
@@ -1101,6 +1364,7 @@ def build_worker_image(
     platform: str,
     region: tuple[str, ...],
     project: str,
+    no_cache: bool,
 ):
     """Build Docker image for Iris worker.
 
@@ -1118,7 +1382,7 @@ def build_worker_image(
         uv run iris build worker-image -t iris-worker:v1 \\
             --push --region us-central1 --region europe-west4
     """
-    build_image("worker", tag, push, dockerfile, context, platform, region, project)
+    build_image("worker", tag, push, dockerfile, context, platform, region, project, no_cache)
 
 
 @build.command("controller-image")
@@ -1135,6 +1399,7 @@ def build_worker_image(
 @click.option("--platform", default="linux/amd64", help="Target platform (e.g., linux/amd64, linux/arm64)")
 @click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to (can be repeated)")
 @click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
+@click.option("--no-cache", is_flag=True, help="Build without using cache")
 def build_controller_image(
     tag: str,
     push: bool,
@@ -1143,6 +1408,7 @@ def build_controller_image(
     platform: str,
     region: tuple[str, ...],
     project: str,
+    no_cache: bool,
 ):
     """Build Docker image for Iris controller.
 
@@ -1160,7 +1426,7 @@ def build_controller_image(
         uv run iris build controller-image -t iris-controller:v1 \\
             --push --region us-central1 --region europe-west4
     """
-    build_image("controller", tag, push, dockerfile, context, platform, region, project)
+    build_image("controller", tag, push, dockerfile, context, platform, region, project, no_cache)
 
 
 @build.command("push")
@@ -1186,6 +1452,179 @@ def build_push(source_tag: str, region: tuple[str, ...], project: str, image_nam
         image_name=image_name,
         version=version,
     )
+
+
+# =============================================================================
+# Submit Command
+# =============================================================================
+
+
+@iris.command("submit")
+@click.argument("script_path", type=click.Path(exists=True))
+@click.option("--controller-url", help="Direct controller URL (e.g., http://localhost:10000)")
+@click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config file for auto-tunneling")
+@click.option("--name", help="Job name (defaults to script filename)")
+@click.option("--timeout", default=600, type=int, help="Job timeout in seconds")
+@click.option("--workspace", type=click.Path(exists=True), help="Workspace directory (defaults to script parent)")
+@click.argument("script_args", nargs=-1)
+@click.pass_context
+def submit(
+    ctx,
+    script_path: str,
+    controller_url: str | None,
+    config_file: str | None,
+    name: str | None,
+    timeout: int,
+    workspace: str | None,
+    script_args: tuple[str, ...],
+):
+    """Submit a Python script as a job to the Iris cluster.
+
+    The script must define a main() function that will be executed as the job entrypoint.
+    Additional arguments after the script path will be passed to main() as positional arguments.
+
+    Examples:
+        # Submit to local controller
+        iris submit script.py --controller-url http://localhost:10000
+
+        # Submit via SSH tunnel from config
+        iris submit script.py --config examples/eu-west4.yaml
+
+        # Pass arguments to script's main function
+        iris submit scripts/test-actor.py --controller-url http://localhost:10000 -- 10
+    """
+    # Validate mutually exclusive options
+    if controller_url and config_file:
+        click.echo("Error: --controller-url and --config are mutually exclusive", err=True)
+        raise SystemExit(1)
+    if not controller_url and not config_file:
+        click.echo("Error: Either --controller-url or --config is required", err=True)
+        raise SystemExit(1)
+
+    # Load script as module and find main function
+    script_path_obj = Path(script_path).resolve()
+    script_name = script_path_obj.stem
+
+    spec = importlib.util.spec_from_file_location(script_name, script_path_obj)
+    if not spec or not spec.loader:
+        click.echo(f"Error: Failed to load script: {script_path}", err=True)
+        raise SystemExit(1)
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[script_name] = module
+
+    try:
+        spec.loader.exec_module(module)
+    except Exception as e:
+        click.echo(f"Error loading script: {e}", err=True)
+        if ctx.obj and ctx.obj.get("traceback"):
+            traceback.print_exc()
+        raise SystemExit(1)  # noqa: B904
+
+    if not hasattr(module, "main"):
+        click.echo(f"Error: Script {script_path} must define a main() function", err=True)
+        raise SystemExit(1)
+
+    main_func = module.main
+
+    # Default workspace to script's parent directory
+    if workspace:
+        workspace_path = Path(workspace).resolve()
+    else:
+        workspace_path = script_path_obj.parent
+
+    # Default job name to script filename
+    job_name = name or script_name
+
+    # Convert script args to appropriate types
+    # For now, just pass as strings - scripts can parse them
+    args_list = list(script_args)
+
+    def _submit_and_wait(url: str):
+        """Helper to submit job and wait for completion."""
+        click.echo(f"Connecting to controller at {url}")
+        click.echo(f"Workspace: {workspace_path}")
+        click.echo(f"Job name: {job_name}")
+        if args_list:
+            click.echo(f"Arguments: {args_list}")
+        click.echo()
+
+        try:
+            client = IrisClient.remote(url, workspace=workspace_path)
+        except Exception as e:
+            click.echo(f"Error connecting to controller: {e}", err=True)
+            if ctx.obj and ctx.obj.get("traceback"):
+                traceback.print_exc()
+            raise SystemExit(1)  # noqa: B904
+
+        # Create entrypoint from main function with args
+        try:
+            entrypoint = Entrypoint.from_callable(main_func, *args_list)
+        except Exception as e:
+            click.echo(f"Error creating entrypoint: {e}", err=True)
+            if ctx.obj and ctx.obj.get("traceback"):
+                traceback.print_exc()
+            raise SystemExit(1)  # noqa: B904
+
+        # Submit job
+        click.echo("Submitting job...")
+        try:
+            job = client.submit(entrypoint=entrypoint, name=job_name)
+            click.echo(f"Job submitted: {job.job_id}")
+            click.echo()
+        except Exception as e:
+            click.echo(f"Error submitting job: {e}", err=True)
+            if ctx.obj and ctx.obj.get("traceback"):
+                traceback.print_exc()
+            raise SystemExit(1)  # noqa: B904
+
+        # Wait for job with log streaming
+        click.echo("Streaming logs...")
+        click.echo("-" * 80)
+        try:
+            status = job.wait(timeout=timeout, stream_logs=True, raise_on_failure=False)
+        except TimeoutError:
+            click.echo(f"\nError: Job timed out after {timeout} seconds", err=True)
+            raise SystemExit(1)  # noqa: B904
+        except Exception as e:
+            click.echo(f"\nError waiting for job: {e}", err=True)
+            if ctx.obj and ctx.obj.get("traceback"):
+                traceback.print_exc()
+            raise SystemExit(1)  # noqa: B904
+
+        # Print final status
+        click.echo("-" * 80)
+        state_name = cluster_pb2.JobState.Name(status.state)
+        click.echo(f"Job {job.job_id}: {state_name}")
+
+        if status.state == cluster_pb2.JOB_STATE_SUCCEEDED:
+            click.echo("Job completed successfully")
+        else:
+            click.echo(f"Job failed: {status.error}", err=True)
+            raise SystemExit(1)
+
+    # Execute with appropriate connection method
+    if controller_url:
+        _submit_and_wait(controller_url)
+    else:
+        # Load config and establish tunnel
+        assert config_file is not None
+        config = load_config(Path(config_file))
+
+        zone = config.zone or "us-central1-a"
+        project = config.project_id or ""
+
+        if not project:
+            click.echo("Error: Config file must specify project_id", err=True)
+            raise SystemExit(1)
+
+        click.echo(f"Establishing SSH tunnel to controller in {zone}...")
+        try:
+            with controller_tunnel(zone, project) as url:
+                _submit_and_wait(url)
+        except RuntimeError as e:
+            click.echo(f"Error: {e}", err=True)
+            raise SystemExit(1)  # noqa: B904
 
 
 if __name__ == "__main__":

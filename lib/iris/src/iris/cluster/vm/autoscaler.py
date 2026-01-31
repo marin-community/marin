@@ -34,13 +34,14 @@ from __future__ import annotations
 
 import logging
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 
-from iris.cluster.types import VmWorkerStatusMap
+from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.vm.managed_vm import VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
-from iris.rpc import vm_pb2
+from iris.rpc import config_pb2, vm_pb2
 from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
@@ -76,8 +77,12 @@ class ScalingDecision:
 class DemandEntry:
     """A demand entry specifying resource requirements and count."""
 
-    accelerator_type: str | None = None  # None = any accelerator
+    device_type: DeviceType = DeviceType.CPU
+    device_variant: str | None = None  # None = any variant of this type
     count: int = 0
+    total_cpu: int = 0
+    total_memory_bytes: int = 0
+    preemptible: bool | None = None  # None = no preference
 
 
 @dataclass
@@ -88,13 +93,6 @@ class RoutingResult:
     unmet_demand: int
 
 
-@dataclass
-class AutoscalerConfig:
-    """Configuration for the autoscaler."""
-
-    evaluation_interval_seconds: float = 10.0
-
-
 def route_demand(
     groups: list[ScalingGroup],
     demand_entries: list[DemandEntry],
@@ -103,7 +101,7 @@ def route_demand(
     """Route demand to groups based on requirements and priority.
 
     For each demand entry:
-    1. Find groups that match the accelerator_type requirement
+    1. Find groups that match the device type/variant requirement
     2. Sort matching groups by priority (lower = higher priority)
     3. Route demand through available groups until satisfied or all exhausted
 
@@ -114,7 +112,9 @@ def route_demand(
     total_unmet = 0
 
     for entry in demand_entries:
-        matching = [g for g in groups if g.matches_requirements(entry.accelerator_type)]
+        matching = [g for g in groups if g.matches_device_requirement(entry.device_type, entry.device_variant)]
+        if entry.preemptible is not None:
+            matching = [g for g in matching if g.config.preemptible == entry.preemptible]
         # Sort by priority (lower = higher priority). Default to 100 if not set (proto3 defaults to 0).
         matching.sort(key=lambda g: g.config.priority or 100)
 
@@ -141,10 +141,11 @@ def route_demand(
 
         if remaining > 0:
             logger.warning(
-                "Demand overflow: %d/%d slices for accelerator_type=%s unmet (tried %d groups)",
+                "Demand overflow: %d/%d slices for device_type=%s, device_variant=%s unmet (tried %d groups)",
                 remaining,
                 entry.count,
-                entry.accelerator_type,
+                entry.device_type.value,
+                entry.device_variant,
                 len(matching),
             )
             total_unmet += remaining
@@ -175,18 +176,55 @@ class Autoscaler:
         self,
         scale_groups: dict[str, ScalingGroup],
         vm_registry: VmRegistry,
-        config: AutoscalerConfig | None = None,
+        config: config_pb2.AutoscalerConfig | None = None,
     ):
         self._groups = scale_groups
         self._vm_registry = vm_registry
-        self._config = config or AutoscalerConfig()
-        self._last_evaluation_ms: int = 0
+
+        # Proto float fields default to 0.0; apply sensible defaults.
+        if config is None:
+            config = config_pb2.AutoscalerConfig()
+        if not config.evaluation_interval_seconds:
+            config.evaluation_interval_seconds = 10.0
+        if not config.requesting_timeout_seconds:
+            config.requesting_timeout_seconds = 120.0
+        self._config = config
 
         # Track slice creation times for short-lived slice detection
         self._slice_created_at: dict[str, int] = {}
 
         # Bounded log of recent autoscaler actions for dashboard/debugging
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
+
+        # Thread pool for async scale-up (scale with number of groups, min 4)
+        self._scale_up_executor = ThreadPoolExecutor(
+            max_workers=max(len(scale_groups), 4),
+            thread_name_prefix="scale-up",
+        )
+
+    def _wait_for_inflight(self) -> None:
+        """Wait for in-flight scale-ups to complete without terminating anything.
+
+        Test-only: not concurrency-safe with concurrent execute() calls.
+        """
+        self._scale_up_executor.shutdown(wait=True)
+        # Re-create executor so the autoscaler remains usable after waiting
+        self._scale_up_executor = ThreadPoolExecutor(
+            max_workers=max(len(self._groups), 4),
+            thread_name_prefix="scale-up",
+        )
+
+    def shutdown(self) -> None:
+        """Shutdown the autoscaler, terminate all VM groups, and wait for in-flight scale-ups."""
+        self._scale_up_executor.shutdown(wait=True)
+        for group in self._groups.values():
+            group.terminate_all()
+
+    def __enter__(self) -> Autoscaler:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.shutdown()
 
     def reconcile(self) -> None:
         """Reconcile all groups (discover existing slices from cloud).
@@ -343,8 +381,6 @@ class Autoscaler:
             decisions: List of scaling decisions to execute.
             timestamp_ms: Current timestamp.
         """
-        self._last_evaluation_ms = timestamp_ms
-
         for decision in decisions:
             group = self._groups.get(decision.scale_group)
             if not group:
@@ -354,8 +390,24 @@ class Autoscaler:
             if decision.action == ScalingAction.SCALE_UP:
                 self._execute_scale_up(group, timestamp_ms, reason=decision.reason)
 
-    def _execute_scale_up(self, group: ScalingGroup, ts: int, reason: str = "") -> bool:
-        """Create a new slice for a scale group.
+    def _execute_scale_up(self, group: ScalingGroup, ts: int, reason: str = "") -> None:
+        """Initiate async scale-up for a scale group.
+
+        Marks the group as REQUESTING and submits the actual scale-up work to
+        a background thread pool. Returns immediately without blocking.
+        """
+        # Mark group as requesting before submitting to executor
+        timeout_ms = int(self._config.requesting_timeout_seconds * 1000)
+        group.mark_requesting(ts, timeout_ms)
+
+        # Submit to background thread
+        self._scale_up_executor.submit(self._do_scale_up, group, ts, reason)
+
+    def _do_scale_up(self, group: ScalingGroup, ts: int, reason: str = "") -> bool:
+        """Execute the actual blocking scale-up work.
+
+        This runs in a background thread and should not be called directly.
+        Use _execute_scale_up instead.
 
         Returns:
             True if scale-up succeeded, False otherwise.
@@ -365,8 +417,8 @@ class Autoscaler:
         # Log action as pending BEFORE execution
         action = self._log_action("scale_up", group.name, reason=reason, status="pending")
 
-        logger.info("Scaling up %s: %s", group.name, reason)
         try:
+            logger.info("Scaling up %s: %s", group.name, reason)
             slice_obj = group.scale_up(ts=ts)
             self._slice_created_at[slice_obj.slice_id] = slice_obj.created_at_ms
             logger.info("Created slice %s for group %s", slice_obj.slice_id, group.name)
@@ -387,6 +439,9 @@ class Autoscaler:
             action.reason = f"{reason} - error: {e}"
             group.record_failure(ts)
             return False
+        finally:
+            # Always clear requesting state when done
+            group.clear_requesting()
 
     def run_once(
         self,
@@ -457,7 +512,7 @@ class Autoscaler:
         return vm_pb2.AutoscalerStatus(
             groups=[g.to_status() for g in self._groups.values()],
             current_demand={g.name: g.current_demand for g in self._groups.values()},
-            last_evaluation_ms=self._last_evaluation_ms,
+            last_evaluation_ms=0,  # Controlled by controller now
             recent_actions=list(self._action_log),
         )
 
@@ -474,6 +529,11 @@ class Autoscaler:
     def groups(self) -> dict[str, ScalingGroup]:
         """All scale groups."""
         return self._groups
+
+    @property
+    def evaluation_interval_seconds(self) -> float:
+        """Configured evaluation interval in seconds."""
+        return self._config.evaluation_interval_seconds
 
     def notify_worker_failed(self, vm_address: str) -> None:
         """Called by controller when a worker fails. Terminates the containing slice.

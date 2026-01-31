@@ -30,6 +30,7 @@ Example:
 
 import logging
 import os
+import sys
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -58,7 +59,6 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import cluster_pb2
-from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -262,9 +262,15 @@ class Job:
         timeout: float,
         poll_interval: float,
     ) -> cluster_pb2.JobStatus:
-        """Wait while streaming logs from all tasks."""
+        """Wait while streaming logs from all tasks.
+
+        Uses a fixed low poll interval for responsive log streaming. The poll_interval
+        parameter sets the base rate; we don't use exponential backoff here since
+        we want logs to appear in near real-time during active job execution.
+        """
         log_states: list[_TaskLogState] = []
-        backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
+        # Use a fixed low interval for responsive streaming (capped at poll_interval)
+        stream_interval = min(0.2, poll_interval)
         start = time.monotonic()
 
         while True:
@@ -305,7 +311,7 @@ class Job:
             if elapsed >= timeout:
                 raise TimeoutError(f"Job {self._job_id} did not complete in {timeout}s")
 
-            time.sleep(backoff.next_interval())
+            time.sleep(stream_interval)
 
     def terminate(self) -> None:
         """Terminate this job."""
@@ -489,11 +495,9 @@ class LocalClientConfig:
 
     Attributes:
         max_workers: Maximum concurrent job threads
-        port_range: Port range for actor servers (inclusive start, exclusive end)
     """
 
     max_workers: int = 4
-    port_range: tuple[int, int] = (50000, 60000)
 
 
 class EndpointRegistry(Protocol):
@@ -667,10 +671,7 @@ class IrisClient:
             IrisClient wrapping LocalClusterClient
         """
         cfg = config or LocalClientConfig()
-        cluster = LocalClusterClient.create(
-            max_workers=cfg.max_workers,
-            port_range=cfg.port_range,
-        )
+        cluster = LocalClusterClient.create(max_workers=cfg.max_workers)
         return cls(cluster)
 
     @classmethod
@@ -748,6 +749,10 @@ class IrisClient:
         scheduling_timeout_seconds: int = 0,
         constraints: list[Constraint] | None = None,
         coscheduling: CoschedulingConfig | None = None,
+        replicas: int = 1,
+        max_retries_failure: int = 0,
+        max_retries_preemption: int = 100,
+        timeout_seconds: int = 0,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -760,15 +765,21 @@ class IrisClient:
             scheduling_timeout_seconds: Maximum time to wait for scheduling (0 = no timeout)
             constraints: Constraints for filtering workers by attribute
             coscheduling: Configuration for atomic multi-task scheduling
+            replicas: Number of tasks to create for gang scheduling (default: 1)
+            max_retries_failure: Max retries per task on failure (default: 0)
+            max_retries_preemption: Max retries per task on preemption (default: 100)
+            timeout_seconds: Per-task timeout in seconds (0 = no timeout)
 
         Returns:
             Job handle for the submitted job
 
         Raises:
-            ValueError: If name contains '/'
+            ValueError: If name contains '/' or replicas < 1
         """
         if "/" in name:
             raise ValueError("Job name cannot contain '/'")
+        if replicas < 1:
+            raise ValueError(f"replicas must be >= 1, got {replicas}")
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
@@ -795,6 +806,10 @@ class IrisClient:
             scheduling_timeout_seconds=scheduling_timeout_seconds,
             constraints=constraints_proto,
             coscheduling=coscheduling_proto,
+            replicas=replicas,
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
+            timeout_seconds=timeout_seconds,
         )
 
         return Job(self, job_id)
@@ -930,13 +945,19 @@ class IrisClient:
 
 
 def _print_log_entry(job_id: JobId, entry: LogEntry, task_index: int | None = None) -> None:
-    """Log a job log entry."""
+    """Print a job log entry to stdout for real-time streaming.
+
+    Uses sys.__stdout__ directly instead of print() to avoid being captured
+    by redirect_stdout in local in-process containers.
+    """
+    assert sys.__stdout__ is not None, "sys.__stdout__ is None"
     ts = datetime.fromtimestamp(entry.timestamp_ms / 1000, tz=timezone.utc)
     ts_str = ts.strftime("%H:%M:%S")
     if task_index is not None:
-        logger.info("[%s/task-%d][%s] %s", job_id, task_index, ts_str, entry.data)
+        sys.__stdout__.write(f"[{job_id}/task-{task_index}][{ts_str}] {entry.data}\n")
     else:
-        logger.info("[%s][%s] %s", job_id, ts_str, entry.data)
+        sys.__stdout__.write(f"[{job_id}][{ts_str}] {entry.data}\n")
+    sys.__stdout__.flush()
 
 
 def create_context_from_env() -> IrisContext:

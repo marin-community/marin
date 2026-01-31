@@ -5,19 +5,23 @@ data:
   tokenizer: marin-community/marin-tokenizer
   shuffle: true
   permutation_type: feistel
-  configs:
+  components:
     ultrafeedback_train_prefs:
-      train_urls:
-        # Replace with the output path from transform_preference_dataset_step (train_prefs split).
-        - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/train_prefs/*.jsonl.gz
+      source:
+        type: url
+        train_urls:
+          # Replace with the output path from transform_preference_dataset_step (train_prefs split).
+          - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/train_prefs/*.jsonl.gz
       format:
         type: preference_chat
         slice_strategy: raise
       cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_train_prefs_marin_tokenizer-7040eb
     ultrafeedback_test_prefs:
-      validation_urls:
-        # Replace with the output path from transform_preference_dataset_step (test_prefs split).
-        - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/test_prefs/*.jsonl.gz
+      source:
+        type: url
+        validation_urls:
+          # Replace with the output path from transform_preference_dataset_step (test_prefs split).
+          - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/test_prefs/*.jsonl.gz
       format:
         type: preference_chat
         slice_strategy: raise

@@ -12,4 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the Iris worker CLI."""
+"""Ray backend for fray v2."""

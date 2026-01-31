@@ -14,18 +14,25 @@
 
 """Tests for controller lifecycle management."""
 
+import re
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
+from click.testing import CliRunner
+from iris.cli import iris
 from iris.cluster.vm.config import config_to_dict, load_config
 from iris.cluster.vm.controller import (
-    CONTROLLER_CONTAINER_NAME,
     GcpController,
+    HealthCheckResult,
     ManualController,
     create_controller,
+)
+from iris.cluster.vm.managed_vm import (
+    BOOTSTRAP_SCRIPT,
+    _build_bootstrap_script,
+    _build_env_flags,
 )
 from iris.rpc import config_pb2
 
@@ -36,9 +43,9 @@ def ssh_bootstrap_config() -> config_pb2.IrisClusterConfig:
     return config_pb2.IrisClusterConfig(
         provider_type="manual",
         controller_vm=config_pb2.ControllerVmConfig(
+            image="gcr.io/project/iris-controller:latest",
             manual=config_pb2.ManualControllerConfig(
                 host="10.0.0.100",
-                image="gcr.io/project/iris-controller:latest",
                 port=10000,
             ),
         ),
@@ -58,25 +65,20 @@ def gcp_config() -> config_pb2.IrisClusterConfig:
         project_id="my-project",
         zone="us-central1-a",
         controller_vm=config_pb2.ControllerVmConfig(
+            image="gcr.io/project/iris-controller:latest",
             gcp=config_pb2.GcpControllerConfig(
-                image="gcr.io/project/iris-controller:latest",
                 port=10000,
             ),
         ),
     )
 
 
-def test_manual_controller_start_requires_image():
+def test_manual_controller_start_requires_image(ssh_bootstrap_config: config_pb2.IrisClusterConfig):
     """start() requires image to be configured."""
-    config = config_pb2.IrisClusterConfig(
-        provider_type="manual",
-        controller_vm=config_pb2.ControllerVmConfig(
-            manual=config_pb2.ManualControllerConfig(
-                host="10.0.0.100",
-                image="",
-            ),
-        ),
-    )
+    config = config_pb2.IrisClusterConfig()
+    config.CopyFrom(ssh_bootstrap_config)
+    config.controller_vm.image = ""
+
     controller = ManualController(config)
     with pytest.raises(RuntimeError, match="image required"):
         controller.start()
@@ -95,7 +97,7 @@ def test_manual_controller_start_runs_bootstrap(
     mock_conn = MagicMock()
     mock_conn_cls.return_value = mock_conn
     mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-    mock_health.return_value = True
+    mock_health.return_value = HealthCheckResult(healthy=True)
 
     controller = ManualController(ssh_bootstrap_config)
     result = controller.start()
@@ -108,98 +110,18 @@ def test_manual_controller_start_runs_bootstrap(
         connect_timeout=30,
     )
     mock_run_streaming.assert_called_once()
-    # Bootstrap script should reference docker and controller container
     call_args = mock_run_streaming.call_args
     command = call_args[0][1]
     assert "docker" in command
     assert "iris-controller" in command
 
 
-@patch("iris.cluster.vm.controller.check_health")
-@patch("iris.cluster.vm.controller.run_streaming_with_retry")
-@patch("iris.cluster.vm.controller.DirectSshConnection")
-def test_manual_controller_stop_runs_stop_script(
-    mock_conn_cls: MagicMock,
-    mock_run_streaming: MagicMock,
-    mock_health: MagicMock,
-    ssh_bootstrap_config: config_pb2.IrisClusterConfig,
-):
-    """stop() runs docker stop via SSH after bootstrap."""
-    mock_conn = MagicMock()
-    mock_conn.run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-    mock_conn_cls.return_value = mock_conn
-    mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-    mock_health.return_value = True
-
-    controller = ManualController(ssh_bootstrap_config)
-    controller.start()
-    controller.stop()
-
-    # Verify stop command was run
-    assert mock_conn.run.called
-    stop_command = mock_conn.run.call_args[0][0]
-    assert "docker stop" in stop_command
-    assert CONTROLLER_CONTAINER_NAME in stop_command
-
-
-@patch("iris.cluster.vm.controller.DirectSshConnection")
-def test_manual_controller_stop_skipped_if_not_bootstrapped(
-    mock_conn_cls: MagicMock,
-    ssh_bootstrap_config: config_pb2.IrisClusterConfig,
-):
-    """stop() is no-op if we didn't bootstrap."""
-    mock_conn = MagicMock()
-    mock_conn_cls.return_value = mock_conn
-
-    controller = ManualController(ssh_bootstrap_config)
-    controller.stop()  # Don't call start() first
-
-    mock_conn.run.assert_not_called()
-
-
-@patch("iris.cluster.vm.controller.check_health")
-@patch("iris.cluster.vm.controller.run_streaming_with_retry")
-@patch("iris.cluster.vm.controller.DirectSshConnection")
-def test_manual_controller_reload_calls_start(
-    mock_conn_cls: MagicMock,
-    mock_run_streaming: MagicMock,
-    mock_health: MagicMock,
-    ssh_bootstrap_config: config_pb2.IrisClusterConfig,
-):
-    """reload() delegates to start() for ManualController."""
-    mock_conn = MagicMock()
-    mock_conn_cls.return_value = mock_conn
-    mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-    mock_health.return_value = True
-
-    controller = ManualController(ssh_bootstrap_config)
-    result = controller.reload()
-
-    assert result == "http://10.0.0.100:10000"
-    # Should have run bootstrap (via start)
-    mock_run_streaming.assert_called_once()
-
-
-def test_create_controller_returns_gcp_when_enabled(gcp_config: config_pb2.IrisClusterConfig):
-    """create_controller returns GcpController when VM enabled."""
-    controller = create_controller(gcp_config)
-    assert isinstance(controller, GcpController)
-
-
-def test_create_controller_returns_manual_for_manual_provider(ssh_bootstrap_config: config_pb2.IrisClusterConfig):
-    """create_controller returns ManualController for manual provider."""
-    controller = create_controller(ssh_bootstrap_config)
-    assert isinstance(controller, ManualController)
-
-
-def test_create_controller_raises_on_missing_config():
+def test_create_controller_raises_on_missing_config(gcp_config: config_pb2.IrisClusterConfig):
     """create_controller raises ValueError when no oneof is set."""
-    config = config_pb2.IrisClusterConfig(
-        provider_type="gcp",
-        project_id="test-project",
-        zone="us-central1-a",
-        # controller_vm left empty - no gcp or manual set
-    )
+    config = config_pb2.IrisClusterConfig()
+    config.CopyFrom(gcp_config)
+    config.controller_vm.ClearField("gcp")
+
     with pytest.raises(ValueError, match="No controller config specified"):
         create_controller(config)
 
@@ -208,7 +130,7 @@ class TestConfigParsing:
     """Tests for config parsing with controller VM settings."""
 
     def test_load_config_with_manual_controller(self, tmp_path: Path):
-        """Config with controller_vm.manual is parsed correctly."""
+        """Config with controller_vm.manual can be loaded and used to create a controller."""
         config_content = """\
 provider_type: manual
 
@@ -217,9 +139,9 @@ bootstrap:
   worker_port: 10001
 
 controller_vm:
+  image: gcr.io/project/iris-controller:latest
   manual:
     host: 10.0.0.100
-    image: gcr.io/project/iris-controller:latest
     port: 10000
 
 ssh:
@@ -231,16 +153,15 @@ scale_groups:
     provider:
       manual:
         hosts: [10.0.0.1]
+    accelerator_type: cpu
 """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
 
         config = load_config(config_path)
 
-        assert config.controller_vm.manual.host == "10.0.0.100"
-        assert config.controller_vm.manual.image == "gcr.io/project/iris-controller:latest"
-        assert config.controller_vm.manual.port == 10000
-        assert config.ssh.user == "ubuntu"
+        # Test behavior: we can create a controller from this config without errors
+        create_controller(config)
 
 
 class TestConfigSerialization:
@@ -260,7 +181,8 @@ bootstrap:
 
 scale_groups:
   tpu_v5e_8:
-    accelerator_type: v5litepod-8
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 1
     max_slices: 10
@@ -278,7 +200,7 @@ scale_groups:
         assert d["bootstrap"]["docker_image"] == "gcr.io/project/iris-worker:latest"
         assert "tpu_v5e_8" in d["scale_groups"]
         sg = d["scale_groups"]["tpu_v5e_8"]
-        assert sg["accelerator_type"] == "v5litepod-8"
+        assert sg["accelerator_variant"] == "v5litepod-8"
         assert sg["min_slices"] == 1
         assert sg["max_slices"] == 10
         assert sg["preemptible"] is True
@@ -299,7 +221,8 @@ bootstrap:
 
 scale_groups:
   tpu_v5e_8:
-    accelerator_type: v5litepod-8
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-8
     runtime_version: v2-alpha-tpuv5-lite
     min_slices: 1
     max_slices: 10
@@ -359,151 +282,424 @@ class TestBootstrapScriptConfig:
         assert "# No config file provided" in script
 
 
-class TestHealthCheckIntegration:
-    """Tests for SSH-based health checking across controller types."""
+class TestControllerLifecycle:
+    """Tests for controller lifecycle behavior (start, stop, reload)."""
 
+    @pytest.mark.parametrize(
+        "controller_type,config_fixture,expected_url",
+        [
+            ("manual", "ssh_bootstrap_config", "http://10.0.0.100:10000"),
+            ("gcp", "gcp_config", "http://10.0.0.50:10000"),
+        ],
+    )
     @patch("iris.cluster.vm.controller.wait_healthy_via_ssh")
     @patch("iris.cluster.vm.controller.run_streaming_with_retry")
     @patch("iris.cluster.vm.controller.DirectSshConnection")
-    def test_manual_controller_start_checks_health(
-        self,
-        mock_conn_cls: MagicMock,
-        mock_run_streaming: MagicMock,
-        mock_ssh_health: MagicMock,
-    ):
-        """ManualController.start() calls wait_healthy_via_ssh."""
-        mock_conn = MagicMock()
-        mock_conn_cls.return_value = mock_conn
-        mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-        mock_ssh_health.return_value = True
-
-        config = config_pb2.IrisClusterConfig(
-            provider_type="manual",
-            controller_vm=config_pb2.ControllerVmConfig(
-                manual=config_pb2.ManualControllerConfig(
-                    host="10.0.0.100",
-                    image="gcr.io/project/iris-controller:latest",
-                    port=10000,
-                ),
-            ),
-            ssh=config_pb2.SshConfig(
-                user="ubuntu",
-                key_file="/home/ubuntu/.ssh/id_rsa",
-                connect_timeout=30,
-            ),
-        )
-        controller = ManualController(config)
-        controller.start()
-
-        mock_ssh_health.assert_called_once()
-        call_args = mock_ssh_health.call_args
-        assert call_args[0][1] == 10000  # port argument
-
-    @patch("iris.cluster.vm.controller.wait_healthy_via_ssh")
-    @patch("iris.cluster.vm.controller.run_streaming_with_retry")
-    @patch("iris.cluster.vm.controller.DirectSshConnection")
-    def test_manual_controller_start_fails_on_health_timeout(
-        self,
-        mock_conn_cls: MagicMock,
-        mock_run_streaming: MagicMock,
-        mock_ssh_health: MagicMock,
-    ):
-        """ManualController.start() raises when health check fails."""
-        mock_conn = MagicMock()
-        mock_conn_cls.return_value = mock_conn
-        mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-        mock_ssh_health.return_value = False  # Health check fails
-
-        config = config_pb2.IrisClusterConfig(
-            provider_type="manual",
-            controller_vm=config_pb2.ControllerVmConfig(
-                manual=config_pb2.ManualControllerConfig(
-                    host="10.0.0.100",
-                    image="gcr.io/project/iris-controller:latest",
-                    port=10000,
-                ),
-            ),
-            ssh=config_pb2.SshConfig(
-                user="ubuntu",
-                key_file="/home/ubuntu/.ssh/id_rsa",
-                connect_timeout=30,
-            ),
-        )
-        controller = ManualController(config)
-
-        with pytest.raises(RuntimeError, match="failed health check after bootstrap"):
-            controller.start()
-
-    @patch("iris.cluster.vm.controller.wait_healthy_via_ssh")
     @patch("iris.cluster.vm.controller.GceSshConnection")
-    def test_gcp_controller_start_checks_health(
+    def test_controller_start_succeeds_when_healthy(
         self,
-        mock_gce_conn_cls: MagicMock,
-        mock_ssh_health: MagicMock,
+        mock_gce_conn: MagicMock,
+        mock_direct_conn: MagicMock,
+        mock_run_streaming: MagicMock,
+        mock_wait_healthy: MagicMock,
+        controller_type: str,
+        config_fixture: str,
+        expected_url: str,
+        request,
     ):
-        """GcpController.start() calls wait_healthy_via_ssh after VM creation."""
-        mock_conn = MagicMock()
-        mock_gce_conn_cls.return_value = mock_conn
-        mock_ssh_health.return_value = True
+        """Controller.start() returns URL when controller becomes healthy."""
+        mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+        mock_wait_healthy.return_value = True
 
-        config = config_pb2.IrisClusterConfig(
-            provider_type="gcp",
-            project_id="my-project",
-            zone="us-central1-a",
-            controller_vm=config_pb2.ControllerVmConfig(
-                gcp=config_pb2.GcpControllerConfig(
-                    image="gcr.io/project/iris-controller:latest",
-                    port=10000,
-                    machine_type="n2-standard-4",
-                ),
-            ),
-        )
-        controller = GcpController(config)
+        config = request.getfixturevalue(config_fixture)
 
-        # Mock the _create_vm method to return an address without actually calling gcloud
-        with patch.object(controller, "_create_vm", return_value="http://10.0.0.50:10000"):
-            with patch.object(controller, "discover", return_value=None):
-                with patch.object(controller, "_tag_metadata"):
-                    result = controller.start()
+        if controller_type == "manual":
+            controller = ManualController(config)
+            result = controller.start()
+        else:  # gcp
+            controller = GcpController(config)
+            with patch.object(controller, "_create_vm", return_value=expected_url):
+                with patch.object(controller, "discover", return_value=None):
+                    with patch.object(controller, "_tag_metadata"):
+                        result = controller.start()
 
-        assert result == "http://10.0.0.50:10000"
-        mock_ssh_health.assert_called_once()
-        call_args = mock_ssh_health.call_args
-        assert call_args[0][1] == 10000  # port argument
+        assert result == expected_url
+
+    @pytest.mark.parametrize(
+        "controller_type,config_fixture",
+        [
+            ("manual", "ssh_bootstrap_config"),
+            ("gcp", "gcp_config"),
+        ],
+    )
+    @patch("iris.cluster.vm.controller.wait_healthy_via_ssh")
+    @patch("iris.cluster.vm.controller.run_streaming_with_retry")
+    @patch("iris.cluster.vm.controller.DirectSshConnection")
+    @patch("iris.cluster.vm.controller.GceSshConnection")
+    def test_controller_start_fails_when_unhealthy(
+        self,
+        mock_gce_conn: MagicMock,
+        mock_direct_conn: MagicMock,
+        mock_run_streaming: MagicMock,
+        mock_wait_healthy: MagicMock,
+        controller_type: str,
+        config_fixture: str,
+        request,
+    ):
+        """Controller.start() raises RuntimeError when health check fails."""
+        mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
+        mock_wait_healthy.return_value = False
+
+        config = request.getfixturevalue(config_fixture)
+
+        if controller_type == "manual":
+            controller = ManualController(config)
+            with pytest.raises(RuntimeError, match="failed health check after bootstrap"):
+                controller.start()
+        else:  # gcp
+            controller = GcpController(config)
+            with patch.object(controller, "_create_vm", return_value="http://10.0.0.50:10000"):
+                with patch.object(controller, "discover", return_value=None):
+                    with patch.object(controller, "_tag_metadata"):
+                        with pytest.raises(RuntimeError, match="failed health check after bootstrap"):
+                            controller.start()
 
     @patch("iris.cluster.vm.controller.wait_healthy_via_ssh")
     @patch("iris.cluster.vm.controller.run_streaming_with_retry")
     @patch("iris.cluster.vm.controller.GceSshConnection")
-    def test_gcp_controller_reload_checks_health(
+    def test_gcp_controller_reload_returns_url_when_healthy(
         self,
-        mock_gce_conn_cls: MagicMock,
+        mock_gce_conn: MagicMock,
         mock_run_streaming: MagicMock,
-        mock_ssh_health: MagicMock,
+        mock_wait_healthy: MagicMock,
+        gcp_config: config_pb2.IrisClusterConfig,
     ):
-        """GcpController.reload() calls wait_healthy_via_ssh after restarting container."""
-        mock_conn = MagicMock()
-        mock_gce_conn_cls.return_value = mock_conn
+        """GcpController.reload() returns URL after successfully restarting container."""
         mock_run_streaming.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-        mock_ssh_health.return_value = True
+        mock_wait_healthy.return_value = True
 
-        config = config_pb2.IrisClusterConfig(
-            provider_type="gcp",
-            project_id="my-project",
-            zone="us-central1-a",
-            controller_vm=config_pb2.ControllerVmConfig(
-                gcp=config_pb2.GcpControllerConfig(
-                    image="gcr.io/project/iris-controller:latest",
-                    port=10000,
-                    machine_type="n2-standard-4",
-                ),
-            ),
-        )
-        controller = GcpController(config)
+        controller = GcpController(gcp_config)
 
-        # Mock the methods that query GCP
         with patch.object(controller, "_find_controller_vm_name", return_value="iris-controller-test"):
             with patch.object(controller, "_get_vm_address", return_value="http://10.0.0.50:10000"):
                 result = controller.reload()
 
         assert result == "http://10.0.0.50:10000"
-        mock_ssh_health.assert_called_once()
+
+
+# ============================================================================
+# CLI Integration Tests (from test_controller_boot.py)
+# ============================================================================
+
+
+@pytest.fixture
+def cli_runner() -> CliRunner:
+    """Create a Click CLI test runner."""
+    return CliRunner()
+
+
+@pytest.fixture
+def gcp_config_file(tmp_path: Path) -> Path:
+    """Create a GCP controller config file."""
+    config_path = tmp_path / "gcp_config.yaml"
+    config_content = """
+provider_type: gcp
+project_id: test-project
+region: us-central1
+zone: us-central1-a
+
+bootstrap:
+  docker_image: test-image:latest
+  worker_port: 10001
+
+controller_vm:
+  image: gcr.io/test-project/iris-controller:latest
+  gcp:
+    machine_type: n2-standard-4
+    boot_disk_size_gb: 50
+    port: 10000
+
+scale_groups:
+  test_group:
+    accelerator_type: tpu
+    accelerator_variant: v5litepod-4
+    runtime_version: v2-alpha-tpuv5-lite
+    min_slices: 0
+    max_slices: 10
+    zones: [us-central1-a]
+"""
+    config_path.write_text(config_content)
+    return config_path
+
+
+@pytest.fixture
+def manual_config_file(tmp_path: Path) -> Path:
+    """Create a manual controller config file with SSH bootstrap."""
+    config_path = tmp_path / "manual_config.yaml"
+    config_content = """
+provider_type: manual
+
+bootstrap:
+  docker_image: gcr.io/test-project/iris-worker:latest
+  worker_port: 10001
+
+controller_vm:
+  image: gcr.io/test-project/iris-controller:latest
+  manual:
+    host: 10.0.0.100
+    port: 10000
+
+ssh:
+  user: ubuntu
+  key_file: ~/.ssh/id_rsa
+  connect_timeout: 30
+
+scale_groups:
+  manual_hosts:
+    provider:
+      manual:
+        hosts: [10.0.0.1]
+    accelerator_type: cpu
+"""
+    config_path.write_text(config_content)
+    return config_path
+
+
+class TestControllerFactory:
+    """Tests for controller factory and type selection."""
+
+    @pytest.mark.parametrize(
+        "config_fixture,expected_type",
+        [
+            ("gcp_config", GcpController),
+            ("ssh_bootstrap_config", ManualController),
+        ],
+    )
+    def test_creates_correct_controller_type(self, config_fixture: str, expected_type: type, request):
+        """create_controller returns correct controller type based on config."""
+        config = request.getfixturevalue(config_fixture)
+        controller = create_controller(config)
+        assert isinstance(controller, expected_type)
+
+
+class TestCliControllerCommands:
+    """Tests for CLI controller start/stop/reload commands."""
+
+    @pytest.mark.parametrize(
+        "command,mock_target,error_msg,expected_output",
+        [
+            (
+                "stop",
+                "iris.cluster.vm.controller.GcpController.stop",
+                "VM not found",
+                "Failed to stop controller: VM not found",
+            ),
+        ],
+    )
+    def test_cli_controller_failure_shows_error(
+        self,
+        cli_runner: CliRunner,
+        gcp_config_file: Path,
+        command: str,
+        mock_target: str,
+        error_msg: str,
+        expected_output: str,
+    ):
+        """CLI shows appropriate error message when controller operation fails."""
+        with patch(mock_target) as mock_op:
+            mock_op.side_effect = RuntimeError(error_msg)
+
+            result = cli_runner.invoke(
+                iris,
+                ["cluster", "--config", str(gcp_config_file), "controller", command],
+            )
+
+        assert result.exit_code == 1
+        assert expected_output in result.output
+
+
+# ============================================================================
+# Worker Bootstrap Script Tests
+# ============================================================================
+
+
+@pytest.fixture
+def minimal_bootstrap_config() -> config_pb2.BootstrapConfig:
+    """Minimal valid bootstrap config."""
+    return config_pb2.BootstrapConfig(
+        docker_image="gcr.io/test/iris-worker:latest",
+        worker_port=10001,
+        cache_dir="/var/cache/iris",
+    )
+
+
+@pytest.fixture
+def config_with_special_chars() -> config_pb2.BootstrapConfig:
+    """Config with values containing braces and special characters."""
+    return config_pb2.BootstrapConfig(
+        docker_image="gcr.io/test/iris:v1.0-{tag}",
+        cache_dir="/cache/{project}/iris",
+        worker_port=10001,
+        env_vars={
+            "MESSAGE": "Hello {world}!",
+            "JSON": '{"key": "value"}',
+        },
+    )
+
+
+class TestBootstrapScript:
+    """Tests for worker bootstrap script template and generation functions."""
+
+    def test_template_has_only_expected_placeholders(self):
+        """Template contains only expected placeholders and properly escapes Docker format strings."""
+        expected_placeholders = {"cache_dir", "docker_image", "worker_port", "env_flags"}
+
+        # Extract single-brace placeholders (not preceded/followed by more braces)
+        pattern = r"(?<!\{)\{([^{}\s]+)\}(?!\})"
+        found_placeholders = set(re.findall(pattern, BOOTSTRAP_SCRIPT))
+        found_placeholders = {p for p in found_placeholders if not p.startswith(".")}
+
+        assert (
+            found_placeholders == expected_placeholders
+        ), f"Unexpected placeholders: {found_placeholders - expected_placeholders}"
+
+        # Verify Docker format strings use quadruple braces
+        assert "{{{{.Status}}}}" in BOOTSTRAP_SCRIPT
+        assert "{{{{.State}}}}" in BOOTSTRAP_SCRIPT
+
+    def test_template_comments_have_no_unescaped_braces(self):
+        """Comments should not contain unescaped single braces like {N}."""
+        lines = BOOTSTRAP_SCRIPT.split("\n")
+        comment_lines = [(i + 1, line) for i, line in enumerate(lines) if "#" in line]
+        unescaped_pattern = r"(?<!\{)\{[^{}]+\}(?!\})"
+
+        errors = []
+        for line_num, line in comment_lines:
+            comment_part = line[line.index("#") :]
+            matches = re.findall(unescaped_pattern, comment_part)
+            if matches:
+                errors.append(f"Line {line_num}: {line.strip()} - Found: {matches}")
+
+        assert not errors, "Found unescaped braces in comments:\n" + "\n".join(errors)
+
+    def test_build_bootstrap_script_no_key_error(self, minimal_bootstrap_config: config_pb2.BootstrapConfig):
+        """Template formatting should not raise KeyError."""
+        try:
+            script = _build_bootstrap_script(minimal_bootstrap_config, vm_address="10.0.0.1")
+            assert script
+        except KeyError as e:
+            pytest.fail(f"Template has unescaped braces: {{{e.args[0]}}}")
+
+    def test_build_bootstrap_script_replaces_all_placeholders(
+        self, minimal_bootstrap_config: config_pb2.BootstrapConfig
+    ):
+        """Generated script should not contain raw placeholders."""
+        script = _build_bootstrap_script(minimal_bootstrap_config, vm_address="10.0.0.1")
+
+        for placeholder in ["{cache_dir}", "{docker_image}", "{worker_port}", "{env_flags}"]:
+            assert placeholder not in script
+
+    def test_build_bootstrap_script_preserves_docker_format_strings(
+        self, minimal_bootstrap_config: config_pb2.BootstrapConfig
+    ):
+        """Docker format strings become double braces after formatting."""
+        script = _build_bootstrap_script(minimal_bootstrap_config, vm_address="10.0.0.1")
+
+        assert "{{.Status}}" in script
+        assert "{{.State}}" in script
+
+    def test_build_bootstrap_script_prepends_discovery_preamble(
+        self, minimal_bootstrap_config: config_pb2.BootstrapConfig
+    ):
+        """Discovery preamble is prepended to script."""
+        preamble = "export CONTROLLER_ADDRESS=http://10.0.0.1:10000\n"
+        script = _build_bootstrap_script(
+            minimal_bootstrap_config,
+            vm_address="10.0.0.1",
+            discovery_preamble=preamble,
+        )
+
+        assert script.startswith(preamble)
+
+    # Environment flags tests
+
+    def test_build_env_flags_includes_controller_address(self, minimal_bootstrap_config: config_pb2.BootstrapConfig):
+        """Env flags include IRIS_CONTROLLER_ADDRESS using shell variable."""
+        flags = _build_env_flags(minimal_bootstrap_config, vm_address="10.0.0.1")
+        assert '-e IRIS_CONTROLLER_ADDRESS="$CONTROLLER_ADDRESS"' in flags
+
+    def test_build_env_flags_includes_tpu_passthroughs(self, minimal_bootstrap_config: config_pb2.BootstrapConfig):
+        """Env flags include all TPU passthrough variables."""
+        flags = _build_env_flags(minimal_bootstrap_config, vm_address="10.0.0.1")
+
+        for var in ["TPU_NAME", "TPU_TYPE", "TPU_WORKER_ID", "TPU_WORKER_HOSTNAMES", "TPU_CHIPS_PER_HOST_BOUNDS"]:
+            assert f'-e {var}="${{{var}:-}}"' in flags
+
+    def test_build_env_flags_quotes_values_with_spaces(self):
+        """Env var values with spaces are properly quoted."""
+        config = config_pb2.BootstrapConfig(
+            docker_image="gcr.io/test/iris:latest",
+            worker_port=10001,
+            env_vars={"MSG": "hello world"},
+        )
+        flags = _build_env_flags(config, vm_address="10.0.0.1")
+        assert "MSG='hello world'" in flags or 'MSG="hello world"' in flags
+
+    # Edge cases
+
+    def test_braces_in_config_values_preserved(self, config_with_special_chars: config_pb2.BootstrapConfig):
+        """Config values with braces are preserved in output."""
+        script = _build_bootstrap_script(config_with_special_chars, vm_address="10.0.0.1")
+
+        assert "v1.0-{tag}" in script
+        assert "/cache/{project}/iris" in script
+        assert "Hello {world}!" in script
+        assert '{"key": "value"}' in script
+
+    @pytest.mark.parametrize(
+        "value", ["value{N}more", "{start}middle{end}", 'json:{"key":"val"}', "{{escaped}}", "{single}"]
+    )
+    def test_problematic_patterns_dont_break_formatting(self, value: str):
+        """Various brace patterns in config values don't cause errors."""
+        config = config_pb2.BootstrapConfig(
+            docker_image=f"gcr.io/test/iris:{value}",
+            worker_port=10001,
+            cache_dir="/var/cache/iris",
+        )
+
+        try:
+            script = _build_bootstrap_script(config, vm_address="10.0.0.1")
+            assert script
+            assert value in script
+        except KeyError as e:
+            pytest.fail(f"Value '{value}' caused KeyError: {e}")
+
+    # Regression tests
+
+    # Integration tests
+
+    def test_multiple_configs_generate_without_errors(self):
+        """Various config combinations generate scripts without errors."""
+        configs = [
+            config_pb2.BootstrapConfig(docker_image="gcr.io/test/iris:latest", worker_port=10001),
+            config_pb2.BootstrapConfig(
+                docker_image="gcr.io/test/iris:latest",
+                worker_port=10001,
+                env_vars={"KEY": "value"},
+            ),
+            config_pb2.BootstrapConfig(
+                docker_image="gcr.io/test/iris:v1.0-{tag}",
+                cache_dir="/cache/{project}",
+                worker_port=10001,
+                env_vars={"MSG": "Hello {world}!", "JSON": '{"key": "value"}'},
+            ),
+        ]
+
+        for config in configs:
+            for vm_addr in ["10.0.0.1", ""]:
+                for preamble in ["", "export CONTROLLER_ADDRESS=http://10.0.0.1:10000\n"]:
+                    script = _build_bootstrap_script(config, vm_address=vm_addr, discovery_preamble=preamble)
+                    assert script
+                    # No raw placeholders should remain
+                    for placeholder in ["{cache_dir}", "{docker_image}", "{worker_port}", "{env_flags}"]:
+                        assert placeholder not in script

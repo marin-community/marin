@@ -5,7 +5,6 @@ import dataclasses
 from dataclasses import dataclass
 from typing import NamedTuple
 
-import chex
 import jax
 import jax.numpy as jnp
 import optax
@@ -15,7 +14,7 @@ import haliax
 from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
-from levanter.optim.util import map_flattened_linear_layers
+from levanter.optim.util import CoefficientType, map_flattened_linear_layers, zeropower_via_newtonschulz5
 from levanter.utils.jax_utils import leaf_key_paths
 
 
@@ -36,6 +35,7 @@ class ScionConfig(OptimizerConfig):
     beta1: float = 0.9
     scion_epsilon: float = 1e-8
     max_grad_norm: float = 1.0
+    coefficient_type: CoefficientType = "quintic"  # Type of Newton-Schulz coefficients to use
 
     def build(self, num_train_steps):
         """
@@ -48,7 +48,9 @@ class ScionConfig(OptimizerConfig):
 
             def scion_transform():
                 components = []
-                components.append(scale_with_scion(self.momentum, self.backend_steps, self.scion_epsilon))
+                components.append(
+                    scale_with_scion(self.momentum, self.backend_steps, self.scion_epsilon, self.coefficient_type)
+                )
                 if self.weight_decay > 0:
                     components.append(optax.add_decayed_weights(self.weight_decay, self.build_weight_decay_mask()))
                 components.append(optax.scale(-learning_rate))
@@ -122,7 +124,7 @@ def scale_by_signum(momentum=0.95):
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-def scale_with_scion(momentum=0.95, steps=5, scion_eps=1e-8):
+def scale_with_scion(momentum=0.95, steps=5, scion_eps=1e-8, coefficient_type="quintic"):
     def init_fn(params):
         momentum_buffer = otu.tree_zeros_like(params)  # First moment
         return ScaleByScionState(momentum_buffer=momentum_buffer)
@@ -140,7 +142,9 @@ def scale_with_scion(momentum=0.95, steps=5, scion_eps=1e-8):
         def transform_linear_layer(layer: haliax.nn.Linear):
             assert layer.weight.ndim == 2
 
-            updated_weight_array = zeropower_via_newtonschulz5(layer.weight.array, steps=steps, eps=scion_eps)
+            updated_weight_array = zeropower_via_newtonschulz5(
+                layer.weight.array, steps=steps, eps=scion_eps, coefficient_type=coefficient_type
+            )
 
             scale = jnp.sqrt(jnp.maximum(1, updated_weight_array.shape[0] / updated_weight_array.shape[1]))
             updated_weight_array *= scale
@@ -154,25 +158,3 @@ def scale_with_scion(momentum=0.95, steps=5, scion_eps=1e-8):
         return updates, ScaleByScionState(momentum_buffer=buf)
 
     return optax.GradientTransformation(init_fn, update_fn)
-
-
-def zeropower_via_newtonschulz5(X, steps=10, eps=1e-7):
-    """
-    Newton-Schulz iteration to compute the zeroth power / orthogonalization of G.
-    """
-    chex.assert_rank(X, 2)
-    a, b, c = (3.4445, -4.7750, 2.0315)
-    X /= jnp.linalg.norm(X) + eps  # Ensure top singular value <= 1
-    transpose = False
-    if X.shape[0] > X.shape[1]:
-        X = X.T
-        transpose = True
-    for _ in range(steps):
-        A = X @ X.T
-        B = b * A + c * A @ A
-        X = a * X + B @ X
-    if transpose:
-        X = X.T
-    # https://x.com/leloykun/status/1874358290093924849
-
-    return X

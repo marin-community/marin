@@ -62,13 +62,14 @@ def _make_mock_slice(slice_id: str, scale_group: str = "test-group") -> MagicMoc
 
 def _create_test_autoscaler(scale_group_name: str = "test-group"):
     """Create a test Autoscaler with mock VmManager."""
-    from iris.cluster.vm.autoscaler import Autoscaler, AutoscalerConfig
+    from iris.cluster.vm.autoscaler import Autoscaler
     from iris.cluster.vm.managed_vm import VmRegistry
     from iris.cluster.vm.scaling_group import ScalingGroup
 
     sg_config = config_pb2.ScaleGroupConfig(
         name=scale_group_name,
-        accelerator_type="v5p-8",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5p-8",
         min_slices=0,
         max_slices=10,
         zones=["us-central1-a"],
@@ -89,7 +90,7 @@ def _create_test_autoscaler(scale_group_name: str = "test-group"):
         Autoscaler(
             scale_groups={scale_group_name: scale_group},
             vm_registry=VmRegistry(),
-            config=AutoscalerConfig(),
+            config=None,
         ),
         mock_manager,
     )
@@ -99,7 +100,8 @@ def _create_test_autoscaler(scale_group_name: str = "test-group"):
 def test_autoscaler():
     """Create a test Autoscaler for CLI testing."""
     autoscaler, fake_manager = _create_test_autoscaler()
-    return autoscaler, fake_manager
+    yield autoscaler, fake_manager
+    autoscaler.shutdown()
 
 
 @pytest.fixture
@@ -128,7 +130,13 @@ def config_file(tmp_path: Path) -> Path:
             "user": "root",
         },
         "scale_groups": {
-            "test-group": {"accelerator_type": "v5p-8", "min_slices": 0, "max_slices": 10, "zones": ["us-central1-a"]},
+            "test-group": {
+                "accelerator_type": "ACCELERATOR_TYPE_TPU",
+                "accelerator_variant": "v5p-8",
+                "min_slices": 0,
+                "max_slices": 10,
+                "zones": ["us-central1-a"],
+            },
         },
     }
     config_path = tmp_path / "vm-config.yaml"
