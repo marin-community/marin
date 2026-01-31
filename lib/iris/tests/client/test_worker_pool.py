@@ -52,6 +52,7 @@ def worker_server():
     server.register(actor_name, TaskExecutorActor())
     port = server.serve_background()
     yield f"http://127.0.0.1:{port}", actor_name
+    server.shutdown()
 
 
 def test_dispatch_discovers_worker_endpoint(worker_server):
@@ -256,6 +257,9 @@ def test_dispatch_retries_on_infrastructure_failure():
     dispatcher_2.stop()
     dispatcher_1.join(timeout=1.0)
     dispatcher_2.join(timeout=1.0)
+
+    # Cleanup server to prevent background threads
+    server.shutdown()
 
     # Worker 1 should be FAILED after the connection error
     assert worker_state_1.status == WorkerStatus.FAILED

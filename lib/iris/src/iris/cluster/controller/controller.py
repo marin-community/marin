@@ -536,6 +536,10 @@ class Controller:
         Uses a lock-copy-unlock-send-lock-apply pattern: snapshots dispatch outboxes
         under lock, sends RPCs without holding the lock, then re-locks to apply results.
         """
+        # Skip heartbeats if shutdown is in progress
+        if self._stop:
+            return
+
         # Phase 1: snapshot worker list (no lock), then drain outboxes (under lock)
         all_workers = self._state.get_available_workers()
         with self._dispatch_lock:
@@ -631,10 +635,27 @@ class Controller:
     ) -> None:
         """Process a successful heartbeat response.
 
-        Updates heartbeat timestamp and processes completed tasks. Reconciliation
-        of running vs expected tasks is handled worker-side using expected_tasks.
+        Updates heartbeat timestamp and processes running task state updates and completed tasks.
+        Reconciliation of running vs expected tasks is handled worker-side using expected_tasks.
         """
         self._state.handle_event(WorkerHeartbeatEvent(worker_id=worker.worker_id, timestamp_ms=now_ms()))
+
+        # Process running task state updates (BUILDING, RUNNING, etc.)
+        for entry in response.running_tasks:
+            task_id = TaskId(entry.task_id)
+            task = self._state.get_task(task_id)
+            if task and not task.is_finished():
+                # Only update state if it's different and not terminal
+                if task.state != entry.state:
+                    self._state.handle_event(
+                        TaskStateChangedEvent(
+                            task_id=task_id,
+                            new_state=entry.state,
+                            error=None,
+                            exit_code=None,
+                            attempt_id=entry.attempt_id,
+                        )
+                    )
 
         for entry in response.completed_tasks:
             task_id = TaskId(entry.task_id)

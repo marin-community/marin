@@ -59,6 +59,7 @@ def test_build_logs_visible_during_building_state(cluster):
 
         # Check if any task is in BUILDING state
         task_states = [task.state for task in status.tasks]
+        print(f"[{time.time() - start_time:.2f}s] Task states: {[cluster_pb2.TaskState.Name(s) for s in task_states]}")
         if cluster_pb2.TASK_STATE_BUILDING in task_states:
             building_state_observed = True
 
