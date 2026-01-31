@@ -209,7 +209,8 @@ def discover_active_clusters() -> dict[str, ClusterInfo]:
         # Get network info
         internal_ip = instance["networkInterfaces"][0]["networkIP"]
         access_configs = instance["networkInterfaces"][0].get("accessConfigs", [])
-        external_ip = access_configs[0]["natIP"] if access_configs else None
+        # Some head nodes are internal-only or don't have a NAT IP assigned.
+        external_ip = access_configs[0].get("natIP") if access_configs else None
         zone = instance["zone"].split("/")[-1]
         project = instance["zone"].split("/")[6]
 
