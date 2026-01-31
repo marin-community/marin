@@ -6,7 +6,7 @@ import gc
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Union, cast
+from typing import Any, Optional, Union, cast
 
 import equinox as eqx
 import haliax as hax
@@ -121,6 +121,66 @@ def _num_validation_sequences(total_sequences: int, fraction: float) -> int:
     return num_val
 
 
+def _get_training_components(config: LmDataConfig) -> dict[str, Any]:
+    """Get components with non-zero training weight."""
+    weights = config.train_weights
+    if weights is None:
+        return dict(config.components)
+    if isinstance(weights, dict):
+        return {name: comp for name, comp in config.components.items() if weights.get(name, 0) > 0}
+    # For scheduled weights, include any component with positive weight in any stage
+    has_weight = set()
+    for _, stage_weights in weights:
+        for name, w in stage_weights.items():
+            if w > 0:
+                has_weight.add(name)
+    return {name: comp for name, comp in config.components.items() if name in has_weight}
+
+
+def _build_dpo_dataset(
+    config: LmDataConfig,
+    Pos: Axis,
+    *,
+    key: jrandom.PRNGKey,
+    epochs: int | None,
+) -> AsyncDataset[DpoExample]:
+    """Build a DPO training dataset from a single component config."""
+    training_components = _get_training_components(config)
+    if len(training_components) != 1:
+        raise ValueError(
+            f"DPO training only supports single-component configs for now. "
+            f"Found {len(training_components)} training components: {list(training_components.keys())}"
+        )
+
+    name, component = next(iter(training_components.items()))
+    caches = config.build_caches("train")
+    cache = caches.get(name)
+    if cache is None:
+        raise ValueError(f"No training cache available for component {name}.")
+
+    if not isinstance(component.format, PreferenceChatLmDatasetFormat):
+        raise ValueError(f"DPO requires preference_chat format, got {type(component.format)}")
+
+    base_dataset = dataset_for_preference_format(component.format, Pos, cache)
+
+    perm_type = config.permutation_type
+    if perm_type == "linear":
+        logger.warning("Using linear shuffling, not recommended. Please use Feistel permutation instead.")
+    elif perm_type is None:
+        perm_type = "feistel"
+
+    train_dataset = base_dataset
+    if config.shuffle is True:
+        train_dataset = train_dataset.shuffle(key, perm_type=perm_type)
+    elif isinstance(config.shuffle, int) and config.shuffle > 0:
+        train_dataset = train_dataset.era_shuffle(config.shuffle, key=key, perm_type=perm_type)
+
+    if epochs:
+        train_dataset = EpochDataset(train_dataset, max_epochs=epochs)
+
+    return cast(AsyncDataset[DpoExample], train_dataset)
+
+
 def _build_validation_split(
     config: LmDataConfig,
     Pos: Axis,
@@ -133,13 +193,18 @@ def _build_validation_split(
 
     For DPO we require exactly one component and don't support mixtures yet.
     """
-    if len(config.components) != 1:
-        raise ValueError("DPO validation_split_fraction only supports single-component configs for now.")
+    training_components = _get_training_components(config)
+    if len(training_components) != 1:
+        raise ValueError(
+            f"DPO validation_split_fraction only supports single-component configs for now. "
+            f"Found {len(training_components)} training components: {list(training_components.keys())}"
+        )
 
-    name, component = next(iter(config.components.items()))
-    cache = component.build_or_load_cache("train", config.tokenizer)
+    name, component = next(iter(training_components.items()))
+    caches = config.build_caches("train")
+    cache = caches.get(name)
     if cache is None:
-        raise ValueError("No training cache available for validation split.")
+        raise ValueError(f"No training cache available for component {name}.")
 
     if not isinstance(component.format, PreferenceChatLmDatasetFormat):
         raise ValueError(f"DPO requires preference_chat format, got {type(component.format)}")
@@ -149,23 +214,23 @@ def _build_validation_split(
     total_len = len(base_dataset.as_sync_dataset())
     num_val = _num_validation_sequences(total_len, fraction)
     if num_val == 0:
-        train_dataset = config.train_set(Pos, key=key, epochs=epochs)
-        return cast(AsyncDataset[DpoExample], train_dataset), {}
+        train_dataset = _build_dpo_dataset(config, Pos, key=key, epochs=epochs)
+        return train_dataset, {}
 
     train_base = base_dataset.slice_dataset(end_index=total_len - num_val)
     val_base = base_dataset.slice_dataset(start_index=total_len - num_val, end_index=total_len)
 
-    perm_type = component.permutation_type
+    perm_type = config.permutation_type
     if perm_type == "linear":
         logger.warning("Using linear shuffling, not recommended. Please use Feistel permutation instead.")
-    else:
+    elif perm_type is None:
         perm_type = "feistel"
 
     train_dataset = train_base
-    if component.shuffle is True:
+    if config.shuffle is True:
         train_dataset = train_dataset.shuffle(key, perm_type=perm_type)
-    elif isinstance(component.shuffle, int) and component.shuffle > 0:
-        train_dataset = train_dataset.era_shuffle(component.shuffle, key=key, perm_type=perm_type)
+    elif isinstance(config.shuffle, int) and config.shuffle > 0:
+        train_dataset = train_dataset.era_shuffle(config.shuffle, key=key, perm_type=perm_type)
 
     if epochs:
         train_dataset = EpochDataset(train_dataset, max_epochs=epochs)
@@ -308,14 +373,24 @@ def main(config: TrainDpoConfig):
                 fraction=fraction,
             )
         else:
-            train_dataset = config.data.train_set(
+            train_dataset = _build_dpo_dataset(
+                config.data,
                 Pos,
                 key=data_key,
                 epochs=config.epoch,
             )
-            validation_sets = cast(dict[str, AsyncDataset[DpoExample]], config.data.validation_sets(Pos))
-
-        train_dataset = cast(AsyncDataset[DpoExample], train_dataset)
+            # Build validation sets from the validation cache
+            val_caches = config.data.build_caches("validation")
+            validation_sets = {}
+            for name, component in config.data.components.items():
+                cache = val_caches.get(name)
+                if cache is None:
+                    continue
+                if not isinstance(component.format, PreferenceChatLmDatasetFormat):
+                    continue
+                validation_sets[name] = cast(
+                    AsyncDataset[DpoExample], dataset_for_preference_format(component.format, Pos, cache)
+                )
 
         init_policy_key, init_reference_key = jrandom.split(model_key)
         initial_model = DpoModel(

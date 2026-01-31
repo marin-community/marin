@@ -3,6 +3,8 @@
 # python infra/launch.py --zone us-central1-a --tpu_name debug --tpu_type v5p-8 -- python src/levanter/main/train_dpo.py --config_path config/dpo_ultrafeedback_llama3_8b.yaml
 data:
   tokenizer: marin-community/marin-tokenizer
+  shuffle: true
+  permutation_type: feistel
   components:
     ultrafeedback_train_prefs:
       source:
@@ -14,8 +16,6 @@ data:
         type: preference_chat
         slice_strategy: raise
       cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_train_prefs_marin_tokenizer-7040eb
-      shuffle: true
-      permutation_type: feistel
     ultrafeedback_test_prefs:
       source:
         type: url
@@ -48,9 +48,9 @@ model:
 train_seq_len: 4096
 
 trainer:
-  seed: 0
+  seed: 1
   per_device_parallelism: -1
-  per_device_eval_parallelism: 8
+  per_device_eval_parallelism: -1
   tracker:
     type: wandb
     project: "dpo"
@@ -61,7 +61,7 @@ trainer:
   steps_per_eval: 200
   model_averaging: null
   checkpointer:
-    save_interval: 60m
+    save_interval: 10m
     base_path: gs://marin-us-central1/checkpoints/dpo/ultrafeedback_llama3_8b
 
 optimizer:
@@ -79,5 +79,5 @@ validation_split_fraction: null
 initialize_from_hf: gs://marin-us-central1/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--main
 use_hf_model_config: false
 
-hf_save_steps: 1000
+hf_save_steps: 500
 hf_save_path: gs://marin-us-central1/checkpoints/dpo/ultrafeedback_llama3_8b/hf
