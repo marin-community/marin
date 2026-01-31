@@ -18,7 +18,7 @@ import time
 
 from iris.cluster.types import Entrypoint, is_job_finished
 from iris.rpc import cluster_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync, WorkerServiceClientSync
+from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import ExponentialBackoff
 
 
@@ -51,15 +51,6 @@ class RemoteClusterClient:
             address=controller_address,
             timeout_ms=timeout_ms,
         )
-        self._worker_clients: dict[str, WorkerServiceClientSync] = {}
-
-    def _get_worker_client(self, worker_address: str) -> WorkerServiceClientSync:
-        if worker_address not in self._worker_clients:
-            self._worker_clients[worker_address] = WorkerServiceClientSync(
-                address=f"http://{worker_address}",
-                timeout_ms=self._timeout_ms,
-            )
-        return self._worker_clients[worker_address]
 
     def submit_job(
         self,
@@ -215,9 +206,7 @@ class RemoteClusterClient:
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
-        for client in self._worker_clients.values():
-            client.close()
-        self._worker_clients.clear()
+        # No cleanup needed - controller client is managed separately
 
     def get_task_status(self, job_id: str, task_index: int) -> cluster_pb2.TaskStatus:
         """Get status of a specific task within a job.
@@ -257,8 +246,7 @@ class RemoteClusterClient:
     ) -> list[cluster_pb2.Worker.LogEntry]:
         """Fetch logs for a specific task.
 
-        Queries the controller to find which worker is running the task,
-        then fetches logs directly from that worker.
+        Uses the controller as a proxy to fetch logs from the worker.
 
         Args:
             task_id: Full task ID in format "{job_id}/task-{index}"
@@ -274,18 +262,11 @@ class RemoteClusterClient:
         job_id, task_suffix = task_id.rsplit("/", 1)
         task_index = int(task_suffix.split("-")[1])
 
-        task_status = self.get_task_status(job_id, task_index)
-        if not task_status.worker_address:
-            return []
-
-        worker_client = self._get_worker_client(task_status.worker_address)
-        filter_proto = cluster_pb2.Worker.FetchLogsFilter(
+        request = cluster_pb2.Controller.GetTaskLogsRequest(
+            job_id=job_id,
+            task_index=task_index,
             start_ms=start_ms,
-            max_lines=max_lines,
+            limit=max_lines,
         )
-        request = cluster_pb2.Worker.FetchTaskLogsRequest(
-            task_id=task_id,
-            filter=filter_proto,
-        )
-        response = worker_client.fetch_task_logs(request)
+        response = self._client.get_task_logs(request)
         return list(response.logs)
