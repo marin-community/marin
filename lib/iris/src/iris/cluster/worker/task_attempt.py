@@ -304,7 +304,11 @@ class TaskAttempt:
 
         # Chaos injection for testing delayed builds (for screenshot tests)
         if rule := chaos("worker.building_delay"):
+            logger.info("Chaos delay triggered: sleeping for %s seconds", rule.delay_seconds)
             time.sleep(rule.delay_seconds)
+            logger.info("Chaos delay complete")
+        else:
+            logger.info("Chaos delay NOT triggered (already consumed or not enabled)")
 
         # Periodically check should_stop during download to support kill during BUILDING
         # (RF-3: For now, we defer kill handling until container starts, as bundle
