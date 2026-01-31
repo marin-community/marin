@@ -7,6 +7,7 @@ multiple ManagedThreads for bulk shutdown.
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -33,7 +34,6 @@ class ManagedThread:
         self._thread.start()
 
     def stop(self) -> None:
-        """Signal the thread to stop by setting the stop event."""
         self._stop_event.set()
 
     def join(self, timeout: float | None = None) -> None:
@@ -80,14 +80,14 @@ class ThreadRegistry:
         for thread in threads:
             thread.stop()
 
-        # Join all with per-thread share of timeout
-        per_thread_timeout = timeout / max(len(threads), 1)
+        deadline = time.monotonic() + timeout
         stuck: list[str] = []
         for thread in threads:
-            thread.join(timeout=per_thread_timeout)
+            remaining = max(0, deadline - time.monotonic())
+            thread.join(timeout=remaining)
             if thread.is_alive:
                 stuck.append(thread.name or "<unnamed>")
-                logger.warning("Thread %s did not exit within %.1fs", thread.name, per_thread_timeout)
+                logger.warning("Thread %s did not exit within timeout", thread.name)
 
         return stuck
 

@@ -214,6 +214,7 @@ class WorkerDispatcher:
         self._managed_thread: ManagedThread | None = None
         self._discover_backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
         self._actor_client: ActorClient | None = None
+        self._stop_event: threading.Event | None = None
 
     def start(self) -> None:
         target = self._run
@@ -235,6 +236,7 @@ class WorkerDispatcher:
             self._managed_thread.join(timeout=timeout)
 
     def _run(self, stop_event: threading.Event) -> None:
+        self._stop_event = stop_event
         while not stop_event.is_set():
             if self.state.status == WorkerStatus.PENDING:
                 self._discover_endpoint()
@@ -268,7 +270,10 @@ class WorkerDispatcher:
             )
             logger.info("Worker %s discovered at %s", self.state.worker_id, endpoint.url)
         else:
-            time.sleep(self._discover_backoff.next_interval())
+            if self._stop_event:
+                self._stop_event.wait(self._discover_backoff.next_interval())
+            else:
+                time.sleep(self._discover_backoff.next_interval())
 
     def _get_task(self) -> PendingTask | None:
         """Try to get a task from the queue."""

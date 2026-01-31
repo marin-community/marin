@@ -94,10 +94,12 @@ def test_registry_context_manager():
 def test_registry_multiple_threads():
     """Registry handles multiple threads."""
     barrier = threading.Barrier(4)  # 3 threads + main
-    started = []
+    started_count = [0]
+    lock = threading.Lock()
 
     def target(stop_event: threading.Event, idx: int):
-        started.append(idx)
+        with lock:
+            started_count[0] += 1
         barrier.wait(timeout=2.0)
         stop_event.wait()
 
@@ -105,4 +107,4 @@ def test_registry_multiple_threads():
         for i in range(3):
             registry.spawn(target=target, name=f"thread-{i}", args=(i,))
         barrier.wait(timeout=2.0)
-        assert len(started) == 3
+        assert started_count[0] == 3
