@@ -338,6 +338,7 @@ def default_train(
                 project="marin",
                 name=wandb_name,
                 tags=[*tags],
+                replicate_path=this_output_path(),
                 group=wandb_group,
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
