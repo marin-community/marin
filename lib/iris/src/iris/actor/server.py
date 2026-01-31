@@ -69,6 +69,8 @@ class ActorServer:
         self._actors: dict[str, RegisteredActor] = {}
         self._app: ActorServiceASGIApplication | None = None
         self._actual_port: int | None = None
+        self._server: uvicorn.Server | None = None
+        self._server_thread: threading.Thread | None = None
 
     @property
     def address(self) -> str:
@@ -222,17 +224,21 @@ class ActorServer:
             port=self._actual_port,
             log_level="error",
         )
-        server = uvicorn.Server(config)
+        self._server = uvicorn.Server(config)
 
-        thread = threading.Thread(target=server.run, daemon=True)
-        thread.start()
+        self._server_thread = threading.Thread(target=self._server.run, daemon=True)
+        self._server_thread.start()
 
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: server.started,
+            lambda: self._server.started,
             timeout=5.0,
         )
 
         return self._actual_port
 
     def shutdown(self) -> None:
-        pass
+        """Shutdown the actor server and wait for the server thread to finish."""
+        if hasattr(self, "_server") and self._server:
+            self._server.should_exit = True
+        if hasattr(self, "_server_thread") and self._server_thread and self._server_thread.is_alive():
+            self._server_thread.join()

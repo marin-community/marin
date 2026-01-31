@@ -67,9 +67,17 @@ class _StreamingCapture(io.StringIO):
         self._container = container
         self._source = source
         self._buffer = ""
+        self._closed = False
 
     def write(self, s: str) -> int:
-        result = super().write(s)
+        if self._closed:
+            return 0
+        try:
+            result = super().write(s)
+        except ValueError:
+            # Stream closed, stop writing
+            self._closed = True
+            return 0
         self._buffer += s
         while "\n" in self._buffer:
             line, self._buffer = self._buffer.split("\n", 1)
@@ -84,7 +92,7 @@ class _StreamingCapture(io.StringIO):
 
     def flush_remaining(self):
         """Flush any remaining buffered content as a final log line."""
-        if self._buffer:
+        if self._buffer and not self._closed:
             self._container._logs.append(
                 LogLine(
                     timestamp=datetime.now(timezone.utc),
@@ -432,6 +440,9 @@ class LocalVmGroup(VmGroupProtocol):
         self._terminated = True
         for worker in self._workers:
             worker.stop()
+        # Wait for all worker threads to finish to prevent logging after stdout/stderr closed
+        for worker in self._workers:
+            worker.wait()
         for vm in self._managed_vms:
             self._vm_registry.unregister(vm.info.vm_id)
 

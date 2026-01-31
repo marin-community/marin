@@ -162,20 +162,33 @@ class Worker:
             logger.info("Startup cleanup: removed %d iris containers", removed)
 
     def wait(self) -> None:
-        """Block until the server thread exits."""
-        if self._server_thread:
+        """Block until all worker threads exit."""
+        if self._lifecycle_thread and self._lifecycle_thread.is_alive():
+            self._lifecycle_thread.join()
+        if self._server_thread and self._server_thread.is_alive():
             self._server_thread.join()
 
     def stop(self) -> None:
-        self._stop_event.set()
-        if self._lifecycle_thread:
-            self._lifecycle_thread.join(timeout=5.0)
+        """Stop the worker and wait for all threads to finish.
 
-        # Stop uvicorn server
+        This method ensures complete cleanup by:
+        1. Signaling all threads to stop
+        2. Stopping the uvicorn server
+        3. Waiting for threads to finish (no timeout to prevent orphaned threads)
+        4. Cleaning up containers and temp directories
+        """
+        self._stop_event.set()
+
+        # Stop uvicorn server first to prevent new requests
         if self._server:
             self._server.should_exit = True
-        if self._server_thread:
-            self._server_thread.join(timeout=5.0)
+
+        # Wait for both threads to finish - no timeout to ensure complete cleanup
+        # If a thread hangs, pytest-timeout or process shutdown will handle it
+        if self._lifecycle_thread and self._lifecycle_thread.is_alive():
+            self._lifecycle_thread.join()
+        if self._server_thread and self._server_thread.is_alive():
+            self._server_thread.join()
 
         # Kill and remove all containers
         with self._lock:
