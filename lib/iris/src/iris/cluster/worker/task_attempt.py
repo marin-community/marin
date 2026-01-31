@@ -158,7 +158,7 @@ class TaskAttempt:
         worker_id: str | None,
         controller_address: str | None,
         port_allocator: PortAllocator,
-        report_state: Callable[["TaskAttempt"], None],
+        report_state: Callable[[], None],
         poll_interval_seconds: float = 5.0,
     ):
         """Initialize a TaskAttempt.
@@ -172,7 +172,7 @@ class TaskAttempt:
             worker_id: Worker identifier for env injection
             controller_address: Controller address for env injection
             port_allocator: Port allocator for retry logic
-            report_state: Callback to report task state changes to Worker
+            report_state: Callback to report task state changes to Worker (no arguments)
             poll_interval_seconds: How often to poll container status
         """
         self._bundle_provider = bundle_provider
@@ -278,7 +278,7 @@ class TaskAttempt:
             self._download_bundle()
             self._build_image()
             container_id = self._start_container()
-            self._report_state(self)
+            self._report_state()
             self._monitor(container_id)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
@@ -286,7 +286,7 @@ class TaskAttempt:
             self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             if is_task_finished(self.status):
-                self._report_state(self)
+                self._report_state()
             self._cleanup()
 
     def _download_bundle(self) -> None:
@@ -297,7 +297,7 @@ class TaskAttempt:
         """
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at_ms = now_ms()
-        self._report_state(self)  # Report BUILDING state to controller
+        self._report_state()  # Report BUILDING state to controller
 
         # Chaos injection for testing failures during download
         chaos_raise("worker.bundle_download")
@@ -324,7 +324,7 @@ class TaskAttempt:
         """
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="building image")
         self.build_started_ms = now_ms()
-        self._report_state(self)  # Report BUILDING state to controller
+        self._report_state()  # Report BUILDING state to controller
 
         # Periodically check should_stop during build to support kill during BUILDING
         # (RF-3: Similar to bundle download, we defer kill handling for now since
@@ -336,7 +336,7 @@ class TaskAttempt:
 
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="populating uv cache")
         self.logs.add("build", "Building Docker image...")
-        self._report_state(self)  # Report state update with logs to controller
+        self._report_state()  # Report state update with logs to controller
 
         # Use the client's Python version for the task container so cloudpickle
         # bytecode is deserialized with the same Python that serialized it.
