@@ -575,10 +575,7 @@ class Controller:
         """
         try:
             response = future.result()
-            if response is None:
-                self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
-            else:
-                self._process_heartbeat_response(worker, response)
+            self._process_heartbeat_response(worker, response)
         except Exception as e:
             logger.warning(f"Heartbeat error for {worker.worker_id}: {e}")
             self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
@@ -588,7 +585,7 @@ class Controller:
         worker: ControllerWorker,
         tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest],
         tasks_to_kill: list[str],
-    ) -> cluster_pb2.HeartbeatResponse | None:
+    ) -> cluster_pb2.HeartbeatResponse:
         """Send a heartbeat to a single worker.
 
         Args:
@@ -597,31 +594,30 @@ class Controller:
             tasks_to_kill: Task IDs to kill on this worker
 
         Returns:
-            HeartbeatResponse on success, None on failure
-        """
-        try:
-            if rule := chaos("controller.heartbeat"):
-                from time import sleep
+            HeartbeatResponse on success
 
-                sleep(rule.delay_seconds)
-                raise Exception("chaos: heartbeat unavailable")
-            stub = self._stub_factory.get_stub(worker.address)
-            expected_tasks = [
-                cluster_pb2.Controller.RunningTaskEntry(
-                    task_id=str(tid),
-                    attempt_id=self._state.get_task(tid).current_attempt_id if self._state.get_task(tid) else 0,
-                )
-                for tid in worker.running_tasks
-            ]
-            request = cluster_pb2.HeartbeatRequest(
-                tasks_to_run=tasks_to_run,
-                tasks_to_kill=tasks_to_kill,
-                expected_tasks=expected_tasks,
+        Raises:
+            Exception on RPC failure (caught and handled by _handle_heartbeat_future)
+        """
+        if rule := chaos("controller.heartbeat"):
+            from time import sleep
+
+            sleep(rule.delay_seconds)
+            raise Exception("chaos: heartbeat unavailable")
+        stub = self._stub_factory.get_stub(worker.address)
+        expected_tasks = [
+            cluster_pb2.Controller.RunningTaskEntry(
+                task_id=str(tid),
+                attempt_id=self._state.get_task(tid).current_attempt_id if self._state.get_task(tid) else 0,
             )
-            return stub.heartbeat(request)
-        except Exception as e:
-            logger.warning(f"Heartbeat failed for worker {worker.worker_id}: {e}")
-            return None
+            for tid in worker.running_tasks
+        ]
+        request = cluster_pb2.HeartbeatRequest(
+            tasks_to_run=tasks_to_run,
+            tasks_to_kill=tasks_to_kill,
+            expected_tasks=expected_tasks,
+        )
+        return stub.heartbeat(request)
 
     def _process_heartbeat_response(
         self,
