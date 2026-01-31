@@ -144,7 +144,7 @@ def create_weight_distribution_figure(
             font=dict(size=16),
         ),
         barmode="overlay",
-        height=300 * n_phases,
+        height=400 * n_phases,
         width=900,
         legend=dict(
             orientation="h",

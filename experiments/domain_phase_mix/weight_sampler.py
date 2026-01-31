@@ -56,6 +56,7 @@ class DirichletSamplingParams:
         vertex_prob: Probability of sampling near a vertex (for vertex_biased/mixed).
         min_dominant_weight: Minimum weight for dominant domain in vertex sampling.
         min_phase_change: Minimum L1/2 distance between consecutive phases (0 to disable).
+        min_config_distance: Minimum average L1/2 distance to previously sampled configs (0 to disable).
     """
 
     temp: float = 0.5
@@ -68,6 +69,7 @@ class DirichletSamplingParams:
     vertex_prob: float = 0.3  # Probability of vertex-biased sample in mixed strategy
     min_dominant_weight: float = 0.7  # Min weight for dominant domain in vertex sampling
     min_phase_change: float = 0.15  # Minimum change between phases (L1/2 distance)
+    min_config_distance: float = 0.0  # Minimum distance to previous configs (0 to disable)
 
 
 class WeightSampler:
@@ -80,7 +82,7 @@ class WeightSampler:
     - MIXED: Combination of uniform and vertex-biased for maximum diversity
     """
 
-    SAMPLE_MULTIPLIER = 100  # Oversample factor for reject sampling
+    SAMPLE_MULTIPLIER = 1000  # Oversample factor for reject sampling
 
     def __init__(
         self,
@@ -281,6 +283,23 @@ class WeightSampler:
         total_diff = sum(abs(weights1.get(k, 0) - weights2.get(k, 0)) for k in weights1)
         return total_diff / 2  # Normalize to [0, 1]
 
+    def _config_distance(self, config1: WeightConfig, config2: WeightConfig) -> float:
+        """Compute average L1/2 distance between two configurations across all phases.
+
+        Args:
+            config1: First configuration.
+            config2: Second configuration.
+
+        Returns:
+            Average L1/2 distance across all phases, in [0, 1].
+        """
+        distances = []
+        for phase_name in self.phase_names:
+            weights1 = config1.phase_weights[phase_name]
+            weights2 = config2.phase_weights[phase_name]
+            distances.append(self._phase_change_distance(weights1, weights2))
+        return sum(distances) / len(distances) if distances else 0.0
+
     def sample_config(self, run_id: int) -> WeightConfig:
         """Sample a complete weight configuration for all phases.
 
@@ -349,16 +368,26 @@ class WeightSampler:
 
         attempts = 0
         max_attempts = n * self.SAMPLE_MULTIPLIER
+        min_dist = self.params.min_config_distance
 
         while len(configs) < n and attempts < max_attempts:
             config = self.sample_config(len(configs))
 
+            # Check hash-based deduplication
             if deduplicate:
                 config_hash = self._config_hash(config, precision)
                 if config_hash in seen_hashes:
                     attempts += 1
                     continue
                 seen_hashes.add(config_hash)
+
+            # Check minimum distance to previous configs
+            if min_dist > 0 and configs:
+                # Compute minimum distance to any previous config
+                min_distance_to_prev = min(self._config_distance(config, prev) for prev in configs)
+                if min_distance_to_prev < min_dist:
+                    attempts += 1
+                    continue
 
             config.run_id = len(configs)
             configs.append(config)
@@ -367,7 +396,7 @@ class WeightSampler:
         if len(configs) < n:
             raise ValueError(
                 f"Could only generate {len(configs)} unique configs after {max_attempts} attempts. "
-                f"Try reducing deduplication precision or adjusting sampling parameters."
+                f"Try reducing deduplication precision, min_config_distance, or adjusting sampling parameters."
             )
 
         return configs
