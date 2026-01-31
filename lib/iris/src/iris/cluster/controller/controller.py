@@ -20,6 +20,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from time import sleep
 from typing import Protocol
 
 import uvicorn
@@ -600,8 +601,6 @@ class Controller:
             Exception on RPC failure (caught and handled by _handle_heartbeat_future)
         """
         if rule := chaos("controller.heartbeat"):
-            from time import sleep
-
             sleep(rule.delay_seconds)
             raise Exception("chaos: heartbeat unavailable")
         stub = self._stub_factory.get_stub(worker.address)
