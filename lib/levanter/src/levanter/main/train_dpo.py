@@ -6,7 +6,7 @@ import gc
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Union, cast
+from typing import Optional, cast
 
 import equinox as eqx
 import haliax as hax
@@ -24,23 +24,18 @@ from levanter.compat.hf_checkpoints import HFCompatConfig
 from levanter.data.mixture import MixtureDataset
 from levanter.data.dataset import AsyncDataset, EpochDataset
 from levanter.data.text import (
-    LMMixtureDatasetConfig,
+    DpoExample,
+    LmDataConfig,
     PreferenceChatLmDatasetFormat,
-    SingleDatasetLMConfigBase,
-    SingleDatasetLMConfig,
-    UrlSingleDatasetLMConfig,
-    dataset_for_format,
+    dataset_for_preference_format,
 )
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.metrics import Metric, ReductionType
 from levanter.optim import AdamConfig, OptimizerConfig
-from levanter.schedule import BatchSchedule
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count, use_cpu_device
 from levanter.utils.tree_utils import inference_mode
-
-from levanter.data.text import DpoExample
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +89,8 @@ def _logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
     return -hax.sum(nll, axis=Pos)
 
 
-def _validate_preference_chat_formats(config: SingleDatasetLMConfig | LMMixtureDatasetConfig) -> None:
-    formats = {name: source.format for name, source in config.sources.items()}
+def _validate_preference_chat_formats(config: LmDataConfig) -> None:
+    formats = {name: comp.format for name, comp in config.components.items()}
 
     non_preference = {name: fmt for name, fmt in formats.items() if not isinstance(fmt, PreferenceChatLmDatasetFormat)}
     if non_preference:
@@ -126,93 +121,63 @@ def _num_validation_sequences(total_sequences: int, fraction: float) -> int:
     return num_val
 
 
-def _build_validation_split_single(
-    config: SingleDatasetLMConfigBase,
+def _build_validation_split(
+    config: LmDataConfig,
     Pos: Axis,
     *,
-    batch_schedule: BatchSchedule,
     key: jrandom.PRNGKey,
     epochs: int | None,
     fraction: float,
 ) -> tuple[AsyncDataset[DpoExample], dict[str, AsyncDataset[DpoExample]]]:
-    cache = config.build_or_load_cache("train")
+    """Build train/validation split from a single component config.
+
+    For DPO we require exactly one component and don't support mixtures yet.
+    """
+    if len(config.components) != 1:
+        raise ValueError("DPO validation_split_fraction only supports single-component configs for now.")
+
+    name, component = next(iter(config.components.items()))
+    cache = component.build_or_load_cache("train", config.tokenizer)
     if cache is None:
         raise ValueError("No training cache available for validation split.")
 
-    base_dataset = dataset_for_format(
-        config.format,
-        Pos,
-        cache,
-        eos_id=config.the_tokenizer.eos_token_id,
-        ignore_index=config.ignore_token_id,
-        block_cross_document_attention=config.block_cross_document_attention,
-    )
+    if not isinstance(component.format, PreferenceChatLmDatasetFormat):
+        raise ValueError(f"DPO requires preference_chat format, got {type(component.format)}")
+
+    base_dataset = dataset_for_preference_format(component.format, Pos, cache)
 
     total_len = len(base_dataset.as_sync_dataset())
     num_val = _num_validation_sequences(total_len, fraction)
     if num_val == 0:
-        return config.train_set(Pos, batch_schedule, key=key, epochs=epochs), {}
+        train_dataset = config.train_set(Pos, key=key, epochs=epochs)
+        return cast(AsyncDataset[DpoExample], train_dataset), {}
 
     train_base = base_dataset.slice_dataset(end_index=total_len - num_val)
     val_base = base_dataset.slice_dataset(start_index=total_len - num_val, end_index=total_len)
 
-    perm_type = config.permutation_type
+    perm_type = component.permutation_type
     if perm_type == "linear":
         logger.warning("Using linear shuffling, not recommended. Please use Feistel permutation instead.")
     else:
         perm_type = "feistel"
 
     train_dataset = train_base
-    if config.shuffle is True:
+    if component.shuffle is True:
         train_dataset = train_dataset.shuffle(key, perm_type=perm_type)
-    elif isinstance(config.shuffle, int) and config.shuffle > 0:
-        train_dataset = train_dataset.era_shuffle(config.shuffle, key=key, perm_type=perm_type)
+    elif isinstance(component.shuffle, int) and component.shuffle > 0:
+        train_dataset = train_dataset.era_shuffle(component.shuffle, key=key, perm_type=perm_type)
 
     if epochs:
         train_dataset = EpochDataset(train_dataset, max_epochs=epochs)
 
     train_dataset = cast(AsyncDataset[DpoExample], train_dataset)
     val_base = cast(AsyncDataset[DpoExample], val_base)
-    return train_dataset, {"": val_base}
-
-
-def _build_validation_split_mixture(
-    config: LMMixtureDatasetConfig,
-    Pos: Axis,
-    *,
-    batch_schedule: BatchSchedule,
-    key: jrandom.PRNGKey,
-    epochs: int | None,
-    fraction: float,
-) -> tuple[AsyncDataset[DpoExample], dict[str, AsyncDataset[DpoExample]]]:
-    if epochs:
-        raise ValueError("Epochs are not supported for mixture datasets")
-
-    train_caches = config.build_caches("train")
-    token_datasets = config.build_token_datasets(train_caches, Pos)
-
-    num_validation_sequences: dict[str, int] = {}
-    for name, dataset in token_datasets.items():
-        total_len = len(dataset.as_sync_dataset())
-        num_val = _num_validation_sequences(total_len, fraction)
-        if num_val > 0:
-            num_validation_sequences[name] = num_val
-
-    if not num_validation_sequences:
-        train_dataset = cast(AsyncDataset[DpoExample], config.train_set(Pos, batch_schedule, key=key, epochs=epochs))
-        return train_dataset, {}
-
-    config_with_val = dataclasses.replace(config, num_validation_sequences=num_validation_sequences)
-    train_dataset = cast(
-        AsyncDataset[DpoExample], config_with_val.train_set(Pos, batch_schedule, key=key, epochs=epochs)
-    )
-    validation_sets = cast(dict[str, AsyncDataset[DpoExample]], config_with_val.validation_sets(Pos))
-    return train_dataset, validation_sets
+    return train_dataset, {name: val_base}
 
 
 @dataclass
 class TrainDpoConfig:
-    data: Union[SingleDatasetLMConfig, LMMixtureDatasetConfig] = field(default_factory=UrlSingleDatasetLMConfig)
+    data: LmDataConfig = field(default_factory=LmDataConfig)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     model: LmConfig = field(default_factory=LlamaConfig)
     train_seq_len: int | None = None
@@ -335,30 +300,16 @@ def main(config: TrainDpoConfig):
             fraction = config.validation_split_fraction
             if fraction < 0 or fraction >= 1:
                 raise ValueError(f"validation_split_fraction must be in [0, 1), got {fraction}")
-            if isinstance(config.data, SingleDatasetLMConfigBase):
-                train_dataset, validation_sets = _build_validation_split_single(
-                    config.data,
-                    Pos,
-                    batch_schedule=config.trainer.batch_schedule,
-                    key=data_key,
-                    epochs=config.epoch,
-                    fraction=fraction,
-                )
-            elif isinstance(config.data, LMMixtureDatasetConfig):
-                train_dataset, validation_sets = _build_validation_split_mixture(
-                    config.data,
-                    Pos,
-                    batch_schedule=config.trainer.batch_schedule,
-                    key=data_key,
-                    epochs=config.epoch,
-                    fraction=fraction,
-                )
-            else:
-                raise TypeError(f"Unsupported data config type: {type(config.data)}")
+            train_dataset, validation_sets = _build_validation_split(
+                config.data,
+                Pos,
+                key=data_key,
+                epochs=config.epoch,
+                fraction=fraction,
+            )
         else:
             train_dataset = config.data.train_set(
                 Pos,
-                config.trainer.batch_schedule,
                 key=data_key,
                 epochs=config.epoch,
             )

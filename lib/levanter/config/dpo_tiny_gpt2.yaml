@@ -1,23 +1,27 @@
 # Tiny DPO sanity-check config for train_dpo.py.
 
 data:
-  train_urls:
-    - config/data/tiny_preference.jsonl
-  format:
-    type: preference_chat
-    chat_template: |
-      {% for message in messages %}
-      {% if message['role'] == 'user' %}
-      {{ message['content'] }}
-      {% elif message['role'] == 'assistant' %}
-      {% generation %}{{ message['content'] }}{% endgeneration %}
-      {% endif %}
-      {% endfor %}
-    pack: false
-    slice_strategy: raise
   tokenizer: gpt2
   cache_dir: cache/dpo_tiny
-  shuffle: true
+  components:
+    default:
+      source:
+        type: url
+        train_urls:
+          - config/data/tiny_preference.jsonl
+      format:
+        type: preference_chat
+        chat_template: |
+          {% for message in messages %}
+          {% if message['role'] == 'user' %}
+          {{ message['content'] }}
+          {% elif message['role'] == 'assistant' %}
+          {% generation %}{{ message['content'] }}{% endgeneration %}
+          {% endif %}
+          {% endfor %}
+        pack: false
+        slice_strategy: raise
+      shuffle: true
 
 model:
   type: gpt2

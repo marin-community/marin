@@ -2,14 +2,18 @@
 # Update the GCS paths to match your transformed preference dataset and desired cache location.
 # python infra/launch.py --zone us-central1-a --tpu_name debug --tpu_type v5p-8 -- python src/levanter/main/train_dpo.py --config_path config/dpo_ultrafeedback_llama3_8b.yaml
 data:
-  train_urls:
-    # Replace with the output path from transform_preference_dataset_step (train_prefs split).
-    - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/train_prefs/*.jsonl.gz
-  format:
-    type: preference_chat
   tokenizer: stanford-crfm/marin-tokenizer
   cache_dir: gs://marin-us-central1/tokenized/ultrafeedback_binarized_marin_tokenizer-651338
-  shuffle: true
+  components:
+    default:
+      source:
+        type: url
+        train_urls:
+          # Replace with the output path from transform_preference_dataset_step (train_prefs split).
+          - gs://marin-us-central1/preference/HuggingFaceH4--ultrafeedback_binarized-3949bf5-69e206/train_prefs/*.jsonl.gz
+      format:
+        type: preference_chat
+      shuffle: true
 
 model:
   type: llama
