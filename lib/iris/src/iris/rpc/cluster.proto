@@ -439,9 +439,8 @@ message Controller {
     int32 attempt_id = 2;
   }
 
-  // A task completion that the worker is reporting via heartbeat.
-  // Used when report_task_state RPC fails — the worker buffers completions
-  // and piggybacks them on the next successful heartbeat.
+  // A task completion reported by the worker in its heartbeat response.
+  // Workers report completions for expected_tasks that have reached a terminal state.
   message CompletedTaskEntry {
     string task_id = 1;
     string job_id = 2;
@@ -453,24 +452,6 @@ message Controller {
     int32 attempt_id = 8;
   }
 
-  message RegisterWorkerRequest {
-    string worker_id = 1;
-    string address = 2;
-    WorkerMetadata metadata = 3;
-    reserved 4;  // was running_task_ids
-    // Tasks the worker is currently running, with attempt IDs for stale detection.
-    repeated RunningTaskEntry running_tasks = 5;
-    // Completed tasks piggybacked on heartbeat when report_task_state RPC failed.
-    repeated CompletedTaskEntry completed_tasks = 6;
-  }
-
-  message RegisterWorkerResponse {
-    bool accepted = 1;
-    string controller_address = 2;   // For callbacks
-    // If true, worker should reset: kill all containers and re-register with empty task list.
-    // Set when worker claims tasks the controller doesn't know about (stale state).
-    bool should_reset = 3;
-  }
 
   message WorkerHealthStatus {
     string worker_id = 1;
@@ -489,20 +470,20 @@ message Controller {
     repeated WorkerHealthStatus workers = 1;
   }
 
-  // --- Task State Reporting (worker -> controller) ---
-  message ReportTaskStateRequest {
-    string worker_id = 1;
-    string task_id = 2;             // Full task ID
-    string job_id = 3;              // Parent job ID (for job-level state aggregation)
-    int32 task_index = 4;
-    TaskState state = 5;
-    int32 exit_code = 6;
-    string error = 7;
-    int64 finished_at_ms = 8;
-    int32 attempt_id = 9;
+
+  message RegisterRequest {
+    string address = 1;
+    WorkerMetadata metadata = 2;
   }
 
-  message ReportTaskStateResponse {}
+  message RegisterResponse {
+    string worker_id = 1;
+    bool accepted = 2;
+  }
+
+  message NotifyTaskUpdateRequest {
+    string worker_id = 1;
+  }
 
   // --- Endpoint Registry ---
   // Endpoints are registered with prefixed names: "{root_job_id}/{actor_name}"
@@ -624,11 +605,6 @@ message Worker {
     int32 attempt_id = 11;
   }
 
-  message RunTaskResponse {
-    string task_id = 1;
-    TaskState state = 2;
-  }
-
   message GetTaskStatusRequest {
     string task_id = 1;
     bool include_result = 2;
@@ -686,6 +662,30 @@ message Worker {
 }
 
 // ============================================================================
+// HEARTBEAT MESSAGES (Controller -> Worker)
+// ============================================================================
+
+message HeartbeatRequest {
+  // Tasks to start on this worker
+  repeated Worker.RunTaskRequest tasks_to_run = 1;
+
+  // Tasks to kill on this worker
+  repeated string tasks_to_kill = 2;
+
+  // Tasks the controller believes this worker is running.
+  // Worker compares against its actual state and reports completions/failures.
+  repeated Controller.RunningTaskEntry expected_tasks = 3;
+}
+
+message HeartbeatResponse {
+  // Tasks currently running on this worker
+  repeated Controller.RunningTaskEntry running_tasks = 1;
+
+  // Tasks from expected_tasks that have finished (with exit code, error, state)
+  repeated Controller.CompletedTaskEntry completed_tasks = 2;
+}
+
+// ============================================================================
 // SERVICES
 // ============================================================================
 
@@ -700,10 +700,10 @@ service ControllerService {
   rpc GetTaskStatus(Controller.GetTaskStatusRequest) returns (Controller.GetTaskStatusResponse);
   rpc ListTasks(Controller.ListTasksRequest) returns (Controller.ListTasksResponse);
 
-  // Worker management (workers send heartbeats to controller)
-  rpc RegisterWorker(Controller.RegisterWorkerRequest) returns (Controller.RegisterWorkerResponse);
+  // Worker management
+  rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
   rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
-  rpc ReportTaskState(Controller.ReportTaskStateRequest) returns (Controller.ReportTaskStateResponse);
+  rpc NotifyTaskUpdate(Controller.NotifyTaskUpdateRequest) returns (Empty);
 
   // Endpoint registry (generic service discovery)
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
@@ -728,11 +728,10 @@ service ControllerService {
 }
 
 service WorkerService {
-  rpc RunTask(Worker.RunTaskRequest) returns (Worker.RunTaskResponse);
   rpc GetTaskStatus(Worker.GetTaskStatusRequest) returns (TaskStatus);
   rpc ListTasks(Worker.ListTasksRequest) returns (Worker.ListTasksResponse);
   rpc FetchTaskLogs(Worker.FetchTaskLogsRequest) returns (Worker.FetchTaskLogsResponse);
-  rpc KillTask(Worker.KillTaskRequest) returns (Empty);
   rpc HealthCheck(Empty) returns (Worker.HealthResponse);
   rpc GetProcessLogs(Worker.GetProcessLogsRequest) returns (Worker.GetProcessLogsResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 }

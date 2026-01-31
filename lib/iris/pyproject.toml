@@ -47,6 +47,7 @@ dev = [
     "pillow>=10.0.0",
     "playwright>=1.49.0",
     "pytest-asyncio",
+    "pytest-flakefinder>=1.1.0",
     "pytest-playwright>=0.6.2",
     "pytest-timeout",
     "pytest>=8.3.2",
@@ -60,7 +61,7 @@ packages = ["src/iris"]
 
 [tool.pytest.ini_options]
 timeout = 30
-addopts = "--durations=10"
+addopts = "--durations=10 -m 'not slow'"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "docker: marks tests that use real Docker (run with --use-docker)",

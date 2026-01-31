@@ -56,8 +56,9 @@ def test_coscheduled_sibling_failure(cluster):
     from the same slice share the same tpu-name attribute value.
     """
     _url, client = cluster
-    # Fail container creation once — hits one replica, sibling cascade kills all
-    enable_chaos("worker.create_container", failure_rate=0.5, max_failures=1, error=RuntimeError("chaos: replica fail"))
+    # Fail container creation once — hits one replica, sibling cascade kills all.
+    # failure_rate=1.0 ensures the first container creation deterministically fails.
+    enable_chaos("worker.create_container", failure_rate=1.0, max_failures=1, error=RuntimeError("chaos: replica fail"))
     from iris.cluster.types import Entrypoint, EnvironmentSpec
 
     job = client.submit(
@@ -132,9 +133,9 @@ def test_scheduling_timeout(cluster):
 
 
 def test_dispatch_delayed(cluster):
-    """Dispatch delayed by chaos, but eventually goes through."""
+    """Dispatch delayed by chaos (via heartbeat), but eventually goes through."""
     _url, client = cluster
-    enable_chaos("controller.dispatch", delay_seconds=3.0, failure_rate=1.0, max_failures=2)
+    enable_chaos("controller.heartbeat", delay_seconds=3.0, failure_rate=1.0, max_failures=2)
     job = submit(client, _quick, "delayed-dispatch")
     status = wait(client, job, timeout=60)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
