@@ -45,7 +45,7 @@ from iris.cluster.controller.state import (
 from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, JobId, TaskId, VmWorkerStatus, VmWorkerStatusMap, WorkerId
 from iris.cluster.vm.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
-from iris.managed_thread import ManagedThread, get_thread_registry
+from iris.managed_thread import ManagedThread, get_thread_registry, stop_event_to_server
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import ExponentialBackoff, now_ms
@@ -732,6 +732,7 @@ class Controller:
                 log_level="error",
             )
             self._server = uvicorn.Server(config)
+            stop_event_to_server(stop_event, self._server)
             self._server.run()
         except Exception as e:
             logger.exception("Controller server error: %s", e)

@@ -70,23 +70,22 @@ def test_registry_spawn_and_shutdown():
     assert entered.wait(timeout=2.0)
     assert t.is_alive
 
-    stuck = registry.shutdown(timeout=5.0)
-    assert stuck == []
+    registry.shutdown()
     assert not t.is_alive
 
 
-def test_registry_reports_stuck_threads():
-    """Registry returns names of threads that don't exit within timeout."""
+def test_registry_shutdown_with_timeout():
+    """Registry with timeout doesn't block forever on stuck threads."""
 
     def stubborn(stop_event: threading.Event):
-        # Ignores stop event, sleeps forever
         time.sleep(100)
 
     registry = ThreadRegistry()
-    registry.spawn(target=stubborn, name="stuck-thread")
+    t = registry.spawn(target=stubborn, name="stuck-thread")
 
-    stuck = registry.shutdown(timeout=0.1)
-    assert stuck == ["stuck-thread"]
+    registry.shutdown(timeout=0.1)
+    # Thread is still alive because it ignores stop_event
+    assert t.is_alive
 
 
 def test_registry_context_manager():

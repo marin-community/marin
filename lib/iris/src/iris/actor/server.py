@@ -35,7 +35,7 @@ import uvicorn
 
 from connectrpc.request import RequestContext
 
-from iris.managed_thread import ManagedThread, get_thread_registry
+from iris.managed_thread import ManagedThread, get_thread_registry, stop_event_to_server
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
 from iris.time_utils import ExponentialBackoff, now_ms
@@ -228,6 +228,7 @@ class ActorServer:
         self._server = uvicorn.Server(config)
 
         def _run_server(stop_event: threading.Event) -> None:
+            stop_event_to_server(stop_event, self._server)
             self._server.run()
 
         self._thread = get_thread_registry().spawn(target=_run_server, name="actor-server")

@@ -34,7 +34,7 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
-from iris.managed_thread import ManagedThread, get_thread_registry
+from iris.managed_thread import ManagedThread, get_thread_registry, stop_event_to_server
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import ExponentialBackoff
@@ -200,6 +200,7 @@ class Worker:
                 log_level="error",
             )
             self._server = uvicorn.Server(config)
+            stop_event_to_server(stop_event, self._server)
             self._server.run()
         except Exception as e:
             print(f"Worker server error: {e}")

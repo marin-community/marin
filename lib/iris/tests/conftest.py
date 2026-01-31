@@ -104,5 +104,5 @@ def _thread_registry():
     registry = ThreadRegistry()
     old = set_thread_registry(registry)
     yield registry
-    registry.shutdown(timeout=5.0)
+    registry.shutdown()
     set_thread_registry(old)

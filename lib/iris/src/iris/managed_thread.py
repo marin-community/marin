@@ -84,11 +84,12 @@ class ThreadRegistry:
         thread.start()
         return thread
 
-    def shutdown(self, timeout: float = 10.0) -> list[str]:
-        """Stop all threads, join with timeout. Returns names of stuck threads.
+    def shutdown(self, timeout: float | None = None) -> None:
+        """Stop all threads and block until they exit.
 
-        Signals all threads to stop first, then joins each with the remaining
-        timeout budget (fast-exiting threads don't waste budget).
+        Signals all threads to stop, then joins each. If timeout is None
+        (the default), blocks indefinitely — rely on pytest-timeout to
+        catch hangs. If timeout is set, uses a deadline-based budget.
         """
         with self._lock:
             threads = list(self._threads)
@@ -96,22 +97,33 @@ class ThreadRegistry:
         for thread in threads:
             thread.stop()
 
-        deadline = time.monotonic() + timeout
-        stuck: list[str] = []
-        for thread in threads:
-            remaining = max(0, deadline - time.monotonic())
-            thread.join(timeout=remaining)
-            if thread.is_alive:
-                stuck.append(thread.name or "<unnamed>")
-                logger.warning("Thread %s did not exit within timeout", thread.name)
-
-        return stuck
+        if timeout is None:
+            for thread in threads:
+                thread.join()
+        else:
+            deadline = time.monotonic() + timeout
+            for thread in threads:
+                remaining = max(0, deadline - time.monotonic())
+                thread.join(timeout=remaining)
 
     def __enter__(self) -> "ThreadRegistry":
         return self
 
     def __exit__(self, *exc: object) -> None:
         self.shutdown()
+
+
+def stop_event_to_server(stop_event: threading.Event, server: Any) -> None:
+    """Bridge a stop_event to a uvicorn Server's should_exit flag.
+
+    Spawns a daemon thread that waits for stop_event and sets server.should_exit.
+    This ensures the server shuts down when the registry signals stop.
+    """
+    def _watch() -> None:
+        stop_event.wait()
+        server.should_exit = True
+
+    threading.Thread(target=_watch, daemon=True, name="stop-event-bridge").start()
 
 
 # ---------------------------------------------------------------------------
