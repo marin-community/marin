@@ -238,7 +238,7 @@ class ActorServer:
 
     def shutdown(self) -> None:
         """Shutdown the actor server and wait for the server thread to finish."""
-        if hasattr(self, "_server") and self._server:
+        if self._server is not None:
             self._server.should_exit = True
-        if hasattr(self, "_server_thread") and self._server_thread and self._server_thread.is_alive():
+        if self._server_thread is not None and self._server_thread.is_alive():
             self._server_thread.join()
