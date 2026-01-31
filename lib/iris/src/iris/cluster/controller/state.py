@@ -705,7 +705,9 @@ class ControllerJob:
             return cluster_pb2.JOB_STATE_KILLED
 
         # Job is RUNNING if any task is running or building
-        if (counts[cluster_pb2.TASK_STATE_RUNNING] > 0 or counts[cluster_pb2.TASK_STATE_BUILDING] > 0) and self.state != cluster_pb2.JOB_STATE_RUNNING:
+        if (
+            counts[cluster_pb2.TASK_STATE_RUNNING] > 0 or counts[cluster_pb2.TASK_STATE_BUILDING] > 0
+        ) and self.state != cluster_pb2.JOB_STATE_RUNNING:
             if self.started_at_ms is None:
                 self.started_at_ms = now_ms()
             return cluster_pb2.JOB_STATE_RUNNING
