@@ -373,6 +373,8 @@ class RayClient:
     ) -> RayActorGroup:
         """Create N Ray actors named "{name}-0", "{name}-1", ..."""
         ray_options = _actor_ray_options(resources)
+        # Don't specify runtime_env - let actors inherit from parent job
+        # This prevents rebuilding packages that are already available
         handles: list[RayActorHandle] = []
         for i in range(count):
             actor_name = f"{name}-{i}"
@@ -388,10 +390,18 @@ class RayClient:
 def _actor_ray_options(resources: ResourceConfig) -> dict[str, Any]:
     """Build ray.remote().options() kwargs for an actor.
 
-    Actors default to num_cpus=0 (they don't reserve CPU cores).
+    Maps ResourceConfig fields to Ray scheduling parameters so that
+    actors reserve the right amount of CPU/memory and get spread
+    across nodes instead of piling onto one.
+
     preemptible=False pins the actor to the head node via a custom resource.
     """
-    options: dict[str, Any] = {"num_cpus": 0}
+    options: dict[str, Any] = {
+        "num_cpus": resources.cpu,
+        "scheduling_strategy": "SPREAD",
+    }
+    if resources.ram:
+        options["memory"] = humanfriendly.parse_size(resources.ram, binary=True)
     if not resources.preemptible:
         options["resources"] = {"head_node": 0.0001}
     return options
