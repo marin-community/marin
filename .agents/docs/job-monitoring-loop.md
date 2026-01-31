@@ -2,6 +2,23 @@
 
 Monitor a Ray job, automatically restarting on failure.
 
+## Before Starting
+
+When the user asks you to start a monitoring loop, gather the required information first:
+
+1. **job_id** - What is the Ray job ID? (e.g., `ray-run-held-isoflop_sweep-20260131-051716`)
+2. **cluster** - Which cluster is it running on? (e.g., `us-east5-a`, `us-central2`)
+3. **experiment** - What is the experiment script path? (e.g., `experiments/isoflop_sweep.py`)
+
+Ask the user for any missing information before proceeding. Example:
+
+> "I need a few details to start the monitoring loop:
+> - Job ID?
+> - Cluster?
+> - Experiment script path?"
+
+Once you have all three, write the state file and begin the loop.
+
 ## State File
 
 Write to a local file (e.g., `monitoring_state.json` in the scratchpad):
@@ -37,9 +54,39 @@ Write to a local file (e.g., `monitoring_state.json` in the scratchpad):
    - Go to step 1
 ```
 
+## Fixing Small Bugs
+
+When step 3 (EVALUATE) detects an error, before restarting:
+
+1. **Analyze the error** in the logs:
+   - Look for `Traceback`, `Error`, `Exception`
+   - Identify the file and line number
+
+2. **If it's a small fix** (typo, missing import, wrong variable name):
+   - Read the relevant file
+   - Make the fix with Edit tool
+   - Proceed to step 4 (RESTART)
+
+3. **If it's a complex issue** (architectural, unclear cause, requires investigation):
+   - Do NOT attempt to fix automatically
+   - Report to user and exit the loop
+
+Examples of small fixes:
+- `NameError: name 'foo' is not defined` → typo in variable name
+- `ImportError: cannot import 'bar'` → missing or misspelled import
+- `SyntaxError` → missing comma, bracket, colon
+- `KeyError` → wrong dict key name (if obvious from context)
+
+Examples of complex issues (do not auto-fix):
+- OOM errors
+- Distributed training failures
+- Data loading issues
+- Unclear stack traces spanning multiple files
+
 ## Notes
 
 - Sleep must be foreground (max ~10 min due to tool timeout)
 - The loop is controlled at the agent level, not bash
 - Track restart_count to detect flapping jobs
 - State file allows resuming if context resets
+- If the same error occurs after a fix attempt, do not retry - report to user
