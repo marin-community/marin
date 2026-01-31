@@ -316,6 +316,7 @@ def load_file(source: str | InputFileSpec) -> Iterator[dict]:
         >>> output_files = list(get_default_zephyr_context().execute(ds))
     """
     spec = _as_spec(source)
+    logger.info("Loading file: %s", spec.path)
 
     if not spec.path.endswith(SUPPORTED_EXTENSIONS):
         raise ValueError(f"Unsupported extension: {spec.path}.")

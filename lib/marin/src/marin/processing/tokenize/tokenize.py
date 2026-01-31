@@ -261,8 +261,16 @@ def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Ite
     tokenizer: transformers.PreTrainedTokenizer = shard_ctx().get_shared("tokenizer")
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
+    batch_count = 0
+    record_count = 0
     for batch in batches:
-        yield from batch_processor(batch)
+        batch_count += 1
+        for record in batch_processor(batch):
+            record_count += 1
+            yield record
+        if batch_count % 100 == 0:
+            logger.info("Tokenized %d batches, %d records so far", batch_count, record_count)
+    logger.info("Tokenization done: %d batches, %d records total", batch_count, record_count)
 
 
 def tokenize(config: TokenizeConfigBase):

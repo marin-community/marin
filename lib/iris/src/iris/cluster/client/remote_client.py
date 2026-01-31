@@ -76,6 +76,8 @@ class RemoteClusterClient:
             pip_packages=list(environment.pip_packages) if environment else [],
             env_vars=dict(environment.env_vars) if environment else {},
             extras=list(environment.extras) if environment else [],
+            python_version=environment.python_version if environment else "",
+            dockerfile=environment.dockerfile if environment else "",
         )
 
         # Determine parent job ID (all but last component)

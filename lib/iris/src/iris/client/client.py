@@ -290,8 +290,8 @@ class Job:
                         if state.last_timestamp is None or entry.timestamp > state.last_timestamp:
                             state.last_timestamp = entry.timestamp
                         _print_log_entry(self._job_id, entry, task_index=state.task_index)
-                except ValueError:
-                    logger.debug("Task %d not yet scheduled for job %s", state.task_index, self._job_id)
+                except Exception as e:
+                    logger.debug("Task %d not yet scheduled for job %s: %s", state.task_index, self._job_id, e)
 
             if is_job_finished(status.state):
                 # Final drain to catch any remaining logs
@@ -302,7 +302,7 @@ class Job:
                         for proto in entries:
                             entry = LogEntry.from_proto(proto)
                             _print_log_entry(self._job_id, entry, task_index=state.task_index)
-                    except ValueError:
+                    except Exception:
                         logger.debug(
                             "Task %d logs unavailable during final drain for job %s", state.task_index, self._job_id
                         )

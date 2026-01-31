@@ -23,6 +23,7 @@ via fray v2's Client protocol.
 
 from __future__ import annotations
 
+import atexit
 import enum
 import logging
 import os
@@ -30,6 +31,7 @@ import pickle
 import threading
 import time
 import uuid
+import weakref
 from collections import defaultdict, deque
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, suppress
@@ -57,6 +59,25 @@ from zephyr.plan import (
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
+
+# Track live ZephyrContext instances for atexit cleanup via weak references,
+# so contexts that are garbage-collected don't prevent the process from exiting.
+_live_context_refs: list[weakref.ref[ZephyrContext]] = []
+
+
+def _atexit_cleanup() -> None:
+    """Kill orphaned actor jobs when the process exits."""
+    for ref in _live_context_refs:
+        ctx = ref()
+        if ctx is not None:
+            try:
+                ctx.shutdown()
+            except Exception:
+                pass
+    _live_context_refs.clear()
+
+
+atexit.register(_atexit_cleanup)
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +601,15 @@ class ZephyrWorker:
         """
         _shard_ctx_var.set(self)
 
+        logger.info(
+            "[shard %d/%d] Starting stage=%s, %d input chunks, %d ops",
+            task.shard_idx,
+            task.total_shards,
+            task.stage_name,
+            len(task.chunk_refs),
+            len(task.operations),
+        )
+
         shard = _SerializableShard(task.chunk_refs)
 
         aux_shards: dict[int, list[Any]] = {}
@@ -621,7 +651,15 @@ class ZephyrWorker:
                     )
                 )
                 chunk_idx += 1
+                if chunk_idx % 10 == 0:
+                    logger.info(
+                        "[shard %d] Wrote %d chunks so far (latest: %d items)",
+                        task.shard_idx,
+                        chunk_idx,
+                        current_header.count,
+                    )
 
+        logger.info("[shard %d] Complete: %d chunks produced", task.shard_idx, chunk_idx)
         return results
 
     def shutdown(self) -> None:
@@ -640,14 +678,20 @@ def _run_stage_on_coordinator(
 ) -> dict[int, list[StageResult]]:
     """Submit tasks to coordinator, poll until complete, return raw results."""
     coordinator.start_stage.remote(stage_name, tasks).result()
+    last_log_completed = -1
     while True:
         coordinator.check_heartbeats.remote()
         status = coordinator.get_status.remote().result()
         if status.get("fatal_error"):
             raise ZephyrWorkerError(status["fatal_error"])
-        if status["completed"] >= status["total"]:
+        completed = status["completed"]
+        total = status["total"]
+        if completed != last_log_completed:
+            logger.info("[%s] %d/%d tasks completed", stage_name, completed, total)
+            last_log_completed = completed
+        if completed >= total:
             break
-        time.sleep(0.1)
+        time.sleep(1.0)
     return coordinator.collect_results.remote().result()
 
 
@@ -708,6 +752,7 @@ class ZephyrContext:
                 self.chunk_storage_prefix = f"{marin_prefix}/tmp/zephyr"
             else:
                 self.chunk_storage_prefix = "/tmp/zephyr"
+        _live_context_refs.append(weakref.ref(self))
 
     def put(self, name: str, obj: Any) -> None:
         """Register shared data to broadcast to all workers.
@@ -740,6 +785,7 @@ class ZephyrContext:
             # Reset coordinator done flag in case this context is being reused
             coordinator.reset.remote().result()
 
+            # Start run loops for whatever workers are ready now
             self._worker_futures = [w.run_loop.remote(coordinator) for w in self._workers]
 
             # Build source data and immediately write to disk as refs
@@ -747,6 +793,9 @@ class ZephyrContext:
             shard_refs = source_data.write_to_disk(self.chunk_storage_prefix, execution_id, "source")
 
             for stage_idx, stage in enumerate(plan.stages):
+                # Pick up any newly-available workers and start their run loops
+                for new_worker in self._discover_workers():
+                    self._worker_futures.append(new_worker.run_loop.remote(coordinator))
                 stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
 
                 if stage.stage_type == StageType.RESHARD:
@@ -784,8 +833,7 @@ class ZephyrContext:
 
     def _get_or_create_coordinator(self) -> ActorHandle:
         if self._coordinator is None:
-            # Coordinator is a lightweight metadata service pinned to the head node
-            coordinator_resources = ResourceConfig(cpu=0, ram="128m", preemptible=False)
+            coordinator_resources = ResourceConfig(cpu=1, ram="2g")
             coordinator_group = self.client.create_actor_group(
                 ZephyrCoordinator,
                 name=f"zephyr-controller-{self._instance_id}",
@@ -805,7 +853,25 @@ class ZephyrContext:
             self._worker_group = worker_group
         return self._coordinator
 
+    def _discover_workers(self) -> list[ActorHandle]:
+        """Discover newly available workers and return them.
+
+        For backends that don't support incremental discovery (e.g. LocalClient),
+        this is a no-op since all workers are returned from wait_ready().
+        """
+        group = self._worker_group
+        if group is None:
+            return []
+        new_handles = group.discover_new()
+        if new_handles:
+            self._workers.extend(new_handles)
+            logger.info("Discovered %d new workers, total now %d", len(new_handles), len(self._workers))
+        return new_handles
+
     def shutdown(self) -> None:
+        # Remove our weak ref from the atexit list
+        _live_context_refs[:] = [r for r in _live_context_refs if r() is not None and r() is not self]
+
         if self._coordinator is not None:
             with suppress(Exception):
                 self._coordinator.signal_done.remote()

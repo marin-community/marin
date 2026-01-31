@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import socket
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -205,25 +206,39 @@ def _get_host_ip() -> str:
         s.close()
 
 
-def _host_actor(actor_class: type, args: tuple, kwargs: dict, name: str) -> None:
+def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) -> None:
     """Entrypoint for actor-hosting Iris jobs.
 
     Instantiates the actor class, creates an ActorServer, registers the
     endpoint for discovery, and blocks until the job is terminated.
+
+    For multi-replica jobs, each replica gets a unique actor name based on
+    its task index (extracted from job_id): "{name_prefix}-{task_index}".
     """
     from iris.actor.server import ActorServer
     from iris.client.client import iris_ctx
+    from iris.cluster.client.job_info import get_job_info
 
     ctx = iris_ctx()
+    job_info = get_job_info()
+    task_index = job_info.task_index if job_info is not None else 0
+
+    actor_name = f"{name_prefix}-{task_index}"
+    logger.info(f"Starting actor: {actor_name} (job_id={ctx.job_id})")
 
     instance = actor_class(*args, **kwargs)
 
     server = ActorServer(host="0.0.0.0", port=ctx.get_port("actor"))
-    server.register(name, instance)
-    server.serve_background()
+    server.register(actor_name, instance)
+    actual_port = server.serve_background()
 
-    address = f"{_get_host_ip()}:{server._actual_port}"
-    ctx.registry.register(name, address)
+    # Use the routable host IP injected by Iris as IRIS_ADVERTISE_HOST,
+    # available via get_job_info().advertise_host.
+    advertise_host = job_info.advertise_host if job_info is not None else _get_host_ip()
+    address = f"{advertise_host}:{actual_port}"
+    logger.info(f"Registering endpoint: {actor_name} -> {address}")
+    ctx.registry.register(actor_name, address)
+    logger.info(f"Actor {actor_name} ready and listening")
 
     # Block forever — job termination kills the process
     threading.Event().wait()
@@ -367,12 +382,14 @@ class IrisActorGroup(ActorGroup):
         known ones). Call repeatedly to pick up workers as they come online.
         """
         newly_discovered: list[ActorHandle] = []
+        # With multi-replica jobs, there's a single job for all replicas.
+        # Use the first (and only) job handle for all endpoint resolution.
+        job = self._jobs[0]
+        resolver = self._iris_client.resolver_for_job(job.job_id)
         for i in range(self._count):
             actor_name = f"{self._name}-{i}"
             if actor_name in self._discovered_names:
                 continue
-            job = self._jobs[i]
-            resolver = self._iris_client.resolver_for_job(job.job_id)
             result = resolver.resolve(actor_name)
 
             if not result.is_empty:
@@ -415,10 +432,10 @@ class IrisActorGroup(ActorGroup):
 
             elapsed = time.monotonic() - start
             if elapsed >= timeout:
+                job = self._jobs[0]
+                all_eps = self._iris_client._cluster.list_endpoints(prefix="")
                 for i in range(self._count):
                     actor_name = f"{self._name}-{i}"
-                    job = self._jobs[i]
-                    all_eps = self._iris_client._cluster.list_endpoints(prefix="")
                     logger.error(
                         "wait_ready TIMEOUT: actor=%s job_id=%s all_endpoints=%s",
                         actor_name,
@@ -504,31 +521,46 @@ class FrayIrisClient:
         resources: ResourceConfig = ResourceConfig(),
         **kwargs: Any,
     ) -> IrisActorGroup:
-        """Submit N Iris jobs, each hosting an instance of actor_class."""
+        """Submit a single Iris job with N replicas, each hosting an instance of actor_class.
+
+        Uses Iris's multi-replica job feature instead of creating N separate jobs,
+        which improves networking and reduces job overhead.
+        """
         from iris.cluster.types import Entrypoint as IrisEntrypoint
 
         iris_resources = convert_resources(resources)
-        iris_environment = convert_environment(None)
         iris_constraints = convert_constraints(resources)
 
-        jobs: list[IrisJobHandle] = []
-        for i in range(count):
-            actor_name = f"{name}-{i}"
-            entrypoint = IrisEntrypoint.from_callable(_host_actor, actor_class, args, kwargs, actor_name)
-            job = self._iris.submit(
-                entrypoint=entrypoint,
-                name=actor_name,
-                resources=iris_resources,
-                environment=iris_environment,
-                ports=["actor"],
-                constraints=iris_constraints if iris_constraints else None,
-            )
-            jobs.append(IrisJobHandle(job))
+        # Child actor jobs need a dockerfile to build their container image.
+        # Priority: inherit parent's dockerfile (preserves extras like --package marin --extra cpu),
+        # otherwise generate a default one.
+        from iris.cluster.client.job_info import get_job_info
+        from iris.cluster.types import EnvironmentSpec, generate_dockerfile
+
+        job_info = get_job_info()
+        parent_dockerfile = job_info.dockerfile if job_info is not None else None
+        dockerfile = parent_dockerfile or generate_dockerfile(
+            python_version=f"{sys.version_info.major}.{sys.version_info.minor}"
+        )
+        iris_environment = EnvironmentSpec(dockerfile=dockerfile)
+
+        # Create a single job with N replicas
+        # Each replica will run _host_actor with a unique task-based actor name
+        entrypoint = IrisEntrypoint.from_callable(_host_actor, actor_class, args, kwargs, name)
+        job = self._iris.submit(
+            entrypoint=entrypoint,
+            name=name,
+            resources=iris_resources,
+            environment=iris_environment,
+            ports=["actor"],
+            constraints=iris_constraints if iris_constraints else None,
+            replicas=count,  # Create N replicas in a single job
+        )
 
         return IrisActorGroup(
             name=name,
             count=count,
-            jobs=jobs,
+            jobs=[IrisJobHandle(job)],  # Single job with multiple replicas
             iris_client=self._iris,
         )
 

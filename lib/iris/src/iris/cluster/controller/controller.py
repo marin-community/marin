@@ -385,27 +385,35 @@ class Controller:
 
     def _run_scheduling_loop(self) -> None:
         """Main controller loop running scheduling, autoscaler, and worker timeout checks."""
-        while not self._stop:
-            self._wake_event.wait(timeout=self._config.scheduler_interval_seconds)
-            self._wake_event.clear()
+        try:
+            while not self._stop:
+                self._wake_event.wait(timeout=self._config.scheduler_interval_seconds)
+                self._wake_event.clear()
 
-            if self._stop:
-                break
+                if self._stop:
+                    break
 
-            self._run_scheduling()
-            self._check_worker_timeouts()
+                self._run_scheduling()
+                self._check_worker_timeouts()
 
-            if self._autoscaler:
-                self._run_autoscaler_once()
+                if self._autoscaler:
+                    self._run_autoscaler_once()
+        except Exception:
+            logger.exception("Scheduling loop crashed")
+            raise
 
     def _run_heartbeat_loop(self) -> None:
         """Heartbeat loop running on its own thread so slow RPCs don't block scheduling."""
-        while not self._stop:
-            self._heartbeat_event.wait(timeout=self._config.scheduler_interval_seconds)
-            self._heartbeat_event.clear()
-            if self._stop:
-                break
-            self._heartbeat_all_workers()
+        try:
+            while not self._stop:
+                self._heartbeat_event.wait(timeout=self._config.scheduler_interval_seconds)
+                self._heartbeat_event.clear()
+                if self._stop:
+                    break
+                self._heartbeat_all_workers()
+        except Exception:
+            logger.exception("Heartbeat loop crashed")
+            raise
 
     def _run_scheduling(self) -> None:
         """Run one scheduling cycle.

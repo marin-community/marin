@@ -70,15 +70,20 @@ def ray_cluster():
 
 
 @pytest.fixture(params=["local", "iris", "ray"])
-def fray_client(request, iris_cluster, ray_cluster):
-    """Parametrized fixture providing Local, Iris, and Ray clients."""
+def fray_client(request):
+    """Parametrized fixture providing Local, Iris, and Ray clients.
+
+    Fixtures are requested lazily to avoid initializing Ray when running
+    Iris tests (and vice-versa), since ray.is_initialized() being true
+    causes current_client() auto-detection to pick Ray.
+    """
     if request.param == "local":
         client = LocalClient()
     elif request.param == "iris":
-        # iris_cluster is session-scoped, so this creates a new client per test
+        iris_cluster = request.getfixturevalue("iris_cluster")
         client = FrayIrisClient(controller_address=iris_cluster, workspace=ZEPHYR_ROOT)
     elif request.param == "ray":
-        # ray_cluster ensures Ray is initialized
+        request.getfixturevalue("ray_cluster")
         client = RayClient()
     else:
         raise ValueError(f"Unknown backend: {request.param}")
