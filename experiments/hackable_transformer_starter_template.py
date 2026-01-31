@@ -377,7 +377,6 @@ def _size_presets() -> dict[str, HackableTransformerConfig]:
         attn_backend=AttentionBackend.JAX_FLASH,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
         tie_word_embeddings=False,
-        cross_entropy_block_size=4096,  # avoid materializing full logits (batch*seq*vocab)
     )
     return {
         "130m": HackableTransformerConfig(

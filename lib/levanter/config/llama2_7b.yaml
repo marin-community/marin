@@ -12,7 +12,6 @@ data:
 model:
   activation_function: silu
   attn_backend: null
-  cross_entropy_block_size: null
   flash_attention_block_size: null
   gradient_checkpointing: true
   hidden_dim: 4096

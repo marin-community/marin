@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import AxisType, Mesh
 
-from levanter.grug.loss import linear_softmax_cross_entropy_loss_and_logz
+from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 
 
 def _make_grug_mesh() -> Mesh:
@@ -50,23 +50,25 @@ def test_linear_softmax_cross_entropy_matches_full_logits():
         loss_full, logz_full = jax.jit(_full_loss_and_logz, static_argnames=("precision",))(
             hidden, lm_head, labels, precision=jax.lax.Precision.HIGHEST
         )
-        loss_blk, logz_blk = jax.jit(
-            lambda x, w, y: linear_softmax_cross_entropy_loss_and_logz(
-                x, w, y, block_size=6, precision=jax.lax.Precision.HIGHEST
+        loss_blk = jax.jit(
+            lambda x, w, y: fused_linear_softmax_cross_entropy_loss(
+                x,
+                w,
+                y,
+                reduction="none",
+                block_size=6,
+                dtype=jnp.float32,
+                precision=jax.lax.Precision.HIGHEST,
             )
         )(hidden, lm_head, labels)
 
     assert loss_blk.shape == loss_full.shape
-    assert logz_blk.shape == logz_full.shape
-    # On TPU, the streaming logsumexp (blockwise) can differ from the full logsumexp due to
-    # different associativity/rounding behavior. We use HIGHEST matmul precision above to
-    # keep this fairly tight.
+    # On TPU, the fused kernel can differ slightly from the full-logits path due to
+    # different associativity/rounding behavior.
     if jax.default_backend() == "tpu":
         assert jnp.allclose(loss_blk, loss_full, atol=5e-3, rtol=5e-3)
-        assert jnp.allclose(logz_blk, logz_full, atol=5e-3, rtol=5e-3)
     else:
         assert jnp.allclose(loss_blk, loss_full, atol=1e-4, rtol=1e-4)
-        assert jnp.allclose(logz_blk, logz_full, atol=1e-4, rtol=1e-4)
 
 
 def test_linear_softmax_cross_entropy_jittable():
@@ -79,13 +81,18 @@ def test_linear_softmax_cross_entropy_jittable():
     mesh = _make_grug_mesh()
     with jax.set_mesh(mesh):
         fn = jax.jit(
-            lambda x, w, y: linear_softmax_cross_entropy_loss_and_logz(
-                x, w, y, block_size=4, precision=jax.lax.Precision.HIGHEST
+            lambda x, w, y: fused_linear_softmax_cross_entropy_loss(
+                x,
+                w,
+                y,
+                reduction="none",
+                block_size=4,
+                dtype=jnp.float32,
+                precision=jax.lax.Precision.HIGHEST,
             )
         )
-        loss, logz = fn(hidden, lm_head, labels)
+        loss = fn(hidden, lm_head, labels)
     assert loss.shape == (b, s)
-    assert logz.shape == (b, s)
 
 
 def test_linear_softmax_cross_entropy_grad_matches_full():
@@ -100,10 +107,15 @@ def test_linear_softmax_cross_entropy_grad_matches_full():
         return jnp.mean(loss)
 
     def loss_blk_fn(x):
-        loss, _ = linear_softmax_cross_entropy_loss_and_logz(
-            x, lm_head, labels, block_size=5, precision=jax.lax.Precision.HIGHEST
+        return fused_linear_softmax_cross_entropy_loss(
+            x,
+            lm_head,
+            labels,
+            reduction="mean",
+            block_size=5,
+            dtype=jnp.float32,
+            precision=jax.lax.Precision.HIGHEST,
         )
-        return jnp.mean(loss)
 
     mesh = _make_grug_mesh()
     with jax.set_mesh(mesh):

@@ -181,7 +181,7 @@ def build_run(size: str, *, use_tpu: bool = False) -> tuple[str, SpeedrunConfig]
     )
 
     run_name = f"grugformer_starter_{size}"
-    desc = f"Grugformer starter (ejkernel blocksparse attention) ({size})."
+    desc = f"Grugformer starter ({size})."
     cfg = SpeedrunConfig(
         author=Author(
             name="__YOUR_NAME__",
@@ -207,7 +207,7 @@ def main() -> None:
         cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))
 
-    executor_main(steps=steps, description="Grugformer starter (ejkernel blocksparse attention).")
+    executor_main(steps=steps, description="Grugformer starter.")
 
 
 if __name__ == "__main__":
