@@ -453,7 +453,11 @@ class TestMultiWorker:
         """
         run_id = uuid.uuid4().hex[:8]
 
-        # Submit one job with 6 replicas - all tasks pending simultaneously
+        # Submit one job with 6 replicas - all tasks pending simultaneously.
+        # cpu=5 is arbitrary (local test workers have cpu=1000, so capacity
+        # is not the distribution mechanism). The scheduler's round-robin
+        # scheduled_workers set distributes tasks across workers when they're
+        # batched in one cycle.
         job_id = multi_worker_cluster.submit(
             lambda: 42,
             name=f"mw-job-{run_id}",

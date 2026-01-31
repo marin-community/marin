@@ -18,7 +18,7 @@ import logging
 import threading
 from collections import defaultdict
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -472,6 +472,10 @@ class Controller:
                     wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
                     wd.dispatch_outbox.append(request)
 
+            # Wake heartbeat thread to deliver buffered dispatches immediately
+            if job_assignments:
+                self._heartbeat_event.set()
+
     def _mark_task_unschedulable(self, task: ControllerTask) -> None:
         """Mark a task as unschedulable due to timeout."""
         job = self._state.get_job(task.job_id)
@@ -502,6 +506,7 @@ class Controller:
         a worker assigned, buffers the kill request for delivery via the next
         heartbeat to that worker.
         """
+        any_buffered = False
         for task_id in task_ids:
             task = self._state.get_task(task_id)
             if not task or not task.worker_id:
@@ -512,6 +517,11 @@ class Controller:
             with self._dispatch_lock:
                 wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
                 wd.kill_outbox.append(str(task_id))
+                any_buffered = True
+
+        # Wake heartbeat thread to deliver buffered kills immediately
+        if any_buffered:
+            self._heartbeat_event.set()
 
     def _heartbeat_all_workers(self) -> None:
         """Send heartbeats to all registered workers.
@@ -536,31 +546,42 @@ class Controller:
         # Phase 3: process results, requeue failures
         try:
             for future in as_completed(futures, timeout=10):
-                worker, tasks_to_run, tasks_to_kill = futures[future]
-                try:
-                    response = future.result()
-                    if response is None:
-                        self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
-                        continue
-                    self._process_heartbeat_response(worker, response)
-                except Exception as e:
-                    logger.warning(f"Heartbeat error for {worker.worker_id}: {e}")
-                    self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
+                worker, tasks_to_run, tasks_to_kill = futures.pop(future)
+                self._handle_heartbeat_future(future, worker, tasks_to_run, tasks_to_kill)
         except TimeoutError:
+            # Process any futures that completed before timeout
             for future, (worker, tasks_to_run, tasks_to_kill) in futures.items():
                 if future.done():
-                    try:
-                        response = future.result()
-                        if response is None:
-                            self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
-                        else:
-                            self._process_heartbeat_response(worker, response)
-                    except Exception:
-                        self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
+                    self._handle_heartbeat_future(future, worker, tasks_to_run, tasks_to_kill)
                 else:
                     logger.warning(f"Heartbeat timed out for {worker.worker_id}")
                     self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
                     future.cancel()
+
+    def _handle_heartbeat_future(
+        self,
+        future: Future,
+        worker: ControllerWorker,
+        tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest],
+        tasks_to_kill: list[str],
+    ) -> None:
+        """Process a completed heartbeat future.
+
+        Args:
+            future: Completed future from heartbeat RPC
+            worker: The worker that was heartbeated
+            tasks_to_run: Tasks that were sent to the worker
+            tasks_to_kill: Task IDs that were sent for killing
+        """
+        try:
+            response = future.result()
+            if response is None:
+                self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
+            else:
+                self._process_heartbeat_response(worker, response)
+        except Exception as e:
+            logger.warning(f"Heartbeat error for {worker.worker_id}: {e}")
+            self._requeue_and_fail(worker, tasks_to_run, tasks_to_kill)
 
     def _heartbeat_worker(
         self,
