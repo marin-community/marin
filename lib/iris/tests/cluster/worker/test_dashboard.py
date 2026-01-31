@@ -462,13 +462,33 @@ async def test_rpc_heartbeat_via_connect_client(service):
         max_retries = 10
         for i in range(max_retries):
             await asyncio.sleep(0.2)
+
+            # Check if server task failed - must await to retrieve exception properly
+            if server_task.done():
+                try:
+                    await server_task
+                except asyncio.CancelledError:
+                    pass  # Normal cancellation, continue waiting
+                except Exception as server_exc:
+                    # Server failed to start, raise with context
+                    raise RuntimeError(f"Server failed to start on port {port}") from server_exc
+
             try:
                 async with httpx.AsyncClient(timeout=2.0) as test_client:
                     await test_client.get(f"http://127.0.0.1:{port}/")
                 break
-            except (httpx.ConnectError, httpx.TimeoutException):
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
                 if i == max_retries - 1:
-                    raise
+                    # Final check: did server task fail?
+                    if server_task.done():
+                        try:
+                            await server_task
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception as server_exc:
+                            raise RuntimeError(f"Server failed to start on port {port}: {server_exc}") from server_exc
+                    # Server didn't fail, but we couldn't connect
+                    raise TimeoutError(f"Could not connect to server on port {port} after {max_retries} retries") from e
                 continue
 
         async with httpx.AsyncClient(timeout=5.0) as http_client:
