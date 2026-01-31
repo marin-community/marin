@@ -820,12 +820,14 @@ class Worker(_message.Message):
     def __init__(self) -> None: ...
 
 class HeartbeatRequest(_message.Message):
-    __slots__ = ("tasks_to_run", "tasks_to_kill")
+    __slots__ = ("tasks_to_run", "tasks_to_kill", "expected_tasks")
     TASKS_TO_RUN_FIELD_NUMBER: _ClassVar[int]
     TASKS_TO_KILL_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_TASKS_FIELD_NUMBER: _ClassVar[int]
     tasks_to_run: _containers.RepeatedCompositeFieldContainer[Worker.RunTaskRequest]
     tasks_to_kill: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, tasks_to_run: _Optional[_Iterable[_Union[Worker.RunTaskRequest, _Mapping]]] = ..., tasks_to_kill: _Optional[_Iterable[str]] = ...) -> None: ...
+    expected_tasks: _containers.RepeatedCompositeFieldContainer[Controller.RunningTaskEntry]
+    def __init__(self, tasks_to_run: _Optional[_Iterable[_Union[Worker.RunTaskRequest, _Mapping]]] = ..., tasks_to_kill: _Optional[_Iterable[str]] = ..., expected_tasks: _Optional[_Iterable[_Union[Controller.RunningTaskEntry, _Mapping]]] = ...) -> None: ...
 
 class HeartbeatResponse(_message.Message):
     __slots__ = ("running_tasks", "completed_tasks")

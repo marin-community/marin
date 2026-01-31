@@ -439,8 +439,8 @@ message Controller {
     int32 attempt_id = 2;
   }
 
-  // A task completion reported by the worker via heartbeat response.
-  // Workers buffer completions and deliver them in the next heartbeat.
+  // A task completion reported by the worker in its heartbeat response.
+  // Workers report completions for expected_tasks that have reached a terminal state.
   message CompletedTaskEntry {
     string task_id = 1;
     string job_id = 2;
@@ -471,7 +471,6 @@ message Controller {
   }
 
 
-  // --- New Registration (Step 3) ---
   message RegisterRequest {
     string address = 1;
     WorkerMetadata metadata = 2;
@@ -672,13 +671,17 @@ message HeartbeatRequest {
 
   // Tasks to kill on this worker
   repeated string tasks_to_kill = 2;
+
+  // Tasks the controller believes this worker is running.
+  // Worker compares against its actual state and reports completions/failures.
+  repeated Controller.RunningTaskEntry expected_tasks = 3;
 }
 
 message HeartbeatResponse {
   // Tasks currently running on this worker
   repeated Controller.RunningTaskEntry running_tasks = 1;
 
-  // Tasks that finished since last heartbeat
+  // Tasks from expected_tasks that have finished (with exit code, error, state)
   repeated Controller.CompletedTaskEntry completed_tasks = 2;
 }
 

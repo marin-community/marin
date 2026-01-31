@@ -28,6 +28,7 @@ state and return results indicating what the caller should do.
 
 import logging
 from collections import Counter, deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import RLock
@@ -55,6 +56,9 @@ MAX_REPLICAS_PER_JOB = 10000
 
 DEFAULT_MAX_RETRIES_PREEMPTION = 100
 """Default preemption retries. High because worker failures are typically transient."""
+
+HEARTBEAT_FAILURE_THRESHOLD = 10
+"""Consecutive heartbeat failures before marking worker as failed."""
 
 
 def get_device_type_enum(device: cluster_pb2.DeviceConfig) -> DeviceType:
@@ -1090,7 +1094,7 @@ class ControllerState:
             return
         worker.consecutive_failures += 1
         txn.log("heartbeat_failed", event.worker_id, consecutive=worker.consecutive_failures)
-        if worker.consecutive_failures >= 3:
+        if worker.consecutive_failures >= HEARTBEAT_FAILURE_THRESHOLD:
             self._on_worker_failed(txn, WorkerFailedEvent(worker_id=event.worker_id, error=event.error))
 
     def _on_worker_failed(self, txn: TransactionLog, event: WorkerFailedEvent) -> None:
@@ -1248,10 +1252,8 @@ class ControllerState:
             return
 
         # Ignore duplicate worker-reported completions for an attempt already processed.
-        # This happens when both report_task_state RPC and heartbeat deliver the
-        # same completion — the first processes the failure and requeues the task
-        # (state=PENDING), but the attempt_id still matches because no new attempt
-        # exists yet. Without this guard, the retry budget gets consumed twice.
+        # This can happen when a heartbeat response is retried (e.g., the previous
+        # heartbeat succeeded on the controller but the worker didn't get the ack).
         # Only guard worker-reported states (FAILED, WORKER_FAILED, SUCCEEDED);
         # controller-originated states (UNSCHEDULABLE, KILLED) are always allowed.
         current_attempt = task.current_attempt
@@ -1612,57 +1614,26 @@ class ControllerState:
                     task_endpoints.discard(endpoint_id)
             return endpoint
 
-    def lookup_endpoints(self, name: str) -> list[ControllerEndpoint]:
-        """Find endpoints by exact name match. Only returns endpoints for jobs that are executing.
+    def _visible_endpoints(self, predicate: Callable[[ControllerEndpoint], bool]) -> list[ControllerEndpoint]:
+        """Return endpoints matching predicate whose jobs are in non-terminal states."""
+        results = []
+        for ep in self._endpoints.values():
+            if not predicate(ep):
+                continue
+            job = self._jobs.get(ep.job_id)
+            if job and not job.is_finished():
+                results.append(ep)
+        return results
 
-        Endpoints are visible for jobs in non-terminal states (PENDING, RUNNING, BUILDING).
-        This includes jobs whose tasks are executing even if the job state hasn't transitioned
-        to RUNNING yet (e.g., task is ASSIGNED and executing in-process).
-        """
+    def lookup_endpoints(self, name: str) -> list[ControllerEndpoint]:
+        """Find endpoints by exact name match for non-terminal jobs."""
         with self._lock:
-            results = []
-            for ep in self._endpoints.values():
-                if ep.name != name:
-                    continue
-                # Return endpoints for jobs that are executing (not finished)
-                job = self._jobs.get(ep.job_id)
-                if job and not job.is_finished():
-                    results.append(ep)
-            return results
+            return self._visible_endpoints(lambda ep: ep.name == name)
 
     def list_endpoints_by_prefix(self, prefix: str) -> list[ControllerEndpoint]:
-        """List endpoints matching a name prefix. Only returns endpoints for jobs that are executing.
-
-        Endpoints are visible for jobs in non-terminal states (PENDING, RUNNING, BUILDING).
-        This includes jobs whose tasks are executing even if the job state hasn't transitioned
-        to RUNNING yet (e.g., task is ASSIGNED and executing in-process).
-        """
+        """List endpoints matching a name prefix for non-terminal jobs."""
         with self._lock:
-            results = []
-            for ep in self._endpoints.values():
-                if not ep.name.startswith(prefix):
-                    logger.debug("Endpoint %s doesn't match prefix %s (name=%s)", ep.endpoint_id, prefix, ep.name)
-                    continue
-                job = self._jobs.get(ep.job_id)
-                if not job:
-                    logger.debug("Endpoint %s job_id %s not found in jobs", ep.endpoint_id, ep.job_id)
-                    continue
-                if job.is_finished():
-                    logger.debug(
-                        "Endpoint %s job %s is finished (state=%s)",
-                        ep.endpoint_id,
-                        ep.job_id,
-                        cluster_pb2.JobState.Name(job.state),
-                    )
-                    continue
-                logger.debug(
-                    "Endpoint %s included (job=%s, state=%s)",
-                    ep.endpoint_id,
-                    ep.job_id,
-                    cluster_pb2.JobState.Name(job.state),
-                )
-                results.append(ep)
-            return results
+            return self._visible_endpoints(lambda ep: ep.name.startswith(prefix))
 
     def list_all_endpoints(self) -> list[ControllerEndpoint]:
         """Return all registered endpoints."""

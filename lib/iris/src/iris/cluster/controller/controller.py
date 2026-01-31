@@ -19,15 +19,18 @@ import threading
 from collections import defaultdict
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 import uvicorn
 
+from iris.chaos import chaos
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.events import (
     TaskAssignedEvent,
     TaskStateChangedEvent,
+    WorkerHeartbeatEvent,
+    WorkerHeartbeatFailedEvent,
 )
 from iris.cluster.controller.scheduler import Scheduler, SchedulingContext, TaskScheduleResult
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -46,6 +49,18 @@ from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import ExponentialBackoff, now_ms
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class WorkerDispatch:
+    """Transient per-worker dispatch state owned by the controller scheduling loop.
+
+    Separate from ControllerWorker (state.py) which holds durable worker metadata.
+    """
+
+    dispatch_outbox: list[cluster_pb2.Worker.RunTaskRequest] = field(default_factory=list)
+    kill_outbox: list[str] = field(default_factory=list)
+    needs_priority_heartbeat: bool = False
 
 
 def _extract_preemptible_preference(constraints: Sequence[cluster_pb2.Constraint]) -> bool | None:
@@ -276,16 +291,14 @@ class Controller:
         self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
 
-        # Thread pool for parallel task dispatch (will be used for heartbeat after Step 2)
+        # Per-worker dispatch state (outboxes, priority flags)
+        self._dispatch: dict[WorkerId, WorkerDispatch] = {}
+
+        # Thread pool for parallel heartbeat dispatch
         self._dispatch_executor = ThreadPoolExecutor(
             max_workers=config.max_dispatch_parallelism,
             thread_name_prefix="dispatch",
         )
-
-        # Per-worker outboxes for heartbeat-driven dispatch (Step 2)
-        self._dispatch_outbox: dict[WorkerId, list[cluster_pb2.Worker.RunTaskRequest]] = defaultdict(list)
-        self._kill_outbox: dict[WorkerId, list[str]] = defaultdict(list)
-        self._priority_heartbeat: set[WorkerId] = set()
 
         # Autoscaler (passed in, configured in start() if provided)
         self._autoscaler: Autoscaler | None = autoscaler
@@ -434,8 +447,9 @@ class Controller:
                     timeout_seconds=job.request.timeout_seconds,
                 )
                 # Buffer for delivery via next heartbeat
-                self._dispatch_outbox[worker.worker_id].append(request)
-                self._priority_heartbeat.add(worker.worker_id)
+                wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
+                wd.dispatch_outbox.append(request)
+                wd.needs_priority_heartbeat = True
 
     def _mark_task_unschedulable(self, task: ControllerTask) -> None:
         """Mark a task as unschedulable due to timeout."""
@@ -471,8 +485,12 @@ class Controller:
             task = self._state.get_task(task_id)
             if not task or not task.worker_id:
                 continue
-            self._kill_outbox[task.worker_id].append(str(task_id))
-            self._priority_heartbeat.add(task.worker_id)
+            worker = self._state.get_worker(task.worker_id)
+            if not worker:
+                continue
+            wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
+            wd.kill_outbox.append(str(task_id))
+            wd.needs_priority_heartbeat = True
 
     def _heartbeat_all_workers(self) -> None:
         """Send heartbeats to all registered workers.
@@ -480,13 +498,15 @@ class Controller:
         Priority workers (those with pending dispatches/kills) go first.
         Delivers buffered task assignments and kill requests via heartbeat.
         """
-        # Get priority workers and clear the set
-        priority = self._priority_heartbeat.copy()
-        self._priority_heartbeat.clear()
-
-        # Heartbeat all healthy workers
         all_workers = self._state.get_available_workers()
-        worker_ids = priority | {w.worker_id for w in all_workers}
+
+        # Priority workers (those with pending dispatches/kills) go first
+        priority_ids = {
+            w.worker_id
+            for w in all_workers
+            if self._dispatch.get(w.worker_id, WorkerDispatch()).needs_priority_heartbeat
+        }
+        worker_ids = priority_ids | {w.worker_id for w in all_workers}
 
         # Submit heartbeat RPCs in parallel
         futures = {}
@@ -494,9 +514,10 @@ class Controller:
             worker = self._state.get_worker(worker_id)
             if not worker:
                 continue
-            # Pop tasks/kills from outboxes (will put back on failure)
-            tasks_to_run = self._dispatch_outbox.pop(worker_id, [])
-            tasks_to_kill = self._kill_outbox.pop(worker_id, [])
+            # Take outbox contents (will put back on failure)
+            wd = self._dispatch.pop(worker_id, WorkerDispatch())
+            tasks_to_run = wd.dispatch_outbox
+            tasks_to_kill = wd.kill_outbox
             future = self._dispatch_executor.submit(self._heartbeat_worker, worker, tasks_to_run, tasks_to_kill)
             futures[future] = (worker, tasks_to_run, tasks_to_kill)
 
@@ -537,17 +558,23 @@ class Controller:
             HeartbeatResponse on success, None on failure
         """
         try:
-            from iris.chaos import chaos
-
             if rule := chaos("controller.heartbeat"):
                 from time import sleep
 
                 sleep(rule.delay_seconds)
                 raise Exception("chaos: heartbeat unavailable")
             stub = self._stub_factory.get_stub(worker.address)
+            expected_tasks = [
+                cluster_pb2.Controller.RunningTaskEntry(
+                    task_id=str(tid),
+                    attempt_id=self._state.get_task(tid).current_attempt_id if self._state.get_task(tid) else 0,
+                )
+                for tid in worker.running_tasks
+            ]
             request = cluster_pb2.HeartbeatRequest(
                 tasks_to_run=tasks_to_run,
                 tasks_to_kill=tasks_to_kill,
+                expected_tasks=expected_tasks,
             )
             return stub.heartbeat(request)
         except Exception as e:
@@ -559,13 +586,13 @@ class Controller:
         worker: ControllerWorker,
         response: cluster_pb2.HeartbeatResponse,
     ) -> None:
-        """Process a successful heartbeat response."""
-        # Update heartbeat timestamp
-        from iris.cluster.controller.events import WorkerHeartbeatEvent
+        """Process a successful heartbeat response.
 
+        Updates heartbeat timestamp and processes completed tasks. Reconciliation
+        of running vs expected tasks is handled worker-side using expected_tasks.
+        """
         self._state.handle_event(WorkerHeartbeatEvent(worker_id=worker.worker_id, timestamp_ms=now_ms()))
 
-        # Process completed tasks
         for entry in response.completed_tasks:
             task_id = TaskId(entry.task_id)
             task = self._state.get_task(task_id)
@@ -580,34 +607,6 @@ class Controller:
                     )
                 )
 
-        # Reconcile running tasks
-        reported_ids = {entry.task_id for entry in response.running_tasks}
-        expected_ids = {str(tid) for tid in worker.running_tasks}
-
-        # Detect tasks that disappeared from worker (e.g. worker restarted mid-task)
-        missing = expected_ids - reported_ids
-        for tid_str in missing:
-            task = self._state.get_task(TaskId(tid_str))
-            if task and not task.is_finished():
-                self._state.handle_event(
-                    TaskStateChangedEvent(
-                        task_id=TaskId(tid_str),
-                        new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
-                        attempt_id=task.current_attempt_id,
-                        error="Task missing from worker heartbeat",
-                        exit_code=1,
-                    )
-                )
-
-        # Detect tasks the worker is running that the controller doesn't know about
-        # (e.g. controller restarted while worker had tasks). Send kill requests.
-        unknown = reported_ids - expected_ids
-        for tid_str in unknown:
-            task = self._state.get_task(TaskId(tid_str))
-            if task is None or task.is_finished():
-                self._kill_outbox[worker.worker_id].append(tid_str)
-                logger.warning(f"Unknown task {tid_str} on worker {worker.worker_id}, sending kill")
-
     def _requeue_and_fail(
         self,
         worker: ControllerWorker,
@@ -615,16 +614,15 @@ class Controller:
         tasks_to_kill: list[str],
     ) -> None:
         """Re-queue outbox entries and record a heartbeat failure for a worker."""
+        wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
         if tasks_to_run:
-            self._dispatch_outbox[worker.worker_id].extend(tasks_to_run)
+            wd.dispatch_outbox.extend(tasks_to_run)
         if tasks_to_kill:
-            self._kill_outbox[worker.worker_id].extend(tasks_to_kill)
+            wd.kill_outbox.extend(tasks_to_kill)
         self._handle_heartbeat_failure(worker)
 
     def _handle_heartbeat_failure(self, worker: ControllerWorker) -> None:
         """Handle a failed heartbeat RPC via the state layer."""
-        from iris.cluster.controller.events import WorkerHeartbeatFailedEvent
-
         self._state.handle_event(
             WorkerHeartbeatFailedEvent(
                 worker_id=worker.worker_id,

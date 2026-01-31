@@ -427,8 +427,7 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.RegisterResponse:
         """One-shot worker registration. Returns worker_id.
 
-        This is the new registration path (Step 3). Worker registers once,
-        then waits for heartbeats from the controller.
+        Worker registers once, then waits for heartbeats from the controller.
         """
         with rpc_error_handler("registering worker"):
             # Derive worker_id from vm_address if present, otherwise from address

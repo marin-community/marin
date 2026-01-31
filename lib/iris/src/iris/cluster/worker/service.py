@@ -43,8 +43,7 @@ class TaskProvider(Protocol):
     def list_tasks(self) -> list[TaskInfo]: ...
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool: ...
     def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]: ...
-    def pop_completed_tasks(self) -> list[cluster_pb2.Controller.CompletedTaskEntry]: ...
-    def on_heartbeat_received(self) -> None: ...
+    def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse: ...
 
 
 class WorkerServiceImpl:
@@ -174,42 +173,5 @@ class WorkerServiceImpl:
                 if not rule.delay_seconds:
                     raise RuntimeError("chaos: worker.heartbeat")
 
-            # Update heartbeat timestamp first
-            self._provider.on_heartbeat_received()
-
-            # Start new tasks
-            for run_req in request.tasks_to_run:
-                try:
-                    self._provider.submit_task(run_req)
-                    logger.info(f"Heartbeat: submitted task {run_req.task_id}")
-                except Exception as e:
-                    logger.warning(f"Heartbeat: failed to submit task {run_req.task_id}: {e}")
-
-            # Kill requested tasks
-            for task_id in request.tasks_to_kill:
-                try:
-                    self._provider.kill_task(task_id)
-                    logger.info(f"Heartbeat: killed task {task_id}")
-                except Exception as e:
-                    logger.warning(f"Heartbeat: failed to kill task {task_id}: {e}")
-
-            # Build response with current running tasks
-            tasks = self._provider.list_tasks()
-            running = []
-            for t in tasks:
-                proto = t.to_proto()
-                if proto.state in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING):
-                    running.append(
-                        cluster_pb2.Controller.RunningTaskEntry(
-                            task_id=proto.task_id,
-                            attempt_id=proto.current_attempt_id,
-                        )
-                    )
-
-            # Completed tasks come from the worker's unreported buffer
-            completed = self._provider.pop_completed_tasks()
-
-            return cluster_pb2.HeartbeatResponse(
-                running_tasks=running,
-                completed_tasks=completed,
-            )
+            # Delegate to worker for reconciliation
+            return self._provider.handle_heartbeat(request)

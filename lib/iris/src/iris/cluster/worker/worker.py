@@ -101,9 +101,6 @@ class Worker:
         # Task state
         self._tasks: dict[str, TaskAttempt] = {}
         self._lock = threading.Lock()
-        # Completions that failed to report via report_task_state RPC.
-        # Piggybacked on the next successful heartbeat.
-        self._unreported_completions: list[cluster_pb2.Controller.CompletedTaskEntry] = []
 
         self._service = WorkerServiceImpl(self, log_buffer=get_global_buffer())
         self._dashboard = WorkerDashboard(
@@ -309,11 +306,7 @@ class Worker:
             self._stop_event.wait(1.0)
 
     def _reset_worker_state(self) -> None:
-        """Reset worker state: wipe all containers and clear tracking.
-
-        Called when controller signals should_reset (e.g., after controller restart
-        when worker claims tasks the controller doesn't know about).
-        """
+        """Reset worker state: wipe all containers and clear tracking."""
         logger.info("Resetting worker state")
 
         # Clear task tracking
@@ -325,15 +318,11 @@ class Worker:
 
         logger.info("Worker state reset complete")
 
-    def _report_task_state(self, task: TaskAttempt) -> None:
-        """Report task state to controller.
+    def _notify_task_update(self, task: TaskAttempt) -> None:
+        """Notify controller that task state changed.
 
-        Terminal completions are buffered locally. This method sends a lightweight
-        ping to the controller, triggering a priority heartbeat that will pick up
-        the completion.
+        Sends a lightweight ping to the controller, triggering a priority heartbeat.
         """
-        self._buffer_completion_if_terminal(task)
-
         if not self._controller_client or not self._worker_id:
             return
 
@@ -345,34 +334,8 @@ class Worker:
                 )
             )
         except Exception as e:
-            # Best-effort ping; if it fails, the next regular heartbeat will deliver the completion
-            logger.debug(
-                "notify_task_update failed (completion will be delivered via next heartbeat): %s", e, exc_info=True
-            )
-
-    def _buffer_completion_if_terminal(self, task: TaskAttempt) -> None:
-        """Buffer a terminal task completion for heartbeat delivery."""
-        terminal_states = {
-            cluster_pb2.TASK_STATE_SUCCEEDED,
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
-        }
-        if task.status not in terminal_states:
-            return
-        with self._lock:
-            self._unreported_completions.append(
-                cluster_pb2.Controller.CompletedTaskEntry(
-                    task_id=task.task_id,
-                    job_id=task.job_id,
-                    task_index=task.task_index,
-                    state=task.status,
-                    exit_code=task.exit_code or 0,
-                    error=task.error or "",
-                    finished_at_ms=task.finished_at_ms or 0,
-                    attempt_id=task.attempt_id,
-                )
-            )
+            # Best-effort ping; if it fails, the next regular heartbeat will deliver the update
+            logger.debug("notify_task_update failed (update will be delivered via next heartbeat): %s", e, exc_info=True)
 
     # Task management methods
 
@@ -419,7 +382,7 @@ class Worker:
             worker_id=self._worker_id,
             controller_address=self._config.controller_address,
             port_allocator=self._port_allocator,
-            report_state=self._report_task_state,
+            report_state=self._notify_task_update,
             poll_interval_seconds=self._config.poll_interval_seconds,
         )
 
@@ -449,22 +412,103 @@ class Worker:
         """
         return list(self._tasks.values())
 
-    def pop_completed_tasks(self) -> list[cluster_pb2.Controller.CompletedTaskEntry]:
-        """Atomically drain and return the worker's completed-but-unreported task buffer.
+    def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse:
+        """Handle controller-initiated heartbeat with reconciliation.
 
-        Used by the heartbeat handler to report completions to the controller.
+        Processes tasks_to_run and tasks_to_kill, reconciles expected_tasks against
+        actual state, and returns current running/completed tasks.
         """
-        with self._lock:
-            completions = list(self._unreported_completions)
-            self._unreported_completions.clear()
-            return completions
-
-    def on_heartbeat_received(self) -> None:
-        """Update the timestamp of the last received heartbeat.
-
-        Called by the heartbeat service handler to track controller liveness.
-        """
+        # Update heartbeat timestamp
         self._last_heartbeat_time = time.monotonic()
+
+        # Start new tasks
+        for run_req in request.tasks_to_run:
+            try:
+                self.submit_task(run_req)
+                logger.info("Heartbeat: submitted task %s", run_req.task_id)
+            except Exception as e:
+                logger.warning("Heartbeat: failed to submit task %s: %s", run_req.task_id, e)
+
+        # Kill requested tasks
+        for task_id in request.tasks_to_kill:
+            try:
+                self.kill_task(task_id)
+                logger.info("Heartbeat: killed task %s", task_id)
+            except Exception as e:
+                logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
+
+        # Build expected_tasks lookup
+        expected_task_ids = {entry.task_id: entry for entry in request.expected_tasks}
+
+        # Terminal states
+        terminal_states = {
+            cluster_pb2.TASK_STATE_SUCCEEDED,
+            cluster_pb2.TASK_STATE_FAILED,
+            cluster_pb2.TASK_STATE_KILLED,
+            cluster_pb2.TASK_STATE_WORKER_FAILED,
+        }
+
+        running_tasks = []
+        completed_tasks = []
+
+        with self._lock:
+            # Reconcile expected_tasks against actual state
+            for expected_entry in request.expected_tasks:
+                task_id = expected_entry.task_id
+                task = self._tasks.get(task_id)
+
+                if task is None:
+                    # Task not found - report as WORKER_FAILED
+                    completed_tasks.append(
+                        cluster_pb2.Controller.CompletedTaskEntry(
+                            task_id=task_id,
+                            job_id="",  # We don't have this information
+                            task_index=0,
+                            state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                            exit_code=0,
+                            error="Task not found on worker",
+                            finished_at_ms=int(time.time() * 1000),
+                            attempt_id=expected_entry.attempt_id,
+                        )
+                    )
+                elif task.status in terminal_states:
+                    # Task is terminal - report as completed
+                    task_proto = task.to_proto()
+                    completed_tasks.append(
+                        cluster_pb2.Controller.CompletedTaskEntry(
+                            task_id=task_proto.task_id,
+                            job_id=task_proto.job_id,
+                            task_index=task_proto.task_index,
+                            state=task_proto.state,
+                            exit_code=task_proto.exit_code,
+                            error=task_proto.error,
+                            finished_at_ms=task_proto.finished_at_ms,
+                            attempt_id=task_proto.current_attempt_id,
+                        )
+                    )
+                else:
+                    # Task is running/building - include in running_tasks
+                    running_tasks.append(
+                        cluster_pb2.Controller.RunningTaskEntry(
+                            task_id=task_id,
+                            attempt_id=task.to_proto().current_attempt_id,
+                        )
+                    )
+
+            # Report all non-terminal tasks (including unexpected ones)
+            for task_id, task in self._tasks.items():
+                if task_id not in expected_task_ids and task.status not in terminal_states:
+                    running_tasks.append(
+                        cluster_pb2.Controller.RunningTaskEntry(
+                            task_id=task_id,
+                            attempt_id=task.to_proto().current_attempt_id,
+                        )
+                    )
+
+        return cluster_pb2.HeartbeatResponse(
+            running_tasks=running_tasks,
+            completed_tasks=completed_tasks,
+        )
 
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:
         """Kill a running task."""
