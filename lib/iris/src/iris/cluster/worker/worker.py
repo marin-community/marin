@@ -34,6 +34,7 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
+from iris.managed_thread import ManagedThread, ThreadRegistry
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import ExponentialBackoff
@@ -68,6 +69,7 @@ class Worker:
         container_runtime: ContainerRuntime | None = None,
         environment_provider: EnvironmentProvider | None = None,
         port_allocator: PortAllocator | None = None,
+        thread_registry: ThreadRegistry | None = None,
     ):
         self._config = config
 
@@ -109,12 +111,11 @@ class Worker:
             port=config.port,
         )
 
-        self._server_thread: threading.Thread | None = None
+        self._threads = thread_registry or ThreadRegistry()
         self._server: uvicorn.Server | None = None
+        self._server_managed: ManagedThread | None = None
+        self._lifecycle_managed: ManagedThread | None = None
 
-        # Lifecycle thread for register + serve loop
-        self._lifecycle_thread: threading.Thread | None = None
-        self._stop_event = threading.Event()
         self._worker_id: str | None = config.worker_id
         self._controller_client: ControllerServiceClientSync | None = None
 
@@ -126,11 +127,7 @@ class Worker:
         self._cleanup_all_iris_containers()
 
         # Start HTTP server
-        self._server_thread = threading.Thread(
-            target=self._run_server,
-            daemon=True,
-        )
-        self._server_thread.start()
+        self._server_managed = self._threads.spawn(target=self._run_server, name="worker-server")
 
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
@@ -146,11 +143,7 @@ class Worker:
             )
 
             # Start lifecycle thread: register + serve + reset loop
-            self._lifecycle_thread = threading.Thread(
-                target=self._run_lifecycle,
-                daemon=True,
-            )
-            self._lifecycle_thread.start()
+            self._lifecycle_managed = self._threads.spawn(target=self._run_lifecycle, name="worker-lifecycle")
 
     def _cleanup_all_iris_containers(self) -> None:
         """Remove all iris-managed containers at startup.
@@ -163,19 +156,16 @@ class Worker:
 
     def wait(self) -> None:
         """Block until the server thread exits."""
-        if self._server_thread:
-            self._server_thread.join()
+        if self._server_managed:
+            self._server_managed.join()
 
     def stop(self) -> None:
-        self._stop_event.set()
-        if self._lifecycle_thread:
-            self._lifecycle_thread.join(timeout=5.0)
-
         # Stop uvicorn server
         if self._server:
             self._server.should_exit = True
-        if self._server_thread:
-            self._server_thread.join(timeout=5.0)
+
+        # Shutdown all managed threads
+        self._threads.shutdown(timeout=5.0)
 
         # Kill and remove all containers
         with self._lock:
@@ -198,7 +188,7 @@ class Worker:
             except OSError:
                 pass
 
-    def _run_server(self) -> None:
+    def _run_server(self, stop_event: threading.Event) -> None:
         try:
             config = uvicorn.Config(
                 self._dashboard._app,
@@ -211,7 +201,7 @@ class Worker:
         except Exception as e:
             print(f"Worker server error: {e}")
 
-    def _run_lifecycle(self) -> None:
+    def _run_lifecycle(self, stop_event: threading.Event) -> None:
         """Main lifecycle: register, serve, reset, repeat.
 
         This loop runs continuously until shutdown. On each iteration:
@@ -220,16 +210,16 @@ class Worker:
         3. Serve (wait for heartbeats from controller)
         4. If heartbeat timeout expires, return to step 1
         """
-        while not self._stop_event.is_set():
+        while not stop_event.is_set():
             self._reset_worker_state()
-            worker_id = self._register()
+            worker_id = self._register(stop_event)
             if worker_id is None:
                 # Shutdown requested during registration
                 break
             self._worker_id = worker_id
-            self._serve()
+            self._serve(stop_event)
 
-    def _register(self) -> str | None:
+    def _register(self, stop_event: threading.Event) -> str | None:
         """Register with controller. Retries until accepted or shutdown.
 
         Returns the assigned worker_id, or None if shutdown was requested.
@@ -242,7 +232,7 @@ class Worker:
 
         logger.info("Attempting to register with controller at %s", self._config.controller_address)
 
-        while not self._stop_event.is_set():
+        while not stop_event.is_set():
             try:
                 # Chaos injection for testing delayed registration
                 if rule := chaos("worker.register"):
@@ -263,7 +253,7 @@ class Worker:
                     logger.warning("Registration rejected by controller, retrying in 5s")
             except Exception as e:
                 logger.warning("Registration failed: %s, retrying in 5s", e)
-            self._stop_event.wait(5.0)
+            stop_event.wait(5.0)
 
         return None
 
@@ -287,7 +277,7 @@ class Worker:
 
         return f"{address_host}:{self._config.port}"
 
-    def _serve(self) -> None:
+    def _serve(self, stop_event: threading.Event) -> None:
         """Wait for heartbeats from controller. Returns when heartbeat timeout expires.
 
         This method blocks in a loop, checking the time since last heartbeat.
@@ -297,13 +287,13 @@ class Worker:
         heartbeat_timeout = self._config.heartbeat_timeout_seconds
         logger.info("Serving (waiting for controller heartbeats)")
 
-        while not self._stop_event.is_set():
+        while not stop_event.is_set():
             elapsed = time.monotonic() - self._last_heartbeat_time
             if elapsed > heartbeat_timeout:
                 logger.warning("No heartbeat from controller for %.0fs, resetting", elapsed)
                 return
             # Check every second
-            self._stop_event.wait(1.0)
+            stop_event.wait(1.0)
 
     def _reset_worker_state(self) -> None:
         """Reset worker state: wipe all containers and clear tracking."""

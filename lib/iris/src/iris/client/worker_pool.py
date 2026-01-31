@@ -58,6 +58,7 @@ from iris.actor.resolver import Resolver
 from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
+from iris.managed_thread import ManagedThread
 from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -210,36 +211,31 @@ class WorkerDispatcher:
         self._resolver = resolver
         self._timeout = timeout
         self._context = context
-        self._shutdown = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._managed_thread: ManagedThread | None = None
         self._discover_backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
         self._actor_client: ActorClient | None = None
 
     def start(self) -> None:
-        if self._context is not None:
-            self._thread = threading.Thread(
-                target=self._context.run,
-                args=(self._run,),
-                daemon=True,
-                name=f"dispatch-{self.state.worker_id}",
-            )
-        else:
-            self._thread = threading.Thread(
-                target=self._run,
-                daemon=True,
-                name=f"dispatch-{self.state.worker_id}",
-            )
-        self._thread.start()
+        target = self._run
+        if self._context:
+            original = target
+
+            def target(stop_event: threading.Event, *args):
+                self._context.run(original, stop_event, *args)
+
+        self._managed_thread = ManagedThread(target=target, name=f"dispatch-{self.state.worker_id}")
+        self._managed_thread.start()
 
     def stop(self) -> None:
-        self._shutdown.set()
+        if self._managed_thread:
+            self._managed_thread.stop()
 
     def join(self, timeout: float | None = None) -> None:
-        if self._thread:
-            self._thread.join(timeout=timeout)
+        if self._managed_thread:
+            self._managed_thread.join(timeout=timeout)
 
-    def _run(self) -> None:
-        while not self._shutdown.is_set():
+    def _run(self, stop_event: threading.Event) -> None:
+        while not stop_event.is_set():
             if self.state.status == WorkerStatus.PENDING:
                 self._discover_endpoint()
                 continue
@@ -247,7 +243,6 @@ class WorkerDispatcher:
             if self.state.status == WorkerStatus.FAILED:
                 break
 
-            # Initialize actor client if needed (handles test cases where worker starts IDLE)
             if self._actor_client is None:
                 self._actor_client = ActorClient(
                     resolver=self._resolver,

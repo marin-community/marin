@@ -52,6 +52,7 @@ def worker_server():
     server.register(actor_name, TaskExecutorActor())
     port = server.serve_background()
     yield f"http://127.0.0.1:{port}", actor_name
+    server.shutdown()
 
 
 def test_dispatch_discovers_worker_endpoint(worker_server):
@@ -185,82 +186,77 @@ def test_dispatch_propagates_user_exceptions(worker_server):
 
 def test_dispatch_retries_on_infrastructure_failure():
     """Infrastructure failures cause re-queue if retries remain."""
-    # Start a real server for the "good" worker
     server = ActorServer(host="127.0.0.1", port=0)
     actor_name_good = "_test_worker_good"
     server.register(actor_name_good, TaskExecutorActor())
     port = server.serve_background()
     good_url = f"http://127.0.0.1:{port}"
 
-    # Worker 1 points to a non-existent endpoint (will fail)
-    actor_name_bad = "_test_worker_bad"
-    worker_state_1 = WorkerState(
-        worker_id="w-0",
-        worker_name=actor_name_bad,
-        endpoint_url="http://127.0.0.1:9999",
-        status=WorkerStatus.IDLE,
-    )
+    try:
+        actor_name_bad = "_test_worker_bad"
+        worker_state_1 = WorkerState(
+            worker_id="w-0",
+            worker_name=actor_name_bad,
+            endpoint_url="http://127.0.0.1:9999",
+            status=WorkerStatus.IDLE,
+        )
 
-    # Worker 2 points to the real server
-    worker_state_2 = WorkerState(
-        worker_id="w-1",
-        worker_name=actor_name_good,
-        endpoint_url=good_url,
-        status=WorkerStatus.IDLE,
-    )
+        worker_state_2 = WorkerState(
+            worker_id="w-1",
+            worker_name=actor_name_good,
+            endpoint_url=good_url,
+            status=WorkerStatus.IDLE,
+        )
 
-    resolver = FixedResolver(
-        {
-            actor_name_bad: "http://127.0.0.1:9999",
-            actor_name_good: good_url,
-        }
-    )
-    task_queue: Queue[PendingTask] = Queue()
+        resolver = FixedResolver(
+            {
+                actor_name_bad: "http://127.0.0.1:9999",
+                actor_name_good: good_url,
+            }
+        )
+        task_queue: Queue[PendingTask] = Queue()
 
-    # Start both dispatchers
-    dispatcher_1 = WorkerDispatcher(
-        state=worker_state_1,
-        task_queue=task_queue,
-        resolver=resolver,
-        timeout=1.0,  # Short timeout for faster failure
-    )
-    dispatcher_2 = WorkerDispatcher(
-        state=worker_state_2,
-        task_queue=task_queue,
-        resolver=resolver,
-        timeout=5.0,
-    )
+        dispatcher_1 = WorkerDispatcher(
+            state=worker_state_1,
+            task_queue=task_queue,
+            resolver=resolver,
+            timeout=1.0,
+        )
+        dispatcher_2 = WorkerDispatcher(
+            state=worker_state_2,
+            task_queue=task_queue,
+            resolver=resolver,
+            timeout=5.0,
+        )
 
-    dispatcher_1.start()
-    dispatcher_2.start()
+        dispatcher_1.start()
+        dispatcher_2.start()
 
-    # Submit a task with retries
-    future: Future = Future()
-    task = PendingTask(
-        task_id="task-retry",
-        serialized_fn=cloudpickle.dumps(lambda: "success"),
-        serialized_args=cloudpickle.dumps(()),
-        serialized_kwargs=cloudpickle.dumps({}),
-        future=future,
-        fn_name="success_fn",
-        submitted_at=time.monotonic(),
-        retries_remaining=2,
-    )
-    task_queue.put(task)
+        future: Future = Future()
+        task = PendingTask(
+            task_id="task-retry",
+            serialized_fn=cloudpickle.dumps(lambda: "success"),
+            serialized_args=cloudpickle.dumps(()),
+            serialized_kwargs=cloudpickle.dumps({}),
+            future=future,
+            fn_name="success_fn",
+            submitted_at=time.monotonic(),
+            retries_remaining=2,
+        )
+        task_queue.put(task)
 
-    # Worker 1 fails, task re-queued, worker 2 succeeds
-    result = future.result(timeout=10.0)
-    assert result == "success"
+        result = future.result(timeout=10.0)
+        assert result == "success"
 
-    dispatcher_1.stop()
-    dispatcher_2.stop()
-    dispatcher_1.join(timeout=1.0)
-    dispatcher_2.join(timeout=1.0)
+        dispatcher_1.stop()
+        dispatcher_2.stop()
+        dispatcher_1.join(timeout=1.0)
+        dispatcher_2.join(timeout=1.0)
 
-    # Worker 1 should be FAILED after the connection error
-    assert worker_state_1.status == WorkerStatus.FAILED
-    # Worker 2 completed the task
-    assert worker_state_2.tasks_completed == 1
+        assert worker_state_1.status == WorkerStatus.FAILED
+        assert worker_state_2.tasks_completed == 1
+    finally:
+        server.shutdown()
 
 
 # =============================================================================

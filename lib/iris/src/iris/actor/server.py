@@ -35,6 +35,7 @@ import uvicorn
 
 from connectrpc.request import RequestContext
 
+from iris.managed_thread import ThreadRegistry
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
 from iris.time_utils import ExponentialBackoff, now_ms
@@ -57,18 +58,21 @@ class RegisteredActor:
 class ActorServer:
     """Server for hosting actor instances and handling RPC calls."""
 
-    def __init__(self, host: str = "0.0.0.0", port: int | None = None):
+    def __init__(self, host: str = "0.0.0.0", port: int | None = None, thread_registry: ThreadRegistry | None = None):
         """Initialize the actor server.
 
         Args:
             host: Host address to bind to
             port: Port to bind to. If None or 0, auto-assigns a free port.
+            thread_registry: Thread registry for managing background threads. If None, creates a new one.
         """
         self._host = host
         self._port = port
         self._actors: dict[str, RegisteredActor] = {}
         self._app: ActorServiceASGIApplication | None = None
         self._actual_port: int | None = None
+        self._threads = thread_registry or ThreadRegistry()
+        self._server: uvicorn.Server | None = None
 
     @property
     def address(self) -> str:
@@ -204,7 +208,7 @@ class ActorServer:
         elif self._port is not None:
             bind_port = self._port
         else:
-            bind_port = 0  # Auto-assign
+            bind_port = 0
 
         self._app = self._create_app()
 
@@ -222,17 +226,21 @@ class ActorServer:
             port=self._actual_port,
             log_level="error",
         )
-        server = uvicorn.Server(config)
+        self._server = uvicorn.Server(config)
 
-        thread = threading.Thread(target=server.run, daemon=True)
-        thread.start()
+        def _run_server(stop_event: threading.Event) -> None:
+            self._server.run()
+
+        self._threads.spawn(target=_run_server, name="actor-server")
 
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: server.started,
+            lambda: self._server.started,
             timeout=5.0,
         )
 
         return self._actual_port
 
     def shutdown(self) -> None:
-        pass
+        if self._server is not None:
+            self._server.should_exit = True
+        self._threads.shutdown(timeout=5.0)
