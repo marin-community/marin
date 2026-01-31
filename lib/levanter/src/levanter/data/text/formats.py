@@ -267,4 +267,9 @@ def preprocessor_for_format(
                 mask_user_turns=mt,
             )  # type: ignore
         case _:
+            # Check for preference format (imported lazily to avoid circular imports)
+            from .preference import PreferenceChatLmDatasetFormat, preprocessor_for_preference_format
+
+            if isinstance(format, PreferenceChatLmDatasetFormat):
+                return preprocessor_for_preference_format(format, tokenizer)  # type: ignore
             raise ValueError(f"Unknown format {format}")

@@ -3,106 +3,6 @@ data:
   tokenizer: allenai/OLMo-1B
   stop_strategy: restart
   shuffle_buffer_size: 100000
-  configs:
-    dolma-algebraic-stack:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/algebraic-stack-train-{0000..0015}.json.gz
-    dolma-arxiv:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/arxiv-{0000..0099}.json.gz
-    dolma-gutenberg:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/books-{0000..0002}.json.gz
-    dolma-c4:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/c4-{0000..0170}.json.gz
-    dolma-cc:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_head-{0000..0274}.json.gz
-      - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_middle-{0000..0238}.json.gz
-      - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_middle-{0240..0379}.json.gz
-      - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_tail-{0000..0152}.json.gz
-      - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_tail-{0154..0444}.json.gz
-    dolma-cc-news:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/cc_news_head-{0000..0004}.json.gz
-      - gs://marin-data/raw/dolma/dolma-v1.7/cc_news_middle-{0000..0002}.json.gz
-      - gs://marin-data/raw/dolma/dolma-v1.7/cc_news_tail-0000.json.gz
-    dolma-falcon:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/falcon-{0000..0499}.json.gz
-    dolma-megawika:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/megawika-{0000..0261}.json.gz
-    dolma-owmath:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/open-web-math-train-{0000..0012}.json.gz
-    dolma-pes2o:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/pes2o-{0000..0025}.json.gz
-    dolma-reddit:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/reddit-{0000..0077}.json.gz
-    dolma-stackexchange:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/stackexchange-{0000..0025}.json.gz
-    dolma-starcoder:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/starcoder-{0000..0048}.json.gz
-    dolma-flan:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/tulu_flan-{0000..0065}.json.gz
-    dolma-wiki:
-      train_urls:
-      - gs://marin-data/raw/dolma/dolma-v1.7/wiki-{0000..0001}.json.gz
-    paloma/4chan:
-      validation_urls:
-      - gs://levanter-data/paloma/4chan_meta_sep/val/val*.jsonl.gz
-    paloma/c4_100_domains:
-      validation_urls:
-      - gs://levanter-data/paloma/c4_100_domains/val/val*.jsonl.gz
-    paloma/c4_en:
-      validation_urls:
-      - gs://levanter-data/paloma/c4_en/val/val*.jsonl.gz
-    paloma/dolma-v1_5:
-      validation_urls:
-      - gs://levanter-data/paloma/dolma-v1_5/val/val*.jsonl.gz
-    paloma/dolma_100_programing_languages:
-      validation_urls:
-      - gs://levanter-data/paloma/dolma_100_programing_languages/val/val*.jsonl.gz
-    paloma/dolma_100_subreddits:
-      validation_urls:
-      - gs://levanter-data/paloma/dolma_100_subreddits/val/val*.jsonl.gz
-    paloma/falcon-refinedweb:
-      validation_urls:
-      - gs://levanter-data/paloma/falcon-refinedweb/val/val*.jsonl.gz
-    paloma/gab:
-      validation_urls:
-      - gs://levanter-data/paloma/gab/val/val*.jsonl.gz
-    paloma/m2d2_s2orc_unsplit:
-      validation_urls:
-      - gs://levanter-data/paloma/m2d2_s2orc_unsplit/val/val*.jsonl.gz
-    paloma/m2d2_wikipedia_unsplit:
-      validation_urls:
-      - gs://levanter-data/paloma/m2d2_wikipedia_unsplit/val/val*.jsonl.gz
-    paloma/manosphere_meta_sep:
-      validation_urls:
-      - gs://levanter-data/paloma/manosphere_meta_sep/val/val*.jsonl.gz
-    paloma/mc4:
-      validation_urls:
-      - gs://levanter-data/paloma/mc4/val/val*.jsonl.gz
-    paloma/ptb:
-      validation_urls:
-      - gs://levanter-data/paloma/ptb/val/val*.jsonl.gz
-    paloma/redpajama:
-      validation_urls:
-      - gs://levanter-data/paloma/redpajama/val/val*.jsonl.gz
-    paloma/twitterAAE_HELM_fixed:
-      validation_urls:
-      - gs://levanter-data/paloma/twitterAAE_HELM_fixed/val/val*.jsonl.gz
-    paloma/wikitext_103:
-      validation_urls:
-      - gs://levanter-data/paloma/wikitext_103/val/val*.jsonl.gz
   train_weights:
     dolma-algebraic-stack: 12.6
     dolma-arxiv: 28.0
@@ -135,6 +35,168 @@ data:
     paloma/redpajama: 0.0
     paloma/twitterAAE_HELM_fixed: 0.0
     paloma/wikitext_103: 0.0
+  components:
+    dolma-algebraic-stack:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/algebraic-stack-train-{0000..0015}.json.gz
+    dolma-arxiv:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/arxiv-{0000..0099}.json.gz
+    dolma-gutenberg:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/books-{0000..0002}.json.gz
+    dolma-c4:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/c4-{0000..0170}.json.gz
+    dolma-cc:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_head-{0000..0274}.json.gz
+        - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_middle-{0000..0238}.json.gz
+        - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_middle-{0240..0379}.json.gz
+        - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_tail-{0000..0152}.json.gz
+        - gs://marin-data/raw/dolma/dolma-v1.7/cc_en_tail-{0154..0444}.json.gz
+    dolma-cc-news:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/cc_news_head-{0000..0004}.json.gz
+        - gs://marin-data/raw/dolma/dolma-v1.7/cc_news_middle-{0000..0002}.json.gz
+        - gs://marin-data/raw/dolma/dolma-v1.7/cc_news_tail-0000.json.gz
+    dolma-falcon:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/falcon-{0000..0499}.json.gz
+    dolma-megawika:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/megawika-{0000..0261}.json.gz
+    dolma-owmath:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/open-web-math-train-{0000..0012}.json.gz
+    dolma-pes2o:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/pes2o-{0000..0025}.json.gz
+    dolma-reddit:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/reddit-{0000..0077}.json.gz
+    dolma-stackexchange:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/stackexchange-{0000..0025}.json.gz
+    dolma-starcoder:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/starcoder-{0000..0048}.json.gz
+    dolma-flan:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/tulu_flan-{0000..0065}.json.gz
+    dolma-wiki:
+      source:
+        type: url
+        train_urls:
+        - gs://marin-data/raw/dolma/dolma-v1.7/wiki-{0000..0001}.json.gz
+    paloma/4chan:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/4chan_meta_sep/val/val*.jsonl.gz
+    paloma/c4_100_domains:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/c4_100_domains/val/val*.jsonl.gz
+    paloma/c4_en:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/c4_en/val/val*.jsonl.gz
+    paloma/dolma-v1_5:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/dolma-v1_5/val/val*.jsonl.gz
+    paloma/dolma_100_programing_languages:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/dolma_100_programing_languages/val/val*.jsonl.gz
+    paloma/dolma_100_subreddits:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/dolma_100_subreddits/val/val*.jsonl.gz
+    paloma/falcon-refinedweb:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/falcon-refinedweb/val/val*.jsonl.gz
+    paloma/gab:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/gab/val/val*.jsonl.gz
+    paloma/m2d2_s2orc_unsplit:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/m2d2_s2orc_unsplit/val/val*.jsonl.gz
+    paloma/m2d2_wikipedia_unsplit:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/m2d2_wikipedia_unsplit/val/val*.jsonl.gz
+    paloma/manosphere_meta_sep:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/manosphere_meta_sep/val/val*.jsonl.gz
+    paloma/mc4:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/mc4/val/val*.jsonl.gz
+    paloma/ptb:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/ptb/val/val*.jsonl.gz
+    paloma/redpajama:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/redpajama/val/val*.jsonl.gz
+    paloma/twitterAAE_HELM_fixed:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/twitterAAE_HELM_fixed/val/val*.jsonl.gz
+    paloma/wikitext_103:
+      source:
+        type: url
+        validation_urls:
+        - gs://levanter-data/paloma/wikitext_103/val/val*.jsonl.gz
 model:
   type: llama
   max_seq_len: 2048

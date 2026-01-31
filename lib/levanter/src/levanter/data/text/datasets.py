@@ -497,6 +497,11 @@ def dataset_for_component(
             block_cross_document_attention=block_cross_document_attention,
         )
     else:
+        # Check for preference format (imported lazily to avoid circular imports)
+        from .preference import PreferenceChatLmDatasetFormat, dataset_for_preference_format
+
+        if isinstance(fmt, PreferenceChatLmDatasetFormat):
+            return dataset_for_preference_format(fmt, Pos, cache)  # type: ignore
         raise ValueError(f"Unknown format {fmt}")
 
 
@@ -809,6 +814,16 @@ class LmDataConfig:
 LMMixtureDatasetConfig: TypeAlias = LmDataConfig
 
 
+def _get_token_key_for_component(component: DatasetComponentBase) -> str:
+    """Get the appropriate token key based on component format."""
+    from .preference import PreferenceChatLmDatasetFormat
+
+    if isinstance(component, DatasetComponent):
+        if isinstance(component.format, PreferenceChatLmDatasetFormat):
+            return "chosen_input_ids"
+    return "input_ids"
+
+
 def count_corpus_sizes(
     config: LmDataConfig,
     prefix: str = "data/stats/",
@@ -829,10 +844,12 @@ def count_corpus_sizes(
 
     for name, cache in train_caches.items():
         metric_prefix = f"{prefix}train/{name}/"
-        stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size
-        stats[f"{metric_prefix}total_docs"] = cache.store.tree["input_ids"].num_rows
+        component = config.components[name]
+        token_key = _get_token_key_for_component(component)
+        stats[f"{metric_prefix}total_tokens"] = cache.store.tree[token_key].data_size
+        stats[f"{metric_prefix}total_docs"] = cache.store.tree[token_key].num_rows
         train_set = dataset_for_component(
-            config.components[name],
+            component,
             Pos,
             cache,
             eos_id=None,
@@ -840,7 +857,7 @@ def count_corpus_sizes(
         )
         train_seqs = len(train_set.as_sync_dataset())
         stats[f"{metric_prefix}total_seqs"] = train_seqs
-        padding_fraction = 1 - (cache.store.tree["input_ids"].data_size / (train_seqs * seq_len))
+        padding_fraction = 1 - (cache.store.tree[token_key].data_size / (train_seqs * seq_len))
         if padding_fraction < 0:
             stats[f"{metric_prefix}truncation_fraction"] = -padding_fraction
         else:
@@ -854,10 +871,12 @@ def count_corpus_sizes(
     validation_caches = config.build_caches("validation")
     for name, cache in validation_caches.items():
         metric_prefix = f"{prefix}validation/{name}/"
-        stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size
-        stats[f"{metric_prefix}total_docs"] = cache.store.tree["input_ids"].num_rows
+        component = config.components[name]
+        token_key = _get_token_key_for_component(component)
+        stats[f"{metric_prefix}total_tokens"] = cache.store.tree[token_key].data_size
+        stats[f"{metric_prefix}total_docs"] = cache.store.tree[token_key].num_rows
         validation_set = dataset_for_component(
-            config.components[name],
+            component,
             Pos,
             cache,
             eos_id=None,

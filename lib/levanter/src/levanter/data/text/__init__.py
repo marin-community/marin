@@ -63,7 +63,7 @@ __all__ = [
     "LmDataConfig",
     "LMMixtureDatasetConfig",
     "count_corpus_sizes",
-    # Preference/DPO classes
+    # Preference/DPO exports
     "DpoExample",
     "PreferenceChatLmDatasetFormat",
     "PreferenceChatProcessor",

@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Callable, Generic, Optional, TypeVar
 import equinox as eqx
 import jax
 import jmp
+
+import haliax
 from haliax.quantization import QuantizationConfig, apply_updates, partition_for_grad_overwrite, quantize_linear_layers
 from haliax.types import IntScalar, Scalar
 from jax import numpy as jnp
@@ -194,7 +196,7 @@ def _partition_trainable_params(model, filter):
         trainable, non-trainable
     """
     filter = make_floating_point_trainable_filter(filter)
-    return eqx.partition(model, filter)
+    return eqx.partition(model, filter, is_leaf=lambda x: isinstance(x, haliax.NamedArray))
 
 
 def trainables_only(model, filter):
@@ -214,8 +216,7 @@ def cast_params_by_trainability(model, mp, is_trainable):
     trainable, non_trainable = _partition_trainable_params(model, is_trainable)
     trainable = mp.cast_to_param(trainable)
     non_trainable = mp.cast_to_compute(non_trainable)
-    model = eqx.combine(trainable, non_trainable)
-    return model
+    return eqx.combine(trainable, non_trainable, is_leaf=lambda x: isinstance(x, haliax.NamedArray))
 
 
 def saveable_training_mask(trainer_state: S, is_trainable_param: FilterTree = True) -> FilterTree:
@@ -280,4 +281,4 @@ def make_floating_point_trainable_filter(is_trainable: FilterTree) -> FilterTree
         else:
             return lambda y: is_inexact_arrayish(y) and x(y)
 
-    return jax.tree_util.tree_map(is_trainable_and_floating_point, is_trainable)
+    return haliax.tree_util.tree_map(is_trainable_and_floating_point, is_trainable)
