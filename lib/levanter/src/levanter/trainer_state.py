@@ -6,12 +6,10 @@ import typing
 from typing import TYPE_CHECKING, Callable, Generic, Optional, TypeVar
 
 import equinox as eqx
-import haliax as hax
 import jax
 import jmp
 from haliax.quantization import QuantizationConfig, apply_updates, partition_for_grad_overwrite, quantize_linear_layers
 from haliax.types import IntScalar, Scalar
-from haliax.jax_utils import is_jax_array_like
 from jax import numpy as jnp
 from jax._src.random import PRNGKey
 from jaxtyping import PRNGKeyArray, PyTree
@@ -90,10 +88,6 @@ class TrainerState(eqx.Module, Generic[M]):
             m = eqx.combine(m, self.model)
         else:
             m = self.model
-
-        m = _fill_missing_namedarrays(m, self.model)
-        if _has_missing_namedarrays(m):
-            raise ValueError("eval_model contains NamedArray placeholders with array=None")
 
         return inference_mode(m, True)
 
@@ -200,7 +194,7 @@ def _partition_trainable_params(model, filter):
         trainable, non-trainable
     """
     filter = make_floating_point_trainable_filter(filter)
-    return eqx.partition(model, filter, is_leaf=lambda x: isinstance(x, hax.NamedArray))
+    return eqx.partition(model, filter)
 
 
 def trainables_only(model, filter):
@@ -220,30 +214,8 @@ def cast_params_by_trainability(model, mp, is_trainable):
     trainable, non_trainable = _partition_trainable_params(model, is_trainable)
     trainable = mp.cast_to_param(trainable)
     non_trainable = mp.cast_to_compute(non_trainable)
-    return eqx.combine(trainable, non_trainable, is_leaf=lambda x: isinstance(x, hax.NamedArray))
-
-
-def _fill_missing_namedarrays(model: M, fallback: M) -> M:
-    def replace_if_missing(node, fallback_node):
-        if isinstance(node, hax.NamedArray) and not is_jax_array_like(node.array):
-            return fallback_node
-        return node
-
-    return jax.tree_util.tree_map(
-        replace_if_missing,
-        model,
-        fallback,
-        is_leaf=lambda x: isinstance(x, hax.NamedArray),
-    )
-
-
-def _has_missing_namedarrays(model: M) -> bool:
-    def is_missing(node):
-        return isinstance(node, hax.NamedArray) and not is_jax_array_like(node.array)
-
-    return any(
-        is_missing(node) for node in jax.tree_util.tree_leaves(model, is_leaf=lambda x: isinstance(x, hax.NamedArray))
-    )
+    model = eqx.combine(trainable, non_trainable)
+    return model
 
 
 def saveable_training_mask(trainer_state: S, is_trainable_param: FilterTree = True) -> FilterTree:
