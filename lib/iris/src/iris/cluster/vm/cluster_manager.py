@@ -101,85 +101,27 @@ class ClusterManager:
             logger.info("Controller stopped")
 
     def reload(self) -> str:
-        """Reload cluster: redeploy containers on existing VMs.
+        """Reload cluster by reloading the controller.
 
-        Reloads controller and all workers by re-running bootstrap scripts
-        without recreating VMs. Much faster than stop/start cycle.
+        The controller will re-bootstrap all worker VMs when it starts,
+        ensuring they run the latest worker image. This is faster than
+        a full stop/start cycle and ensures consistent image versions.
 
-        For GCP: SSHs into existing VMs and pulls new images, restarts containers.
+        For GCP: Reloads controller VM, which then re-bootstraps workers.
         For local: Equivalent to restart (no VMs to preserve).
 
         Returns:
             Controller address
 
         Raises:
-            RuntimeError: If controller or worker VMs don't exist
+            RuntimeError: If controller VM doesn't exist
         """
-        # Reload controller
+        # Reload controller - it will re-bootstrap workers on startup
         self._controller = create_controller(self._config)
         address = self._controller.reload()
         logger.info("Controller reloaded at %s", address)
 
-        # Reload workers (GCP only - local workers restart with controller)
-        if not self.is_local:
-            self._reload_workers()
-
         return address
-
-    def _reload_workers(self) -> None:
-        """Reload all worker VMs by discovering and re-running bootstrap.
-
-        Waits for each VM to become SSH-reachable before reloading. This
-        handles VMs that are still booting (e.g. TPUs in CREATING state).
-        """
-        from iris.cluster.vm.config import _create_manager_from_config
-        from iris.cluster.vm.managed_vm import TrackedVmFactory, VmRegistry
-        from iris.cluster.vm.ssh import wait_for_connection
-
-        vm_registry = VmRegistry()
-        vm_factory = TrackedVmFactory(vm_registry)
-        boot_timeout = self._config.timeouts.boot_timeout_seconds or 300
-
-        logger.info("Reloading workers across %d scale group(s)", len(self._config.scale_groups))
-
-        for group_name in self._config.scale_groups:
-            logger.info("Processing scale group: %s", group_name)
-
-            manager = _create_manager_from_config(
-                group_name=group_name,
-                cluster_config=self._config,
-                vm_factory=vm_factory,
-                dry_run=False,
-            )
-
-            vm_groups = manager.discover_vm_groups()
-
-            if not vm_groups:
-                logger.warning("No existing VMs found for scale group %s", group_name)
-                continue
-
-            logger.info("Found %d VM group(s) in %s", len(vm_groups), group_name)
-
-            failed: list[str] = []
-            for group in vm_groups:
-                logger.info("Reloading VM group %s", group.group_id)
-                for vm in group.vms():
-                    try:
-                        logger.info("Waiting for SSH on %s (timeout=%ds)...", vm.info.vm_id, boot_timeout)
-                        if not wait_for_connection(vm._conn, boot_timeout):
-                            logger.warning("VM %s not reachable after %ds, skipping", vm.info.vm_id, boot_timeout)
-                            failed.append(vm.info.vm_id)
-                            continue
-                        vm.reload()
-                        logger.info("  ✓ Reloaded VM %s", vm.info.vm_id)
-                    except Exception:
-                        logger.warning("Failed to reload VM %s, skipping", vm.info.vm_id, exc_info=True)
-                        failed.append(vm.info.vm_id)
-
-            if failed:
-                logger.warning("Failed to reload %d VM(s): %s", len(failed), ", ".join(failed))
-
-        logger.info("Worker reload complete")
 
     @contextmanager
     def connect(self) -> Iterator[str]:
