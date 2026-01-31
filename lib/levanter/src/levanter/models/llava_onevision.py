@@ -1704,26 +1704,12 @@ class _LlavaInferenceWrapper(eqx.Module):
         # Get number of segments from batched data
         num_batched_segments = len(self._batched_num_patches_per_segment)
 
-        # Map batch sequence indices to segment indices in stored image features
-        # batch_info.slot_ids[batch_seq_idx] -> slot_id for that batch position
-        # _slot_to_segment_map[slot_id] -> segment index in stored features
-        #
-        # Create a lookup table: slot_id -> segment_index
-        # We need max_slot_id to size the array; use batch_info's max_seqs as upper bound
-        max_slots = batch_info.slot_ids.axis_size("seq")
-        slot_to_segment_array = jnp.zeros(max_slots, dtype=jnp.int32)
-        for slot_id, segment_idx in self._slot_to_segment_map.items():
-            slot_to_segment_array = slot_to_segment_array.at[slot_id].set(segment_idx)
-
-        # Get slot_ids for each batch sequence position
-        batch_slot_ids = batch_info.slot_ids.array  # (max_seqs,)
-
-        # Map: token position -> batch_seq_idx -> slot_id -> segment_idx
-        slot_ids_per_token = batch_slot_ids[batch_seq_indices]
-        segment_ids = slot_to_segment_array[slot_ids_per_token]
-
-        # Ensure segment_ids are valid (within num_batched_segments)
-        segment_ids = jnp.clip(segment_ids, 0, num_batched_segments - 1)
+        # Use batch_seq_indices directly as segment_ids
+        # This works because:
+        # 1. Storage: set_batched_request_data() stores features in order [0, 1, 2...]
+        # 2. Retrieval: batch_seq_indices gives us 0, 1, 2... for each token's request
+        # The indices match directly - no slot_id lookup needed!
+        segment_ids = jnp.clip(batch_seq_indices, 0, num_batched_segments - 1)
 
         # 3. Identify image placeholder tokens
         image_token_id = self.model.config.image_token_index

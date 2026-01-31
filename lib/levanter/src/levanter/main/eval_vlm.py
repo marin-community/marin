@@ -68,6 +68,9 @@ logger = logging.getLogger(__name__)
 # DEFAULT MODEL CONFIGURATION (matches demo_vlm_train.py)
 # ============================================================================
 
+# Flash attention block size (matches training config for memory efficiency)
+FLASH_ATTENTION_BLOCK_SIZE = 1024
+
 # Vision encoder: SigLIP (matches google/siglip2-so400m-patch16-384)
 DEFAULT_VISION_CONFIG = SiglipVisionConfig(
     hidden_size=1152,
@@ -77,6 +80,7 @@ DEFAULT_VISION_CONFIG = SiglipVisionConfig(
     image_size=384,
     patch_size=16,
     gradient_checkpointing=False,  # Not needed for inference
+    flash_attention_block_size=FLASH_ATTENTION_BLOCK_SIZE,  # Critical for memory efficiency
 )
 
 # Language model: Qwen3-1.7B
@@ -90,6 +94,7 @@ DEFAULT_TEXT_CONFIG = Qwen3Config(
     rope=Llama3RotaryEmbeddingsConfig(),
     tie_word_embeddings=True,
     gradient_checkpointing=False,  # Not needed for inference
+    flash_attention_block_size=FLASH_ATTENTION_BLOCK_SIZE,  # Critical for memory efficiency
 )
 
 # Qwen3-1.7B <|image_pad|> token ID
@@ -228,6 +233,7 @@ def _load_vlm_model(
         model = converter.load_pretrained(
             model_config.model_type,
             ref=config.hf_checkpoint,
+            config=model_config,  # Use our config with flash_attention_block_size!
             dtype=mp.compute_dtype,
             resize_vocab_to_match_tokenizer=False,
         )
