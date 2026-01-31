@@ -986,6 +986,15 @@ class LmEvalHarnessConfig:
     These can be overridden on a per-request basis by the evaluation harness.
     """
 
+    eval_datasets_cache_path: str | None = None
+    """
+    Optional GCS path to pre-cached evaluation datasets.
+
+    When set, datasets will be synced from this GCS path to the local HuggingFace
+    datasets cache before loading tasks. This avoids HuggingFace API rate limiting
+    when multiple concurrent jobs all try to download the same evaluation datasets.
+    """
+
     @property
     def max_gen_toks(self) -> int:
         """Backward compatibility property for max_gen_toks."""
@@ -1000,6 +1009,53 @@ class LmEvalHarnessConfig:
         """
         return [task.to_dict() if isinstance(task, TaskConfig) else task for task in self.task_spec]
 
+    def _sync_datasets_from_gcs(self) -> bool:
+        """
+        Sync evaluation datasets from GCS to local HuggingFace cache.
+
+        This method is called before loading tasks to ensure datasets are available
+        locally, avoiding HuggingFace API rate limiting.
+
+        Returns:
+            True if sync was successful, False otherwise.
+        """
+        import os
+        import fsspec
+
+        if not self.eval_datasets_cache_path:
+            return False
+
+        # Check if GCS cache exists
+        marker_path = os.path.join(self.eval_datasets_cache_path, ".eval_datasets_cached")
+        fs = fsspec.core.url_to_fs(self.eval_datasets_cache_path)[0]
+        if not fs.exists(marker_path):
+            logger.info(f"No eval datasets cache found at {self.eval_datasets_cache_path}")
+            return False
+
+        # Get local HF datasets cache directory
+        local_cache_dir = os.environ.get("HF_DATASETS_CACHE")
+        if local_cache_dir is None:
+            local_cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "datasets")
+
+        # Ensure local cache directory exists
+        os.makedirs(local_cache_dir, exist_ok=True)
+
+        # Sync from GCS to local
+        logger.info(f"Syncing eval datasets from {self.eval_datasets_cache_path} to {local_cache_dir}")
+        try:
+            fs.get(self.eval_datasets_cache_path, local_cache_dir, recursive=True)
+            logger.info(f"Successfully synced eval datasets to {local_cache_dir}")
+
+            # Set offline mode to prevent any HuggingFace API calls
+            # This is critical to avoid rate limiting when multiple jobs run concurrently
+            os.environ["HF_DATASETS_OFFLINE"] = "1"
+            logger.info("Set HF_DATASETS_OFFLINE=1 to use cached datasets only")
+
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to sync eval datasets from GCS: {e}")
+            return False
+
     def to_task_dict(self) -> dict:
         """
         Convert the task spec to a dictionary that the LM Eval Harness expects.
@@ -1008,6 +1064,10 @@ class LmEvalHarnessConfig:
         run, and LM Eval Harness doesn't seem to want to do that by default. So we need to do some hacky stuff to make
         it work.
         """
+        # Sync datasets from GCS cache if configured
+        if self.eval_datasets_cache_path:
+            self._sync_datasets_from_gcs()
+
         logger.info("Loading tasks...")
         import lm_eval.tasks as tasks
 
