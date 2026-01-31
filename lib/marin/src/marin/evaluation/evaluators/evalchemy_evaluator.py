@@ -33,6 +33,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -54,9 +55,19 @@ EVALCHEMY_REPO = "https://github.com/mlfoundations/evalchemy.git"
 EVALCHEMY_COMMIT = "6ed674159b37f740f2353a86f596f49f6ac13c19"  # 2025-01-08
 
 # Wandb project name for evalchemy evaluations
-# Note: Also defined in experiments/evals/evals.py. Kept separate to avoid
-# library code (lib/marin) depending on experiments code (experiments/evals).
-WANDB_PROJECT = "marin"
+# Reads from WANDB_PROJECT env var, defaults to "marin"
+WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
+
+# Evalchemy benchmarks that have hardcoded n_repeat values and their paths.
+# These benchmarks run multiple repetitions with different seeds to compute
+# averaged accuracy, but this significantly increases evaluation time. 
+# For example, AIME25 defaults to n_repeat=10 
+# (https://github.com/mlfoundations/evalchemy/blob/main/eval/chat_benchmarks/AIME25/eval_instruct.py)
+N_REPEAT_BENCHMARK_PATHS = {
+    "AIME25": "eval/chat_benchmarks/AIME25/eval_instruct.py",
+    "AIME24": "eval/chat_benchmarks/AIME24/eval_instruct.py",
+    "AMC23": "eval/chat_benchmarks/AMC23/eval_instruct.py",
+}
 
 
 class EvalchemyEvaluator(VllmTpuEvaluator):
@@ -262,6 +273,37 @@ class EvalchemyEvaluator(VllmTpuEvaluator):
         self._patch_eval_py_imports()
         self._patch_vllm_version()
         self._patch_vllm_seed_for_tpu()
+
+    def _patch_benchmark_n_repeat(self, task_name: str, n_repeat: int) -> None:
+        """
+        Override by patching an evalchemy benchmark's n_repeat value.
+        Note: not all tasks support this.
+
+        Args:
+            task_name: Name of the task (e.g., "AIME25", "AIME24", "AMC23")
+            n_repeat: Number of repetitions to use
+        """
+        if task_name not in N_REPEAT_BENCHMARK_PATHS:
+            logger.warning(f"n_repeat patching not supported for task: {task_name}")
+            return
+
+        path = os.path.join(self.EVALCHEMY_PATH, N_REPEAT_BENCHMARK_PATHS[task_name])
+        if not os.path.exists(path):
+            logger.warning(f"Benchmark file not found: {path}")
+            return
+
+        content = self._read_file(path)
+
+        # Replace n_repeat = N with the configured value
+        new_content = re.sub(
+            r'self\.n_repeat\s*=\s*\d+',
+            f'self.n_repeat = {n_repeat}',
+            content
+        )
+
+        if new_content != content:
+            self._write_file(path, new_content)
+            logger.info(f"Patched {task_name} n_repeat to {n_repeat}")
 
     def _patch_eval_tracker_imports(self) -> None:
         """Patch eval_tracker.py to handle different lm-eval versions."""
@@ -679,6 +721,14 @@ _patch_autoconfig_for_gcs()
                     max_model_len = required_max_model_len
 
             for eval_task in evals:
+                # Apply task-specific patches (e.g., n_repeat for AIME benchmarks)
+                if eval_task.task_kwargs:
+                    if "n_repeat" in eval_task.task_kwargs:
+                        self._patch_benchmark_n_repeat(
+                            eval_task.name,
+                            eval_task.task_kwargs["n_repeat"]
+                        )
+
                 result_dir = os.path.join(
                     self.RESULTS_PATH,
                     f"{eval_task.name}_{eval_task.num_fewshot}shot"

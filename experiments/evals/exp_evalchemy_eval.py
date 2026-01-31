@@ -33,6 +33,9 @@ from experiments.evals.evalchemy_task_configs import (  # noqa: F401
     AIME24,
     AIME25,
     AMC23,
+    AIME24_QUICK,
+    AIME25_QUICK,
+    AMC23_QUICK,
     MATH500,
     HMMT,
     # Code tasks
@@ -61,7 +64,7 @@ from marin.execution.executor import executor_main
 # =============================================================================
 # Model Configuration
 # =============================================================================
-MODEL_PATH = "gs://marin-us-central2/models/OpenThinker3-7B/"
+MODEL = "Qwen/Qwen3-8B"
 
 # =============================================================================
 # Evaluation Configuration
@@ -77,7 +80,7 @@ SEEDS = [42]  # Single seed for quick testing
 # -----------------------------------------------------------------------------
 
 # === Math Benchmarks ===
-EVAL_TASKS = [AIME25]  # Current selection
+EVAL_TASKS = [AIME25_QUICK]
 # EVAL_TASKS = [AIME24]  # AIME 2024 (30 problems)
 # EVAL_TASKS = [AIME25]  # AIME 2025 (30 problems)
 # EVAL_TASKS = [AMC23]  # AMC 2023
@@ -150,12 +153,13 @@ if __name__ == "__main__":
         generation_params = {**BASE_GENERATION_PARAMS, "seed": seed}
 
         step = default_evalchemy_eval(
-            step=MODEL_PATH,
+            step=MODEL,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
             evals=EVAL_TASKS,
             engine_kwargs=ENGINE_KWARGS,
             generation_params=generation_params,
             apply_chat_template=True,
+            discover_latest_checkpoint=False,
         )
         all_steps.append(step)
 
