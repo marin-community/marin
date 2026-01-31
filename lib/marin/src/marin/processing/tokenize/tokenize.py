@@ -26,16 +26,13 @@ import logging
 import os
 import re
 from collections.abc import Iterator, Sequence
-from typing import Any
 
 import fsspec
 
 import draccus
-from fray.job.context import JobContext
 import humanfriendly
 import transformers
 from datasets import load_dataset_builder
-from fray.job import create_job_ctx
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -45,7 +42,8 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.store.cache import consolidate_shard_caches
-from zephyr import Backend, Dataset
+from zephyr import Backend, Dataset, shard_ctx
+from zephyr.execution import get_default_zephyr_context
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
@@ -258,11 +256,9 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
         yield current_group
 
 
-def _tokenize_batches(
-    *, ctx: JobContext, tokenizer_ref: Any, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]
-) -> Iterator[dict]:
+def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer: transformers.PreTrainedTokenizer = ctx.get(tokenizer_ref)
+    tokenizer: transformers.PreTrainedTokenizer = shard_ctx().get_shared("tokenizer")
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     for batch in batches:
@@ -318,11 +314,9 @@ def tokenize(config: TokenizeConfigBase):
             )
             return
 
-        thread_ctx = create_job_ctx("threadpool")
         file_stats = list(
             Backend.execute(
                 Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
-                context=thread_ctx,
                 verbose=False,
             )
         )
@@ -335,40 +329,29 @@ def tokenize(config: TokenizeConfigBase):
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
-        cluster_ctx = create_job_ctx(context_type="auto", num_cpus=config.zephyr_num_cpus, memory=config.zephyr_memory)
-        # NOTE: "broadcast" the tokenizer on the cluster context
-        tokenizer_ref = cluster_ctx.put(transformers.AutoTokenizer.from_pretrained(config.tokenizer))
+        # Broadcast the tokenizer to all workers via ZephyrContext
+        zephyr_ctx = get_default_zephyr_context()
+        zephyr_ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
 
         temp_shards = (
             ds.window(64)
-            .map_shard(
-                lambda batches: _tokenize_batches(
-                    ctx=cluster_ctx, tokenizer_ref=tokenizer_ref, config=config, batches=batches
-                )
-            )
+            .map_shard(lambda batches: _tokenize_batches(config=config, batches=batches))
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
 
-        shard_paths = Backend.execute(temp_shards, context=cluster_ctx)
+        shard_paths = Backend.execute(temp_shards)
 
         logger.info("Computing exemplar for cache consolidation")
         exemplar = Backend.execute(
             Dataset.from_list(paths[0:1])
             .flat_map(load_file)
             .take_per_shard(1)
-            .map_shard(
-                lambda example: _tokenize_batches(
-                    ctx=cluster_ctx, tokenizer_ref=tokenizer_ref, config=config, batches=[example]
-                )
-            ),
-            context=cluster_ctx,
+            .map_shard(lambda example: _tokenize_batches(config=config, batches=[example])),
             verbose=False,
         )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
-        consolidate_shard_caches(
-            shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar, context=cluster_ctx
-        )
+        consolidate_shard_caches(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
 
         # Aggregate token counts from shard stats
         total_tokens = 0
