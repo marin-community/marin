@@ -324,6 +324,7 @@ class TaskAttempt:
         """
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="building image")
         self.build_started_ms = now_ms()
+        self._report_state(self)  # Report BUILDING state to controller
 
         # Periodically check should_stop during build to support kill during BUILDING
         # (RF-3: Similar to bundle download, we defer kill handling for now since
@@ -335,6 +336,7 @@ class TaskAttempt:
 
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="populating uv cache")
         self.logs.add("build", "Building Docker image...")
+        self._report_state(self)  # Report state update with logs to controller
 
         # Use the client's Python version for the task container so cloudpickle
         # bytecode is deserialized with the same Python that serialized it.
