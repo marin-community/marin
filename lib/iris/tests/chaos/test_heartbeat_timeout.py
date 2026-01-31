@@ -20,11 +20,13 @@ heartbeats and reset their state appropriately.
 This extends the chaos test suite with specific tests for heartbeat timeout.
 """
 
+import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
 from .conftest import submit, wait
 
 
+@pytest.mark.chaos
 def test_worker_survives_transient_heartbeat_delay(cluster):
     """Worker doesn't reset on brief heartbeat delays.
 
