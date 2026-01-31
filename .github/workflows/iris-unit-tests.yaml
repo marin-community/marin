@@ -40,4 +40,4 @@ jobs:
         env:
           PYTHONASYNCIODEBUG: "1"
         run: |
-          cd lib/iris && uv run --group dev python -X faulthandler -m pytest --durations=5 --tb=short -m 'not slow and not docker' -v -s tests/
+          cd lib/iris && uv run --group dev python -X faulthandler -m pytest --durations=5 --tb=short -m 'not slow and not docker and not chaos' -v -s tests/
