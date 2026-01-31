@@ -28,13 +28,23 @@ This same pattern works for ANY Harbor dataset:
 - swebench-verified@1.0 (500 tasks)
 - And 40+ other benchmarks!
 
-Usage (Local):
-    MARIN_PREFIX=gs://marin-us-central1 ANTHROPIC_API_KEY=<key> python experiments/exp_harbor_aime_sanity_check.py
+Usage (Local with Daytona):
+    DAYTONA_API_KEY=<daytona-key> ANTHROPIC_API_KEY=<key> \
+    MARIN_PREFIX=./test-marin-harbor-terminus2 uv run experiments/exp_harbor_aime_sanity_check.py
 
-Usage (Ray Cluster):
+Usage (Local with Docker):
+    ANTHROPIC_API_KEY=<key> ENV_TYPE=local \
+    ENV_TYPE=local MARIN_PREFIX=./test-marin-harbor-terminus2 uv run experiments/exp_harbor_aime_sanity_check.py
+
+Usage (Infra sanity check, no LLM required):
+    DAYTONA_API_KEY=<daytona-key> HARBOR_AGENT=nop HARBOR_MAX_INSTANCES=1 HARBOR_N_CONCURRENT=1 \
+    uv run python experiments/exp_harbor_aime_sanity_check.py --prefix ./runs
+
+Usage (Ray Cluster with Daytona):
     uv run lib/marin/src/marin/run/ray_run.py \
         --env_vars MARIN_PREFIX gs://marin-us-central1 \
         --env_vars ANTHROPIC_API_KEY ${ANTHROPIC_API_KEY} \
+        --env_vars DAYTONA_API_KEY ${DAYTONA_API_KEY} \
         --env_vars WANDB_API_KEY ${WANDB_API_KEY} \
         --env_vars WANDB_ENTITY marin-community \
         --env_vars WANDB_PROJECT harbor \
@@ -83,17 +93,39 @@ MODEL = {
     "path": None,  # API model, no path needed
 }
 
-# Check for API key
-if not os.environ.get("ANTHROPIC_API_KEY"):
+# Get environment type from ENV_TYPE environment variable (default: daytona)
+ENV_TYPE = os.environ.get("ENV_TYPE", "daytona")
+
+# Harbor agent configuration
+# Cannot use claude-code until this PR is fixed: https://github.com/laude-institute/harbor/pull/557
+HARBOR_AGENT = os.environ.get("HARBOR_AGENT", "terminus-2")
+
+
+def _optional_int_from_env(var_name: str, *, default: int | None) -> int | None:
+    value = os.environ.get(var_name)
+    if value is None:
+        return default
+
+    if value.strip().lower() in {"none", "null", "all"}:
+        return None
+
+    return int(value)
+
+
+HARBOR_MAX_INSTANCES = _optional_int_from_env("HARBOR_MAX_INSTANCES", default=5)
+HARBOR_N_CONCURRENT = _optional_int_from_env("HARBOR_N_CONCURRENT", default=5)
+
+# Warn if using Daytona without API key
+if ENV_TYPE == "daytona" and not os.environ.get("DAYTONA_API_KEY"):
     logger.warning(
-        "ANTHROPIC_API_KEY not set! The evaluation will fail without it. " "Set it in your environment or .env file."
+        "DAYTONA_API_KEY not set but ENV_TYPE=daytona! "
+        "The evaluation will likely fail. Set DAYTONA_API_KEY or use ENV_TYPE=local for Docker."
     )
 
 # AIME configuration from Harbor registry
 # See https://harborframework.com/registry/aime/1.0
 DATASET = "aime"
 VERSION = "1.0"
-MAX_INSTANCES = 5  # Start with just 5 tasks for sanity check
 
 MODEL_NAME_ESCAPED = _escape_model_name_for_path(MODEL["name"])
 OUTPUT_DIR = os.path.join("evaluation", "harbor", DATASET, MODEL_NAME_ESCAPED)
@@ -103,9 +135,10 @@ logger.info("Harbor + AIME Sanity Check")
 logger.info("=" * 80)
 logger.info(f"Dataset: {DATASET}@{VERSION}")
 logger.info(f"Model: {MODEL['name']}")
-logger.info(f"Max instances: {MAX_INSTANCES}")
-logger.info("Agent: claude-code (Harbor's built-in Claude agent)")
-logger.info("Harbor env: local (Docker) - run via Ray for cluster execution")
+logger.info(f"Max instances: {HARBOR_MAX_INSTANCES}")
+logger.info(f"Agent: {HARBOR_AGENT}")
+logger.info(f"Concurrent trials: {HARBOR_N_CONCURRENT}")
+logger.info(f"Harbor env: {ENV_TYPE} - {'Docker containers' if ENV_TYPE == 'local' else 'Daytona cloud workspaces'}")
 logger.info(f"Output dir (under MARIN_PREFIX): {OUTPUT_DIR}")
 logger.info("=" * 80)
 
@@ -115,36 +148,30 @@ step = evaluate_harbor(
     model_path=MODEL["path"],
     dataset=DATASET,
     version=VERSION,
-    max_eval_instances=MAX_INSTANCES,
+    max_eval_instances=HARBOR_MAX_INSTANCES,
     resource_config=resource_config,
-    wandb_tags=["harbor", "aime", "sanity-check", "claude"],
-    agent="claude-code",  # Use Harbor's built-in Claude Code agent
-    n_concurrent=5,  # Run all 5 tasks in parallel
-    env="local",  # Use local Docker containers
+    wandb_tags=["harbor", DATASET, "sanity-check", HARBOR_AGENT, ENV_TYPE],
+    agent=HARBOR_AGENT,
+    n_concurrent=HARBOR_N_CONCURRENT or 4,
+    env=ENV_TYPE,  # Use Daytona cloud workspaces (or local Docker if ENV_TYPE=local)
 )
 step = step.with_output_path(OUTPUT_DIR)
 
 if __name__ == "__main__":
     logger.info("Starting Harbor evaluation...")
+    env_desc = "local Docker containers" if ENV_TYPE == "local" else f"{ENV_TYPE} cloud workspaces"
+    task_count_desc = "all tasks" if HARBOR_MAX_INSTANCES is None else f"the first {HARBOR_MAX_INSTANCES} task(s)"
     logger.info(
-        "This will:\n"
-        "1. Load AIME@1.0 dataset from Harbor registry (60 tasks total)\n"
-        "2. Run first 5 tasks using Claude Code agent\n"
-        "3. Execute in local Docker containers (or Ray cluster if using ray_run.py)\n"
-        "4. Save trajectories and results to GCS\n"
-        "5. Log metrics to W&B"
+        f"This will:\n"
+        f"1. Load AIME@1.0 dataset from Harbor registry (60 tasks total)\n"
+        f"2. Run {task_count_desc} using agent '{HARBOR_AGENT}'\n"
+        f"3. Execute in {env_desc}\n"
+        f"4. Save trajectories and results to GCS\n"
+        f"5. Log metrics to W&B"
     )
 
     executor_main(steps=[step])
 
     logger.info("=" * 80)
-    logger.info("Sanity check complete!")
-    logger.info("Next steps:")
-    logger.info("1. Check W&B for results: https://wandb.ai/marin-community/harbor")
-    logger.info(
-        "2. Check GCS for results: gs://marin-us-central1/"
-        f"{OUTPUT_DIR}/samples_TIMESTAMP.jsonl and gs://marin-us-central1/{OUTPUT_DIR}/results_TIMESTAMP.json"
-    )
-    logger.info("3. For full evaluation, run on Ray cluster with MAX_INSTANCES=None (or set max_eval_instances=None)")
-    logger.info("4. Try other datasets: terminal-bench@2.0, swebench-verified@1.0")
+    logger.info("Harbor sanity check complete!")
     logger.info("=" * 80)

@@ -15,7 +15,7 @@ The Harbor integration enables running **any Harbor dataset** from the [Harbor r
 
 ✅ **Generic Integration** - No custom adapters needed for each benchmark
 ✅ **45+ Datasets** - Access entire Harbor registry with one evaluator
-✅ **Containerized Execution** - Tasks run in isolated Docker containers
+✅ **Sandboxed Execution** - Tasks run in isolated environments (Docker or cloud workspaces)
 ✅ **Multi-Environment Support** - Local Docker, Daytona, E2B, Modal
 ✅ **Agent Flexibility** - Use Claude Code, custom agents, or build your own
 
@@ -46,14 +46,18 @@ step = evaluate_harbor(
     max_eval_instances=5,  # Start with 5 tasks
     agent="claude-code",
     n_concurrent=2,
-    env="local",
+    env="daytona",  # Use cloud sandboxes to avoid local Docker setup
 )
 ```
 
 Or use the provided sanity check script:
 ```bash
 export ANTHROPIC_API_KEY=your_key_here
-python experiments/exp_harbor_aime_sanity_check.py
+export DAYTONA_API_KEY=your_key_here
+uv run python experiments/exp_harbor_aime_sanity_check.py --prefix ./runs
+
+# Use local Docker instead of Daytona:
+ENV_TYPE=local uv run python experiments/exp_harbor_aime_sanity_check.py --prefix ./runs
 ```
 
 ## Available Datasets
