@@ -355,8 +355,12 @@ def main(config: EvalVLMConfig):
                 max_images=config.eval_harness.max_images,
                 generation_kwargs=config.eval_harness.generation_kwargs,
                 custom_task_path=config.eval_harness.custom_task_path,
-                output_dir=config.output_dir,  # Pass output_dir for GCS/local saving
-                vlm_batch_size=config.eval_harness.vlm_batch_size,  # Pass vlm_batch_size for batched inference
+                output_dir=config.eval_harness.output_dir or config.output_dir,
+                vlm_batch_size=config.eval_harness.vlm_batch_size,
+                checkpoint_interval=config.eval_harness.checkpoint_interval,
+                checkpoint_dir=config.eval_harness.checkpoint_dir,
+                resume_from_checkpoint=config.eval_harness.resume_from_checkpoint,
+                auto_resume=config.eval_harness.auto_resume,
             )
             harness_results = run_vlm_eval_harness(
                 model=model,
