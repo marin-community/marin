@@ -28,11 +28,8 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 __all__ = [
     # Math tasks
     "AIME24",
-    "AIME24_QUICK",
     "AIME25",
-    "AIME25_QUICK",
     "AMC23",
-    "AMC23_QUICK",
     "MATH500",
     "HMMT",
     # Code tasks
@@ -61,17 +58,13 @@ __all__ = [
 # =============================================================================
 # Note: Evalchemy task names are case-sensitive and match the directory names.
 # task_alias is set explicitly for clarity in logs/wandb, even when identical to name.
-# Standard configs (n_repeat=10, full evaluation)
-AIME24 = EvalTaskConfig(name="AIME24", num_fewshot=0, task_alias="AIME24")
-AIME25 = EvalTaskConfig(name="AIME25", num_fewshot=0, task_alias="AIME25")
-AMC23 = EvalTaskConfig(name="AMC23", num_fewshot=0, task_alias="AMC23")
-
-# Quick configs (n_repeat=1) for faster iteration. These benchmarks default to
-# n_repeat=10, running each problem 10 times with different seeds for averaged
-# accuracy. Use _QUICK variants for ~10x faster eval during development.
-AIME24_QUICK = EvalTaskConfig(name="AIME24", num_fewshot=0, task_alias="AIME24", task_kwargs={"n_repeat": 1})
-AIME25_QUICK = EvalTaskConfig(name="AIME25", num_fewshot=0, task_alias="AIME25", task_kwargs={"n_repeat": 1})
-AMC23_QUICK = EvalTaskConfig(name="AMC23", num_fewshot=0, task_alias="AMC23", task_kwargs={"n_repeat": 1})
+#
+# For AIME/AMC benchmarks, we set n_repeat=1 by default. Evalchemy's originally hardcoded
+# n_repeat=10 (running each problem 10 times with different seeds for averaged accuracy),
+# Here we run once but control the number of seeds from Marin.
+AIME24 = EvalTaskConfig(name="AIME24", num_fewshot=0, task_alias="AIME24", task_kwargs={"n_repeat": 1})
+AIME25 = EvalTaskConfig(name="AIME25", num_fewshot=0, task_alias="AIME25", task_kwargs={"n_repeat": 1})
+AMC23 = EvalTaskConfig(name="AMC23", num_fewshot=0, task_alias="AMC23", task_kwargs={"n_repeat": 1})
 
 MATH500 = EvalTaskConfig(name="MATH500", num_fewshot=0, task_alias="MATH500")
 HMMT = EvalTaskConfig(name="HMMT", num_fewshot=0, task_alias="HMMT")  # Harvard-MIT Math Tournament

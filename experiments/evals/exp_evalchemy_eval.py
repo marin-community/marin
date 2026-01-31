@@ -33,9 +33,6 @@ from experiments.evals.evalchemy_task_configs import (  # noqa: F401
     AIME24,
     AIME25,
     AMC23,
-    AIME24_QUICK,
-    AIME25_QUICK,
-    AMC23_QUICK,
     MATH500,
     HMMT,
     # Code tasks
@@ -80,7 +77,7 @@ SEEDS = [42]  # Single seed for quick testing
 # -----------------------------------------------------------------------------
 
 # === Math Benchmarks ===
-EVAL_TASKS = [AIME25_QUICK]
+EVAL_TASKS = [AIME25]
 # EVAL_TASKS = [AIME24]  # AIME 2024 (30 problems)
 # EVAL_TASKS = [AIME25]  # AIME 2025 (30 problems)
 # EVAL_TASKS = [AMC23]  # AMC 2023
