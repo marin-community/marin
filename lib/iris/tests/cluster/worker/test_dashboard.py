@@ -142,12 +142,15 @@ def create_run_task_request(
 
     entrypoint_proto = Entrypoint.from_callable(test_fn).to_proto()
 
+    from iris.cluster.types import generate_dockerfile
+
     env_config = cluster_pb2.EnvironmentConfig(
         env_vars={
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",
         },
         extras=["dev"],
+        dockerfile=generate_dockerfile("3.12", extras=["dev"]),
     )
 
     resources = cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3)
