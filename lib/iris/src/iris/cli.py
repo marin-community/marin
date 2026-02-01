@@ -44,9 +44,11 @@ from iris.cluster.vm.config import (
     create_manual_autoscaler,
     load_config,
 )
+from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.controller import create_controller
 from iris.cluster.vm.debug import controller_tunnel
 from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
+from iris.logging import configure_logging as _configure_logging
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.rpc_cli import ServiceCommands
@@ -291,6 +293,36 @@ def _wait_for_slice_obj(slice_obj, poll_interval: float = 5.0) -> bool:
         time.sleep(poll_interval)
 
 
+def _validate_cluster_health(config) -> None:
+    """Validate cluster by submitting a test job and waiting for it to complete."""
+    from pathlib import Path
+
+    from iris.cluster.types import ResourceSpec
+
+    zone = config.zone
+    project = config.project_id
+    label_prefix = config.label_prefix or "iris"
+
+    with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
+        click.echo(f"  Connected to controller at {tunnel_url}")
+        client = IrisClient.remote(tunnel_url, workspace=Path.cwd())
+
+        def _validate_hello():
+            print("Reload validation job OK")
+            return 42
+
+        click.echo("  Submitting validation job...")
+        job = client.submit(
+            entrypoint=Entrypoint.from_callable(_validate_hello),
+            name="reload-validate",
+            resources=ResourceSpec(cpu=1),
+        )
+        click.echo(f"  Job submitted: {job.job_id}")
+        click.echo("  Waiting for job (workers may need to scale up)...")
+        status = job.wait(timeout=600, raise_on_failure=True)
+        click.echo(f"  Job completed: {cluster_pb2.JobState.Name(status.state)}")
+
+
 # =============================================================================
 # Main CLI Group
 # =============================================================================
@@ -306,17 +338,9 @@ def iris(ctx, verbose: bool, show_traceback: bool):
     ctx.obj["traceback"] = show_traceback
 
     if verbose:
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
+        _configure_logging(level=logging.DEBUG)
     else:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
+        _configure_logging(level=logging.INFO)
 
 
 # =============================================================================
@@ -1106,25 +1130,33 @@ def cluster_init(
 
 
 @cluster.command("start")
+@click.option("--local", is_flag=True, help="Run locally without GCP")
 @click.pass_context
-def cluster_start(ctx):
+def cluster_start(ctx, local: bool):
     """Start controller VM and wait for health.
 
     Automatically builds and pushes both worker and controller images, then
     boots the controller GCE VM which runs the autoscaler internally.
     The autoscaler provisions/terminates worker VMs based on task demand.
+
+    Use --local to run entirely on the local machine without GCP.
     """
     config = ctx.obj.get("config")
     if not config:
         click.echo("Error: --config is required", err=True)
         raise SystemExit(1)
 
-    _build_cluster_images(config)
+    if local:
+        config = make_local_config(config)
 
-    ctrl = create_controller(config)
+    manager = ClusterManager(config)
+
+    if not manager.is_local:
+        _build_cluster_images(config)
+
     click.echo("Starting controller...")
     try:
-        address = ctrl.start()
+        address = manager.start()
         click.echo(f"Controller started at {address}")
         click.echo("\nController is running with integrated autoscaler.")
         click.echo("Use 'iris cluster --config=... status' to check cluster state.")
@@ -1210,6 +1242,55 @@ def cluster_restart(ctx):
     ctx.invoke(cluster_stop)
     click.echo("")
     ctx.invoke(cluster_start)
+
+
+@cluster.command("reload")
+@click.option("--no-build", is_flag=True, help="Skip image building (use existing images)")
+@click.option("--validate", is_flag=True, help="Submit a health check after reload")
+@click.pass_context
+def cluster_reload(ctx, no_build: bool, validate: bool):
+    """Reload cluster by rebuilding images and reloading the controller.
+
+    Faster than a full restart: rebuilds Docker images and reloads the controller VM.
+    The controller will automatically re-bootstrap all worker VMs with the latest
+    worker image when it starts up. This ensures all workers run the latest image
+    without manual intervention.
+
+    Use --validate to verify the reloaded controller is healthy by establishing
+    an SSH tunnel and checking the health endpoint.
+
+    Examples:
+        uv run iris cluster --config=examples/eu-west4.yaml reload
+        uv run iris cluster --config=examples/eu-west4.yaml reload --no-build
+        uv run iris cluster --config=examples/eu-west4.yaml reload --validate
+    """
+    config = ctx.obj.get("config")
+    if not config:
+        click.echo("Error: --config is required", err=True)
+        raise SystemExit(1)
+
+    if not no_build:
+        _build_cluster_images(config)
+
+    manager = ClusterManager(config)
+
+    click.echo("Reloading controller (workers will be re-bootstrapped automatically)...")
+    try:
+        address = manager.reload()
+        click.echo(f"Controller reloaded at {address}")
+        click.echo("Workers will be re-bootstrapped with latest image on next controller reconcile.")
+    except Exception as e:
+        click.echo(f"Failed to reload cluster: {e}", err=True)
+        raise SystemExit(1) from e
+
+    if validate:
+        click.echo("\nValidating cluster health...")
+        try:
+            _validate_cluster_health(config)
+            click.echo("Cluster validation passed.")
+        except Exception as e:
+            click.echo(f"Cluster validation failed: {e}", err=True)
+            raise SystemExit(1) from e
 
 
 @cluster.command("status")

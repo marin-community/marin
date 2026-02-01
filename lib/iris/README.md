@@ -128,20 +128,55 @@ Workers communicate with the controller using internal VPC IPs. External clients
 
 ## Worker Lifecycle
 
-### Registration and Reconciliation
+### Registration and Heartbeat
 
-Workers register with the controller via heartbeat (every 10 seconds). The registration
-includes `running_task_ids` - the list of tasks the worker believes it's running.
+Workers register with the controller once at startup via the `Register` RPC.
+After registration, the worker enters a serve loop and waits for controller-
+initiated heartbeats.
 
-The controller performs bidirectional reconciliation:
+The controller sends `Heartbeat` RPCs to all registered workers on each
+scheduler tick (~5s). The heartbeat request carries:
+- `tasks_to_run`: new task assignments for this worker
+- `tasks_to_kill`: task IDs to terminate
 
-1. **Worker claims unknown tasks** (e.g., controller restarted):
-   - Controller sends `should_reset=True`
-   - Worker wipes all containers and re-registers
+The worker responds with:
+- `running_tasks`: tasks currently executing (task_id + attempt_id)
+- `completed_tasks`: tasks that finished since the last heartbeat
 
-2. **Worker missing expected tasks** (e.g., worker restarted):
+The controller reconciles the response:
+
+1. **Worker missing expected tasks** (e.g., worker restarted mid-task):
    - Controller marks missing tasks as `WORKER_FAILED`
-   - Tasks will be retried on another worker
+   - Tasks are retried on another worker
+
+2. **Worker reports unknown tasks** (e.g., controller restarted):
+   - Controller sends kill requests for unknown tasks on next heartbeat
+   - Worker terminates orphaned containers
+
+## Job State Transitions
+
+Jobs progress through the following states:
+
+| State | Description |
+|-------|-------------|
+| **PENDING** | Job submitted, waiting for worker assignment |
+| **BUILDING** | Job bundle being built/transferred (future use) |
+| **RUNNING** | At least one task is actively executing |
+| **SUCCEEDED** | All tasks completed successfully |
+| **FAILED** | Job failed (exceeded max task failures or retry limit) |
+| **KILLED** | Job was cancelled by user |
+| **UNSCHEDULABLE** | Job could not be scheduled (constraint mismatch or timeout) |
+
+### Endpoint Visibility
+
+Job endpoints (registered via `RegisterEndpoint` RPC) are visible for all non-terminal states:
+- **PENDING**: Endpoint visible (tasks may be executing before job state updates)
+- **BUILDING**: Endpoint visible
+- **RUNNING**: Endpoint visible
+- **Terminal states** (SUCCEEDED, FAILED, KILLED): Endpoints **not visible**
+
+This behavior accounts for controller-worker communication delay: a task may start
+executing and register an endpoint before the controller updates the job state to RUNNING.
 
 ### Startup Cleanup
 
@@ -156,6 +191,23 @@ Task containers are labeled for discoverability:
 - `iris.managed=true` - All iris-managed containers
 - `iris.task_id=<id>` - Task identifier
 - `iris.job_id=<id>` - Job identifier
+
+### TPU Container Configuration
+
+When a job requests TPU resources (`device=tpu_device("v5litepod-16")`), workers automatically configure Docker containers with the necessary flags and environment variables for TPU access:
+
+**Docker flags:**
+- `--device /dev/vfio:/dev/vfio` - VFIO device for TPU passthrough
+- `--shm-size=100g` - Large shared memory for TPU operations
+- `--cap-add=SYS_RESOURCE` - Resource management capabilities
+- `--ulimit memlock=68719476736:68719476736` - Unlocked memory limits
+
+**Environment variables:**
+- `JAX_PLATFORMS=tpu,cpu` - JAX platform configuration
+- `PJRT_DEVICE=TPU` - PJRT runtime device
+- `TPU_NAME`, `TPU_WORKER_ID`, `TPU_WORKER_HOSTNAMES`, `TPU_CHIPS_PER_HOST_BOUNDS` - TPU metadata from host
+
+This enables JAX and other TPU-aware frameworks to initialize correctly inside job containers.
 
 ## Bundle Storage (Required)
 
@@ -184,6 +236,7 @@ uv run iris cluster controller run-local --bundle-prefix file:///var/cache/iris/
 iris cluster --config=cluster.yaml start
 iris cluster --config=cluster.yaml stop
 iris cluster --config=cluster.yaml restart
+iris cluster --config=cluster.yaml reload       # Rebuild images + redeploy on existing VMs
 iris cluster --config=cluster.yaml status
 
 # Controller subcommands (for GCE-managed controller)
@@ -258,12 +311,22 @@ uv run python lib/iris/scripts/smoke-test.py --config ... --no-cleanup-on-failur
 
 # Custom job timeout
 uv run python lib/iris/scripts/smoke-test.py --config ... --job-timeout 900
+
+# Save logs to a custom directory
+uv run python lib/iris/scripts/smoke-test.py --config ... --log-dir /path/to/logs
+
+# Use a unique prefix (isolates resources from other smoke tests)
+uv run python lib/iris/scripts/smoke-test.py --config ... --prefix my-test
 ```
 
 The smoke test:
 1. Builds and pushes controller + worker images
 2. Starts controller VM with autoscaler
-3. Submits TPU jobs to exercise autoscaling
+3. Submits 4 TPU jobs to exercise autoscaling:
+   - Simple TPU job (basic execution)
+   - Concurrent TPU jobs (parallel provisioning)
+   - Coscheduled multi-task job (distributed work)
+   - JAX TPU job (validates TPU initialization and computation)
 4. Collects logs on failure for debugging
 5. Cleans up all resources
 

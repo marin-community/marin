@@ -59,6 +59,7 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import cluster_pb2
+from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -269,8 +270,7 @@ class Job:
         we want logs to appear in near real-time during active job execution.
         """
         log_states: list[_TaskLogState] = []
-        # Use a fixed low interval for responsive streaming (capped at poll_interval)
-        stream_interval = min(0.2, poll_interval)
+        backoff = ExponentialBackoff(initial=0.2, maximum=poll_interval)
         start = time.monotonic()
 
         while True:
@@ -281,16 +281,20 @@ class Job:
                 log_states = [_TaskLogState(i) for i in range(len(status.tasks))]
 
             # Poll logs from all tasks
+            got_new_logs = False
             for state in log_states:
                 try:
                     task_id = f"{self._job_id}/task-{state.task_index}"
                     entries = self._client._cluster.fetch_task_logs(task_id, state.last_timestamp_ms, 0)
                     for proto in entries:
+                        got_new_logs = True
                         entry = LogEntry.from_proto(proto)
                         state.last_timestamp_ms = max(state.last_timestamp_ms, entry.timestamp_ms)
                         _print_log_entry(self._job_id, entry, task_index=state.task_index)
                 except ValueError:
                     logger.debug("Task %d not yet scheduled for job %s", state.task_index, self._job_id)
+                except Exception:
+                    logger.debug("Task %d log fetch failed for job %s", state.task_index, self._job_id)
 
             if is_job_finished(status.state):
                 # Final drain to catch any remaining logs
@@ -301,7 +305,7 @@ class Job:
                         for proto in entries:
                             entry = LogEntry.from_proto(proto)
                             _print_log_entry(self._job_id, entry, task_index=state.task_index)
-                    except ValueError:
+                    except Exception:
                         logger.debug(
                             "Task %d logs unavailable during final drain for job %s", state.task_index, self._job_id
                         )
@@ -311,7 +315,10 @@ class Job:
             if elapsed >= timeout:
                 raise TimeoutError(f"Job {self._job_id} did not complete in {timeout}s")
 
-            time.sleep(stream_interval)
+            # Reset backoff when new logs arrive for responsive streaming
+            if got_new_logs:
+                backoff.reset()
+            time.sleep(backoff.next_interval())
 
     def terminate(self) -> None:
         """Terminate this job."""
@@ -495,11 +502,9 @@ class LocalClientConfig:
 
     Attributes:
         max_workers: Maximum concurrent job threads
-        port_range: Port range for actor servers (inclusive start, exclusive end)
     """
 
     max_workers: int = 4
-    port_range: tuple[int, int] = (50000, 60000)
 
 
 class EndpointRegistry(Protocol):
@@ -673,10 +678,7 @@ class IrisClient:
             IrisClient wrapping LocalClusterClient
         """
         cfg = config or LocalClientConfig()
-        cluster = LocalClusterClient.create(
-            max_workers=cfg.max_workers,
-            port_range=cfg.port_range,
-        )
+        cluster = LocalClusterClient.create(max_workers=cfg.max_workers)
         return cls(cluster)
 
     @classmethod
@@ -754,6 +756,10 @@ class IrisClient:
         scheduling_timeout_seconds: int = 0,
         constraints: list[Constraint] | None = None,
         coscheduling: CoschedulingConfig | None = None,
+        replicas: int = 1,
+        max_retries_failure: int = 0,
+        max_retries_preemption: int = 100,
+        timeout_seconds: int = 0,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -766,15 +772,21 @@ class IrisClient:
             scheduling_timeout_seconds: Maximum time to wait for scheduling (0 = no timeout)
             constraints: Constraints for filtering workers by attribute
             coscheduling: Configuration for atomic multi-task scheduling
+            replicas: Number of tasks to create for gang scheduling (default: 1)
+            max_retries_failure: Max retries per task on failure (default: 0)
+            max_retries_preemption: Max retries per task on preemption (default: 100)
+            timeout_seconds: Per-task timeout in seconds (0 = no timeout)
 
         Returns:
             Job handle for the submitted job
 
         Raises:
-            ValueError: If name contains '/'
+            ValueError: If name contains '/' or replicas < 1
         """
         if "/" in name:
             raise ValueError("Job name cannot contain '/'")
+        if replicas < 1:
+            raise ValueError(f"replicas must be >= 1, got {replicas}")
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
@@ -801,6 +813,10 @@ class IrisClient:
             scheduling_timeout_seconds=scheduling_timeout_seconds,
             constraints=constraints_proto,
             coscheduling=coscheduling_proto,
+            replicas=replicas,
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
+            timeout_seconds=timeout_seconds,
         )
 
         return Job(self, job_id)
@@ -941,6 +957,7 @@ def _print_log_entry(job_id: JobId, entry: LogEntry, task_index: int | None = No
     Uses sys.__stdout__ directly instead of print() to avoid being captured
     by redirect_stdout in local in-process containers.
     """
+    assert sys.__stdout__ is not None, "sys.__stdout__ is None"
     ts = datetime.fromtimestamp(entry.timestamp_ms / 1000, tz=timezone.utc)
     ts_str = ts.strftime("%H:%M:%S")
     if task_index is not None:

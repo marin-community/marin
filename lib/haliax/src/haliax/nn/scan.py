@@ -494,6 +494,7 @@ class Stacked(ModuleWithStateDictSerialization, Generic[M]):
         @functools.wraps(module)
         def fn(*args, **kwargs):
             stacked = haliax.vmap(module.init, Block)(*args, **kwargs)
+            stacked = haliax.auto_sharded(stacked)
             return Stacked(stacked, Block, gradient_checkpointing)
 
         return fn

@@ -33,11 +33,15 @@ message ManualProvider {
   int32 ssh_port = 4;            // Default: 22
 }
 
+// Provider configuration for local (in-process) scale groups
+message LocalProvider {}
+
 // Per-scale-group provider configuration
 message ProviderConfig {
   oneof provider {
     TpuProvider tpu = 1;
     ManualProvider manual = 2;
+    LocalProvider local = 3;
   }
 }
 
@@ -122,6 +126,11 @@ message ManualControllerConfig {
   int32 port = 3;               // Default: 10000
 }
 
+// Locally-managed controller configuration (in-process)
+message LocalControllerConfig {
+  int32 port = 1;               // 0 = auto-assign
+}
+
 // Controller configuration using oneof for type-safe dispatch
 message ControllerVmConfig {
   string image = 10;            // Controller docker image (shared by all controller types)
@@ -129,7 +138,18 @@ message ControllerVmConfig {
   oneof controller {
     GcpControllerConfig gcp = 1;
     ManualControllerConfig manual = 2;
+    LocalControllerConfig local = 3;
   }
+}
+
+// ============================================================================
+// AUTOSCALER CONFIGURATION
+// ============================================================================
+
+// Configuration for the autoscaler
+message AutoscalerConfig {
+  float evaluation_interval_seconds = 1;  // Default: 10.0
+  float requesting_timeout_seconds = 2;   // Default: 120.0
 }
 
 // ============================================================================
@@ -159,4 +179,5 @@ message IrisClusterConfig {
   BootstrapConfig bootstrap = 80;
   TimeoutConfig timeouts = 81;
   SshConfig ssh = 82;
+  AutoscalerConfig autoscaler = 83;
 }
