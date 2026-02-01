@@ -42,6 +42,30 @@ from fray.cluster.ray.deps import build_runtime_env_for_packages, accelerator_ty
 logger = logging.getLogger(__name__)
 
 REMOTE_DASHBOARD_URL = "http://127.0.0.1:8265"
+_SENSITIVE_ENV_KEYS = frozenset(
+    {
+        "HF_TOKEN",
+        "WANDB_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "DAYTONA_API_KEY",
+        "E2B_API_KEY",
+        "MODAL_API_KEY",
+        "GITHUB_TOKEN",
+    }
+)
+
+
+def _redact_env_vars(env_vars: dict) -> dict:
+    redacted = dict(env_vars)
+    for key in list(redacted.keys()):
+        if key in _SENSITIVE_ENV_KEYS and redacted.get(key):
+            redacted[key] = "<redacted>"
+    return redacted
 
 
 def _maybe_enable_ray_token_auth(*, require_token: bool) -> None:
@@ -161,7 +185,7 @@ async def submit_and_track_job(
 
     logger.info(f"Submitting job with entrypoint: {entrypoint}")
     logger.info(f"Extras: {extra}")
-    logger.info(f"env_vars: {json.dumps(env_vars, indent=4)}")
+    logger.info(f"env_vars: {json.dumps(_redact_env_vars(env_vars), indent=4)}")
 
     runtime_dict = {
         "working_dir": current_dir,
@@ -176,10 +200,12 @@ async def submit_and_track_job(
 
     runtime_dict = build_runtime_env_for_packages(extra=[*extra_list], env_vars=env_vars) | runtime_dict
 
+    runtime_dict_for_logging = dict(runtime_dict)
+    runtime_dict_for_logging["env_vars"] = _redact_env_vars(runtime_dict.get("env_vars", {}))
     logger.info(
         f"Terminal command: \n"
         f"ray job submit "
-        f"--runtime-env-json '{json.dumps(runtime_dict)}' "
+        f"--runtime-env-json '{json.dumps(runtime_dict_for_logging)}' "
         f"--submission-id '{submission_id} "
         f" -- {entrypoint}"
     )

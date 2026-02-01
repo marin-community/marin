@@ -430,8 +430,52 @@ def _pick_free_port(host: str) -> int:
 
 
 def _detect_tpu_environment() -> bool:
-    """Detects whether the TPU environment variable TPU_NAME is set and non-empty."""
-    return bool(os.environ.get("TPU_NAME"))
+    """Return True when running on TPU hardware.
+
+    Ray TPU pods do not consistently set `TPU_NAME`, so we also detect the
+    presence of TPU device nodes and other TPU-related environment variables.
+    """
+
+    if os.environ.get("TPU_NAME"):
+        return True
+
+    # GKE TPU device plugin exposes /dev/accel* device nodes.
+    if glob.glob("/dev/accel*"):
+        return True
+
+    # Heuristic fallbacks for TPU pods / libtpu environments.
+    for key in (
+        "TPU_ACCELERATOR_TYPE",
+        "TPU_WORKER_ID",
+        "TPU_WORKER_HOSTNAMES",
+        "TPU_MESH_CONTROLLER_ADDRESS",
+        "TPU_VISIBLE_DEVICES",
+    ):
+        if os.environ.get(key):
+            return True
+
+    # Ray TPU workers may not expose TPU env vars/device nodes to the driver
+    # container, but Ray's TPUAcceleratorManager can still report topology.
+    try:
+        from ray._private.accelerators import TPUAcceleratorManager
+
+        pod_type = None
+        if hasattr(TPUAcceleratorManager, "_get_current_node_tpu_pod_type"):
+            pod_type = TPUAcceleratorManager._get_current_node_tpu_pod_type()
+        elif hasattr(TPUAcceleratorManager, "get_current_node_tpu_pod_type"):
+            pod_type = TPUAcceleratorManager.get_current_node_tpu_pod_type()
+        if pod_type:
+            return True
+
+        tpu_name = None
+        if hasattr(TPUAcceleratorManager, "get_current_node_tpu_name"):
+            tpu_name = TPUAcceleratorManager.get_current_node_tpu_name()
+        if tpu_name:
+            return True
+    except Exception:
+        pass
+
+    return False
 
 
 def _detect_nvidia_gpu_environment() -> bool:
@@ -711,7 +755,7 @@ def _start_vllm_docker_server(
 
 
 def _vllm_jax_env() -> dict[str, str | Any]:
-    return {
+    env: dict[str, str | Any] = {
         "TOKENIZERS_PARALLELISM": "false",
         # See `_vllm_env`.
         "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "vllm"),
@@ -727,6 +771,18 @@ def _vllm_jax_env() -> dict[str, str | Any]:
         "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": os.environ.get("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1"),
         "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": os.environ.get("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2"),
     }
+
+    # Pass through vLLM knobs when callers set them in the environment.
+    for key in (
+        "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
+        "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
+        "VLLM_TPU_SKIP_PRECOMPILE",
+    ):
+        value = os.environ.get(key)
+        if value is not None:
+            env[key] = value
+
+    return env
 
 
 def _default_jax_compilation_cache_dir() -> str:

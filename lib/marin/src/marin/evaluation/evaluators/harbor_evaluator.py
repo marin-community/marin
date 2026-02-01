@@ -24,53 +24,77 @@ Supports 45+ benchmarks including:
 No custom adapters needed - Harbor's registry handles all datasets generically.
 """
 
+import asyncio
+import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import time
-import asyncio
 from pathlib import Path
+from typing import Any
 
 import fsspec
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.utils import is_remote_path
 from fray.cluster import ResourceConfig
-from fray.cluster.ray.deps import build_runtime_env_for_packages
+
+from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
+from marin.evaluation.utils import is_remote_path
+from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
 
 logger = logging.getLogger(__name__)
 
 
+_HOSTED_VLLM_CANONICAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+_DEFAULT_HOSTED_VLLM_MODEL_INFO: dict[str, Any] = {
+    "max_input_tokens": 32768,
+    "max_output_tokens": 8192,
+    "input_cost_per_token": 0.0,
+    "output_cost_per_token": 0.0,
+}
+
+
+def _sanitize_hosted_vllm_canonical_name(name: str) -> str:
+    """Return a Harbor-safe canonical name for `hosted_vllm/<canonical>`.
+
+    Harbor requires canonical names to match `[A-Za-z0-9._-]{1,64}`.
+    """
+
+    candidate = re.sub(r"[^A-Za-z0-9._-]", "_", name.strip())
+    candidate = candidate.strip("_")
+    if not candidate:
+        candidate = "model"
+
+    if len(candidate) > 64:
+        digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+        candidate = f"{candidate[:55]}_{digest}"
+
+    if not _HOSTED_VLLM_CANONICAL_NAME_PATTERN.fullmatch(candidate):
+        digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
+        candidate = f"model_{digest}"
+
+    return candidate
+
+
+def _env_vars_from_keys(keys: list[str]) -> dict[str, str]:
+    env_vars: dict[str, str] = {}
+    for key in keys:
+        value = os.environ.get(key)
+        if value:
+            env_vars[key] = value
+    return env_vars
+
+
 class HarborEvaluator(Evaluator):
+    """Generic evaluator for any Harbor dataset from the registry.
+
+    When `model.path` is set, starts a local vLLM server and points the Harbor
+    agent at it via `api_base`, using Harbor's `hosted_vllm/<model>` provider.
     """
-    Generic evaluator for any Harbor dataset from the registry.
-
-    Can run any Harbor benchmark without custom adapters:
-    - Uses Harbor's programmatic API for execution
-    - Loads datasets from Harbor registry
-    - Supports all Harbor agents and environments
-    """
-
-    def get_runtime_env(self) -> dict:
-        """Returns Ray runtime environment."""
-        env_vars = {
-            "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY", ""),
-            "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", ""),
-        }
-
-        # Pass through any API keys that might be needed
-        for key in ["DAYTONA_API_KEY", "E2B_API_KEY", "MODAL_API_KEY"]:
-            if key in os.environ:
-                env_vars[key] = os.environ[key]
-
-        return build_runtime_env_for_packages(
-            extra=["harbor"],
-            pip_packages=[],
-            env_vars=env_vars,
-        )
 
     def evaluate(
         self,
@@ -79,7 +103,6 @@ class HarborEvaluator(Evaluator):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
-        generation_params: dict | None = None,
     ) -> None:
         """
         Run Harbor evaluation on any dataset.
@@ -94,7 +117,6 @@ class HarborEvaluator(Evaluator):
             "env": str,            # "local", "daytona", "e2b"
         }
         """
-        # Extract Harbor config from model config
         harbor_config = (model.engine_kwargs or {}).get("harbor_config", {})
 
         dataset = harbor_config.get("dataset", "aime")
@@ -102,55 +124,48 @@ class HarborEvaluator(Evaluator):
         agent = harbor_config.get("agent", "claude-code")
         n_concurrent = harbor_config.get("n_concurrent", 4)
         env_type = harbor_config.get("env", "local")
-        agent_kwargs = dict(harbor_config.get("agent_kwargs", {}))
+        agent_kwargs = harbor_config.get("agent_kwargs") or {}
+        if not isinstance(agent_kwargs, dict):
+            raise TypeError(f"harbor_config['agent_kwargs'] must be a dict, got {type(agent_kwargs)}")
+        agent_kwargs = dict(agent_kwargs)
 
-        logger.info(f"Running Harbor evaluation: {dataset}@{version}")
-        logger.info(f"Agent: {agent}, Model: {model.name}, Concurrent: {n_concurrent}, Env: {env_type}")
+        logger.info("Running Harbor evaluation: %s@%s", dataset, version)
+        logger.info("Agent=%s Model=%s Concurrent=%s Env=%s", agent, model.name, n_concurrent, env_type)
+        if max_eval_instances is not None:
+            logger.info("Limiting to first %s task(s)", max_eval_instances)
 
-        if max_eval_instances:
-            logger.info(f"Limiting to first {max_eval_instances} tasks")
-
-        # If model has a path, serve it via vLLM and point Harbor at the local server
-        if model.path:
-            server_url, served_model_name = self._start_vllm_server(model)
-            vllm_model_name = f"hosted_vllm/{served_model_name}"
-            api_base = server_url
-            logger.info(f"vLLM server ready: model={served_model_name}, api_base={api_base}")
-            agent_kwargs.setdefault("api_base", api_base)
-            agent_kwargs.setdefault(
-                "model_info",
-                {
-                    "max_input_tokens": 32768,
-                    "max_output_tokens": 8192,
-                    "input_cost_per_token": 0.0,
-                    "output_cost_per_token": 0.0,
-                },
-            )
-            try:
-                self._run_eval_inner(
-                    model_name=vllm_model_name,
-                    harbor_config=harbor_config,
-                    agent=agent,
-                    agent_kwargs=agent_kwargs,
-                    n_concurrent=n_concurrent,
-                    env_type=env_type,
-                    output_path=output_path,
-                    max_eval_instances=max_eval_instances,
-                    wandb_tags=wandb_tags,
-                    dataset=dataset,
-                    version=version,
-                )
-            finally:
-                from marin.evaluation.utils import kill_process_on_port
-
-                try:
-                    kill_process_on_port(8000)
-                except Exception as e:
-                    logger.warning(f"Failed to kill vLLM server: {e}")
-        else:
+        if model.path is None:
             self._run_eval_inner(
                 model_name=model.name,
-                harbor_config=harbor_config,
+                agent=agent,
+                agent_kwargs=agent_kwargs,
+                n_concurrent=n_concurrent,
+                env_type=env_type,
+                output_path=output_path,
+                max_eval_instances=max_eval_instances,
+                wandb_tags=wandb_tags,
+                dataset=dataset,
+                version=version,
+            )
+            return
+
+        os.environ.setdefault("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1")
+        os.environ.setdefault("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1")
+        os.environ.setdefault("VLLM_TPU_SKIP_PRECOMPILE", "1")
+
+        canonical_name = _sanitize_hosted_vllm_canonical_name(model.name)
+        hosted_model_name = f"hosted_vllm/{canonical_name}"
+
+        agent_kwargs.setdefault("model_info", _DEFAULT_HOSTED_VLLM_MODEL_INFO)
+
+        with VllmEnvironment(
+            model,
+            extra_args=["--served-model-name", canonical_name],
+        ) as env:
+            agent_kwargs.setdefault("api_base", env.server_url)
+            logger.info("vLLM server ready: api_base=%s model=%s", env.server_url, env.model_id)
+            self._run_eval_inner(
+                model_name=hosted_model_name,
                 agent=agent,
                 agent_kwargs=agent_kwargs,
                 n_concurrent=n_concurrent,
@@ -162,90 +177,74 @@ class HarborEvaluator(Evaluator):
                 version=version,
             )
 
-    @staticmethod
-    def _start_vllm_server(
+    def launch_evaluate_with_ray(
+        self,
         model: ModelConfig,
-        host: str = "127.0.0.1",
-        port: int = 8000,
-        timeout_seconds: int = 3600,
-    ) -> tuple[str, str]:
-        """Start a vLLM server as a native subprocess and wait for it to be ready.
+        evals: list[EvalTaskConfig],
+        output_path: str,
+        resource_config: ResourceConfig,
+        max_eval_instances: int | None = None,
+        wandb_tags: list[str] | None = None,
+    ) -> None:
+        """Launch Harbor evaluation with Fray.
 
-        Returns (server_url, served_model_name).
+        For local models (`model.path` is set), this runs on the provided TPU/GPU
+        resources so vLLM can serve the model. For API models it runs in-process.
         """
-        import dataclasses
-        import requests
-        from urllib.parse import urlparse
 
-        # Auto-enable streaming for GCS paths
-        parsed = urlparse(model.path or "")
-        if parsed.scheme in ("gs", "s3") and "load_format" not in model.engine_kwargs:
-            engine_kwargs = dict(model.engine_kwargs)
-            engine_kwargs["load_format"] = "runai_streamer"
-            model = dataclasses.replace(model, engine_kwargs=engine_kwargs)
+        if model.path is None:
+            self.evaluate(
+                model=model,
+                evals=evals,
+                output_path=output_path,
+                max_eval_instances=max_eval_instances,
+                wandb_tags=wandb_tags,
+            )
+            return
 
-        model_name_or_path = model.path if model.path else model.name
+        mode_str = resolve_vllm_mode(None)
+        pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
 
-        # Use model.name as the served name (simple, no slashes from GCS paths)
-        served_model_name = model.name
+        env_vars = _env_vars_from_keys(
+            [
+                "WANDB_API_KEY",
+                "WANDB_ENTITY",
+                "WANDB_PROJECT",
+                "HF_TOKEN",
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+                "DAYTONA_API_KEY",
+                "E2B_API_KEY",
+                "MODAL_API_KEY",
+                "TPU_CI",
+                "MARIN_PREFIX",
+                "MARIN_VLLM_MODE",
+                "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
+                "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
+                "VLLM_TPU_SKIP_PRECOMPILE",
+            ]
+        )
+        env_vars.setdefault("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1")
+        env_vars.setdefault("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1")
+        env_vars.setdefault("VLLM_TPU_SKIP_PRECOMPILE", "1")
 
-        # Build CLI args from engine_kwargs
-        extra_args: list[str] = []
-        load_format = model.engine_kwargs.get("load_format")
-        if isinstance(load_format, str):
-            extra_args.extend(["--load-format", load_format])
-
-        command: list[str] = [
-            "vllm",
-            "serve",
-            model_name_or_path,
-            "--served-model-name",
-            served_model_name,
-            "--trust-remote-code",
-            "--host",
-            host,
-            "--port",
-            str(port),
-            "--distributed-executor-backend",
-            "ray",
-            *extra_args,
-        ]
-
-        env = dict(os.environ)
-        env.setdefault("MODEL_IMPL_TYPE", "vllm")
-        env.setdefault("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1")
-        env.setdefault("VLLM_TPU_SKIP_PRECOMPILE", "1")
-
-        logger.info(f"Starting vLLM server: {' '.join(command)}")
-        subprocess.Popen(command, env=env)
-
-        server_url = f"http://{host}:{port}/v1"
-        start_time = time.time()
-        while True:
-            try:
-                response = requests.get(f"{server_url}/models")
-                if response.status_code == 200:
-                    raw = response.json()
-                    loaded = [m["id"] for m in raw["data"]]
-                    logger.info(f"vLLM server up at {server_url}: {loaded}")
-                    if served_model_name in loaded:
-                        logger.info(f"Model {served_model_name} loaded.")
-                        break
-                    logger.info(f"Model not loaded yet. Loaded: {loaded}")
-            except requests.ConnectionError:
-                elapsed = time.time() - start_time
-                logger.info(f"vLLM not ready yet ({elapsed:.0f}s)")
-
-            if time.time() - start_time > timeout_seconds:
-                raise TimeoutError("vLLM server did not start within timeout.")
-            time.sleep(5)
-
-        return server_url, served_model_name
+        launch_evaluate_with_ray(
+            evaluator=self,
+            job_name="harbor-vllm-eval",
+            model=model,
+            evals=evals,
+            output_path=output_path,
+            resource_config=resource_config,
+            max_eval_instances=max_eval_instances,
+            wandb_tags=wandb_tags,
+            extras=("harbor", "tpu"),
+            pip_packages=pip_packages,
+            env_vars=env_vars,
+        )
 
     def _run_eval_inner(
         self,
         model_name: str,
-        harbor_config: dict,
         agent: str,
         agent_kwargs: dict,
         n_concurrent: int,
@@ -257,7 +256,7 @@ class HarborEvaluator(Evaluator):
         version: str,
     ) -> None:
         """Run Harbor trials and save results."""
-        results, job_dir = self._run_harbor_trials(
+        results = self._run_harbor_trials(
             dataset=dataset,
             version=version,
             model_name=model_name,
@@ -278,7 +277,7 @@ class HarborEvaluator(Evaluator):
             "max_eval_instances": max_eval_instances,
             "model": model_name,
         }
-        self._save_results(parsed_results, output_path, wandb_tags, model_name, dataset, version, job_dir)
+        self._save_results(parsed_results, output_path, wandb_tags, model_name, dataset, version)
 
         logger.info("Harbor evaluation completed successfully")
 
@@ -292,7 +291,7 @@ class HarborEvaluator(Evaluator):
         env_type: str,
         task_limit: int | None = None,
         agent_kwargs: dict | None = None,
-    ) -> tuple[dict, Path | None]:
+    ) -> dict:
         """Run Harbor trials using programmatic API."""
         from harbor.job import Job
         from harbor.models.job.config import JobConfig, RegistryDatasetConfig
@@ -372,13 +371,15 @@ class HarborEvaluator(Evaluator):
                 if not result_file.exists():
                     continue
 
-                trial_result = json.loads(result_file.read_text())
+                trial_result = json.loads(result_file.read_text(encoding="utf-8"))
                 trial_id = trial_result.get("task_name", trial_dir.name)
 
                 # Extract reward from verifier_result.rewards.reward
                 verifier_result = trial_result.get("verifier_result") or {}
                 rewards = verifier_result.get("rewards") or {}
                 reward = rewards.get("reward", 0.0)
+                if not isinstance(reward, int | float):
+                    reward = 0.0
 
                 # Extract error info if present
                 error = None
@@ -395,7 +396,7 @@ class HarborEvaluator(Evaluator):
                 trajectory_length = 0
                 if trajectory_file.exists():
                     try:
-                        trajectory_content = trajectory_file.read_text()
+                        trajectory_content = trajectory_file.read_text(encoding="utf-8")
                         trajectory_data = json.loads(trajectory_content)
                         trajectory_length = len(trajectory_data.get("steps", []))
                     except Exception as e:
@@ -412,7 +413,7 @@ class HarborEvaluator(Evaluator):
                     "trajectory_length": trajectory_length,
                 }
 
-            return results, job_dir
+            return results
         finally:
             # Clean up temp directory, ignoring permission errors from Docker
             try:
@@ -484,7 +485,6 @@ class HarborEvaluator(Evaluator):
         model_name: str,
         dataset: str,
         version: str,
-        job_dir: Path | None = None,
     ) -> None:
         """Save results to GCS and log to W&B."""
 
@@ -584,76 +584,3 @@ class HarborEvaluator(Evaluator):
         except Exception as e:
             logger.warning(f"Failed to log to W&B: {e}")
             # Don't fail the whole eval if W&B logging fails
-
-    def launch_evaluate_with_ray(
-        self,
-        model: ModelConfig,
-        evals: list[EvalTaskConfig],
-        output_path: str,
-        resource_config: ResourceConfig,
-        max_eval_instances: int | None = None,
-        wandb_tags: list[str] | None = None,
-        generation_params: dict | None = None,
-    ) -> None:
-        """Launch evaluation with Ray (for distributed execution).
-
-        When model.path is set (vLLM serving), launches a fray sub-job on TPU/GPU
-        with the correct vllm extras. Otherwise calls evaluate directly.
-        """
-        if model.path:
-            from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, current_cluster
-
-            evaluator = self
-
-            def _run():
-                import logging
-
-                logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-                evaluator.evaluate(
-                    model=model,
-                    evals=evals,
-                    output_path=output_path,
-                    max_eval_instances=max_eval_instances,
-                    wandb_tags=wandb_tags,
-                    generation_params=generation_params,
-                )
-
-            env_vars = {}
-            for key in [
-                "WANDB_API_KEY",
-                "HF_TOKEN",
-                "ANTHROPIC_API_KEY",
-                "DAYTONA_API_KEY",
-                "OPENAI_API_KEY",
-                "E2B_API_KEY",
-                "MODAL_API_KEY",
-            ]:
-                val = os.environ.get(key)
-                if val:
-                    env_vars[key] = val
-            env_vars["VLLM_ALLOW_LONG_MAX_MODEL_LEN"] = "1"
-
-            job_request = JobRequest(
-                name="harbor-vllm-evaluation",
-                entrypoint=Entrypoint.from_callable(_run),
-                resources=resource_config,
-                environment=EnvironmentConfig.create(
-                    extras=["harbor", "vllm"],
-                    env_vars=env_vars,
-                ),
-            )
-            cluster = current_cluster()
-            job_id = cluster.launch(job_request)
-            result = cluster.monitor(job_id)
-            if result.status == "failed":
-                raise RuntimeError(f"Harbor vLLM evaluation job failed: {result.error_message}")
-            return
-
-        self.evaluate(
-            model=model,
-            evals=evals,
-            output_path=output_path,
-            max_eval_instances=max_eval_instances,
-            wandb_tags=wandb_tags,
-            generation_params=generation_params,
-        )

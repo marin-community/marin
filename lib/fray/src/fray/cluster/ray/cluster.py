@@ -46,6 +46,35 @@ from fray.job.context import RayContext, fray_default_job_ctx
 
 logger = logging.getLogger("ray")
 
+_SENSITIVE_ENV_KEYS = frozenset(
+    {
+        "HF_TOKEN",
+        "WANDB_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "GITHUB_TOKEN",
+        "DAYTONA_API_KEY",
+        "E2B_API_KEY",
+        "MODAL_API_KEY",
+    }
+)
+
+
+def _redact_runtime_env(runtime_env: dict[str, Any]) -> dict[str, Any]:
+    redacted = dict(runtime_env)
+    env_vars = redacted.get("env_vars")
+    if isinstance(env_vars, dict):
+        env_vars_redacted = dict(env_vars)
+        for key in _SENSITIVE_ENV_KEYS:
+            if env_vars_redacted.get(key):
+                env_vars_redacted[key] = "<redacted>"
+        redacted["env_vars"] = env_vars_redacted
+    return redacted
+
 
 # We can't launch TPU or callable entrypoint jobs directly via Ray, as it
 # doesn't support gang-scheduling and jobs are always started with a single task
@@ -306,7 +335,7 @@ class RayCluster(Cluster):
             env_vars["PYTHONPATH"] = ":".join(python_path)
             runtime_env = {"env_vars": env_vars}
 
-        logger.info("Ray runtime env: %s", runtime_env)
+        logger.info("Ray runtime env: %s", _redact_runtime_env(runtime_env))
         return runtime_env
 
     def _get_entrypoint_params(self, request: JobRequest) -> dict[str, Any]:
