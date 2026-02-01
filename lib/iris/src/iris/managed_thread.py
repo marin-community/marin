@@ -119,6 +119,7 @@ def stop_event_to_server(stop_event: threading.Event, server: Any) -> None:
     Spawns a daemon thread that waits for stop_event and sets server.should_exit.
     This ensures the server shuts down when the registry signals stop.
     """
+
     def _watch() -> None:
         stop_event.wait()
         server.should_exit = True

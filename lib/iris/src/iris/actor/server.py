@@ -240,6 +240,11 @@ class ActorServer:
 
         return self._actual_port
 
+    def wait(self) -> None:
+        """Block until the server thread exits."""
+        if self._thread is not None:
+            self._thread.join()
+
     def shutdown(self) -> None:
         if self._server is not None:
             self._server.should_exit = True

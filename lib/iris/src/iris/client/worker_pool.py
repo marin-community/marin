@@ -182,10 +182,9 @@ def worker_job_entrypoint(pool_id: str) -> None:
     ctx.registry.register(worker_name, address, {"job_id": ctx.job_id})
     logger.info("ActorServer started and registered on port %d", actual_port)
 
-    # Serve forever
+    # Block until the server is shut down (container kill → registry shutdown → server exit)
     logger.info("Worker ready, waiting for tasks...")
-    while True:
-        time.sleep(1)
+    server.wait()
 
 
 class WorkerDispatcher:
@@ -618,8 +617,10 @@ class WorkerPool:
 
         if wait:
             self._task_queue.join()
-            for dispatcher in self._dispatchers:
-                dispatcher.join(timeout=5.0)
+
+        # Always join dispatcher threads to avoid logging-after-teardown errors
+        for dispatcher in self._dispatchers:
+            dispatcher.join(timeout=5.0)
 
         # Terminate worker job
         if self._job:

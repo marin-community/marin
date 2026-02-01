@@ -366,13 +366,13 @@ class TestJobLifecycle:
             status = test_cluster.wait(job_id, timeout=30)
             assert status["state"] == "JOB_STATE_SUCCEEDED"
 
-    def test_kill_running_job(self, test_cluster):
+    def test_kill_running_job(self, test_cluster, sentinel):
         """Running job can be killed."""
 
-        def long_job():
-            time.sleep(60)
+        def long_job(s):
+            s.wait()
 
-        job_id = test_cluster.submit(long_job, name=unique_name("long-job"))
+        job_id = test_cluster.submit(long_job, sentinel, name=unique_name("long-job"))
 
         # Wait for job to start running
         for _ in range(50):
@@ -382,6 +382,7 @@ class TestJobLifecycle:
             time.sleep(0.1)
 
         test_cluster.kill(job_id)
+        sentinel.signal()
         status = test_cluster.wait(job_id, timeout=10)
         assert status["state"] == "JOB_STATE_KILLED"
 
