@@ -28,6 +28,8 @@ import equinox as eqx
 import fsspec
 import jax
 import jmp
+import pandas as pd
+from tqdm import tqdm
 
 import haliax as hax
 from haliax import Axis
@@ -41,6 +43,7 @@ from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llava_onevision import LlavaOnevisionConfig, LlavaOnevisionModel
 from levanter.models.qwen import Qwen3Config
 from levanter.models.siglip import SiglipVisionConfig
+from levanter.distributed import RayConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.mesh import MeshConfig
@@ -48,10 +51,12 @@ from levanter.utils.tree_utils import inference_mode
 
 try:
     from vlmeval.smp import dump, load
-    from vlmeval.evaluate import Evaluator
+    from vlmeval.dataset import build_dataset
+    from vlmeval.tools import EVAL
     VLMEVAL_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     VLMEVAL_AVAILABLE = False
+    VLMEVAL_IMPORT_ERROR = str(e)
 
 
 logger = logging.getLogger(__name__)
@@ -115,7 +120,9 @@ DEFAULT_MESH_CONFIG = MeshConfig(
 
 
 def _default_trainer_config():
-    return TrainerConfig(mesh=DEFAULT_MESH_CONFIG)
+    # Disable Ray auto-start for local evaluation
+    ray_config = RayConfig(auto_start_cluster=False)
+    return TrainerConfig(mesh=DEFAULT_MESH_CONFIG, ray=ray_config)
 
 
 @dataclass
@@ -221,7 +228,7 @@ def main(config: EvalVLMEvalKitConfig):
     """Main function for VLM evaluation using VLMEvalKit."""
     if not VLMEVAL_AVAILABLE:
         raise ImportError(
-            "VLMEvalKit is not installed. Install with: pip install vlmeval"
+            f"VLMEvalKit is not available. Import error: {VLMEVAL_IMPORT_ERROR}"
         )
 
     levanter.initialize(config)
@@ -307,38 +314,102 @@ def main(config: EvalVLMEvalKitConfig):
             mp=mp,
             max_gen_toks=config.max_gen_toks,
             temperature=config.temperature,
+            vlm_batch_size=config.vlm_batch_size,
         )
 
         # Run VLMEvalKit evaluation
         logger.info(f"Starting VLMEvalKit evaluation on benchmarks: {config.benchmarks}")
 
+        # Setup working directory
+        work_dir = config.output_dir or "./vlm_evalkit_results"
+        if not work_dir.startswith("gs://"):
+            os.makedirs(work_dir, exist_ok=True)
+        model_name = "levanter_vlm"
+
         all_results = {}
         for benchmark in config.benchmarks:
             logger.info(f"Evaluating on {benchmark}...")
             try:
-                # VLMEvalKit's run_single_benchmark approach
-                from vlmeval.config import supported_VLM
-                from vlmeval.inference import infer_data_job
-                from vlmeval.evaluate import evaluate
+                # Build dataset using VLMEvalKit
+                dataset = build_dataset(benchmark)
+                dataset_name = dataset.dataset_name
+                logger.info(f"Dataset {dataset_name} has {len(dataset)} samples")
 
-                # Register our model temporarily
-                model_name = "levanter_vlm"
+                # Limit examples if specified
+                data = dataset.data
+                if config.max_examples is not None and len(data) > config.max_examples:
+                    data = data.head(config.max_examples)
+                    logger.info(f"Limited to {config.max_examples} examples")
 
-                # Run inference
-                result = infer_data_job(
-                    model=vlm_model,
-                    model_name=model_name,
-                    dataset_name=benchmark,
-                    verbose=True,
-                )
+                # Run inference in batches (similar to vlm_eval_harness.py:600-705)
+                results = {}
+                batch_size = max(1, config.vlm_batch_size)
+                num_batches = (len(data) + batch_size - 1) // batch_size
+
+                for batch_idx in tqdm(range(num_batches), desc=f"Evaluating {benchmark} (batch_size={batch_size})"):
+                    batch_start = batch_idx * batch_size
+                    batch_end = min(batch_start + batch_size, len(data))
+                    batch_data = data.iloc[batch_start:batch_end]
+
+                    # Prepare batch requests
+                    vlm_requests = []
+                    batch_indices = []
+
+                    for i, (_, item) in enumerate(batch_data.iterrows()):
+                        idx = item['index']
+
+                        # Build prompt
+                        if hasattr(vlm_model, 'use_custom_prompt') and vlm_model.use_custom_prompt(dataset_name):
+                            struct = vlm_model.build_prompt(item, dataset=dataset_name)
+                        else:
+                            struct = dataset.build_prompt(item)
+
+                        try:
+                            # Parse messages and create VLM request
+                            prompt, images = vlm_model._parse_messages(struct)
+                            vlm_request = vlm_model._create_vlm_request(prompt, images, request_id=i)
+                            vlm_requests.append(vlm_request)
+                            batch_indices.append(idx)
+                        except Exception as e:
+                            logger.error(f"Error creating request for index {idx}: {e}")
+                            results[idx] = ""
+
+                    # Generate for batch
+                    if vlm_requests:
+                        try:
+                            result = vlm_model._engine.generate(vlm_requests)
+
+                            # Decode results
+                            for i, idx in enumerate(batch_indices):
+                                if result.tokens and i < len(result.tokens):
+                                    generated_tokens = result.tokens[i]
+                                    prompt_len = len(vlm_requests[i].prompt_tokens)
+                                    new_tokens = generated_tokens[prompt_len:]
+                                    text = vlm_model.tokenizer.decode(new_tokens, skip_special_tokens=True)
+                                    results[idx] = text.strip()
+                                else:
+                                    results[idx] = ""
+                        except Exception as e:
+                            logger.error(f"Error during batch generation: {e}")
+                            for idx in batch_indices:
+                                if idx not in results:
+                                    results[idx] = ""
+
+                    processed = batch_end
+                    if processed % 50 == 0 or processed == len(data):
+                        logger.info(f"Processed {processed}/{len(data)} samples")
+
+                # Save predictions to Excel file
+                result_file = os.path.join(work_dir, f'{model_name}_{dataset_name}.xlsx')
+                pred_data = data.copy()
+                pred_data['prediction'] = [str(results.get(x, '')) for x in pred_data['index']]
+                if 'image' in pred_data.columns:
+                    pred_data = pred_data.drop(columns=['image'])
+                pred_data.to_excel(result_file, index=False)
+                logger.info(f"Predictions saved to: {result_file}")
 
                 # Run evaluation
-                eval_result = evaluate(
-                    model_name=model_name,
-                    dataset_name=benchmark,
-                    result_file=result,
-                )
-
+                eval_result = EVAL(dataset_name, result_file)
                 all_results[benchmark] = eval_result
                 logger.info(f"{benchmark} results: {eval_result}")
 

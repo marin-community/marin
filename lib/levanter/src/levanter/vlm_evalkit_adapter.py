@@ -86,6 +86,7 @@ class LevanterVLM(BaseModel):
         mp: jmp.Policy,
         max_gen_toks: int = 512,
         temperature: float = 0.0,
+        vlm_batch_size: int = 1,
         **kwargs,
     ):
         """Initialize the LevanterVLM adapter.
@@ -100,6 +101,7 @@ class LevanterVLM(BaseModel):
             mp: Mixed precision policy.
             max_gen_toks: Maximum number of tokens to generate.
             temperature: Sampling temperature (0.0 for greedy).
+            vlm_batch_size: Number of requests to process in parallel.
         """
         self.model = levanter_model
         self.tokenizer = tokenizer
@@ -110,6 +112,7 @@ class LevanterVLM(BaseModel):
         self.mp = mp
         self.max_gen_toks = max_gen_toks
         self.temperature = temperature
+        self.vlm_batch_size = vlm_batch_size
 
         # Create inference engine
         self._engine = None
@@ -119,18 +122,26 @@ class LevanterVLM(BaseModel):
         """Initialize the LlavaInferenceEngine."""
         from levanter.inference.engine import InferenceEngineConfig
 
+        max_seq_len = getattr(self.EvalPos, 'size', 4096)
+
+        # Match vlm_eval_harness.py settings to avoid OOM
+        # See vlm_eval_harness.py:398-409 for reference
+        max_seqs = max(1, self.vlm_batch_size)
         engine_config = InferenceEngineConfig(
-            max_decode_length=self.max_gen_toks,
-            top_k=-1,
-            top_p=1.0,
+            max_seq_len=max_seq_len,
+            max_seqs=max_seqs,  # Use vlm_batch_size for batched inference
+            max_seqs_in_prefill=max_seqs,
+            page_size=8,  # Smaller page size
+            compute_dtype=jnp.bfloat16,
+            hbm_utilization=0.5,  # Only use 50% HBM for KV cache
         )
 
         self._engine = LlavaInferenceEngine.from_model_with_config(
             model=self.model,
             tokenizer=self.tokenizer,
             config=engine_config,
-            Vocab=hax.Axis("vocab", len(self.tokenizer)),
-            mesh=hax.partitioning._current_mesh.get(),
+            Vocab=self.model.Vocab,  # Use model's Vocab axis, not tokenizer length
+            mesh=hax.partitioning._get_mesh(),
         )
 
     def _load_image(self, image_source: Union[str, bytes, Image.Image]) -> Image.Image:
@@ -329,13 +340,13 @@ class LevanterVLM(BaseModel):
             logger.warning("No tokens generated")
             return ""
 
-    def generate(self, msgs: Union[List[dict], List[str]], dataset: Optional[str] = None) -> str:
+    def generate(self, message: Union[List[dict], List[str]], dataset: Optional[str] = None) -> str:
         """Generate a response (VLMEvalKit's main entry point).
 
         This method handles both the dict format and the simplified list format.
 
         Args:
-            msgs: Either a list of dicts with type/value, or a list of strings
+            message: Either a list of dicts with type/value, or a list of strings
                 where image paths are auto-detected.
             dataset: Optional dataset name.
 
@@ -343,16 +354,16 @@ class LevanterVLM(BaseModel):
             The generated text response.
         """
         # Convert simplified format to dict format if needed
-        if msgs and isinstance(msgs[0], str):
+        if message and isinstance(message[0], str):
             converted_msgs = []
-            for item in msgs:
+            for item in message:
                 if self._is_image_path(item):
                     converted_msgs.append({"type": "image", "value": item})
                 else:
                     converted_msgs.append({"type": "text", "value": item})
-            msgs = converted_msgs
+            message = converted_msgs
 
-        return self.generate_inner(msgs, dataset=dataset)
+        return self.generate_inner(message, dataset=dataset)
 
     def _is_image_path(self, s: str) -> bool:
         """Check if a string looks like an image path or URL."""
