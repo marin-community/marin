@@ -149,17 +149,25 @@ class HarborEvaluator(Evaluator):
 
         # Find harbor executable (prefer venv installation)
         harbor_cmd = shutil.which("harbor")
-        if harbor_cmd is None:
+        if harbor_cmd is not None:
+            harbor_cmd_list = [harbor_cmd]
+        else:
             # Try venv bin directory
             venv_harbor = os.path.join(sys.prefix, "bin", "harbor")
             if os.path.exists(venv_harbor):
-                harbor_cmd = venv_harbor
+                harbor_cmd_list = [venv_harbor]
             else:
-                raise RuntimeError("Harbor CLI not found. Please install harbor package.")
+                # Fallback to python -m harbor if harbor CLI is not in PATH
+                # but package is available in PYTHONPATH
+                try:
+                    import harbor  # noqa: F401
+
+                    harbor_cmd_list = [sys.executable, "-m", "harbor"]
+                except ImportError:
+                    raise RuntimeError("Harbor CLI not found. Please install harbor package.")
 
         # Build Harbor run command
-        cmd = [
-            harbor_cmd,
+        cmd = harbor_cmd_list + [
             "run",
             "--dataset",
             f"{dataset}@{version}",
