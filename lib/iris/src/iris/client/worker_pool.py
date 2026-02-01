@@ -58,7 +58,7 @@ from iris.actor.resolver import Resolver
 from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
-from iris.managed_thread import ManagedThread, get_thread_registry
+from iris.managed_thread import ThreadContainer
 from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -208,28 +208,22 @@ class WorkerDispatcher:
         self._task_queue = task_queue
         self._resolver = resolver
         self._timeout = timeout
-        self._managed_thread: ManagedThread | None = None
         self._discover_backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
         self._actor_client: ActorClient | None = None
         self._stop_event: threading.Event | None = None
 
-    def start(self) -> None:
-        # Python threads don't inherit contextvars. Capture a snapshot now
-        # so iris_ctx() and friends are available inside the dispatcher thread.
+    def make_target(self) -> Callable[..., None]:
+        """Create a thread target that carries the current context.
+
+        Must be called from the main thread so copy_context() captures
+        the right contextvars (iris_ctx, etc.).
+        """
         ctx = copy_context()
 
-        def target(stop_event: threading.Event, *args):
-            ctx.run(self._run, stop_event, *args)
+        def target(stop_event: threading.Event) -> None:
+            ctx.run(self._run, stop_event)
 
-        self._managed_thread = get_thread_registry().spawn(target=target, name=f"dispatch-{self.state.worker_id}")
-
-    def stop(self) -> None:
-        if self._managed_thread:
-            self._managed_thread.stop()
-
-    def join(self, timeout: float | None = None) -> None:
-        if self._managed_thread:
-            self._managed_thread.join(timeout=timeout)
+        return target
 
     def _run(self, stop_event: threading.Event) -> None:
         self._stop_event = stop_event
@@ -415,7 +409,7 @@ class WorkerPool:
 
         # Task queue and dispatch
         self._task_queue: Queue[PendingTask] = Queue()
-        self._dispatchers: list[WorkerDispatcher] = []
+        self._threads = ThreadContainer()
         self._shutdown = False
 
         # Resolver for endpoint discovery (injectable for testing)
@@ -482,8 +476,10 @@ class WorkerPool:
                 resolver=self._resolver,
                 timeout=self._timeout,
             )
-            dispatcher.start()
-            self._dispatchers.append(dispatcher)
+            self._threads.spawn(
+                target=dispatcher.make_target(),
+                name=f"dispatch-{worker_state.worker_id}",
+            )
 
     def wait_for_workers(
         self,
@@ -604,16 +600,10 @@ class WorkerPool:
         """
         self._shutdown = True
 
-        # Stop all dispatchers
-        for dispatcher in self._dispatchers:
-            dispatcher.stop()
-
         if wait:
             self._task_queue.join()
 
-        # Always join dispatcher threads to avoid logging-after-teardown errors
-        for dispatcher in self._dispatchers:
-            dispatcher.join(timeout=5.0)
+        self._threads.stop()
 
         # Terminate worker job
         if self._job:
