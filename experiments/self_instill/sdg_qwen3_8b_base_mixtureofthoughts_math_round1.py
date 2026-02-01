@@ -43,8 +43,8 @@ from marin.export.hf_upload import upload_dir_to_hf
 from marin.generation.inference import TextGenerationInferenceConfig
 from marin.generation.inference import run_inference as run_generation_inference
 
-# Import model from central location
-from experiments.models import qwen3_8b_base, get_model_local_path
+# Model HuggingFace ID (using HF Hub directly instead of local gcsfuse path)
+QWEN3_8B_BASE_HF_ID = "Qwen/Qwen3-8B-Base"
 
 # Import prompts (only import what's used at module level)
 from experiments.self_instill.prompts import REASONING_LONG_INSTRUCTION
@@ -163,7 +163,7 @@ generate_with_selection = ExecutorStep(
         output_path=this_output_path(),
 
         # Model
-        model_name=get_model_local_path(qwen3_8b_base),
+        model_name=QWEN3_8B_BASE_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": 1,
             "max_model_len": 32768 + 2048,
@@ -262,7 +262,7 @@ summarize_selected = ExecutorStep(
         output_path=this_output_path(),
 
         # Model
-        model_name=get_model_local_path(qwen3_8b_base),
+        model_name=QWEN3_8B_BASE_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": 1,
             "max_model_len": 32768 + 2048,
@@ -378,7 +378,7 @@ cycle_gen_questions = ExecutorStep(
         output_path=this_output_path(),
 
         # Model
-        model_name=get_model_local_path(qwen3_8b_base),
+        model_name=QWEN3_8B_BASE_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": 1,
             "max_model_len": 32768 + 2048,
@@ -505,7 +505,7 @@ cycle_compare = ExecutorStep(
         output_path=this_output_path(),
 
         # Model
-        model_name=get_model_local_path(qwen3_8b_base),
+        model_name=QWEN3_8B_BASE_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": 1,
             "max_model_len": 32768 + 2048,
@@ -563,7 +563,7 @@ factual_check = ExecutorStep(
         output_path=this_output_path(),
 
         # Model
-        model_name=get_model_local_path(qwen3_8b_base),
+        model_name=QWEN3_8B_BASE_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": 1,
             "max_model_len": 32768 + 2048,
@@ -621,7 +621,7 @@ correctness_check = ExecutorStep(
         output_path=this_output_path(),
 
         # Model
-        model_name=get_model_local_path(qwen3_8b_base),
+        model_name=QWEN3_8B_BASE_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": 1,
             "max_model_len": 32768 + 2048,
@@ -789,9 +789,8 @@ upload_self_instill = replace(upload_self_instill, pip_dependency_groups=["vllm"
 # =============================================================================
 
 if __name__ == "__main__":
-    # Stage 1: Download model and dataset
-    print("Stage 1: Downloading model and dataset...")
-    executor_main([qwen3_8b_base])
+    # Stage 1: Download dataset (model downloaded via HF Hub on workers)
+    print("Stage 1: Downloading dataset...")
     executor_main([download_mot_math])
 
     # Stage 2: Preprocess - extract user message
