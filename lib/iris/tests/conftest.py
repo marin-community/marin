@@ -121,15 +121,6 @@ def _thread_registry():
     old = set_thread_registry(registry)
     yield registry
     registry.shutdown(timeout=5.0)
-    stuck = [t for t in registry._threads if t.is_alive]
-    if stuck:
-        print(
-            f"\n[WARN] {len(stuck)} threads still alive after shutdown(5s):",
-            file=sys.stdout,
-            flush=True,
-        )
-        for t in stuck:
-            print(f"  - {t.name}", file=sys.stdout, flush=True)
     set_thread_registry(old)
 
 
@@ -151,4 +142,4 @@ def pytest_sessionfinish(session, exitstatus):
             tty.write(f"\nPytest exiting with status {exitstatus}\n")
         tty.flush()
         tty.close()
-        sys._exit(1)
+        os._exit(1)

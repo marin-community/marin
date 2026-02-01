@@ -217,6 +217,8 @@ class WorkerDispatcher:
 
     def start(self) -> None:
         target = self._run
+        # Python threads don't inherit contextvars. Wrap the target so it runs
+        # inside the parent's Context, propagating iris_ctx() and friends.
         if self._context:
             original = target
 
