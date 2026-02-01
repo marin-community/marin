@@ -59,6 +59,7 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import cluster_pb2
+from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -269,8 +270,7 @@ class Job:
         we want logs to appear in near real-time during active job execution.
         """
         log_states: list[_TaskLogState] = []
-        # Use a fixed low interval for responsive streaming (capped at poll_interval)
-        stream_interval = min(0.2, poll_interval)
+        backoff = ExponentialBackoff(initial=0.2, maximum=poll_interval)
         start = time.monotonic()
 
         while True:
@@ -281,11 +281,13 @@ class Job:
                 log_states = [_TaskLogState(i) for i in range(len(status.tasks))]
 
             # Poll logs from all tasks
+            got_new_logs = False
             for state in log_states:
                 try:
                     task_id = f"{self._job_id}/task-{state.task_index}"
                     entries = self._client._cluster.fetch_task_logs(task_id, state.last_timestamp_ms, 0)
                     for proto in entries:
+                        got_new_logs = True
                         entry = LogEntry.from_proto(proto)
                         state.last_timestamp_ms = max(state.last_timestamp_ms, entry.timestamp_ms)
                         _print_log_entry(self._job_id, entry, task_index=state.task_index)
@@ -313,7 +315,10 @@ class Job:
             if elapsed >= timeout:
                 raise TimeoutError(f"Job {self._job_id} did not complete in {timeout}s")
 
-            time.sleep(stream_interval)
+            # Reset backoff when new logs arrive for responsive streaming
+            if got_new_logs:
+                backoff.reset()
+            time.sleep(backoff.next_interval())
 
     def terminate(self) -> None:
         """Terminate this job."""

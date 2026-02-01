@@ -31,10 +31,9 @@ def _quick():
     return 1
 
 
-def _slow():
-    import time
-
-    time.sleep(120)
+def _block(s):
+    """Block until sentinel is signalled. Pass a SentinelFile instance."""
+    s.wait()
 
 
 @pytest.fixture(autouse=True)
@@ -67,9 +66,9 @@ def cluster():
         yield url, client
 
 
-def submit(client, fn, name, **kw):
+def submit(client, fn, name, *args, **kw):
     return client.submit(
-        entrypoint=Entrypoint.from_callable(fn),
+        entrypoint=Entrypoint.from_callable(fn, *args),
         name=name,
         resources=ResourceSpec(cpu=1, memory="1g"),
         environment=EnvironmentSpec(),

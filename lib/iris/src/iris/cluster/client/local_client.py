@@ -27,6 +27,7 @@ from iris.cluster.types import Entrypoint
 from iris.cluster.vm.cluster_manager import ClusterManager
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.time_utils import ExponentialBackoff
 
 
 def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
@@ -98,11 +99,12 @@ class LocalClusterClient:
         )
         try:
             start = time.monotonic()
+            backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
             while time.monotonic() - start < timeout:
                 response = temp_client.list_workers(cluster_pb2.Controller.ListWorkersRequest())
                 if response.workers:
                     return
-                time.sleep(0.1)
+                time.sleep(backoff.next_interval())
             raise TimeoutError("Worker failed to register with controller")
         finally:
             temp_client.close()

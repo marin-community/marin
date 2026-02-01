@@ -312,16 +312,16 @@ class E2ECluster:
 # =============================================================================
 
 
-@pytest.fixture(scope="session")
-def test_cluster(use_docker, docker_cleanup_session):
-    """Provide a running test cluster for E2E tests (session-scoped)."""
+@pytest.fixture
+def test_cluster(use_docker, docker_cleanup_scope):
+    """Provide a running test cluster for E2E tests."""
     with E2ECluster(use_docker=use_docker) as cluster:
         yield cluster
 
 
-@pytest.fixture(scope="session")
-def multi_worker_cluster(use_docker, docker_cleanup_session):
-    """Provide a cluster with multiple workers (session-scoped)."""
+@pytest.fixture
+def multi_worker_cluster(use_docker, docker_cleanup_scope):
+    """Provide a cluster with multiple workers."""
     with E2ECluster(num_workers=3, use_docker=use_docker) as cluster:
         yield cluster
 
@@ -366,13 +366,13 @@ class TestJobLifecycle:
             status = test_cluster.wait(job_id, timeout=30)
             assert status["state"] == "JOB_STATE_SUCCEEDED"
 
-    def test_kill_running_job(self, test_cluster):
+    def test_kill_running_job(self, test_cluster, sentinel):
         """Running job can be killed."""
 
-        def long_job():
-            time.sleep(60)
+        def long_job(s):
+            s.wait()
 
-        job_id = test_cluster.submit(long_job, name=unique_name("long-job"))
+        job_id = test_cluster.submit(long_job, sentinel, name=unique_name("long-job"))
 
         # Wait for job to start running
         for _ in range(50):
@@ -382,6 +382,7 @@ class TestJobLifecycle:
             time.sleep(0.1)
 
         test_cluster.kill(job_id)
+        sentinel.signal()
         status = test_cluster.wait(job_id, timeout=10)
         assert status["state"] == "JOB_STATE_KILLED"
 
