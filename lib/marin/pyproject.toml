@@ -1,17 +1,17 @@
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.11,<3.13"
 
 [project]
 name = "marin"
 version = "0.1.0"
 
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "braceexpand",
     "cryptography>=45",
-    "datasets",
+    "datasets<4.0.0",
     "ddsketch",
     "deepdiff",
     "draccus>=0.11.5",

@@ -134,8 +134,10 @@ def build_python_path(submodules_dir: str = "submodules") -> list[str]:
     # Workspace member src directories + experiments directory
     paths = [
         "experiments",
+        "harbor/src",
         "lib/fray/src",
         "lib/haliax/src",
+        "lib/iris/src",
         "lib/levanter/src",
         "lib/marin/src",
         "lib/zephyr/src",

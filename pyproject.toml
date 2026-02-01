@@ -7,7 +7,7 @@ name = "marin-root"
 version = "0.1.0"
 description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "iris",
     "fray",
@@ -24,11 +24,12 @@ override-dependencies = [
     "antlr4-python3-runtime==4.11",
     "python-multipart>=0.0.22",
     "wheel>=0.46.2",
-    "datasets>=4.4.1",
+    "datasets>=3.1.0,<4.0.0",
 ]
 
 [tool.uv.workspace]
 members = [
+    "harbor",
     "lib/iris",
     "lib/fray",
     "lib/haliax",
@@ -38,6 +39,7 @@ members = [
 ]
 
 [tool.uv.sources]
+harbor = { workspace = true }
 iris = { workspace = true }
 fray = { workspace = true }
 haliax = { workspace = true }
