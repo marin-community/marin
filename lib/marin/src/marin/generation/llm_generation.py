@@ -80,3 +80,22 @@ class vLLMProvider(BaseLLMProvider):
         for output in outputs:
             generated_text.append(" ".join([o.text for o in output.outputs]))
         return generated_text
+
+    def generate_multi_sample(self, prompts: list[str]) -> list[list[str]]:
+        """Generate multiple samples per prompt, returning them separately.
+
+        Unlike generate() which joins samples with spaces, this returns
+        each sample individually for downstream selection/filtering.
+
+        Args:
+            prompts: List of prompts to generate from.
+
+        Returns:
+            List of lists, where each inner list contains all samples for one prompt.
+        """
+        outputs = self.llm.generate(prompts, self.sampling_params)
+        generated_samples: list[list[str]] = []
+        for output in outputs:
+            samples = [o.text for o in output.outputs]
+            generated_samples.append(samples)
+        return generated_samples

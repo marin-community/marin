@@ -22,7 +22,7 @@ import pyarrow as pa
 import ray
 from fray.cluster import ResourceConfig
 from marin.generation.chunk_utils import ChunkStrategy
-from marin.generation.pipeline import vLLMTextGeneration
+from marin.generation.pipeline import vLLMTextGeneration, vLLMTextGenerationWithSelection
 from marin.utils import fsspec_glob
 from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
@@ -69,6 +69,20 @@ class TextGenerationInferenceConfig:
     # This checkpoint id column is the "key" in the file that will be used to uniquely identify an input example.
     # This is used for deduplicating work in the case when we are resuming from a checkpoint.
     checkpoint_id_column: str | None = None
+
+    # Multi-sample selection specific
+    # When enabled, generates multiple samples (via generation_kwargs["n"]) and selects the longest
+    # sample that passes static validation (requires \\boxed{}, no non-English characters).
+    enable_multi_sample_selection: bool = False
+    # Whether to save all generated samples (for debugging). Only used if enable_multi_sample_selection=True.
+    save_all_samples: bool = False
+    # Column name for all samples if save_all_samples=True.
+    all_samples_column_name: str = "all_samples"
+
+    # Multi-sample as list (for validation/voting)
+    # When enabled with n>1 in generation_kwargs, saves samples as a list instead of joining with space.
+    # Useful for multi-sample voting where each sample needs to be checked independently.
+    save_samples_as_list: bool = False
 
 
 class OneToOneFilenameProvider(FilenameProvider):
@@ -269,13 +283,10 @@ def run_inference(config: TextGenerationInferenceConfig):
                 ds = ds.filter(lambda x: x[config.checkpoint_id_column] not in finished_ids)
             print("Dataset count after checkpoint filter:", ds.count())
 
-    ds = ds.map_batches(  # Apply batch inference for all input data.
-        vLLMTextGeneration,
-        # Set the concurrency to the number of LLM instances.
-        concurrency=config.num_instances,
-        # Specify the batch size for inference.
-        batch_size=config.batch_size,
-        fn_constructor_kwargs={
+    # Choose pipeline class based on multi-sample selection mode
+    if config.enable_multi_sample_selection:
+        pipeline_class = vLLMTextGenerationWithSelection
+        fn_constructor_kwargs = {
             "model_name": config.model_name,
             "engine_kwargs": config.engine_kwargs,
             "generation_kwargs": config.generation_kwargs,
@@ -286,7 +297,32 @@ def run_inference(config: TextGenerationInferenceConfig):
             "max_doc_tokens": config.max_doc_tokens,
             "generated_text_column_name": config.generated_text_column_name,
             "column_types": column_types,
-        },
+            "save_all_samples": config.save_all_samples,
+            "all_samples_column_name": config.all_samples_column_name,
+        }
+    else:
+        pipeline_class = vLLMTextGeneration
+        fn_constructor_kwargs = {
+            "model_name": config.model_name,
+            "engine_kwargs": config.engine_kwargs,
+            "generation_kwargs": config.generation_kwargs,
+            "template": template,
+            "prompt_column": config.prompt_column,
+            "save_templated_prompt": config.save_templated_prompt,
+            "apply_chat_template": config.apply_chat_template,
+            "max_doc_tokens": config.max_doc_tokens,
+            "generated_text_column_name": config.generated_text_column_name,
+            "column_types": column_types,
+            "save_samples_as_list": config.save_samples_as_list,
+        }
+
+    ds = ds.map_batches(  # Apply batch inference for all input data.
+        pipeline_class,
+        # Set the concurrency to the number of LLM instances.
+        concurrency=config.num_instances,
+        # Specify the batch size for inference.
+        batch_size=config.batch_size,
+        fn_constructor_kwargs=fn_constructor_kwargs,
         **ray_resources_kwarg(config),
     )
 

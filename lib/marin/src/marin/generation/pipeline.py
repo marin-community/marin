@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import logging
-from typing import Any
+import re
+from typing import Any, Callable
 
 import pyarrow as pa
 
@@ -21,6 +22,9 @@ from marin.generation.llm_generation import BaseLLMProvider, vLLMProvider
 from marin.generation.templates import STEP_BY_STEP_TEMPLATE
 
 logger = logging.getLogger(__name__)
+
+# Default static check pattern for boxed answers
+_BOXED_PATTERN = re.compile(r"\\boxed\{[^}]+\}")
 
 try:
     from vllm.inputs.data import TokensPrompt
@@ -173,7 +177,26 @@ class vLLMTextGeneration(TextGeneration):
         max_doc_tokens: int = 7000,
         generated_text_column_name: str = "generated_text",
         column_types: dict[str, pa.DataType] | None = None,
+        save_samples_as_list: bool = False,
     ):
+        """Initialize vLLM text generation pipeline.
+
+        Args:
+            model_name: The name of the model to use.
+            engine_kwargs: Keyword arguments for the vLLM engine.
+            generation_kwargs: Keyword arguments for generation (can include `n` for multi-sample).
+            template: Template(s) for formatting prompts.
+            num_generations: Number of generations (typically 1).
+            num_instances: Number of parallel instances.
+            prompt_column: The column containing prompts.
+            apply_chat_template: Whether to apply chat template.
+            save_templated_prompt: Whether to save the templated prompt.
+            max_doc_tokens: Maximum document tokens.
+            generated_text_column_name: Column name for output.
+            column_types: Expected column types for schema normalization.
+            save_samples_as_list: If True and n>1 in generation_kwargs, saves samples as a list
+                instead of joining with space. Useful for multi-sample voting/validation.
+        """
         # Initialize the LLM Provider here for the pipeline since we need the model
         # to be placed in the same placement group as the pipeline
         llm = vLLMProvider(model_name, engine_kwargs, generation_kwargs)
@@ -185,6 +208,7 @@ class vLLMTextGeneration(TextGeneration):
         self.max_doc_tokens = max_doc_tokens
         self.tokenizer = self.llm.llm.get_tokenizer()
         self.column_types = column_types or {}
+        self.save_samples_as_list = save_samples_as_list
 
     def _truncate_example(self, example: str) -> str:
         example_tokens = self.tokenizer.encode(example)
@@ -234,11 +258,203 @@ class vLLMTextGeneration(TextGeneration):
                 else:
                     prompts.append(example)
 
-        generated_text = self.llm.generate(prompts)
-        batch = self._update_batch(batch, generated_text, prompts)
+        if self.save_samples_as_list:
+            # Use multi-sample generation and save as list
+            all_samples = self.llm.generate_multi_sample(prompts)
+            batch[self.generated_text_column_name] = all_samples
+            if self.save_templated_prompt:
+                batch["prompt"] = prompts
+        else:
+            # Standard generation (joins samples with space if n>1)
+            generated_text = self.llm.generate(prompts)
+            batch = self._update_batch(batch, generated_text, prompts)
 
         # Normalize schema for all columns to prevent type mismatches when
         # batches have all-null values (which PyArrow may infer as float).
+        if self.column_types:
+            batch = _normalize_batch_schema(batch, self.column_types)
+
+        return batch
+
+
+def default_static_check(text: str) -> bool:
+    """Default static validation: requires \\boxed{} and no non-English letters.
+
+    Args:
+        text: The generated text to validate.
+
+    Returns:
+        True if the text passes all checks, False otherwise.
+    """
+    if not text:
+        return False
+    # Must have boxed answer
+    if not _BOXED_PATTERN.search(text):
+        return False
+    # Must not have non-English letters (non-ASCII alphabetic characters)
+    if any(ch.isalpha() and ord(ch) > 127 for ch in text):
+        return False
+    return True
+
+
+class vLLMTextGenerationWithSelection(vLLMTextGeneration):
+    """vLLM text generation with multi-sample generation and selection.
+
+    This class generates multiple samples per prompt (using the `n` parameter in
+    generation_kwargs), applies a static validation check to each sample, and
+    selects the longest valid sample. This is useful for reasoning tasks where
+    longer, more detailed responses tend to be higher quality.
+
+    The selection process:
+    1. Generate `n` samples per prompt
+    2. Sort samples by length (longest first)
+    3. Apply static check to each sample
+    4. Select the first (longest) sample that passes validation
+    5. If no sample passes, mark the row with selected_text=None
+
+    Usage:
+        config = TextGenerationInferenceConfig(
+            ...
+            generation_kwargs={"temperature": 0.8, "max_tokens": 30000, "n": 4},
+            ...
+        )
+        # Use vLLMTextGenerationWithSelection instead of vLLMTextGeneration
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        engine_kwargs: dict[str, Any] | None = None,
+        generation_kwargs: dict[str, Any] | None = None,
+        template: list[str] | str | None = None,
+        num_generations: int = 1,
+        num_instances: tuple[int, int] = (1, 4),
+        prompt_column: str = "text",
+        apply_chat_template: bool = True,
+        save_templated_prompt: bool = False,
+        max_doc_tokens: int = 7000,
+        generated_text_column_name: str = "generated_text",
+        column_types: dict[str, pa.DataType] | None = None,
+        static_check_fn: Callable[[str], bool] | None = None,
+        save_all_samples: bool = False,
+        all_samples_column_name: str = "all_samples",
+    ):
+        """Initialize the multi-sample generation pipeline with selection.
+
+        Args:
+            model_name: The name of the model to use.
+            engine_kwargs: Keyword arguments for the vLLM engine.
+            generation_kwargs: Keyword arguments for generation (should include `n` for multi-sample).
+            template: Template(s) for formatting prompts.
+            num_generations: Number of generations (typically 1 for multi-sample selection).
+            num_instances: Number of parallel instances.
+            prompt_column: The column containing prompts.
+            apply_chat_template: Whether to apply chat template.
+            save_templated_prompt: Whether to save the templated prompt.
+            max_doc_tokens: Maximum document tokens.
+            generated_text_column_name: Column name for selected output.
+            column_types: Expected column types for schema normalization.
+            static_check_fn: Function to validate samples. Defaults to requiring \\boxed{}
+                and no non-English characters. Returns True if sample is valid.
+            save_all_samples: Whether to save all generated samples (for debugging).
+            all_samples_column_name: Column name for all samples if save_all_samples=True.
+        """
+        super().__init__(
+            model_name=model_name,
+            engine_kwargs=engine_kwargs,
+            generation_kwargs=generation_kwargs,
+            template=template,
+            num_generations=num_generations,
+            num_instances=num_instances,
+            prompt_column=prompt_column,
+            apply_chat_template=apply_chat_template,
+            save_templated_prompt=save_templated_prompt,
+            max_doc_tokens=max_doc_tokens,
+            generated_text_column_name=generated_text_column_name,
+            column_types=column_types,
+        )
+        self.static_check_fn = static_check_fn or default_static_check
+        self.save_all_samples = save_all_samples
+        self.all_samples_column_name = all_samples_column_name
+
+    def _select_best_sample(self, samples: list[str]) -> str | None:
+        """Select the longest sample that passes static validation.
+
+        Args:
+            samples: List of generated samples for a single prompt.
+
+        Returns:
+            The longest valid sample, or None if no sample passes validation.
+        """
+        # Sort by length descending (prefer longer responses)
+        sorted_samples = sorted(samples, key=len, reverse=True)
+
+        for sample in sorted_samples:
+            if self.static_check_fn(sample):
+                return sample
+
+        return None
+
+    def __call__(self, batch: dict[str, Any]) -> dict[str, Any]:
+        """Generate multiple samples per prompt and select the best one."""
+        prompts = []
+        examples = batch[self.prompt_column]
+
+        # Build prompts (same logic as parent class)
+        if len(self.templates) == 1:
+            single_template = self.templates[0]
+            for example in examples:
+                example = self._truncate_example(example)
+                if self.apply_chat_template:
+                    try:
+                        chat_example = [{"role": "user", "content": single_template.format(example=example)}]
+                    except Exception as e:
+                        logger.error(f"Error formatting template: {e}")
+                        logger.error(f"Template: {single_template}")
+                        logger.error(f"Example: {example}")
+                        raise e
+                    prompts.append(
+                        self.tokenizer.apply_chat_template(chat_example, tokenize=False, add_generation_prompt=True)
+                    )
+                else:
+                    prompts.append(example)
+        else:
+            assert len(self.templates) == len(examples), "The number of templates must match the number of examples."
+            for template, example in zip(self.templates, examples, strict=False):
+                example = self._truncate_example(example)
+                if self.apply_chat_template:
+                    try:
+                        chat_example = [{"role": "user", "content": template.format(example=example)}]
+                    except Exception as e:
+                        logger.error(f"Error formatting template: {e}")
+                        logger.error(f"Template: {template}")
+                        logger.error(f"Example: {example}")
+                        raise e
+                    prompts.append(
+                        self.tokenizer.apply_chat_template(chat_example, tokenize=False, add_generation_prompt=True)
+                    )
+                else:
+                    prompts.append(example)
+
+        # Generate multiple samples per prompt
+        all_samples = self.llm.generate_multi_sample(prompts)
+
+        # Select best sample for each prompt
+        selected_texts: list[str | None] = []
+        for samples in all_samples:
+            best = self._select_best_sample(samples)
+            selected_texts.append(best)
+
+        # Update batch with selected text
+        batch[self.generated_text_column_name] = selected_texts
+
+        if self.save_templated_prompt:
+            batch["prompt"] = prompts
+
+        if self.save_all_samples:
+            batch[self.all_samples_column_name] = all_samples
+
+        # Normalize schema for all columns
         if self.column_types:
             batch = _normalize_batch_schema(batch, self.column_types)
 
