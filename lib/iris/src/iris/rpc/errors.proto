@@ -24,5 +24,5 @@ message ErrorDetails {
   string exception_type = 1;   // e.g., "docker.errors.DockerException"
   string message = 2;          // str(exception)
   string traceback = 3;        // Full Python traceback
-  iris.common.Timestamp timestamp = 4;  // When error occurred
+  iris.time.Timestamp timestamp = 4;  // When error occurred
 }

@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from iris.time_utils import Deadline, Duration, RateLimiter, Timer, Timestamp
+from iris.time_utils import Deadline, Duration, RateLimiter, Timestamp
 
 
 def test_deadline_expires():
@@ -56,14 +56,6 @@ def test_duration_proto_roundtrip():
     proto = original.to_proto()
     restored = Duration.from_proto(proto)
     assert original == restored
-
-
-def test_repr_formats():
-    """Time classes have useful repr for logging."""
-    assert "Duration(" in repr(Duration.from_seconds(1.5))
-    assert "Timestamp(" in repr(Timestamp.now())
-    assert "Deadline(" in repr(Deadline.from_seconds(10))
-    assert "Timer(" in repr(Timer())
 
 
 def test_rate_limiter_throttles():

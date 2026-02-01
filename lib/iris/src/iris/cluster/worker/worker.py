@@ -36,7 +36,7 @@ from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import Duration, ExponentialBackoff, Timestamp
+from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ class Worker:
         self._controller_client: ControllerServiceClientSync | None = None
 
         # Heartbeat tracking for timeout detection
-        self._last_heartbeat_time = time.monotonic()
+        self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
 
     def start(self) -> None:
         # Clean up any orphaned containers from previous runs
@@ -293,14 +293,12 @@ class Worker:
         This method blocks in a loop, checking the time since last heartbeat.
         When the timeout expires, it returns, triggering a reset and re-registration.
         """
-        self._last_heartbeat_time = time.monotonic()
-        heartbeat_timeout = self._config.heartbeat_timeout.to_seconds()
+        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
         logger.info("Serving (waiting for controller heartbeats)")
 
         while not self._stop_event.is_set():
-            elapsed = time.monotonic() - self._last_heartbeat_time
-            if elapsed > heartbeat_timeout:
-                logger.warning("No heartbeat from controller for %.0fs, resetting", elapsed)
+            if self._heartbeat_deadline.expired():
+                logger.warning("No heartbeat from controller, resetting")
                 return
             # Check every second
             self._stop_event.wait(1.0)
@@ -440,8 +438,8 @@ class Worker:
         Processes tasks_to_run and tasks_to_kill, reconciles expected_tasks against
         actual state, and returns current running/completed tasks.
         """
-        # Update heartbeat timestamp
-        self._last_heartbeat_time = time.monotonic()
+        # Reset heartbeat deadline
+        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
 
         # Start new tasks
         for run_req in request.tasks_to_run:

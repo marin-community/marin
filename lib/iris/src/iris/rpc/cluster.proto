@@ -71,8 +71,8 @@ message TaskStatus {
   int32 exit_code = 7;
   string error = 8;
 
-  iris.common.Timestamp started_at = 9;
-  iris.common.Timestamp finished_at = 10;
+  iris.time.Timestamp started_at = 9;
+  iris.time.Timestamp finished_at = 10;
 
   map<string, int32> ports = 11;      // Per-task port allocations
   ResourceUsage resource_usage = 12;
@@ -93,8 +93,8 @@ message TaskAttempt {
   TaskState state = 3;
   int32 exit_code = 4;
   string error = 5;
-  iris.common.Timestamp started_at = 6;
-  iris.common.Timestamp finished_at = 7;
+  iris.time.Timestamp started_at = 6;
+  iris.time.Timestamp finished_at = 7;
   bool is_worker_failure = 8;
 }
 
@@ -108,8 +108,8 @@ message ResourceUsage {
 }
 
 message BuildMetrics {
-  iris.common.Timestamp build_started = 1;
-  iris.common.Timestamp build_finished = 2;
+  iris.time.Timestamp build_started = 1;
+  iris.time.Timestamp build_finished = 2;
   bool from_cache = 3;
   string image_tag = 4;
 }
@@ -119,8 +119,8 @@ message JobStatus {
   JobState state = 2;
   int32 exit_code = 3;
   string error = 4;
-  iris.common.Timestamp started_at = 5;
-  iris.common.Timestamp finished_at = 6;
+  iris.time.Timestamp started_at = 5;
+  iris.time.Timestamp finished_at = 6;
 
   // Port allocations
   map<string, int32> ports = 7;
@@ -144,7 +144,7 @@ message JobStatus {
 
   // Job metadata from request (for dashboard display)
   string name = 25;                        // Job name from request
-  iris.common.Timestamp submitted_at = 26;
+  iris.time.Timestamp submitted_at = 26;
 
   // Resource specification from job request (for dashboard display)
   ResourceSpecProto resources = 27;
@@ -345,7 +345,7 @@ message Controller {
 
     // Scheduling timeout - job fails with UNSCHEDULABLE if not scheduled within this time
     // If not set or milliseconds=0, no timeout (wait forever)
-    iris.common.Duration scheduling_timeout = 8;
+    iris.time.Duration scheduling_timeout = 8;
 
     // Named ports to allocate (e.g., ["http", "grpc", "actor"])
     // Worker allocates ports and injects FLUSTER_PORT_<NAME> env vars into the container
@@ -383,7 +383,7 @@ message Controller {
 
     // Per-task timeout. Task is killed if it runs longer than this.
     // If not set or milliseconds=0, no timeout.
-    iris.common.Duration timeout = 21;
+    iris.time.Duration timeout = 21;
   }
 
   message LaunchJobResponse {
@@ -432,7 +432,7 @@ message Controller {
     string worker_id = 1;
     string address = 2;              // host:port for WorkerService
     WorkerMetadata metadata = 3;
-    iris.common.Timestamp registered_at = 4;
+    iris.time.Timestamp registered_at = 4;
   }
 
   message RunningTaskEntry {
@@ -449,7 +449,7 @@ message Controller {
     TaskState state = 4;
     int32 exit_code = 5;
     string error = 6;
-    iris.common.Timestamp finished_at = 7;
+    iris.time.Timestamp finished_at = 7;
     int32 attempt_id = 8;
   }
 
@@ -458,7 +458,7 @@ message Controller {
     string worker_id = 1;
     bool healthy = 2;
     int32 consecutive_failures = 3;
-    iris.common.Timestamp last_heartbeat = 4;
+    iris.time.Timestamp last_heartbeat = 4;
     repeated string running_job_ids = 5;
     string address = 6;                    // Worker RPC address (host:port)
     WorkerMetadata metadata = 7;           // Full worker metadata
@@ -547,7 +547,7 @@ message Controller {
 
   // --- Transactions / Actions Log ---
   message TransactionAction {
-    iris.common.Timestamp timestamp = 1;
+    iris.time.Timestamp timestamp = 1;
     string action = 2;
     string entity_id = 3;
     string details = 4;
@@ -600,7 +600,7 @@ message Worker {
     EnvironmentConfig environment = 6;
     string bundle_gcs_path = 7;
     ResourceSpecProto resources = 8;
-    iris.common.Duration timeout = 9;
+    iris.time.Duration timeout = 9;
     repeated string ports = 10;
     int32 attempt_id = 11;
   }
@@ -617,7 +617,7 @@ message Worker {
   }
 
   message LogEntry {
-    iris.common.Timestamp timestamp = 1;
+    iris.time.Timestamp timestamp = 1;
     string source = 2;  // "stdout", "stderr", or "build"
     string data = 3;    // Log line content
   }
@@ -641,12 +641,12 @@ message Worker {
 
   message KillTaskRequest {
     string task_id = 1;
-    iris.common.Duration term_timeout = 2;  // Time to wait for graceful termination before SIGKILL
+    iris.time.Duration term_timeout = 2;  // Time to wait for graceful termination before SIGKILL
   }
 
   message HealthResponse {
     bool healthy = 1;
-    iris.common.Duration uptime = 2;
+    iris.time.Duration uptime = 2;
     int32 running_tasks = 3;        // Renamed from running_jobs
   }
 

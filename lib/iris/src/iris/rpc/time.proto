@@ -14,7 +14,7 @@
 
 edition = "2023";
 
-package iris.common;
+package iris.time;
 
 // Timestamp representing milliseconds since Unix epoch.
 // Provides type safety and prevents mixing with other int64 fields.
@@ -27,8 +27,8 @@ package iris.common;
 // Example usage in other protos:
 //   import "time.proto";
 //   message TaskStatus {
-//     iris.common.Timestamp started_at = 1;
-//     iris.common.Timestamp finished_at = 2;
+//     iris.time.Timestamp started_at = 1;
+//     iris.time.Timestamp finished_at = 2;
 //   }
 message Timestamp {
   int64 epoch_ms = 1;
@@ -39,8 +39,8 @@ message Timestamp {
 //
 // Example usage:
 //   message Config {
-//     iris.common.Duration timeout = 1;
-//     iris.common.Duration retry_interval = 2;
+//     iris.time.Duration timeout = 1;
+//     iris.time.Duration retry_interval = 2;
 //   }
 message Duration {
   int64 milliseconds = 1;

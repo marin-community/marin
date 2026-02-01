@@ -233,7 +233,7 @@ class Timestamp:
         return _now_ms() - self._epoch_ms
 
     def add_ms(self, milliseconds: int) -> "Timestamp":
-        """Return new timestamp offset by milliseconds."""
+        """Return new timestamp offset by milliseconds (may be negative)."""
         return Timestamp(self._epoch_ms + milliseconds)
 
     def add(self, duration: Duration) -> "Timestamp":

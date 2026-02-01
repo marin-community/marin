@@ -49,8 +49,8 @@ message VmInfo {
   VmState state = 4;
   string address = 5;
   string zone = 6;
-  iris.common.Timestamp created_at = 7;
-  iris.common.Timestamp state_changed_at = 8;
+  iris.time.Timestamp created_at = 7;
+  iris.time.Timestamp state_changed_at = 8;
 
   // Worker info (populated after registration)
   string worker_id = 10;
@@ -69,7 +69,7 @@ message VmInfo {
 message SliceInfo {
   string slice_id = 1;
   string scale_group = 2;
-  iris.common.Timestamp created_at = 3;
+  iris.time.Timestamp created_at = 3;
   repeated VmInfo vms = 4;
 }
 
@@ -91,12 +91,12 @@ message ScaleGroupStatus {
   int32 peak_demand = 21;
 
   // Backoff state
-  iris.common.Timestamp backoff_until = 30;
+  iris.time.Timestamp backoff_until = 30;
   int32 consecutive_failures = 31;
 
   // Rate limiting
-  iris.common.Timestamp last_scale_up = 40;
-  iris.common.Timestamp last_scale_down = 41;
+  iris.time.Timestamp last_scale_up = 40;
+  iris.time.Timestamp last_scale_down = 41;
 
   // Slices in this group
   repeated SliceInfo slices = 50;
@@ -104,7 +104,7 @@ message ScaleGroupStatus {
 
 // Autoscaler action/event log entry
 message AutoscalerAction {
-  iris.common.Timestamp timestamp = 1;
+  iris.time.Timestamp timestamp = 1;
   string action_type = 2;     // "scale_up", "scale_down", "quota_exceeded", "backoff_triggered", "worker_failed"
   string scale_group = 3;
   string slice_id = 4;        // Empty for group-level actions
@@ -116,6 +116,6 @@ message AutoscalerAction {
 message AutoscalerStatus {
   repeated ScaleGroupStatus groups = 1;
   map<string, int32> current_demand = 2;
-  iris.common.Timestamp last_evaluation = 3;
+  iris.time.Timestamp last_evaluation = 3;
   repeated AutoscalerAction recent_actions = 4;  // Last N actions (max 100)
 }

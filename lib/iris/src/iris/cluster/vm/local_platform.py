@@ -589,8 +589,8 @@ def _create_local_autoscaler(
         scale_groups[name] = ScalingGroup(
             config=sg_config,
             vm_manager=manager,
-            scale_up_cooldown_ms=1000,
-            scale_down_cooldown_ms=300_000,
+            scale_up_cooldown=Duration.from_ms(1000),
+            scale_down_cooldown=Duration.from_ms(300_000),
         )
 
     return Autoscaler(
