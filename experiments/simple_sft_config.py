@@ -98,6 +98,9 @@ class SimpleSFTConfig:
     beta2: float | None = None
     """AdamW optimizer beta2."""
 
+    epsilon: float | None = None
+    """AdamW optimizer epsilon."""
+
     warmup: float = 0.03
     """Fraction of training steps to use for learning rate warmup."""
 
@@ -155,6 +158,9 @@ class SimpleSFTConfig:
     train_batch_size/num_devices (no gradient accumulation). Set to a positive value
     to enable gradient accumulation. For example, with 8 devices, batch_size=32, and
     per_device_parallelism=1, you get gradient accumulation of 4."""
+
+    per_device_eval_parallelism: int | None = None
+    """Number of examples to evaluate in parallel on each device."""
 
     reinit_tokens: list[str] | bool = False
     """
