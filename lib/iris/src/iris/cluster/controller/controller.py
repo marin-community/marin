@@ -42,10 +42,10 @@ from iris.cluster.controller.state import (
     get_device_type_enum,
     get_device_variant,
 )
-from iris.cluster.types import JobId, TaskId, WorkerId, VmWorkerStatus, VmWorkerStatusMap, PREEMPTIBLE_ATTRIBUTE_KEY
+from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, JobId, TaskId, VmWorkerStatus, VmWorkerStatusMap, WorkerId
 from iris.cluster.vm.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
-from iris.managed_thread import ThreadRegistry
+from iris.managed_thread import ManagedThread, get_thread_registry
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import ExponentialBackoff, now_ms
@@ -93,8 +93,8 @@ def compute_demand_entries(state: ControllerState) -> list:
     Returns:
         List of DemandEntry objects with device_type, device_variant, and count.
     """
-    from iris.cluster.vm.autoscaler import DemandEntry
     from iris.cluster.types import DeviceType
+    from iris.cluster.vm.autoscaler import DemandEntry
 
     @dataclass
     class DemandAccumulator:
@@ -261,7 +261,6 @@ class Controller:
         config: ControllerConfig,
         worker_stub_factory: WorkerStubFactory,
         autoscaler: "Autoscaler | None" = None,
-        thread_registry: ThreadRegistry | None = None,
     ):
         if not config.bundle_prefix:
             raise ValueError(
@@ -286,10 +285,12 @@ class Controller:
             port=config.port,
         )
 
-        self._threads = thread_registry or ThreadRegistry()
         self._wake_event = threading.Event()
         self._heartbeat_event = threading.Event()
         self._server: uvicorn.Server | None = None
+        self._scheduler_thread: ManagedThread | None = None
+        self._heartbeat_thread: ManagedThread | None = None
+        self._server_thread: ManagedThread | None = None
 
         # Per-worker dispatch state (outboxes). Protected by _dispatch_lock since
         # the scheduling thread writes and the heartbeat thread reads+drains.
@@ -318,9 +319,13 @@ class Controller:
 
     def start(self) -> None:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
-        self._threads.spawn(target=self._run_scheduling_loop, name="controller-scheduler")
-        self._threads.spawn(target=self._run_heartbeat_loop, name="controller-heartbeat")
-        self._threads.spawn(target=self._run_server, name="controller-server")
+        self._scheduler_thread = get_thread_registry().spawn(
+            target=self._run_scheduling_loop, name="controller-scheduler"
+        )
+        self._heartbeat_thread = get_thread_registry().spawn(
+            target=self._run_heartbeat_loop, name="controller-heartbeat"
+        )
+        self._server_thread = get_thread_registry().spawn(target=self._run_server, name="controller-server")
 
         if self._autoscaler:
             logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
@@ -342,7 +347,15 @@ class Controller:
         if self._server:
             self._server.should_exit = True
 
-        self._threads.shutdown()
+        if self._scheduler_thread:
+            self._scheduler_thread.stop()
+            self._scheduler_thread.join(timeout=5.0)
+        if self._heartbeat_thread:
+            self._heartbeat_thread.stop()
+            self._heartbeat_thread.join(timeout=5.0)
+        if self._server_thread:
+            self._server_thread.stop()
+            self._server_thread.join(timeout=5.0)
 
         self._dispatch_executor.shutdown(wait=True, cancel_futures=False)
 
@@ -601,6 +614,20 @@ class Controller:
         of running vs expected tasks is handled worker-side using expected_tasks.
         """
         self._state.handle_event(WorkerHeartbeatEvent(worker_id=worker.worker_id, timestamp_ms=now_ms()))
+
+        for entry in response.running_tasks:
+            task_id = TaskId(entry.task_id)
+            task = self._state.get_task(task_id)
+            if task and not task.is_finished() and task.state != entry.state:
+                self._state.handle_event(
+                    TaskStateChangedEvent(
+                        task_id=task_id,
+                        new_state=entry.state,
+                        error=None,
+                        exit_code=None,
+                        attempt_id=entry.attempt_id,
+                    )
+                )
 
         for entry in response.completed_tasks:
             task_id = TaskId(entry.task_id)

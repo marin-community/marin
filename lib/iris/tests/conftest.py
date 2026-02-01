@@ -20,6 +20,8 @@ from contextlib import contextmanager
 
 import pytest
 
+from iris.managed_thread import ThreadRegistry, set_thread_registry
+
 
 def pytest_addoption(parser):
     parser.addoption(
@@ -94,3 +96,13 @@ def docker_cleanup_session(use_docker):
     else:
         # Skip Docker cleanup when not using Docker
         yield
+
+
+@pytest.fixture(autouse=True)
+def _thread_registry():
+    """Swap in a fresh ThreadRegistry for each test, shut it down after."""
+    registry = ThreadRegistry()
+    old = set_thread_registry(registry)
+    yield registry
+    registry.shutdown(timeout=5.0)
+    set_thread_registry(old)

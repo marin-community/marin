@@ -1,8 +1,25 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """ManagedThread and ThreadRegistry for structured thread lifecycle management.
 
 ManagedThread wraps threading.Thread with an integrated stop event, ensuring
 threads are non-daemon and can be cleanly shut down. ThreadRegistry tracks
 multiple ManagedThreads for bulk shutdown.
+
+Components use the global registry via get_thread_registry(). Tests swap in
+a fresh registry via set_thread_registry() and call shutdown() in teardown.
 """
 
 import logging
@@ -70,13 +87,12 @@ class ThreadRegistry:
     def shutdown(self, timeout: float = 10.0) -> list[str]:
         """Stop all threads, join with timeout. Returns names of stuck threads.
 
-        Signals all threads to stop first, then joins each with a share of the
-        total timeout budget.
+        Signals all threads to stop first, then joins each with the remaining
+        timeout budget (fast-exiting threads don't waste budget).
         """
         with self._lock:
             threads = list(self._threads)
 
-        # Signal all threads to stop
         for thread in threads:
             thread.stop()
 
@@ -96,3 +112,25 @@ class ThreadRegistry:
 
     def __exit__(self, *exc: object) -> None:
         self.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Global registry
+# ---------------------------------------------------------------------------
+
+_global_registry = ThreadRegistry()
+_registry_lock = threading.Lock()
+
+
+def get_thread_registry() -> ThreadRegistry:
+    """Return the process-wide ThreadRegistry."""
+    return _global_registry
+
+
+def set_thread_registry(registry: ThreadRegistry) -> ThreadRegistry:
+    """Replace the global registry. Returns the previous one (for restore)."""
+    global _global_registry
+    with _registry_lock:
+        old = _global_registry
+        _global_registry = registry
+    return old
