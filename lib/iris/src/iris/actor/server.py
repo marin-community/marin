@@ -24,7 +24,6 @@ import asyncio
 import inspect
 import logging
 import socket
-import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -35,7 +34,7 @@ import uvicorn
 
 from connectrpc.request import RequestContext
 
-from iris.managed_thread import ManagedThread, get_thread_registry, stop_event_to_server
+from iris.managed_thread import ManagedThread, spawn_server
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
 from iris.time_utils import ExponentialBackoff, now_ms
@@ -226,12 +225,7 @@ class ActorServer:
             log_level="error",
         )
         self._server = uvicorn.Server(config)
-
-        def _run_server(stop_event: threading.Event) -> None:
-            stop_event_to_server(stop_event, self._server)
-            self._server.run()
-
-        self._thread = get_thread_registry().spawn(target=_run_server, name="actor-server")
+        self._thread = spawn_server(self._server, name="actor-server")
 
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
             lambda: self._server.started,

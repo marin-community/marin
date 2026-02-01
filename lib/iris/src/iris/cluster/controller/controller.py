@@ -45,7 +45,7 @@ from iris.cluster.controller.state import (
 from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, JobId, TaskId, VmWorkerStatus, VmWorkerStatusMap, WorkerId
 from iris.cluster.vm.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
-from iris.managed_thread import ManagedThread, get_thread_registry, stop_event_to_server
+from iris.managed_thread import ManagedThread, get_thread_registry, spawn_server
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import ExponentialBackoff, now_ms
@@ -325,13 +325,21 @@ class Controller:
         self._heartbeat_thread = get_thread_registry().spawn(
             target=self._run_heartbeat_loop, name="controller-heartbeat"
         )
-        self._server_thread = get_thread_registry().spawn(target=self._run_server, name="controller-server")
+        self._server = uvicorn.Server(
+            uvicorn.Config(
+                self._dashboard._app,
+                host=self._config.host,
+                port=self._config.port,
+                log_level="error",
+            )
+        )
+        self._server_thread = spawn_server(self._server, name="controller-server")
 
         if self._autoscaler:
             logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
 
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: self._server is not None and self._server.started,
+            lambda: self._server.started,
             timeout=5.0,
         )
 
@@ -722,20 +730,6 @@ class Controller:
                 running_task_ids=frozenset(str(tid) for tid in worker.running_tasks),
             )
         return result
-
-    def _run_server(self, stop_event: threading.Event) -> None:
-        try:
-            config = uvicorn.Config(
-                self._dashboard._app,
-                host=self._config.host,
-                port=self._config.port,
-                log_level="error",
-            )
-            self._server = uvicorn.Server(config)
-            stop_event_to_server(stop_event, self._server)
-            self._server.run()
-        except Exception as e:
-            logger.exception("Controller server error: %s", e)
 
     def launch_job(
         self,

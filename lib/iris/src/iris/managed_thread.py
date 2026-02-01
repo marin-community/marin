@@ -113,11 +113,10 @@ class ThreadRegistry:
         self.shutdown()
 
 
-def stop_event_to_server(stop_event: threading.Event, server: Any) -> None:
+def _stop_event_to_server(stop_event: threading.Event, server: Any) -> None:
     """Bridge a stop_event to a uvicorn Server's should_exit flag.
 
     Spawns a daemon thread that waits for stop_event and sets server.should_exit.
-    This ensures the server shuts down when the registry signals stop.
     """
 
     def _watch() -> None:
@@ -125,6 +124,20 @@ def stop_event_to_server(stop_event: threading.Event, server: Any) -> None:
         server.should_exit = True
 
     threading.Thread(target=_watch, daemon=True, name="stop-event-bridge").start()
+
+
+def spawn_server(server: Any, *, name: str) -> ManagedThread:
+    """Spawn a uvicorn Server as a managed thread in the global registry.
+
+    Bridges the ManagedThread stop_event to server.should_exit so the server
+    shuts down cleanly when the registry signals stop.
+    """
+
+    def _run(stop_event: threading.Event) -> None:
+        _stop_event_to_server(stop_event, server)
+        server.run()
+
+    return get_thread_registry().spawn(target=_run, name=name)
 
 
 # ---------------------------------------------------------------------------

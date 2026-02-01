@@ -48,7 +48,7 @@ from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
-from iris.managed_thread import ManagedThread
+from iris.managed_thread import ManagedThread, get_thread_registry
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
 from iris.time_utils import now_ms
 
@@ -107,8 +107,7 @@ class _LocalContainer:
 
     def start(self):
         self._running = True
-        self._thread = ManagedThread(target=self._execute, name="local-container")
-        self._thread.start()
+        self._thread = get_thread_registry().spawn(target=self._execute, name="local-container")
 
     def _execute(self, stop_event: threading.Event):
         from iris.cluster.client.job_info import JobInfo, _parse_ports_from_env, set_job_info

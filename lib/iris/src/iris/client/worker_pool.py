@@ -58,7 +58,7 @@ from iris.actor.resolver import Resolver
 from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import EnvironmentSpec, Entrypoint, JobId, ResourceSpec
-from iris.managed_thread import ManagedThread
+from iris.managed_thread import ManagedThread, get_thread_registry
 from iris.time_utils import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -221,8 +221,7 @@ class WorkerDispatcher:
         def target(stop_event: threading.Event, *args):
             ctx.run(self._run, stop_event, *args)
 
-        self._managed_thread = ManagedThread(target=target, name=f"dispatch-{self.state.worker_id}")
-        self._managed_thread.start()
+        self._managed_thread = get_thread_registry().spawn(target=target, name=f"dispatch-{self.state.worker_id}")
 
     def stop(self) -> None:
         if self._managed_thread:

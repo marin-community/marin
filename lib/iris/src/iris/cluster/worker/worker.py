@@ -34,7 +34,7 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
-from iris.managed_thread import ManagedThread, get_thread_registry, stop_event_to_server
+from iris.managed_thread import ManagedThread, get_thread_registry, spawn_server
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import ExponentialBackoff
@@ -111,8 +111,8 @@ class Worker:
         )
 
         self._server: uvicorn.Server | None = None
-        self._server_managed: ManagedThread | None = None
-        self._lifecycle_managed: ManagedThread | None = None
+        self._server_thread: ManagedThread | None = None
+        self._lifecycle_thread: ManagedThread | None = None
 
         self._worker_id: str | None = config.worker_id
         self._controller_client: ControllerServiceClientSync | None = None
@@ -125,11 +125,19 @@ class Worker:
         self._cleanup_all_iris_containers()
 
         # Start HTTP server
-        self._server_managed = get_thread_registry().spawn(target=self._run_server, name="worker-server")
+        self._server = uvicorn.Server(
+            uvicorn.Config(
+                self._dashboard._app,
+                host=self._config.host,
+                port=self._config.port,
+                log_level="error",
+            )
+        )
+        self._server_thread = spawn_server(self._server, name="worker-server")
 
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: self._server is not None and self._server.started,
+            lambda: self._server.started,
             timeout=5.0,
         )
 
@@ -141,7 +149,7 @@ class Worker:
             )
 
             # Start lifecycle thread: register + serve + reset loop
-            self._lifecycle_managed = get_thread_registry().spawn(target=self._run_lifecycle, name="worker-lifecycle")
+            self._lifecycle_thread = get_thread_registry().spawn(target=self._run_lifecycle, name="worker-lifecycle")
 
     def _cleanup_all_iris_containers(self) -> None:
         """Remove all iris-managed containers at startup.
@@ -154,8 +162,8 @@ class Worker:
 
     def wait(self) -> None:
         """Block until the server thread exits."""
-        if self._server_managed:
-            self._server_managed.join()
+        if self._server_thread:
+            self._server_thread.join()
 
     def stop(self) -> None:
         # Stop uvicorn server
@@ -163,12 +171,12 @@ class Worker:
             self._server.should_exit = True
 
         # Stop and join managed threads
-        if self._server_managed:
-            self._server_managed.stop()
-            self._server_managed.join(timeout=5.0)
-        if self._lifecycle_managed:
-            self._lifecycle_managed.stop()
-            self._lifecycle_managed.join(timeout=5.0)
+        if self._server_thread:
+            self._server_thread.stop()
+            self._server_thread.join(timeout=5.0)
+        if self._lifecycle_thread:
+            self._lifecycle_thread.stop()
+            self._lifecycle_thread.join(timeout=5.0)
 
         # Kill and remove all containers
         with self._lock:
@@ -190,20 +198,6 @@ class Worker:
                 self._temp_dir.cleanup()
             except OSError:
                 pass
-
-    def _run_server(self, stop_event: threading.Event) -> None:
-        try:
-            config = uvicorn.Config(
-                self._dashboard._app,
-                host=self._config.host,
-                port=self._config.port,
-                log_level="error",
-            )
-            self._server = uvicorn.Server(config)
-            stop_event_to_server(stop_event, self._server)
-            self._server.run()
-        except Exception as e:
-            print(f"Worker server error: {e}")
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:
         """Main lifecycle: register, serve, reset, repeat.
