@@ -43,7 +43,7 @@ import time
 import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
-from contextvars import Context, copy_context
+from contextvars import copy_context
 from dataclasses import dataclass
 from enum import Enum, auto
 from queue import Empty, Queue
@@ -203,27 +203,23 @@ class WorkerDispatcher:
         task_queue: "Queue[PendingTask]",
         resolver: Resolver,
         timeout: float,
-        context: Context | None = None,
     ):
         self.state = state
         self._task_queue = task_queue
         self._resolver = resolver
         self._timeout = timeout
-        self._context = context
         self._managed_thread: ManagedThread | None = None
         self._discover_backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
         self._actor_client: ActorClient | None = None
         self._stop_event: threading.Event | None = None
 
     def start(self) -> None:
-        target = self._run
-        # Python threads don't inherit contextvars. Wrap the target so it runs
-        # inside the parent's Context, propagating iris_ctx() and friends.
-        if self._context:
-            original = target
+        # Python threads don't inherit contextvars. Capture a snapshot now
+        # so iris_ctx() and friends are available inside the dispatcher thread.
+        ctx = copy_context()
 
-            def target(stop_event: threading.Event, *args):
-                self._context.run(original, stop_event, *args)
+        def target(stop_event: threading.Event, *args):
+            ctx.run(self._run, stop_event, *args)
 
         self._managed_thread = ManagedThread(target=target, name=f"dispatch-{self.state.worker_id}")
         self._managed_thread.start()
@@ -480,16 +476,12 @@ class WorkerPool:
         if self._resolver is None:
             self._resolver = self._client.resolver_for_job(self._job.job_id)
 
-        # Start dispatchers (one per worker). Each thread needs its own context copy
-        # because a Context can only be entered by one thread at a time.
         for worker_state in self._workers.values():
-            ctx = copy_context()
             dispatcher = WorkerDispatcher(
                 state=worker_state,
                 task_queue=self._task_queue,
                 resolver=self._resolver,
                 timeout=self._timeout,
-                context=ctx,
             )
             dispatcher.start()
             self._dispatchers.append(dispatcher)
