@@ -127,10 +127,15 @@ class LevanterVLM(BaseModel):
         # Match vlm_eval_harness.py settings to avoid OOM
         # See vlm_eval_harness.py:398-409 for reference
         max_seqs = max(1, self.vlm_batch_size)
+        # For batched VLM prefill, we need enough space for all sequences' tokens
+        # Each VLM sequence can have many image placeholder tokens (1000+)
+        # Set max_prefill_size to accommodate all sequences in a batch
+        max_prefill_size = max_seqs * max_seq_len
         engine_config = InferenceEngineConfig(
             max_seq_len=max_seq_len,
             max_seqs=max_seqs,  # Use vlm_batch_size for batched inference
             max_seqs_in_prefill=max_seqs,
+            max_prefill_size=max_prefill_size,  # Enough for all VLM sequences
             page_size=8,  # Smaller page size
             compute_dtype=jnp.bfloat16,
             hbm_utilization=0.5,  # Only use 50% HBM for KV cache

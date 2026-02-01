@@ -25,6 +25,9 @@ fork-strategy = "fewest"
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
+    # Force headless opencv to avoid libGL.so.1 dependency on headless servers
+    # VLMEvalKit depends on opencv-python, but we want headless version
+    "opencv-python ; python_version < '0'",  # Never install (marker is always false)
 ]
 
 [tool.uv.workspace]
