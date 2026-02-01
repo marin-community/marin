@@ -448,6 +448,43 @@ def main(config: EvalVLMConfig):
             "checkpoint": config.checkpoint_path or str(config.hf_checkpoint),
             "tasks": [str(t) for t in task_spec],
             "results": all_results,
+            # Evaluation metadata for reproducibility
+            "metadata": {
+                # Model configuration
+                "model": {
+                    "vision_encoder": config.model.vision_encoder_type,
+                    "vision_hidden_size": config.model.vision_config.hidden_size,
+                    "vision_image_size": config.model.vision_config.image_size,
+                    "vision_patch_size": config.model.vision_config.patch_size,
+                    "text_hidden_size": config.model.text_config.hidden_dim,
+                    "text_num_layers": config.model.text_config.num_layers,
+                    "text_max_seq_len": config.model.text_config.max_seq_len,
+                },
+                # Evaluation parameters
+                "eval_config": {
+                    "max_eval_length": config.max_eval_length,
+                    "vlm_batch_size": config.eval_harness.vlm_batch_size,
+                    "max_examples": config.eval_harness.max_examples,
+                    "generation_kwargs": config.eval_harness.generation_kwargs,
+                },
+                # Image processing settings
+                "image_processing": {
+                    "image_size": config.image_size,
+                    "patch_size": config.patch_size,
+                    "vision_feature_height": config.vision_feature_height,
+                    "disable_anyres": config.disable_anyres,
+                },
+                # Paths
+                "paths": {
+                    "processor_path": config.processor_path,
+                    "tokenizer_path": config.tokenizer_path,
+                },
+                # Hardware info
+                "hardware": {
+                    "num_devices": jax.device_count(),
+                    "device_type": str(jax.devices()[0].platform) if jax.devices() else "unknown",
+                },
+            },
         }
 
         with open(results_file, "w") as f:
