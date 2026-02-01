@@ -389,6 +389,7 @@ def evaluate_harbor(
     agent: str = "claude-code",
     n_concurrent: int = 4,
     env: str = "local",
+    agent_kwargs: dict | None = None,
 ) -> ExecutorStep:
     """
     Evaluate on ANY Harbor dataset from the registry.
@@ -437,6 +438,7 @@ def evaluate_harbor(
             "agent": agent,
             "n_concurrent": n_concurrent,
             "env": env,
+            "agent_kwargs": agent_kwargs or {},
         }
     }
 
@@ -459,4 +461,7 @@ def evaluate_harbor(
             generation_params=generation_params,
         ),
         pip_dependency_groups=["harbor"],
+        # When model_path is set, the evaluator launches a fray sub-job for vLLM serving
+        # with the correct resources. The outer executor step runs on CPU.
+        resources=ResourceConfig.with_cpu() if model_path else resource_config,
     )

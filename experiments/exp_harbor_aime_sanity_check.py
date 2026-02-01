@@ -13,43 +13,21 @@
 # limitations under the License.
 
 """
-Harbor + AIME sanity check
+Harbor + AIME sanity check with Qwen3-8B served via vLLM
 
-This demonstrates the generic Harbor integration working with AIME@1.0.
-AIME@1.0 from Harbor registry contains 60 competition math problems:
-- 30 from AIME 2024 (aime_60 through aime_89)
-- 15 from AIME 2025-I (aime_i-1 through aime_i-15)
-- 15 from AIME 2025-II (aime_ii-1 through aime_ii-15)
-
-No custom adapters needed! Harbor loads AIME directly from its registry.
-
-This same pattern works for ANY Harbor dataset:
-- terminal-bench@2.0 (89 tasks)
-- swebench-verified@1.0 (500 tasks)
-- And 40+ other benchmarks!
-
-Usage (Local with Daytona):
-    DAYTONA_API_KEY=<daytona-key> ANTHROPIC_API_KEY=<key> \
-    MARIN_PREFIX=./test-marin-harbor-terminus2 uv run experiments/exp_harbor_aime_sanity_check.py
-
-Usage (Local with Docker):
-    ANTHROPIC_API_KEY=<key> ENV_TYPE=local \
-    ENV_TYPE=local MARIN_PREFIX=./test-marin-harbor-terminus2 uv run experiments/exp_harbor_aime_sanity_check.py
-
-Usage (Infra sanity check, no LLM required):
-    DAYTONA_API_KEY=<daytona-key> HARBOR_AGENT=nop HARBOR_MAX_INSTANCES=1 HARBOR_N_CONCURRENT=1 \
-    uv run python experiments/exp_harbor_aime_sanity_check.py --prefix ./runs
+Evaluates Qwen3-8B on AIME@1.0 from Harbor registry (60 competition math problems)
+using a vLLM server started automatically by the evaluator.
 
 Usage (Ray Cluster with Daytona):
     uv run lib/marin/src/marin/run/ray_run.py \
         --env_vars MARIN_PREFIX gs://marin-us-central1 \
-        --env_vars ANTHROPIC_API_KEY ${ANTHROPIC_API_KEY} \
         --env_vars DAYTONA_API_KEY ${DAYTONA_API_KEY} \
         --env_vars WANDB_API_KEY ${WANDB_API_KEY} \
         --env_vars WANDB_ENTITY marin-community \
         --env_vars WANDB_PROJECT harbor \
+        --env_vars HF_TOKEN ${HF_TOKEN} \
         --cluster us-central1 \
-        --extra harbor,cpu \
+        --extra harbor \
         --no_wait \
         -- python experiments/exp_harbor_aime_sanity_check.py
 
@@ -59,8 +37,6 @@ Results are saved to:
       - results_TIMESTAMP.json: Aggregated metrics and pointer to samples file
       - trajectories/{task_id}.jsonl: Full agent interaction traces (best-effort)
     - W&B: Metrics and trajectory lengths logged to wandb.ai/marin-community/harbor
-
-Note: Requires ANTHROPIC_API_KEY environment variable for Claude agent.
 """
 
 import logging
@@ -83,21 +59,19 @@ def _escape_model_name_for_path(model_name: str) -> str:
     return model_name.replace("://", "__").replace("/", "__")
 
 
-# Resource configuration (Harbor runs via API + containers; no accelerator required)
-resource_config = ResourceConfig.with_cpu()
-
-# Model configuration
-# For the sanity check, we'll use Claude Haiku 4.5 for faster, cost-effective evaluation
+# Qwen3-8B served via vLLM (the evaluator starts the vLLM server automatically)
 MODEL = {
-    "name": "anthropic/claude-haiku-4-5-20251001",
-    "path": None,  # API model, no path needed
+    "name": "qwen3-8b",
+    "path": "gs://marin-us-central1/models/Qwen--Qwen3-8B--main/",
 }
+
+# TPU resource config for vLLM serving
+resource_config = ResourceConfig.with_tpu("v5p-8")
 
 # Get environment type from ENV_TYPE environment variable (default: daytona)
 ENV_TYPE = os.environ.get("ENV_TYPE", "daytona")
 
 # Harbor agent configuration
-# Cannot use claude-code until this PR is fixed: https://github.com/laude-institute/harbor/pull/557
 HARBOR_AGENT = os.environ.get("HARBOR_AGENT", "terminus-2")
 
 
@@ -123,7 +97,6 @@ if ENV_TYPE == "daytona" and not os.environ.get("DAYTONA_API_KEY"):
     )
 
 # AIME configuration from Harbor registry
-# See https://harborframework.com/registry/aime/1.0
 DATASET = "aime"
 VERSION = "1.0"
 
@@ -131,7 +104,7 @@ MODEL_NAME_ESCAPED = _escape_model_name_for_path(MODEL["name"])
 OUTPUT_DIR = os.path.join("evaluation", "harbor", DATASET, MODEL_NAME_ESCAPED)
 
 logger.info("=" * 80)
-logger.info("Harbor + AIME Sanity Check")
+logger.info("Harbor + AIME Sanity Check (Qwen3-8B via vLLM)")
 logger.info("=" * 80)
 logger.info(f"Dataset: {DATASET}@{VERSION}")
 logger.info(f"Model: {MODEL['name']}")
@@ -150,10 +123,10 @@ step = evaluate_harbor(
     version=VERSION,
     max_eval_instances=HARBOR_MAX_INSTANCES,
     resource_config=resource_config,
-    wandb_tags=["harbor", DATASET, "sanity-check", HARBOR_AGENT, ENV_TYPE],
+    wandb_tags=["harbor", DATASET, "sanity-check", HARBOR_AGENT, ENV_TYPE, "qwen3-8b", "vllm"],
     agent=HARBOR_AGENT,
     n_concurrent=HARBOR_N_CONCURRENT or 4,
-    env=ENV_TYPE,  # Use Daytona cloud workspaces (or local Docker if ENV_TYPE=local)
+    env=ENV_TYPE,
 )
 step = step.with_output_path(OUTPUT_DIR)
 
@@ -163,11 +136,12 @@ if __name__ == "__main__":
     task_count_desc = "all tasks" if HARBOR_MAX_INSTANCES is None else f"the first {HARBOR_MAX_INSTANCES} task(s)"
     logger.info(
         f"This will:\n"
-        f"1. Load AIME@1.0 dataset from Harbor registry (60 tasks total)\n"
-        f"2. Run {task_count_desc} using agent '{HARBOR_AGENT}'\n"
-        f"3. Execute in {env_desc}\n"
-        f"4. Save trajectories and results to GCS\n"
-        f"5. Log metrics to W&B"
+        f"1. Start vLLM server serving {MODEL['name']}\n"
+        f"2. Load AIME@1.0 dataset from Harbor registry (60 tasks total)\n"
+        f"3. Run {task_count_desc} using agent '{HARBOR_AGENT}'\n"
+        f"4. Execute in {env_desc}\n"
+        f"5. Save trajectories and results to GCS\n"
+        f"6. Log metrics to W&B"
     )
 
     executor_main(steps=[step])
