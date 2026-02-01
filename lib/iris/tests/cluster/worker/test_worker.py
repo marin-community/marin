@@ -23,13 +23,15 @@ from unittest.mock import Mock
 import pytest
 from connectrpc.request import RequestContext
 
+from iris.logging import BufferedLogRecord, LogRingBuffer
 from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
+from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
+from iris.cluster.worker.worker import Worker, WorkerConfig
 
 # ============================================================================
 # PortAllocator Tests
@@ -550,7 +552,7 @@ def create_integration_entrypoint():
         print("Hello from test task!")
         return 42
 
-    return Entrypoint(callable=test_fn, args=(), kwargs={})
+    return Entrypoint.from_callable(test_fn)
 
 
 def create_integration_run_task_request(bundle_path: str, task_id: str):
@@ -581,6 +583,59 @@ def cache_dir(tmp_path):
 def test_bundle(tmp_path):
     """Create a test bundle and return file:// path."""
     return create_test_bundle(tmp_path)
+
+
+def test_get_process_logs():
+    """Test GetProcessLogs RPC on worker retrieves logs from the buffer."""
+
+    # Create a mock provider
+    mock_provider = Mock(spec=["submit_task", "get_task", "list_tasks", "kill_task", "get_logs"])
+    mock_provider.list_tasks = Mock(return_value=[])
+
+    # Create a log buffer with test records
+    log_buffer = LogRingBuffer(maxlen=100)
+    log_buffer.append(
+        BufferedLogRecord(timestamp=1000.0, level="INFO", logger_name="iris.worker", message="Worker log 1")
+    )
+    log_buffer.append(
+        BufferedLogRecord(timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="VM log")
+    )
+    log_buffer.append(
+        BufferedLogRecord(timestamp=1002.0, level="ERROR", logger_name="iris.worker", message="Worker log 2")
+    )
+
+    service = WorkerServiceImpl(provider=mock_provider, log_buffer=log_buffer)
+
+    # Test: Get all logs
+    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="", limit=0), None)
+    assert len(response.records) == 3
+    assert response.records[0].message == "Worker log 1"
+    assert response.records[1].logger_name == "iris.cluster.vm"
+    assert response.records[2].level == "ERROR"
+
+    # Test: Filter by prefix
+    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="iris.worker", limit=0), None)
+    assert len(response.records) == 2
+    assert response.records[0].message == "Worker log 1"
+    assert response.records[1].message == "Worker log 2"
+
+    # Test: Limit results
+    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="", limit=2), None)
+    assert len(response.records) == 2
+    assert response.records[0].message == "VM log"
+    assert response.records[1].message == "Worker log 2"
+
+
+def test_get_process_logs_no_buffer():
+    """Test GetProcessLogs returns empty when buffer is None."""
+    # Create a mock provider
+    mock_provider = Mock(spec=["submit_task", "get_task", "list_tasks", "kill_task", "get_logs"])
+    mock_provider.list_tasks = Mock(return_value=[])
+
+    service = WorkerServiceImpl(provider=mock_provider, log_buffer=None)
+
+    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="", limit=0), None)
+    assert len(response.records) == 0
 
 
 @pytest.fixture

@@ -56,6 +56,14 @@ class WorkerHeartbeatEvent(Event):
 
 
 @dataclass(frozen=True)
+class WorkerHeartbeatFailedEvent(Event):
+    """Single heartbeat failure for a worker. State layer tracks consecutive count."""
+
+    worker_id: WorkerId
+    error: str
+
+
+@dataclass(frozen=True)
 class WorkerFailedEvent(Event):
     """Worker marked as failed."""
 
@@ -94,6 +102,7 @@ class TaskStateChangedEvent(Event):
 
     task_id: TaskId
     new_state: int  # cluster_pb2.TaskState
+    attempt_id: int
     error: str | None = None
     exit_code: int | None = None
 

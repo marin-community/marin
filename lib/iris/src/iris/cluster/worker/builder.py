@@ -50,6 +50,7 @@ class ImageProvider(Protocol):
         extras: list[str],
         job_id: str,
         task_logs: TaskLogs | None = None,
+        pip_packages: list[str] | None = None,
     ) -> BuildResult: ...
 
     def protect(self, tag: str) -> None:
@@ -63,13 +64,14 @@ class ImageProvider(Protocol):
 
 DOCKERFILE_TEMPLATE = """FROM {base_image}
 
-# Install git (required for git-based dependencies) and UV
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# Install git, curl, and build tools (required for git-based dependencies and Rust compilation)
+RUN apt-get update && apt-get install -y git curl build-essential && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# TODO -- install Cargo here.
-# How do we make Rust stuff build faster?
-# We could pre-build something similar or at least fetch Rust deps to cache?
+# Install Rust toolchain (required for building dupekit and other Rust packages)
+# Using rustup for stable Rust installation
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:$PATH"
 
 # Configure UV
 ENV UV_CACHE_DIR=/opt/uv-cache
@@ -77,20 +79,22 @@ ENV UV_LINK_MODE=copy
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv
 WORKDIR /app
 
-RUN --mount=type=cache,id=iris-uv-global,sharing=shared,target=/opt/uv-cache \\
-    {pyproject_mounts} \\
-    uv sync {extras_flags}
-
-# Copy workspace contents
+# Copy workspace contents FIRST so source code is available for building
 COPY . .
+
+# Install all dependencies and workspace packages
+# Now that source code is present, uv sync can build Rust packages
+RUN --mount=type=cache,id=iris-uv-global,sharing=shared,target=/opt/uv-cache \\
+    --mount=type=cache,id=iris-cargo,sharing=shared,target=/root/.cargo/registry \\
+    --mount=type=cache,id=iris-cargo-git,sharing=shared,target=/root/.cargo/git \\
+    uv sync {extras_flags}
 
 # Use the venv python
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Install the workspace project in editable mode (so imports work)
-# and ensure cloudpickle is available (required by iris to unpickle job entrypoints)
-RUN uv pip install -e . cloudpickle
-"""
+# Ensure cloudpickle is available (required by iris to unpickle job entrypoints)
+RUN uv pip install cloudpickle
+{pip_install_step}"""
 
 
 class ImageCache:
@@ -142,6 +146,7 @@ class ImageCache:
         extras: list[str],
         job_id: str,
         task_logs: TaskLogs | None = None,
+        pip_packages: list[str] | None = None,
     ) -> BuildResult:
         uv_locks_files = _find_all_recursive(bundle_path, "pyproject.toml") + _find_all_recursive(bundle_path, "uv.lock")
 
@@ -154,6 +159,15 @@ class ImageCache:
             for f in uv_locks_files:
                 with open(f, "rb") as fd:
                     h.update(fd.read())
+            # Include base image and pip_packages in hash so different configurations
+            # get different images
+            h.update(base_image.encode())
+            if pip_packages:
+                for pkg in sorted(pip_packages):
+                    h.update(pkg.encode())
+            if extras:
+                for e in sorted(extras):
+                    h.update(e.encode())
             tag = h.hexdigest()[:tag_len]
 
         if self._registry:
@@ -180,8 +194,17 @@ class ImageCache:
             for f in uv_locks_files
         )
 
+        # Build pip install step if packages are specified
+        pip_install_step = ""
+        if pip_packages:
+            packages_str = " ".join(f'"{pkg}"' for pkg in pip_packages)
+            pip_install_step = f"\n# Install additional pip packages\nRUN uv pip install {packages_str}\n"
+
         dockerfile = DOCKERFILE_TEMPLATE.format(
-            base_image=base_image, extras_flags=extras_flags, pyproject_mounts=pyproject_mounts
+            base_image=base_image,
+            extras_flags=extras_flags,
+            pyproject_mounts=pyproject_mounts,
+            pip_install_step=pip_install_step,
         )
         # TODO (rav): does there need to be a lock around docker build?
         self._docker.build(bundle_path, dockerfile, image_tag, task_logs)

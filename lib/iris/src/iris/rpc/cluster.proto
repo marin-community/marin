@@ -24,6 +24,13 @@ import "vm.proto";
 
 message Empty {}
 
+message ProcessLogRecord {
+  double timestamp = 1;
+  string level = 2;
+  string logger_name = 3;
+  string message = 4;
+}
+
 enum JobState {
   JOB_STATE_UNSPECIFIED = 0;
   JOB_STATE_PENDING = 1;
@@ -47,6 +54,7 @@ enum TaskState {
   TASK_STATE_KILLED = 6;
   TASK_STATE_WORKER_FAILED = 7;
   TASK_STATE_UNSCHEDULABLE = 8;
+  TASK_STATE_ASSIGNED = 9;
 }
 
 // Status of a single task within a job
@@ -146,6 +154,9 @@ message JobStatus {
   // Convenience counts (could derive from task_state_counts)
   int32 task_count = 29;
   int32 completed_count = 30;
+
+  // Diagnostic message for pending/failed jobs (e.g., "No workers match constraint: gpu=true")
+  string pending_reason = 31;
 }
 
 // JobAttempt message removed: Jobs don't have attempts - tasks do.
@@ -192,11 +203,8 @@ message ResourceSpecProto {
   // Device configuration
   DeviceConfig device = 5;
 
-  // Multi-instance configuration
-  int32 replicas = 6;         // Number of replicas/slices
-
   // Scheduling preferences
-  bool preemptible = 7;
+  reserved 7;                 // was: preemptible (now handled via constraints)
   repeated string regions = 8; // Preferred cloud regions
 }
 
@@ -209,6 +217,7 @@ message EnvironmentConfig {
   repeated string pip_packages = 1;  // Additional pip packages to install
   map<string, string> env_vars = 2;  // Environment variables to set
   repeated string extras = 3;         // Extra dependency groups for uv (e.g., ["tpu", "eval"])
+  string python_version = 4;         // Client Python version (e.g., "3.11") for task container base image
 }
 
 // ============================================================================
@@ -366,6 +375,14 @@ message Controller {
     // group_by attribute value. If not enough workers are available in any group,
     // the job stays pending.
     CoschedulingConfig coscheduling = 15;
+
+    // Number of tasks to create for gang scheduling (default: 1).
+    // For multi-host TPU jobs, set to the number of VMs in the slice.
+    int32 replicas = 20;
+
+    // Per-task timeout in seconds. Task is killed if it runs longer than this.
+    // 0 means no timeout.
+    int32 timeout_seconds = 21;
   }
 
   message LaunchJobResponse {
@@ -417,22 +434,24 @@ message Controller {
     int64 registered_at_ms = 4;
   }
 
-  message RegisterWorkerRequest {
-    string worker_id = 1;
-    string address = 2;
-    WorkerMetadata metadata = 3;
-    // Task IDs the worker believes it is running (for controller restart recovery).
-    // If the controller doesn't recognize these tasks, it signals should_reset.
-    repeated string running_task_ids = 4;
+  message RunningTaskEntry {
+    string task_id = 1;
+    int32 attempt_id = 2;
   }
 
-  message RegisterWorkerResponse {
-    bool accepted = 1;
-    string controller_address = 2;   // For callbacks
-    // If true, worker should reset: kill all containers and re-register with empty task list.
-    // Set when worker claims tasks the controller doesn't know about (stale state).
-    bool should_reset = 3;
+  // A task completion reported by the worker in its heartbeat response.
+  // Workers report completions for expected_tasks that have reached a terminal state.
+  message CompletedTaskEntry {
+    string task_id = 1;
+    string job_id = 2;
+    int32 task_index = 3;
+    TaskState state = 4;
+    int32 exit_code = 5;
+    string error = 6;
+    int64 finished_at_ms = 7;
+    int32 attempt_id = 8;
   }
+
 
   message WorkerHealthStatus {
     string worker_id = 1;
@@ -442,6 +461,7 @@ message Controller {
     repeated string running_job_ids = 5;
     string address = 6;                    // Worker RPC address (host:port)
     WorkerMetadata metadata = 7;           // Full worker metadata
+    string status_message = 8;             // Error or status message (e.g., "Heartbeat timeout", "Worker crashed")
   }
 
   message ListWorkersRequest {}
@@ -450,20 +470,20 @@ message Controller {
     repeated WorkerHealthStatus workers = 1;
   }
 
-  // --- Task State Reporting (worker -> controller) ---
-  message ReportTaskStateRequest {
-    string worker_id = 1;
-    string task_id = 2;             // Full task ID
-    string job_id = 3;              // Parent job ID (for job-level state aggregation)
-    int32 task_index = 4;
-    TaskState state = 5;
-    int32 exit_code = 6;
-    string error = 7;
-    int64 finished_at_ms = 8;
-    int32 attempt_id = 9;
+
+  message RegisterRequest {
+    string address = 1;
+    WorkerMetadata metadata = 2;
   }
 
-  message ReportTaskStateResponse {}
+  message RegisterResponse {
+    string worker_id = 1;
+    bool accepted = 2;
+  }
+
+  message NotifyTaskUpdateRequest {
+    string worker_id = 1;
+  }
 
   // --- Endpoint Registry ---
   // Endpoints are registered with prefixed names: "{root_job_id}/{actor_name}"
@@ -540,6 +560,29 @@ message Controller {
   message GetTransactionsResponse {
     repeated TransactionAction actions = 1;
   }
+
+  // --- Task Logs (proxied to worker) ---
+  message GetTaskLogsRequest {
+    string job_id = 1;
+    int32 task_index = 2;
+    int64 start_ms = 3;
+    int64 limit = 4;
+  }
+
+  message GetTaskLogsResponse {
+    repeated Worker.LogEntry logs = 1;
+    string worker_address = 2;
+  }
+
+  // --- Process Logs ---
+  message GetProcessLogsRequest {
+    string prefix = 1;   // Logger name prefix filter (empty = all)
+    int32 limit = 2;     // Max records to return (0 = default 200)
+  }
+
+  message GetProcessLogsResponse {
+    repeated ProcessLogRecord records = 1;
+  }
 }
 
 // ============================================================================
@@ -560,11 +603,6 @@ message Worker {
     int32 timeout_seconds = 9;
     repeated string ports = 10;
     int32 attempt_id = 11;
-  }
-
-  message RunTaskResponse {
-    string task_id = 1;
-    TaskState state = 2;
   }
 
   message GetTaskStatusRequest {
@@ -611,6 +649,40 @@ message Worker {
     int64 uptime_ms = 2;
     int32 running_tasks = 3;        // Renamed from running_jobs
   }
+
+  // --- Process Logs ---
+  message GetProcessLogsRequest {
+    string prefix = 1;   // Logger name prefix filter (empty = all)
+    int32 limit = 2;     // Max records to return (0 = default 200)
+  }
+
+  message GetProcessLogsResponse {
+    repeated ProcessLogRecord records = 1;
+  }
+}
+
+// ============================================================================
+// HEARTBEAT MESSAGES (Controller -> Worker)
+// ============================================================================
+
+message HeartbeatRequest {
+  // Tasks to start on this worker
+  repeated Worker.RunTaskRequest tasks_to_run = 1;
+
+  // Tasks to kill on this worker
+  repeated string tasks_to_kill = 2;
+
+  // Tasks the controller believes this worker is running.
+  // Worker compares against its actual state and reports completions/failures.
+  repeated Controller.RunningTaskEntry expected_tasks = 3;
+}
+
+message HeartbeatResponse {
+  // Tasks currently running on this worker
+  repeated Controller.RunningTaskEntry running_tasks = 1;
+
+  // Tasks from expected_tasks that have finished (with exit code, error, state)
+  repeated Controller.CompletedTaskEntry completed_tasks = 2;
 }
 
 // ============================================================================
@@ -628,10 +700,10 @@ service ControllerService {
   rpc GetTaskStatus(Controller.GetTaskStatusRequest) returns (Controller.GetTaskStatusResponse);
   rpc ListTasks(Controller.ListTasksRequest) returns (Controller.ListTasksResponse);
 
-  // Worker management (workers send heartbeats to controller)
-  rpc RegisterWorker(Controller.RegisterWorkerRequest) returns (Controller.RegisterWorkerResponse);
+  // Worker management
+  rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
   rpc ListWorkers(Controller.ListWorkersRequest) returns (Controller.ListWorkersResponse);
-  rpc ReportTaskState(Controller.ReportTaskStateRequest) returns (Controller.ReportTaskStateResponse);
+  rpc NotifyTaskUpdate(Controller.NotifyTaskUpdateRequest) returns (Empty);
 
   // Endpoint registry (generic service discovery)
   rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
@@ -647,13 +719,19 @@ service ControllerService {
 
   // Transactions / Actions Log
   rpc GetTransactions(Controller.GetTransactionsRequest) returns (Controller.GetTransactionsResponse);
+
+  // Task logs (proxied to worker)
+  rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
+
+  // Controller process logs
+  rpc GetProcessLogs(Controller.GetProcessLogsRequest) returns (Controller.GetProcessLogsResponse);
 }
 
 service WorkerService {
-  rpc RunTask(Worker.RunTaskRequest) returns (Worker.RunTaskResponse);
   rpc GetTaskStatus(Worker.GetTaskStatusRequest) returns (TaskStatus);
   rpc ListTasks(Worker.ListTasksRequest) returns (Worker.ListTasksResponse);
   rpc FetchTaskLogs(Worker.FetchTaskLogsRequest) returns (Worker.FetchTaskLogsResponse);
-  rpc KillTask(Worker.KillTaskRequest) returns (Empty);
   rpc HealthCheck(Empty) returns (Worker.HealthResponse);
+  rpc GetProcessLogs(Worker.GetProcessLogsRequest) returns (Worker.GetProcessLogsResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 }
