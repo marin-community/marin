@@ -37,8 +37,7 @@ from typing import Any
 import click
 import psutil
 from tqdm import tqdm
-from zephyr import Dataset, ExecutionHint
-from zephyr.execution import get_default_zephyr_context
+from zephyr import Backend, Dataset, ExecutionHint
 from zephyr.readers import load_file
 from zephyr.writers import write_parquet_file
 
@@ -146,7 +145,7 @@ def run_benchmark(
         print("Executing pipeline...")
         mem_before = process.memory_info().rss
         exec_start = time.time()
-        results = list(get_default_zephyr_context().execute(pipeline, ExecutionHint()))
+        results = list(Backend.execute(pipeline, ExecutionHint(intra_shard_parallelism=8)))
         exec_time = time.time() - exec_start
         mem_after = process.memory_info().rss
 

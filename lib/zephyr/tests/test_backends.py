@@ -18,7 +18,9 @@ import gzip
 import io
 import json
 
-from zephyr.dataset import format_shard_path
+import ray
+from fray.job import create_job_ctx
+from zephyr.backends import format_shard_path
 from zephyr.writers import write_jsonl_file
 
 
@@ -107,6 +109,21 @@ def test_write_jsonl_no_compression_without_gz_extension(tmp_path):
         assert len(lines) == 2
         assert json.loads(lines[0]) == {"id": 1, "text": "hello"}
         assert json.loads(lines[1]) == {"id": 2, "text": "world"}
+
+
+def test_create_job_ctx_defaults_to_ray_when_initialized():
+    """Test that create_job_ctx returns ray context when Ray is initialized."""
+    from fray.job import RayContext
+
+    if ray.is_initialized():
+        ray.shutdown()
+
+    try:
+        ray.init(ignore_reinit_error=True)
+        ctx = create_job_ctx()
+        assert isinstance(ctx, RayContext)
+    finally:
+        ray.shutdown()
 
 
 def test_write_jsonl_infers_compression_from_zst_extension(tmp_path):

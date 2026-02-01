@@ -15,16 +15,15 @@
 """Tests for Dataset API."""
 
 import json
+import time
 from functools import partial
 from pathlib import Path
 
 import pytest
-
-from fray.v2.local import LocalClient
-from zephyr import Dataset, load_file, load_parquet
+from fray.job import create_job_ctx
+from zephyr import Backend, Dataset, load_file, load_parquet
 from zephyr._test_helpers import SampleDataclass
 from zephyr.dataset import FilterOp, MapOp, WindowOp
-from zephyr.execution import ZephyrContext
 from zephyr.writers import write_parquet_file
 
 from .conftest import CallCounter
@@ -36,45 +35,45 @@ def sample_data():
     return list(range(1, 11))  # [1, 2, 3, ..., 10]
 
 
-def test_from_list(sample_data, zephyr_ctx):
+def test_from_list(sample_data, backend):
     """Test creating dataset from list."""
     ds = Dataset.from_list(sample_data)
-    assert list(zephyr_ctx.execute(ds)) == sample_data
+    assert list(Backend.execute(ds, context=backend)) == sample_data
 
 
-def test_dataclass_round_trip_preserves_type(zephyr_ctx):
+def test_dataclass_round_trip_preserves_type(backend):
     """Ensure dataclass items are not downcast to dicts during execution."""
     items = [SampleDataclass("alpha", 1), SampleDataclass("beta", 2)]
 
     ds = Dataset.from_list(items)
-    result = list(zephyr_ctx.execute(ds))
+    result = list(Backend.execute(ds, context=backend))
 
     assert [item.name for item in result] == ["alpha", "beta"]
     assert all(isinstance(item, SampleDataclass) for item in result)
 
     doubled = Dataset.from_list(items).map(lambda x: x.value * 2)
-    assert list(zephyr_ctx.execute(doubled)) == [2, 4]
+    assert list(Backend.execute(doubled, context=backend)) == [2, 4]
 
 
-def test_from_iterable(zephyr_ctx):
+def test_from_iterable(backend):
     """Test creating dataset from iterable."""
     ds = Dataset.from_iterable(range(5))
-    assert list(zephyr_ctx.execute(ds)) == [0, 1, 2, 3, 4]
+    assert list(Backend.execute(ds, context=backend)) == [0, 1, 2, 3, 4]
 
 
-def test_filter(sample_data, zephyr_ctx):
+def test_filter(sample_data, backend):
     """Test filtering dataset."""
     ds = Dataset.from_list(sample_data).filter(lambda x: x % 2 == 0)
-    assert list(zephyr_ctx.execute(ds)) == [2, 4, 6, 8, 10]
+    assert list(Backend.execute(ds, context=backend)) == [2, 4, 6, 8, 10]
 
 
-def test_take_per_shard(zephyr_ctx):
+def test_take_per_shard(backend):
     ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take_per_shard(5)
-    result = list(zephyr_ctx.execute(ds))
+    result = list(Backend.execute(ds, context=backend))
     assert result == [0, 1, 2, 3, 4]
 
     ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take_per_shard(0)
-    result = list(zephyr_ctx.execute(ds))
+    result = list(Backend.execute(ds, context=backend))
     assert result == []
 
     # Create 3 shards with 5 items each
@@ -84,13 +83,13 @@ def test_take_per_shard(zephyr_ctx):
         .take_per_shard(2)
     )
 
-    result = sorted(list(zephyr_ctx.execute(ds)))
+    result = sorted(list(Backend.execute(ds, context=backend)))
     # Each of 3 shards contributes 2 items = 6 total
     # Shard 0: [0, 1], Shard 1: [5, 6], Shard 2: [10, 11]
     assert result == [0, 1, 5, 6, 10, 11]
 
 
-def test_take_with_filter_and_map(zephyr_ctx):
+def test_take_with_filter_and_map(backend):
     """Test take fuses with other operations."""
     ds = (
         Dataset.from_list([list(range(20))])
@@ -99,18 +98,18 @@ def test_take_with_filter_and_map(zephyr_ctx):
         .take_per_shard(5)  # [0, 2, 4, 6, 8]
         .map(lambda x: x * 2)  # [0, 4, 8, 12, 16]
     )
-    result = list(zephyr_ctx.execute(ds))
+    result = list(Backend.execute(ds, context=backend))
     assert result == [0, 4, 8, 12, 16]
 
 
-def test_window(zephyr_ctx):
+def test_window(backend):
     """Test window operation (same as batch)."""
     ds = Dataset.from_list([[1, 2, 3, 4, 5]]).flat_map(lambda x: x).window(2)
-    windows = list(zephyr_ctx.execute(ds))
+    windows = list(Backend.execute(ds, context=backend))
     assert windows == [[1, 2], [3, 4], [5]]
 
 
-def test_window_by_size_based(zephyr_ctx):
+def test_window_by_size_based(backend):
     """Test window_by with size-based windowing."""
     data = [
         {"id": 1, "size": 5_000_000_000},  # 5GB
@@ -129,7 +128,7 @@ def test_window_by_size_based(zephyr_ctx):
         )
     )
 
-    windows = list(zephyr_ctx.execute(ds))
+    windows = list(Backend.execute(ds, context=backend))
     # Window 1: [id=1 (5GB)] - total 5GB
     # Window 2: [id=2 (6GB), id=3 (3GB)] - total 9GB
     # Window 3: [id=4 (8GB)] - total 8GB
@@ -143,7 +142,7 @@ def test_window_by_size_based(zephyr_ctx):
     assert windows[2][0]["id"] == 4
 
 
-def test_window_by_count_based(zephyr_ctx):
+def test_window_by_count_based(backend):
     """Test window_by with custom count logic."""
     data = list(range(1, 11))
 
@@ -158,7 +157,7 @@ def test_window_by_count_based(zephyr_ctx):
         )
     )
 
-    windows = list(zephyr_ctx.execute(ds))
+    windows = list(Backend.execute(ds, context=backend))
     # Window 1: [1, 2, 3] - sum = 6
     # Window 2: [4, 5] - sum = 9
     # Window 3: [6] - sum = 6
@@ -169,14 +168,34 @@ def test_window_by_count_based(zephyr_ctx):
     assert len(windows) >= 5
 
 
-def test_map(zephyr_ctx):
+def test_map(backend):
     """Test map operation with all backends."""
     ds = Dataset.from_list([1, 2, 3, 4, 5]).map(lambda x: x * 2)
-    result = list(zephyr_ctx.execute(ds))
+    result = list(Backend.execute(ds, context=backend))
     assert sorted(result) == [2, 4, 6, 8, 10]
 
 
-def test_chaining_operations(zephyr_ctx):
+def test_bounded_parallelism_ray():
+    """Test that Ray backend respects max_parallelism."""
+
+    def slow_fn(x):
+        time.sleep(0.2)
+        return x * 2
+
+    # With max_parallelism=2, processing 6 items should take ~3*0.2 = 0.6s
+    ctx = create_job_ctx("ray")
+    ds = Dataset.from_list([1, 2, 3, 4, 5, 6]).map(slow_fn)
+
+    start = time.time()
+    result = list(Backend.execute(ds, ctx, max_parallelism=2))
+    elapsed = time.time() - start
+
+    assert sorted(result) == [2, 4, 6, 8, 10, 12]
+    # Should take at least 0.6s due to bounded parallelism
+    assert elapsed >= 0.5, f"Elapsed time {elapsed} suggests no bounding"
+
+
+def test_chaining_operations(backend):
     """Test chaining multiple operations.
 
     Use flat_map to create multi-item shards that work across all backends.
@@ -189,7 +208,7 @@ def test_chaining_operations(zephyr_ctx):
         .window(2)  # [[4, 8], [12, 16], [20]]
     )
 
-    result = list(zephyr_ctx.execute(ds))
+    result = list(Backend.execute(ds, context=backend))
 
     # Flatten and sort for comparison since some backends may reorder
     flattened = [item for batch in result for item in batch]
@@ -214,26 +233,22 @@ def test_lazy_evaluation():
     assert call_count == 0
 
     # Now execute - should call function
-    client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=1)
-    try:
-        result = list(ctx.execute(ds))
-        assert result == [2, 4, 6]
-        assert call_count == 3
-    finally:
-        ctx.shutdown()
+    ctx = create_job_ctx("sync")
+    result = list(Backend.execute(ds, context=ctx))
+    assert result == [2, 4, 6]
+    assert call_count == 3
 
 
-def test_empty_dataset(zephyr_ctx):
+def test_empty_dataset(backend):
     """Test operations on empty dataset."""
     ds = Dataset.from_list([])
-    assert list(zephyr_ctx.execute(ds)) == []
-    assert list(zephyr_ctx.execute(ds.filter(lambda x: True))) == []
-    assert list(zephyr_ctx.execute(ds.map(lambda x: x * 2))) == []
-    assert list(zephyr_ctx.execute(ds.window(10))) == []
+    assert list(Backend.execute(ds, context=backend)) == []
+    assert list(Backend.execute(ds.filter(lambda x: True), backend)) == []
+    assert list(Backend.execute(ds.map(lambda x: x * 2), backend)) == []
+    assert list(Backend.execute(ds.window(10), backend)) == []
 
 
-def test_reshard(zephyr_ctx):
+def test_reshard(backend):
     """Test reshard operation redistributes data across target number of shards."""
     # Test 1: Start with 1 item (1 shard), expand to many items, then reshard
     ds = (
@@ -242,31 +257,31 @@ def test_reshard(zephyr_ctx):
         .reshard(5)  # Redistribute to 5 shards
         .map(lambda x: x * 2)
     )
-    result = sorted(zephyr_ctx.execute(ds))
+    result = sorted(Backend.execute(ds, context=backend))
     assert result == [x * 2 for x in range(50)]
 
     # Test 2: Start with many items, reshard to fewer
     ds = Dataset.from_list(range(50)).reshard(5).map(lambda x: x + 100)  # 50 shards  # Consolidate to 5 shards
-    result = sorted(zephyr_ctx.execute(ds))
+    result = sorted(Backend.execute(ds, context=backend))
     assert result == [x + 100 for x in range(50)]
 
     # Test 3: Reshard preserves order when materializing all shards
     ds = Dataset.from_list(range(10)).reshard(3)
-    result = list(zephyr_ctx.execute(ds))
+    result = list(Backend.execute(ds, context=backend))
     assert sorted(result) == list(range(10))
 
 
-def test_reshard_noop(zephyr_ctx):
+def test_reshard_noop(backend):
     """Test reshard with None is a noop, and non-positive values raise ValueError"""
 
     def yield_1(it):
         yield from [1]
 
     ds = Dataset.from_list(range(10)).reshard(None).map_shard(yield_1)
-    assert sum(list(zephyr_ctx.execute(ds))) == 10
+    assert sum(list(Backend.execute(ds, context=backend))) == 10
 
     ds = Dataset.from_list(range(10)).reshard(2).map_shard(yield_1)
-    assert sum(list(zephyr_ctx.execute(ds))) == 2
+    assert sum(list(Backend.execute(ds, context=backend))) == 2
 
     with pytest.raises(ValueError, match="num_shards must be positive"):
         Dataset.from_list(range(10)).reshard(-5)
@@ -275,7 +290,7 @@ def test_reshard_noop(zephyr_ctx):
         Dataset.from_list(range(10)).reshard(0)
 
 
-def test_complex_pipeline(zephyr_ctx):
+def test_complex_pipeline(backend):
     """Test a more complex data processing pipeline."""
     ds = (
         Dataset.from_list(range(1, 21))
@@ -284,7 +299,7 @@ def test_complex_pipeline(zephyr_ctx):
         .filter(lambda item: item["label"] == "even")  # Even items only
     )
 
-    result = list(zephyr_ctx.execute(ds))
+    result = list(Backend.execute(ds, context=backend))
     assert len(result) == 8  # 6, 8, 10, 12, 14, 16, 18, 20
     assert all(item["label"] == "even" for item in result)
     assert all(item["value"] % 2 == 0 for item in result)
@@ -370,7 +385,7 @@ def test_from_files_empty_glob_error(tmp_path):
         Dataset.from_files(f"{input_dir}/*.txt", empty_glob_ok=False)
 
 
-def test_from_files_with_map(tmp_path, zephyr_ctx):
+def test_from_files_with_map(tmp_path, backend):
     """Test from_files integrated with map and write operations."""
     # Create test input files
     input_dir = tmp_path / "input"
@@ -395,7 +410,7 @@ def test_from_files_with_map(tmp_path, zephyr_ctx):
         .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"))
     )
 
-    result = list(zephyr_ctx.execute(ds))
+    result = list(Backend.execute(ds, context=backend))
 
     # Verify output files were created
     assert len(result) == 3
@@ -403,7 +418,7 @@ def test_from_files_with_map(tmp_path, zephyr_ctx):
     assert all("output-" in p for p in result)
 
 
-def test_write_and_read_parquet(tmp_path, zephyr_ctx):
+def test_write_and_read_parquet(tmp_path, backend):
     """Test writing and reading parquet files."""
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -420,7 +435,7 @@ def test_write_and_read_parquet(tmp_path, zephyr_ctx):
     # Write to parquet
     ds = Dataset.from_list(sample_data).write_parquet(str(output_dir / "data-{shard:05d}.parquet"))
 
-    output_files = list(zephyr_ctx.execute(ds))
+    output_files = list(Backend.execute(ds, context=backend))
 
     # Verify output files were created
     assert len(output_files) > 0
@@ -430,7 +445,7 @@ def test_write_and_read_parquet(tmp_path, zephyr_ctx):
     # Read back from parquet
     ds_read = Dataset.from_files(f"{output_dir}/*.parquet").flat_map(load_parquet)
 
-    records = list(zephyr_ctx.execute(ds_read))
+    records = list(Backend.execute(ds_read, context=backend))
 
     # Verify data integrity
     assert len(records) == len(sample_data)
@@ -446,7 +461,7 @@ def test_write_and_read_parquet(tmp_path, zephyr_ctx):
         assert record["active"] == expected["active"]
 
 
-def test_write_and_read_parquet_nested(tmp_path, zephyr_ctx):
+def test_write_and_read_parquet_nested(tmp_path, backend):
     """Test writing and reading parquet files with nested structures."""
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -461,7 +476,7 @@ def test_write_and_read_parquet_nested(tmp_path, zephyr_ctx):
     # Write to parquet
     ds = Dataset.from_list(sample_data).write_parquet(str(output_dir / "nested-{shard:05d}.parquet"))
 
-    output_files = list(zephyr_ctx.execute(ds))
+    output_files = list(Backend.execute(ds, context=backend))
 
     # Verify output files were created
     assert len(output_files) > 0
@@ -470,7 +485,7 @@ def test_write_and_read_parquet_nested(tmp_path, zephyr_ctx):
     # Read back from parquet
     ds_read = Dataset.from_files(f"{output_dir}/*.parquet").flat_map(load_parquet)
 
-    records = list(zephyr_ctx.execute(ds_read))
+    records = list(Backend.execute(ds_read, context=backend))
 
     # Verify data integrity
     assert len(records) == len(sample_data)
@@ -486,7 +501,7 @@ def test_write_and_read_parquet_nested(tmp_path, zephyr_ctx):
 
 
 @pytest.mark.parametrize("output_format", ["jsonl", "parquet"])
-def test_write_dataclass(tmp_path, zephyr_ctx, output_format: str):
+def test_write_dataclass(tmp_path, backend, output_format: str):
     """Test writing and reading jsonl files with dataclass instances."""
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -503,14 +518,14 @@ def test_write_dataclass(tmp_path, zephyr_ctx, output_format: str):
     else:
         ds = Dataset.from_list(sample_data).write_parquet(str(output_dir / "dataclass-{shard:05d}.parquet"))
 
-    output_files = list(zephyr_ctx.execute(ds))
+    output_files = list(Backend.execute(ds, context=backend))
 
     # Verify output files were created
     assert len(output_files) > 0
 
     ds_read = Dataset.from_files(f"{output_dir}/*.{output_format}").flat_map(load_file)
 
-    records = list(zephyr_ctx.execute(ds_read))
+    records = list(Backend.execute(ds_read, context=backend))
 
     # Verify data integrity
     assert len(records) == len(sample_data)
@@ -524,7 +539,7 @@ def test_write_dataclass(tmp_path, zephyr_ctx, output_format: str):
         assert record["value"] == expected.value
 
 
-def test_load_file_parquet(tmp_path, zephyr_ctx):
+def test_load_file_parquet(tmp_path, backend):
     """Test load_file with .parquet files."""
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -538,11 +553,11 @@ def test_load_file_parquet(tmp_path, zephyr_ctx):
 
     # Write to parquet with shard pattern
     ds = Dataset.from_list(sample_data).write_parquet(str(output_dir / "test-{shard:05d}.parquet"))
-    _ = list(zephyr_ctx.execute(ds))
+    _ = list(Backend.execute(ds, context=backend))
 
     # Load using load_file
     ds_read = Dataset.from_files(f"{output_dir}/*.parquet").flat_map(load_file)
-    records = list(zephyr_ctx.execute(ds_read))
+    records = list(Backend.execute(ds_read, context=backend))
 
     # Verify data
     assert len(records) == len(sample_data)
@@ -555,7 +570,7 @@ def test_load_file_parquet(tmp_path, zephyr_ctx):
         assert abs(record["score"] - expected["score"]) < 0.01
 
 
-def test_load_file_mixed_directory(tmp_path, zephyr_ctx):
+def test_load_file_mixed_directory(tmp_path, backend):
     """Test load_file with mixed JSONL and Parquet files."""
     input_dir = tmp_path / "input"
     input_dir.mkdir()
@@ -578,11 +593,11 @@ def test_load_file_mixed_directory(tmp_path, zephyr_ctx):
     ]
 
     ds = Dataset.from_list(parquet_data).write_parquet(str(input_dir / "data-{shard:05d}.parquet"))
-    list(zephyr_ctx.execute(ds))
+    list(Backend.execute(ds, context=backend))
 
     # Load all files using load_file
     ds_read = Dataset.from_files(f"{input_dir}/*").flat_map(load_file)
-    records = list(zephyr_ctx.execute(ds_read))
+    records = list(Backend.execute(ds_read, context=backend))
 
     # Verify we got data from both files
     assert len(records) == 4
@@ -592,7 +607,7 @@ def test_load_file_mixed_directory(tmp_path, zephyr_ctx):
     assert len(parquet_records) == 2
 
 
-def test_load_file_unsupported_extension(tmp_path, zephyr_ctx):
+def test_load_file_unsupported_extension(tmp_path, backend):
     """Test load_file raises ValueError for unsupported file extensions."""
     input_dir = tmp_path / "input"
     input_dir.mkdir()
@@ -604,14 +619,12 @@ def test_load_file_unsupported_extension(tmp_path, zephyr_ctx):
     # Try to load using load_file
     ds = Dataset.from_files(str(input_dir), "*.txt").flat_map(load_file)
 
-    # Worker errors are wrapped in ZephyrWorkerError
-    from zephyr.execution import ZephyrWorkerError
-
-    with pytest.raises(ZephyrWorkerError, match="Unsupported"):
-        list(zephyr_ctx.execute(ds))
+    # Should raise ValueError during execution
+    with pytest.raises(ValueError, match="Unsupported"):
+        list(Backend.execute(ds, context=backend))
 
 
-def test_write_without_shard_pattern_multiple_shards(tmp_path, zephyr_ctx):
+def test_write_without_shard_pattern_multiple_shards(tmp_path, backend):
     """Test that writing multiple shards without {shard} pattern raises ValueError."""
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -622,14 +635,12 @@ def test_write_without_shard_pattern_multiple_shards(tmp_path, zephyr_ctx):
     # Try to write without {shard} in pattern
     ds = Dataset.from_list(sample_data).write_jsonl(str(output_dir / "output.jsonl"))
 
-    # Worker errors are wrapped in ZephyrWorkerError
-    from zephyr.execution import ZephyrWorkerError
-
-    with pytest.raises(ZephyrWorkerError, match="Output pattern must"):
-        list(zephyr_ctx.execute(ds))
+    # Should raise ValueError during execution when total > 1
+    with pytest.raises(ValueError, match="Output pattern must"):
+        list(Backend.execute(ds, context=backend))
 
 
-def test_write_without_shard_pattern_single_shard(tmp_path, zephyr_ctx):
+def test_write_without_shard_pattern_single_shard(tmp_path, backend):
     """Test that writing single shard without {shard} pattern is allowed."""
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -641,31 +652,31 @@ def test_write_without_shard_pattern_single_shard(tmp_path, zephyr_ctx):
     ds = Dataset.from_list(sample_data).write_jsonl(str(output_dir / "output.jsonl"))
 
     # Should succeed since there's only one shard
-    output_files = list(zephyr_ctx.execute(ds))
+    output_files = list(Backend.execute(ds, context=backend))
     assert len(output_files) == 1
     assert Path(output_files[0]).exists()
 
 
-def test_reduce_sum(zephyr_ctx):
+def test_reduce_sum(backend):
     """Test basic sum reduction."""
     ds = Dataset.from_list(range(100)).reduce(sum)
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 1
     assert results[0] == sum(range(100))
 
 
-def test_reduce_count(zephyr_ctx):
+def test_reduce_count(backend):
     """Test count reduction."""
     ds = Dataset.from_list([{"id": i} for i in range(50)]).reduce(
         local_reducer=lambda items: sum(1 for _ in items),
         global_reducer=sum,
     )
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 1
     assert results[0] == 50
 
 
-def test_reduce_complex_aggregation(zephyr_ctx):
+def test_reduce_complex_aggregation(backend):
     """Test custom aggregation with stats."""
 
     def local_stats(items):
@@ -693,7 +704,7 @@ def test_reduce_complex_aggregation(zephyr_ctx):
         global_reducer=global_stats,
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 1
     assert results[0]["sum"] == sum(range(1, 101))
     assert results[0]["count"] == 100
@@ -701,47 +712,47 @@ def test_reduce_complex_aggregation(zephyr_ctx):
     assert results[0]["max"] == 100
 
 
-def test_reduce_empty(zephyr_ctx):
+def test_reduce_empty(backend):
     """Test reduce on empty dataset."""
     ds = Dataset.from_list([]).reduce(sum)
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 0
 
 
-def test_reduce_with_pipeline(zephyr_ctx):
+def test_reduce_with_pipeline(backend):
     """Test reduce integrated with other operations."""
     ds = Dataset.from_list(range(1, 21)).filter(lambda x: x % 2 == 0).map(lambda x: x * 2).reduce(sum)
 
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 1
     expected = sum(x * 2 for x in range(1, 21) if x % 2 == 0)
     assert results[0] == expected
 
 
-def test_count_basic(zephyr_ctx):
+def test_count_basic(backend):
     """Test basic count operation."""
     ds = Dataset.from_list(range(100)).count()
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 1
     assert results[0] == 100
 
 
-def test_count_empty(zephyr_ctx):
+def test_count_empty(backend):
     """Test count on empty dataset."""
     ds = Dataset.from_list([]).count()
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 0
 
 
-def test_count_with_filter(zephyr_ctx):
+def test_count_with_filter(backend):
     """Test count with filter operation."""
     ds = Dataset.from_list(range(100)).filter(lambda x: x % 2 == 0).count()
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 1
     assert results[0] == 50
 
 
-def test_sorted_merge_join_inner_basic(zephyr_ctx):
+def test_sorted_merge_join_inner_basic(backend):
     """Test basic inner sorted merge join."""
     # Create pre-sorted, co-partitioned datasets via group_by
     left = Dataset.from_list(
@@ -753,13 +764,13 @@ def test_sorted_merge_join_inner_basic(zephyr_ctx):
 
     joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
 
-    results = sorted(list(zephyr_ctx.execute(joined)), key=lambda x: x["id"])
+    results = sorted(list(Backend.execute(joined, context=backend)), key=lambda x: x["id"])
     assert len(results) == 2
     assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
     assert results[1] == {"id": 2, "text": "world", "score": 0.3}
 
 
-def test_sorted_merge_join_left(zephyr_ctx):
+def test_sorted_merge_join_left(backend):
     """Test left sorted merge join with missing right items."""
     # Create pre-sorted, co-partitioned datasets
     left = Dataset.from_list([{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]).group_by(
@@ -777,13 +788,13 @@ def test_sorted_merge_join_left(zephyr_ctx):
         how="left",
     )
 
-    results = sorted(list(zephyr_ctx.execute(joined)), key=lambda x: x["id"])
+    results = sorted(list(Backend.execute(joined, context=backend)), key=lambda x: x["id"])
     assert len(results) == 2
     assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
     assert results[1] == {"id": 2, "text": "world", "score": 0.0}
 
 
-def test_sorted_merge_join_duplicate_keys(zephyr_ctx):
+def test_sorted_merge_join_duplicate_keys(backend):
     """Test sorted merge join with duplicate keys (cartesian product)."""
     # Create datasets with duplicate keys
     left = Dataset.from_list([{"id": 1, "text": "a"}, {"id": 1, "text": "b"}]).group_by(
@@ -799,7 +810,7 @@ def test_sorted_merge_join_duplicate_keys(zephyr_ctx):
 
     joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
 
-    results = sorted(list(zephyr_ctx.execute(joined)), key=lambda x: (x["text"], x["score"]))
+    results = sorted(list(Backend.execute(joined, context=backend)), key=lambda x: (x["text"], x["score"]))
     assert len(results) == 4
     assert results[0] == {"id": 1, "text": "a", "score": 0.3}
     assert results[1] == {"id": 1, "text": "a", "score": 0.9}
@@ -807,7 +818,7 @@ def test_sorted_merge_join_duplicate_keys(zephyr_ctx):
     assert results[3] == {"id": 1, "text": "b", "score": 0.9}
 
 
-def test_sorted_merge_join_after_group_by(zephyr_ctx):
+def test_sorted_merge_join_after_group_by(backend):
     """Test realistic pipeline: group_by followed by sorted_merge_join."""
     # Simulate a typical use case: group documents and attributes, then join
     docs = Dataset.from_list(
@@ -833,14 +844,14 @@ def test_sorted_merge_join_after_group_by(zephyr_ctx):
 
     joined = docs.sorted_merge_join(attrs, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
 
-    results = sorted(list(zephyr_ctx.execute(joined)), key=lambda x: x["id"])
+    results = sorted(list(Backend.execute(joined, context=backend)), key=lambda x: x["id"])
     assert len(results) == 3
     assert results[0] == {"id": 1, "text": "hello updated", "version": 2, "quality": 0.9}
     assert results[1] == {"id": 2, "text": "world", "version": 1, "quality": 0.3}
     assert results[2] == {"id": 3, "text": "foo", "version": 1, "quality": 0.8}
 
 
-def test_sorted_merge_join_shard_mismatch(zephyr_ctx):
+def test_sorted_merge_join_shard_mismatch(backend):
     """Test that shard count mismatch raises error."""
     # Create datasets with different shard counts
     left = Dataset.from_list([{"id": 1, "text": "hello"}]).group_by(
@@ -856,10 +867,10 @@ def test_sorted_merge_join_shard_mismatch(zephyr_ctx):
     joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
 
     with pytest.raises(ValueError, match="Sorted merge join requires equal shard counts"):
-        list(zephyr_ctx.execute(joined))
+        list(Backend.execute(joined, context=backend))
 
 
-def test_sorted_merge_join_empty_datasets(zephyr_ctx):
+def test_sorted_merge_join_empty_datasets(backend):
     """Test sorted merge join with empty datasets.
 
     Note: Empty datasets with group_by create 0 shards, so shard counts won't match.
@@ -877,7 +888,7 @@ def test_sorted_merge_join_empty_datasets(zephyr_ctx):
 
     # Empty dataset creates 0 shards, non-empty creates N shards - this is a mismatch
     with pytest.raises(ValueError, match="Sorted merge join requires equal shard counts"):
-        list(zephyr_ctx.execute(joined))
+        list(Backend.execute(joined, context=backend))
 
     # Empty right dataset - will create 0 shards
     left = Dataset.from_list([{"id": 1, "text": "hello"}]).group_by(
@@ -891,10 +902,10 @@ def test_sorted_merge_join_empty_datasets(zephyr_ctx):
 
     # Empty dataset creates 0 shards, non-empty creates N shards - this is a mismatch
     with pytest.raises(ValueError, match="Sorted merge join requires equal shard counts"):
-        list(zephyr_ctx.execute(joined))
+        list(Backend.execute(joined, context=backend))
 
 
-def test_map_shard_stateful_deduplication(zephyr_ctx):
+def test_map_shard_stateful_deduplication(backend):
     """Test map_shard for stateful within-shard deduplication."""
 
     def deduplicate_shard(items):
@@ -914,7 +925,7 @@ def test_map_shard_stateful_deduplication(zephyr_ctx):
     ]
 
     ds = Dataset.from_list([data]).flat_map(lambda x: x).map_shard(deduplicate_shard)
-    result = sorted(list(zephyr_ctx.execute(ds)), key=lambda x: x["id"])
+    result = sorted(list(Backend.execute(ds, context=backend)), key=lambda x: x["id"])
 
     # Should keep first occurrence of each id
     assert len(result) == 3
@@ -923,7 +934,7 @@ def test_map_shard_stateful_deduplication(zephyr_ctx):
     assert result[2] == {"id": 3, "val": "d"}
 
 
-def test_map_shard_empty_result(zephyr_ctx):
+def test_map_shard_empty_result(backend):
     """Test map_shard that filters everything out."""
 
     def filter_all(items):
@@ -932,11 +943,11 @@ def test_map_shard_empty_result(zephyr_ctx):
         return iter([])  # Return empty iterator
 
     ds = Dataset.from_list([list(range(1, 6))]).flat_map(lambda x: x).map_shard(filter_all)
-    result = list(zephyr_ctx.execute(ds))
+    result = list(Backend.execute(ds, context=backend))
     assert result == []
 
 
-def test_map_shard_error_propagation(zephyr_ctx):
+def test_map_shard_error_propagation(backend):
     """Test that exceptions in map_shard functions propagate correctly."""
 
     def failing_generator(items):
@@ -947,10 +958,8 @@ def test_map_shard_error_propagation(zephyr_ctx):
 
     ds = Dataset.from_list([list(range(1, 6))]).flat_map(lambda x: x).map_shard(failing_generator)
 
-    from zephyr.execution import ZephyrWorkerError
-
-    with pytest.raises(ZephyrWorkerError, match="Test error"):
-        list(zephyr_ctx.execute(ds))
+    with pytest.raises(ValueError, match="Test error"):
+        list(Backend.execute(ds, context=backend))
 
 
 @pytest.fixture
@@ -966,8 +975,7 @@ def sample_input_files(tmp_path):
 
 def test_skip_existing_clean_run(tmp_path, sample_input_files):
     """Test skip_existing with no existing files - all shards process."""
-    client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=1)
+    ctx = create_job_ctx("sync")
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -979,21 +987,17 @@ def test_skip_existing_clean_run(tmp_path, sample_input_files):
         .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
     )
 
-    try:
-        result = list(ctx.execute(ds))
-        assert len(result) == 3
-        assert all(Path(p).exists() for p in result)
-        assert counter.flat_map_count == 3  # All files loaded
-        assert counter.map_count == 3  # All items mapped
-        assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
-    finally:
-        ctx.shutdown()
+    result = list(Backend.execute(ds, context=ctx))
+    assert len(result) == 3
+    assert all(Path(p).exists() for p in result)
+    assert counter.flat_map_count == 3  # All files loaded
+    assert counter.map_count == 3  # All items mapped
+    assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
 
 
 def test_skip_existing_one_file_exists(tmp_path, sample_input_files):
     """Test skip_existing with one output file existing - only that shard skips."""
-    client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=1)
+    ctx = create_job_ctx("sync")
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -1009,21 +1013,17 @@ def test_skip_existing_one_file_exists(tmp_path, sample_input_files):
         .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
     )
 
-    try:
-        result = list(ctx.execute(ds))
-        assert len(result) == 3
-        assert all(Path(p).exists() for p in result)
-        assert counter.flat_map_count == 2  # Only 2 files loaded (shard 1 skipped)
-        assert counter.map_count == 2  # Only 2 items mapped
-        assert sorted(counter.processed_ids) == [0, 2]  # Only shards 0 and 2 ran
-    finally:
-        ctx.shutdown()
+    result = list(Backend.execute(ds, context=ctx))
+    assert len(result) == 3
+    assert all(Path(p).exists() for p in result)
+    assert counter.flat_map_count == 2  # Only 2 files loaded (shard 1 skipped)
+    assert counter.map_count == 2  # Only 2 items mapped
+    assert sorted(counter.processed_ids) == [0, 2]  # Only shards 0 and 2 ran
 
 
 def test_skip_existing_all_files_exist(tmp_path, sample_input_files):
     """Test skip_existing with all output files existing - all shards skip."""
-    client = LocalClient()
-    ctx = ZephyrContext(client=client, num_workers=1)
+    ctx = create_job_ctx("sync")
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -1035,30 +1035,27 @@ def test_skip_existing_all_files_exist(tmp_path, sample_input_files):
         .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
     )
 
-    try:
-        # First run: create all output files
-        result = list(ctx.execute(ds))
-        assert len(result) == 3
-        assert counter.flat_map_count == 3
-        assert counter.map_count == 3
-        assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
+    # First run: create all output files
+    result = list(Backend.execute(ds, context=ctx))
+    assert len(result) == 3
+    assert counter.flat_map_count == 3
+    assert counter.map_count == 3
+    assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
 
-        # Second run: all files exist, nothing should process
-        counter.reset()
-        ds = (
-            Dataset.from_files(f"{sample_input_files}/*.jsonl")
-            .flat_map(counter.counting_flat_map)
-            .map(counter.counting_map)
-            .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
-        )
+    # Second run: all files exist, nothing should process
+    counter.reset()
+    ds = (
+        Dataset.from_files(f"{sample_input_files}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
 
-        result = list(ctx.execute(ds))
-        assert len(result) == 3
-        assert counter.flat_map_count == 0  # Nothing loaded
-        assert counter.map_count == 0  # Nothing mapped
-        assert counter.processed_ids == []  # No shards ran
-    finally:
-        ctx.shutdown()
+    result = list(Backend.execute(ds, context=ctx))
+    assert len(result) == 3
+    assert counter.flat_map_count == 0  # Nothing loaded
+    assert counter.map_count == 0  # Nothing mapped
+    assert counter.processed_ids == []  # No shards ran
 
 
 def test_repr_handles_partials():
@@ -1078,7 +1075,7 @@ def test_repr_handles_lambdas():
     assert repr(op) == "FilterOp(predicate=test_repr_handles_lambdas.<locals>.<lambda>)"
 
 
-def test_filter_with_expression(zephyr_ctx):
+def test_filter_with_expression(backend):
     """Test filter with expression on in-memory data."""
     from zephyr import col
 
@@ -1090,12 +1087,12 @@ def test_filter_with_expression(zephyr_ctx):
         ]
     ).filter(col("score") > 70)
 
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 2
     assert all(r["score"] > 70 for r in results)
 
 
-def test_filter_expression_equality(zephyr_ctx):
+def test_filter_expression_equality(backend):
     """Test filter with equality expression."""
     from zephyr import col
 
@@ -1107,12 +1104,12 @@ def test_filter_expression_equality(zephyr_ctx):
         ]
     ).filter(col("category") == "A")
 
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 2
     assert all(r["category"] == "A" for r in results)
 
 
-def test_filter_expression_logical_and(zephyr_ctx):
+def test_filter_expression_logical_and(backend):
     """Test filter with logical AND expression."""
     from zephyr import col
 
@@ -1125,12 +1122,12 @@ def test_filter_expression_logical_and(zephyr_ctx):
         ]
     ).filter((col("a") > 0) & (col("b") > 0))
 
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 1
     assert results[0] == {"a": 1, "b": 2}
 
 
-def test_filter_expression_logical_or(zephyr_ctx):
+def test_filter_expression_logical_or(backend):
     """Test filter with logical OR expression."""
     from zephyr import col
 
@@ -1143,11 +1140,11 @@ def test_filter_expression_logical_or(zephyr_ctx):
         ]
     ).filter((col("a") > 0) | (col("b") > 0))
 
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 3
 
 
-def test_filter_nested_field(zephyr_ctx):
+def test_filter_nested_field(backend):
     """Test filter with nested field access."""
     from zephyr import col
 
@@ -1159,12 +1156,12 @@ def test_filter_nested_field(zephyr_ctx):
         ]
     ).filter(col("meta")["score"] > 0.5)
 
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 2
     assert all(r["meta"]["score"] > 0.5 for r in results)
 
 
-def test_select_columns(zephyr_ctx):
+def test_select_columns(backend):
     """Test column projection with select."""
     ds = Dataset.from_list(
         [
@@ -1173,13 +1170,13 @@ def test_select_columns(zephyr_ctx):
         ]
     ).select("id", "name")
 
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 2
     assert results[0] == {"id": 1, "name": "alice"}
     assert results[1] == {"id": 2, "name": "bob"}
 
 
-def test_select_partial_columns(zephyr_ctx):
+def test_select_partial_columns(backend):
     """Test select with columns that don't exist in all records."""
     ds = Dataset.from_list(
         [
@@ -1188,13 +1185,13 @@ def test_select_partial_columns(zephyr_ctx):
         ]
     ).select("id", "score")
 
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 2
     assert results[0] == {"id": 1}
     assert results[1] == {"id": 2, "score": 60}
 
 
-def test_filter_and_select_combined(zephyr_ctx):
+def test_filter_and_select_combined(backend):
     """Test combined filter and select."""
     from zephyr import col
 
@@ -1210,13 +1207,13 @@ def test_filter_and_select_combined(zephyr_ctx):
         .select("id", "name")
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 2
     assert all(set(r.keys()) == {"id", "name"} for r in results)
 
 
 @pytest.mark.parametrize("output_format", ["parquet", "jsonl"])
-def test_filter_and_select(tmp_path, zephyr_ctx, output_format: str):
+def test_filter_and_select(tmp_path, backend, output_format: str):
     """Test combined filter and select on parquet."""
     from zephyr import col
 
@@ -1235,11 +1232,11 @@ def test_filter_and_select(tmp_path, zephyr_ctx, output_format: str):
     elif output_format == "jsonl":
         ds = ds.write_jsonl(str(output_path))
 
-    zephyr_ctx.execute(ds)
+    Backend.execute(ds, context=backend)
 
     ds = Dataset.from_files(str(output_path)).load_file().filter(col("score") > 70).select("id", "name")
 
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 2
     assert all(set(r.keys()) == {"id", "name"} for r in results)
     names = {r["name"] for r in results}
@@ -1257,7 +1254,7 @@ def test_filter_expression_repr():
     assert "col('score')" in repr(op)
 
 
-def test_mixed_filter_expression_and_lambda(zephyr_ctx):
+def test_mixed_filter_expression_and_lambda(backend):
     """Test combining expression filter with lambda filter."""
     from zephyr import col
 
@@ -1274,7 +1271,7 @@ def test_mixed_filter_expression_and_lambda(zephyr_ctx):
         .filter(lambda r: r["b"] == "x")
     )
 
-    results = list(zephyr_ctx.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 1
     assert results[0] == {"a": 3, "b": "x"}
 
@@ -1328,3 +1325,111 @@ def test_input_file_spec_with_columns_and_row_range(tmp_path):
     assert set(records[0].keys()) == {"id", "value"}
     assert records[0]["id"] == 5
     assert records[-1]["id"] == 9
+
+
+def test_fork_chunks_inserted_with_intra_shard_parallelism(tmp_path):
+    """Test that ForkChunks is inserted when intra_shard_parallelism is enabled."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from zephyr.plan import ExecutionHint, ForkChunks, Map, compute_plan
+
+    # Create a parquet file
+    data = [{"id": i, "value": i * 2} for i in range(100)]
+    input_path = tmp_path / "data.parquet"
+    table = pa.Table.from_pylist(data)
+    pq.write_table(table, str(input_path))
+
+    # Create pipeline: load_parquet -> map -> write
+    output_path = tmp_path / "output.parquet"
+    ds = (
+        Dataset.from_files(str(input_path))
+        .load_parquet()
+        .map(lambda x: {"id": x["id"], "doubled": x["value"]})
+        .write_parquet(str(output_path))
+    )
+
+    # Test with intra_shard_parallelism enabled
+    hints = ExecutionHint(intra_shard_parallelism=4)
+    plan = compute_plan(ds, hints)
+
+    # Should have one stage
+    assert len(plan.stages) == 1
+    stage = plan.stages[0]
+
+    # Check that ForkChunks is the first op
+    assert len(stage.operations) > 0
+    assert isinstance(stage.operations[0], ForkChunks)
+    assert stage.operations[0].target_chunks == 4
+
+    # Check that ForkChunks contains the user ops (map)
+    fork_chunks = stage.operations[0]
+    assert len(fork_chunks.parallel_ops) == 1
+    assert isinstance(fork_chunks.parallel_ops[0], Map)
+
+
+def test_fork_chunks_not_inserted_when_disabled(tmp_path):
+    """Test that ForkChunks is NOT inserted when intra_shard_parallelism is 0."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from zephyr.plan import ExecutionHint, ForkChunks, compute_plan
+
+    # Create a parquet file
+    data = [{"id": i, "value": i * 2} for i in range(100)]
+    input_path = tmp_path / "data.parquet"
+    table = pa.Table.from_pylist(data)
+    pq.write_table(table, str(input_path))
+
+    # Create pipeline: load_parquet -> map -> write
+    output_path = tmp_path / "output.parquet"
+    ds = (
+        Dataset.from_files(str(input_path))
+        .load_parquet()
+        .map(lambda x: {"id": x["id"], "doubled": x["value"]})
+        .write_parquet(str(output_path))
+    )
+
+    # Test with intra_shard_parallelism disabled
+    hints = ExecutionHint(intra_shard_parallelism=0)
+    plan = compute_plan(ds, hints)
+
+    # Should have one stage
+    assert len(plan.stages) == 1
+    stage = plan.stages[0]
+
+    # Check that ForkChunks is NOT present
+    fork_chunks_found = any(isinstance(op, ForkChunks) for op in stage.operations)
+    assert not fork_chunks_found
+
+
+def test_fork_chunks_not_inserted_with_map_shard(tmp_path):
+    """Test that ForkChunks is NOT inserted when MapShardOp requires full shard context."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from zephyr.plan import ExecutionHint, ForkChunks, compute_plan
+
+    # Create a parquet file
+    data = [{"id": i, "value": i * 2} for i in range(100)]
+    input_path = tmp_path / "data.parquet"
+    table = pa.Table.from_pylist(data)
+    pq.write_table(table, str(input_path))
+
+    # Create pipeline with map_shard (requires full shard context)
+    output_path = tmp_path / "output.parquet"
+    ds = (
+        Dataset.from_files(str(input_path))
+        .load_parquet()
+        .map_shard(lambda items: list(items)[:10])
+        .write_parquet(str(output_path))
+    )
+
+    # Test with intra_shard_parallelism enabled
+    hints = ExecutionHint(intra_shard_parallelism=4)
+    plan = compute_plan(ds, hints)
+
+    # Should have one stage
+    assert len(plan.stages) == 1
+    stage = plan.stages[0]
+
+    # Check that ForkChunks is NOT present (because map_shard requires full shard)
+    fork_chunks_found = any(isinstance(op, ForkChunks) for op in stage.operations)
+    assert not fork_chunks_found
