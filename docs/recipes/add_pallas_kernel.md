@@ -366,3 +366,8 @@ favor a bit more copy-paste and explicitness for agents.
 
 JAX has some built-in kernels that use Pallas under the hood; these can be
 good references for patterns. `.venv/lib/python3.11/site-packages/jax/experimental/pallas/ops`
+
+
+## Misc Tips
+
+-  Try to add parallel dimension semantics to at least one axis (usually batch) for TPU kernels.
