@@ -106,9 +106,18 @@ def build_iris_env(
     if controller_address:
         # Only rewrite localhost addresses for Docker containers
         if runtime_type is DockerRuntime:
-            env["IRIS_CONTROLLER_ADDRESS"] = _rewrite_address_for_container(controller_address)
+            rewritten = _rewrite_address_for_container(controller_address)
+            env["IRIS_CONTROLLER_ADDRESS"] = rewritten
         else:
-            env["IRIS_CONTROLLER_ADDRESS"] = controller_address
+            rewritten = controller_address
+            env["IRIS_CONTROLLER_ADDRESS"] = rewritten
+
+        # Allow fray v2 to auto-discover the Iris backend.
+        # Strip http:// prefix since FRAY_CLIENT_SPEC uses its own iris:// scheme.
+        addr_for_fray = rewritten.removeprefix("http://").removeprefix("https://")
+        fray_spec = f"iris://{addr_for_fray}"
+        env["FRAY_CLIENT_SPEC"] = fray_spec
+        logger.info("Injecting FRAY_CLIENT_SPEC=%s for task %s", fray_spec, task.task_id)
 
     # Inject bundle path for sub-task inheritance
     if task.request.bundle_gcs_path:
