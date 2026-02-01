@@ -22,7 +22,9 @@ import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
 from iris.cluster.types import ResourceSpec, CoschedulingConfig
-from .conftest import submit, wait, _quick
+from iris.test_util import SentinelFile
+
+from .conftest import submit, wait, _quick, _block
 
 
 @pytest.mark.chaos
@@ -38,16 +40,10 @@ def test_bundle_download_intermittent(cluster):
 
 
 @pytest.mark.chaos
-def test_task_timeout(cluster):
+def test_task_timeout(cluster, sentinel):
     """Task times out, marked FAILED."""
     _url, client = cluster
-
-    def hang():
-        import time
-
-        time.sleep(300)
-
-    job = submit(client, hang, "timeout-test", timeout_seconds=5)
+    job = submit(client, _block, "timeout-test", sentinel, timeout_seconds=5)
     status = wait(client, job, timeout=30)
     assert status.state == cluster_pb2.JOB_STATE_FAILED
 
@@ -89,22 +85,19 @@ def test_retry_budget_exact(cluster):
 
 
 @pytest.mark.chaos
-def test_capacity_wait(cluster):
+def test_capacity_wait(cluster, tmp_path):
     """Workers at capacity, task pends, schedules when capacity frees."""
     _url, client = cluster
     from iris.cluster.types import Entrypoint, EnvironmentSpec
 
-    def blocker():
-        import time
-
-        time.sleep(8)
-        return 1
-
     # Submit blockers with high CPU directly using client.submit
+    blocker_sentinels = []
     blockers = []
     for i in range(2):
+        s = SentinelFile(str(tmp_path / f"blocker-{i}"))
+        blocker_sentinels.append(s)
         job = client.submit(
-            entrypoint=Entrypoint.from_callable(blocker),
+            entrypoint=Entrypoint.from_callable(_block, s),
             name=f"blocker-{i}",
             resources=ResourceSpec(cpu=4, memory="1g"),
             environment=EnvironmentSpec(),
@@ -115,6 +108,9 @@ def test_capacity_wait(cluster):
     pending = submit(client, _quick, "pending")
     status = client.status(str(pending.job_id))
     assert status.state == cluster_pb2.JOB_STATE_PENDING
+    # Release blockers so capacity frees up
+    for s in blocker_sentinels:
+        s.signal()
     for b in blockers:
         wait(client, b, timeout=30)
     status = wait(client, pending, timeout=30)
