@@ -198,6 +198,12 @@ class LevanterVLM(BaseModel):
                 text_parts.append(value)
 
         prompt = "\n".join(text_parts)
+
+        # Debug: log prompt and image count
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"_parse_messages: {len(images)} images, prompt preview: {prompt[:200]}...")
+
         return prompt, images
 
     def _create_vlm_request(
@@ -234,6 +240,24 @@ class LevanterVLM(BaseModel):
         grid_mask = processed.get("grid_mask")
         unpad_indices = processed.get("unpad_indices")
         num_unpadded_features = processed.get("num_unpadded_features")
+
+        # Debug: log processed data info
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Check for image tokens in input_ids
+        # Image token ID is typically 151655 for Qwen2-VL/LLaVA-OneVision
+        image_token_id = self.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+        num_image_tokens = sum(1 for t in input_ids if t == image_token_id)
+
+        # Also decode first 100 tokens to see the prompt structure
+        first_tokens = self.tokenizer.decode(input_ids[:100], skip_special_tokens=False)
+
+        logger.info(f"_create_vlm_request: input_ids len={len(input_ids)}, "
+                    f"pixel_values shape={pixel_values.shape if pixel_values is not None else None}, "
+                    f"num_images={len(images)}, "
+                    f"image_token_id={image_token_id}, num_image_tokens={num_image_tokens}")
+        logger.info(f"First 100 tokens decoded: {first_tokens[:200]}...")
 
         # Convert input_ids to list
         input_ids_list = input_ids.tolist() if hasattr(input_ids, 'tolist') else list(input_ids)

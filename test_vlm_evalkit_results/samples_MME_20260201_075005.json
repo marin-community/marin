@@ -1,0 +1,64 @@
+{
+  "MME": [
+    {
+      "index": 0,
+      "question": "Is the word in the logo \"angie's\"? Please answer yes or no.",
+      "answer": "Yes",
+      "prediction": "Yes"
+    },
+    {
+      "index": 1,
+      "question": "Is the word in the logo \"angle's\"? Please answer yes or no.",
+      "answer": "No",
+      "prediction": "Yes"
+    },
+    {
+      "index": 2,
+      "question": "Is the word in the logo \"c'est cheese\"? Please answer yes or no.",
+      "answer": "Yes",
+      "prediction": "Yes"
+    },
+    {
+      "index": 3,
+      "question": "Is the word in the logo \"crest cheese\"? Please answer yes or no.",
+      "answer": "No",
+      "prediction": "Yes"
+    },
+    {
+      "index": 4,
+      "question": "Is the word in the logo \"beavertails pastry\"? Please answer yes or no.",
+      "answer": "Yes",
+      "prediction": "Yes"
+    },
+    {
+      "index": 5,
+      "question": "Is the word in the logo \"beavertalls pastry\"? Please answer yes or no.",
+      "answer": "No",
+      "prediction": "Yes"
+    },
+    {
+      "index": 6,
+      "question": "Is the word in the logo \"old market sundries\"? Please answer yes or no.",
+      "answer": "Yes",
+      "prediction": "Yes"
+    },
+    {
+      "index": 7,
+      "question": "Is the word in the logo \"old market hundreds\"? Please answer yes or no.",
+      "answer": "No",
+      "prediction": "Yes"
+    },
+    {
+      "index": 8,
+      "question": "Is the word in the logo \"kress\"? Please answer yes or no.",
+      "answer": "Yes",
+      "prediction": "Yes"
+    },
+    {
+      "index": 9,
+      "question": "Is the word in the logo \"dress\"? Please answer yes or no.",
+      "answer": "No",
+      "prediction": "No"
+    }
+  ]
+}

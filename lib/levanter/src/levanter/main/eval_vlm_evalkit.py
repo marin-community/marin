@@ -385,15 +385,14 @@ def main(config: EvalVLMEvalKitConfig):
                             logger.info(f"Batch {batch_idx}: {len(vlm_requests)} requests, {num_tokens} token sequences returned")
 
                             # Decode results
+                            # Note: result.tokens contains only the newly generated tokens, not prompt + generation
                             for i, idx in enumerate(batch_indices):
                                 if result.tokens and i < len(result.tokens):
                                     generated_tokens = result.tokens[i]
-                                    prompt_len = len(vlm_requests[i].prompt_tokens)
-                                    new_tokens = generated_tokens[prompt_len:]
-                                    text = vlm_model.tokenizer.decode(new_tokens, skip_special_tokens=True)
+                                    text = vlm_model.tokenizer.decode(generated_tokens, skip_special_tokens=True)
                                     results[idx] = text.strip()
                                     if not text.strip():
-                                        logger.warning(f"Empty generation for index {idx}: prompt_len={prompt_len}, generated_len={len(generated_tokens)}, new_tokens_len={len(new_tokens)}")
+                                        logger.warning(f"Empty generation for index {idx}: generated_len={len(generated_tokens)}")
                                 else:
                                     logger.warning(f"No tokens for index {idx}: result.tokens={result.tokens is not None}, i={i}, num_tokens={num_tokens}")
                                     results[idx] = ""

@@ -1,0 +1,108 @@
+{
+  "timestamp": "20260201_075005",
+  "checkpoint": "gs://marin-us-east1/checkpoints/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/hf/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/step-39061/",
+  "benchmarks": [
+    "MME"
+  ],
+  "results": {
+    "MME": {
+      "error": "'artwork'"
+    }
+  },
+  "predictions": {
+    "MME": [
+      {
+        "index": 0,
+        "question": "Is the word in the logo \"angie's\"? Please answer yes or no.",
+        "answer": "Yes",
+        "prediction": "Yes"
+      },
+      {
+        "index": 1,
+        "question": "Is the word in the logo \"angle's\"? Please answer yes or no.",
+        "answer": "No",
+        "prediction": "Yes"
+      },
+      {
+        "index": 2,
+        "question": "Is the word in the logo \"c'est cheese\"? Please answer yes or no.",
+        "answer": "Yes",
+        "prediction": "Yes"
+      },
+      {
+        "index": 3,
+        "question": "Is the word in the logo \"crest cheese\"? Please answer yes or no.",
+        "answer": "No",
+        "prediction": "Yes"
+      },
+      {
+        "index": 4,
+        "question": "Is the word in the logo \"beavertails pastry\"? Please answer yes or no.",
+        "answer": "Yes",
+        "prediction": "Yes"
+      },
+      {
+        "index": 5,
+        "question": "Is the word in the logo \"beavertalls pastry\"? Please answer yes or no.",
+        "answer": "No",
+        "prediction": "Yes"
+      },
+      {
+        "index": 6,
+        "question": "Is the word in the logo \"old market sundries\"? Please answer yes or no.",
+        "answer": "Yes",
+        "prediction": "Yes"
+      },
+      {
+        "index": 7,
+        "question": "Is the word in the logo \"old market hundreds\"? Please answer yes or no.",
+        "answer": "No",
+        "prediction": "Yes"
+      },
+      {
+        "index": 8,
+        "question": "Is the word in the logo \"kress\"? Please answer yes or no.",
+        "answer": "Yes",
+        "prediction": "Yes"
+      },
+      {
+        "index": 9,
+        "question": "Is the word in the logo \"dress\"? Please answer yes or no.",
+        "answer": "No",
+        "prediction": "No"
+      }
+    ]
+  },
+  "metadata": {
+    "model": {
+      "vision_encoder": "siglip",
+      "vision_hidden_size": 1152,
+      "vision_image_size": 384,
+      "vision_patch_size": 16,
+      "text_hidden_size": 2048,
+      "text_num_layers": 28,
+      "text_max_seq_len": 4096
+    },
+    "eval_config": {
+      "max_eval_length": 4096,
+      "max_gen_toks": 100,
+      "max_examples": 10,
+      "vlm_batch_size": 2,
+      "temperature": 0.0
+    },
+    "image_processing": {
+      "image_size": 384,
+      "patch_size": 16,
+      "vision_feature_height": 24,
+      "disable_anyres": true
+    },
+    "paths": {
+      "processor_path": "gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf",
+      "tokenizer_path": "gs://marin-vlm/tokenizers/Qwen3-1.7B"
+    },
+    "hardware": {
+      "num_devices": 8,
+      "device_type": "tpu"
+    }
+  }
+}

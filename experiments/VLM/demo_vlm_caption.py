@@ -27,6 +27,9 @@ Usage:
     uv run python experiments/VLM/demo_vlm_caption.py --image_path 7-1-scaled.jpg --checkpoint gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-round2-2-80caa3/checkpoints/step-20000
 
     uv run python experiments/VLM/demo_vlm_caption.py --image_path apple.jpg --checkpoint gs://marin-us-east1/checkpoints/vlm-official-qwen3-1.7b-stage1-pack-4_bs_1-2f8fa5/hf/vlm-official-qwen3-1.7b-stage1-pack-4_bs_1-2f8fa5/step-1452 
+    
+    uv run python experiments/VLM/demo_vlm_caption.py --image_path image.png --checkpoint  gs://marin-eu-west4/checkpoints/vlm-official-qwen3-1.7b-stage3_4096-2-0abda3/hf/vlm-official-qwen3-1.7b-stage3_4096-2-0abda3/step-39061/      --prompt 'How many food item is shown in the bar graph?'
+
 
     # With custom prompt
     python experiments/VLM/demo_vlm_caption.py \
