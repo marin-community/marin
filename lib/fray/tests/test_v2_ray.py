@@ -274,7 +274,7 @@ def test_actor_options_default_preemptible():
     from fray.v2.ray.backend import _actor_ray_options
 
     options = _actor_ray_options(ResourceConfig())
-    assert options["num_cpus"] == 0
+    assert options["num_cpus"] == 1
     assert "resources" not in options
 
 
@@ -282,5 +282,5 @@ def test_actor_options_non_preemptible_pins_head_node():
     from fray.v2.ray.backend import _actor_ray_options
 
     options = _actor_ray_options(ResourceConfig(preemptible=False))
-    assert options["num_cpus"] == 0
+    assert options["num_cpus"] == 1
     assert options["resources"] == {"head_node": 0.0001}
