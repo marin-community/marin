@@ -204,8 +204,10 @@ def current_client() -> Client:
 
     Resolution order:
         1. Explicitly set client (via set_current_client)
-        2. FRAY_CLIENT_SPEC environment variable
-        3. LocalClient() default
+        2. FRAY_CLIENT_SPEC environment variable (explicit override)
+        3. Auto-detect Iris environment (IRIS_CONTROLLER_ADDRESS is set)
+        4. Auto-detect Ray environment (ray.is_initialized() returns True)
+        5. LocalClient() default
     """
     client = _current_client_var.get()
     if client is not None:
@@ -214,6 +216,25 @@ def current_client() -> Client:
     spec = os.environ.get("FRAY_CLIENT_SPEC")
     if spec is not None:
         return _parse_client_spec(spec)
+
+    # Auto-detect Iris environment
+    controller_address = os.environ.get("IRIS_CONTROLLER_ADDRESS")
+    if controller_address is not None:
+        from fray.v2.iris_backend import FrayIrisClient
+
+        bundle_gcs_path = os.environ.get("IRIS_BUNDLE_GCS_PATH")
+        return FrayIrisClient(controller_address, bundle_gcs_path=bundle_gcs_path)
+
+    # Auto-detect Ray environment
+    try:
+        import ray
+
+        if ray.is_initialized():
+            from fray.v2.ray.backend import RayClient
+
+            return RayClient()
+    except ImportError:
+        pass  # Ray not installed, skip detection
 
     from fray.v2.local import LocalClient
 

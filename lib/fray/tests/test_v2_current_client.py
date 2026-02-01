@@ -86,3 +86,67 @@ def test_unknown_spec_raises(monkeypatch):
     monkeypatch.setenv("FRAY_CLIENT_SPEC", "unknown_backend")
     with pytest.raises(ValueError, match="Unknown FRAY_CLIENT_SPEC"):
         current_client()
+
+
+def test_auto_detect_iris_environment(monkeypatch):
+    """Test that IRIS_CONTROLLER_ADDRESS triggers auto-detection."""
+    from unittest.mock import patch
+
+    monkeypatch.setenv("IRIS_CONTROLLER_ADDRESS", "http://localhost:10000")
+    with patch("fray.v2.iris_backend.IrisClientLib"):
+        from fray.v2.iris_backend import FrayIrisClient
+
+        client = current_client()
+        assert isinstance(client, FrayIrisClient)
+
+
+def test_auto_detect_iris_with_bundle(monkeypatch):
+    """Test that IRIS_BUNDLE_GCS_PATH is passed through auto-detection."""
+    from unittest.mock import patch
+
+    monkeypatch.setenv("IRIS_CONTROLLER_ADDRESS", "http://localhost:10000")
+    monkeypatch.setenv("IRIS_BUNDLE_GCS_PATH", "gs://bucket/bundle.zip")
+    with patch("fray.v2.iris_backend.IrisClientLib") as mock_iris:
+        from fray.v2.iris_backend import FrayIrisClient
+
+        client = current_client()
+        assert isinstance(client, FrayIrisClient)
+        mock_iris.remote.assert_called_once_with(
+            "http://localhost:10000", workspace=None, bundle_gcs_path="gs://bucket/bundle.zip"
+        )
+
+
+def test_auto_detect_ray_environment(monkeypatch):
+    """Test that ray.is_initialized() triggers auto-detection."""
+    from unittest.mock import patch
+
+    with patch("fray.v2.client.ray") as mock_ray:
+        mock_ray.is_initialized.return_value = True
+        from fray.v2.ray.backend import RayClient
+
+        client = current_client()
+        assert isinstance(client, RayClient)
+
+
+def test_fray_client_spec_overrides_auto_detection(monkeypatch):
+    """Test that FRAY_CLIENT_SPEC takes precedence over auto-detection."""
+    # Set both Iris env vars and FRAY_CLIENT_SPEC
+    monkeypatch.setenv("IRIS_CONTROLLER_ADDRESS", "http://localhost:10000")
+    monkeypatch.setenv("FRAY_CLIENT_SPEC", "local")
+
+    client = current_client()
+    # Should get LocalClient from FRAY_CLIENT_SPEC, not FrayIrisClient from auto-detect
+    assert isinstance(client, LocalClient)
+
+
+def test_explicit_client_overrides_auto_detection(monkeypatch):
+    """Test that set_current_client() takes precedence over auto-detection."""
+    from unittest.mock import patch
+
+    monkeypatch.setenv("IRIS_CONTROLLER_ADDRESS", "http://localhost:10000")
+    explicit = LocalClient(max_threads=1)
+
+    with patch("fray.v2.iris_backend.IrisClientLib"):
+        with set_current_client(explicit):
+            # Should get explicit client, not auto-detected FrayIrisClient
+            assert current_client() is explicit
