@@ -186,6 +186,10 @@ def build_runtime_env_for_packages(
 
     torch_pkgs = []
     for pkg in package_spec.package_specs + pip_packages:
+        # Filter out non-headless opencv (headless version will be used instead)
+        # This avoids libGL.so.1 dependency issues on headless Ray cluster nodes
+        if pkg.startswith("opencv-python==") or pkg.startswith("opencv-python["):
+            continue
         # Defer torch-family installs to the end so that the --extra-index-url only applies to them
         if pkg.startswith(TORCH_GPU_PACKAGE_PREFIXES):
             torch_pkgs.append(pkg)

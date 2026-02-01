@@ -148,17 +148,22 @@ async def submit_and_track_job(
 
     runtime_dict = build_runtime_env_for_packages(extra=[*extra_list], env_vars=env_vars) | runtime_dict
 
+    # Uninstall non-headless opencv and install headless version to avoid libGL.so.1 dependency
+    # opencv-python-headless provides the same cv2 API without GUI/OpenGL requirements
+    opencv_fix = "pip uninstall -y opencv-python 2>/dev/null || true && pip install opencv-python-headless"
+    entrypoint_with_opencv_fix = f"{opencv_fix} && {entrypoint}"
+
     logger.info(
         f"Terminal command: \n"
         f"ray job submit "
         f"--runtime-env-json '{json.dumps(runtime_dict)}' "
         f"--submission-id '{submission_id} "
-        f" -- {entrypoint}"
+        f" -- {entrypoint_with_opencv_fix}"
     )
 
     # Submit the job with runtime environment and entrypoint
     submission_id = client.submit_job(
-        entrypoint=entrypoint,
+        entrypoint=entrypoint_with_opencv_fix,
         runtime_env=runtime_dict,
         entrypoint_num_cpus=entrypoint_num_cpus,
         entrypoint_num_gpus=entrypoint_num_gpus,
