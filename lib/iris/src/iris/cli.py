@@ -1249,11 +1249,12 @@ def cluster_restart(ctx):
 @click.option("--validate", is_flag=True, help="Submit a health check after reload")
 @click.pass_context
 def cluster_reload(ctx, no_build: bool, validate: bool):
-    """Reload cluster by rebuilding images and redeploying on existing VMs.
+    """Reload cluster by rebuilding images and reloading the controller.
 
-    Faster than a full restart: rebuilds Docker images, SSHs into existing
-    controller and worker VMs, pulls new images, and restarts containers.
-    Existing VMs are preserved.
+    Faster than a full restart: rebuilds Docker images and reloads the controller VM.
+    The controller will automatically re-bootstrap all worker VMs with the latest
+    worker image when it starts up. This ensures all workers run the latest image
+    without manual intervention.
 
     Use --validate to verify the reloaded controller is healthy by establishing
     an SSH tunnel and checking the health endpoint.
@@ -1273,10 +1274,11 @@ def cluster_reload(ctx, no_build: bool, validate: bool):
 
     manager = ClusterManager(config)
 
-    click.echo("Reloading cluster (controller + workers)...")
+    click.echo("Reloading controller (workers will be re-bootstrapped automatically)...")
     try:
         address = manager.reload()
-        click.echo(f"Cluster reloaded. Controller at {address}")
+        click.echo(f"Controller reloaded at {address}")
+        click.echo("Workers will be re-bootstrapped with latest image on next controller reconcile.")
     except Exception as e:
         click.echo(f"Failed to reload cluster: {e}", err=True)
         raise SystemExit(1) from e

@@ -23,6 +23,7 @@ from iris.rpc import cluster_pb2
 from .conftest import submit, wait, _quick, _slow
 
 
+@pytest.mark.chaos
 def test_worker_crash_mid_task(cluster):
     """Worker task monitor crashes mid-task. Task fails, controller detects
     via heartbeat reconciliation or report_task_state."""
@@ -34,6 +35,7 @@ def test_worker_crash_mid_task(cluster):
     assert status.state == cluster_pb2.JOB_STATE_FAILED
 
 
+@pytest.mark.chaos
 def test_worker_delayed_registration(cluster):
     """Worker registration delayed by 5s on first attempt. Task pends, then
     schedules once registration completes."""
@@ -44,6 +46,7 @@ def test_worker_delayed_registration(cluster):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
+@pytest.mark.chaos
 def test_worker_sequential_jobs(cluster):
     """Sequential jobs verify reconciliation works across job boundaries.
     Worker state is consistent between tasks."""
@@ -54,6 +57,7 @@ def test_worker_sequential_jobs(cluster):
         assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
+@pytest.mark.chaos
 @pytest.mark.timeout(60)
 def test_all_workers_fail(cluster):
     """All workers' registration fails permanently. With scheduling timeout,
@@ -66,6 +70,7 @@ def test_all_workers_fail(cluster):
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
+@pytest.mark.chaos
 def test_task_fails_once_then_succeeds(cluster):
     """Container creation fails once, succeeds on retry."""
     _url, client = cluster
