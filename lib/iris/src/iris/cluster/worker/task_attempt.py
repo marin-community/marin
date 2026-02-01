@@ -20,7 +20,6 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 
 import logging
 import shutil
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -326,58 +325,33 @@ class TaskAttempt:
         )
 
     def _build_image(self) -> None:
-        """Build the container image from the downloaded bundle.
-
-        Handles uv cache population and builds with appropriate Python version
-        and base image selection.
-        """
+        """Build the container image from the downloaded bundle."""
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="building image")
         self.build_started_ms = now_ms()
         self._report_state()  # Report BUILDING state to controller
 
-        # Periodically check should_stop during build to support kill during BUILDING
-        # (RF-3: Similar to bundle download, we defer kill handling for now since
-        # image builds are handled by ImageProvider which doesn't expose cancellation.
-        # Most builds are fast due to caching.)
-
         env_config = self.request.environment
-        extras = list(env_config.extras)
+        dockerfile = env_config.dockerfile
+        if not dockerfile:
+            raise RuntimeError("No dockerfile in environment config - client must generate one")
 
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="populating uv cache")
         self.logs.add("build", "Building Docker image...")
         self._report_state()  # Report state update with logs to controller
-
-        # Use the client's Python version for the task container so cloudpickle
-        # bytecode is deserialized with the same Python that serialized it.
-        py_version = env_config.python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
-
-        pip_packages = list(env_config.pip_packages) if env_config.pip_packages else None
-
-        # Use the full Python image when additional pip packages are requested,
-        # since native wheels (e.g. libtpu for jax[tpu]) often depend on system
-        # libraries (libstdc++, libgomp, etc.) that python:*-slim strips out.
-        if pip_packages:
-            base_image = f"python:{py_version}"
-        else:
-            base_image = f"python:{py_version}-slim"
 
         if not self._image_provider:
             raise RuntimeError("Image provider not configured")
 
         build_result = self._image_provider.build(
             bundle_path=self._bundle_path,
-            base_image=base_image,
-            extras=extras,
+            dockerfile=dockerfile,
             job_id=self.job_id,
             task_logs=self.logs,
-            pip_packages=pip_packages,
         )
 
         self.build_finished_ms = now_ms()
         self.build_from_cache = build_result.from_cache
         self.image_tag = build_result.image_tag
-
-        # Protect image from eviction while task is running
         self._image_provider.protect(build_result.image_tag)
 
     def _start_container(self) -> str:
