@@ -148,9 +148,10 @@ async def submit_and_track_job(
 
     runtime_dict = build_runtime_env_for_packages(extra=[*extra_list], env_vars=env_vars) | runtime_dict
 
-    # Uninstall non-headless opencv and install headless version to avoid libGL.so.1 dependency
+    # Uninstall non-headless opencv and reinstall headless version to avoid libGL.so.1 dependency
     # opencv-python-headless provides the same cv2 API without GUI/OpenGL requirements
-    opencv_fix = "pip uninstall -y opencv-python 2>/dev/null || true && pip install opencv-python-headless"
+    # --force-reinstall is needed because uninstalling opencv-python removes the shared cv2 module
+    opencv_fix = "pip uninstall -y opencv-python 2>/dev/null || true && pip install --force-reinstall opencv-python-headless"
     entrypoint_with_opencv_fix = f"{opencv_fix} && {entrypoint}"
 
     logger.info(
