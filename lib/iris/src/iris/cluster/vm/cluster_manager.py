@@ -28,6 +28,7 @@ from contextlib import contextmanager
 from iris.cluster.vm.controller import ControllerProtocol, create_controller
 from iris.cluster.vm.debug import controller_tunnel
 from iris.rpc import config_pb2
+from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +51,8 @@ def make_local_config(
         sg.provider.ClearField("provider")
         sg.provider.local.SetInParent()
     # Local mode needs fast autoscaler evaluation for tests
-    if not config.autoscaler.evaluation_interval_seconds:
-        config.autoscaler.evaluation_interval_seconds = 0.5
+    if not config.autoscaler.HasField("evaluation_interval"):
+        config.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
     return config
 
 

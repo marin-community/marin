@@ -24,6 +24,7 @@ import asyncio
 import inspect
 import logging
 import socket
+import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -34,10 +35,9 @@ import uvicorn
 
 from connectrpc.request import RequestContext
 
-from iris.managed_thread import ManagedThread, spawn_server
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceASGIApplication
-from iris.time_utils import ExponentialBackoff, now_ms
+from iris.time_utils import ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class RegisteredActor:
     actor_id: ActorId
     instance: Any
     methods: dict[str, Callable]
-    registered_at_ms: int = field(default_factory=now_ms)
+    registered_at: Timestamp = field(default_factory=Timestamp.now)
 
 
 class ActorServer:
@@ -69,8 +69,6 @@ class ActorServer:
         self._actors: dict[str, RegisteredActor] = {}
         self._app: ActorServiceASGIApplication | None = None
         self._actual_port: int | None = None
-        self._server: uvicorn.Server | None = None
-        self._thread: ManagedThread | None = None
 
     @property
     def address(self) -> str:
@@ -181,7 +179,7 @@ class ActorServer:
                 actor_pb2.ActorInfo(
                     name=actor.name,
                     actor_id=actor.actor_id,
-                    registered_at_ms=actor.registered_at_ms,
+                    registered_at_ms=actor.registered_at.epoch_ms(),
                     metadata={},
                 )
             )
@@ -206,7 +204,7 @@ class ActorServer:
         elif self._port is not None:
             bind_port = self._port
         else:
-            bind_port = 0
+            bind_port = 0  # Auto-assign
 
         self._app = self._create_app()
 
@@ -224,24 +222,17 @@ class ActorServer:
             port=self._actual_port,
             log_level="error",
         )
-        self._server = uvicorn.Server(config)
-        self._thread = spawn_server(self._server, name="actor-server")
+        server = uvicorn.Server(config)
+
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
 
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: self._server.started,
+            lambda: server.started,
             timeout=5.0,
         )
 
         return self._actual_port
 
-    def wait(self) -> None:
-        """Block until the server thread exits."""
-        if self._thread is not None:
-            self._thread.join()
-
     def shutdown(self) -> None:
-        if self._server is not None:
-            self._server.should_exit = True
-        if self._thread is not None:
-            self._thread.stop()
-            self._thread.join(timeout=5.0)
+        pass

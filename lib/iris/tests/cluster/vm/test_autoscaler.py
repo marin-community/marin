@@ -35,6 +35,7 @@ from iris.cluster.vm.managed_vm import VmRegistry
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.rpc import config_pb2, vm_pb2
+from iris.time_utils import Duration
 
 # --- Test fixtures and helpers ---
 
@@ -96,10 +97,12 @@ def make_mock_slice(
         mock_vms.append(vm_mock)
     mock.vms.return_value = mock_vms
 
+    from iris.rpc import time_pb2
+
     mock.to_proto.return_value = vm_pb2.SliceInfo(
         slice_id=slice_id,
         scale_group=scale_group,
-        created_at_ms=created_at_ms,
+        created_at=time_pb2.Timestamp(epoch_ms=created_at_ms),
         vms=[vm.info for vm in mock_vms],
     )
     return mock
@@ -224,7 +227,7 @@ class TestAutoscalerScaleUp:
 
     def test_no_scale_up_during_backoff(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Does not scale up during backoff period."""
-        from iris.time_utils import now_ms
+        from iris.time_utils import Timestamp
 
         manager = make_mock_vm_manager()
         # Use large backoff so it's still active when we evaluate
@@ -232,9 +235,9 @@ class TestAutoscalerScaleUp:
             scale_group_config,
             manager,
             scale_up_cooldown_ms=0,
-            backoff_initial_ms=3600_000,  # 1 hour backoff
+            backoff_initial=Duration.from_hours(1),  # 1 hour backoff
         )
-        group.record_failure(ts=now_ms())
+        group.record_failure(ts=Timestamp.now().epoch_ms())
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
@@ -245,12 +248,12 @@ class TestAutoscalerScaleUp:
 
     def test_no_scale_up_during_cooldown(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Does not scale up during cooldown period."""
-        from iris.time_utils import now_ms
+        from iris.time_utils import Timestamp
 
         manager = make_mock_vm_manager()
         # Use large cooldown so it's still active when we evaluate
         group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=3600_000)  # 1 hour
-        group.scale_up(ts=now_ms())
+        group.scale_up(ts=Timestamp.now().epoch_ms())
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
@@ -448,7 +451,7 @@ class TestAutoscalerScaleDown:
 
     def test_no_scale_down_during_cooldown(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Does not scale down during cooldown period."""
-        from iris.time_utils import now_ms
+        from iris.time_utils import Timestamp
 
         discovered = [
             make_mock_slice("slice-001", all_ready=True),
@@ -464,7 +467,7 @@ class TestAutoscalerScaleDown:
         )
         group.reconcile()
         # Trigger a scale down to start cooldown
-        group.scale_down("slice-003", timestamp_ms=now_ms())
+        group.scale_down("slice-003", timestamp_ms=Timestamp.now().epoch_ms())
         autoscaler = make_autoscaler({"test-group": group})
 
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
@@ -514,7 +517,8 @@ class TestAutoscalerExecution:
         """execute() records failure when scale-up fails."""
         manager = make_mock_vm_manager()
         manager.create_vm_group.side_effect = RuntimeError("TPU unavailable")
-        group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0, backoff_initial_ms=5000)
+        backoff = Duration.from_seconds(5.0)
+        group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0, backoff_initial=backoff)
         autoscaler = make_autoscaler({"test-group": group})
 
         decision = ScalingDecision(
@@ -738,7 +742,7 @@ class TestAutoscalerFailedSliceCleanup:
             scale_group_config,
             manager,
             scale_up_cooldown_ms=0,
-            backoff_initial_ms=60_000,
+            backoff_initial=Duration.from_seconds(60.0),
         )
         group.reconcile()
         autoscaler = make_autoscaler({"test-group": group})
@@ -1093,7 +1097,8 @@ class TestAutoscalerWaterfallEndToEnd:
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown_ms=0)
 
         # Use short evaluation interval to allow rapid re-evaluation
-        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
+        config = config_pb2.AutoscalerConfig()
+        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
             config=config,
@@ -1127,14 +1132,14 @@ class TestAutoscalerWaterfallEndToEnd:
     def test_quota_recovery_restores_primary_routing(self):
         """After quota timeout expires, demand routes to primary again.
 
-        Note: execute() uses now_ms() internally, so quota_exceeded_until_ms is
+        Note: execute() uses Timestamp.now().epoch_ms() internally, so quota_exceeded_until_ms is
         set relative to real time, not test timestamps. We use a very short
         quota_timeout_ms and wait for it to expire naturally.
         """
 
         from tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig, FailureMode
         from iris.cluster.vm.scaling_group import GroupAvailability
-        from iris.time_utils import now_ms
+        from iris.time_utils import Timestamp
 
         config_primary = config_pb2.ScaleGroupConfig(
             name="primary",
@@ -1161,7 +1166,8 @@ class TestAutoscalerWaterfallEndToEnd:
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown_ms=0)
 
         # Use short evaluation interval to allow rapid re-evaluation
-        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
+        config = config_pb2.AutoscalerConfig()
+        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
             config=config,
@@ -1172,7 +1178,7 @@ class TestAutoscalerWaterfallEndToEnd:
         # First run: tries primary, fails with quota (nothing created yet)
         autoscaler.run_once(demand, {})
         time.sleep(0.1)  # Wait for async scale-up to complete
-        ts_after_fail = now_ms()
+        ts_after_fail = Timestamp.now().epoch_ms()
         assert group_primary.availability(ts_after_fail).status == GroupAvailability.QUOTA_EXCEEDED
         assert group_fallback.slice_count() == 0
 
@@ -1188,7 +1194,7 @@ class TestAutoscalerWaterfallEndToEnd:
         manager_primary.set_failure_mode(FailureMode.NONE)
 
         # After timeout: primary should be available again
-        ts_now = now_ms()
+        ts_now = Timestamp.now().epoch_ms()
         assert group_primary.availability(ts_now).status == GroupAvailability.AVAILABLE
 
         # Increase demand to verify routing goes to primary now
@@ -1224,11 +1230,13 @@ class TestAutoscalerWaterfallEndToEnd:
         )
         manager_fallback = FakeVmManager(FakeVmManagerConfig(config=config_fallback))
 
-        group_primary = ScalingGroup(config_primary, manager_primary, scale_up_cooldown_ms=0, backoff_initial_ms=60000)
+        backoff = Duration.from_seconds(60.0)
+        group_primary = ScalingGroup(config_primary, manager_primary, scale_up_cooldown_ms=0, backoff_initial=backoff)
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown_ms=0)
 
         # Use short evaluation interval to allow rapid re-evaluation
-        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
+        config = config_pb2.AutoscalerConfig()
+        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
             config=config,
@@ -1303,7 +1311,7 @@ class TestAutoscalerWaterfallEndToEnd:
         need multiple runs to fill up both groups.
         """
         from tests.cluster.vm.fakes import FakeVmManager, FakeVmManagerConfig
-        from iris.time_utils import now_ms
+        from iris.time_utils import Timestamp
 
         config_primary = config_pb2.ScaleGroupConfig(
             name="primary",
@@ -1328,7 +1336,8 @@ class TestAutoscalerWaterfallEndToEnd:
 
         # Use short evaluation interval to allow rapid re-evaluation
 
-        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
+        config = config_pb2.AutoscalerConfig()
+        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler(
             scale_groups={"primary": group_primary, "fallback": group_fallback},
             config=config,
@@ -1346,7 +1355,7 @@ class TestAutoscalerWaterfallEndToEnd:
 
         # Tick the managers to advance VM states (makes them ready)
         # This simulates time passing where VMs finish booting
-        ts = now_ms()
+        ts = Timestamp.now().epoch_ms()
         manager_primary.tick(ts)
         manager_fallback.tick(ts)
 
@@ -1369,8 +1378,8 @@ class TestAutoscalerWaterfallEndToEnd:
         assert group_fallback.slice_count() == 2
 
         # Tick again
-        manager_primary.tick(now_ms())
-        manager_fallback.tick(now_ms())
+        manager_primary.tick(Timestamp.now().epoch_ms())
+        manager_fallback.tick(Timestamp.now().epoch_ms())
 
         # Third run: primary still has headroom=1, but gets allocated demand<=capacity
         # Let's verify that when we have demand > total capacity, the system works
@@ -1384,8 +1393,8 @@ class TestAutoscalerWaterfallEndToEnd:
 
         # After several more runs, demand should be met
         for _ in range(2):
-            manager_primary.tick(now_ms())
-            manager_fallback.tick(now_ms())
+            manager_primary.tick(Timestamp.now().epoch_ms())
+            manager_fallback.tick(Timestamp.now().epoch_ms())
             autoscaler.run_once(demand, {})
             time.sleep(0.1)
 
@@ -1408,7 +1417,8 @@ class TestAutoscalerQuotaHandling:
         manager.create_vm_group.side_effect = QuotaExceededError("Quota exceeded")
         group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0, quota_timeout_ms=60_000)
         # Use short evaluation interval to avoid rate-limiting
-        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
+        config = config_pb2.AutoscalerConfig()
+        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
@@ -1445,7 +1455,8 @@ class TestAutoscalerQuotaHandling:
         group_primary = ScalingGroup(config_primary, manager_primary, scale_up_cooldown_ms=0, quota_timeout_ms=60_000)
         group_fallback = ScalingGroup(config_fallback, manager_fallback, scale_up_cooldown_ms=0)
         # Use short evaluation interval to avoid rate-limiting
-        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
+        config = config_pb2.AutoscalerConfig()
+        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler({"primary": group_primary, "fallback": group_fallback}, config=config)
 
         # First call: primary fails with quota, triggers quota state
@@ -1485,9 +1496,11 @@ class TestAutoscalerQuotaHandling:
         manager = make_mock_vm_manager()
         manager.create_vm_group.side_effect = RuntimeError("TPU unavailable")
 
-        group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0, backoff_initial_ms=5000)
+        backoff = Duration.from_seconds(5.0)
+        group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0, backoff_initial=backoff)
         # Use short evaluation interval to avoid rate-limiting
-        config = config_pb2.AutoscalerConfig(evaluation_interval_seconds=0.001)
+        config = config_pb2.AutoscalerConfig()
+        config.evaluation_interval.CopyFrom(Duration.from_seconds(0.001).to_proto())
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
@@ -1609,17 +1622,17 @@ class TestAutoscalerActionLogging:
 
     def test_action_log_includes_timestamp(self, empty_autoscaler: Autoscaler):
         """Verify actions include valid timestamps."""
-        from iris.time_utils import now_ms
+        from iris.time_utils import Timestamp
 
-        before = now_ms()
+        before = Timestamp.now().epoch_ms()
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
         empty_autoscaler.run_once(demand, {})
         empty_autoscaler._wait_for_inflight()  # Wait for async scale-up
-        after = now_ms()
+        after = Timestamp.now().epoch_ms()
 
         status = empty_autoscaler.get_status()
         action = status.recent_actions[0]
-        assert before <= action.timestamp_ms <= after
+        assert before <= action.timestamp.epoch_ms <= after
 
 
 class TestScalingGroupRequestingState:
@@ -1628,7 +1641,7 @@ class TestScalingGroupRequestingState:
     def test_mark_requesting_sets_requesting_state(self):
         """mark_requesting() causes availability() to return REQUESTING."""
         from iris.cluster.vm.scaling_group import GroupAvailability
-        from iris.time_utils import now_ms
+        from iris.time_utils import Timestamp
 
         config = config_pb2.ScaleGroupConfig(
             name="test-group",
@@ -1639,7 +1652,7 @@ class TestScalingGroupRequestingState:
         manager = make_mock_vm_manager()
         group = ScalingGroup(config, manager)
 
-        ts = now_ms()
+        ts = Timestamp.now().epoch_ms()
         timeout_ms = 120_000  # 2 minutes
 
         # Mark as requesting
@@ -1652,7 +1665,7 @@ class TestScalingGroupRequestingState:
     def test_requesting_state_expires_after_timeout(self):
         """REQUESTING state expires after timeout."""
         from iris.cluster.vm.scaling_group import GroupAvailability
-        from iris.time_utils import now_ms
+        from iris.time_utils import Timestamp
 
         config = config_pb2.ScaleGroupConfig(
             name="test-group",
@@ -1663,7 +1676,7 @@ class TestScalingGroupRequestingState:
         manager = make_mock_vm_manager()
         group = ScalingGroup(config, manager)
 
-        ts = now_ms()
+        ts = Timestamp.now().epoch_ms()
         timeout_ms = 120_000
 
         group.mark_requesting(ts, timeout_ms)
@@ -1679,7 +1692,7 @@ class TestScalingGroupRequestingState:
     def test_clear_requesting_removes_state(self):
         """clear_requesting() removes REQUESTING state."""
         from iris.cluster.vm.scaling_group import GroupAvailability
-        from iris.time_utils import now_ms
+        from iris.time_utils import Timestamp
 
         config = config_pb2.ScaleGroupConfig(
             name="test-group",
@@ -1690,7 +1703,7 @@ class TestScalingGroupRequestingState:
         manager = make_mock_vm_manager()
         group = ScalingGroup(config, manager)
 
-        ts = now_ms()
+        ts = Timestamp.now().epoch_ms()
         group.mark_requesting(ts, 120_000)
 
         # Clear requesting
@@ -1702,7 +1715,7 @@ class TestScalingGroupRequestingState:
 
     def test_demand_routing_skips_requesting_groups(self):
         """route_demand() skips groups in REQUESTING state."""
-        from iris.time_utils import now_ms
+        from iris.time_utils import Timestamp
 
         config1 = config_pb2.ScaleGroupConfig(
             name="group-1",
@@ -1726,7 +1739,7 @@ class TestScalingGroupRequestingState:
         group1 = ScalingGroup(config1, manager1)
         group2 = ScalingGroup(config2, manager2)
 
-        ts = now_ms()
+        ts = Timestamp.now().epoch_ms()
         # Mark group1 as requesting (higher priority)
         group1.mark_requesting(ts, 120_000)
 
@@ -1746,7 +1759,7 @@ class TestAutoscalerAsyncScaleUp:
     def test_execute_scale_up_returns_immediately(self):
         """_execute_scale_up returns immediately without blocking."""
 
-        from iris.time_utils import now_ms
+        from iris.time_utils import Timestamp
 
         config = config_pb2.ScaleGroupConfig(
             name="test-group",
@@ -1776,7 +1789,7 @@ class TestAutoscalerAsyncScaleUp:
 
         # Execute should return quickly
         start = time.time()
-        autoscaler.execute([decision], timestamp_ms=now_ms())
+        autoscaler.execute([decision], timestamp_ms=Timestamp.now().epoch_ms())
         elapsed = time.time() - start
 
         # Should return in < 0.1s, not wait for 0.5s creation
@@ -1788,7 +1801,7 @@ class TestAutoscalerAsyncScaleUp:
         """Group is marked REQUESTING immediately after execute() is called."""
 
         from iris.cluster.vm.scaling_group import GroupAvailability
-        from iris.time_utils import now_ms
+        from iris.time_utils import Timestamp
 
         config = config_pb2.ScaleGroupConfig(
             name="test-group",
@@ -1809,7 +1822,7 @@ class TestAutoscalerAsyncScaleUp:
         group = ScalingGroup(config, manager, scale_up_cooldown_ms=0)
         autoscaler = make_autoscaler({"test-group": group})
 
-        ts = now_ms()
+        ts = Timestamp.now().epoch_ms()
         decision = ScalingDecision(
             scale_group="test-group",
             action=ScalingAction.SCALE_UP,
@@ -1832,7 +1845,7 @@ class TestAutoscalerAsyncScaleUp:
     def test_autoscaler_shutdown_waits_for_scale_up(self):
         """shutdown() waits for in-flight scale-ups to complete."""
 
-        from iris.time_utils import now_ms
+        from iris.time_utils import Timestamp
 
         config = config_pb2.ScaleGroupConfig(
             name="test-group",
@@ -1863,7 +1876,7 @@ class TestAutoscalerAsyncScaleUp:
             reason="test shutdown",
         )
 
-        autoscaler.execute([decision], timestamp_ms=now_ms())
+        autoscaler.execute([decision], timestamp_ms=Timestamp.now().epoch_ms())
 
         # Shutdown should wait for scale-up to complete
         autoscaler.shutdown()

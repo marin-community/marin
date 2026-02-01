@@ -25,13 +25,14 @@ from connectrpc.request import RequestContext
 
 from iris.logging import BufferedLogRecord, LogRingBuffer
 from iris.rpc import cluster_pb2
-from iris.cluster.types import Entrypoint, generate_dockerfile
+from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
+from iris.time_utils import Duration
 
 # ============================================================================
 # PortAllocator Tests
@@ -182,7 +183,7 @@ def worker(mock_bundle_cache, mock_image_cache, mock_runtime):
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
-        poll_interval_seconds=0.1,  # Fast polling for tests
+        poll_interval=Duration.from_seconds(0.1),  # Fast polling for tests
     )
     return Worker(
         config,
@@ -231,12 +232,12 @@ def create_run_task_request(
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",
         },
-        dockerfile=generate_dockerfile("3.12", extras=["dev"]),
+        extras=["dev"],
     )
 
     resources = cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3)
 
-    return cluster_pb2.Worker.RunTaskRequest(
+    request = cluster_pb2.Worker.RunTaskRequest(
         task_id=task_id,
         job_id=job_id or task_id,
         task_index=task_index,
@@ -245,9 +246,11 @@ def create_run_task_request(
         environment=env_config,
         bundle_gcs_path="gs://bucket/bundle.zip",
         resources=resources,
-        timeout_seconds=300,
         ports=ports or [],
     )
+    # Set timeout to 300 seconds
+    request.timeout.CopyFrom(Duration.from_seconds(300).to_proto())
+    return request
 
 
 def test_task_lifecycle_phases(worker):
@@ -451,7 +454,7 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_image_cache):
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
-        poll_interval_seconds=0.1,
+        poll_interval=Duration.from_seconds(0.1),
     )
     worker = Worker(
         config,
@@ -491,7 +494,7 @@ def test_port_retry_exhausted(mock_bundle_cache, mock_image_cache):
     config = WorkerConfig(
         port=0,
         port_range=(50000, 50100),
-        poll_interval_seconds=0.1,
+        poll_interval=Duration.from_seconds(0.1),
     )
     worker = Worker(
         config,
@@ -566,9 +569,7 @@ def create_integration_run_task_request(bundle_path: str, task_id: str):
         num_tasks=1,
         entrypoint=entrypoint.to_proto(),
         bundle_gcs_path=bundle_path,
-        environment=cluster_pb2.EnvironmentConfig(
-            dockerfile=generate_dockerfile("3.12"),
-        ),
+        environment=cluster_pb2.EnvironmentConfig(),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=512 * 1024**2),
     )
 
@@ -648,7 +649,7 @@ def real_worker(cache_dir, docker_cleanup_scope):
         cache_dir=cache_dir,
         registry="localhost:5000",
         port_range=(40000, 40100),
-        poll_interval_seconds=0.5,  # Faster polling for tests
+        poll_interval=Duration.from_seconds(0.5),  # Faster polling for tests
     )
     return Worker(config)
 
@@ -699,7 +700,7 @@ class TestWorkerServiceIntegration:
         response = real_service.health_check(cluster_pb2.Empty(), ctx)
 
         assert response.healthy
-        assert response.uptime_ms >= 0
+        assert response.uptime.milliseconds >= 0
 
     @pytest.mark.slow
     def test_fetch_logs_tail(self, real_service, test_bundle):

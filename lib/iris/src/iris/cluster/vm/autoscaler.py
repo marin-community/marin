@@ -42,7 +42,7 @@ from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.vm.managed_vm import VmRegistry
 from iris.cluster.vm.scaling_group import ScalingGroup
 from iris.rpc import config_pb2, vm_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def route_demand(
 
     Groups are skipped if not available (backoff, quota exceeded, at capacity).
     """
-    ts = timestamp_ms or now_ms()
+    ts = timestamp_ms or Timestamp.now().epoch_ms()
     allocations: dict[str, int] = {g.name: 0 for g in groups}
     total_unmet = 0
 
@@ -181,13 +181,12 @@ class Autoscaler:
         self._groups = scale_groups
         self._vm_registry = vm_registry
 
-        # Proto float fields default to 0.0; apply sensible defaults.
         if config is None:
             config = config_pb2.AutoscalerConfig()
-        if not config.evaluation_interval_seconds:
-            config.evaluation_interval_seconds = 10.0
-        if not config.requesting_timeout_seconds:
-            config.requesting_timeout_seconds = 120.0
+        if not config.HasField("evaluation_interval"):
+            config.evaluation_interval.CopyFrom(Duration.from_seconds(10).to_proto())
+        if not config.HasField("requesting_timeout"):
+            config.requesting_timeout.CopyFrom(Duration.from_seconds(120).to_proto())
         self._config = config
 
         # Track slice creation times for short-lived slice detection
@@ -260,8 +259,9 @@ class Autoscaler:
             status after execution (e.g., from "pending" to "completed").
             This works because the deque holds references to the proto objects.
         """
+
         action = vm_pb2.AutoscalerAction(
-            timestamp_ms=now_ms(),
+            timestamp=Timestamp.now().to_proto(),
             action_type=action_type,
             scale_group=scale_group,
             slice_id=slice_id,
@@ -284,12 +284,12 @@ class Autoscaler:
 
         Args:
             demand_entries: List of demand entries with requirements and counts.
-            timestamp_ms: Optional timestamp for testing. If None, uses now_ms().
+            timestamp_ms: Optional timestamp for testing. If None, uses Timestamp.now().epoch_ms().
 
         Returns:
             List of scaling decisions to execute.
         """
-        ts = timestamp_ms or now_ms()
+        ts = timestamp_ms or Timestamp.now().epoch_ms()
 
         result = route_demand(list(self._groups.values()), demand_entries, ts)
 
@@ -397,7 +397,7 @@ class Autoscaler:
         a background thread pool. Returns immediately without blocking.
         """
         # Mark group as requesting before submitting to executor
-        timeout_ms = int(self._config.requesting_timeout_seconds * 1000)
+        timeout_ms = Duration.from_proto(self._config.requesting_timeout).to_ms()
         group.mark_requesting(ts, timeout_ms)
 
         # Submit to background thread
@@ -458,7 +458,7 @@ class Autoscaler:
 
         Returns the decisions that were made (for testing/logging).
         """
-        timestamp_ms = timestamp_ms or now_ms()
+        timestamp_ms = timestamp_ms or Timestamp.now().epoch_ms()
         logger.debug("Autoscaler run_once: demand_entries=%s", demand_entries)
 
         # Step 1: Clean up failed slices FIRST
@@ -509,10 +509,12 @@ class Autoscaler:
 
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""
+        from iris.rpc import time_pb2
+
         return vm_pb2.AutoscalerStatus(
             groups=[g.to_status() for g in self._groups.values()],
             current_demand={g.name: g.current_demand for g in self._groups.values()},
-            last_evaluation_ms=0,  # Controlled by controller now
+            last_evaluation=time_pb2.Timestamp(epoch_ms=0),  # Controlled by controller now
             recent_actions=list(self._action_log),
         )
 
@@ -533,7 +535,7 @@ class Autoscaler:
     @property
     def evaluation_interval_seconds(self) -> float:
         """Configured evaluation interval in seconds."""
-        return self._config.evaluation_interval_seconds
+        return Duration.from_proto(self._config.evaluation_interval).to_seconds()
 
     def notify_worker_failed(self, vm_address: str) -> None:
         """Called by controller when a worker fails. Terminates the containing slice.
@@ -588,7 +590,7 @@ class Autoscaler:
         if created_at is None:
             return
 
-        age_ms = now_ms() - created_at
+        age_ms = Timestamp.now().epoch_ms() - created_at
         if age_ms < SHORT_LIVED_SLICE_THRESHOLD_MS:
             logger.warning(
                 "Short-lived slice %s (age=%dms) in %s, applying backoff",

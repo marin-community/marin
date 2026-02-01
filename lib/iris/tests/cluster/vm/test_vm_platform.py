@@ -107,11 +107,13 @@ def bootstrap_config() -> config_pb2.BootstrapConfig:
 @pytest.fixture
 def timeout_config() -> config_pb2.TimeoutConfig:
     """Timeout configuration for tests."""
-    return config_pb2.TimeoutConfig(
-        boot_timeout_seconds=5,
-        init_timeout_seconds=10,
-        ssh_poll_interval_seconds=1,
-    )
+    from iris.time_utils import Duration
+
+    timeout_cfg = config_pb2.TimeoutConfig()
+    timeout_cfg.boot_timeout.CopyFrom(Duration.from_seconds(5).to_proto())
+    timeout_cfg.init_timeout.CopyFrom(Duration.from_seconds(10).to_proto())
+    timeout_cfg.ssh_poll_interval.CopyFrom(Duration.from_seconds(1).to_proto())
+    return timeout_cfg
 
 
 @pytest.fixture
@@ -166,6 +168,8 @@ def vm_group_factory(
     """
 
     def create_tpu_group(vms: list[MagicMock]) -> VmGroupProtocol:
+        from iris.time_utils import Timestamp
+
         return TpuVmGroup(
             group_id="test-slice-001",
             scale_group="test-group",
@@ -173,16 +177,18 @@ def vm_group_factory(
             project_id="test-project",
             vms=vms,
             vm_registry=registry,
-            created_at_ms=1234567890,
+            created_at=Timestamp.from_ms(1234567890),
         )
 
     def create_manual_group(vms: list[MagicMock]) -> VmGroupProtocol:
+        from iris.time_utils import Timestamp
+
         return ManualVmGroup(
             group_id="test-slice-001",
             scale_group="test-group",
             vms=vms,
             vm_registry=registry,
-            created_at_ms=1234567890,
+            created_at=Timestamp.from_ms(1234567890),
         )
 
     return create_tpu_group if request.param == "tpu" else create_manual_group

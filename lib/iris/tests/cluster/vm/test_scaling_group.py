@@ -25,7 +25,8 @@ import pytest
 from iris.cluster.types import VmWorkerStatus
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
 from iris.cluster.vm.scaling_group import ScalingGroup
-from iris.rpc import config_pb2, vm_pb2
+from iris.rpc import time_pb2, config_pb2, vm_pb2
+from iris.time_utils import Duration
 
 
 @pytest.fixture
@@ -97,7 +98,7 @@ def make_mock_vm_group(
     mock.to_proto.return_value = vm_pb2.SliceInfo(
         slice_id=slice_id,
         scale_group=scale_group,
-        created_at_ms=created_at_ms,
+        created_at=time_pb2.Timestamp(epoch_ms=created_at_ms),
         vms=[
             vm_pb2.VmInfo(
                 vm_id=s.vm_id,
@@ -105,6 +106,8 @@ def make_mock_vm_group(
                 address=s.address,
                 init_phase=s.init_phase,
                 init_error=s.init_error,
+                created_at=time_pb2.Timestamp(epoch_ms=created_at_ms),
+                state_changed_at=time_pb2.Timestamp(epoch_ms=created_at_ms),
             )
             for s in snapshots
         ],
@@ -306,7 +309,7 @@ class TestScalingGroupBackoff:
         group = ScalingGroup(
             unbounded_config,
             manager,
-            backoff_initial_ms=5000,
+            backoff_initial=Duration.from_seconds(5.0),
         )
 
         ts = 1000000
@@ -321,7 +324,7 @@ class TestScalingGroupBackoff:
         group = ScalingGroup(
             unbounded_config,
             manager,
-            backoff_initial_ms=5000,
+            backoff_initial=Duration.from_seconds(5.0),
             backoff_factor=2.0,
         )
 
@@ -339,8 +342,8 @@ class TestScalingGroupBackoff:
         group = ScalingGroup(
             unbounded_config,
             manager,
-            backoff_initial_ms=5000,
-            backoff_max_ms=15000,
+            backoff_initial=Duration.from_seconds(5.0),
+            backoff_max=Duration.from_seconds(15.0),
             backoff_factor=2.0,
         )
 
@@ -695,7 +698,7 @@ class TestScalingGroupAvailability:
         from iris.cluster.vm.scaling_group import GroupAvailability
 
         manager = make_mock_vm_manager()
-        group = ScalingGroup(unbounded_config, manager, backoff_initial_ms=60000)
+        group = ScalingGroup(unbounded_config, manager, backoff_initial=Duration.from_seconds(60.0))
         ts = 1000000
         group.record_failure(ts=ts)
 
@@ -839,7 +842,7 @@ class TestScalingGroupFailedSliceCleanup:
             make_mock_vm_group("slice-003", any_failed=True),
         ]
         manager = make_mock_vm_manager(vm_groups_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, manager, backoff_initial_ms=5000)
+        group = ScalingGroup(unbounded_config, manager, backoff_initial=Duration.from_seconds(5.0))
         group.reconcile()
 
         group.cleanup_failed_slices(timestamp_ms=1000)

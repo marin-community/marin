@@ -16,11 +16,13 @@ edition = "2023";
 
 package iris.rpc;
 
+import "time.proto";
+
 // Rich error details for debugging RPC failures.
 // Attached to ConnectError via add_detail() for structured error reporting.
 message ErrorDetails {
   string exception_type = 1;   // e.g., "docker.errors.DockerException"
   string message = 2;          // str(exception)
   string traceback = 3;        // Full Python traceback
-  int64 timestamp_ms = 4;      // When error occurred
+  iris.common.Timestamp timestamp = 4;  // When error occurred
 }

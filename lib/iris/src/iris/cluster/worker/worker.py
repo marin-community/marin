@@ -18,7 +18,7 @@ import logging
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import uvicorn
@@ -34,10 +34,9 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
-from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +52,8 @@ class WorkerConfig:
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
-    poll_interval_seconds: float = 5.0
-    heartbeat_timeout_seconds: float = 60.0
+    poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
+    heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
 
 
 class Worker:
@@ -110,9 +109,12 @@ class Worker:
             port=config.port,
         )
 
+        self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
-        self._threads = ThreadContainer()
 
+        # Lifecycle thread for register + serve loop
+        self._lifecycle_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
         self._worker_id: str | None = config.worker_id
         self._controller_client: ControllerServiceClientSync | None = None
 
@@ -124,19 +126,15 @@ class Worker:
         self._cleanup_all_iris_containers()
 
         # Start HTTP server
-        self._server = uvicorn.Server(
-            uvicorn.Config(
-                self._dashboard._app,
-                host=self._config.host,
-                port=self._config.port,
-                log_level="error",
-            )
+        self._server_thread = threading.Thread(
+            target=self._run_server,
+            daemon=True,
         )
-        self._threads.spawn_server(self._server, name="worker-server")
+        self._server_thread.start()
 
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: self._server.started,
+            lambda: self._server is not None and self._server.started,
             timeout=5.0,
         )
 
@@ -148,7 +146,11 @@ class Worker:
             )
 
             # Start lifecycle thread: register + serve + reset loop
-            self._threads.spawn(target=self._run_lifecycle, name="worker-lifecycle")
+            self._lifecycle_thread = threading.Thread(
+                target=self._run_lifecycle,
+                daemon=True,
+            )
+            self._lifecycle_thread.start()
 
     def _cleanup_all_iris_containers(self) -> None:
         """Remove all iris-managed containers at startup.
@@ -160,12 +162,20 @@ class Worker:
             logger.info("Startup cleanup: removed %d iris containers", removed)
 
     def wait(self) -> None:
-        self._threads.wait()
+        """Block until the server thread exits."""
+        if self._server_thread:
+            self._server_thread.join()
 
     def stop(self) -> None:
+        self._stop_event.set()
+        if self._lifecycle_thread:
+            self._lifecycle_thread.join(timeout=5.0)
+
+        # Stop uvicorn server
         if self._server:
             self._server.should_exit = True
-        self._threads.stop()
+        if self._server_thread:
+            self._server_thread.join(timeout=5.0)
 
         # Kill and remove all containers
         with self._lock:
@@ -188,7 +198,20 @@ class Worker:
             except OSError:
                 pass
 
-    def _run_lifecycle(self, stop_event: threading.Event) -> None:
+    def _run_server(self) -> None:
+        try:
+            config = uvicorn.Config(
+                self._dashboard._app,
+                host=self._config.host,
+                port=self._config.port,
+                log_level="error",
+            )
+            self._server = uvicorn.Server(config)
+            self._server.run()
+        except Exception as e:
+            print(f"Worker server error: {e}")
+
+    def _run_lifecycle(self) -> None:
         """Main lifecycle: register, serve, reset, repeat.
 
         This loop runs continuously until shutdown. On each iteration:
@@ -197,16 +220,16 @@ class Worker:
         3. Serve (wait for heartbeats from controller)
         4. If heartbeat timeout expires, return to step 1
         """
-        while not stop_event.is_set():
+        while not self._stop_event.is_set():
             self._reset_worker_state()
-            worker_id = self._register(stop_event)
+            worker_id = self._register()
             if worker_id is None:
                 # Shutdown requested during registration
                 break
             self._worker_id = worker_id
-            self._serve(stop_event)
+            self._serve()
 
-    def _register(self, stop_event: threading.Event) -> str | None:
+    def _register(self) -> str | None:
         """Register with controller. Retries until accepted or shutdown.
 
         Returns the assigned worker_id, or None if shutdown was requested.
@@ -219,7 +242,7 @@ class Worker:
 
         logger.info("Attempting to register with controller at %s", self._config.controller_address)
 
-        while not stop_event.is_set():
+        while not self._stop_event.is_set():
             try:
                 # Chaos injection for testing delayed registration
                 if rule := chaos("worker.register"):
@@ -240,7 +263,7 @@ class Worker:
                     logger.warning("Registration rejected by controller, retrying in 5s")
             except Exception as e:
                 logger.warning("Registration failed: %s, retrying in 5s", e)
-            stop_event.wait(5.0)
+            self._stop_event.wait(5.0)
 
         return None
 
@@ -264,23 +287,23 @@ class Worker:
 
         return f"{address_host}:{self._config.port}"
 
-    def _serve(self, stop_event: threading.Event) -> None:
+    def _serve(self) -> None:
         """Wait for heartbeats from controller. Returns when heartbeat timeout expires.
 
         This method blocks in a loop, checking the time since last heartbeat.
         When the timeout expires, it returns, triggering a reset and re-registration.
         """
         self._last_heartbeat_time = time.monotonic()
-        heartbeat_timeout = self._config.heartbeat_timeout_seconds
+        heartbeat_timeout = self._config.heartbeat_timeout.to_seconds()
         logger.info("Serving (waiting for controller heartbeats)")
 
-        while not stop_event.is_set():
+        while not self._stop_event.is_set():
             elapsed = time.monotonic() - self._last_heartbeat_time
             if elapsed > heartbeat_timeout:
                 logger.warning("No heartbeat from controller for %.0fs, resetting", elapsed)
                 return
             # Check every second
-            stop_event.wait(1.0)
+            self._stop_event.wait(1.0)
 
     def _reset_worker_state(self) -> None:
         """Reset worker state: wipe all containers and clear tracking."""
@@ -316,12 +339,34 @@ class Worker:
 
     # Task management methods
 
+    _TERMINAL_STATES = frozenset(
+        {
+            cluster_pb2.TASK_STATE_SUCCEEDED,
+            cluster_pb2.TASK_STATE_FAILED,
+            cluster_pb2.TASK_STATE_KILLED,
+            cluster_pb2.TASK_STATE_WORKER_FAILED,
+        }
+    )
+
     def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str:
-        """Submit a new task for execution."""
+        """Submit a new task for execution.
+
+        Rejects duplicates: if a task with the same task_id is already running
+        (non-terminal), the submission is skipped. This guards against the controller
+        re-dispatching a task after a heartbeat timeout while the original is still
+        in-flight.
+        """
         if rule := chaos("worker.submit_task"):
             time.sleep(rule.delay_seconds)
             raise RuntimeError("chaos: worker rejecting task")
         task_id = request.task_id
+
+        with self._lock:
+            existing = self._tasks.get(task_id)
+            if existing is not None and existing.status not in self._TERMINAL_STATES:
+                logger.info("Rejecting duplicate task %s (status=%s)", task_id, existing.status)
+                return task_id
+
         job_id = request.job_id
         task_index = request.task_index
         num_tasks = request.num_tasks
@@ -360,7 +405,7 @@ class Worker:
             controller_address=self._config.controller_address,
             port_allocator=self._port_allocator,
             report_state=lambda: self._notify_task_update(attempt),
-            poll_interval_seconds=self._config.poll_interval_seconds,
+            poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
 
         with self._lock:
@@ -444,7 +489,7 @@ class Worker:
                             state=cluster_pb2.TASK_STATE_WORKER_FAILED,
                             exit_code=0,
                             error="Task not found on worker",
-                            finished_at_ms=int(time.time() * 1000),
+                            finished_at=Timestamp.now().to_proto(),
                             attempt_id=expected_entry.attempt_id,
                         )
                     )
@@ -459,7 +504,7 @@ class Worker:
                             state=task_proto.state,
                             exit_code=task_proto.exit_code,
                             error=task_proto.error,
-                            finished_at_ms=task_proto.finished_at_ms,
+                            finished_at=task_proto.finished_at,
                             attempt_id=task_proto.current_attempt_id,
                         )
                     )
@@ -469,7 +514,6 @@ class Worker:
                         cluster_pb2.Controller.RunningTaskEntry(
                             task_id=task_id,
                             attempt_id=task.to_proto().current_attempt_id,
-                            state=task.status,
                         )
                     )
 
@@ -480,7 +524,6 @@ class Worker:
                         cluster_pb2.Controller.RunningTaskEntry(
                             task_id=task_id,
                             attempt_id=task.to_proto().current_attempt_id,
-                            state=task.status,
                         )
                     )
 
@@ -550,7 +593,7 @@ class Worker:
                 logs.append(log_line.to_proto())
 
         # Sort by timestamp
-        logs.sort(key=lambda x: x.timestamp_ms)
+        logs.sort(key=lambda x: x.timestamp.epoch_ms)
 
         return logs[start_line:]
 

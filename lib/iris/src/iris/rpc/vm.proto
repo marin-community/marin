@@ -16,6 +16,7 @@ edition = "2023";
 
 package iris.vm;
 
+import "time.proto";
 import "config.proto";
 
 // VM lifecycle states
@@ -48,8 +49,8 @@ message VmInfo {
   VmState state = 4;
   string address = 5;
   string zone = 6;
-  int64 created_at_ms = 7;
-  int64 state_changed_at_ms = 8;
+  iris.common.Timestamp created_at = 7;
+  iris.common.Timestamp state_changed_at = 8;
 
   // Worker info (populated after registration)
   string worker_id = 10;
@@ -68,7 +69,7 @@ message VmInfo {
 message SliceInfo {
   string slice_id = 1;
   string scale_group = 2;
-  int64 created_at_ms = 3;
+  iris.common.Timestamp created_at = 3;
   repeated VmInfo vms = 4;
 }
 
@@ -90,12 +91,12 @@ message ScaleGroupStatus {
   int32 peak_demand = 21;
 
   // Backoff state
-  int64 backoff_until_ms = 30;
+  iris.common.Timestamp backoff_until = 30;
   int32 consecutive_failures = 31;
 
   // Rate limiting
-  int64 last_scale_up_ms = 40;
-  int64 last_scale_down_ms = 41;
+  iris.common.Timestamp last_scale_up = 40;
+  iris.common.Timestamp last_scale_down = 41;
 
   // Slices in this group
   repeated SliceInfo slices = 50;
@@ -103,7 +104,7 @@ message ScaleGroupStatus {
 
 // Autoscaler action/event log entry
 message AutoscalerAction {
-  int64 timestamp_ms = 1;
+  iris.common.Timestamp timestamp = 1;
   string action_type = 2;     // "scale_up", "scale_down", "quota_exceeded", "backoff_triggered", "worker_failed"
   string scale_group = 3;
   string slice_id = 4;        // Empty for group-level actions
@@ -115,6 +116,6 @@ message AutoscalerAction {
 message AutoscalerStatus {
   repeated ScaleGroupStatus groups = 1;
   map<string, int32> current_demand = 2;
-  int64 last_evaluation_ms = 3;
+  iris.common.Timestamp last_evaluation = 3;
   repeated AutoscalerAction recent_actions = 4;  // Last N actions (max 100)
 }

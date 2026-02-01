@@ -28,7 +28,7 @@ from enum import Enum
 from iris.cluster.types import DeviceType, VmWorkerStatusMap
 from iris.cluster.vm.vm_platform import VmGroupProtocol, VmManagerProtocol
 from iris.rpc import config_pb2, vm_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +54,8 @@ class AvailabilityState:
 
 DEFAULT_SCALE_UP_COOLDOWN_MS = 60_000  # 1 minute
 DEFAULT_SCALE_DOWN_COOLDOWN_MS = 300_000  # 5 minutes
-DEFAULT_BACKOFF_INITIAL_MS = 5_000  # 5 seconds
-DEFAULT_BACKOFF_MAX_MS = 300_000  # 5 minutes
+DEFAULT_BACKOFF_INITIAL = Duration.from_seconds(5.0)
+DEFAULT_BACKOFF_MAX = Duration.from_minutes(5)
 DEFAULT_BACKOFF_FACTOR = 2.0
 DEFAULT_IDLE_THRESHOLD_MS = 300_000  # 5 minutes
 DEFAULT_QUOTA_TIMEOUT_MS = 300_000  # 5 minutes
@@ -79,8 +79,8 @@ class ScalingGroup:
         vm_manager: VmManagerProtocol,
         scale_up_cooldown_ms: int = DEFAULT_SCALE_UP_COOLDOWN_MS,
         scale_down_cooldown_ms: int = DEFAULT_SCALE_DOWN_COOLDOWN_MS,
-        backoff_initial_ms: int = DEFAULT_BACKOFF_INITIAL_MS,
-        backoff_max_ms: int = DEFAULT_BACKOFF_MAX_MS,
+        backoff_initial: Duration = DEFAULT_BACKOFF_INITIAL,
+        backoff_max: Duration = DEFAULT_BACKOFF_MAX,
         backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
         idle_threshold_ms: int = DEFAULT_IDLE_THRESHOLD_MS,
         quota_timeout_ms: int = DEFAULT_QUOTA_TIMEOUT_MS,
@@ -99,10 +99,10 @@ class ScalingGroup:
         self._idle_threshold_ms = idle_threshold_ms
 
         # Backoff state
-        self._backoff_until_ms: int = 0
+        self._backoff_until: Timestamp = Timestamp.from_ms(0)
         self._consecutive_failures: int = 0
-        self._backoff_initial_ms = backoff_initial_ms
-        self._backoff_max_ms = backoff_max_ms
+        self._backoff_initial = backoff_initial
+        self._backoff_max = backoff_max
         self._backoff_factor = backoff_factor
 
         # Rate limiting
@@ -157,7 +157,7 @@ class ScalingGroup:
     @property
     def backoff_until_ms(self) -> int:
         """Timestamp until which scale-up is blocked due to backoff."""
-        return self._backoff_until_ms
+        return self._backoff_until.epoch_ms()
 
     @property
     def last_scale_up_ms(self) -> int:
@@ -206,14 +206,14 @@ class ScalingGroup:
         """
         from iris.cluster.vm.managed_vm import QuotaExceededError
 
-        ts = ts or now_ms()
+        ts = ts or Timestamp.now().epoch_ms()
         try:
             vm_group = self._vm_manager.create_vm_group(tags)
             with self._vm_groups_lock:
                 self._vm_groups[vm_group.group_id] = vm_group
             self._last_scale_up_ms = ts
             self._consecutive_failures = 0
-            self._backoff_until_ms = 0
+            self._backoff_until = Timestamp.from_ms(0)
             self._quota_exceeded_until_ms = 0
             self._quota_reason = ""
             return vm_group
@@ -229,7 +229,7 @@ class ScalingGroup:
             group_id: ID of the VM group to terminate
             timestamp_ms: Optional timestamp (for testing)
         """
-        timestamp_ms = timestamp_ms or now_ms()
+        timestamp_ms = timestamp_ms or Timestamp.now().epoch_ms()
         with self._vm_groups_lock:
             vm_group = self._vm_groups.pop(group_id, None)
         if vm_group:
@@ -242,7 +242,7 @@ class ScalingGroup:
 
         Does NOT respect scale_down_cooldown - failed slices are always cleaned immediately.
         """
-        timestamp_ms = timestamp_ms or now_ms()
+        timestamp_ms = timestamp_ms or Timestamp.now().epoch_ms()
         cleaned: list[VmGroupProtocol] = []
 
         with self._vm_groups_lock:
@@ -418,8 +418,8 @@ class ScalingGroup:
         - Already at max_slices
         - Scale-up request is in progress (REQUESTING state)
         """
-        ts = ts or now_ms()
-        if ts < self._backoff_until_ms:
+        ts = ts or Timestamp.now().epoch_ms()
+        if Timestamp.from_ms(ts).before(self._backoff_until):
             return False
         if ts < self._requesting_until_ms:
             return False
@@ -438,7 +438,7 @@ class ScalingGroup:
         - Scale-down cooldown period has not elapsed
         - Already at min_slices
         """
-        ts = ts or now_ms()
+        ts = ts or Timestamp.now().epoch_ms()
         if self._last_scale_down_ms > 0 and ts < self._last_scale_down_ms + self._scale_down_cooldown_ms:
             return False
         with self._vm_groups_lock:
@@ -452,17 +452,17 @@ class ScalingGroup:
 
         Each consecutive failure doubles the backoff time, up to a maximum.
         """
-        ts = ts or now_ms()
+        ts = ts or Timestamp.now().epoch_ms()
         self._consecutive_failures += 1
 
-        backoff_ms = self._backoff_initial_ms * (self._backoff_factor ** (self._consecutive_failures - 1))
-        backoff_ms = min(backoff_ms, self._backoff_max_ms)
-        self._backoff_until_ms = ts + int(backoff_ms)
+        backoff_duration = self._backoff_initial * (self._backoff_factor ** (self._consecutive_failures - 1))
+        backoff_duration = min(backoff_duration, self._backoff_max)
+        self._backoff_until = Timestamp.from_ms(ts).add(backoff_duration)
 
     def reset_backoff(self) -> None:
         """Reset backoff state (typically after successful operation)."""
         self._consecutive_failures = 0
-        self._backoff_until_ms = 0
+        self._backoff_until = Timestamp.from_ms(0)
 
     def slice_state_counts(self) -> dict[str, int]:
         """Count VM groups by their dominant lifecycle state.
@@ -532,7 +532,8 @@ class ScalingGroup:
         All states are computed from timestamps—no external state setting.
         Priority: QUOTA_EXCEEDED > BACKOFF > REQUESTING > AT_CAPACITY > AVAILABLE
         """
-        ts = timestamp_ms or now_ms()
+        ts = timestamp_ms or Timestamp.now().epoch_ms()
+        current = Timestamp.from_ms(ts)
 
         # Quota exceeded
         if self._quota_exceeded_until_ms and ts < self._quota_exceeded_until_ms:
@@ -543,11 +544,11 @@ class ScalingGroup:
             )
 
         # Backoff from failures
-        if ts < self._backoff_until_ms:
+        if current.before(self._backoff_until):
             return AvailabilityState(
                 GroupAvailability.BACKOFF,
-                f"backoff until {self._backoff_until_ms}",
-                self._backoff_until_ms,
+                f"backoff until {self._backoff_until.epoch_ms()}",
+                self._backoff_until.epoch_ms(),
             )
 
         # Requesting (scale-up in progress)
@@ -580,6 +581,8 @@ class ScalingGroup:
 
     def to_status(self) -> vm_pb2.ScaleGroupStatus:
         """Build a ScaleGroupStatus proto for the status API."""
+        from iris.rpc import time_pb2
+
         with self._vm_groups_lock:
             snapshot = list(self._vm_groups.values())
         return vm_pb2.ScaleGroupStatus(
@@ -587,9 +590,9 @@ class ScalingGroup:
             config=self._config,
             current_demand=self._current_demand,
             peak_demand=self._peak_demand,
-            backoff_until_ms=self._backoff_until_ms,
+            backoff_until=self._backoff_until.to_proto(),
             consecutive_failures=self._consecutive_failures,
-            last_scale_up_ms=self._last_scale_up_ms,
-            last_scale_down_ms=self._last_scale_down_ms,
+            last_scale_up=time_pb2.Timestamp(epoch_ms=self._last_scale_up_ms),
+            last_scale_down=time_pb2.Timestamp(epoch_ms=self._last_scale_down_ms),
             slices=[g.to_proto() for g in snapshot],
         )
