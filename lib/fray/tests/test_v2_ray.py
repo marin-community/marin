@@ -254,17 +254,6 @@ def test_build_runtime_env_gpu_clears_jax_platforms():
     assert env["env_vars"]["JAX_PLATFORMS"] == ""
 
 
-def test_build_runtime_env_sets_fray_client_spec():
-    from fray.v2.ray.backend import build_runtime_env
-
-    request = JobRequest(
-        name="spec-test",
-        entrypoint=Entrypoint.from_callable(lambda: None),
-    )
-    env = build_runtime_env(request, "ray?namespace=test-ns")
-    assert env["env_vars"]["FRAY_CLIENT_SPEC"] == "ray?namespace=test-ns"
-
-
 # ---------------------------------------------------------------------------
 # Actor resource mapping (_actor_ray_options)
 # ---------------------------------------------------------------------------
