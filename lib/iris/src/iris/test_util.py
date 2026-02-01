@@ -45,7 +45,10 @@ class SentinelFile:
     def is_set(self) -> bool:
         return os.path.exists(self._path)
 
-    def wait(self, poll_interval: float = 0.1) -> None:
+    def wait(self, poll_interval: float = 0.1, timeout: float | None = None) -> None:
         """Block until the sentinel file exists."""
+        deadline = time.monotonic() + timeout if timeout is not None else None
         while not os.path.exists(self._path):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError(f"SentinelFile {self._path} not signalled within {timeout}s")
             time.sleep(poll_interval)

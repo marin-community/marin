@@ -123,7 +123,11 @@ def _thread_registry():
     registry.shutdown(timeout=5.0)
     stuck = [t for t in registry._threads if t.is_alive]
     if stuck:
-        print(f"\n⚠ {len(stuck)} threads still alive after shutdown(5s):", file=sys.stdout, flush=True)
+        print(
+            f"\n[WARN] {len(stuck)} threads still alive after shutdown(5s):",
+            file=sys.stdout,
+            flush=True,
+        )
         for t in stuck:
             print(f"  - {t.name}", file=sys.stdout, flush=True)
     set_thread_registry(old)
@@ -132,7 +136,6 @@ def _thread_registry():
 def pytest_sessionfinish(session, exitstatus):
     """Hook to debug pytest exit status - dump any non-daemon threads still alive."""
     alive = [t for t in threading.enumerate() if t.is_alive() and not t.daemon and t.name != "MainThread"]
-
     if alive:
         # Write directly to fd 2 (stderr) to bypass pytest's capture entirely.
         tty = os.fdopen(os.dup(2), "w")
@@ -148,5 +151,4 @@ def pytest_sessionfinish(session, exitstatus):
             tty.write(f"\nPytest exiting with status {exitstatus}\n")
         tty.flush()
         tty.close()
-        if alive:
-            os._exit(exitstatus)
+        sys._exit(1)
