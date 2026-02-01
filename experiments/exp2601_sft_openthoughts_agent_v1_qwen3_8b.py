@@ -71,12 +71,12 @@ tokenized_datasets = {
 assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = int(sum(mixture_weights.values()))
-TARGET_EPOCHS = 10
-TRAIN_BATCH_SIZE = 128
-MICROBATCH_SIZE = 128
+TARGET_EPOCHS = 7
+TRAIN_BATCH_SIZE = 16
+MICROBATCH_SIZE = 16  # Global microbatch; with 16 GPUs this corresponds to per-device train batch size = 1
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
-RESOURCES = ResourceConfig.with_tpu("v5p-64")
+RESOURCES = ResourceConfig.with_gpu(count=16)
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
@@ -84,17 +84,19 @@ mixture_sft_config = SimpleSFTConfig(
     model_name_or_path="Qwen/Qwen3-8B",
     train_batch_size=TRAIN_BATCH_SIZE,
     per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
+    per_device_eval_parallelism=8,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=4e-5,
     max_seq_len=32768,
-    seed=0,
+    seed=42,
     steps_per_checkpoint=(total_examples // TRAIN_BATCH_SIZE) // 4,  # Every quarter epoch
     lr_schedule="cosine",
     warmup=0.1,
     decay=0.9,
     weight_decay=0.0,
     beta1=0.9,
-    beta2=0.999,
+    beta2=0.98,
+    epsilon=1e-8,
     pad_tokenizer_to_match_model=True,  # Model and tokenizer vocab sizes differ
 )
 

@@ -496,8 +496,10 @@ def default_sft(
         z_loss_weight=sft_config.z_loss_weight,
         beta1=sft_config.beta1,
         beta2=sft_config.beta2,
+        epsilon=sft_config.epsilon,
         pad_tokenizer_to_match_model=sft_config.pad_tokenizer_to_match_model,
         per_device_parallelism=sft_config.per_device_parallelism,
+        per_device_eval_parallelism=sft_config.per_device_eval_parallelism,
     )
 
     if sft_config.reinit_tokens:

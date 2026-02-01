@@ -42,15 +42,11 @@ def compute_per_device_parallelism(
     num_devices = resources.chip_count()
 
     if microbatch_size % num_devices != 0:
-        raise ValueError(
-            f"microbatch_size ({microbatch_size}) must be divisible by "
-            f"num_devices ({num_devices})"
-        )
+        raise ValueError(f"microbatch_size ({microbatch_size}) must be divisible by " f"num_devices ({num_devices})")
 
     if global_batch_size % microbatch_size != 0:
         raise ValueError(
-            f"global_batch_size ({global_batch_size}) must be divisible by "
-            f"microbatch_size ({microbatch_size})"
+            f"global_batch_size ({global_batch_size}) must be divisible by " f"microbatch_size ({microbatch_size})"
         )
 
     per_device_parallelism = microbatch_size // num_devices
@@ -110,6 +106,9 @@ class SimpleSFTConfig:
 
     beta2: float | None = None
     """AdamW optimizer beta2."""
+
+    epsilon: float | None = None
+    """AdamW optimizer epsilon."""
 
     warmup: float = 0.03
     """Fraction of training steps to use for learning rate warmup."""
@@ -173,6 +172,9 @@ class SimpleSFTConfig:
     train_batch_size/num_devices (no gradient accumulation). Set to a smaller value
     to enable gradient accumulation. For example, with 8 devices, batch_size=32, and
     per_device_parallelism=1, you get gradient accumulation of 4."""
+
+    per_device_eval_parallelism: int | None = None
+    """Number of examples to evaluate in parallel on each device."""
 
     reinit_tokens: list[str] | bool = False
     """
