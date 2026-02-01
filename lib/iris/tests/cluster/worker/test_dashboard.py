@@ -24,7 +24,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
-from iris.cluster.types import Entrypoint
+from iris.cluster.types import Entrypoint, generate_dockerfile
 from iris.cluster.worker.builder import BuildResult, ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.dashboard import WorkerDashboard
@@ -147,7 +147,7 @@ def create_run_task_request(
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",
         },
-        extras=["dev"],
+        dockerfile=generate_dockerfile("3.12", extras=["dev"]),
     )
 
     resources = cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3)

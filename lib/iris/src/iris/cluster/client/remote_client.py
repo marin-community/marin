@@ -14,9 +14,10 @@
 
 """RPC-based cluster client implementation."""
 
+import sys
 import time
 
-from iris.cluster.types import Entrypoint, is_job_finished
+from iris.cluster.types import Entrypoint, generate_dockerfile, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import ExponentialBackoff
@@ -72,11 +73,15 @@ class RemoteClusterClient:
 
         entrypoint_proto = entrypoint.to_proto()
 
-        env_config = cluster_pb2.EnvironmentConfig(
-            pip_packages=list(environment.pip_packages) if environment else [],
-            env_vars=dict(environment.env_vars) if environment else {},
-            extras=list(environment.extras) if environment else [],
-        )
+        env_config = environment if environment else cluster_pb2.EnvironmentConfig()
+
+        # Ensure dockerfile is populated so the worker doesn't have to generate it
+        if not env_config.dockerfile:
+            py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            env_config = cluster_pb2.EnvironmentConfig(
+                env_vars=dict(env_config.env_vars),
+                dockerfile=generate_dockerfile(python_version=py_version),
+            )
 
         # Determine parent job ID (all but last component)
         parts = job_id.rsplit("/", 1)

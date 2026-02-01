@@ -291,7 +291,7 @@ class ResourceSpecProto(_message.Message):
     def __init__(self, cpu: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., regions: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
-    __slots__ = ("pip_packages", "env_vars", "extras", "python_version")
+    __slots__ = ("env_vars", "dockerfile")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -299,15 +299,11 @@ class EnvironmentConfig(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
-    PIP_PACKAGES_FIELD_NUMBER: _ClassVar[int]
     ENV_VARS_FIELD_NUMBER: _ClassVar[int]
-    EXTRAS_FIELD_NUMBER: _ClassVar[int]
-    PYTHON_VERSION_FIELD_NUMBER: _ClassVar[int]
-    pip_packages: _containers.RepeatedScalarFieldContainer[str]
+    DOCKERFILE_FIELD_NUMBER: _ClassVar[int]
     env_vars: _containers.ScalarMap[str, str]
-    extras: _containers.RepeatedScalarFieldContainer[str]
-    python_version: str
-    def __init__(self, pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ..., python_version: _Optional[str] = ...) -> None: ...
+    dockerfile: str
+    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., dockerfile: _Optional[str] = ...) -> None: ...
 
 class Entrypoint(_message.Message):
     __slots__ = ("callable", "command")
