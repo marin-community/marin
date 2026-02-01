@@ -47,6 +47,7 @@ Current datasets:
 19. nvidia/Nemotron-Post-Training-Dataset-v1
 20. nvidia/Nemotron-Post-Training-Dataset-v2
 21. HuggingFaceH4/no_robots
+22. open-r1/Mixture-of-Thoughts-Math
 """
 
 import dataclasses
@@ -456,6 +457,16 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
             "task",
         ],
         name="GeneralReasoning/GeneralThought-195K-modelreasoning",
+        splits=["train"],
+    ),
+    # Mixture-of-Thoughts dataset (used for self-instill synthetic data generation)
+    "open-r1/Mixture-of-Thoughts-Math": InstructionDatasetConfig(
+        hf_dataset_id="open-r1/Mixture-of-Thoughts",
+        revision="e55fa28",
+        adapter=multi_turn_adapter(),
+        metadata_columns=["num_tokens", "source"],
+        name="open-r1/Mixture-of-Thoughts-Math",
+        subsets=["math"],
         splits=["train"],
     ),
 }
