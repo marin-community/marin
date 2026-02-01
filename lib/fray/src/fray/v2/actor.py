@@ -76,6 +76,7 @@ class ActorGroup:
     def __init__(self, handles: list[ActorHandle], jobs: list[JobHandle]):
         self._handles = handles
         self._jobs = jobs
+        self._yielded_count = 0
 
     @property
     def ready_count(self) -> int:
@@ -91,7 +92,9 @@ class ActorGroup:
         target = count if count is not None else len(self._handles)
         if target > len(self._handles):
             raise ValueError(f"Requested {target} actors but group only has {len(self._handles)}")
-        return list(self._handles[:target])
+        result = list(self._handles[:target])
+        self._yielded_count = max(self._yielded_count, target)
+        return result
 
     @property
     def jobs(self) -> list[JobHandle]:
@@ -101,6 +104,20 @@ class ActorGroup:
     def statuses(self) -> list[JobStatus]:
         """Return the job status of each actor in the group."""
         return [job.status() for job in self._jobs]
+
+    def discover_new(self) -> list[ActorHandle]:
+        """Return handles that are ready but haven't been yielded yet.
+
+        After wait_ready(count=1), subsequent calls to discover_new() will
+        return the remaining handles as they become available. For LocalClient
+        all handles are ready immediately, so this returns whatever wait_ready
+        didn't return on its first call.
+        """
+        if self._yielded_count >= len(self._handles):
+            return []
+        new = list(self._handles[self._yielded_count :])
+        self._yielded_count = len(self._handles)
+        return new
 
     def shutdown(self) -> None:
         """Terminate all actor jobs."""

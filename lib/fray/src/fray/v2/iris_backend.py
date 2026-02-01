@@ -240,22 +240,54 @@ class IrisActorHandle:
     Deferred: created with just an actor name. On first use, resolves the
     name via iris_ctx().resolver to find the actor's address.
 
-    Picklable: serializes as (actor_name,) and reconstructs from the current
+    Picklable: serializes as (actor_name, job_id) and reconstructs from the current
     IrisContext on the receiving end. This works because child jobs inherit
     the parent's namespace.
     """
 
-    def __init__(self, actor_name: str, client: Any = None):
+    def __init__(
+        self,
+        actor_name: str,
+        client: Any = None,
+        job_id: str | None = None,
+        iris_client: IrisClientLib | None = None,
+        controller_address: str | None = None,
+    ):
         self._actor_name = actor_name
         self._client = client
+        self._job_id = job_id
+        self._iris_client = iris_client
+        self._controller_address = controller_address
 
     def _resolve(self) -> Any:
         if self._client is None:
             from iris.actor.client import ActorClient
-            from iris.client.client import iris_ctx
+            from iris.client.client import get_iris_ctx
 
-            ctx = iris_ctx()
-            self._client = ActorClient(ctx.resolver, self._actor_name)
+            # If we have an explicit IrisClient and job_id, use that (for external calls)
+            if self._iris_client is not None and self._job_id is not None:
+                resolver = self._iris_client.resolver_for_job(self._job_id)
+            else:
+                # Try the context's resolver first (works when called within a job
+                # that has iris context properly set up via ContextVar inheritance).
+                ctx = get_iris_ctx()
+                if ctx is not None and self._job_id is not None and ctx.client is not None:
+                    resolver = ctx.client.resolver_for_job(self._job_id)
+                elif ctx is not None and ctx.client is not None:
+                    resolver = ctx.resolver
+                elif self._controller_address is not None and self._job_id is not None:
+                    # Fallback: create a lightweight client from the serialized
+                    # controller address. This handles the case where the handle
+                    # was deserialized in a thread that doesn't inherit the iris
+                    # ContextVar (e.g. ActorServer RPC dispatch threads).
+                    fallback_client = IrisClientLib.remote(self._controller_address)
+                    resolver = fallback_client.resolver_for_job(self._job_id)
+                else:
+                    raise RuntimeError(
+                        f"Cannot resolve actor '{self._actor_name}': no iris context, "
+                        f"no iris_client, and no controller_address available"
+                    )
+            self._client = ActorClient(resolver, self._actor_name)
         return self._client
 
     def __getattr__(self, method_name: str) -> _IrisActorMethod:
@@ -264,11 +296,23 @@ class IrisActorHandle:
         return _IrisActorMethod(self, method_name)
 
     def __getstate__(self) -> dict:
-        return {"actor_name": self._actor_name}
+        controller_address = self._controller_address
+        if controller_address is None and self._iris_client is not None:
+            # Extract controller address from the IrisClient so the handle
+            # can reconstruct a resolver after deserialization.
+            controller_address = getattr(self._iris_client._cluster, "_address", None)
+        return {
+            "actor_name": self._actor_name,
+            "job_id": self._job_id,
+            "controller_address": controller_address,
+        }
 
     def __setstate__(self, state: dict) -> None:
         self._actor_name = state["actor_name"]
+        self._job_id = state.get("job_id")
+        self._controller_address = state.get("controller_address")
         self._client = None
+        self._iris_client = None
 
 
 class _IrisActorMethod:
@@ -316,30 +360,71 @@ class IrisActorGroup(ActorGroup):
         self._iris_client = iris_client
         self._discovered_names: set[str] = set()
 
-    def wait_ready(self, count: int | None = None, timeout: float = 300.0) -> list[ActorHandle]:
-        """Block until `count` actors are discoverable via the resolver."""
+    def discover_new(self) -> list[ActorHandle]:
+        """Probe for newly available actors without blocking.
+
+        Returns only the handles discovered during this call (not previously
+        known ones). Call repeatedly to pick up workers as they come online.
+        """
+        newly_discovered: list[ActorHandle] = []
+        for i in range(self._count):
+            actor_name = f"{self._name}-{i}"
+            if actor_name in self._discovered_names:
+                continue
+            job = self._jobs[i]
+            resolver = self._iris_client.resolver_for_job(job.job_id)
+            result = resolver.resolve(actor_name)
+
+            if not result.is_empty:
+                self._discovered_names.add(actor_name)
+                controller_address = getattr(self._iris_client._cluster, "_address", None)
+                handle = IrisActorHandle(
+                    actor_name,
+                    job_id=job.job_id,
+                    iris_client=self._iris_client,
+                    controller_address=controller_address,
+                )
+                self._handles.append(handle)
+                newly_discovered.append(handle)
+                logger.info(
+                    "discover_new: found actor=%s job_id=%s (%d/%d ready)",
+                    actor_name,
+                    job.job_id,
+                    len(self._discovered_names),
+                    self._count,
+                )
+
+        return newly_discovered
+
+    def wait_ready(self, count: int | None = None, timeout: float = 900.0) -> list[ActorHandle]:
+        """Block until `count` actors are discoverable via the resolver.
+
+        With count=1 this returns as soon as the first worker is available,
+        allowing the caller to start work immediately and discover more
+        workers later via discover_new().
+        """
         target = count if count is not None else self._count
         start = time.monotonic()
         sleep_secs = 0.5
 
         while True:
-            # Check resolver for each actor name
-            resolver = self._iris_client.resolver()
-            for i in range(self._count):
-                actor_name = f"{self._name}-{i}"
-                if actor_name in self._discovered_names:
-                    continue
-                result = resolver.resolve(actor_name)
-                if not result.is_empty:
-                    self._discovered_names.add(actor_name)
-                    handle = IrisActorHandle(actor_name)
-                    self._handles.append(handle)
+            self.discover_new()
 
             if len(self._discovered_names) >= target:
                 return list(self._handles[:target])
 
             elapsed = time.monotonic() - start
             if elapsed >= timeout:
+                for i in range(self._count):
+                    actor_name = f"{self._name}-{i}"
+                    job = self._jobs[i]
+                    all_eps = self._iris_client._cluster.list_endpoints(prefix="")
+                    logger.error(
+                        "wait_ready TIMEOUT: actor=%s job_id=%s all_endpoints=%s",
+                        actor_name,
+                        job.job_id,
+                        [(ep.name, ep.address, ep.job_id) for ep in all_eps],
+                    )
                 raise TimeoutError(f"Only {len(self._discovered_names)}/{target} actors ready after {timeout}s")
 
             time.sleep(sleep_secs)
@@ -358,8 +443,19 @@ class FrayIrisClient:
     registration for discovery.
     """
 
-    def __init__(self, controller_address: str, workspace: Path | None = None):
-        self._iris = IrisClientLib.remote(controller_address, workspace=workspace)
+    def __init__(
+        self,
+        controller_address: str,
+        workspace: Path | None = None,
+        bundle_gcs_path: str | None = None,
+    ):
+        logger.info(
+            "FrayIrisClient connecting to %s (workspace=%s, bundle_gcs_path=%s)",
+            controller_address,
+            workspace,
+            bundle_gcs_path,
+        )
+        self._iris = IrisClientLib.remote(controller_address, workspace=workspace, bundle_gcs_path=bundle_gcs_path)
 
     def submit(self, request: JobRequest) -> IrisJobHandle:
         iris_resources = convert_resources(request.resources)

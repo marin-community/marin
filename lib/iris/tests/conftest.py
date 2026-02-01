@@ -15,7 +15,6 @@
 # Test configuration for iris
 
 import subprocess
-import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -95,11 +94,3 @@ def docker_cleanup_session(use_docker):
     else:
         # Skip Docker cleanup when not using Docker
         yield
-
-
-def pytest_sessionfinish(session, exitstatus):
-    """Hook to debug pytest exit status - helps diagnose silent failures."""
-    if exitstatus == 0:
-        print("\nPytest thinks everything is fine...", file=sys.stderr)
-    else:
-        print(f"\nPytest is exiting with status {exitstatus}", file=sys.stderr)

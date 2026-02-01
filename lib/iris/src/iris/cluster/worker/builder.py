@@ -97,6 +97,20 @@ RUN uv pip install cloudpickle
 {pip_install_step}"""
 
 
+def _build_extras_flags(extras: list[str]) -> str:
+    """Convert extras like ["marin:cpu"] to uv sync flags like "--package marin --extra cpu"."""
+    if not extras:
+        return ""
+    parts = []
+    for e in extras:
+        if ":" in e:
+            package, extra = e.split(":", 1)
+            parts.append(f"--package {package} --extra {extra}")
+        else:
+            parts.append(f"--extra {e}")
+    return " ".join(parts)
+
+
 class ImageCache:
     """Manages Docker image building with caching.
 
@@ -187,7 +201,7 @@ class ImageCache:
 
         # Build image
         start = time.time()
-        extras_flags = " ".join(f"--extra {e}" for e in extras) if extras else ""
+        extras_flags = _build_extras_flags(extras)
 
         pyproject_mounts = " \\\n".join(
             f"--mount=type=bind,source={f.relative_to(bundle_path)},target={f.relative_to(bundle_path)}"

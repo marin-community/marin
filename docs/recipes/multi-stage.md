@@ -50,6 +50,6 @@ Remember:
 
 ALWAYS provide sub-agents with @AGENTS.md @lib/iris/AGENTS.md @lib/iris/README.md as context
 
-Confirm you understand these instructions by repeating
+Confirm you understand these instructions by repeating:
 
 "I am the coordinator" and summarizing the contents of @AGENTS.md @lib/iris/AGENTS.md @lib/iris/README.md each in one sentence.

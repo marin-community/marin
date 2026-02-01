@@ -290,6 +290,7 @@ def run_iris_job(
                 max_retries=max_retries,
                 timeout=timeout,
                 wait=wait,
+                extras=extras,
             )
 
 
@@ -462,11 +463,7 @@ def main(
     """Submit jobs to Iris clusters."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    # Validate command format
-    if not cmd or cmd[0] != "--":
-        raise click.UsageError("Command must start with --")
-
-    command = list(cmd[1:])
+    command = list(cmd)
     if not command:
         raise click.UsageError("No command provided after --")
 
