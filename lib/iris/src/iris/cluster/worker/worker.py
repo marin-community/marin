@@ -34,7 +34,7 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
-from iris.managed_thread import ManagedThread, get_thread_registry, spawn_server
+from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import ExponentialBackoff
@@ -111,8 +111,7 @@ class Worker:
         )
 
         self._server: uvicorn.Server | None = None
-        self._server_thread: ManagedThread | None = None
-        self._lifecycle_thread: ManagedThread | None = None
+        self._threads = ThreadContainer()
 
         self._worker_id: str | None = config.worker_id
         self._controller_client: ControllerServiceClientSync | None = None
@@ -133,7 +132,7 @@ class Worker:
                 log_level="error",
             )
         )
-        self._server_thread = spawn_server(self._server, name="worker-server")
+        self._threads.spawn_server(self._server, name="worker-server")
 
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
@@ -149,7 +148,7 @@ class Worker:
             )
 
             # Start lifecycle thread: register + serve + reset loop
-            self._lifecycle_thread = get_thread_registry().spawn(target=self._run_lifecycle, name="worker-lifecycle")
+            self._threads.spawn(target=self._run_lifecycle, name="worker-lifecycle")
 
     def _cleanup_all_iris_containers(self) -> None:
         """Remove all iris-managed containers at startup.
@@ -161,22 +160,12 @@ class Worker:
             logger.info("Startup cleanup: removed %d iris containers", removed)
 
     def wait(self) -> None:
-        """Block until the server thread exits."""
-        if self._server_thread:
-            self._server_thread.join()
+        self._threads.wait()
 
     def stop(self) -> None:
-        # Stop uvicorn server
         if self._server:
             self._server.should_exit = True
-
-        # Stop and join managed threads
-        if self._server_thread:
-            self._server_thread.stop()
-            self._server_thread.join(timeout=5.0)
-        if self._lifecycle_thread:
-            self._lifecycle_thread.stop()
-            self._lifecycle_thread.join(timeout=5.0)
+        self._threads.stop()
 
         # Kill and remove all containers
         with self._lock:

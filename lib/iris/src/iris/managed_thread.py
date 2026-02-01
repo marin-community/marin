@@ -113,6 +113,42 @@ class ThreadRegistry:
         self.shutdown()
 
 
+class ThreadContainer:
+    """Component-scoped thread group with bulk stop/join.
+
+    Threads are spawned into the global ThreadRegistry (for test cleanup)
+    and also tracked locally so the owning component can shut them all
+    down in one call.
+    """
+
+    def __init__(self) -> None:
+        self._threads: list[ManagedThread] = []
+
+    def spawn(self, target: Callable[..., Any], *, name: str | None = None, args: tuple = ()) -> ManagedThread:
+        thread = get_thread_registry().spawn(target=target, name=name, args=args)
+        self._threads.append(thread)
+        return thread
+
+    def spawn_server(self, server: Any, *, name: str) -> ManagedThread:
+        thread = spawn_server(server, name=name)
+        self._threads.append(thread)
+        return thread
+
+    def wait(self) -> None:
+        """Block until all threads have exited."""
+        for thread in self._threads:
+            thread.join()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        """Signal all threads to stop, then join with a shared deadline."""
+        for thread in self._threads:
+            thread.stop()
+        deadline = time.monotonic() + timeout
+        for thread in self._threads:
+            remaining = max(0, deadline - time.monotonic())
+            thread.join(timeout=remaining)
+
+
 def _stop_event_to_server(stop_event: threading.Event, server: Any) -> None:
     """Bridge a stop_event to a uvicorn Server's should_exit flag.
 

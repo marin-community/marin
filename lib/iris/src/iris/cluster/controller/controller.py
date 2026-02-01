@@ -45,7 +45,7 @@ from iris.cluster.controller.state import (
 from iris.cluster.types import PREEMPTIBLE_ATTRIBUTE_KEY, JobId, TaskId, VmWorkerStatus, VmWorkerStatusMap, WorkerId
 from iris.cluster.vm.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
-from iris.managed_thread import ManagedThread, get_thread_registry, spawn_server
+from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.time_utils import ExponentialBackoff, now_ms
@@ -288,9 +288,7 @@ class Controller:
         self._wake_event = threading.Event()
         self._heartbeat_event = threading.Event()
         self._server: uvicorn.Server | None = None
-        self._scheduler_thread: ManagedThread | None = None
-        self._heartbeat_thread: ManagedThread | None = None
-        self._server_thread: ManagedThread | None = None
+        self._threads = ThreadContainer()
 
         # Per-worker dispatch state (outboxes). Protected by _dispatch_lock since
         # the scheduling thread writes and the heartbeat thread reads+drains.
@@ -319,12 +317,8 @@ class Controller:
 
     def start(self) -> None:
         """Start main controller loop, dashboard server, and optionally autoscaler."""
-        self._scheduler_thread = get_thread_registry().spawn(
-            target=self._run_scheduling_loop, name="controller-scheduler"
-        )
-        self._heartbeat_thread = get_thread_registry().spawn(
-            target=self._run_heartbeat_loop, name="controller-heartbeat"
-        )
+        self._threads.spawn(target=self._run_scheduling_loop, name="controller-scheduler")
+        self._threads.spawn(target=self._run_heartbeat_loop, name="controller-heartbeat")
         self._server = uvicorn.Server(
             uvicorn.Config(
                 self._dashboard._app,
@@ -333,7 +327,7 @@ class Controller:
                 log_level="error",
             )
         )
-        self._server_thread = spawn_server(self._server, name="controller-server")
+        self._threads.spawn_server(self._server, name="controller-server")
 
         if self._autoscaler:
             logger.info("Autoscaler configured with %d scale groups", len(self._autoscaler.groups))
@@ -355,16 +349,7 @@ class Controller:
         if self._server:
             self._server.should_exit = True
 
-        if self._scheduler_thread:
-            self._scheduler_thread.stop()
-            self._scheduler_thread.join(timeout=5.0)
-        if self._heartbeat_thread:
-            self._heartbeat_thread.stop()
-            self._heartbeat_thread.join(timeout=5.0)
-        if self._server_thread:
-            self._server_thread.stop()
-            self._server_thread.join(timeout=5.0)
-
+        self._threads.stop()
         self._dispatch_executor.shutdown(wait=True, cancel_futures=False)
 
         if self._autoscaler:
