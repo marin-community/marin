@@ -29,9 +29,9 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
+import asyncio
 from pathlib import Path
 
 import fsspec
@@ -49,7 +49,7 @@ class HarborEvaluator(Evaluator):
     Generic evaluator for any Harbor dataset from the registry.
 
     Can run any Harbor benchmark without custom adapters:
-    - Uses Harbor's CLI for execution
+    - Uses Harbor's programmatic API for execution
     - Loads datasets from Harbor registry
     - Supports all Harbor agents and environments
     """
@@ -145,147 +145,125 @@ class HarborEvaluator(Evaluator):
         env_type: str,
         task_limit: int | None = None,
     ) -> tuple[dict, Path | None]:
-        """Run Harbor trials using CLI."""
-
-        # Find harbor executable (prefer venv installation)
-        harbor_cmd = shutil.which("harbor")
-        if harbor_cmd is not None:
-            harbor_cmd_list = [harbor_cmd]
-        else:
-            # Try venv bin directory
-            venv_harbor = os.path.join(sys.prefix, "bin", "harbor")
-            if os.path.exists(venv_harbor):
-                harbor_cmd_list = [venv_harbor]
-            else:
-                # Fallback to python -m harbor if harbor CLI is not in PATH
-                # but package is available in PYTHONPATH
-                try:
-                    import harbor  # noqa: F401
-
-                    harbor_cmd_list = [sys.executable, "-m", "harbor"]
-                except ImportError:
-                    raise RuntimeError("Harbor CLI not found. Please install harbor package.")
-
-        # Build Harbor run command
-        cmd = harbor_cmd_list + [
-            "run",
-            "--dataset",
-            f"{dataset}@{version}",
-            "--agent",
-            agent,
-            "--model",
-            model_name,
-            "--n-concurrent",
-            str(n_concurrent),
-        ]
-
-        # Set environment type (default is docker which is "local")
-        if env_type != "local":
-            cmd.extend(["--env", env_type])
-
-        # Limit number of tasks
-        if task_limit:
-            cmd.extend(["--n-tasks", str(task_limit)])
+        """Run Harbor trials using programmatic API."""
+        from harbor.job import Job
+        from harbor.models.job.config import JobConfig, RegistryDatasetConfig
+        from harbor.models.trial.config import AgentConfig, EnvironmentConfig
+        from harbor.models.orchestrator_type import OrchestratorType
+        from harbor.models.registry import RemoteRegistryInfo
+        from harbor.models.environment_type import EnvironmentType
 
         # Create temporary output directory
-        # Use a manual temp dir to avoid permission issues with Docker-created files
         tmpdir = tempfile.mkdtemp(prefix="harbor_eval_")
         try:
             output_dir = Path(tmpdir) / "harbor_results"
-            cmd.extend(["--jobs-dir", str(output_dir)])
+            output_dir.mkdir(parents=True, exist_ok=True)
 
-            logger.info(f"Running Harbor command: {' '.join(cmd)}")
+            # Map environment type
+            # "local" in Marin means Docker in Harbor
+            harbor_env_type = EnvironmentType.DOCKER
+            if env_type != "local":
+                try:
+                    harbor_env_type = EnvironmentType(env_type)
+                except ValueError:
+                    logger.warning(f"Unknown environment type: {env_type}, falling back to docker")
 
+            # Create Harbor JobConfig
+            config = JobConfig(
+                job_name=f"eval_{dataset}_{int(time.time())}",
+                jobs_dir=output_dir,
+                datasets=[
+                    RegistryDatasetConfig(
+                        registry=RemoteRegistryInfo(),
+                        name=dataset,
+                        version=version,
+                        n_tasks=task_limit,
+                    )
+                ],
+                agents=[
+                    AgentConfig(
+                        name=agent,
+                        model_name=model_name,
+                    )
+                ],
+                orchestrator=dict(
+                    type=OrchestratorType.LOCAL,
+                    n_concurrent_trials=n_concurrent,
+                ),
+                environment=EnvironmentConfig(
+                    type=harbor_env_type,
+                ),
+            )
+
+            job = Job(config)
+            logger.info(f"Starting Harbor job {job.config.job_name} via programmatic API")
+
+            # Run the job
+            asyncio.run(job.run())
+
+            logger.info("Harbor execution completed")
+            job_dir = job.job_dir
+
+            # Fix permissions on Docker-created files so we can read them
             try:
-                result = subprocess.run(
-                    cmd,
+                subprocess.run(
+                    ["sudo", "chmod", "-R", "755", str(job_dir)],
+                    check=False,
                     capture_output=True,
-                    text=True,
-                    check=True,
-                    timeout=7200,  # 2 hour timeout for safety
                 )
-                logger.info("Harbor execution completed")
-                logger.debug(f"Harbor stdout: {result.stdout}")
+            except Exception:
+                pass  # Continue even if chmod fails
 
-                # Harbor creates a timestamped job directory inside jobs-dir
-                # Look for the most recent job directory and read its results
-                job_dirs = sorted(output_dir.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
-                if job_dirs:
-                    job_dir = job_dirs[0]
-                    logger.info(f"Reading results from {job_dir}")
+            # Read trial results from Harbor's result.json files
+            results = {"trials": {}}
 
-                    # Fix permissions on Docker-created files so we can read them
+            trial_dirs = [d for d in job_dir.iterdir() if d.is_dir()]
+            for trial_dir in trial_dirs:
+                result_file = trial_dir / "result.json"
+                if not result_file.exists():
+                    continue
+
+                trial_result = json.loads(result_file.read_text())
+                trial_id = trial_result.get("task_name", trial_dir.name)
+
+                # Extract reward from verifier_result.rewards.reward
+                verifier_result = trial_result.get("verifier_result") or {}
+                rewards = verifier_result.get("rewards") or {}
+                reward = rewards.get("reward", 0.0)
+
+                # Extract error info if present
+                error = None
+                exception_info = trial_result.get("exception_info")
+                if exception_info:
+                    error = {
+                        "type": exception_info.get("exception_type"),
+                        "message": exception_info.get("exception_message"),
+                    }
+
+                # Read trajectory from agent/trajectory.json if it exists
+                trajectory_file = trial_dir / "agent" / "trajectory.json"
+                trajectory_content = None
+                trajectory_length = 0
+                if trajectory_file.exists():
                     try:
-                        subprocess.run(
-                            ["sudo", "chmod", "-R", "755", str(job_dir)],
-                            check=False,
-                            capture_output=True,
-                        )
-                    except Exception:
-                        pass  # Continue even if chmod fails
+                        trajectory_content = trajectory_file.read_text()
+                        trajectory_data = json.loads(trajectory_content)
+                        trajectory_length = len(trajectory_data.get("steps", []))
+                    except Exception as e:
+                        logger.warning(f"Failed to read trajectory for {trial_id}: {e}")
 
-                    # Read trial results from Harbor's result.json files
-                    results = {"trials": {}}
+                results["trials"][trial_id] = {
+                    "reward": reward,
+                    "status": "completed" if not exception_info else "failed",
+                    "task_name": trial_id,
+                    "started_at": trial_result.get("started_at"),
+                    "finished_at": trial_result.get("finished_at"),
+                    "error": error,
+                    "trajectory_content": trajectory_content,
+                    "trajectory_length": trajectory_length,
+                }
 
-                    trial_dirs = [d for d in job_dir.iterdir() if d.is_dir()]
-                    for trial_dir in trial_dirs:
-                        result_file = trial_dir / "result.json"
-                        if not result_file.exists():
-                            continue
-
-                        trial_result = json.loads(result_file.read_text())
-                        trial_id = trial_result.get("task_name", trial_dir.name)
-
-                        # Extract reward from verifier_result.rewards.reward
-                        verifier_result = trial_result.get("verifier_result") or {}
-                        rewards = verifier_result.get("rewards") or {}
-                        reward = rewards.get("reward", 0.0)
-
-                        # Extract error info if present
-                        error = None
-                        exception_info = trial_result.get("exception_info")
-                        if exception_info:
-                            error = {
-                                "type": exception_info.get("exception_type"),
-                                "message": exception_info.get("exception_message"),
-                            }
-
-                        # Read trajectory from agent/trajectory.json if it exists
-                        trajectory_file = trial_dir / "agent" / "trajectory.json"
-                        trajectory_content = None
-                        trajectory_length = 0
-                        if trajectory_file.exists():
-                            try:
-                                trajectory_content = trajectory_file.read_text()
-                                trajectory_data = json.loads(trajectory_content)
-                                trajectory_length = len(trajectory_data.get("steps", []))
-                            except Exception as e:
-                                logger.warning(f"Failed to read trajectory for {trial_id}: {e}")
-
-                        results["trials"][trial_id] = {
-                            "reward": reward,
-                            "status": "completed" if not exception_info else "failed",
-                            "task_name": trial_id,
-                            "started_at": trial_result.get("started_at"),
-                            "finished_at": trial_result.get("finished_at"),
-                            "error": error,
-                            "trajectory_content": trajectory_content,
-                            "trajectory_length": trajectory_length,
-                        }
-
-                    return results, job_dir
-                else:
-                    logger.warning("No job directory found in harbor output")
-                    return {"trials": {}}, None
-
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Harbor command failed with exit code {e.returncode}")
-                logger.error(f"Stdout: {e.stdout}")
-                logger.error(f"Stderr: {e.stderr}")
-                raise RuntimeError(f"Harbor execution failed: {e.stderr}") from e
-            except subprocess.TimeoutExpired as e:
-                logger.error("Harbor command timed out")
-                raise RuntimeError("Harbor execution timed out after 2 hours") from e
+            return results, job_dir
         finally:
             # Clean up temp directory, ignoring permission errors from Docker
             try:
