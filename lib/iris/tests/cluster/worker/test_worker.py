@@ -25,7 +25,7 @@ from connectrpc.request import RequestContext
 
 from iris.logging import BufferedLogRecord, LogRingBuffer
 from iris.rpc import cluster_pb2
-from iris.cluster.types import Entrypoint
+from iris.cluster.types import Entrypoint, generate_dockerfile
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
@@ -231,7 +231,7 @@ def create_run_task_request(
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",
         },
-        extras=["dev"],
+        dockerfile=generate_dockerfile("3.12", extras=["dev"]),
     )
 
     resources = cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3)
@@ -566,7 +566,9 @@ def create_integration_run_task_request(bundle_path: str, task_id: str):
         num_tasks=1,
         entrypoint=entrypoint.to_proto(),
         bundle_gcs_path=bundle_path,
-        environment=cluster_pb2.EnvironmentConfig(),
+        environment=cluster_pb2.EnvironmentConfig(
+            dockerfile=generate_dockerfile("3.12"),
+        ),
         resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=512 * 1024**2),
     )
 

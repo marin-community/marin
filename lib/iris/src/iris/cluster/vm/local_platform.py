@@ -238,13 +238,11 @@ class _LocalImageProvider:
     def build(
         self,
         bundle_path: Path,
-        base_image: str,
-        extras: list[str],
+        dockerfile: str,
         job_id: str,
         task_logs=None,
-        pip_packages: list[str] | None = None,
     ) -> BuildResult:
-        del bundle_path, base_image, extras, job_id, task_logs, pip_packages
+        del bundle_path, dockerfile, job_id, task_logs
         return BuildResult(
             image_tag="local:latest",
             build_time_ms=0,
