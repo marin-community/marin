@@ -47,6 +47,7 @@ Current datasets:
 21. HuggingFaceH4/no_robots
 22. open-thoughts/OpenThoughts3-1.2M  # Note that this is the *original* OpenThoughts3 dataset; smoltalk2 has a slightly different version
 23. marin-community/OpenThoughts4-1.2M-Qwen3-32B  # Subsampled from full OT4 dataset annotated with Qwen3-32B
+24. open-thoughts/OpenThoughts-Agent-v1-SFT  # Exported from Harbor traces; see Harbor SFT docs
 """
 
 import dataclasses
@@ -358,6 +359,23 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         adapter=multi_turn_adapter(),
         metadata_columns=["system", "source", "generated_token_count", "correct"],
         name="open-r1/OpenThoughts-114k-math",
+    ),
+    "open-thoughts/OpenThoughts-Agent-v1-SFT": InstructionDatasetConfig(
+        hf_dataset_id="open-thoughts/OpenThoughts-Agent-v1-SFT",
+        revision="c5dc896",
+        adapter=multi_turn_adapter(conversation_column="conversations"),
+        metadata_columns=[
+            "agent",
+            "episode",
+            "run_id",
+            "trial_name",
+            "date",
+            "task",
+            "model_provider",
+            "model",
+        ],
+        name="open-thoughts/OpenThoughts-Agent-v1-SFT",
+        max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
     ),
     "bespokelabs/Bespoke-Stratos-17k": InstructionDatasetConfig(
         hf_dataset_id="bespokelabs/Bespoke-Stratos-17k",
