@@ -368,15 +368,8 @@ class ManagedVm:
         logger.info("VM %s: Starting lifecycle (state=BOOTING)", vm_id)
 
         try:
-            # If address is already known, check if worker is healthy before bootstrapping.
-            # This handles controller restart recovery - skip bootstrap if worker is running.
-            if vm_address:
-                logger.info("VM %s: Address known, checking if worker already healthy", vm_id)
-                if self._check_worker_healthy():
-                    logger.info("VM %s: Worker already healthy, skipping bootstrap", vm_id)
-                    self._transition(vm_pb2.VM_STATE_READY)
-                    return
-
+            # Always bootstrap VMs when controller adopts them to ensure latest image.
+            # The controller re-bootstraps all VMs on startup to pull the latest worker image.
             # Wait for connection
             logger.info("VM %s: Waiting for connection (timeout=%ds)", vm_id, boot_timeout)
             if not wait_for_connection(self._conn, boot_timeout, poll_interval, self._stop):

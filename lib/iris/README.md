@@ -128,20 +128,55 @@ Workers communicate with the controller using internal VPC IPs. External clients
 
 ## Worker Lifecycle
 
-### Registration and Reconciliation
+### Registration and Heartbeat
 
-Workers register with the controller via heartbeat (every 10 seconds). The registration
-includes `running_task_ids` - the list of tasks the worker believes it's running.
+Workers register with the controller once at startup via the `Register` RPC.
+After registration, the worker enters a serve loop and waits for controller-
+initiated heartbeats.
 
-The controller performs bidirectional reconciliation:
+The controller sends `Heartbeat` RPCs to all registered workers on each
+scheduler tick (~5s). The heartbeat request carries:
+- `tasks_to_run`: new task assignments for this worker
+- `tasks_to_kill`: task IDs to terminate
 
-1. **Worker claims unknown tasks** (e.g., controller restarted):
-   - Controller sends `should_reset=True`
-   - Worker wipes all containers and re-registers
+The worker responds with:
+- `running_tasks`: tasks currently executing (task_id + attempt_id)
+- `completed_tasks`: tasks that finished since the last heartbeat
 
-2. **Worker missing expected tasks** (e.g., worker restarted):
+The controller reconciles the response:
+
+1. **Worker missing expected tasks** (e.g., worker restarted mid-task):
    - Controller marks missing tasks as `WORKER_FAILED`
-   - Tasks will be retried on another worker
+   - Tasks are retried on another worker
+
+2. **Worker reports unknown tasks** (e.g., controller restarted):
+   - Controller sends kill requests for unknown tasks on next heartbeat
+   - Worker terminates orphaned containers
+
+## Job State Transitions
+
+Jobs progress through the following states:
+
+| State | Description |
+|-------|-------------|
+| **PENDING** | Job submitted, waiting for worker assignment |
+| **BUILDING** | Job bundle being built/transferred (future use) |
+| **RUNNING** | At least one task is actively executing |
+| **SUCCEEDED** | All tasks completed successfully |
+| **FAILED** | Job failed (exceeded max task failures or retry limit) |
+| **KILLED** | Job was cancelled by user |
+| **UNSCHEDULABLE** | Job could not be scheduled (constraint mismatch or timeout) |
+
+### Endpoint Visibility
+
+Job endpoints (registered via `RegisterEndpoint` RPC) are visible for all non-terminal states:
+- **PENDING**: Endpoint visible (tasks may be executing before job state updates)
+- **BUILDING**: Endpoint visible
+- **RUNNING**: Endpoint visible
+- **Terminal states** (SUCCEEDED, FAILED, KILLED): Endpoints **not visible**
+
+This behavior accounts for controller-worker communication delay: a task may start
+executing and register an endpoint before the controller updates the job state to RUNNING.
 
 ### Startup Cleanup
 
@@ -201,6 +236,7 @@ uv run iris cluster controller run-local --bundle-prefix file:///var/cache/iris/
 iris cluster --config=cluster.yaml start
 iris cluster --config=cluster.yaml stop
 iris cluster --config=cluster.yaml restart
+iris cluster --config=cluster.yaml reload       # Rebuild images + redeploy on existing VMs
 iris cluster --config=cluster.yaml status
 
 # Controller subcommands (for GCE-managed controller)

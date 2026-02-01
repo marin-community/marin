@@ -726,6 +726,82 @@ def list_jobs(ctx: click.Context, local_port: int, json_output: bool) -> None:
                 click.echo(f"  Error: {job.error}")
 
 
+@cli.command("show-task-logs")
+@click.argument("job_id")
+@click.option("--local-port", default=DEFAULT_CONTROLLER_PORT, help="Local port for tunnel")
+@click.option("--category", help="Filter logs by category (e.g., 'build')")
+@click.option("--max-entries", default=5000, help="Maximum log entries to fetch")
+@click.pass_context
+def show_task_logs(ctx: click.Context, job_id: str, local_port: int, category: str | None, max_entries: int) -> None:
+    """Show detailed task logs for a job (auto-establishes tunnel).
+
+    Fetches task status and logs for all tasks in the specified job.
+    Useful for debugging build failures and task execution issues.
+
+    Examples:
+        # Show all logs for a job
+        uv run python scripts/cluster-tools.py --zone europe-west4-b --project hai-gcp-models show-task-logs JOB_ID
+
+        # Show only build logs
+        uv run python scripts/cluster-tools.py --zone europe-west4-b \\
+            --project hai-gcp-models show-task-logs JOB_ID --category build
+    """
+    zone = ctx.obj["zone"]
+    project = ctx.obj["project"]
+
+    with controller_tunnel(zone, project, local_port) as url:
+        client = ControllerServiceClientSync(url)
+
+        # Get job status to find task IDs
+        try:
+            job_resp = client.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id=job_id))
+        except Exception as e:
+            click.echo(f"Failed to get job status: {e}", err=True)
+            raise SystemExit(1) from e
+
+        job = job_resp.job
+        click.echo(f"Job: {job.job_id}")
+        click.echo(f"State: {cluster_pb2.JobState.Name(job.state)}")
+        click.echo(f"Tasks: {len(job.tasks)}")
+        if job.error:
+            click.echo(f"Error: {job.error}")
+        click.echo()
+
+        # Get details for each task
+        for task in job.tasks:
+            click.echo(f"=== Task: {task.task_id} (index {task.task_index}) ===")
+            click.echo(f"State: {cluster_pb2.TaskState.Name(task.state)}")
+            if task.worker_id:
+                click.echo(f"Worker: {task.worker_id}")
+            if task.error:
+                click.echo(f"Error: {task.error}")
+            click.echo()
+
+            # Fetch logs for this task using GetTaskLogsRequest
+            try:
+                logs_resp = client.get_task_logs(
+                    cluster_pb2.Controller.GetTaskLogsRequest(
+                        job_id=job.job_id, task_index=task.task_index, start_ms=0, limit=max_entries
+                    )
+                )
+            except Exception as e:
+                click.echo(f"Failed to fetch logs for task {task.task_index}: {e}", err=True)
+                continue
+
+            # Filter and display logs
+            logs = logs_resp.logs
+            if category:
+                logs = [log for log in logs if category.lower() in log.source.lower()]
+
+            if not logs:
+                click.echo(f"No logs found{f' for category {category}' if category else ''}.")
+            else:
+                click.echo(f"Logs ({len(logs)} entries):")
+                for log in logs:
+                    click.echo(f"[{log.source}] {log.data}")
+            click.echo()
+
+
 @cli.command()
 @click.option("--controller-url", help="Direct controller URL (skips SSH tunnel)")
 @click.option("--workspace", type=click.Path(exists=True, path_type=Path), help="Workspace directory")

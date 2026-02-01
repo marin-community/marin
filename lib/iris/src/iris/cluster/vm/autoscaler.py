@@ -82,6 +82,7 @@ class DemandEntry:
     count: int = 0
     total_cpu: int = 0
     total_memory_bytes: int = 0
+    preemptible: bool | None = None  # None = no preference
 
 
 @dataclass
@@ -112,6 +113,8 @@ def route_demand(
 
     for entry in demand_entries:
         matching = [g for g in groups if g.matches_device_requirement(entry.device_type, entry.device_variant)]
+        if entry.preemptible is not None:
+            matching = [g for g in matching if g.config.preemptible == entry.preemptible]
         # Sort by priority (lower = higher priority). Default to 100 if not set (proto3 defaults to 0).
         matching.sort(key=lambda g: g.config.priority or 100)
 
@@ -199,11 +202,29 @@ class Autoscaler:
             thread_name_prefix="scale-up",
         )
 
-    def shutdown(self) -> None:
-        """Shutdown the autoscaler and wait for in-flight scale-ups to complete."""
-        logger.info("Shutting down autoscaler, waiting for in-flight scale-ups...")
+    def _wait_for_inflight(self) -> None:
+        """Wait for in-flight scale-ups to complete without terminating anything.
+
+        Test-only: not concurrency-safe with concurrent execute() calls.
+        """
         self._scale_up_executor.shutdown(wait=True)
-        logger.info("Autoscaler shutdown complete")
+        # Re-create executor so the autoscaler remains usable after waiting
+        self._scale_up_executor = ThreadPoolExecutor(
+            max_workers=max(len(self._groups), 4),
+            thread_name_prefix="scale-up",
+        )
+
+    def shutdown(self) -> None:
+        """Shutdown the autoscaler, terminate all VM groups, and wait for in-flight scale-ups."""
+        self._scale_up_executor.shutdown(wait=True)
+        for group in self._groups.values():
+            group.terminate_all()
+
+    def __enter__(self) -> Autoscaler:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.shutdown()
 
     def reconcile(self) -> None:
         """Reconcile all groups (discover existing slices from cloud).

@@ -264,7 +264,7 @@ For the below tests, DO NOT attempt to fix them if they fail, except for failure
 Tests that Iris handles RPC failures gracefully:
 - Dispatch retries (4x with exponential backoff)
 - Heartbeat timeout (60s)
-- Heartbeat reconciliation (running_task_ids)
+- Heartbeat reconciliation (running_tasks)
 """
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
@@ -324,7 +324,7 @@ def test_heartbeat_permanent_failure(cluster):
 ```
 
 **Test 5** — `report_task_state` always fails. Controller should detect task completion
-via heartbeat reconciliation (`running_task_ids` goes empty when task finishes).
+via heartbeat reconciliation (`running_tasks` goes empty when task finishes).
 ```python
 def test_report_task_state_failure(cluster):
     url, client = cluster

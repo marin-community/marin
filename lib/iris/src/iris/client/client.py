@@ -495,11 +495,9 @@ class LocalClientConfig:
 
     Attributes:
         max_workers: Maximum concurrent job threads
-        port_range: Port range for actor servers (inclusive start, exclusive end)
     """
 
     max_workers: int = 4
-    port_range: tuple[int, int] = (50000, 60000)
 
 
 class EndpointRegistry(Protocol):
@@ -673,10 +671,7 @@ class IrisClient:
             IrisClient wrapping LocalClusterClient
         """
         cfg = config or LocalClientConfig()
-        cluster = LocalClusterClient.create(
-            max_workers=cfg.max_workers,
-            port_range=cfg.port_range,
-        )
+        cluster = LocalClusterClient.create(max_workers=cfg.max_workers)
         return cls(cluster)
 
     @classmethod
@@ -754,6 +749,10 @@ class IrisClient:
         scheduling_timeout_seconds: int = 0,
         constraints: list[Constraint] | None = None,
         coscheduling: CoschedulingConfig | None = None,
+        replicas: int = 1,
+        max_retries_failure: int = 0,
+        max_retries_preemption: int = 100,
+        timeout_seconds: int = 0,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
 
@@ -766,15 +765,21 @@ class IrisClient:
             scheduling_timeout_seconds: Maximum time to wait for scheduling (0 = no timeout)
             constraints: Constraints for filtering workers by attribute
             coscheduling: Configuration for atomic multi-task scheduling
+            replicas: Number of tasks to create for gang scheduling (default: 1)
+            max_retries_failure: Max retries per task on failure (default: 0)
+            max_retries_preemption: Max retries per task on preemption (default: 100)
+            timeout_seconds: Per-task timeout in seconds (0 = no timeout)
 
         Returns:
             Job handle for the submitted job
 
         Raises:
-            ValueError: If name contains '/'
+            ValueError: If name contains '/' or replicas < 1
         """
         if "/" in name:
             raise ValueError("Job name cannot contain '/'")
+        if replicas < 1:
+            raise ValueError(f"replicas must be >= 1, got {replicas}")
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
@@ -801,6 +806,10 @@ class IrisClient:
             scheduling_timeout_seconds=scheduling_timeout_seconds,
             constraints=constraints_proto,
             coscheduling=coscheduling_proto,
+            replicas=replicas,
+            max_retries_failure=max_retries_failure,
+            max_retries_preemption=max_retries_preemption,
+            timeout_seconds=timeout_seconds,
         )
 
         return Job(self, job_id)
@@ -941,6 +950,7 @@ def _print_log_entry(job_id: JobId, entry: LogEntry, task_index: int | None = No
     Uses sys.__stdout__ directly instead of print() to avoid being captured
     by redirect_stdout in local in-process containers.
     """
+    assert sys.__stdout__ is not None, "sys.__stdout__ is None"
     ts = datetime.fromtimestamp(entry.timestamp_ms / 1000, tz=timezone.utc)
     ts_str = ts.strftime("%H:%M:%S")
     if task_index is not None:

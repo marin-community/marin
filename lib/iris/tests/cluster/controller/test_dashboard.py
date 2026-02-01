@@ -162,6 +162,7 @@ def job_request():
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
+        replicas=1,
     )
 
 
@@ -229,7 +230,12 @@ def test_list_workers_returns_healthy_status(client, state, make_worker_metadata
 
 
 def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
-    """ListEndpoints filters out endpoints for non-running jobs."""
+    """ListEndpoints filters out endpoints for terminal jobs.
+
+    Endpoints are visible for jobs in non-terminal states (PENDING, BUILDING, RUNNING)
+    to support the case where tasks are executing but the job hasn't transitioned to
+    RUNNING yet due to controller-worker communication delay.
+    """
     # Create jobs in various states
     pending_id = submit_job(state, "pending", job_request)
 
@@ -247,8 +253,10 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
     endpoints = resp.get("endpoints", [])
 
-    assert len(endpoints) == 1
-    assert endpoints[0]["name"] == "running-svc"
+    # Both pending and running endpoints should be visible (terminal state filtered out)
+    assert len(endpoints) == 2
+    endpoint_names = {ep["name"] for ep in endpoints}
+    assert endpoint_names == {"pending-svc", "running-svc"}
 
 
 def test_list_jobs_includes_retry_counts(client, state, job_request):
@@ -277,7 +285,8 @@ def test_list_jobs_includes_task_counts(client, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="multi-replica-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=3),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=3,
         environment=cluster_pb2.EnvironmentConfig(),
     )
     job_id = submit_job(state, "multi", request)
@@ -533,7 +542,8 @@ def test_coscheduling_failure_reason_no_workers(client, state):
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="cosched-job",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=2),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=2,
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
             cluster_pb2.Constraint(
@@ -569,7 +579,8 @@ def test_coscheduling_failure_reason_insufficient_group(client, state, make_work
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="big-cosched",
         entrypoint=_make_test_entrypoint(),
-        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3, replicas=4),
+        resources=cluster_pb2.ResourceSpecProto(cpu=1, memory_bytes=1024**3),
+        replicas=4,
         environment=cluster_pb2.EnvironmentConfig(),
         constraints=[
             cluster_pb2.Constraint(

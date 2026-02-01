@@ -268,8 +268,6 @@ class ResourceSpec:
     memory: str | int = 0  # "8g" or bytes
     disk: str | int = 0
     device: cluster_pb2.DeviceConfig | None = None
-    replicas: int = 0
-    preemptible: bool = False
     regions: Sequence[str] | None = None
 
     def to_proto(self) -> cluster_pb2.ResourceSpecProto:
@@ -280,8 +278,6 @@ class ResourceSpec:
             cpu=self.cpu,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
-            replicas=self.replicas,
-            preemptible=self.preemptible,
             regions=list(self.regions or []),
         )
         if self.device is not None:
@@ -368,6 +364,14 @@ class Namespace(str):
         return cls(job_id.split("/")[0])
 
 
+PREEMPTIBLE_ATTRIBUTE_KEY = "preemptible"
+
+
+def preemptible_constraint(preemptible: bool = True) -> Constraint:
+    """Constraint requiring workers to be preemptible (or not)."""
+    return Constraint(key=PREEMPTIBLE_ATTRIBUTE_KEY, op=ConstraintOp.EQ, value=str(preemptible).lower())
+
+
 def is_job_finished(state: int) -> bool:
     return state in (
         cluster_pb2.JOB_STATE_SUCCEEDED,
@@ -395,32 +399,6 @@ def is_task_finished(state: int) -> bool:
         }
     )
     return state in terminal_states
-
-
-def job_task_counts(job: cluster_pb2.JobStatus) -> dict[str, int]:
-    """Compute task state counts from tasks[] in JobStatus proto.
-
-    Returns a dict with keys: pending, assigned, running, succeeded, failed.
-    ASSIGNED tasks are counted separately since they have been dispatched to a worker
-    but have not yet started container setup/execution.
-    """
-    counts = {"pending": 0, "assigned": 0, "running": 0, "succeeded": 0, "failed": 0}
-    for task in job.tasks:
-        if task.state == cluster_pb2.TASK_STATE_PENDING:
-            counts["pending"] += 1
-        elif task.state == cluster_pb2.TASK_STATE_ASSIGNED:
-            counts["assigned"] += 1
-        elif task.state in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING):
-            counts["running"] += 1
-        elif task.state == cluster_pb2.TASK_STATE_SUCCEEDED:
-            counts["succeeded"] += 1
-        elif task.state in (
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
-        ):
-            counts["failed"] += 1
-    return counts
 
 
 JobState = cluster_pb2.JobState

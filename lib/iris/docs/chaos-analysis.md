@@ -74,19 +74,19 @@ detects a mismatch and marks the task as `WORKER_FAILED`, restarting the cycle.
 **Sequence:**
 1. Task dispatched to worker, worker executes successfully
 2. Worker calls `report_task_state` to report completion -- chaos blocks it
-3. Worker's `running_task_ids` becomes empty (task finished)
+3. Worker's `running_tasks` becomes empty (task finished)
 4. Controller heartbeat sees worker has no running tasks but controller still
    expects the task to be running
 5. Controller marks task as `WORKER_FAILED` ("Worker missing expected tasks")
 6. Task requeued, cycle repeats
 
-**Root cause:** The reconciliation protocol only has `running_task_ids`. It
+**Root cause:** The reconciliation protocol only has `running_tasks`. It
 cannot distinguish "task completed normally" from "worker lost the task." Both
-look the same: the task ID is absent from `running_task_ids`.
+look the same: the task ID is absent from `running_tasks`.
 
 **Recommendation:** Add `completed_task_ids` (or a `recently_finished` map with
 exit codes) to the heartbeat payload. When the controller sees a task missing
-from `running_task_ids` but present in `completed_task_ids`, it should treat this
+from `running_tasks` but present in `completed_task_ids`, it should treat this
 as a successful completion rather than a worker failure.
 
 ### Issue 3: Chaos Exception Type Mismatch (Low, Test Infrastructure)

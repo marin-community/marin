@@ -29,8 +29,9 @@ from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.docker import ContainerStats, ContainerStatus, DockerRuntime, ImageBuilder
+from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
+from iris.cluster.worker.worker import Worker, WorkerConfig
 
 # ============================================================================
 # PortAllocator Tests

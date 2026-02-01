@@ -75,6 +75,11 @@ def _slow_job():
     return "done"
 
 
+def _building_job():
+    """Simple job for testing BUILDING state (used with chaos delay injection)."""
+    return "ok"
+
+
 # =============================================================================
 # Job submission
 # =============================================================================
@@ -85,9 +90,25 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
 
     Returns a mapping of logical name -> job_id for later reference.
     """
+    from iris.chaos import enable_chaos
+
     job_ids: dict[str, str] = {}
 
-    # 1. Succeeded job
+    # 1. Building job (with chaos delay)
+    # Enable chaos to inject a 30-second delay during the BUILDING state
+    # max_failures=1 ensures only the first job hits the delay
+    enable_chaos("worker.building_delay", delay_seconds=30.0, max_failures=1)
+
+    job = client.submit(
+        entrypoint=Entrypoint.from_callable(_building_job),
+        name="snapshot-building",
+        resources=ResourceSpec(cpu=1, memory="2g"),
+        environment=EnvironmentSpec(),
+    )
+    job_ids["building"] = str(job.job_id)
+    logger.info("Submitted building job (with 30s chaos delay): %s", job.job_id)
+
+    # 2. Succeeded job
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-succeeded",
@@ -97,7 +118,7 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["succeeded"] = str(job.job_id)
     logger.info("Submitted succeeded job: %s", job.job_id)
 
-    # 2. Failed job
+    # 3. Failed job
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_failed_job),
         name="snapshot-failed",
@@ -107,7 +128,7 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["failed"] = str(job.job_id)
     logger.info("Submitted failed job: %s", job.job_id)
 
-    # 3. Running/slow job
+    # 4. Running/slow job
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_slow_job),
         name="snapshot-running",
@@ -117,7 +138,7 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["running"] = str(job.job_id)
     logger.info("Submitted running job: %s", job.job_id)
 
-    # 4. Second running job (more realistic)
+    # 5. Second running job (more realistic)
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_slow_job),
         name="snapshot-running-2",
@@ -127,7 +148,7 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["running-2"] = str(job.job_id)
     logger.info("Submitted second running job: %s", job.job_id)
 
-    # 5. Pending unschedulable job (constraint for nonexistent TPU)
+    # 6. Pending unschedulable job (constraint for nonexistent TPU)
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-pending-constraint",
@@ -140,21 +161,22 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["pending-constraint"] = str(job.job_id)
     logger.info("Submitted pending/unschedulable job: %s", job.job_id)
 
-    # 6. Coscheduled multi-replica job (also unschedulable)
+    # 7. Coscheduled multi-replica job (also unschedulable)
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-coscheduled",
-        resources=ResourceSpec(cpu=1, memory="2g", replicas=4),
+        resources=ResourceSpec(cpu=1, memory="2g"),
         environment=EnvironmentSpec(),
         constraints=[
             Constraint(key="tpu-name", op=ConstraintOp.EQ, value="nonexistent-tpu-xyz"),
         ],
         coscheduling=CoschedulingConfig(group_by="tpu-name"),
+        replicas=4,
     )
     job_ids["coscheduled"] = str(job.job_id)
     logger.info("Submitted coscheduled job: %s", job.job_id)
 
-    # 7. Job targeting zero-quota scale group (quota exhaustion scenario)
+    # 8. Job targeting zero-quota scale group (quota exhaustion scenario)
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-quota-exhausted",
@@ -167,7 +189,7 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["quota-exhausted"] = str(job.job_id)
     logger.info("Submitted quota-exhausted job: %s", job.job_id)
 
-    # 8. Job targeting disabled scale group
+    # 9. Job targeting disabled scale group
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-disabled-group",
@@ -180,18 +202,19 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job_ids["disabled-group"] = str(job.job_id)
     logger.info("Submitted disabled-group job: %s", job.job_id)
 
-    # 9. Large coscheduled job that needs more workers than available
+    # 10. Large coscheduled job that needs more workers than available
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-insufficient-capacity",
-        resources=ResourceSpec(cpu=1, memory="1g", replicas=100),
+        resources=ResourceSpec(cpu=1, memory="1g"),
         environment=EnvironmentSpec(),
         coscheduling=CoschedulingConfig(group_by="scale-group"),
+        replicas=100,
     )
     job_ids["insufficient-capacity"] = str(job.job_id)
     logger.info("Submitted insufficient-capacity job: %s", job.job_id)
 
-    # 10. Killed job — submit a slow job, then terminate it
+    # 11. Killed job — submit a slow job, then terminate it
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_slow_job),
         name="snapshot-killed",
@@ -205,7 +228,11 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
 
 
 def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout: float = 60.0):
-    """Wait for the succeeded, failed, and killed jobs to reach terminal states."""
+    """Wait for the succeeded, failed, and killed jobs to reach terminal states.
+
+    Also verifies that the building job shows BUILDING state with appropriate
+    task status message before eventually completing.
+    """
     terminal_states = (
         cluster_pb2.JOB_STATE_SUCCEEDED,
         cluster_pb2.JOB_STATE_FAILED,
@@ -227,6 +254,27 @@ def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout:
             time.sleep(0.5)
         else:
             logger.warning("  %s job did not finish within %.0fs", name, timeout)
+
+    # Verify building job is in BUILDING state with appropriate task status
+    # Wait for the building job to enter BUILDING state (may take a few seconds for worker dispatch)
+    building_jid = job_ids.get("building")
+    if building_jid:
+        logger.info("Waiting for building job (%s) to enter BUILDING state...", building_jid)
+        build_state_deadline = time.monotonic() + 10.0
+        while time.monotonic() < build_state_deadline:
+            status = client.status(building_jid)
+            if status.tasks:
+                task_status = status.tasks[0]
+                if task_status.state == cluster_pb2.TASK_STATE_BUILDING:
+                    logger.info("  building task entered BUILDING state")
+                    break
+            time.sleep(0.5)
+        else:
+            status = client.status(building_jid)
+            if status.tasks:
+                task_status = status.tasks[0]
+                task_state_name = cluster_pb2.TaskState.Name(task_status.state)
+                logger.warning("  Building job did not enter BUILDING state within timeout (state: %s)", task_state_name)
 
     # Kill the "killed" job after a brief delay so it has time to start
     killed_jid = job_ids.get("killed")
@@ -279,7 +327,7 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             saved.append(path)
 
         # Screenshot job detail pages
-        for name, label in [("failed", "failed"), ("running", "running")]:
+        for name, label in [("building", "building"), ("failed", "failed"), ("running", "running")]:
             jid = job_ids.get(name)
             if not jid:
                 continue
@@ -423,6 +471,28 @@ def main(config: Path, output_dir: Path, stay_open: bool):
             logger.info("Summary: %d screenshots saved", len(saved))
             for path in saved:
                 logger.info("  %s", path)
+
+            # After screenshots, wait for building job to complete
+            # (chaos delay is 30s, should complete shortly after screenshots)
+            building_jid = job_ids.get("building")
+            if building_jid:
+                logger.info("Waiting for building job to complete after chaos delay...")
+                deadline = time.monotonic() + 60.0
+                terminal_states = (
+                    cluster_pb2.JOB_STATE_SUCCEEDED,
+                    cluster_pb2.JOB_STATE_FAILED,
+                    cluster_pb2.JOB_STATE_KILLED,
+                    cluster_pb2.JOB_STATE_WORKER_FAILED,
+                )
+                while time.monotonic() < deadline:
+                    status = client.status(building_jid)
+                    if status.state in terminal_states:
+                        state_name = cluster_pb2.JobState.Name(status.state)
+                        logger.info("  building -> %s", state_name)
+                        break
+                    time.sleep(0.5)
+                else:
+                    logger.warning("  building job did not complete within timeout")
         else:
             logger.info("Skipping screenshots (no --output-dir specified)")
 

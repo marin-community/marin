@@ -29,6 +29,7 @@ from iris.cluster.vm.autoscaler import (
     DemandEntry,
     ScalingAction,
     ScalingDecision,
+    route_demand,
 )
 from iris.cluster.vm.managed_vm import VmRegistry
 from iris.cluster.vm.vm_platform import VmGroupStatus, VmSnapshot
@@ -138,7 +139,9 @@ def empty_autoscaler(scale_group_config):
     """Empty autoscaler ready for scale-up tests."""
     manager = make_mock_vm_manager()
     group = ScalingGroup(scale_group_config, manager, scale_up_cooldown_ms=0)
-    return make_autoscaler({"test-group": group})
+    autoscaler = make_autoscaler({"test-group": group})
+    yield autoscaler
+    autoscaler.shutdown()
 
 
 @pytest.fixture
@@ -151,7 +154,9 @@ def autoscaler_with_ready_slices(scale_group_config):
     manager = make_mock_vm_manager(slices_to_discover=discovered)
     group = ScalingGroup(scale_group_config, manager, scale_down_cooldown_ms=0, idle_threshold_ms=0)
     group.reconcile()
-    return make_autoscaler({"test-group": group}), group, manager
+    autoscaler = make_autoscaler({"test-group": group})
+    yield autoscaler, group, manager
+    autoscaler.shutdown()
 
 
 def make_autoscaler(
@@ -488,7 +493,7 @@ class TestAutoscalerExecution:
         )
 
         empty_autoscaler.execute([decision], timestamp_ms=1000)
-        empty_autoscaler.shutdown()  # Wait for async scale-up
+        empty_autoscaler._wait_for_inflight()  # Wait for async scale-up
 
         group = empty_autoscaler.groups["test-group"]
         assert group.slice_count() == 1
@@ -519,7 +524,7 @@ class TestAutoscalerExecution:
         )
 
         autoscaler.execute([decision], timestamp_ms=1000)
-        autoscaler.shutdown()  # Wait for async scale-up
+        autoscaler._wait_for_inflight()  # Wait for async scale-up
 
         assert group.consecutive_failures == 1
         assert group.backoff_until_ms > 0
@@ -529,7 +534,7 @@ class TestAutoscalerExecution:
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
         vm_status_map = {}  # Empty - no workers yet
         decisions = empty_autoscaler.run_once(demand, vm_status_map)
-        empty_autoscaler.shutdown()  # Wait for async scale-up
+        empty_autoscaler._wait_for_inflight()  # Wait for async scale-up
 
         assert len(decisions) == 1
         assert decisions[0].action == ScalingAction.SCALE_UP
@@ -960,6 +965,92 @@ class TestWaterfallRouting:
         assert "v5lite-group" in groups_in_decisions
 
 
+class TestPreemptibleRouting:
+    """Tests for preemptible demand routing."""
+
+    def test_route_demand_filters_by_preemptible_true(self):
+        """Demand with preemptible=True only routes to preemptible groups."""
+        config_preemptible = config_pb2.ScaleGroupConfig(
+            name="preemptible-group",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            max_slices=5,
+            priority=10,
+            preemptible=True,
+        )
+        config_on_demand = config_pb2.ScaleGroupConfig(
+            name="on-demand-group",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            max_slices=5,
+            priority=10,
+        )
+
+        group_preemptible = ScalingGroup(config_preemptible, make_mock_vm_manager())
+        group_on_demand = ScalingGroup(config_on_demand, make_mock_vm_manager())
+
+        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2, preemptible=True)]
+        result = route_demand([group_preemptible, group_on_demand], demand)
+
+        assert result.allocations["preemptible-group"] == 2
+        assert result.allocations["on-demand-group"] == 0
+
+    def test_route_demand_filters_by_preemptible_false(self):
+        """Demand with preemptible=False only routes to non-preemptible groups."""
+        config_preemptible = config_pb2.ScaleGroupConfig(
+            name="preemptible-group",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            max_slices=5,
+            priority=10,
+            preemptible=True,
+        )
+        config_on_demand = config_pb2.ScaleGroupConfig(
+            name="on-demand-group",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            max_slices=5,
+            priority=10,
+        )
+
+        group_preemptible = ScalingGroup(config_preemptible, make_mock_vm_manager())
+        group_on_demand = ScalingGroup(config_on_demand, make_mock_vm_manager())
+
+        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2, preemptible=False)]
+        result = route_demand([group_preemptible, group_on_demand], demand)
+
+        assert result.allocations["preemptible-group"] == 0
+        assert result.allocations["on-demand-group"] == 2
+
+    def test_route_demand_no_preference_routes_to_any(self):
+        """Demand with preemptible=None routes to any matching group."""
+        config_preemptible = config_pb2.ScaleGroupConfig(
+            name="preemptible-group",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            max_slices=5,
+            priority=10,
+            preemptible=True,
+        )
+        config_on_demand = config_pb2.ScaleGroupConfig(
+            name="on-demand-group",
+            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_variant="v5p-8",
+            max_slices=5,
+            priority=20,
+        )
+
+        group_preemptible = ScalingGroup(config_preemptible, make_mock_vm_manager())
+        group_on_demand = ScalingGroup(config_on_demand, make_mock_vm_manager())
+
+        demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=3, preemptible=None)]
+        result = route_demand([group_preemptible, group_on_demand], demand)
+
+        # Both groups are eligible; preemptible has higher priority (10 < 20)
+        assert result.allocations["preemptible-group"] == 3
+        assert result.unmet_demand == 0
+
+
 class TestAutoscalerWaterfallEndToEnd:
     """End-to-end tests for waterfall routing with FakeVmManager.
 
@@ -1030,7 +1121,7 @@ class TestAutoscalerWaterfallEndToEnd:
 
         # Third run: another slice on fallback
         autoscaler.run_once(demand, {})
-        time.sleep(0.1)
+        autoscaler._wait_for_inflight()
         assert group_fallback.slice_count() == 2
 
     def test_quota_recovery_restores_primary_routing(self):
@@ -1155,7 +1246,7 @@ class TestAutoscalerWaterfallEndToEnd:
 
         # Second run: should route to fallback
         autoscaler.run_once(demand, {})
-        time.sleep(0.1)  # Wait for async scale-up to complete
+        autoscaler._wait_for_inflight()
         assert group_fallback.slice_count() == 1
 
     def test_multiple_accelerator_types_route_independently(self):
@@ -1194,7 +1285,7 @@ class TestAutoscalerWaterfallEndToEnd:
         ]
 
         autoscaler.run_once(demand, {})
-        autoscaler.shutdown()  # Wait for async scale-ups to complete
+        autoscaler._wait_for_inflight()  # Wait for async scale-ups to complete
 
         # Each group should have received its own demand
         assert group_v5p.slice_count() == 1  # Created 1 slice toward demand of 2
@@ -1298,6 +1389,8 @@ class TestAutoscalerWaterfallEndToEnd:
             autoscaler.run_once(demand, {})
             time.sleep(0.1)
 
+        autoscaler._wait_for_inflight()
+
         # Total slices should meet or exceed demand
         total = group_primary.slice_count() + group_fallback.slice_count()
         assert total >= 4
@@ -1320,7 +1413,7 @@ class TestAutoscalerQuotaHandling:
 
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
         autoscaler.run_once(demand, {}, timestamp_ms=1000)
-        autoscaler.shutdown()  # Wait for async scale-up to complete
+        autoscaler._wait_for_inflight()  # Wait for async scale-up to complete
 
         # Group should be in QUOTA_EXCEEDED state
         state = group.availability(timestamp_ms=2000)
@@ -1358,7 +1451,7 @@ class TestAutoscalerQuotaHandling:
         # First call: primary fails with quota, triggers quota state
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
         autoscaler.run_once(demand, {}, timestamp_ms=1000)
-        autoscaler.shutdown()  # Wait for async scale-up to complete
+        autoscaler._wait_for_inflight()  # Wait for async scale-up to complete
 
         # Second call: primary is in QUOTA_EXCEEDED, should route to fallback
         decisions = autoscaler.evaluate(demand, timestamp_ms=2000)
@@ -1399,7 +1492,7 @@ class TestAutoscalerQuotaHandling:
 
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
         autoscaler.run_once(demand, {}, timestamp_ms=1000)
-        autoscaler.shutdown()  # Wait for async scale-up to complete
+        autoscaler._wait_for_inflight()  # Wait for async scale-up to complete
 
         # Should be in BACKOFF, not QUOTA_EXCEEDED
         state = group.availability(timestamp_ms=2000)
@@ -1414,7 +1507,7 @@ class TestAutoscalerActionLogging:
         """Verify scale-up actions are logged."""
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=2)]
         empty_autoscaler.run_once(demand, {})
-        empty_autoscaler.shutdown()  # Wait for async scale-up
+        empty_autoscaler._wait_for_inflight()  # Wait for async scale-up
 
         # Check that the action log contains a scale_up action
         status = empty_autoscaler.get_status()
@@ -1454,7 +1547,7 @@ class TestAutoscalerActionLogging:
 
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
         autoscaler.run_once(demand, {})
-        autoscaler.shutdown()  # Wait for async scale-up
+        autoscaler._wait_for_inflight()  # Wait for async scale-up
 
         status = autoscaler.get_status()
         assert len(status.recent_actions) == 1
@@ -1504,7 +1597,7 @@ class TestAutoscalerActionLogging:
         # Run a scale-up to generate an action
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
         empty_autoscaler.run_once(demand, {})
-        empty_autoscaler.shutdown()  # Wait for async scale-up
+        empty_autoscaler._wait_for_inflight()  # Wait for async scale-up
 
         status = empty_autoscaler.get_status()
 
@@ -1521,7 +1614,7 @@ class TestAutoscalerActionLogging:
         before = now_ms()
         demand = [DemandEntry(device_type=DeviceType.TPU, device_variant="v5p-8", count=1)]
         empty_autoscaler.run_once(demand, {})
-        empty_autoscaler.shutdown()  # Wait for async scale-up
+        empty_autoscaler._wait_for_inflight()  # Wait for async scale-up
         after = now_ms()
 
         status = empty_autoscaler.get_status()
@@ -1609,7 +1702,6 @@ class TestScalingGroupRequestingState:
 
     def test_demand_routing_skips_requesting_groups(self):
         """route_demand() skips groups in REQUESTING state."""
-        from iris.cluster.vm.autoscaler import route_demand
         from iris.time_utils import now_ms
 
         config1 = config_pb2.ScaleGroupConfig(
@@ -1690,6 +1782,8 @@ class TestAutoscalerAsyncScaleUp:
         # Should return in < 0.1s, not wait for 0.5s creation
         assert elapsed < 0.1
 
+        autoscaler._wait_for_inflight()  # Wait for async scale-up to avoid logging on closed streams
+
     def test_group_marked_requesting_during_scale_up(self):
         """Group is marked REQUESTING immediately after execute() is called."""
 
@@ -1729,7 +1823,7 @@ class TestAutoscalerAsyncScaleUp:
         assert availability.status == GroupAvailability.REQUESTING
 
         # Wait for async operation to complete
-        time.sleep(0.3)
+        autoscaler._wait_for_inflight()
 
         # After completion, should be AVAILABLE again
         availability = group.availability(ts + 300)
