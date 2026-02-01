@@ -213,6 +213,8 @@ class HarborEvaluator(Evaluator):
 
         env = dict(os.environ)
         env.setdefault("MODEL_IMPL_TYPE", "vllm")
+        env.setdefault("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1")
+        env.setdefault("VLLM_TPU_SKIP_PRECOMPILE", "1")
 
         logger.info(f"Starting vLLM server: {' '.join(command)}")
         subprocess.Popen(command, env=env)
