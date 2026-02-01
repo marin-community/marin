@@ -207,18 +207,13 @@ def compute_ppo_loss_objective(
     loss_objective = jnp.minimum(non_clipped_objective, clipped_objective)
     if trainer_inference_importance_sampling_ratio is not None:
         loss_objective = trainer_inference_importance_sampling_ratio * loss_objective
-    # Mean over response tokens per batch
-    # loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
 
     if response_truncated_array is not None:
         batch_size, _ = loss_objective.shape
         loss_objective = loss_objective * (1 - response_truncated_array.reshape(batch_size, 1))
 
-    # Dr GRPO loss, token-level loss
-    # loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / max_output_tokens)
-
-    # more like DAPO loss
-    loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
+    # Default to DAPO loss (matches original active behavior)
+    loss = compute_dapo_loss(loss_objective, loss_masks)
 
     per_batch_loss = jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1)
     metadata = {
@@ -226,6 +221,34 @@ def compute_ppo_loss_objective(
         "loss_std_over_batch": Metric.from_value(jnp.std(per_batch_loss).astype(jnp.float32), ReductionType.MEAN),
     }
     return loss, metadata
+
+
+def compute_ppo_loss(
+    loss_objective: jax.Array,
+    loss_masks: jax.Array,
+) -> jax.Array:
+    """Compute PPO loss (per-example normalization)."""
+    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
+
+
+def compute_dapo_loss(
+    loss_objective: jax.Array,
+    loss_masks: jax.Array,
+) -> jax.Array:
+    """Compute DAPO-like loss (global token normalization).
+
+    Divides by total tokens across all examples in the batch, not per-example.
+    """
+    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
+
+
+def compute_grpo_loss(
+    loss_objective: jax.Array,
+    loss_masks: jax.Array,
+    max_output_tokens: int,
+) -> jax.Array:
+    """Compute GRPO loss (token-level loss)."""
+    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / max_output_tokens)
 
 
 def importance_sampling_ratio(
@@ -375,6 +398,8 @@ def rloo_loss_with_importance_sampling(
         "trainer_inference_importance_sampling_ratio_mean": Metric.from_value(
             trainer_inference_importance_sampling_ratio_mean.astype(jnp.float32), ReductionType.MEAN
         ),
+        "temperature": Metric.from_value(jnp.mean(batch.temperature.array).astype(jnp.float32), ReductionType.MEAN),
+        "top_k": Metric.from_value(jnp.mean(batch.top_k.array).astype(jnp.float32), ReductionType.MEAN),
         **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
         **metadata,
     }

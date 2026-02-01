@@ -15,7 +15,7 @@ from typing import Any, Callable, ContextManager, Mapping, Optional, ParamSpec, 
 import equinox as eqx
 import jax
 from equinox import is_array, module_update_wrapper
-from jax._src.pjit import reshard
+from jax.sharding import reshard
 from jax.experimental.shard_map import shard_map as jax_shard_map
 from jax.lax import with_sharding_constraint
 from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, get_abstract_mesh, AxisType
@@ -28,7 +28,7 @@ from haliax._src.compile_utils import compile_cache
 
 from .axis import Axis, AxisSelection, AxisSelector, axis_spec_to_shape_dict
 from .core import NamedArray
-from .jax_utils import Static, is_in_jit, is_jax_array_like, is_on_mac_metal
+from .jax_utils import Static, is_jax_array_like, is_on_mac_metal, is_in_jit
 from .tree_util import hashable_combine, hashable_partition
 from .util import StringHolderEnum
 
@@ -250,7 +250,7 @@ def shard(x: T, mapping: ResourceMapping | None = None, mesh: Mesh | None = None
 
         pspec = pspec_for(named, mapping)
         assert isinstance(pspec, PartitionSpec)
-        if is_in_jit():
+        if _is_jit_tracer(named.array):
             # ok so jax is mildly annoying right now. we have to use reshard if *all* mesh axes are explicit.
             # otherwise, we need to use with_sharding_constraint.
             if all_mesh_axes_explicit(resolved_mesh, pspec):
@@ -290,7 +290,7 @@ def pspec_for(
 
     def partition_spec(node: typing.Any):
         if isinstance(node, NamedArray):
-            return pspec_for_axis(node.axes, resource_mapping)
+            return pspec_for_axis(node.axis_names, resource_mapping)
         elif isinstance(node, eqx.Module):
             # handle eqx.Module explicitly so that we can look at axis_names metadata
             updates: dict[str, typing.Any] = {}
@@ -720,6 +720,53 @@ def pspec_for_axis(axis: AxisSelection, mapping: ResourceMapping | None = None) 
     """Get the PartitionSpec for a single axis"""
     axis = axis_spec_to_shape_dict(axis)
     return PartitionSpec(*(physical_axis_name(a, mapping) for a in axis))
+
+
+def get_pspec_for_manual_mesh(
+    axis: AxisSelection,
+    mapping: ResourceMapping | None = None,
+    *,
+    mesh: MeshLike | None = None,
+) -> PartitionSpec | None:
+    """Return a `PartitionSpec` for `axis` iff the active mesh uses explicit axis types.
+
+    Some JAX APIs (e.g. gather via `.at[...].get(out_sharding=...)`) require an output sharding to be
+    unambiguous. However, passing a `PartitionSpec` while under an `AbstractMesh` or a mesh with
+    `AxisType.Auto`/`AxisType.Manual` can raise errors because JAX cannot resolve a concrete device assignment.
+
+    This helper returns:
+      - `pspec_for_axis(axis, mapping)` when all referenced mesh axes are `AxisType.Explicit`, else
+      - `None` (caller should omit `out_sharding`).
+    """
+
+    resolved_mesh = _resolve_mesh(mesh)
+    if resolved_mesh is None or resolved_mesh.empty:
+        return None
+
+    pspec = pspec_for_axis(axis, mapping)
+
+    axis_type_by_name = dict(zip(resolved_mesh.axis_names, resolved_mesh.axis_types, strict=False))
+
+    def _iter_mesh_axes(spec_entry):
+        if spec_entry is None or spec_entry is PartitionSpec.UNCONSTRAINED:
+            return
+        if isinstance(spec_entry, str):
+            yield spec_entry
+        else:
+            for item in spec_entry:
+                if item is None or item is PartitionSpec.UNCONSTRAINED:
+                    continue
+                yield item
+
+    referenced = {name for entry in pspec for name in _iter_mesh_axes(entry)}
+    if not referenced:
+        return pspec
+
+    for name in referenced:
+        if axis_type_by_name.get(name) != AxisType.Explicit:
+            return None
+
+    return pspec
 
 
 def round_axis_for_partitioning(axis: Axis, mapping: ResourceMapping | None = None) -> Axis:

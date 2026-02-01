@@ -8,43 +8,46 @@ import functools
 import json
 import logging
 import os
+import random
 import shutil
 import tempfile
+import time
 import urllib.parse
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Generic, Optional, Tuple, Type, TypeVar, Union, cast, Callable
+from typing import Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
 import fsspec
+import haliax
 import huggingface_hub
 import humanfriendly
 import jax
 import jax.numpy as jnp
-from jax._src.mesh import get_concrete_mesh
 import mergedeep
 import numpy as np
+import requests
 import transformers.utils.hub
 from fsspec import AbstractFileSystem
-from fsspec.asyn import get_loop, sync as fsspec_sync
+from fsspec.asyn import get_loop
+from fsspec.asyn import sync as fsspec_sync
+from haliax import Axis
 from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like
-from haliax.state_dict import StateDict
-from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download
+from haliax.partitioning import ResourceMapping
+from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
+from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download, ModelInfo
+from huggingface_hub.errors import HfHubHTTPError
 from huggingface_hub.file_download import repo_folder_name
-from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError, RepositoryNotFoundError
+from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
+from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from tqdm_loggable.auto import tqdm
-
-import haliax
-from haliax import Axis
-from haliax.partitioning import ResourceMapping, round_axis_for_partitioning
-from haliax.state_dict import from_torch_compatible_state_dict, save_state_dict
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
@@ -52,35 +55,61 @@ from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.hf_utils import HfTokenizer
-from levanter.utils.jax_utils import best_effort_sharding, use_cpu_device, sync_global_devices
+from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import dataclass_with_default_init
 
-
 silence_transformer_nag()
-from transformers import (  # noqa: E402
+from transformers import (  # noqa: E402  # noqa: E402
     AutoConfig,
     AutoModel,
     AutoModelForCausalLM,
     AutoProcessor,
     AutoTokenizer,
     FeatureExtractionMixin,
-)
-from transformers import PretrainedConfig as HfConfig  # noqa: E402
-from transformers import (  # noqa: E402
     PreTrainedTokenizer,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
     ProcessorMixin,
 )
+from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers.dynamic_module_utils import get_class_from_dynamic_module  # noqa: E402
 from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
-
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_to_hf_url(model_id: str, revision: Optional[str] = None) -> str:
+    """Convert a HuggingFace model ID to an hf:// URL for fsspec streaming.
+
+    Args:
+        model_id: HuggingFace model ID like "meta-llama/Llama-2-7b"
+        revision: Optional git revision (branch, tag, or commit hash)
+
+    Returns:
+        An hf:// URL like "hf://meta-llama/Llama-2-7b" or "hf://meta-llama/Llama-2-7b@main"
+    """
+    if revision:
+        return f"hf://{model_id}@{revision}"
+    return f"hf://{model_id}"
+
+
+def _is_hf_model_id(path: str) -> bool:
+    """Check if a path looks like a HuggingFace model ID (not a URL or local path)."""
+    # If it contains "://", it's already a URL
+    if "://" in path:
+        return False
+    # If it starts with "/" or "./" or "../", it's a local path
+    if path.startswith("/") or path.startswith("./") or path.startswith("../"):
+        return False
+    # If it exists as a local directory, it's a local path
+    if os.path.isdir(path):
+        return False
+    # Otherwise, assume it's an HF model ID
+    return True
 
 
 PYTORCH_MODEL = "pytorch_model.bin"
@@ -284,147 +313,6 @@ def _to_state_dict_with_dtype(
     state_dict = jax.lax.with_sharding_constraint(state_dict, PartitionSpec())
 
     return state_dict
-
-
-def _detect_vocab_size_from_state_dict(
-    state_dict: dict[str, Array | ShapeDtypeStruct], ignore_prefix: Optional[str] = None
-) -> Optional[int]:
-    """
-    Detect the actual vocab size from state dict weights by looking for common embedding/lm_head weight keys.
-    Returns None if no vocab-sized weights are found.
-    """
-    # Common keys that have vocab size as first dimension (without prefix)
-    base_vocab_size_keys = [
-        "lm_head.weight",
-        "model.embed_tokens.weight",
-        "embed_tokens.weight",
-        "transformer.wte.weight",
-        "wte.weight",
-        "embeddings.token_embeddings.weight",
-    ]
-
-    # Build list of keys to check, including with prefix if provided
-    vocab_size_keys = list(base_vocab_size_keys)
-    if ignore_prefix:
-        vocab_size_keys.extend([f"{ignore_prefix}.{k}" for k in base_vocab_size_keys])
-
-    for key in vocab_size_keys:
-        if key in state_dict:
-            weight = state_dict[key]
-            # Handle both JAX arrays and ShapeDtypeStruct
-            if hasattr(weight, "shape"):
-                shape = weight.shape
-            elif hasattr(weight, "get_shape"):
-                shape = weight.get_shape()
-            else:
-                continue
-
-            if len(shape) >= 2:
-                # First dimension is vocab size for embedding/lm_head weights
-                vocab_size = shape[0]
-                logger.debug(f"Detected vocab size {vocab_size} from state dict key '{key}' with shape {shape}")
-                return int(vocab_size)
-
-    # If no standard keys found, try to find any 2D weight with vocab-like first dimension
-    # (fallback for unusual model architectures)
-    # Check keys that might have the prefix stripped or not
-    for key, weight in state_dict.items():
-        # Skip if key starts with ignore_prefix (we already checked those)
-        if ignore_prefix and key.startswith(f"{ignore_prefix}."):
-            key_without_prefix = key[len(ignore_prefix) + 1 :]
-        else:
-            key_without_prefix = key
-
-        if "embed" in key_without_prefix.lower() or "lm_head" in key_without_prefix.lower() or "vocab" in key_without_prefix.lower():
-            if hasattr(weight, "shape"):
-                shape = weight.shape
-            elif hasattr(weight, "get_shape"):
-                shape = weight.get_shape()
-            else:
-                continue
-
-            if len(shape) == 2:
-                vocab_size = shape[0]
-                logger.debug(f"Detected vocab size {vocab_size} from state dict key '{key}' with shape {shape}")
-                return int(vocab_size)
-
-    logger.warning("Could not detect vocab size from state dict weights")
-    return None
-
-
-def _pad_vocab_weights_in_state_dict(
-    state_dict: dict[str, Array | ShapeDtypeStruct],
-    actual_vocab_size: int,
-    target_vocab_size: int,
-    ignore_prefix: Optional[str] = None,
-) -> dict[str, Array | ShapeDtypeStruct]:
-    """
-    Pad vocab-sized weights in the state dict from actual_vocab_size to target_vocab_size.
-    This is needed when we need to round the vocab size for partitioning but the checkpoint
-    has the unrounded size.
-    """
-    if actual_vocab_size >= target_vocab_size:
-        return state_dict
-
-    # Common keys that have vocab size as first dimension (without prefix)
-    base_vocab_size_keys = [
-        "lm_head.weight",
-        "model.embed_tokens.weight",
-        "embed_tokens.weight",
-        "transformer.wte.weight",
-        "wte.weight",
-        "embeddings.token_embeddings.weight",
-    ]
-
-    # Build list of keys to check, including with prefix if provided
-    vocab_size_keys = list(base_vocab_size_keys)
-    if ignore_prefix:
-        vocab_size_keys.extend([f"{ignore_prefix}.{k}" for k in base_vocab_size_keys])
-
-    padded_state_dict = state_dict.copy()
-    padding_size = target_vocab_size - actual_vocab_size
-
-    for key in vocab_size_keys:
-        if key in padded_state_dict:
-            weight = padded_state_dict[key]
-            # Handle both JAX arrays, numpy arrays, and ShapeDtypeStruct
-            if hasattr(weight, "shape"):
-                shape = weight.shape
-                if len(shape) >= 2 and shape[0] == actual_vocab_size:
-                    # This is a vocab-sized weight that needs padding
-                    if isinstance(weight, (jnp.ndarray, np.ndarray)):
-                        # Pad with zeros (these tokens won't be used)
-                        pad_shape = (padding_size,) + shape[1:]
-                        if isinstance(weight, jnp.ndarray):
-                            padding = jnp.zeros(pad_shape, dtype=weight.dtype)
-                            padded_weight = jnp.concatenate([weight, padding], axis=0)
-                        else:  # numpy array
-                            padding = np.zeros(pad_shape, dtype=weight.dtype)
-                            padded_weight = np.concatenate([weight, padding], axis=0)
-                        padded_state_dict[key] = padded_weight
-                        logger.info(
-                            f"Padded vocab weight '{key}' from shape {shape} to {(target_vocab_size,) + shape[1:]}"
-                        )
-                    elif isinstance(weight, ShapeDtypeStruct):
-                        # For ShapeDtypeStruct, we need to create a new one with the padded shape
-                        new_shape = (target_vocab_size,) + shape[1:]
-                        padded_state_dict[key] = ShapeDtypeStruct(new_shape, weight.dtype)
-                        logger.info(
-                            f"Updated ShapeDtypeStruct '{key}' from shape {shape} to {new_shape}"
-                        )
-            elif hasattr(weight, "get_shape"):
-                shape = weight.get_shape()
-                if len(shape) >= 2 and shape[0] == actual_vocab_size:
-                    # For ShapeDtypeStruct-like objects
-                    new_shape = (target_vocab_size,) + shape[1:]
-                    # Try to create a new ShapeDtypeStruct with the padded shape
-                    if hasattr(weight, "dtype"):
-                        padded_state_dict[key] = ShapeDtypeStruct(new_shape, weight.dtype)
-                        logger.info(
-                            f"Updated ShapeDtypeStruct-like '{key}' from shape {shape} to {new_shape}"
-                        )
-
-    return padded_state_dict
 
 
 @dataclass_with_default_init(frozen=True)
@@ -658,7 +546,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
         return ref.model_name_or_path, ref.revision
 
     def load_state_dict(self, ref: Optional[Union[str, RepoRef]] = None, dtype: Optional[jnp.dtype] = None) -> dict:
-        """Load a state dict from either HF Hub or a GCS path"""
+        """Load a state dict from either HF Hub or a GCS path.
+
+        HuggingFace model IDs are converted to hf:// URLs and streamed directly
+        without caching to local disk.
+        """
         if ref is None:
             ref = self.reference_checkpoint
         if ref is None:
@@ -670,6 +562,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
             if rev is not None:
                 raise ValueError("Revisions not supported for explicit URLs")
             return self._load_from_remote(id, dtype)
+
+        # Convert HF model IDs to hf:// URLs and stream directly
+        if _is_hf_model_id(id):
+            hf_url = _convert_to_hf_url(id, rev)
+            logger.info(f"Loading from HuggingFace Hub: {hf_url}")
+            return self._load_from_remote(hf_url, dtype)
 
         for index_file in [SAFE_TENSORS_INDEX_NAME, PYTORCH_WEIGHTS_INDEX_NAME]:
             try:
@@ -820,14 +718,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # Vocab: first we have to resize the vocab as loaded from the checkpoint
         tokenizer_Vocab = self.Vocab
         Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
-        # Round Vocab axis for partitioning if axis_mapping is provided
-        if axis_mapping is not None:
-            original_vocab_size = Vocab.size
-            Vocab = round_axis_for_partitioning(Vocab, axis_mapping)
-            if Vocab.size != original_vocab_size:
-                logger.info(
-                    f"Rounding vocab size from {original_vocab_size} to {Vocab.size} for partitioning"
-                )
 
         # TODO: in an ideal world, we would only load the part of the array we needed, but
         # AFAICT neither torch state dicts nor safetensors support this.
@@ -839,28 +729,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 if k.startswith(f"{self.ignore_prefix}."):
                     ignore_prefix = self.ignore_prefix
                     break
-
-        # Detect actual vocab size from state dict weights (may differ from config)
-        actual_vocab_size = _detect_vocab_size_from_state_dict(state_dict, ignore_prefix=ignore_prefix)
-        if actual_vocab_size is not None and actual_vocab_size != Vocab.size:
-            logger.info(
-                f"Detected vocab size {actual_vocab_size} from state dict weights, "
-                f"which differs from config vocab size {Vocab.size}. Using actual vocab size."
-            )
-            Vocab = tokenizer_Vocab.resize(actual_vocab_size)
-            # Round for partitioning if needed (required for sharding to work)
-            if axis_mapping is not None:
-                original_vocab_size = Vocab.size
-                Vocab = round_axis_for_partitioning(Vocab, axis_mapping)
-                if Vocab.size != original_vocab_size:
-                    logger.info(
-                        f"Rounding vocab size from {original_vocab_size} to {Vocab.size} for partitioning. "
-                        f"Padding weights in state dict to match."
-                    )
-                    # Pad the vocab weights in the state dict to match the rounded size
-                    state_dict = _pad_vocab_weights_in_state_dict(
-                        state_dict, actual_vocab_size, Vocab.size, ignore_prefix=ignore_prefix
-                    )
 
         def load_from_state_dict(template, state_dict):
             lev_model = from_torch_compatible_state_dict(template, state_dict, prefix=ignore_prefix)
@@ -874,21 +742,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             if Vocab.size != tokenizer_Vocab.size:
                 if resize_vocab_to_match_tokenizer:
-                    # Round tokenizer vocab size for partitioning if axis_mapping is provided
-                    target_vocab_size = tokenizer_Vocab.size
-                    if axis_mapping is not None:
-                        rounded_tokenizer_Vocab = round_axis_for_partitioning(
-                            Axis("vocab", target_vocab_size), axis_mapping
-                        )
-                        target_vocab_size = rounded_tokenizer_Vocab.size
-                        if target_vocab_size != tokenizer_Vocab.size:
-                            logger.info(
-                                f"Rounding tokenizer vocab size from {tokenizer_Vocab.size} to {target_vocab_size} for partitioning"
-                            )
                     logger.info(
-                        f"Resizing model from {Vocab.size} to {target_vocab_size} to match tokenizer vocab size"
+                        f"Resizing model from {Vocab.size} to {tokenizer_Vocab.size} to match tokenizer vocab size"
                     )
-                    lev_model = lev_model.resize_vocab(target_vocab_size)
+                    lev_model = lev_model.resize_vocab(tokenizer_Vocab.size)
                 else:
                     logger.warning(
                         f"Model vocab size ({Vocab.size}) does not match tokenizer vocab size ({tokenizer_Vocab.size})"
@@ -920,10 +777,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
         dict_config = config.to_dict()
 
         try:
-            for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
-                attr = getattr(self.default_hf_config, k, None)
-                if attr is not None:
-                    dict_config[k] = attr
+            base_config = self.default_hf_config
+        except ValueError:
+            # Training-from-scratch runs may intentionally omit a reference checkpoint. In that case, we can't pull
+            # metadata like `architectures` from an upstream config; the config produced by `to_hf_config()` is still
+            # sufficient for most built-in architectures.
+            base_config = None
+            logger.warning("No reference checkpoint set; skipping base HF config metadata copy.")
         except Exception as e:  # noqa: BLE001
             if isinstance(e, GatedRepoError) or isinstance(e.__cause__, GatedRepoError):
                 warnings.warn("Could not copy keys from base config because the repo is gated. Making assumptions.")
@@ -932,8 +792,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     "AutoConfig": self.HfConfigClass.__qualname__,
                 }
                 dict_config["architectures"] = [self.HFAutoModelClass(AutoModelForCausalLM).__name__]
+                base_config = None
             else:
                 raise
+
+        if base_config is not None:
+            for k in KEYS_TO_COPY_FROM_BASE_CONFIG:
+                attr = getattr(base_config, k, None)
+                if attr is not None:
+                    dict_config[k] = attr
 
         if self.tokenizer:
             tokenizer_dependent_config = {}
@@ -1268,19 +1135,67 @@ def save_hf_checkpoint_callback(
     return cb
 
 
+T = TypeVar("T")
+
+
+def _hf_hub_retry(fn: Callable[[], T], *, action: str, max_attempts: int = 8, max_sleep_seconds: float = 60.0) -> T:
+    """Retry HuggingFace Hub operations that fail transiently (e.g. 5xx/429/timeouts).
+
+    Args:
+        fn: Callable to execute.
+        action: Human-readable description of what we're doing (used for logs).
+        max_attempts: Maximum number of attempts.
+        max_sleep_seconds: Maximum sleep between retries.
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            if attempt >= max_attempts or not _is_retryable_hf_exception(exc):
+                raise
+
+            base_sleep_seconds = min(max_sleep_seconds, 2.0**attempt)
+            sleep_seconds = base_sleep_seconds * (0.5 + random.random())  # [0.5, 1.5) jitter
+            logger.warning(
+                "HuggingFace Hub request failed while trying to %s. Retrying in %.1fs (%d/%d). Error: %s",
+                action,
+                sleep_seconds,
+                attempt,
+                max_attempts,
+                exc,
+            )
+            time.sleep(sleep_seconds)
+
+    raise RuntimeError(f"Unreachable: failed to {action} after {max_attempts} attempts.")
+
+
+def _is_retryable_hf_exception(exc: Exception) -> bool:
+    if isinstance(exc, HfHubHTTPError):
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        return status_code in {408, 429} or (status_code is not None and 500 <= status_code < 600)
+
+    return isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+
+
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:
     """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec"""
     with _patch_hf_hub_download():
-        return AutoTokenizer.from_pretrained(
-            model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+        return _hf_hub_retry(
+            lambda: AutoTokenizer.from_pretrained(
+                model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+            ),
+            action=f"load tokenizer {model_name_or_path!r}",
         )
 
 
 def load_processor(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> ProcessorMixin:
     """Like AutoProcessor.from_pretrained, but works with gs:// paths or anything on fsspec"""
     with _patch_hf_hub_download():
-        return AutoProcessor.from_pretrained(
-            model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+        return _hf_hub_retry(
+            lambda: AutoProcessor.from_pretrained(
+                model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
+            ),
+            action=f"load processor {model_name_or_path!r}",
         )
 
 
@@ -1453,16 +1368,6 @@ def _shard_best_effort(array_or_slice, dtype) -> jax.Array:
     return jax.make_array_from_callback(tuple(shape), sharding, get_slice)
 
 
-def _is_hf_hub_model(ref: RepoRef):
-    api = HfApi()
-
-    try:
-        api.model_info(repo_id=ref.model_name_or_path)
-        return True
-    except RepositoryNotFoundError:
-        return False
-
-
 @contextlib.contextmanager
 def _patch_hf_hub_download():
     """
@@ -1520,9 +1425,21 @@ def _patch_hf_hub_download():
 
         huggingface_hub.utils._validators.validate_repo_id = custom_validate_repo_id
 
+        # transformers calls  model_info in _patch_mistral_regex to check if model is a base Mistral model
+        original_model_info = huggingface_hub.hf_api.model_info
+
+        def custom_model_info(repo_id, *args, **kwargs) -> ModelInfo:
+            if _is_url_like(repo_id):
+                # `tags=None` makes is_base_mistral return False, skipping the problematic code path
+                return ModelInfo(id="monkeypatched", tags=None)
+            return original_model_info(repo_id, *args, **kwargs)
+
+        huggingface_hub.hf_api.model_info = custom_model_info
+
         try:
             yield custom_hf_hub_download
         finally:
             # Restore the original implementation
             transformers.utils.hub.hf_hub_download = original_hf_hub_download
             huggingface_hub.utils._validators.validate_repo_id = original_validate_repo_id
+            huggingface_hub.hf_api.model_info = original_model_info

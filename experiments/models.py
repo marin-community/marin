@@ -17,7 +17,6 @@
 Usage:
 1. If you have a model you want to download from huggingface, add the repo name and config in MODEL_NAME_TO_CONFIG.
 2. Run download_model_step(MODEL_NAME_TO_CONFIG[model_name]) to download the model.
-3. Use get_model_local_path(model_name) to get the local path of the model.
 
 Example:
 ```
@@ -25,8 +24,6 @@ model_name = "meta-llama/Llama-3.1-8B-Instruct"
 model_config = MODEL_NAME_TO_CONFIG[model_name]
 download_step = download_model_step(model_config)
 executor_main([download_step])
-
-local_path = get_model_local_path(model_name)
 ```
 """
 
@@ -44,10 +41,9 @@ class ModelConfig:
     hf_revision: str
 
 
-# We utilize GCSFuse because our disk space is limited on TPUs.
-# This means that for certain large models (e.g. Llama 70B), we will not be able
-# to fit the models on local disk. We use GCSFuse to mount the GCS bucket to the local filesystem
-# to be able to download and use these large models.
+MODEL_OUTPUT_SUBDIR = "models"
+
+# Used by SDG experiments to locate models via GCSFuse mount.
 LOCAL_PREFIX = "/opt"
 GCS_FUSE_MOUNT_PATH = "gcsfuse_mount/models"
 
@@ -75,6 +71,7 @@ def download_model_step(model_config: ModelConfig) -> ExecutorStep:
 
 
 def get_model_local_path(step: ExecutorStep) -> str:
+    """Get the local path of a model downloaded via GCSFuse mount."""
     model_repo_name = step.name[len(GCS_FUSE_MOUNT_PATH) + 1 :]
     return os.path.join(LOCAL_PREFIX, GCS_FUSE_MOUNT_PATH, model_repo_name)
 
@@ -87,6 +84,13 @@ smollm2_1_7b_instruct = download_model_step(
 )
 
 # Note(Will): I don't think we actually support Qwen models in Levanter?
+qwen2_5_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-7B",
+        hf_revision="d149729398750b98c0af14eb82c78cfe92750796",
+    )
+)
+
 qwen2_5_7b_instruct = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen2.5-7B-Instruct",
@@ -161,6 +165,13 @@ olmo_2_base_32b = download_model_step(
     ModelConfig(
         hf_repo_id="allenai/OLMo-2-0325-32B",
         hf_revision="stage2-ingredient2-step9000-tokens76B",
+    )
+)
+
+olmo_3_1025_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/Olmo-3-1025-7B",
+        hf_revision="18b40a1e895f829c68a132befa20109c41488e62",
     )
 )
 
@@ -260,5 +271,12 @@ qwen3_32b = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-32B",
         hf_revision="9216db5781bf21249d130ec9da846c4624c16137",
+    )
+)
+
+apertus_8b = download_model_step(
+    ModelConfig(
+        hf_repo_id="swiss-ai/Apertus-8B-2509",
+        hf_revision="9325d4a",
     )
 )

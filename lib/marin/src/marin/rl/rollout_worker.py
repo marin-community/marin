@@ -45,6 +45,7 @@ from transformers import PreTrainedTokenizer
 from typing import Literal
 
 from levanter.utils.mesh import MeshConfig
+from fray.job import get_default_job_ctx
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
@@ -150,11 +151,18 @@ class RolloutWorkerConfig:
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
+    vocab_size: int | None = None
+    """Vocab size for model construction. Should match the checkpoint's vocab dimension.
+    If None, falls back to len(tokenizer)."""
+
     system_prompt: str | None = None
     """System prompt to use for inference."""
 
     inflight_weight_updates: bool = False
     """Whether to use inflight weight updates."""
+
+    worker_index: int = 0
+    """Index of this worker among all rollout workers."""
 
 
 def find_open_port() -> int:
@@ -193,6 +201,8 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
                     lesson_id=lesson_id,
                     episode_reward=rollout.episode_reward,
                     env_example_id=rollout.env_example_id,
+                    temperature=rollout.temperature,
+                    top_k=rollout.top_k,
                 )
             )
 
@@ -346,6 +356,7 @@ class RolloutWorker:
 
         # Get sampling params from lesson config
         temperature = lesson_config.sampling_params.temperature
+        top_k = lesson_config.sampling_params.top_k
         stop_tokens = lesson_config.sampling_params.stop_tokens
         max_tokens = lesson_config.sampling_params.max_output_tokens
 
@@ -357,6 +368,7 @@ class RolloutWorker:
             prng_key=rng,
             mode=mode,
             max_tokens=max_tokens,
+            top_k=top_k,
             stop=stop_tokens,
             system_prompt=self.config.system_prompt,
         )
@@ -404,7 +416,7 @@ class RolloutWorker:
 
         if self.config.inference_type == "levanter":
             key = jrandom.PRNGKey(self.config.seed)
-            vocab_size = self._tokenizer.vocab_size
+            vocab_size = self.config.vocab_size if self.config.vocab_size is not None else len(self._tokenizer)
             Vocab = hax.Axis("vocab", vocab_size)
 
             initial_model = load_model_from_checkpoint(
@@ -422,7 +434,7 @@ class RolloutWorker:
             logger.info("Initializing policy model from initial checkpoint")
             self._policy_model = initial_model
         elif self.config.inference_type == "vllm":
-            # TODO(chris): Remove this completely
+
             self._policy_model = None
 
     def stop(self):
@@ -546,7 +558,13 @@ class RolloutWorker:
         logger.info(f"Logged {len(rows)} eval samples for lesson {lesson_id} at step {step}")
 
     def _build_eval_metrics(
-        self, prefix: str, lesson_id: str, batch: RolloutBatch, n_generations: int
+        self,
+        prefix: str,
+        lesson_id: str,
+        batch: RolloutBatch,
+        n_generations: int,
+        temperature: float,
+        top_k: int | None,
     ) -> dict[str, Any]:
         metrics = {}
         stats = _compute_batch_stats(batch, lesson_id)
@@ -559,9 +577,11 @@ class RolloutWorker:
         metrics[f"{prefix}/{lesson_id}/pass_at_one"] = stats.pass_at_one
         metrics[f"{prefix}/{lesson_id}/pass_at_{n_generations}"] = stats.pass_at_k
         metrics[f"{prefix}/{lesson_id}/avg_at_{n_generations}"] = stats.avg_at_k
+        metrics[f"{prefix}/{lesson_id}/temperature"] = temperature
+        metrics[f"{prefix}/{lesson_id}/top_k"] = top_k if top_k is not None else -1
         return metrics
 
-    def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> dict:
+    def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> RolloutBatchStats:
         """Evaluate a single lesson and log metrics."""
         N_EVAL_GENERATIONS = 1
 
@@ -574,16 +594,23 @@ class RolloutWorker:
         )
         stats = _compute_batch_stats(batch, lesson_id)
         self._log_prompt_example(lesson_id, batch, step, eval_type=eval_type)
+        sampling_params = self.config.curriculum_config.lessons[lesson_id].sampling_params
         metrics = self._build_eval_metrics(
-            prefix=f"inference.{eval_type}", lesson_id=lesson_id, batch=batch, n_generations=N_EVAL_GENERATIONS
+            prefix=f"inference.{eval_type}",
+            lesson_id=lesson_id,
+            batch=batch,
+            n_generations=N_EVAL_GENERATIONS,
+            temperature=sampling_params.temperature,
+            top_k=sampling_params.top_k,
         )
-        self.tracker.log(metrics, step=step)
-        logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, step, metrics)
+        self.tracker.log(metrics, step=self._current_weight_step)
+        logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, self._current_weight_step, metrics)
         # only update curriculum for full evals
         if eval_type == "eval":
-            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
-                stats.rollout_stats, mode="eval", current_step=step
+            future = self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+                stats.rollout_stats, mode="eval", current_step=self._current_weight_step
             )
+            get_default_job_ctx().get(future)
         return stats
 
     def _evaluate_curriculum(self, rng, step: int) -> dict:
@@ -609,13 +636,26 @@ class RolloutWorker:
 
         # For inflight weight updates, wait for first weights before generating rollouts
         if self.config.inflight_weight_updates:
-            logger.info("Waiting for first weight transfer before starting inference...")
-            while not self._first_weights_received.wait(timeout=10.0):
+            max_wait_time = self.config.weight_transfer.max_weight_transfer_wait_time
+            logger.info(
+                "Waiting for first weight transfer before starting inference (timeout %.1fs)...",
+                max_wait_time,
+            )
+            start_time = time.time()
+            while True:
+                if self._first_weights_received.wait(timeout=10.0):
+                    break
+
                 if not self._running:
                     logger.info("Shutdown requested while waiting for first weights")
                     self._shutdown_complete.set()
                     return
-                logger.info("Still waiting for first weight transfer...")
+
+                elapsed = time.time() - start_time
+                if max_wait_time - elapsed <= 0:
+                    raise RuntimeError("Timed out waiting for initial weight transfer.")
+
+                logger.info("Still waiting for first weight transfer (elapsed: %.1fs)", elapsed)
             logger.info("First weights received, starting inference loop")
 
         step = 0
@@ -648,7 +688,8 @@ class RolloutWorker:
                 seed = py_rng.randint(0, 2**31 - 1)
 
             try:
-                lesson_id = self._curriculum_actor.sample_lesson.call(seed)
+                future = self._curriculum_actor.sample_lesson.remote(seed)
+                lesson_id = get_default_job_ctx().get(future)
             except Exception as e:
                 logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
                 time.sleep(10.0)
@@ -665,7 +706,7 @@ class RolloutWorker:
                     self.config.curriculum_config.micro_eval_n_examples,
                     eval_type="micro_eval",
                     rng=micro_eval_rng,
-                    step=step,
+                    step=self._current_weight_step,
                 )
 
             # Full eval: comprehensive check on all lessons
@@ -675,7 +716,7 @@ class RolloutWorker:
                     rng, eval_rng = jrandom.split(rng)
                 else:
                     eval_rng = py_rng.randint(0, 2**31 - 1)
-                self._evaluate_curriculum(eval_rng, step)
+                self._evaluate_curriculum(eval_rng, self._current_weight_step)
 
             logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
 
@@ -718,14 +759,17 @@ class RolloutWorker:
             self._rollout_writer.write_batch(rollout_batch)
 
             stats = _compute_batch_stats(rollout_batch, lesson_id)
-            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
-                stats.rollout_stats, mode="training", current_step=step
+            future = self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+                stats.rollout_stats, mode="training", current_step=self._current_weight_step
             )
+            get_default_job_ctx().get(future)
             eval_metrics = self._build_eval_metrics(
                 prefix="rollout",
                 lesson_id=lesson_id,
                 batch=rollout_batch,
                 n_generations=lesson_config.sampling_params.n_generations_per_prompt,
+                temperature=lesson_config.sampling_params.temperature,
+                top_k=lesson_config.sampling_params.top_k,
             )
 
             step += 1
@@ -740,8 +784,8 @@ class RolloutWorker:
                 log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                 # Add throughput metrics (already prefixed with "inference.throughput/")
                 log_metrics.update(throughput_metrics)
-                logger.info(f"Logging metrics at step {step}... {log_metrics}")
-                self.tracker.log(log_metrics, step=step)
+                logger.info(f"Logging metrics at step {step} (weight_step={self._current_weight_step})...")
+                self.tracker.log(log_metrics, step=self._current_weight_step)
 
         logger.info(f"Inference worker completed after generating {step} rollouts")
         if use_jax_rng:

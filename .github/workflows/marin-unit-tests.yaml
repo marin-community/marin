@@ -48,6 +48,8 @@ jobs:
       - name: Test with pytest
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # Avoid Ray propagating `uv run` to workers (can trigger slow per-worker venv setup in CI).
+          RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
         run: |
           # Ensure we select the CPU torch wheels (and JAX CPU) for unit tests on GitHub runners.
           PYTHONPATH=tests:. uv run --package marin --extra cpu --frozen pytest -n 2 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/

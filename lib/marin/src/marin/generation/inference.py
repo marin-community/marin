@@ -115,7 +115,7 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
     # Clear JAX_PLATFORMS so TPU devices are detected correctly
-    runtime_env = {"env_vars": {"JAX_PLATFORMS": ""}}
+    runtime_env = {"env_vars": {"JAX_PLATFORMS": "tpu"}}
 
     # Request TPU resources directly without placement groups.
     # For TPU nodes (e.g., v5p-8), all chips are co-located on the same node,
@@ -178,7 +178,7 @@ def _get_column_types_from_schema(schema) -> dict[str, pa.DataType]:
 
 @ray.remote
 def _find_finished_ids_for_file(checkpoint_filepath: str, id_column: str | dict[str, str]):
-    from marin.processing.classification.dataset_utils import read_dataset
+    import pandas as pd
 
     if isinstance(id_column, dict):
         dataset_column = next(iter(id_column.keys()))
@@ -188,7 +188,7 @@ def _find_finished_ids_for_file(checkpoint_filepath: str, id_column: str | dict[
         metadata_key_column = None
 
     # TODO(chris): replace columns with user input
-    df = read_dataset(checkpoint_filepath, columns=[dataset_column])
+    df = pd.read_parquet(checkpoint_filepath, columns=[dataset_column])
     finished_ids = set()
 
     if metadata_key_column is None:

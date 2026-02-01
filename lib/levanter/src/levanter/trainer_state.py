@@ -8,19 +8,19 @@ from typing import TYPE_CHECKING, Callable, Generic, Optional, TypeVar
 import equinox as eqx
 import jax
 import jmp
+
+import haliax
+from haliax.quantization import QuantizationConfig, apply_updates, partition_for_grad_overwrite, quantize_linear_layers
+from haliax.types import IntScalar, Scalar
 from jax import numpy as jnp
 from jax._src.random import PRNGKey
 from jaxtyping import PRNGKeyArray, PyTree
 from optax import GradientTransformation, OptState
 
-from haliax.quantization import QuantizationConfig, apply_updates, partition_for_grad_overwrite, quantize_linear_layers
-from haliax.types import IntScalar, Scalar
-
 from levanter.optim.model_averaging import ModelAveraging, ModelAveragingConfig
 from levanter.utils.jax_utils import is_inexact_arrayish
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import FilterTree
-
 
 M = TypeVar("M", bound=PyTree)
 S = TypeVar("S")
@@ -186,10 +186,6 @@ def init_optimizer_for_trainables(optimizer, trainable_model):
     return opt_state
 
 
-def _params_only(t):
-    return eqx.filter(t, is_inexact_arrayish)
-
-
 def _partition_trainable_params(model, filter):
     """
     Partitions the model into trainable and non-trainable parameters. This is used internally
@@ -201,7 +197,7 @@ def _partition_trainable_params(model, filter):
     """
 
     filter = make_floating_point_trainable_filter(filter)
-    return eqx.partition(model, filter)
+    return eqx.partition(model, filter, is_leaf=lambda x: isinstance(x, haliax.NamedArray))
 
 
 def trainables_only(model, filter):
@@ -222,8 +218,7 @@ def cast_params_by_trainability(model, mp, is_trainable):
     trainable, non_trainable = _partition_trainable_params(model, is_trainable)
     trainable = mp.cast_to_param(trainable)
     non_trainable = mp.cast_to_compute(non_trainable)
-    model = eqx.combine(trainable, non_trainable)
-    return model
+    return eqx.combine(trainable, non_trainable, is_leaf=lambda x: isinstance(x, haliax.NamedArray))
 
 
 def saveable_training_mask(trainer_state: S, is_trainable_param: FilterTree = True) -> FilterTree:
@@ -255,7 +250,7 @@ def take_train_step(
     Takes a single training step for the model using the provided optimizer and gradients. This function takes into account:
     - The optimizer to update the model parameters based on the gradients.
     - The model parameters that are trainable based on the provided filter.
-    - The optional objective function for Sophia, etc.
+    - The optional objective function for certain optimizers.
     - quantized state updates (Gradient Overwrite) if applicable.
 
     Returns:
@@ -288,4 +283,4 @@ def make_floating_point_trainable_filter(is_trainable: FilterTree) -> FilterTree
         else:
             return lambda y: is_inexact_arrayish(y) and x(y)
 
-    return jax.tree_util.tree_map(is_trainable_and_floating_point, is_trainable)
+    return haliax.tree_util.tree_map(is_trainable_and_floating_point, is_trainable)

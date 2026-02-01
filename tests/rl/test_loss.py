@@ -40,6 +40,7 @@ def create_test_rollout(
         token_rewards=token_rewards,
         episode_reward=episode_reward,
         temperature=1.0,
+        top_k=None,
         is_truncated=False,
     )
 

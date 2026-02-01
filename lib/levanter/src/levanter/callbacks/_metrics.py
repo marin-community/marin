@@ -3,7 +3,6 @@
 
 import copy
 import logging as pylogging
-from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Optional
 
@@ -14,58 +13,11 @@ from tqdm_loggable.tqdm_logging import tqdm_logging
 
 import levanter.tracker
 from levanter.callbacks import StepInfo
-from levanter.data import AsyncDataset
 from levanter.schedule import BatchSchedule
 from levanter.tracker import log_optimizer_hyperparams
 from levanter.utils.jax_utils import jnp_to_python
 
 logger = pylogging.getLogger(__name__)
-
-
-def log_epoch_progress(total_tokens_future, tokens_per_example, batch_size, max_epochs: Optional[int] = None):
-    total_tokens = None
-
-    def log_epoch(step_info: StepInfo):
-        nonlocal total_tokens
-        if total_tokens is None:
-            if not total_tokens_future.done():
-                if step_info.step % 1000 == 0:
-                    logger.info("Dataset not finished. Can't compute epochs.")
-                return  # We don't have the total tokens yet, so we can't calculate epoch
-            total_tokens = total_tokens_future.result()
-
-        # Get the total processed tokens from the metrics logged by log_performance_stats
-        processed_tokens = tokens_per_example * batch_size * step_info.step
-
-        # If we're doing multiple epochs, adjust the denominator
-        total_tokens_for_epochs = total_tokens * max_epochs if max_epochs else total_tokens
-        current_epoch = processed_tokens / total_tokens_for_epochs
-
-        levanter.tracker.log({"train/current_epoch": current_epoch}, step=step_info.step)
-
-    return log_epoch
-
-
-def get_total_dataset_tokens(ds: AsyncDataset, seq_length: int):
-    def log_length():
-        # If ds.async_len() is the only option, run it in an event loop inside the thread
-        import asyncio
-
-        async def compute_length():
-            length = await ds.dataset.async_len()
-            return length
-
-        # Run the async function synchronously in this thread
-        length = asyncio.run(compute_length())
-        total_tokens = length * seq_length
-        levanter.tracker.log_summary({"dataset/total_tokens": total_tokens})
-        return total_tokens
-
-    # Create a ThreadPoolExecutor with a single worker thread
-    executor = ThreadPoolExecutor(max_workers=1)
-    # Submit the log_length function to be executed in a separate thread
-    future = executor.submit(log_length)
-    return future
 
 
 def log_step_info(total_steps: Optional[int]):

@@ -142,6 +142,7 @@ class MathEnv(MarinEnv):
         prng_key,
         mode: str = "train",
         max_tokens: int | None = None,
+        top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
@@ -172,6 +173,7 @@ class MathEnv(MarinEnv):
             temperature=temperature,
             n=n_generations,
             max_tokens=max_tokens,
+            top_k=top_k,
             stop=stop,
             system_prompt=None,  # No system prompt - use few-shot examples instead
         )
@@ -203,6 +205,7 @@ class MathEnv(MarinEnv):
                     reward=reward,
                     correctness_reward=correct_score,
                     temperature=temperature,
+                    top_k=top_k,
                     system_prompt=system_prompt,
                 )
 

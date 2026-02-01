@@ -45,6 +45,7 @@ class BaseInferenceContext:
         temperature: float,
         n: int,
         max_tokens: int | None = None,
+        top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
@@ -102,17 +103,13 @@ class BaseInferenceContext:
         env_example_id: str,
         reward: float,
         temperature: float,
+        top_k: int | None = None,
         system_prompt: str | None = None,
         correctness_reward: float | None = None,
     ) -> Rollout:
         """Construct Rollout from a choice with validation."""
 
         prompt_tokens = self.tokenize_prompt(prompt, choice, system_prompt)
-        # print(f"prompt_tokens: {prompt_tokens}")
-        # print(f"prompt token ids: {choice.prompt_token_ids}")
-
-        # assert choice.prompt_token_ids == prompt_tokens,
-        # f"Prompt token IDs mismatch: {choice.prompt_token_ids} != {prompt_tokens}"
         response_tokens = self.response_tokens_from_choice(choice)
         response_logprobs = self.logprobs_from_choice(choice)
 
@@ -137,5 +134,6 @@ class BaseInferenceContext:
             episode_reward=float(reward),
             correctness_reward=correctness_reward,
             temperature=temperature,
+            top_k=top_k,
             is_truncated=is_truncated,
         )

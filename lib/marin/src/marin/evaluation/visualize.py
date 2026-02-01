@@ -19,8 +19,6 @@ Uses Levanter's viz_lm functionality to visualize log probabilities of a languag
 import dataclasses
 import logging
 import multiprocessing
-import os
-import shutil
 import sys
 from dataclasses import dataclass
 from queue import Empty
@@ -34,14 +32,10 @@ from levanter.main.viz_logprobs import main as viz_lm_main
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
-from marin.evaluation.utils import discover_levanter_checkpoints, download_from_gcs, is_remote_path
 from marin.execution.executor import this_output_path
-from marin.utilities.executor_utils import ckpt_path_to_step_name
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
-HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"
-GCSFUSE_MOUNT_POINT = "/opt/gcsfuse_mount"
 
 
 @dataclass
@@ -121,33 +115,9 @@ def do_viz_lm(config: LevanterVizLmConfig) -> None:
     Args:
         config (VizLmConfig): The configuration for visualizing log probabilities.
     """
-    # remove_tpu_lockfile_on_exit() isn't sufficient now?
-    try:
-        local_path = None
-        if config.checkpoint_is_hf:
-            # Use GCSFuse directly so that we don't have to download the checkpoint to the local filesystem
-            local_path = os.path.join(config.local_model_dir, ckpt_path_to_step_name(config.checkpoint_path))
-            download_from_gcs(
-                gcs_path=config.checkpoint_path,
-                destination_path=local_path,
-            )
-            config.checkpoint_path = local_path
-            print(f"Downloaded model checkpoint to {local_path}: {os.listdir(local_path)}")
-        elif config.checkpoint_path and is_remote_path(config.checkpoint_path):
-            local_path = os.path.join(config.local_model_dir, ckpt_path_to_step_name(config.checkpoint_path))
-            download_from_gcs(
-                gcs_path=config.checkpoint_path,
-                destination_path=local_path,
-            )
-            config.checkpoint_path = discover_levanter_checkpoints(local_path)[-1]
-        execute_in_subprocess(viz_lm_main, (config,), {})
-    finally:
-        if config.checkpoint_is_hf and not os.path.exists(config.checkpoint_path):
-            shutil.rmtree(HUGGINGFACE_CACHE_PATH, ignore_errors=True)
-            print(f"Deleted HuggingFace cache at {HUGGINGFACE_CACHE_PATH}.")
-        if local_path and not local_path.startswith(GCSFUSE_MOUNT_POINT):
-            shutil.rmtree(local_path, ignore_errors=True)
-            print(f"Deleted local checkpoint at {local_path}.")
+    # Levanter can read `gs://` checkpoints directly via fsspec/tensorstore, and HF
+    # checkpoints via fsspec as well. Avoid staging large directories locally.
+    execute_in_subprocess(viz_lm_main, (config,), {})
 
 
 def visualize_lm_log_probs(config: VizLmConfig) -> None:
@@ -179,7 +149,7 @@ def visualize_lm_log_probs(config: VizLmConfig) -> None:
         name="viz-lm-log-probs",
         entrypoint=Entrypoint.from_callable(_run_viz),
         resources=config.resource_config,
-        environment=EnvironmentConfig.create(env_vars={"HF_HOME": HUGGINGFACE_CACHE_PATH}),
+        environment=EnvironmentConfig.create(),
     )
 
     cluster = current_cluster()

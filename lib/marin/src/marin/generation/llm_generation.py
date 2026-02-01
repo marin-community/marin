@@ -71,8 +71,51 @@ class vLLMProvider(BaseLLMProvider):
         self.engine_kwargs = {**vLLMProvider.DEFAULT_ENGINE_KWARGS, **engine_kwargs}
         self.generation_kwargs = {**vLLMProvider.DEFAULT_GENERATION_KWARGS, **generation_kwargs}
 
+        # On multi-host TPU slices (v5p-16, v5p-32, etc.), JAX cannot initialize
+        # properly with a single process, causing AttributeError on device.coords.
+        # Fail fast so Ray Data retries on a single-host node (e.g. v5p-8).
+        self._check_tpu_single_host()
+
         self.llm = LLM(model=self.model_name, **self.engine_kwargs)
         self.sampling_params = SamplingParams(**self.generation_kwargs)
+
+    @staticmethod
+    def _check_tpu_single_host():
+        """Raise if this node is a multi-host TPU slice (incompatible with single-process vLLM)."""
+        try:
+            import urllib.request
+
+            req = urllib.request.Request(
+                "http://metadata.google.internal/computeMetadata/v1/instance/attributes/accelerator-type",
+                headers={"Metadata-Flavor": "Google"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                tpu_type = resp.read().decode().strip()
+
+            # Parse chip count from tpu_type like "v5p-8" -> 8
+            parts = tpu_type.rsplit("-", 1)
+            if len(parts) == 2:
+                try:
+                    slice_chips = int(parts[1])
+                except ValueError:
+                    return
+                # v5p-8 = 4 chips on 1 host (single-host), v5p-16+ = multi-host
+                if slice_chips > 8:
+                    # Use os._exit instead of raising so the actor process dies
+                    # and Ray restarts it (max_restarts=-1) on a potentially
+                    # different node. Raising in __init__ counts against the
+                    # limited init-retry budget and exhausts it quickly.
+                    import os as _os
+
+                    logger.error(
+                        "This node is a multi-host TPU slice (%s) which is "
+                        "incompatible with single-process vLLM inference. "
+                        "Killing actor so Ray restarts on a different node.",
+                        tpu_type,
+                    )
+                    _os._exit(1)
+        except Exception as e:
+            logger.debug("Could not check TPU type from metadata: %s", e)
 
     def generate(self, prompts: list[str]) -> list[str]:
         outputs = self.llm.generate(prompts, self.sampling_params)

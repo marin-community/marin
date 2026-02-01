@@ -41,6 +41,7 @@ from functools import partial
 import haliax as hax
 import haliax.state_dict as hsd
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
@@ -314,12 +315,37 @@ class MarinFlightServer(flight.FlightServerBase):
             return self._latest_weight_id
 
 
-@jax.jit
-def copy_and_flatten(model: PyTree) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
-    """Convert `model` into a state with flattened arrays and shapes."""
+@partial(jax.jit, static_argnames=("convert_to_bfloat16",))
+def copy_and_flatten(
+    model: PyTree, convert_to_bfloat16: bool = True
+) -> tuple[dict[str, jax.Array], dict[str, tuple[int, ...]]]:
+    """Convert `model` into a state with flattened arrays and shapes.
+
+    Optionally converts weights to bfloat16 for efficient transfer to inference workers.
+    This provides several benefits:
+    1. Reduces network transfer size by 50% (float32 -> bfloat16)
+    2. Reduces device-to-host copy bandwidth by 50%
+    3. Eliminates dtype conversion overhead in vLLM
+    4. Reduces memory fragmentation from temporary conversion buffers
+
+    The training model remains in float32 for numerical stability during optimization.
+    """
     state_dict = hsd.to_state_dict(model)
     shape_dict = jax.tree.map(lambda y: y.shape, state_dict)
-    flat_dict = jax.tree.map(lambda y: y.reshape(-1), state_dict)
+
+    if convert_to_bfloat16:
+        # Convert to bfloat16 for inference - happens on GPU before device_get
+        # Only cast floating point arrays to avoid issues with integer/bool arrays
+        def maybe_cast_to_bf16(arr):
+            if jnp.issubdtype(arr.dtype, jnp.floating):
+                return arr.astype(jnp.bfloat16)
+            return arr
+
+        bf16_dict = jax.tree.map(maybe_cast_to_bf16, state_dict)
+        flat_dict = jax.tree.map(lambda y: y.reshape(-1), bf16_dict)
+    else:
+        flat_dict = jax.tree.map(lambda y: y.reshape(-1), state_dict)
+
     return flat_dict, shape_dict
 
 
@@ -382,7 +408,11 @@ class ArrowFlightServer(WeightTransferServer):
         self.metrics = WeightTransferServerMetrics()
         self._ctx = get_default_job_ctx()
         self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
+            ArrowFlightCoordinator,
+            name=self.config.coordinator_name,
+            get_if_exists=True,
+            preemptible=False,
+            num_cpus=0,
         )
         logger.info("Started Arrow Flight weight transfer with config: %s", self.config)
 
@@ -399,7 +429,7 @@ class ArrowFlightServer(WeightTransferServer):
 
             if jax.process_index() == 0:
                 # Fetching the entire state dict to CPU allows JAX to parallelize the individual transfers
-                flat_dict, shape_dict = copy_and_flatten(model)
+                flat_dict, shape_dict = copy_and_flatten(model, self.config.convert_to_bfloat16)
                 state_dict_time = time.time()
                 flat_dict = jax.device_get(flat_dict)
                 copy_time = time.time()
@@ -435,9 +465,10 @@ class ArrowFlightServer(WeightTransferServer):
 
             barrier_sync()
 
-        except Exception as e:
+        except Exception:
             self.metrics.failed_transfers += 1
-            logger.error(f"Failed to serve weights {weight_id} via Arrow Flight: {e}")
+            logger.exception(f"Failed to serve weights {weight_id} via Arrow Flight")
+            raise
 
     def cleanup(self) -> None:
         """Cleanup Flight server resources."""
@@ -478,7 +509,11 @@ class ArrowFlightClient(WeightTransferClient):
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
         self._ctx = get_default_job_ctx()
         self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
+            ArrowFlightCoordinator,
+            name=self.config.coordinator_name,
+            get_if_exists=True,
+            preemptible=False,
+            num_cpus=0,
         )
 
     def _connect_to_servers(self, new_locations) -> bool:

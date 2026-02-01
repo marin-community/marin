@@ -229,7 +229,7 @@ def test_shard_cache_crashes_if_processor_throws():
         def __call__(self, batch: Sequence[Sequence[int]]):
             raise RuntimeError("exc")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         with pytest.raises(RuntimeError):
             build_or_load_cache(tmpdir, SimpleShardSource(), ThrowingProcessor())
 

@@ -29,6 +29,7 @@ import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
+import wandb
 from levanter import callbacks
 from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
@@ -38,11 +39,12 @@ from levanter.trainer import Trainer, TrainerConfig
 from transformers import PreTrainedTokenizer
 
 from marin.rl import weight_transfer
+from fray.job import get_default_job_ctx
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.weight_transfer import WeightTransferConfig
 
-from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader
+from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, RolloutWithCount
 from .rl_losses import RLLossModule
 from .rollout_storage import RolloutStorageConfig
 from .train_batch import create_training_batch_from_rollouts
@@ -67,6 +69,10 @@ class TrainWorkerConfig:
 
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
+
+    vocab_size: int | None = None
+    """Vocab size for model construction. Should match the checkpoint's vocab dimension.
+    If None, falls back to len(tokenizer)."""
 
     seed: int = 0
     """Random seed for replay buffer sampling and model construction."""
@@ -114,14 +120,16 @@ class StreamingRolloutLoader:
 
         # Track batch prep time for forward/backward calculation
         self._last_batch_prep_time: float = 0.0
+        self._last_rollouts: list[RolloutWithCount] | None = None
 
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
         while True:
-            # Measure time to get rollouts from replay buffer
             fetch_start = time.time()
             rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
             fetch_time = time.time() - fetch_start
+
+            self._last_rollouts = rollouts
 
             if not rollouts:
                 logger.warning("No rollouts received from data loader within timeout, retrying...")
@@ -230,7 +238,8 @@ class TrainWorker:
         """Build reference and initial policy models."""
         config = self.config
         model_key = jrandom.PRNGKey(config.seed)
-        Vocab = hax.Axis("vocab", self.tokenizer.vocab_size)
+        vocab_size = config.vocab_size if config.vocab_size is not None else len(self.tokenizer)
+        Vocab = hax.Axis("vocab", vocab_size)
 
         if config.initial_checkpoint is not None:
             logger.info(f"Loading initial model from checkpoint: {config.initial_checkpoint}")
@@ -304,7 +313,8 @@ class TrainWorker:
             self.replay_buffer.set_current_step(-1)
 
             # Wait for initial rollouts to ensure we have baseline measurements
-            self._wait_for_initial_rollouts()
+            if not self._wait_for_initial_rollouts():
+                raise RuntimeError("Timed out waiting for initial rollouts; aborting training.")
 
             self._configure_training_hooks(trainer)
 
@@ -359,10 +369,17 @@ class TrainWorker:
 
         trainer.add_hook(_log_step_timing, every=1)
 
+        def _log_samples_hook(info: levanter.callbacks.StepInfo):
+            rollouts = self.data_loader._last_rollouts
+            if rollouts is not None:
+                self._log_samples(trainer, info.step, rollouts)
+
+        trainer.add_hook(_log_samples_hook, every=1)
+
         # Add MFU (Model FLOPs Utilization) logging
-        vocab_size = len(self.tokenizer)
-        flops_per_token = self.config.model.flops_per_token(vocab_size)
+        vocab_size = self.config.vocab_size if self.config.vocab_size is not None else len(self.tokenizer)
         tokens_per_example = self.config.curriculum_config.max_seq_len
+        flops_per_token = self.config.model.flops_per_token(vocab_size, tokens_per_example)
         flops_per_example = 3 * flops_per_token * tokens_per_example if flops_per_token is not None else None
         trainer.add_hook(
             callbacks.log_performance_stats(
@@ -377,7 +394,8 @@ class TrainWorker:
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
             try:
-                self._curriculum_actor.save_checkpoint.call(checkpoint_dir)
+                future = self._curriculum_actor.save_checkpoint.remote(checkpoint_dir)
+                get_default_job_ctx().get(future)
             except Exception as e:
                 logger.error(f"Failed to save curriculum checkpoint: {e}")
 
@@ -405,6 +423,32 @@ class TrainWorker:
 
         trainer.tracker.log(metrics, step=step)
         logger.info("Successfully transferred weights with ID %d (transfer_time=%.2fs)", step, transfer_time)
+
+    def _log_samples(self, trainer, step, rollouts):
+        """Log trainer samples for the first 5 prompts to wandb table."""
+        # group by prompt
+        prompts = {}
+        for r_adv in rollouts:
+            r = r_adv.rollout
+            pid = r.env_example_id
+            if pid not in prompts:
+                prompts[pid] = []
+            prompts[pid].append(r)
+
+        # take first 5 prompts
+        first_5_pids = list(prompts.keys())[:5]
+
+        columns = ["step", "prompt_id", "prompt", "response", "reward"]
+        data = []
+        for pid in first_5_pids:
+            prompt_rs = prompts[pid]
+            prompt_text = self.tokenizer.decode(prompt_rs[0].prompt_tokens, skip_special_tokens=False)
+            for r in prompt_rs:
+                response_text = self.tokenizer.decode(r.response_tokens, skip_special_tokens=False)
+                data.append([step, pid, prompt_text, response_text, float(r.episode_reward)])
+
+        table = wandb.Table(columns=columns, data=data)
+        trainer.tracker.log({"train/samples": table}, step=step)
 
     def stop(self):
         """Stop the training worker."""

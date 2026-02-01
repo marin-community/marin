@@ -26,10 +26,47 @@ since we have to store the mapping of id -> attributes.
 the streaming data paradigm (it might but not sure).
 """
 import datetime
+import json
+import logging
+import os
+from dataclasses import dataclass
+from typing import TypedDict
 
-import datasets
+import fsspec
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger("ray")
+
+
+class Document(TypedDict):
+    id: str
+    source: str
+    text: str
+
+
+class Attribute(TypedDict):
+    id: str
+    source: str
+    attributes: dict
+
+
+@dataclass
+class DatasetConfig:
+    """Configuration for curating a dataset for training a quality classifier
+
+    Attributes:
+        input_doc_path (str): Path to the input dataset directory (Dolma format).
+        label (str): Label for the dataset. This should be in the format "<label>"
+            where <label> is the label for the dataset. For example, "hq" or "lq", respectively.
+        sampling_rate (Optional[float]): Subsampling fraction to construct the dataset.
+        max_sample_size (Optional[int]): Maximum number of examples to include in the dataset.
+    """
+
+    input_doc_path: str
+    label: str
+    sampling_rate: float = 1.0
+    max_sample_size: int | None = None
 
 
 # TODO(chris): Consolidate this with other make json serializable functions
@@ -45,30 +82,6 @@ def make_json_serializable(row: dict) -> dict:
         if isinstance(value, np.float32 | np.float64):
             row[key] = float(value)
     return row
-
-
-def _coerce_table_to_schema(table, target_schema):
-    """Align a PyArrow table's column order and dtypes to the target schema."""
-    import pyarrow as pa
-
-    if table.schema == target_schema:
-        return table
-
-    missing = [name for name in target_schema.names if name not in table.schema.names]
-    if missing:
-        raise ValueError(f"New data is missing columns required by existing dataset: {missing}")
-
-    extra = [name for name in table.schema.names if name not in target_schema.names]
-    if extra:
-        raise ValueError(f"New data has unexpected columns not present in existing dataset: {extra}")
-
-    indices = [table.schema.get_field_index(name) for name in target_schema.names]
-    table = table.select(indices)
-
-    try:
-        return table.cast(target_schema)
-    except pa.ArrowInvalid as exc:
-        raise ValueError(f"Unable to cast new data to existing schema: {exc}") from exc
 
 
 def read_dataset_streaming(input_filename: str, columns: list[str] | None = None):
@@ -114,12 +127,8 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
         append semantics for object stores.
       - Checkpoint restoration should continue to read from the remote path.
     """
-    import json
     import hashlib
-    import os
     import shutil
-
-    import fsspec
 
     mode = "ab" if append else "wb"
 
@@ -158,14 +167,13 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
         rows = list(rows_iterator)
         if rows:
             df = pd.DataFrame(rows)
-            table = pa.Table.from_pandas(df, preserve_index=False)
+            table = pa.Table.from_pandas(df)
 
             fs, _ = fsspec.core.url_to_fs(output_filename)
             if append and fs.exists(output_filename):
                 # Read existing parquet and append
                 with fsspec.open(output_filename, "rb") as f:
                     existing_table = pq.read_table(f)
-                table = _coerce_table_to_schema(table, existing_table.schema)
                 table = pa.concat_tables([existing_table, table])
 
             with fsspec.open(output_filename, "wb") as f:
@@ -173,44 +181,3 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
         return
 
     raise ValueError(f"Unsupported filetype: {output_filename}")
-
-
-def read_dataset(input_filename: str, columns: list[str] | None = None):
-    """Read in a data source and return as a Huggingface Dataset
-
-    Args:
-        input_filename: str
-            The path to the input file. Currently supports .jsonl.gz and .parquet
-
-    Returns:
-        datasets.Dataset: A Huggingface Dataset in-memory without using the disk
-    """
-    datasets.disable_caching()  # Disabling caching or else it spills to disk to cache
-    datasets.logging.set_verbosity_warning()
-    # We use pandas to read in the file so that we don't have to materialize
-    # the entire dataset in disk since we have limited disk space.
-    # Huggingface datasets loads the dataset into disk first and mmaps.
-    if input_filename.endswith(".jsonl.gz"):
-        df = pd.read_json(input_filename, compression="gzip", lines=True)
-    elif input_filename.endswith(".jsonl.zst"):
-        df = pd.read_json(input_filename, compression="zstd", lines=True)
-    elif input_filename.endswith(".parquet"):
-        df = pd.read_parquet(input_filename, columns=columns)
-    else:
-        raise ValueError(f"Unsupported filetype: {input_filename}")
-
-    return datasets.Dataset.from_pandas(df)
-
-
-def write_dataset(dataset, output_filename: str):
-    """Writes a Huggingface Dataset to a file (remote or local)"""
-    if output_filename.endswith(".jsonl.gz"):
-        dataset.to_json(output_filename, compression="gzip")
-    elif output_filename.endswith(".jsonl.zst"):
-        df_pandas = dataset.to_pandas()
-        df_pandas.to_json(output_filename, orient="records", compression="zstd", lines=True)
-        # dataset.to_json(output_filename, to_json_kwargs={"compression": "zstd", "lines": True})
-    elif output_filename.endswith(".parquet"):
-        dataset.to_parquet(output_filename)
-    else:
-        raise ValueError(f"Unsupported filetype: {output_filename}")

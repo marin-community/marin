@@ -15,6 +15,7 @@ from haliax import Axis, NamedArray
 from haliax.partitioning import (
     ResourceAxis,
     axis_mapping,
+    get_pspec_for_manual_mesh,
     named_jit,
     set_mesh,
     pspec_for,
@@ -65,6 +66,16 @@ def test_pspec_for_plain_array_axis_names():
         assert specs.arr == PartitionSpec(ResourceAxis.DATA, ResourceAxis.MODEL)
 
 
+def test_pspec_for_namedarray_with_missing_array():
+    mesh = Mesh(np.array(jax.devices()).reshape(-1, 1), (ResourceAxis.DATA, ResourceAxis.MODEL))
+    with axis_mapping(resource_map), mesh:
+        named = NamedArray(None, ("dim2", "dim3"))
+
+        spec = pspec_for(named)
+
+        assert spec == PartitionSpec(ResourceAxis.DATA, ResourceAxis.MODEL)
+
+
 def test_pspec_for_plain_array_uses_typeof_sharding():
     # In explicit sharding mode, jax.typeof carries sharding info for plain arrays.
     devices = jax.devices()
@@ -74,6 +85,24 @@ def test_pspec_for_plain_array_uses_typeof_sharding():
 
     spec = pspec_for(array, resource_mapping={})
     assert spec == PartitionSpec(ResourceAxis.DATA, None)
+
+
+def test_get_pspec_for_manual_mesh_requires_explicit_axis_types():
+    devices = jax.devices()
+    mesh_devices = np.array(devices).reshape(-1, 1)
+
+    explicit = Mesh(
+        mesh_devices,
+        (ResourceAxis.DATA, ResourceAxis.MODEL),
+        axis_types=(AxisType.Explicit, AxisType.Explicit),
+    )
+    with axis_mapping(resource_map), explicit:
+        spec = get_pspec_for_manual_mesh((Dim1, Dim2, Dim3))
+        assert spec == PartitionSpec(None, ResourceAxis.DATA, ResourceAxis.MODEL)
+
+    auto = Mesh(mesh_devices, (ResourceAxis.DATA, ResourceAxis.MODEL))
+    with axis_mapping(resource_map), auto:
+        assert get_pspec_for_manual_mesh((Dim1, Dim2, Dim3)) is None
 
 
 class NestedArrayModule(eqx.Module):

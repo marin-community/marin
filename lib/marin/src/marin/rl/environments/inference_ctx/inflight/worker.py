@@ -31,6 +31,116 @@ except ImportError:
     logger.warning("vLLM async engine is not available. Please install vLLM v1 with: pip install vllm")
 
 
+def _apply_worker_extension_mro_fix():
+    """Monkeypatch vLLM's WorkerWrapperBase.init_worker to fix MRO conflict.
+
+    vLLM V1's init_worker appends worker_extension_cls to worker_class.__bases__:
+        worker_class.__bases__ = worker_class.__bases__ + (worker_extension_cls,)
+
+    This causes MRO conflicts when the worker class hierarchy ends with 'object'
+    and the extension also inherits from 'object'. The fix is to prepend instead:
+        worker_class.__bases__ = (worker_extension_cls,) + worker_class.__bases__
+
+    This is a known issue with dynamic mixin injection in Python.
+    See: https://github.com/vllm-project/vllm/issues/XXXX (TODO: file upstream issue)
+    """
+    try:
+        from vllm.v1.worker.worker_base import WorkerWrapperBase
+        from vllm.config import set_current_vllm_config
+        from vllm.utils.import_utils import resolve_obj_by_qualname
+        from vllm.multimodal import MULTIMODAL_REGISTRY
+        from vllm.multimodal.cache import worker_receiver_cache_from_config
+    except ImportError:
+        logger.warning("Could not import vLLM V1 worker modules for MRO fix")
+        return
+
+    def _patched_init_worker(self, all_kwargs):
+        """Patched init_worker that prepends worker_extension_cls instead of appending."""
+        kwargs = all_kwargs[self.rpc_rank]
+        self.vllm_config = kwargs.get("vllm_config")
+        assert self.vllm_config is not None, "vllm_config is required to initialize the worker"
+        self.vllm_config.enable_trace_function_call_for_thread()
+
+        from vllm.plugins import load_general_plugins
+
+        load_general_plugins()
+
+        if isinstance(self.vllm_config.parallel_config.worker_cls, str):
+            worker_class = resolve_obj_by_qualname(self.vllm_config.parallel_config.worker_cls)
+        else:
+            raise ValueError(
+                "passing worker_cls is no longer supported. Please keep the class in a "
+                "separate module and pass the qualified name of the class as a string."
+            )
+
+        if self.vllm_config.parallel_config.worker_extension_cls:
+            worker_extension_cls = resolve_obj_by_qualname(self.vllm_config.parallel_config.worker_extension_cls)
+            extended_calls = []
+            if worker_extension_cls not in worker_class.__bases__:
+                # Check any conflicts between worker and worker_extension_cls
+                for attr in dir(worker_extension_cls):
+                    if attr.startswith("__"):
+                        continue
+                    assert not hasattr(worker_class, attr), (
+                        f"Worker class {worker_class} already has an attribute"
+                        f" {attr}, which conflicts with the worker"
+                        f" extension class {worker_extension_cls}."
+                    )
+                    if callable(getattr(worker_extension_cls, attr)):
+                        extended_calls.append(attr)
+
+                # FIX: Create a new class dynamically instead of modifying __bases__
+                # Direct __bases__ modification fails with:
+                #   TypeError: __bases__ assignment: 'WorkerExtension' deallocator differs from 'object'
+                # Creating a new class avoids this CPython restriction.
+                worker_class = type(
+                    f"{worker_class.__name__}WithExtension",
+                    (worker_extension_cls, worker_class),  # Extension first for proper MRO
+                    {},  # No additional attributes needed
+                )
+                # Update the config so the new class is used for future references
+                self.vllm_config.parallel_config.worker_cls = worker_class
+                logger.info(
+                    "Created extended worker class %s with %s for collective_rpc calls %s",
+                    worker_class.__name__,
+                    worker_extension_cls.__name__,
+                    extended_calls,
+                )
+
+        shared_worker_lock = kwargs.pop("shared_worker_lock", None)
+        if shared_worker_lock is None:
+            msg = (
+                "Missing `shared_worker_lock` argument from executor. "
+                "This argument is needed for mm_processor_cache_type='shm'."
+            )
+            mm_config = self.vllm_config.model_config.multimodal_config
+            if mm_config and mm_config.mm_processor_cache_type == "shm":
+                raise ValueError(msg)
+            else:
+                # Use warning_once if available, otherwise regular warning
+                logger.warning(msg)
+
+            self.mm_receiver_cache = None
+        else:
+            self.mm_receiver_cache = worker_receiver_cache_from_config(
+                self.vllm_config,
+                MULTIMODAL_REGISTRY,
+                shared_worker_lock,
+            )
+
+        with set_current_vllm_config(self.vllm_config):
+            self.worker = worker_class(**kwargs)
+            assert self.worker is not None
+
+    WorkerWrapperBase.init_worker = _patched_init_worker
+    logger.info("Applied MRO fix for vLLM V1 worker extension injection")
+
+
+# Apply the monkeypatch when this module is imported
+if AsyncEngineArgs is not None:
+    _apply_worker_extension_mro_fix()
+
+
 def deserialize_state_dict_from_rpc(serialized_state_dict: dict) -> dict:
     """Deserialize (bytes, dtype, shape) tuples/lists back to numpy arrays.
 
@@ -78,7 +188,13 @@ class SyncVLLMWrapper:
     """
 
     def __init__(
-        self, model: str, max_model_len: int = 1024, tensor_parallel_size: int = 1, gpu_memory_utilization: float = 0.95
+        self,
+        model: str,
+        max_model_len: int = 1024,
+        tensor_parallel_size: int = 1,
+        gpu_memory_utilization: float = 0.95,
+        load_format: str = "auto",
+        enforce_eager: bool = True,
     ):
         if AsyncEngineArgs is None:
             raise RuntimeError("vLLM async engine is not available. Please install vLLM v1 with: pip install vllm")
@@ -93,6 +209,8 @@ class SyncVLLMWrapper:
             worker_extension_cls="marin.rl.environments.inference_ctx.inflight.worker.WorkerExtension",
             tensor_parallel_size=tensor_parallel_size,
             gpu_memory_utilization=gpu_memory_utilization,
+            load_format=load_format,
+            enforce_eager=enforce_eager,
         )
 
         self.engine = self.bridge.run(self._init_engine(engine_args))

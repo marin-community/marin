@@ -79,10 +79,21 @@ class SamplingParams:
     """Parameters for sampling rollouts from an environment."""
 
     temperature: float = 1.0
+    top_k: int | None = None
     n_prompts: int = 8
     n_generations_per_prompt: int = 4
     max_output_tokens: int = 512
     stop_tokens: list[int] | None = None
+
+    def __post_init__(self):
+        if self.temperature < 1e-4:
+            logger.warning(
+                "SamplingParams.temperature is very low (%f). Greedy decoding is generally "
+                "not useful for RL training as it limits exploration.",
+                self.temperature,
+            )
+        if self.top_k == 1:
+            logger.warning("SamplingParams.top_k is 1. Greedy decoding is generally not useful for RL training.")
 
 
 @dataclass
@@ -609,12 +620,15 @@ class Curriculum:
 
 def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
     job_ctx = get_default_job_ctx()
-    actor = job_ctx.create_actor(Curriculum, actor_name=config.actor_name, actor_args=(config,), preemptible=False)
+    actor = job_ctx.create_actor(
+        Curriculum, config, name=config.actor_name, get_if_exists=True, preemptible=False, num_cpus=0
+    )
 
     # Auto-restore from checkpoint if path provided
     if checkpoint_path:
         try:
-            actor.restore_checkpoint.call(checkpoint_path)
+            future = actor.restore_checkpoint.remote(checkpoint_path)
+            job_ctx.get(future)
         except Exception as e:
             logger.warning(f"Failed to restore curriculum checkpoint from {checkpoint_path}: {e}, starting fresh")
 
