@@ -53,11 +53,9 @@ def main() -> None:
     y_raw = jax.random.randint(key_y, (batch,), 0, vocab, dtype=jnp.int32)
 
     configs = [
-        # Keep b*v roughly <= 4M (float32 scratch) to stay within TPU scoped vmem.
-        BlockSizes(b_block_size=512, h_block_size=256, v_block_size=4096),
-        BlockSizes(b_block_size=512, h_block_size=512, v_block_size=4096),
-        BlockSizes(b_block_size=512, h_block_size=256, v_block_size=8192),
-        BlockSizes(b_block_size=512, h_block_size=512, v_block_size=8192),
+        BlockSizes(b_block_size=1024, h_block_size=128, v_block_size=1024),
+        BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=1024),
+        BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
         BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=2048),
         BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
         BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=4096),
@@ -80,30 +78,34 @@ def main() -> None:
                 implementation="pallas_tpu",
             )
 
-        return loss_fn
+        return jax.value_and_grad(loss_fn, argnums=(0, 1))
 
     for cfg in configs:
         print("config", cfg)
         loss_jit = jax.jit(make_loss_fn(cfg))
         try:
             start = time.perf_counter()
-            out = loss_jit(x_raw, w_raw, y_raw)
-            out.block_until_ready()
+            loss, out = loss_jit(x_raw, w_raw, y_raw)
+            jax.block_until_ready(out)
+            # out.block_until_ready()
             compile_time = time.perf_counter() - start
 
             steps = 3
             start = time.perf_counter()
             for _ in range(steps):
                 out = loss_jit(x_raw, w_raw, y_raw)
-                out.block_until_ready()
+                jax.block_until_ready(out)
             steady_time = (time.perf_counter() - start) / steps
 
-            print("loss", float(out))
+            print("loss", float(loss))
             print("compile_time_s", compile_time)
             print("steady_time_s", steady_time)
             print("tokens_per_s", tokens / steady_time)
         except Exception as exc:
             print("failed", type(exc).__name__, exc)
+            # print stack trace for debugging
+            # import traceback
+            # traceback.print_exc()
 
 
 if __name__ == "__main__":

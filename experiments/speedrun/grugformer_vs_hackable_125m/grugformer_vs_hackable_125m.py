@@ -217,8 +217,8 @@ def main() -> None:
         raise AssertionError("Grug speedrun vocab_size mismatch; expected llama3_tokenizer_vocab_size")
 
     steps = []
-    steps.extend(default_speedrun(f"hackable_compare_125m_{max_seq_len}-profile2", hack_speedrun))
-    steps.extend(default_speedrun(f"grug_compare_125m_{max_seq_len}-profile2", grug_speedrun))
+    steps.extend(default_speedrun(f"hackable_compare_125m_{max_seq_len}-profile4", hack_speedrun))
+    steps.extend(default_speedrun(f"grug_compare_125m_{max_seq_len}-profile4", grug_speedrun))
     executor_main(steps=steps, description="Head-to-head: hackable transformer vs grugformer (~125M, no sinks)")
 
 

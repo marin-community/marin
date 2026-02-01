@@ -124,7 +124,10 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         Reduced loss (scalar) or per-example loss [B] if reduction is None.
     """
     _validate_inputs(x, labels, w)
-    block_sizes = _resolve_block_sizes(block_size, block_sizes, x=x, w=w, dtype=dtype)
+    explicit_block_sizes = block_size is not None or block_sizes is not None
+    resolved_block_sizes = (
+        _resolve_block_sizes(block_size, block_sizes, x=x, w=w, dtype=dtype) if explicit_block_sizes else None
+    )
 
     if implementation is None:
         impls: Sequence[Implementation | ArrayImpl] = _DEFAULT_IMPLEMENTATION
@@ -138,13 +141,19 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 
     errors: list[Exception] = []
     for impl in impls:
+        if explicit_block_sizes:
+            block_sizes_for_impl = resolved_block_sizes
+        elif impl in ("xla", "reference"):
+            block_sizes_for_impl = None
+        else:
+            block_sizes_for_impl = infer_block_sizes(x.shape[0], x.shape[1], w.shape[1], dtype=dtype)
         if callable(impl):
             try:
                 loss, lse = impl(
                     x,
                     labels,
                     w,
-                    block_sizes=block_sizes,
+                    block_sizes=block_sizes_for_impl,
                     dtype=dtype,
                     logit_soft_cap=logit_soft_cap,
                     precision=precision,
@@ -176,7 +185,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                     x,
                     labels,
                     w,
-                    block_sizes=block_sizes,
+                    block_sizes=block_sizes_for_impl,
                     dtype=dtype,
                     logit_soft_cap=logit_soft_cap,
                     precision=precision,

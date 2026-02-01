@@ -77,6 +77,24 @@ def _validate_inputs(
             "Weight hidden dimension must be a multiple of h_block_size: "
             f"H={w.shape[0]}, h_block_size={block_sizes.h_block_size}."
         )
+    if jax.default_backend() == "tpu" and x.shape[0] >= 1024:
+        device_kind = jax.devices()[0].device_kind.lower()
+        if ("tpu v4" in device_kind or "tpu v5" in device_kind or "tpu v7" in device_kind) and (
+            block_sizes.b_block_size % 1024 != 0
+        ):
+            raise PallasUnsupportedError(
+                "TPU label layout requires b_block_size to be a multiple of 1024 when B>=1024; "
+                f"got b_block_size={block_sizes.b_block_size}."
+            )
+
+
+def _infer_num_tensorcores() -> int:
+    if jax.default_backend() != "tpu":
+        return 1
+    device_kind = jax.devices()[0].device_kind.lower()
+    if "tpu v4" in device_kind or "tpu v5" in device_kind or "tpu v7" in device_kind:
+        return 2
+    return 1
 
 
 def linear_softmax_cross_entropy_loss_forward_pallas_kernel(
@@ -193,7 +211,7 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
             ),  # x
             pl.BlockSpec(
                 (block_sizes.b_block_size,),
-                lambda i, j, k: (i,),
+                lambda i, j, k: (i),
                 memory_space=pltpu.VMEM,
             ),  # labels
             pl.BlockSpec(
@@ -205,12 +223,12 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
         out_specs=[
             pl.BlockSpec(
                 (block_sizes.b_block_size,),
-                lambda i, j, k: (i,),
+                lambda i, j, k: (i),
                 memory_space=pltpu.VMEM,
             ),  # loss
             pl.BlockSpec(
                 (block_sizes.b_block_size,),
-                lambda i, j, k: (i,),
+                lambda i, j, k: (i),
                 memory_space=pltpu.VMEM,
             ),  # lse
         ],
@@ -227,8 +245,7 @@ def linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
         ),
         grid=(num_b_blocks, num_v_blocks, num_h_blocks),
         compiler_params=pltpu.CompilerParams(
-            # Megacore (v4/v5p) requires parallel semantics to use both TensorCores.
-            dimension_semantics=("parallel", "parallel", "arbitrary"),
+            dimension_semantics=("parallel", "arbitrary", "arbitrary"),
         ),
     )(x, labels, w)
 
@@ -262,7 +279,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
     logits, and use staged async DMA to overlap memory copies with compute.
     """
     b_index, v_index, stage_index, h_index = (pl.program_id(i) for i in range(4))
-    num_b_blocks, num_v_blocks, _, num_h_blocks = (pl.num_programs(i) for i in range(4))
+    num_v_blocks = pl.num_programs(1)
     b_block_size, h_block_size = x_ref.shape
     v_block_size = w_ref.shape[1]
     v_dim = w_grad_hbm_ref.shape[-1]
@@ -300,14 +317,14 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
     cur_v_block_size = pl.multiple_of(cur_v_block_size, 128)
 
     x_grad_slice = x_grad_hbm_ref.at[
-        pl.dslice(b_index * b_block_size, b_block_size),
+        pl.ds(b_index * b_block_size, b_block_size),
         pl.ds(h_index * h_block_size, h_block_size),
     ]
     w_grad_slice = w_grad_hbm_ref.at[
         pl.ds(h_index * h_block_size, h_block_size),
-        pl.dslice(v_index * v_block_size, cur_v_block_size),
+        pl.ds(v_index * v_block_size, cur_v_block_size),
     ]
-    w_grad_tile_slice = w_grad_tile_ref.at[:, pl.dslice(0, cur_v_block_size)]
+    w_grad_tile_slice = w_grad_tile_ref.at[:, pl.ds(0, cur_v_block_size)]
 
     x_write_future = pltpu.make_async_copy(x_grad_tile_ref, x_grad_slice, sem=x_write_sem)
     w_write_future = pltpu.make_async_copy(w_grad_tile_slice, w_grad_slice, sem=w_write_sem)
@@ -366,6 +383,7 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
         )
         w_write_future.start()
 
+    # Accumulate X grad on V dimension
     @pl.when(jnp.logical_and(stage_index == 1, v_index != 0))
     def accumulate_x_grad():
         res = jax.lax.dot_general(
@@ -398,6 +416,404 @@ def linear_softmax_cross_entropy_loss_backward_pallas_kernel(
         w_write_future.wait()
 
 
+def linear_softmax_cross_entropy_loss_backward_x_grad_kernel(
+    x_ref,
+    labels_ref,
+    w_ref,
+    lse_ref,
+    dout_loss_ref,
+    dout_lse_ref,
+    x_grad_hbm_ref,
+    xw_scratch_ref,
+    x_grad_tile_ref,
+    x_read_sem,
+    x_write_sem,
+    *,
+    v_dim: int,
+    dtype: Optional[jnp.dtype],
+    logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
+):
+    """Backward kernel for x-grad only (megacore-friendly split)."""
+    b_index, v_index, stage_index, h_index = (pl.program_id(i) for i in range(4))
+    num_v_blocks = pl.num_programs(1)
+    b_block_size, h_block_size = x_ref.shape
+    v_block_size = w_ref.shape[1]
+
+    @pl.when(v_index == num_v_blocks - 1)
+    def pad_non_aligned_v_block():
+        if v_dim % v_block_size != 0:
+            rem = v_dim % v_block_size
+            w_ref[:, rem:] = jnp.zeros((w_ref.shape[0], w_ref.shape[1] - rem), dtype=w_ref.dtype)
+
+    @pl.when(jnp.logical_and(stage_index == 0, h_index == 0))
+    def init_logits():
+        xw_scratch_ref[...] = jax.lax.dot_general(
+            x_ref[...],
+            w_ref[...],
+            (((1,), (0,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+
+    @pl.when(jnp.logical_and(stage_index == 0, h_index != 0))
+    def accumulate_logits():
+        xw_scratch_ref[...] += jax.lax.dot_general(
+            x_ref[...],
+            w_ref[...],
+            (((1,), (0,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+
+    cur_v_block_size = jnp.minimum(v_dim - v_block_size * v_index, v_block_size)
+    cur_v_block_size = (jnp.ceil(cur_v_block_size / 128) * 128).astype(jnp.int32)
+    cur_v_block_size = pl.multiple_of(cur_v_block_size, 128)
+
+    x_grad_slice = x_grad_hbm_ref.at[
+        pl.ds(b_index * b_block_size, b_block_size),
+        pl.ds(h_index * h_block_size, h_block_size),
+    ]
+
+    x_write_future = pltpu.make_async_copy(x_grad_tile_ref, x_grad_slice, sem=x_write_sem)
+    x_read_future = pltpu.make_async_copy(x_grad_slice, x_grad_tile_ref, sem=x_read_sem)
+
+    @pl.when(jnp.logical_and(stage_index == 1, v_index != 0))
+    def x_read():
+        x_read_future.start()
+
+    @pl.when(jnp.logical_and(stage_index == 1, h_index == 0))
+    def compute_s():
+        labels_adjusted = labels_ref[...] - v_index * v_block_size
+        labels_one_hot = jax.nn.one_hot(labels_adjusted, num_classes=v_block_size, dtype=x_ref.dtype)
+        logits = xw_scratch_ref[...]
+        if dtype is not None:
+            logits = logits.astype(dtype)
+        if logit_soft_cap is not None:
+            tanh_arg = logits / logit_soft_cap
+            tanh_val = jnp.tanh(tanh_arg)
+            logits = tanh_val * logit_soft_cap
+            cap_deriv = 1.0 - tanh_val**2
+        else:
+            cap_deriv = 1.0
+        probs = jnp.exp(logits - lse_ref[...][:, None])
+        dout_loss = dout_loss_ref[...]
+        dout_lse = dout_lse_ref[...]
+        delta = (dout_loss[:, None] + dout_lse[:, None]) * probs - dout_loss[:, None] * labels_one_hot
+        xw_scratch_ref[...] = delta * cap_deriv
+
+    @pl.when(jnp.logical_and(stage_index == 1, v_index == 0))
+    def init_x_grad():
+        x_grad_tile_ref[...] = jax.lax.dot_general(
+            xw_scratch_ref[...],
+            w_ref[...],
+            (((1,), (1,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+        x_write_future.start()
+
+    @pl.when(jnp.logical_and(stage_index == 1, v_index != 0))
+    def accumulate_x_grad():
+        res = jax.lax.dot_general(
+            xw_scratch_ref[...],
+            w_ref[...],
+            (((1,), (1,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+        x_read_future.wait()
+        x_grad_tile_ref[...] += res
+        x_write_future.start()
+
+    @pl.when(stage_index == 1)
+    def wait_async_writes():
+        x_write_future.wait()
+
+
+def linear_softmax_cross_entropy_loss_backward_w_grad_kernel(
+    x_ref,
+    labels_ref,
+    w_ref,
+    lse_ref,
+    dout_loss_ref,
+    dout_lse_ref,
+    w_grad_hbm_ref,
+    xw_scratch_ref,
+    w_grad_tile_ref,
+    w_read_sem,
+    w_write_sem,
+    *,
+    dtype: Optional[jnp.dtype],
+    logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
+):
+    """Backward kernel for w-grad only (megacore-friendly split)."""
+    b_index, v_index, stage_index, h_index = (pl.program_id(i) for i in range(4))
+    num_b_blocks, num_v_blocks, _, num_h_blocks = (pl.num_programs(i) for i in range(4))
+    b_block_size, h_block_size = x_ref.shape
+    v_block_size = w_ref.shape[1]
+    v_dim = w_grad_hbm_ref.shape[-1]
+
+    @pl.when(v_index == num_v_blocks - 1)
+    def pad_non_aligned_v_block():
+        if v_dim % v_block_size != 0:
+            rem = v_dim % v_block_size
+            w_ref[:, rem:] = jnp.zeros((w_ref.shape[0], w_ref.shape[1] - rem), dtype=w_ref.dtype)
+
+    @pl.when(jnp.logical_and(stage_index == 0, h_index == 0))
+    def init_logits():
+        xw_scratch_ref[...] = jax.lax.dot_general(
+            x_ref[...],
+            w_ref[...],
+            (((1,), (0,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+
+    @pl.when(jnp.logical_and(stage_index == 0, h_index != 0))
+    def accumulate_logits():
+        xw_scratch_ref[...] += jax.lax.dot_general(
+            x_ref[...],
+            w_ref[...],
+            (((1,), (0,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+
+    cur_v_block_size = jnp.minimum(v_dim - v_block_size * v_index, v_block_size)
+    cur_v_block_size = (jnp.ceil(cur_v_block_size / 128) * 128).astype(jnp.int32)
+    cur_v_block_size = pl.multiple_of(cur_v_block_size, 128)
+
+    w_grad_slice = w_grad_hbm_ref.at[
+        pl.ds(h_index * h_block_size, h_block_size),
+        pl.dslice(v_index * v_block_size, cur_v_block_size),
+    ]
+    w_grad_tile_slice = w_grad_tile_ref.at[:, pl.dslice(0, cur_v_block_size)]
+
+    w_write_future = pltpu.make_async_copy(w_grad_tile_slice, w_grad_slice, sem=w_write_sem)
+    w_read_future = pltpu.make_async_copy(w_grad_slice, w_grad_tile_slice, sem=w_read_sem)
+
+    @pl.when(jnp.logical_and(stage_index == 1, b_index != 0))
+    def w_read():
+        w_read_future.start()
+
+    @pl.when(jnp.logical_and(stage_index == 1, h_index == 0))
+    def compute_s():
+        labels_adjusted = labels_ref[...] - v_index * v_block_size
+        labels_one_hot = jax.nn.one_hot(labels_adjusted, num_classes=v_block_size, dtype=x_ref.dtype)
+        logits = xw_scratch_ref[...]
+        if dtype is not None:
+            logits = logits.astype(dtype)
+        if logit_soft_cap is not None:
+            tanh_arg = logits / logit_soft_cap
+            tanh_val = jnp.tanh(tanh_arg)
+            logits = tanh_val * logit_soft_cap
+            cap_deriv = 1.0 - tanh_val**2
+        else:
+            cap_deriv = 1.0
+        probs = jnp.exp(logits - lse_ref[...][:, None])
+        dout_loss = dout_loss_ref[...]
+        dout_lse = dout_lse_ref[...]
+        delta = (dout_loss[:, None] + dout_lse[:, None]) * probs - dout_loss[:, None] * labels_one_hot
+        xw_scratch_ref[...] = delta * cap_deriv
+
+    @pl.when(jnp.logical_and(stage_index == 1, b_index == 0))
+    def init_w_grad():
+        w_grad_tile_ref[...] = jax.lax.dot_general(
+            x_ref[...],
+            xw_scratch_ref[...],
+            (((0,), (0,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+        w_write_future.start()
+
+    @pl.when(jnp.logical_and(stage_index == 1, b_index != 0))
+    def accumulate_w_grad():
+        res = jax.lax.dot_general(
+            x_ref[...],
+            xw_scratch_ref[...],
+            (((0,), (0,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+        w_read_future.wait()
+        w_grad_tile_ref[...] += res
+        w_write_future.start()
+
+    @pl.when(stage_index == 1)
+    def wait_async_writes():
+        w_write_future.wait()
+
+
+def linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel(
+    x_ref,
+    labels_ref,
+    w_ref,
+    lse_ref,
+    dout_loss_ref,
+    dout_lse_ref,
+    x_grad_hbm_ref,
+    w_grad_hbm_ref,
+    xw_scratch_ref,
+    x_grad_tile_ref,
+    w_grad_tile_ref,
+    x_read_sem,
+    w_read_sem,
+    x_write_sem,
+    w_write_sem,
+    *,
+    dtype: Optional[jnp.dtype],
+    logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
+):
+    """Backward kernel with an explicit core grid axis (per-core w_grad partials)."""
+    core_index, b_index, v_index, stage_index, h_index = (pl.program_id(i) for i in range(5))
+    num_v_blocks = pl.num_programs(2)
+    num_b_blocks_per_core = pl.num_programs(1)
+    b_block_size, h_block_size = x_ref.shape
+    v_block_size = w_ref.shape[1]
+    v_dim = w_grad_hbm_ref.shape[-1]
+
+    # Zero the tail if V isn't aligned so the last tile is safe.
+    @pl.when(v_index == num_v_blocks - 1)
+    def pad_non_aligned_v_block():
+        if v_dim % v_block_size != 0:
+            rem = v_dim % v_block_size
+            w_ref[:, rem:] = jnp.zeros((w_ref.shape[0], w_ref.shape[1] - rem), dtype=w_ref.dtype)
+
+    # Stage 0: build logits for this (B,V) tile by accumulating over H.
+    @pl.when(jnp.logical_and(stage_index == 0, h_index == 0))
+    def init_logits():
+        xw_scratch_ref[...] = jax.lax.dot_general(
+            x_ref[...],
+            w_ref[...],
+            (((1,), (0,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+
+    @pl.when(jnp.logical_and(stage_index == 0, h_index != 0))
+    def accumulate_logits():
+        xw_scratch_ref[...] += jax.lax.dot_general(
+            x_ref[...],
+            w_ref[...],
+            (((1,), (0,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+
+    cur_v_block_size = jnp.minimum(v_dim - v_block_size * v_index, v_block_size)
+    cur_v_block_size = (jnp.ceil(cur_v_block_size / 128) * 128).astype(jnp.int32)
+    cur_v_block_size = pl.multiple_of(cur_v_block_size, 128)
+
+    b_index_global = core_index * num_b_blocks_per_core + b_index
+    x_grad_slice = x_grad_hbm_ref.at[
+        pl.ds(b_index_global * b_block_size, b_block_size),
+        pl.ds(h_index * h_block_size, h_block_size),
+    ]
+    w_grad_slice = w_grad_hbm_ref.at[
+        core_index,
+        pl.ds(h_index * h_block_size, h_block_size),
+        pl.ds(v_index * v_block_size, cur_v_block_size),
+    ]
+    w_grad_tile_slice = w_grad_tile_ref.at[:, pl.ds(0, cur_v_block_size)]
+
+    x_write_future = pltpu.make_async_copy(x_grad_tile_ref, x_grad_slice, sem=x_write_sem)
+    w_write_future = pltpu.make_async_copy(w_grad_tile_slice, w_grad_slice, sem=w_write_sem)
+    x_read_future = pltpu.make_async_copy(x_grad_slice, x_grad_tile_ref, sem=x_read_sem)
+    w_read_future = pltpu.make_async_copy(w_grad_slice, w_grad_tile_slice, sem=w_read_sem)
+
+    # Stage 1: async DMA reads for gradient tiles.
+    @pl.when(jnp.logical_and(stage_index == 1, v_index != 0))
+    def x_read():
+        x_read_future.start()
+
+    @pl.when(jnp.logical_and(stage_index == 1, b_index != 0))
+    def w_read():
+        w_read_future.start()
+
+    # Compute the softmax-gradient term for this V tile (once per H=0).
+    @pl.when(jnp.logical_and(stage_index == 1, h_index == 0))
+    def compute_s():
+        labels_adjusted = labels_ref[...] - v_index * v_block_size
+        labels_one_hot = jax.nn.one_hot(labels_adjusted, num_classes=v_block_size, dtype=x_ref.dtype)
+        logits = xw_scratch_ref[...]
+        if dtype is not None:
+            logits = logits.astype(dtype)
+        if logit_soft_cap is not None:
+            tanh_arg = logits / logit_soft_cap
+            tanh_val = jnp.tanh(tanh_arg)
+            logits = tanh_val * logit_soft_cap
+            cap_deriv = 1.0 - tanh_val**2
+        else:
+            cap_deriv = 1.0
+
+        logits = logits - lse_ref[...][:, None]
+        probs = jnp.exp(logits)
+        dout_loss = dout_loss_ref[...]
+        dout_lse = dout_lse_ref[...]
+        delta = (dout_loss[:, None] + dout_lse[:, None]) * probs - dout_loss[:, None] * labels_one_hot
+        xw_scratch_ref[...] = delta * cap_deriv
+
+    @pl.when(jnp.logical_and(stage_index == 1, v_index == 0))
+    def init_x_grad():
+        x_grad_tile_ref[...] = jax.lax.dot_general(
+            xw_scratch_ref[...],
+            w_ref[...],
+            (((1,), (1,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+        x_write_future.start()
+
+    @pl.when(jnp.logical_and(stage_index == 1, v_index != 0))
+    def accumulate_x_grad():
+        res = jax.lax.dot_general(
+            xw_scratch_ref[...],
+            w_ref[...],
+            (((1,), (1,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+        x_read_future.wait()
+        x_grad_tile_ref[...] += res
+        x_write_future.start()
+
+    @pl.when(stage_index == 1)
+    def wait_async_x_writes():
+        x_write_future.wait()
+
+    @pl.when(jnp.logical_and(stage_index == 1, b_index == 0))
+    def init_w_grad():
+        w_grad_tile_ref[...] = jax.lax.dot_general(
+            x_ref[...],
+            xw_scratch_ref[...],
+            (((0,), (0,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+        w_write_future.start()
+
+    @pl.when(jnp.logical_and(stage_index == 1, b_index != 0))
+    def accumulate_w_grad():
+        res = jax.lax.dot_general(
+            x_ref[...],
+            xw_scratch_ref[...],
+            (((0,), (0,)), ((), ())),
+            preferred_element_type=jnp.float32,
+            precision=precision,
+        )
+        w_read_future.wait()
+        w_grad_tile_ref[...] += res
+        w_write_future.start()
+
+    @pl.when(stage_index == 1)
+    def wait_async_writes():
+        w_write_future.wait()
+
+
 @partial(
     jax.jit,
     static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision"],
@@ -421,14 +837,116 @@ def linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
     v_dim = w.shape[1]
     b_dim = x.shape[0]
     h_dim = x.shape[-1]
+    num_v_blocks = math.ceil(v_dim / block_sizes.v_block_size)
+    num_h_blocks = math.ceil(h_dim / block_sizes.h_block_size)
+    num_stages = 2
+    num_cores = _infer_num_tensorcores()
+    if num_cores > 1:
+        if b_dim % num_cores != 0:
+            num_cores = 1
+        else:
+            b_per_core = b_dim // num_cores
+            if b_per_core % block_sizes.b_block_size != 0:
+                num_cores = 1
+
+    num_b_blocks_per_core = b_dim // (num_cores * block_sizes.b_block_size)
+    x_grad, w_grad_partial = pl.pallas_call(
+        partial(
+            linear_softmax_cross_entropy_loss_backward_pallas_parallel_kernel,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+        ),
+        grid=(num_cores, num_b_blocks_per_core, num_v_blocks, num_stages, num_h_blocks),
+        in_specs=[
+            pl.BlockSpec(  # x
+                (block_sizes.b_block_size, block_sizes.h_block_size),
+                lambda c, i, j, s, k: (c * num_b_blocks_per_core + i, k),
+                memory_space=pltpu.VMEM,
+            ),
+            pl.BlockSpec(  # labels
+                (block_sizes.b_block_size,),
+                lambda c, i, j, s, k: (c * num_b_blocks_per_core + i),
+                memory_space=pltpu.VMEM,
+            ),
+            pl.BlockSpec(  # w
+                (block_sizes.h_block_size, block_sizes.v_block_size),
+                lambda c, i, j, s, k: (k, j),
+                memory_space=pltpu.VMEM,
+            ),
+            pl.BlockSpec(  # lse
+                (block_sizes.b_block_size,),
+                lambda c, i, j, s, k: (c * num_b_blocks_per_core + i,),
+                memory_space=pltpu.VMEM,
+            ),
+            pl.BlockSpec(  # dout_loss
+                (block_sizes.b_block_size,),
+                lambda c, i, j, s, k: (c * num_b_blocks_per_core + i,),
+                memory_space=pltpu.VMEM,
+            ),
+            pl.BlockSpec(  # dout_lse
+                (block_sizes.b_block_size,),
+                lambda c, i, j, s, k: (c * num_b_blocks_per_core + i,),
+                memory_space=pltpu.VMEM,
+            ),
+        ],
+        out_specs=[
+            pl.BlockSpec(memory_space=pltpu.HBM),  # x_grad
+            pl.BlockSpec(memory_space=pltpu.HBM),  # w_grad_partial
+        ],
+        out_shape=[
+            jax.ShapeDtypeStruct(x.shape, dtype=jnp.float32),
+            jax.ShapeDtypeStruct((num_cores,) + w.shape, dtype=jnp.float32),
+        ],
+        scratch_shapes=(
+            pltpu.VMEM((block_sizes.b_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # xw_scratch
+            pltpu.VMEM((block_sizes.b_block_size, block_sizes.h_block_size), dtype=jnp.float32),  # x_grad_tile
+            pltpu.VMEM((block_sizes.h_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # w_grad_tile
+            pltpu.SemaphoreType.DMA,  # x_read_sem
+            pltpu.SemaphoreType.DMA,  # w_read_sem
+            pltpu.SemaphoreType.DMA,  # x_write_sem
+            pltpu.SemaphoreType.DMA,  # w_write_sem
+        ),
+        compiler_params=pltpu.CompilerParams(
+            dimension_semantics=("parallel", "arbitrary", "arbitrary", "arbitrary", "arbitrary"),
+        ),
+    )(x, labels, w, lse, dout_loss, dout_lse)
+    w_grad = jnp.sum(w_grad_partial, axis=0)
+    return x_grad, w_grad
+
+
+@partial(
+    jax.jit,
+    static_argnames=["block_sizes", "dtype", "logit_soft_cap", "precision"],
+)
+def linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split(
+    dout_loss: Float[Array, "B"],
+    dout_lse: Float[Array, "B"],
+    lse: Float[Array, "B"],
+    x: Float[Array, "B H"],
+    labels: Int[Array, "B"],
+    w: Float[Array, "H V"],
+    *,
+    block_sizes: BlockSizes,
+    dtype: Optional[jnp.dtype] = jnp.float32,
+    logit_soft_cap: Optional[float] = None,
+    precision: jax.lax.PrecisionLike = None,
+) -> tuple[Float[Array, "B H"], Float[Array, "H V"]]:
+    """Backward Pallas kernel wrapper (split x/w grads for megacore)."""
+    _validate_inputs(x, labels, w, block_sizes)
+
+    v_dim = w.shape[1]
+    b_dim = x.shape[0]
+    h_dim = x.shape[-1]
     num_b_blocks = math.ceil(b_dim / block_sizes.b_block_size)
     num_v_blocks = math.ceil(v_dim / block_sizes.v_block_size)
     num_h_blocks = math.ceil(h_dim / block_sizes.h_block_size)
     num_stages = 2
 
-    x_grad, w_grad = pl.pallas_call(
+    x_grad = pl.pallas_call(
         partial(
-            linear_softmax_cross_entropy_loss_backward_pallas_kernel,
+            linear_softmax_cross_entropy_loss_backward_x_grad_kernel,
+            v_dim=v_dim,
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
@@ -465,24 +983,73 @@ def linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
                 memory_space=pltpu.VMEM,
             ),
         ],
-        out_specs=[
-            pl.BlockSpec(memory_space=pltpu.HBM),  # x_grad
-            pl.BlockSpec(memory_space=pltpu.HBM),  # w_grad
-        ],
-        out_shape=[
-            jax.ShapeDtypeStruct(x.shape, dtype=jnp.float32),
-            jax.ShapeDtypeStruct(w.shape, dtype=jnp.float32),
-        ],
+        out_specs=pl.BlockSpec(memory_space=pltpu.HBM),  # x_grad
+        out_shape=jax.ShapeDtypeStruct(x.shape, dtype=jnp.float32),
         scratch_shapes=(
             pltpu.VMEM((block_sizes.b_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # xw_scratch
             pltpu.VMEM((block_sizes.b_block_size, block_sizes.h_block_size), dtype=jnp.float32),  # x_grad_tile
-            pltpu.VMEM((block_sizes.h_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # w_grad_tile
             pltpu.SemaphoreType.DMA,  # x_read_sem
-            pltpu.SemaphoreType.DMA,  # w_read_sem
             pltpu.SemaphoreType.DMA,  # x_write_sem
+        ),
+        grid=(num_b_blocks, num_v_blocks, num_stages, num_h_blocks),
+        compiler_params=pltpu.CompilerParams(
+            # Only the batch grid axis is independent for x-grad.
+            dimension_semantics=("parallel", "arbitrary", "arbitrary", "arbitrary"),
+        ),
+    )(x, labels, w, lse, dout_loss, dout_lse)
+
+    w_grad = pl.pallas_call(
+        partial(
+            linear_softmax_cross_entropy_loss_backward_w_grad_kernel,
+            dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+            precision=precision,
+        ),
+        in_specs=[
+            pl.BlockSpec(  # x
+                (block_sizes.b_block_size, block_sizes.h_block_size),
+                lambda i, j, s, k: (i, k),
+                memory_space=pltpu.VMEM,
+            ),
+            pl.BlockSpec(  # labels
+                (block_sizes.b_block_size,),
+                lambda i, j, s, k: (i),
+                memory_space=pltpu.VMEM,
+            ),
+            pl.BlockSpec(  # w
+                (block_sizes.h_block_size, block_sizes.v_block_size),
+                lambda i, j, s, k: (k, j),
+                memory_space=pltpu.VMEM,
+            ),
+            pl.BlockSpec(  # lse
+                (block_sizes.b_block_size,),
+                lambda i, j, s, k: (i,),
+                memory_space=pltpu.VMEM,
+            ),
+            pl.BlockSpec(  # dout_loss
+                (block_sizes.b_block_size,),
+                lambda i, j, s, k: (i,),
+                memory_space=pltpu.VMEM,
+            ),
+            pl.BlockSpec(  # dout_lse
+                (block_sizes.b_block_size,),
+                lambda i, j, s, k: (i,),
+                memory_space=pltpu.VMEM,
+            ),
+        ],
+        out_specs=pl.BlockSpec(memory_space=pltpu.HBM),  # w_grad
+        out_shape=jax.ShapeDtypeStruct(w.shape, dtype=jnp.float32),
+        scratch_shapes=(
+            pltpu.VMEM((block_sizes.b_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # xw_scratch
+            pltpu.VMEM((block_sizes.h_block_size, block_sizes.v_block_size), dtype=jnp.float32),  # w_grad_tile
+            pltpu.SemaphoreType.DMA,  # w_read_sem
             pltpu.SemaphoreType.DMA,  # w_write_sem
         ),
         grid=(num_b_blocks, num_v_blocks, num_stages, num_h_blocks),
+        compiler_params=pltpu.CompilerParams(
+            # Only the vocab grid axis is independent for w-grad.
+            dimension_semantics=("arbitrary", "parallel", "arbitrary", "arbitrary"),
+        ),
     )(x, labels, w, lse, dout_loss, dout_lse)
 
     return x_grad, w_grad
@@ -499,6 +1066,7 @@ def _make_custom_vjp(
     b_block_size: int,
     h_block_size: int,
     v_block_size: int,
+    bwd_strategy: str,
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
@@ -507,11 +1075,10 @@ def _make_custom_vjp(
         b_block_size=b_block_size,
         h_block_size=h_block_size,
         v_block_size=v_block_size,
+        bwd_strategy=bwd_strategy,
     )
-    print(f"Creating custom VJP with block sizes: {block_sizes}")
 
-    @jax.custom_vjp
-    def _fn(x: jax.Array, labels: jax.Array, w: jax.Array):
+    def _forward(x: jax.Array, labels: jax.Array, w: jax.Array):
         return linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
             x,
             labels,
@@ -522,16 +1089,12 @@ def _make_custom_vjp(
             precision=precision,
         )
 
+    @jax.custom_vjp
+    def _fn(x: jax.Array, labels: jax.Array, w: jax.Array):
+        return _forward(x, labels, w)
+
     def _fn_fwd(x: jax.Array, labels: jax.Array, w: jax.Array):
-        loss, lse = linear_softmax_cross_entropy_loss_fwd_pallas_mosaic_tpu(
-            x,
-            labels,
-            w,
-            block_sizes=block_sizes,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-        )
+        loss, lse = _forward(x, labels, w)
         return (loss, lse), (x, labels, w, lse)
 
     def _fn_bwd(residuals, ct):
@@ -540,18 +1103,34 @@ def _make_custom_vjp(
         dout_loss = _zeros_like_if_needed(dout_loss, lse)
         dout_lse = _zeros_like_if_needed(dout_lse, lse)
 
-        x_grad, w_grad = linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
-            dout_loss,
-            dout_lse,
-            lse,
-            x,
-            labels,
-            w,
-            block_sizes=block_sizes,
-            dtype=dtype,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-        )
+        if block_sizes.bwd_strategy == "split":
+            x_grad, w_grad = linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu_split(
+                dout_loss,
+                dout_lse,
+                lse,
+                x,
+                labels,
+                w,
+                block_sizes=block_sizes,
+                dtype=dtype,
+                logit_soft_cap=logit_soft_cap,
+                precision=precision,
+            )
+        elif block_sizes.bwd_strategy == "combined":
+            x_grad, w_grad = linear_softmax_cross_entropy_loss_bwd_pallas_mosaic_tpu(
+                dout_loss,
+                dout_lse,
+                lse,
+                x,
+                labels,
+                w,
+                block_sizes=block_sizes,
+                dtype=dtype,
+                logit_soft_cap=logit_soft_cap,
+                precision=precision,
+            )
+        else:
+            raise ValueError(f"Unsupported bwd_strategy: {block_sizes.bwd_strategy}")
         labels_grad = jnp.zeros_like(labels)
         return x_grad, labels_grad, w_grad
 
@@ -574,6 +1153,7 @@ def linear_softmax_cross_entropy_loss_pallas(
         block_sizes.b_block_size,
         block_sizes.h_block_size,
         block_sizes.v_block_size,
+        block_sizes.bwd_strategy,
         dtype,
         logit_soft_cap,
         precision,

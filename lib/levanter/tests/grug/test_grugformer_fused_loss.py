@@ -56,7 +56,6 @@ def test_linear_softmax_cross_entropy_matches_full_logits():
                 w,
                 y,
                 reduction="none",
-                block_size=6,
                 dtype=jnp.float32,
                 precision=jax.lax.Precision.HIGHEST,
             )
@@ -96,7 +95,10 @@ def test_linear_softmax_cross_entropy_jittable():
 
 def test_linear_softmax_cross_entropy_grad_matches_full():
     key = jax.random.key(0)
-    b, s, h, v = len(jax.devices()), 3, 8, 13
+    if jax.default_backend() == "cpu":
+        b, s, h, v = len(jax.devices()), 3, 8, 13
+    else:
+        b, s, h, v = 8 * len(jax.devices()), 2048, 128, 4096
     hidden = jax.random.normal(key, (b, s, h), dtype=jnp.float32)
     lm_head = jax.random.normal(jax.random.key(1), (h, v), dtype=jnp.float32)
     labels = jax.random.randint(jax.random.key(2), (b, s), 0, v, dtype=jnp.int32)
@@ -111,7 +113,6 @@ def test_linear_softmax_cross_entropy_grad_matches_full():
             lm_head,
             labels,
             reduction="mean",
-            block_size=5,
             dtype=jnp.float32,
             precision=jax.lax.Precision.HIGHEST,
         )

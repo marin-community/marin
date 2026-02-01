@@ -85,6 +85,7 @@ def fused_linear_softmax_cross_entropy_loss(
             logit_soft_cap=None,
             precision=precision,
             # implementation="reference"
+            # implementation="xla"
         )
 
         if reduction_mode is None:

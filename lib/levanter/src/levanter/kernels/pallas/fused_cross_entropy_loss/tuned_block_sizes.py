@@ -48,12 +48,80 @@ TUNED_BLOCK_SIZES: dict[str, dict[tuple[str, str], BlockSizes]] = {
         ("float32", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
     },
     "TPU v5p": {
-        ("bfloat16", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
-        ("bfloat16", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
-        ("bfloat16", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
-        ("float32", "small-vocab"): BlockSizes(b_block_size=1024, h_block_size=256, v_block_size=512),
-        ("float32", "llama3-ish"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=1024),
-        ("float32", "large-batch-small-h"): BlockSizes(b_block_size=1024, h_block_size=512, v_block_size=2048),
+        ("bfloat16", "small-vocab"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=256,
+            v_block_size=512,
+            bwd_strategy="combined",
+        ),
+        ("bfloat16", "llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=1024,
+            bwd_strategy="combined",
+        ),
+        ("bfloat16", "large-batch-small-h"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=256,
+            v_block_size=2048,
+            bwd_strategy="combined",
+        ),
+        ("float32", "small-vocab"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=256,
+            v_block_size=512,
+            bwd_strategy="combined",
+        ),
+        ("float32", "llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=1024,
+            bwd_strategy="combined",
+        ),
+        ("float32", "large-batch-small-h"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=2048,
+            bwd_strategy="combined",
+        ),
+    },
+    "TPU v5": {
+        ("bfloat16", "small-vocab"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=256,
+            v_block_size=512,
+            bwd_strategy="combined",
+        ),
+        ("bfloat16", "llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=1024,
+            bwd_strategy="combined",
+        ),
+        ("bfloat16", "large-batch-small-h"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=2048,
+            bwd_strategy="combined",
+        ),
+        ("float32", "small-vocab"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=256,
+            v_block_size=512,
+            bwd_strategy="combined",
+        ),
+        ("float32", "llama3-ish"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=1024,
+            bwd_strategy="combined",
+        ),
+        ("float32", "large-batch-small-h"): BlockSizes(
+            b_block_size=1024,
+            h_block_size=512,
+            v_block_size=2048,
+            bwd_strategy="combined",
+        ),
     },
 }
 
@@ -154,10 +222,30 @@ def infer_block_sizes(
     return BlockSizes.get_default()
 
 
+def infer_xla_v_block_size(
+    b: int,
+    h: int,
+    v: int,
+    *,
+    dtype: Optional[jnp.dtype],
+    device_kind: Optional[str] = None,
+) -> int:
+    """Heuristic v-block size for the XLA streaming path."""
+    del b, h, dtype, device_kind  # currently unused
+    target = min(v, 32768)
+    if target <= 0:
+        return 1
+    # Keep the block size <= v to avoid excess padding work.
+    if target == v:
+        return target
+    return max(128, 128 * (target // 128))
+
+
 __all__ = [
     "DEFAULT_DEVICE_KEY",
     "ShapeBucket",
     "TUNED_BLOCK_SIZES",
     "SHAPE_BUCKETS",
     "infer_block_sizes",
+    "infer_xla_v_block_size",
 ]

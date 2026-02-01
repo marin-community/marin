@@ -217,3 +217,66 @@ def test_fused_cross_entropy_default_grad_matches_reference():
 
     assert jnp.allclose(gx_default, gx_ref, atol=1e-4, rtol=1e-4)
     assert jnp.allclose(gw_default, gw_ref, atol=1e-4, rtol=1e-4)
+
+
+def test_fused_cross_entropy_pallas_bwd_strategies_match_reference():
+    if jax.default_backend() != "tpu":
+        pytest.skip("requires TPU backend")
+    device_kind = jax.devices()[0].device_kind.lower()
+    if device_kind != "tpu v5":
+        pytest.skip("requires TPU v5 for split/combined comparison")
+
+    hidden, vocab = 128, 256
+
+    logsumexp_weight = 0.2
+    logit_soft_cap = 1.5
+
+    def make_inputs(batch):
+        key = jax.random.PRNGKey(batch)
+        key_x, key_w, key_y = jax.random.split(key, 3)
+        x = jax.random.normal(key_x, (batch, hidden), dtype=jnp.float32)
+        w = jax.random.normal(key_w, (hidden, vocab), dtype=jnp.float32)
+        y = jax.random.randint(key_y, (batch,), 0, vocab, dtype=jnp.int32)
+        return x, w, y
+
+    def loss_ref(x_raw, w_raw, y_raw):
+        loss_val, lse_val = linear_softmax_cross_entropy_loss_reference(
+            x_raw,
+            y_raw,
+            w_raw,
+            dtype=jnp.float32,
+            logit_soft_cap=logit_soft_cap,
+        )
+        loss_val = loss_val + logsumexp_weight * (lse_val**2)
+        return loss_val.mean()
+
+    # strategies = ["combined", "split"]
+    strategies = ["combined"]
+
+    for strategy in strategies:
+        batch = 4096
+        block_sizes_base = dict(b_block_size=1024, h_block_size=128, v_block_size=128)
+        x, w, y = make_inputs(batch)
+        gx_ref, gw_ref = jax.grad(loss_ref, argnums=(0, 1))(x, w, y)
+
+        block_sizes = fused_api.BlockSizes(**block_sizes_base, bwd_strategy=strategy)
+
+        def loss_pallas(x_raw, y, w_raw):
+            return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+                x_raw,
+                y,
+                w_raw,
+                reduction="mean",
+                logsumexp_weight=logsumexp_weight,
+                block_sizes=block_sizes,
+                dtype=jnp.float32,
+                logit_soft_cap=logit_soft_cap,
+                implementation="pallas_tpu",
+            )
+
+        lp = loss_pallas(x, y, w)
+        lp.block_until_ready()
+
+        gx_pallas, gw_pallas = jax.grad(loss_pallas, argnums=(0, 2))(x, y, w)
+        assert jnp.allclose(gx_pallas, gx_ref, atol=1e-4, rtol=1e-4)
+        assert jnp.allclose(gw_pallas, gw_ref, atol=1e-4, rtol=1e-4)

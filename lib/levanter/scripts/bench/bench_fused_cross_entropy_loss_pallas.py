@@ -57,11 +57,11 @@ def _estimate_v5p_roofline(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch", type=int, default=128)
-    parser.add_argument("--pos", type=int, default=8)
-    parser.add_argument("--embed", type=int, default=512)
-    parser.add_argument("--vocab", type=int, default=2048)
-    parser.add_argument("--input-dtype", type=str, default="float32")
+    parser.add_argument("--batch", type=int, default=64)
+    parser.add_argument("--pos", type=int, default=2048)
+    parser.add_argument("--embed", type=int, default=1024)
+    parser.add_argument("--vocab", type=int, default=128256)
+    parser.add_argument("--input-dtype", type=str, default="bfloat16")
     parser.add_argument("--accum-dtype", type=str, default="float32")
     parser.add_argument("--implementation", type=str, default="pallas_tpu")
     parser.add_argument("--block-sizes", type=str, choices=("default", "infer"), default="default")
