@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Union
 
+import fsspec
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -431,9 +433,10 @@ def main(config: EvalVLMConfig):
 
         print("=" * 60)
 
-        # Save results locally
+        # Save results (supports both local and GCS paths via fsspec)
         output_dir = config.output_dir or "./vlm_eval_results"
-        os.makedirs(output_dir, exist_ok=True)
+        fs, plain_path = fsspec.core.url_to_fs(output_dir)
+        fs.makedirs(plain_path, exist_ok=True)
 
         # Generate timestamped filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -442,7 +445,7 @@ def main(config: EvalVLMConfig):
             task_names += f"_and_{len(task_spec) - 3}_more"
 
         # Save summary results
-        results_file = os.path.join(output_dir, f"results_{task_names}_{timestamp}.json")
+        results_file = os.path.join(plain_path, f"results_{task_names}_{timestamp}.json")
         results_data = {
             "timestamp": timestamp,
             "checkpoint": config.checkpoint_path or str(config.hf_checkpoint),
@@ -487,18 +490,20 @@ def main(config: EvalVLMConfig):
             },
         }
 
-        with open(results_file, "w") as f:
+        with fs.open(results_file, "w") as f:
             json.dump(results_data, f, indent=2, default=str)
-        logger.info(f"Results saved to: {results_file}")
-        print(f"\nResults saved to: {results_file}")
+        display_path = f"{output_dir.rstrip('/')}/results_{task_names}_{timestamp}.json"
+        logger.info(f"Results saved to: {display_path}")
+        print(f"\nResults saved to: {display_path}")
 
         # Save sample outputs if enabled
         if config.save_samples and sample_outputs:
-            samples_file = os.path.join(output_dir, f"samples_{task_names}_{timestamp}.json")
-            with open(samples_file, "w") as f:
+            samples_file = os.path.join(plain_path, f"samples_{task_names}_{timestamp}.json")
+            with fs.open(samples_file, "w") as f:
                 json.dump(sample_outputs, f, indent=2, default=str)
-            logger.info(f"Sample outputs saved to: {samples_file}")
-            print(f"Sample outputs saved to: {samples_file}")
+            samples_display_path = f"{output_dir.rstrip('/')}/samples_{task_names}_{timestamp}.json"
+            logger.info(f"Sample outputs saved to: {samples_display_path}")
+            print(f"Sample outputs saved to: {samples_display_path}")
 
             # Also print a few sample outputs to console
             print("\n" + "-" * 60)

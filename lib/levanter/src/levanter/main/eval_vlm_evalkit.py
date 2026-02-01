@@ -327,6 +327,7 @@ def main(config: EvalVLMEvalKitConfig):
         model_name = "levanter_vlm"
 
         all_results = {}
+        all_predictions = {}  # Store detailed predictions for each benchmark
         for benchmark in config.benchmarks:
             logger.info(f"Evaluating on {benchmark}...")
             try:
@@ -379,6 +380,10 @@ def main(config: EvalVLMEvalKitConfig):
                         try:
                             result = vlm_model._engine.generate(vlm_requests)
 
+                            # Debug: log generation result info
+                            num_tokens = len(result.tokens) if result.tokens else 0
+                            logger.info(f"Batch {batch_idx}: {len(vlm_requests)} requests, {num_tokens} token sequences returned")
+
                             # Decode results
                             for i, idx in enumerate(batch_indices):
                                 if result.tokens and i < len(result.tokens):
@@ -387,13 +392,20 @@ def main(config: EvalVLMEvalKitConfig):
                                     new_tokens = generated_tokens[prompt_len:]
                                     text = vlm_model.tokenizer.decode(new_tokens, skip_special_tokens=True)
                                     results[idx] = text.strip()
+                                    if not text.strip():
+                                        logger.warning(f"Empty generation for index {idx}: prompt_len={prompt_len}, generated_len={len(generated_tokens)}, new_tokens_len={len(new_tokens)}")
                                 else:
+                                    logger.warning(f"No tokens for index {idx}: result.tokens={result.tokens is not None}, i={i}, num_tokens={num_tokens}")
                                     results[idx] = ""
                         except Exception as e:
                             logger.error(f"Error during batch generation: {e}")
+                            import traceback
+                            traceback.print_exc()
                             for idx in batch_indices:
                                 if idx not in results:
                                     results[idx] = ""
+                    else:
+                        logger.warning(f"Batch {batch_idx}: No valid VLM requests created")
 
                     processed = batch_end
                     if processed % 50 == 0 or processed == len(data):
@@ -407,6 +419,17 @@ def main(config: EvalVLMEvalKitConfig):
                     pred_data = pred_data.drop(columns=['image'])
                 pred_data.to_excel(result_file, index=False)
                 logger.info(f"Predictions saved to: {result_file}")
+
+                # Collect predictions for JSON output
+                all_predictions[benchmark] = [
+                    {
+                        "index": int(row['index']),
+                        "question": str(row.get('question', '')),
+                        "answer": str(row.get('answer', '')),
+                        "prediction": str(row.get('prediction', '')),
+                    }
+                    for _, row in pred_data.iterrows()
+                ]
 
                 # Run evaluation
                 eval_result = EVAL(dataset_name, result_file)
@@ -456,6 +479,7 @@ def main(config: EvalVLMEvalKitConfig):
             "checkpoint": config.checkpoint_path or str(config.hf_checkpoint),
             "benchmarks": config.benchmarks,
             "results": all_results,
+            "predictions": all_predictions,
             "metadata": {
                 "model": {
                     "vision_encoder": config.model.vision_encoder_type,
@@ -492,18 +516,27 @@ def main(config: EvalVLMEvalKitConfig):
 
         # Use fsspec to support both local and GCS paths
         results_filename = f"results_{benchmark_names}_{timestamp}.json"
-        if output_dir.startswith("gs://"):
-            results_file = f"{output_dir.rstrip('/')}/{results_filename}"
-        else:
-            os.makedirs(output_dir, exist_ok=True)
-            results_file = os.path.join(output_dir, results_filename)
+        fs, plain_path = fsspec.core.url_to_fs(output_dir)
+        fs.makedirs(plain_path, exist_ok=True)
+        results_file = os.path.join(plain_path, results_filename)
 
-        fs, path = fsspec.core.url_to_fs(results_file)
-        with fs.open(path, "w") as f:
+        with fs.open(results_file, "w") as f:
             json.dump(results_data, f, indent=2, default=str)
 
-        logger.info(f"Results saved to: {results_file}")
-        print(f"\nResults saved to: {results_file}")
+        # Log with the original output_dir prefix for user reference
+        display_path = f"{output_dir.rstrip('/')}/{results_filename}"
+        logger.info(f"Results saved to: {display_path}")
+        print(f"\nResults saved to: {display_path}")
+
+        # Save samples to separate JSON file (like lm-eval-harness format)
+        if all_predictions:
+            samples_filename = f"samples_{benchmark_names}_{timestamp}.json"
+            samples_file = os.path.join(plain_path, samples_filename)
+            with fs.open(samples_file, "w") as f:
+                json.dump(all_predictions, f, indent=2, default=str)
+            samples_display_path = f"{output_dir.rstrip('/')}/{samples_filename}"
+            logger.info(f"Sample outputs saved to: {samples_display_path}")
+            print(f"Sample outputs saved to: {samples_display_path}")
 
         return all_results
 

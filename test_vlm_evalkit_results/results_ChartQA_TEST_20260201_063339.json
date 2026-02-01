@@ -1,0 +1,42 @@
+{
+  "timestamp": "20260201_063339",
+  "checkpoint": "gs://marin-us-east1/checkpoints/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/hf/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/step-39061/",
+  "benchmarks": [
+    "ChartQA_TEST"
+  ],
+  "results": {
+    "ChartQA_TEST": "   test_human  Overall\n0         0.0      0.0"
+  },
+  "metadata": {
+    "model": {
+      "vision_encoder": "siglip",
+      "vision_hidden_size": 1152,
+      "vision_image_size": 384,
+      "vision_patch_size": 16,
+      "text_hidden_size": 2048,
+      "text_num_layers": 28,
+      "text_max_seq_len": 4096
+    },
+    "eval_config": {
+      "max_eval_length": 4096,
+      "max_gen_toks": 512,
+      "max_examples": 14,
+      "vlm_batch_size": 4,
+      "temperature": 0.0
+    },
+    "image_processing": {
+      "image_size": 384,
+      "patch_size": 16,
+      "vision_feature_height": 24,
+      "disable_anyres": true
+    },
+    "paths": {
+      "processor_path": "gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf",
+      "tokenizer_path": "gs://marin-vlm/tokenizers/Qwen3-1.7B"
+    },
+    "hardware": {
+      "num_devices": 8,
+      "device_type": "tpu"
+    }
+  }
+}

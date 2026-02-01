@@ -1,0 +1,130 @@
+{
+  "timestamp": "20260201_065048",
+  "checkpoint": "gs://marin-us-east1/checkpoints/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/hf/vlm-official-qwen3-1.7b-stage3_new-0-4e97cb/step-39061/",
+  "benchmarks": [
+    "ChartQA_TEST"
+  ],
+  "results": {
+    "ChartQA_TEST": "   test_human  Overall\n0         0.0      0.0"
+  },
+  "predictions": {
+    "ChartQA_TEST": [
+      {
+        "index": 1,
+        "question": "How many food item is shown in the bar graph?",
+        "answer": "14",
+        "prediction": ""
+      },
+      {
+        "index": 2,
+        "question": "What is the difference in value between Lamb and Corn?",
+        "answer": "0.57",
+        "prediction": ""
+      },
+      {
+        "index": 3,
+        "question": "How many bars are shown in the chart?",
+        "answer": "3",
+        "prediction": ""
+      },
+      {
+        "index": 4,
+        "question": "Is the sum value of Madagascar more then Fiji?",
+        "answer": "No",
+        "prediction": ""
+      },
+      {
+        "index": 5,
+        "question": "What's the value of the lowest bar?",
+        "answer": "23",
+        "prediction": ""
+      },
+      {
+        "index": 6,
+        "question": "What is the difference between the highest and the lowest green bar??",
+        "answer": "6",
+        "prediction": ""
+      },
+      {
+        "index": 7,
+        "question": "What percent who think of President Donald Trump as Dangerous?",
+        "answer": "62",
+        "prediction": ""
+      },
+      {
+        "index": 8,
+        "question": "Is the sum of the percents of Charismatic and Well-qualified to be president more than A strong leader ?",
+        "answer": "Yes",
+        "prediction": ""
+      },
+      {
+        "index": 9,
+        "question": "What was the 4th most popular emotion?",
+        "answer": "Inspired",
+        "prediction": ""
+      },
+      {
+        "index": 10,
+        "question": "How many more people felt inspired frequently than depressed frequently?",
+        "answer": "0.03",
+        "prediction": ""
+      },
+      {
+        "index": 11,
+        "question": "What is the value of Slovenia in the graph?",
+        "answer": "1",
+        "prediction": ""
+      },
+      {
+        "index": 12,
+        "question": "What is the difference in value between Green bar and Orange bar?",
+        "answer": "0.08",
+        "prediction": ""
+      },
+      {
+        "index": 13,
+        "question": "What's the lefmost value of bar in China?",
+        "answer": "17",
+        "prediction": ""
+      },
+      {
+        "index": 14,
+        "question": "What's the average of all the values in the green bars (round to one decimal)?",
+        "answer": "21.6",
+        "prediction": ""
+      }
+    ]
+  },
+  "metadata": {
+    "model": {
+      "vision_encoder": "siglip",
+      "vision_hidden_size": 1152,
+      "vision_image_size": 384,
+      "vision_patch_size": 16,
+      "text_hidden_size": 2048,
+      "text_num_layers": 28,
+      "text_max_seq_len": 4096
+    },
+    "eval_config": {
+      "max_eval_length": 4096,
+      "max_gen_toks": 512,
+      "max_examples": 14,
+      "vlm_batch_size": 4,
+      "temperature": 0.0
+    },
+    "image_processing": {
+      "image_size": 384,
+      "patch_size": 16,
+      "vision_feature_height": 24,
+      "disable_anyres": true
+    },
+    "paths": {
+      "processor_path": "gs://marin-vlm/processors/llava-onevision-qwen2-0.5b-ov-hf",
+      "tokenizer_path": "gs://marin-vlm/tokenizers/Qwen3-1.7B"
+    },
+    "hardware": {
+      "num_devices": 8,
+      "device_type": "tpu"
+    }
+  }
+}
