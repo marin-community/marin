@@ -44,17 +44,22 @@ RUN add-apt-repository ppa:deadsnakes/ppa \
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 2 \
     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
+# Pre-populate the GitHub Actions tool cache with official Python builds from
+# actions/python-versions. setup-python checks AGENT_TOOLSDIRECTORY for cached
+# installations; if found it skips the ~5min download. We also write
+# AGENT_TOOLSDIRECTORY into the runner's .env so the runner process picks it up.
 ARG AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache
 ENV AGENT_TOOLSDIRECTORY=${AGENT_TOOLSDIRECTORY}
 
-# Populate tool cache entries so setup-python skips downloading.
-# The action looks for $AGENT_TOOLSDIRECTORY/Python/<version>/x64/python
-RUN for pyver in 3.11 3.12; do \
-        full=$(python${pyver} -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"); \
-        dir="${AGENT_TOOLSDIRECTORY}/Python/${full}/x64"; \
+RUN mkdir -p "${AGENT_TOOLSDIRECTORY}/Python" \
+    && for url in \
+        "https://github.com/actions/python-versions/releases/download/3.12.12-18393146713/python-3.12.12-linux-22.04-x64.tar.gz" \
+        "https://github.com/actions/python-versions/releases/download/3.11.14-18393181605/python-3.11.14-linux-22.04-x64.tar.gz" \
+    ; do \
+        ver=$(echo "$url" | grep -oP 'python-\K[0-9]+\.[0-9]+\.[0-9]+'); \
+        dir="${AGENT_TOOLSDIRECTORY}/Python/${ver}/x64"; \
         mkdir -p "${dir}"; \
-        ln -s /usr/bin/python${pyver} "${dir}/python"; \
-        ln -s /usr/bin/python${pyver} "${dir}/python3"; \
+        curl -sSL "$url" | tar xz -C "${dir}"; \
         touch "${dir}.complete"; \
     done \
     && node_full=$(node -v | sed 's/^v//') \
@@ -74,6 +79,10 @@ RUN mkdir -p /home/${RUNNER_USER}/actions-runner \
     && tar xzf actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
     && rm actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
     && chown -R ${RUNNER_USER}:${RUNNER_USER} /home/${RUNNER_USER}/actions-runner
+
+# Write AGENT_TOOLSDIRECTORY into the runner's .env so the runner process uses
+# our pre-populated cache instead of its default _work/_tool path.
+RUN echo "AGENT_TOOLSDIRECTORY=${AGENT_TOOLSDIRECTORY}" >> /home/${RUNNER_USER}/actions-runner/.env
 
 # Install runner dependencies
 RUN /home/${RUNNER_USER}/actions-runner/bin/installdependencies.sh

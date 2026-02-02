@@ -308,6 +308,20 @@ echo "=== Setting up CPU CI runners ==="
 echo "Pulling CPU CI Docker image..."
 docker pull {config.CPU_CI_IMAGE} || true
 
+# Maintain a bare git mirror on the host so containers can reuse git objects
+# instead of fetching everything from GitHub (~2 MiB/s rate-limited).
+echo "Setting up git mirror cache..."
+GIT_MIRROR=/var/cache/git/marin.git
+mkdir -p /var/cache/git
+if [ -d "$GIT_MIRROR" ]; then
+    cd "$GIT_MIRROR" && git fetch --prune --quiet || true
+    cd /
+else
+    git clone --mirror --depth=1 https://github.com/{config.GITHUB_REPOSITORY}.git "$GIT_MIRROR" || true
+fi
+chmod -R a+rX /var/cache/git
+echo "Git mirror cache ready"
+
 # Pre-populate the shared UV cache so the first CI job doesn't start cold.
 # Clones the repo and runs uv sync for each subpackage that CPU tests use.
 echo "Pre-populating UV cache for CPU CI..."
@@ -360,8 +374,10 @@ ExecStart=/usr/bin/docker run --rm \\
   -e RUNNER_NAME=$RUNNER_NAME \\
   -e RUNNER_LABELS={",".join(config.CPU_RUNNER_LABELS)} \\
   -v /var/cache/uv:/opt/uv-cache:rw \\
+  -v /var/cache/git:/var/cache/git:ro \\
   -e UV_CACHE_DIR=/opt/uv-cache \\
   -e UV_LINK_MODE=copy \\
+  -e GIT_ALTERNATE_OBJECT_DIRECTORIES=/var/cache/git/marin.git/objects \\
   {config.CPU_CI_IMAGE}
 ExecStop=/usr/bin/docker stop $SERVICE_NAME
 

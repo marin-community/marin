@@ -33,6 +33,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
         with:
@@ -60,6 +62,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
         with:
@@ -86,6 +90,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
         with:
@@ -112,6 +118,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - name: Install uv and Python
         uses: astral-sh/setup-uv@v6
         with:
@@ -152,6 +160,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          fetch-depth: 1
           ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
 
       - name: Run Levanter TPU tests in Docker

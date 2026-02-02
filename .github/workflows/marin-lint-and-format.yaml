@@ -13,6 +13,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
+      with:
+        fetch-depth: 1
 
     - name: Install uv and Python
       uses: astral-sh/setup-uv@v6

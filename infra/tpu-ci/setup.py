@@ -120,22 +120,8 @@ def check_ghcr_authentication() -> bool:
     return False
 
 
-def build_and_push_docker_image():
-    """Build and push TPU CI Docker image to GitHub Container Registry."""
-    logging.info("Building and pushing Docker image to ghcr.io...")
-
-    # Build the full image URLs (both latest and date-tagged)
-    base_url = f"ghcr.io/{config.GITHUB_REPOSITORY}/{config.DOCKER_IMAGE_NAME}"
-    latest_image = f"{base_url}:{config.DOCKER_IMAGE_TAG}"
-
-    date_tag = datetime.utcnow().strftime("%Y-%m-%d-%H%M")
-    date_image = f"{base_url}:{date_tag}"
-
-    logging.info("Target images:")
-    logging.info(f"  - {latest_image}")
-    logging.info(f"  - {date_image}")
-
-    # Check if user is authenticated to ghcr.io
+def ensure_ghcr_authenticated():
+    """Check ghcr.io authentication and exit with instructions if not authenticated."""
     if not check_ghcr_authentication():
         logging.error("Not authenticated to ghcr.io")
         logging.error("")
@@ -152,6 +138,19 @@ def build_and_push_docker_image():
 
     logging.info("✓ Authenticated to ghcr.io")
 
+
+def _build_and_push_image(image_name: str, image_tag: str, dockerfile_path: str):
+    """Build and push a Docker image to GitHub Container Registry."""
+    base_url = f"ghcr.io/{config.GITHUB_REPOSITORY}/{image_name}"
+    latest_image = f"{base_url}:{image_tag}"
+
+    date_tag = datetime.utcnow().strftime("%Y-%m-%d-%H%M")
+    date_image = f"{base_url}:{date_tag}"
+
+    logging.info(f"Building {image_name}:")
+    logging.info(f"  - {latest_image}")
+    logging.info(f"  - {date_image}")
+
     run(
         [
             "docker",
@@ -165,15 +164,27 @@ def build_and_push_docker_image():
             "-t",
             date_image,
             "-f",
-            config.DOCKERFILE_TPU_CI_PATH,
+            dockerfile_path,
             ".",
         ],
         check=True,
     )
 
-    logging.info("✓ Docker images built and pushed to ghcr.io")
-    logging.info(f"  - {latest_image}")
-    logging.info(f"  - {date_image}")
+    logging.info(f"✓ {image_name} built and pushed")
+
+
+def build_and_push_docker_image():
+    """Build and push TPU CI Docker image to GitHub Container Registry."""
+    logging.info("Building and pushing Docker images to ghcr.io...")
+    ensure_ghcr_authenticated()
+    _build_and_push_image(config.DOCKER_IMAGE_NAME, config.DOCKER_IMAGE_TAG, config.DOCKERFILE_TPU_CI_PATH)
+
+
+def build_and_push_cpu_ci_image():
+    """Build and push CPU CI Docker image to GitHub Container Registry."""
+    logging.info("Building and pushing CPU CI Docker image to ghcr.io...")
+    ensure_ghcr_authenticated()
+    _build_and_push_image(config.CPU_CI_IMAGE_NAME, config.CPU_CI_IMAGE_TAG, config.DOCKERFILE_CPU_CI_PATH)
 
 
 def delete_controller_vm():
@@ -414,6 +425,23 @@ def build_image():
     logging.info("Building TPU CI Docker image...")
     build_and_push_docker_image()
     logging.info("✓ Image build complete")
+
+
+@cli.command("build-cpu-image")
+def build_cpu_image():
+    """Build and push the CPU CI Docker image to ghcr.io."""
+    logging.info("Building CPU CI Docker image...")
+    build_and_push_cpu_ci_image()
+    logging.info("✓ CPU CI image build complete")
+
+
+@cli.command("build-all-images")
+def build_all_images():
+    """Build and push both TPU CI and CPU CI Docker images to ghcr.io."""
+    ensure_ghcr_authenticated()
+    _build_and_push_image(config.DOCKER_IMAGE_NAME, config.DOCKER_IMAGE_TAG, config.DOCKERFILE_TPU_CI_PATH)
+    _build_and_push_image(config.CPU_CI_IMAGE_NAME, config.CPU_CI_IMAGE_TAG, config.DOCKERFILE_CPU_CI_PATH)
+    logging.info("✓ All images built and pushed")
 
 
 @cli.command("controller-logs")
