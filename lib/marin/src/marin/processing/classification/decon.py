@@ -105,11 +105,18 @@ def _bloom_hash(x: str) -> int:
     return int.from_bytes(hashlib.blake2b(x.encode(), digest_size=8).digest(), "big")
 
 
+def _tokenize_for_ngrams(text: str) -> list[str]:
+    """
+    Tokenize text for n-gram extraction.
+    """
+    return text.lower().split()
+
+
 def extract_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
     """
     Extract n-grams from text based on config.
     """
-    tokens: list[str] = text.split()
+    tokens = _tokenize_for_ngrams(text)
 
     for i in range(0, len(tokens) - n + 1, stride + 1):
         yield " ".join(tokens[i : i + n])
@@ -119,14 +126,12 @@ def extract_features(text: str, ngram_config: NGramConfig | None) -> Iterator[st
     """
     Extract features (paragraphs or n-grams) from text.
     """
-    paragraphs = text.split("\n")
+    if ngram_config:
+        yield from extract_ngrams(text, ngram_config.ngram_length, ngram_config.stride)
+        return
 
-    for para in paragraphs:
-        if ngram_config:
-            yield from extract_ngrams(para, ngram_config.ngram_length, ngram_config.stride)
-        else:
-            # Exact paragraph matching
-            yield para
+    # Exact paragraph matching
+    yield from text.split("\n")
 
 
 def _collect_input_files(input_path: str | list[str]) -> list[str]:
@@ -259,15 +264,12 @@ def calculate_paragraph_overlap(paragraph: str, bloom_filter: "Bloom", ngram_con
     if ngram_config:
         ngrams = list(extract_ngrams(paragraph, ngram_config.ngram_length, ngram_config.stride))
         if not ngrams:
-            # Paragraph too short for n-grams - fall back to exact paragraph matching
-            return 1.0 if _bloom_hash(paragraph) in bloom_filter else 0.0
-        else:
-            # N-gram matching
-            matches = sum(1 for ng in ngrams if _bloom_hash(ng) in bloom_filter)
-            return matches / len(ngrams)
-    else:
-        # Exact paragraph matching
-        return 1.0 if _bloom_hash(paragraph) in bloom_filter else 0.0
+            return 0.0
+        matches = sum(1 for ng in ngrams if _bloom_hash(ng) in bloom_filter)
+        return matches / len(ngrams)
+
+    # Exact paragraph matching
+    return 1.0 if _bloom_hash(paragraph) in bloom_filter else 0.0
 
 
 def mark_duplicates_bloom(
@@ -296,19 +298,25 @@ def mark_duplicates_bloom(
         # Process each record
         for record in records:
             text = record.get(config.text_field, "")
-            paragraphs = text.split("\n")
             duplicate_spans = []
+            if config.ngram is None:
+                paragraphs = text.split("\n")
+                threshold = 1.0
+                offset = 0
+                for para in paragraphs:
+                    if not para:
+                        offset += 1  # Just the newline
+                        continue
 
-            offset = 0
-            for para in paragraphs:
-                if not para:
-                    offset += 1  # Just the newline
-                    continue
-
-                overlap_score = calculate_paragraph_overlap(para, bf, config.ngram)
-                if overlap_score > 0:
-                    duplicate_spans.append([offset, offset + len(para), overlap_score])
-                offset += len(para) + 1  # +1 for newline
+                    overlap_score = calculate_paragraph_overlap(para, bf, config.ngram)
+                    if overlap_score >= threshold:
+                        duplicate_spans.append([offset, offset + len(para), overlap_score])
+                    offset += len(para) + 1  # +1 for newline
+            else:
+                overlap_score = calculate_paragraph_overlap(text, bf, config.ngram)
+                threshold = config.ngram.overlap_threshold
+                if overlap_score >= threshold:
+                    duplicate_spans.append([0, len(text), overlap_score])
 
             yield {
                 "id": _record_id(record),

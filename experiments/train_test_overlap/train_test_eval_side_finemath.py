@@ -18,6 +18,7 @@ Run eval-side train/test overlap detection for FineMath, one step per training f
 
 This builds one Bloom filter per training file and applies it to each eval dataset
 so we can report overlaps with training-file provenance and run steps in parallel.
+takes 27 min on central2
 """
 
 import hashlib
@@ -36,7 +37,7 @@ from marin.processing.classification.decon import DeconConfig, NGramConfig
 from experiments.midtraining_datasets import finemath_3_plus
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 from experiments.train_test_overlap.ngram_new.utils import parse_eval_dataset_name
-from experiments.train_test_overlap.train_test_total import DEFAULT_NGRAM_CONFIG, DatasetConfig
+from experiments.train_test_overlap.train_test_total import DatasetConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -62,6 +63,12 @@ class PerFileEvalOverlapConfig:
 
 
 FINEMATH_CONFIG = DatasetConfig(name="finemath", path=finemath_3_plus, text_field="text")
+
+DEFAULT_NGRAM_CONFIG = NGramConfig(
+    ngram_length=[20],
+    overlap_threshold=1e-6,
+    stride=0,
+)
 
 
 def _train_label(path: str) -> str:
@@ -164,7 +171,7 @@ def build_eval_side_steps(training_config: DatasetConfig, prefix: str) -> list[E
         )
         steps.append(
             ExecutorStep(
-                name=f"train_test_overlap/dolma/eval_side_per_file/{training_config.name}/{label}",
+                name=f"train_test_overlap/decon/eval_side_per_file/{training_config.name}/{label}",
                 fn=run_eval_side_per_file,
                 config=config,
                 description=f"Eval-side overlap per file: {training_config.name}/{os.path.basename(train_path)}",

@@ -263,7 +263,7 @@ def build_decon_eval_reduce_step(
 ) -> ExecutorStep:
     cfg = DeconEvalReduceConfig(
         eval_side_base_path=eval_side_base_path
-        or InputName.hardcoded("train_test_overlap/dolma/eval_side_per_file/finemath"),
+        or InputName.hardcoded("train_test_overlap/decon/eval_side_per_file/finemath"),
         eval_side_output_paths=eval_side_output_paths,
         output_path=output_path or this_output_path(),
         eval_dataset_paths=eval_dataset_paths or EVAL_DATASET_STEPS,
