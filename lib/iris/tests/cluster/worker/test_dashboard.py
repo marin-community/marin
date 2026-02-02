@@ -258,8 +258,15 @@ def test_get_logs_with_tail_parameter(client, worker):
     while worker.get_task("task-tail").status == cluster_pb2.TASK_STATE_BUILDING:
         time.sleep(0.1)
 
-    # inject logs
+    # Stop the task thread so it doesn't add more logs
     task = worker.get_task("task-tail")
+    time.sleep(0.05)
+    task.should_stop = True
+    if task.thread:
+        task.thread.join(timeout=1.0)
+
+    # Clear any existing logs and inject test logs
+    task.logs.lines.clear()
     for i in range(100):
         task.logs.add("stdout", f"Log line {i}")
 

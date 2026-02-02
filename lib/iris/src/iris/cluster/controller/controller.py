@@ -676,7 +676,7 @@ class Controller:
 
         Rate-limits evaluations based on the autoscaler's configured evaluation_interval_seconds.
         """
-        if not self._autoscaler:
+        if not self._autoscaler or self._stop:
             return
 
         from time import monotonic
