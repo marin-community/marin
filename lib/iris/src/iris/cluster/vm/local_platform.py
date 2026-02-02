@@ -48,9 +48,8 @@ from iris.cluster.worker.builder import BuildResult
 from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, ContainerStats, ContainerStatus
 from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
-from iris.managed_thread import ManagedThread, get_thread_registry
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -99,17 +98,19 @@ class _StreamingCapture(io.StringIO):
 @dataclass
 class _LocalContainer:
     config: ContainerConfig
-    _thread: ManagedThread | None = field(default=None, repr=False)
+    _thread: threading.Thread | None = field(default=None, repr=False)
     _running: bool = False
     _exit_code: int | None = None
     _error: str | None = None
     _logs: list[LogLine] = field(default_factory=list)
+    _killed: threading.Event = field(default_factory=threading.Event)
 
     def start(self):
         self._running = True
-        self._thread = get_thread_registry().spawn(target=self._execute, name="local-container")
+        self._thread = threading.Thread(target=self._execute, daemon=True)
+        self._thread.start()
 
-    def _execute(self, stop_event: threading.Event):
+    def _execute(self):
         from iris.cluster.client.job_info import JobInfo, _parse_ports_from_env, set_job_info
 
         stdout_capture = _StreamingCapture(self, "stdout")
@@ -132,7 +133,8 @@ class _LocalContainer:
 
             entrypoint = self.config.entrypoint
 
-            if stop_event.is_set():
+            # Check if killed before executing
+            if self._killed.is_set():
                 self._exit_code = 137
                 return
 
@@ -169,8 +171,9 @@ class _LocalContainer:
             self._running = False
 
     def kill(self):
-        if self._thread:
-            self._thread.stop()
+        self._killed.set()
+        # Give thread a moment to notice
+        if self._thread and self._thread.is_alive():
             self._thread.join(timeout=0.5)
         if self._running:
             self._running = False
@@ -238,11 +241,13 @@ class _LocalImageProvider:
     def build(
         self,
         bundle_path: Path,
-        dockerfile: str,
+        base_image: str,
+        extras: list[str],
         job_id: str,
         task_logs=None,
+        pip_packages: list[str] | None = None,
     ) -> BuildResult:
-        del bundle_path, dockerfile, job_id, task_logs
+        del bundle_path, base_image, extras, job_id, task_logs, pip_packages
         return BuildResult(
             image_tag="local:latest",
             build_time_ms=0,
@@ -350,7 +355,7 @@ class LocalVmGroup(VmGroupProtocol):
         self._scale_group = scale_group
         self._workers = workers
         self._worker_ids = worker_ids
-        self._created_at_ms = now_ms()
+        self._created_at = Timestamp.now()
         self._vm_registry = vm_registry
         self._terminated = False
 
@@ -367,8 +372,8 @@ class LocalVmGroup(VmGroupProtocol):
                 address=f"127.0.0.1:{port}",
                 zone="local",
                 worker_id=worker_id,
-                created_at_ms=self._created_at_ms,
-                state_changed_at_ms=self._created_at_ms,
+                created_at=self._created_at.to_proto(),
+                state_changed_at=self._created_at.to_proto(),
             )
             # Create a stub ManagedVm that just holds the info
             managed_vm = _StubManagedVm(vm_info)
@@ -389,7 +394,8 @@ class LocalVmGroup(VmGroupProtocol):
 
     @property
     def created_at_ms(self) -> int:
-        return self._created_at_ms
+        """Timestamp when this VM group was created (milliseconds since epoch)."""
+        return self._created_at.epoch_ms()
 
     def status(self) -> VmGroupStatus:
         if self._terminated:
@@ -434,7 +440,7 @@ class LocalVmGroup(VmGroupProtocol):
         return vm_pb2.SliceInfo(
             slice_id=self._group_id,
             scale_group=self._scale_group,
-            created_at_ms=self._created_at_ms,
+            created_at=self._created_at.to_proto(),
             vms=[vm.info for vm in self._managed_vms],
         )
 
@@ -518,7 +524,7 @@ class LocalVmManager:
                 cache_dir=self._cache_path,
                 controller_address=self._controller_address,
                 worker_id=worker_id,
-                poll_interval_seconds=0.1,  # Fast polling for demos
+                poll_interval=Duration.from_seconds(0.1),
             )
             worker = Worker(
                 worker_config,
@@ -583,8 +589,8 @@ def _create_local_autoscaler(
         scale_groups[name] = ScalingGroup(
             config=sg_config,
             vm_manager=manager,
-            scale_up_cooldown_ms=1000,
-            scale_down_cooldown_ms=300_000,
+            scale_up_cooldown=Duration.from_ms(1000),
+            scale_down_cooldown=Duration.from_ms(300_000),
         )
 
     return Autoscaler(

@@ -26,6 +26,7 @@ from iris.cluster.vm.ssh import (
     run_streaming_with_retry,
     wait_for_connection,
 )
+from iris.time_utils import Duration
 
 
 def make_fake_popen(lines: list[str] | None = None):
@@ -60,35 +61,34 @@ def test_wait_for_connection_returns_true_immediately(mock_conn_avail, _mock_sle
     """wait_for_connection returns True if connection available immediately."""
     mock_conn_avail.return_value = True
     conn = MagicMock()
-    assert wait_for_connection(conn, timeout_seconds=60, poll_interval=5) is True
+    assert wait_for_connection(conn, timeout=Duration.from_seconds(60), poll_interval=Duration.from_seconds(5)) is True
     mock_conn_avail.assert_called_once()
 
 
 @patch("iris.cluster.vm.ssh.time.sleep")
 @patch("iris.cluster.vm.ssh.connection_available")
-@patch("iris.cluster.vm.ssh.time.time")
-def test_wait_for_connection_returns_false_on_timeout(mock_time, mock_conn_avail, _mock_sleep):
+def test_wait_for_connection_returns_false_on_timeout(mock_conn_avail, _mock_sleep):
     """wait_for_connection returns False when timeout expires."""
     mock_conn_avail.return_value = False
-    # Provide enough time values for all calls - the function now also logs which triggers
-    # additional time.time() calls from the logging module, so use a callable
-    times = iter([0, 0, 5, 11])
-    mock_time.side_effect = lambda: next(times, 100)  # Return 100 for any extra calls (logging)
     conn = MagicMock()
-    assert wait_for_connection(conn, timeout_seconds=10, poll_interval=5) is False
+    # Use a very short timeout so the real monotonic deadline expires quickly
+    assert wait_for_connection(conn, timeout=Duration.from_ms(50), poll_interval=Duration.from_ms(10)) is False
 
 
 @patch("iris.cluster.vm.ssh.time.sleep")
 @patch("iris.cluster.vm.ssh.connection_available")
-@patch("iris.cluster.vm.ssh.time.time")
-def test_wait_for_connection_respects_stop_event(mock_time, mock_conn_avail, _mock_sleep):
+def test_wait_for_connection_respects_stop_event(mock_conn_avail, _mock_sleep):
     """wait_for_connection returns False when stop_event is set."""
     mock_conn_avail.return_value = False
-    mock_time.return_value = 0
     conn = MagicMock()
     stop_event = threading.Event()
     stop_event.set()
-    assert wait_for_connection(conn, timeout_seconds=60, poll_interval=5, stop_event=stop_event) is False
+    assert (
+        wait_for_connection(
+            conn, timeout=Duration.from_seconds(60), poll_interval=Duration.from_seconds(5), stop_event=stop_event
+        )
+        is False
+    )
 
 
 def test_check_health_returns_healthy_on_success():

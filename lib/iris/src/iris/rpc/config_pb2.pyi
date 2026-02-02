@@ -1,3 +1,4 @@
+from . import time_pb2 as _time_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
@@ -98,14 +99,14 @@ class BootstrapConfig(_message.Message):
     def __init__(self, controller_address: _Optional[str] = ..., worker_id: _Optional[str] = ..., worker_port: _Optional[int] = ..., docker_image: _Optional[str] = ..., cache_dir: _Optional[str] = ..., env_vars: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class TimeoutConfig(_message.Message):
-    __slots__ = ("boot_timeout_seconds", "init_timeout_seconds", "ssh_poll_interval_seconds")
-    BOOT_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
-    INIT_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
-    SSH_POLL_INTERVAL_SECONDS_FIELD_NUMBER: _ClassVar[int]
-    boot_timeout_seconds: int
-    init_timeout_seconds: int
-    ssh_poll_interval_seconds: int
-    def __init__(self, boot_timeout_seconds: _Optional[int] = ..., init_timeout_seconds: _Optional[int] = ..., ssh_poll_interval_seconds: _Optional[int] = ...) -> None: ...
+    __slots__ = ("boot_timeout", "init_timeout", "ssh_poll_interval")
+    BOOT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
+    INIT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
+    SSH_POLL_INTERVAL_FIELD_NUMBER: _ClassVar[int]
+    boot_timeout: _time_pb2.Duration
+    init_timeout: _time_pb2.Duration
+    ssh_poll_interval: _time_pb2.Duration
+    def __init__(self, boot_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., init_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ssh_poll_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class SshConfig(_message.Message):
     __slots__ = ("user", "key_file", "port", "connect_timeout")
@@ -116,8 +117,8 @@ class SshConfig(_message.Message):
     user: str
     key_file: str
     port: int
-    connect_timeout: int
-    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[int] = ...) -> None: ...
+    connect_timeout: _time_pb2.Duration
+    def __init__(self, user: _Optional[str] = ..., key_file: _Optional[str] = ..., port: _Optional[int] = ..., connect_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class GcpControllerConfig(_message.Message):
     __slots__ = ("machine_type", "boot_disk_size_gb", "port")
@@ -158,12 +159,12 @@ class ControllerVmConfig(_message.Message):
     def __init__(self, image: _Optional[str] = ..., bundle_prefix: _Optional[str] = ..., gcp: _Optional[_Union[GcpControllerConfig, _Mapping]] = ..., manual: _Optional[_Union[ManualControllerConfig, _Mapping]] = ..., local: _Optional[_Union[LocalControllerConfig, _Mapping]] = ...) -> None: ...
 
 class AutoscalerConfig(_message.Message):
-    __slots__ = ("evaluation_interval_seconds", "requesting_timeout_seconds")
-    EVALUATION_INTERVAL_SECONDS_FIELD_NUMBER: _ClassVar[int]
-    REQUESTING_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
-    evaluation_interval_seconds: float
-    requesting_timeout_seconds: float
-    def __init__(self, evaluation_interval_seconds: _Optional[float] = ..., requesting_timeout_seconds: _Optional[float] = ...) -> None: ...
+    __slots__ = ("evaluation_interval", "requesting_timeout")
+    EVALUATION_INTERVAL_FIELD_NUMBER: _ClassVar[int]
+    REQUESTING_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
+    evaluation_interval: _time_pb2.Duration
+    requesting_timeout: _time_pb2.Duration
+    def __init__(self, evaluation_interval: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., requesting_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class IrisClusterConfig(_message.Message):
     __slots__ = ("provider_type", "project_id", "region", "zone", "controller_vm", "scale_groups", "label_prefix", "bootstrap", "timeouts", "ssh", "autoscaler")

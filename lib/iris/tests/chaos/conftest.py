@@ -31,6 +31,12 @@ def _quick():
     return 1
 
 
+def _slow():
+    import time
+
+    time.sleep(120)
+
+
 def _block(s):
     """Block until sentinel is signalled. Pass a SentinelFile instance."""
     s.wait()

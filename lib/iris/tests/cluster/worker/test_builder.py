@@ -15,7 +15,6 @@
 import subprocess
 
 import pytest
-from iris.cluster.types import generate_dockerfile
 from iris.cluster.worker.builder import ImageCache
 
 # ImageCache Tests
@@ -89,11 +88,13 @@ def test_image_caching(tmp_path, docker_bundle, docker_cleanup_scope):
     builder = ImageCache(cache_dir, registry="localhost:5000")
 
     job_id = "cache-test-456"
+    base_image = "python:3.11-slim"
 
     # First build - not from cache
     result1 = builder.build(
         bundle_path=docker_bundle,
-        dockerfile=generate_dockerfile("3.11"),
+        base_image=base_image,
+        extras=[],
         job_id=job_id,
     )
 
@@ -102,7 +103,8 @@ def test_image_caching(tmp_path, docker_bundle, docker_cleanup_scope):
     # Second build - should be from cache
     result2 = builder.build(
         bundle_path=docker_bundle,
-        dockerfile=generate_dockerfile("3.11"),
+        base_image=base_image,
+        extras=[],
         job_id=job_id,
     )
 
@@ -160,7 +162,8 @@ packages = ["src/test_app"]
     # Build with extras
     result = builder.build(
         bundle_path=bundle_dir,
-        dockerfile=generate_dockerfile("3.11", extras=["dev", "test"]),
+        base_image="python:3.11-slim",
+        extras=["dev", "test"],
         job_id="extras-test",
     )
 
@@ -211,13 +214,15 @@ source = { editable = "." }
     # Build both bundles with same job_id and check tags match
     result1 = builder.build(
         bundle_path=bundle_dirs[0],
-        dockerfile=generate_dockerfile("3.11"),
+        base_image="python:3.11-slim",
+        extras=[],
         job_id="test-job",
     )
 
     result2 = builder.build(
         bundle_path=bundle_dirs[1],
-        dockerfile=generate_dockerfile("3.11"),
+        base_image="python:3.11-slim",
+        extras=[],
         job_id="test-job",
     )
 
@@ -243,13 +248,15 @@ def test_tag_generation_no_lock_files(tmp_path):
     # Build twice - should get different tags (random generation)
     result1 = builder.build(
         bundle_path=bundle_dir,
-        dockerfile=generate_dockerfile("3.11"),
+        base_image="python:3.11-slim",
+        extras=[],
         job_id="test-job",
     )
 
     result2 = builder.build(
         bundle_path=bundle_dir,
-        dockerfile=generate_dockerfile("3.11"),
+        base_image="python:3.11-slim",
+        extras=[],
         job_id="test-job",
     )
 
@@ -400,7 +407,8 @@ dependencies = []
 
     result1 = builder_with_registry.build(
         bundle_path=bundle_dir,
-        dockerfile=generate_dockerfile("3.11"),
+        base_image="python:3.11-slim",
+        extras=[],
         job_id="test-job",
     )
 
@@ -414,7 +422,8 @@ dependencies = []
 
     result2 = builder_no_registry.build(
         bundle_path=bundle_dir,
-        dockerfile=generate_dockerfile("3.11"),
+        base_image="python:3.11-slim",
+        extras=[],
         job_id="test-job",
     )
 

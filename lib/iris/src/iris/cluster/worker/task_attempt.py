@@ -20,6 +20,7 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 
 import logging
 import shutil
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -37,7 +38,7 @@ from iris.cluster.worker.worker_types import TaskLogs
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
 from iris.rpc.errors import format_exception_with_traceback
-from iris.time_utils import now_ms
+from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -105,18 +106,9 @@ def build_iris_env(
     if controller_address:
         # Only rewrite localhost addresses for Docker containers
         if runtime_type is DockerRuntime:
-            rewritten = _rewrite_address_for_container(controller_address)
-            env["IRIS_CONTROLLER_ADDRESS"] = rewritten
+            env["IRIS_CONTROLLER_ADDRESS"] = _rewrite_address_for_container(controller_address)
         else:
-            rewritten = controller_address
-            env["IRIS_CONTROLLER_ADDRESS"] = rewritten
-
-        # Allow fray v2 to auto-discover the Iris backend.
-        # Strip http:// prefix since FRAY_CLIENT_SPEC uses its own iris:// scheme.
-        addr_for_fray = rewritten.removeprefix("http://").removeprefix("https://")
-        fray_spec = f"iris://{addr_for_fray}"
-        env["FRAY_CLIENT_SPEC"] = fray_spec
-        logger.info("Injecting FRAY_CLIENT_SPEC=%s for task %s", fray_spec, task.task_id)
+            env["IRIS_CONTROLLER_ADDRESS"] = controller_address
 
     # Inject bundle path for sub-task inheritance
     if task.request.bundle_gcs_path:
@@ -180,7 +172,7 @@ class TaskAttempt:
             worker_id: Worker identifier for env injection
             controller_address: Controller address for env injection
             port_allocator: Port allocator for retry logic
-            report_state: Callback to report task state changes to Worker (no arguments)
+            report_state: Callback to report task state changes to Worker
             poll_interval_seconds: How often to poll container status
         """
         self._bundle_provider = bundle_provider
@@ -207,8 +199,8 @@ class TaskAttempt:
         self.status: TaskState = cluster_pb2.TASK_STATE_PENDING
         self.exit_code: int | None = None
         self.error: str | None = None
-        self.started_at_ms: int | None = None
-        self.finished_at_ms: int | None = None
+        self.started_at: Timestamp | None = None
+        self.finished_at: Timestamp | None = None
         self.status_message: str = ""
 
         # Resource tracking
@@ -219,8 +211,8 @@ class TaskAttempt:
         self.disk_mb: int = 0
 
         # Build tracking
-        self.build_started_ms: int | None = None
-        self.build_finished_ms: int | None = None
+        self.build_started: Timestamp | None = None
+        self.build_finished: Timestamp | None = None
         self.build_from_cache: bool = False
         self.image_tag: str = ""
 
@@ -246,22 +238,31 @@ class TaskAttempt:
         self.status = state
         self.status_message = message
         if is_task_finished(state):
-            self.finished_at_ms = now_ms()
+            self.finished_at = Timestamp.now()
             if error:
                 self.error = error
             if exit_code is not None:
                 self.exit_code = exit_code
 
+    def duration(self) -> Duration | None:
+        """Calculate how long the attempt ran.
+
+        Returns:
+            Duration from started_at to finished_at, or None if not finished
+        """
+        if self.finished_at is None:
+            return None
+        elapsed_ms = self.finished_at.epoch_ms() - self.started_at.epoch_ms()
+        return Duration.from_ms(elapsed_ms)
+
     def to_proto(self) -> cluster_pb2.TaskStatus:
-        return cluster_pb2.TaskStatus(
+        proto = cluster_pb2.TaskStatus(
             task_id=self.task_id,
             job_id=self.job_id,
             task_index=self.task_index,
             state=self.status,
             exit_code=self.exit_code or 0,
             error=self.error or "",
-            started_at_ms=self.started_at_ms or 0,
-            finished_at_ms=self.finished_at_ms or 0,
             ports=self.ports,
             current_attempt_id=self.attempt_id,
             resource_usage=cluster_pb2.ResourceUsage(
@@ -273,12 +274,22 @@ class TaskAttempt:
                 process_count=self.process_count,
             ),
             build_metrics=cluster_pb2.BuildMetrics(
-                build_started_ms=self.build_started_ms or 0,
-                build_finished_ms=self.build_finished_ms or 0,
                 from_cache=self.build_from_cache,
                 image_tag=self.image_tag,
             ),
         )
+
+        # Set timestamp fields using proto Timestamp messages
+        if self.started_at is not None:
+            proto.started_at.CopyFrom(self.started_at.to_proto())
+        if self.finished_at is not None:
+            proto.finished_at.CopyFrom(self.finished_at.to_proto())
+        if self.build_started is not None:
+            proto.build_metrics.build_started.CopyFrom(self.build_started.to_proto())
+        if self.build_finished is not None:
+            proto.build_metrics.build_finished.CopyFrom(self.build_finished.to_proto())
+
+        return proto
 
     def run(self) -> None:
         """Execute the full task lifecycle. Intended to run in a background thread."""
@@ -304,7 +315,7 @@ class TaskAttempt:
         for testing delayed builds.
         """
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
-        self.started_at_ms = now_ms()
+        self.started_at = Timestamp.now()
         self._report_state()  # Report BUILDING state to controller
 
         # Chaos injection for testing failures during download
@@ -325,33 +336,58 @@ class TaskAttempt:
         )
 
     def _build_image(self) -> None:
-        """Build the container image from the downloaded bundle."""
+        """Build the container image from the downloaded bundle.
+
+        Handles uv cache population and builds with appropriate Python version
+        and base image selection.
+        """
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="building image")
-        self.build_started_ms = now_ms()
+        self.build_started = Timestamp.now()
         self._report_state()  # Report BUILDING state to controller
 
+        # Periodically check should_stop during build to support kill during BUILDING
+        # (RF-3: Similar to bundle download, we defer kill handling for now since
+        # image builds are handled by ImageProvider which doesn't expose cancellation.
+        # Most builds are fast due to caching.)
+
         env_config = self.request.environment
-        dockerfile = env_config.dockerfile
-        if not dockerfile:
-            raise RuntimeError("No dockerfile in environment config - client must generate one")
+        extras = list(env_config.extras)
 
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="populating uv cache")
         self.logs.add("build", "Building Docker image...")
         self._report_state()  # Report state update with logs to controller
+
+        # Use the client's Python version for the task container so cloudpickle
+        # bytecode is deserialized with the same Python that serialized it.
+        py_version = env_config.python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
+
+        pip_packages = list(env_config.pip_packages) if env_config.pip_packages else None
+
+        # Use the full Python image when additional pip packages are requested,
+        # since native wheels (e.g. libtpu for jax[tpu]) often depend on system
+        # libraries (libstdc++, libgomp, etc.) that python:*-slim strips out.
+        if pip_packages:
+            base_image = f"python:{py_version}"
+        else:
+            base_image = f"python:{py_version}-slim"
 
         if not self._image_provider:
             raise RuntimeError("Image provider not configured")
 
         build_result = self._image_provider.build(
             bundle_path=self._bundle_path,
-            dockerfile=dockerfile,
+            base_image=base_image,
+            extras=extras,
             job_id=self.job_id,
             task_logs=self.logs,
+            pip_packages=pip_packages,
         )
 
-        self.build_finished_ms = now_ms()
+        self.build_finished = Timestamp.now()
         self.build_from_cache = build_result.from_cache
         self.image_tag = build_result.image_tag
+
+        # Protect image from eviction while task is running
         self._image_provider.protect(build_result.image_tag)
 
     def _start_container(self) -> str:
@@ -384,12 +420,17 @@ class TaskAttempt:
         # Convert proto entrypoint to typed Entrypoint
         entrypoint = Entrypoint.from_proto(self.request.entrypoint)
 
+        # Extract timeout from proto (0 or unset means no timeout)
+        timeout_seconds = None
+        if self.request.HasField("timeout") and self.request.timeout.milliseconds > 0:
+            timeout_seconds = self.request.timeout.milliseconds / 1000
+
         config = ContainerConfig(
             image=self.image_tag,
             entrypoint=entrypoint,
             env=env,
             resources=self.request.resources if self.request.HasField("resources") else None,
-            timeout_seconds=self.request.timeout_seconds or None,
+            timeout_seconds=timeout_seconds,
             ports=self.ports,
             mounts=[(str(self.workdir), "/workdir", "rw")],
             task_id=self.task_id,
@@ -450,8 +491,11 @@ class TaskAttempt:
         Args:
             container_id: Container to monitor
         """
-        timeout_seconds = self.request.timeout_seconds or None
-        start_time = time.time()
+        # Create deadline from timeout if specified (0 or unset means no timeout)
+        deadline = None
+        if self.request.HasField("timeout") and self.request.timeout.milliseconds > 0:
+            timeout_seconds = self.request.timeout.milliseconds / 1000
+            deadline = Deadline.from_seconds(timeout_seconds)
 
         while True:
             if rule := chaos("worker.task_monitor"):
@@ -465,7 +509,7 @@ class TaskAttempt:
                 break
 
             # Check timeout
-            if timeout_seconds and (time.time() - start_time) > timeout_seconds:
+            if deadline and deadline.expired():
                 self._runtime.kill(container_id, force=True)
                 self.transition_to(
                     cluster_pb2.TASK_STATE_FAILED,
