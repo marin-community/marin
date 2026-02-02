@@ -38,12 +38,12 @@ from iris.build import build_image, push_to_registries
 from iris.client import IrisClient
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import Entrypoint
+from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.config import (
     create_autoscaler_from_config,
     create_manual_autoscaler,
     load_config,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.controller import create_controller
 from iris.cluster.vm.debug import controller_tunnel
 from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
@@ -1359,7 +1359,6 @@ def build():
 @click.option("--platform", default="linux/amd64", help="Target platform (e.g., linux/amd64, linux/arm64)")
 @click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to (can be repeated)")
 @click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
-@click.option("--no-cache", is_flag=True, help="Build without using cache")
 def build_worker_image(
     tag: str,
     push: bool,
@@ -1368,7 +1367,6 @@ def build_worker_image(
     platform: str,
     region: tuple[str, ...],
     project: str,
-    no_cache: bool,
 ):
     """Build Docker image for Iris worker.
 
@@ -1386,7 +1384,7 @@ def build_worker_image(
         uv run iris build worker-image -t iris-worker:v1 \\
             --push --region us-central1 --region europe-west4
     """
-    build_image("worker", tag, push, dockerfile, context, platform, region, project, no_cache)
+    build_image("worker", tag, push, dockerfile, context, platform, region, project)
 
 
 @build.command("controller-image")
@@ -1403,7 +1401,6 @@ def build_worker_image(
 @click.option("--platform", default="linux/amd64", help="Target platform (e.g., linux/amd64, linux/arm64)")
 @click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to (can be repeated)")
 @click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
-@click.option("--no-cache", is_flag=True, help="Build without using cache")
 def build_controller_image(
     tag: str,
     push: bool,
@@ -1412,7 +1409,6 @@ def build_controller_image(
     platform: str,
     region: tuple[str, ...],
     project: str,
-    no_cache: bool,
 ):
     """Build Docker image for Iris controller.
 
@@ -1430,7 +1426,7 @@ def build_controller_image(
         uv run iris build controller-image -t iris-controller:v1 \\
             --push --region us-central1 --region europe-west4
     """
-    build_image("controller", tag, push, dockerfile, context, platform, region, project, no_cache)
+    build_image("controller", tag, push, dockerfile, context, platform, region, project)
 
 
 @build.command("push")

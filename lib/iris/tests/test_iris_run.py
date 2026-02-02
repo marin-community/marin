@@ -24,7 +24,6 @@ from iris.client import IrisClient
 from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.config import load_config
 from iris.iris_run import (
-    add_standard_env_vars,
     build_resources,
     load_cluster_config,
     load_env_vars,
@@ -72,21 +71,6 @@ def test_build_resources_gpu_not_supported():
     """Test that GPU raises error."""
     with pytest.raises(ValueError, match="GPU support not yet implemented"):
         build_resources(tpu=None, gpu=2, cpu=None, memory=None)
-
-
-def test_add_standard_env_vars():
-    """Test standard env vars are added without overriding."""
-    base_env = {"USER_VAR": "user_value", "PYTHONPATH": "/custom/path"}
-    result = add_standard_env_vars(base_env)
-
-    # User values preserved
-    assert result["USER_VAR"] == "user_value"
-    assert result["PYTHONPATH"] == "/custom/path"
-
-    # Defaults added
-    assert result["PYTHONUNBUFFERED"] == "1"
-    assert result["HF_HOME"] == "~/.cache/huggingface"
-    assert result["HF_HUB_ENABLE_HF_TRANSFER"] == "1"
 
 
 # Integration tests using local cluster

@@ -20,7 +20,7 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 
 import logging
 import shutil
-import sys
+import socket
 import threading
 import time
 from collections.abc import Callable
@@ -31,7 +31,7 @@ from iris.chaos import chaos, chaos_raise
 from iris.cluster.types import Entrypoint, is_task_finished
 from iris.cluster.worker.bundle_cache import BundleProvider
 from iris.cluster.worker.builder import ImageProvider
-from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, DockerRuntime
+from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime
 from iris.cluster.worker.env_probe import collect_workdir_size_mb
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.worker_types import TaskLogs
@@ -57,24 +57,25 @@ class TaskAttemptConfig:
     workdir: Path
 
 
-def _rewrite_address_for_container(address: str) -> str:
-    """Rewrite localhost addresses to host.docker.internal for container access.
+def _get_host_ip() -> str:
+    """Get the routable IP of this host via the default route.
 
-    Docker containers on Mac/Windows cannot reach host localhost directly.
-    Using host.docker.internal works cross-platform when combined with
-    --add-host=host.docker.internal:host-gateway on Linux.
+    Opens a UDP socket to a public IP (no traffic sent) and reads back the
+    local address the OS selected. With --network=host this returns the real
+    machine IP visible to other machines in the same VPC.
     """
-    for localhost in ("127.0.0.1", "localhost", "0.0.0.0"):
-        if localhost in address:
-            return address.replace(localhost, "host.docker.internal")
-    return address
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    finally:
+        s.close()
 
 
 def build_iris_env(
     task: "TaskAttempt",
     worker_id: str | None,
     controller_address: str | None,
-    runtime_type: type[ContainerRuntime],
 ) -> dict[str, str]:
     """Build Iris system environment variables for the task container.
 
@@ -86,7 +87,6 @@ def build_iris_env(
         task: TaskAttempt object with metadata
         worker_id: Worker identifier, if registered with controller
         controller_address: Controller RPC address, if configured
-        runtime_type: Type of container runtime (e.g., DockerRuntime)
 
     Returns:
         Dictionary of environment variables to inject into the task container
@@ -104,24 +104,25 @@ def build_iris_env(
         env["IRIS_WORKER_ID"] = worker_id
 
     if controller_address:
-        # Only rewrite localhost addresses for Docker containers
-        if runtime_type is DockerRuntime:
-            env["IRIS_CONTROLLER_ADDRESS"] = _rewrite_address_for_container(controller_address)
-        else:
-            env["IRIS_CONTROLLER_ADDRESS"] = controller_address
+        # With --network=host, containers share the host's network directly,
+        # so no address rewriting is needed.
+        env["IRIS_CONTROLLER_ADDRESS"] = controller_address
 
     # Inject bundle path for sub-task inheritance
     if task.request.bundle_gcs_path:
         env["IRIS_BUNDLE_GCS_PATH"] = task.request.bundle_gcs_path
 
-    # Inject bind host - 0.0.0.0 for Docker (so port mapping works), 127.0.0.1 otherwise
-    # Also inject advertise host - the address other containers should use to reach this one
-    if runtime_type is DockerRuntime:
-        env["IRIS_BIND_HOST"] = "0.0.0.0"
-        env["IRIS_ADVERTISE_HOST"] = "host.docker.internal"
-    else:
-        env["IRIS_BIND_HOST"] = "127.0.0.1"
-        env["IRIS_ADVERTISE_HOST"] = "127.0.0.1"
+    # With --network=host, containers share the host's network stack.
+    # Compute the host's routable IP so container code can read it via
+    # get_job_info().advertise_host without needing its own socket tricks.
+    env["IRIS_BIND_HOST"] = "0.0.0.0"
+    env["IRIS_ADVERTISE_HOST"] = _get_host_ip()
+
+    # Propagate the dockerfile so child jobs can inherit it via get_job_info().dockerfile
+    # instead of regenerating (which would lose extras like --package marin --extra cpu).
+    dockerfile = task.request.environment.dockerfile
+    if dockerfile:
+        env["IRIS_DOCKERFILE"] = dockerfile
 
     # Inject allocated ports
     for name, port in task.ports.items():
@@ -337,49 +338,33 @@ class TaskAttempt:
     def _build_image(self) -> None:
         """Build the container image from the downloaded bundle.
 
-        Handles uv cache population and builds with appropriate Python version
-        and base image selection.
+        Uses the pre-generated dockerfile from the client rather than
+        regenerating it, which preserves extras like package:extra syntax.
         """
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="building image")
         self.build_started = Timestamp.now()
         self._report_state()  # Report BUILDING state to controller
 
-        # Periodically check should_stop during build to support kill during BUILDING
-        # (RF-3: Similar to bundle download, we defer kill handling for now since
-        # image builds are handled by ImageProvider which doesn't expose cancellation.
-        # Most builds are fast due to caching.)
-
         env_config = self.request.environment
-        extras = list(env_config.extras)
+        dockerfile = env_config.dockerfile
+        if not dockerfile:
+            raise RuntimeError(
+                f"Task {self.task_id} has no dockerfile in environment config. "
+                "The client must provide a dockerfile when submitting jobs."
+            )
 
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="populating uv cache")
         self.logs.add("build", "Building Docker image...")
-        self._report_state()  # Report state update with logs to controller
-
-        # Use the client's Python version for the task container so cloudpickle
-        # bytecode is deserialized with the same Python that serialized it.
-        py_version = env_config.python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
-
-        pip_packages = list(env_config.pip_packages) if env_config.pip_packages else None
-
-        # Use the full Python image when additional pip packages are requested,
-        # since native wheels (e.g. libtpu for jax[tpu]) often depend on system
-        # libraries (libstdc++, libgomp, etc.) that python:*-slim strips out.
-        if pip_packages:
-            base_image = f"python:{py_version}"
-        else:
-            base_image = f"python:{py_version}-slim"
+        self._report_state()
 
         if not self._image_provider:
             raise RuntimeError("Image provider not configured")
 
         build_result = self._image_provider.build(
             bundle_path=self._bundle_path,
-            base_image=base_image,
-            extras=extras,
+            dockerfile=dockerfile,
             job_id=self.job_id,
             task_logs=self.logs,
-            pip_packages=pip_packages,
         )
 
         self.build_finished = Timestamp.now()
@@ -408,12 +393,10 @@ class TaskAttempt:
         env_config = self.request.environment
         env = dict(env_config.env_vars)
 
-        # Build iris system environment based on runtime type
         iris_env = build_iris_env(
             self,
             self._worker_id,
             self._controller_address,
-            type(self._runtime),
         )
         env.update(iris_env)
 
@@ -432,6 +415,7 @@ class TaskAttempt:
             resources=self.request.resources if self.request.HasField("resources") else None,
             timeout_seconds=timeout_seconds,
             ports=self.ports,
+            network_mode="host",
             mounts=[(str(self.workdir), "/workdir", "rw")],
             task_id=self.task_id,
             job_id=self.job_id,

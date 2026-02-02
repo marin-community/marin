@@ -903,15 +903,16 @@ class ManualController:
     def _create_ssh_connection(self, host: str) -> DirectSshConnection:
         """Create SSH connection for the given host."""
         ssh = self.config.ssh
+        connect_timeout = (
+            Duration.from_proto(ssh.connect_timeout)
+            if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0
+            else Duration.from_seconds(30)
+        )
         return DirectSshConnection(
             host=host,
             user=ssh.user or "root",
             key_file=ssh.key_file or None,
-            connect_timeout=(
-                Duration.from_ms(ssh.connect_timeout.milliseconds)
-                if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0
-                else Duration.from_seconds(30)
-            ),
+            connect_timeout=connect_timeout,
         )
 
     def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
