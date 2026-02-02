@@ -71,7 +71,7 @@ def _failed_job():
 def _slow_job():
     import time as _time
 
-    _time.sleep(30)
+    _time.sleep(120)
     return "done"
 
 
@@ -276,6 +276,25 @@ def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout:
                 task_state_name = cluster_pb2.TaskState.Name(task_status.state)
                 logger.warning("  Building job did not enter BUILDING state within timeout (state: %s)", task_state_name)
 
+    # Wait for running job's task to actually reach RUNNING state (not just ASSIGNED)
+    running_jid = job_ids.get("running")
+    if running_jid:
+        logger.info("Waiting for running job (%s) task to enter RUNNING state...", running_jid)
+        run_deadline = time.monotonic() + 15.0
+        while time.monotonic() < run_deadline:
+            status = client.status(running_jid)
+            if status.tasks and status.tasks[0].state == cluster_pb2.TASK_STATE_RUNNING:
+                logger.info("  running task entered RUNNING state")
+                break
+            time.sleep(0.5)
+        else:
+            status = client.status(running_jid)
+            if status.tasks:
+                task_state_name = cluster_pb2.TaskState.Name(status.tasks[0].state)
+                logger.warning(
+                    "  Running job task did not enter RUNNING state within timeout (state: %s)", task_state_name
+                )
+
     # Kill the "killed" job after a brief delay so it has time to start
     killed_jid = job_ids.get("killed")
     if killed_jid:
@@ -405,7 +424,7 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
         page.goto(f"{dashboard_url}#logs")
         page.wait_for_load_state("domcontentloaded")
         page.wait_for_function(
-            "() => !document.body.textContent.includes('Loading')",
+            "() => document.querySelectorAll('.log-line').length > 0",
             timeout=10000,
         )
         path = output_dir / "controller-logs.png"
