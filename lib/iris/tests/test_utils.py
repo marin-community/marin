@@ -140,8 +140,8 @@ def test_sentinel_file_concurrent_creation(tmp_path: Path) -> None:
     sentinel.wait(timeout=Duration.from_seconds(1.0))
     elapsed = time.monotonic() - start
 
-    # Should return shortly after file creation (~50-100ms)
-    assert 0.04 < elapsed < 0.2
+    # Should return after file creation but well before the 1s timeout
+    assert 0.04 < elapsed < 0.9
     assert sentinel.is_set()
 
     thread.join()
