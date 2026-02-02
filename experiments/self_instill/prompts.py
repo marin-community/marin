@@ -33,17 +33,17 @@ REASONING_LONG_INSTRUCTION = (
     "Avoid structured writeups: do NOT use Markdown headings (###), numbered lists, or section titles like 'Plan'/'Step-by-step'.\n"
     "As you go, question your own steps and check for mistakes; if you notice an issue or a better idea, correct course and continue.\n"
     "Before finishing, do a quick sanity check (edge cases / constraints / re-check a key step).\n"
-    "Put your final answer within \\boxed{}."
+    "Put your final answer within \\boxed{{}}."
 )
 """
 Long-form reasoning instruction that encourages:
 - Informal, scratchpad-style thinking
 - Self-correction and mistake checking
 - Sanity checks before finalizing
-- Final answer in \\boxed{} format
+- Final answer in \\boxed{{}} format
 """
 
-REASONING_INSTRUCTION = "Please reason step by step, and put your final answer within \\boxed{}."
+REASONING_INSTRUCTION = "Please reason step by step, and put your final answer within \\boxed{{}}."
 """
 Short reasoning instruction for the final formatted output.
 Used when constructing the conversation format after summarization.
@@ -70,7 +70,7 @@ Template for summarizing long reasoning into a clean explanation.
 The summarizer takes verbose reasoning output and produces:
 - A clear, concise explanation of the solution approach
 - Key reasoning steps that justify the result
-- The final answer in \\boxed{} format
+- The final answer in \\boxed{{}} format
 
 Args:
     text: The original long-form reasoning to summarize

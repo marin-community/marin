@@ -166,7 +166,7 @@ generate_with_selection = ExecutorStep(
         model_name=QWEN3_8B_BASE_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": 1,
-            "max_model_len": 32768 + 2048,
+            "max_model_len": 32768,
         },
         generation_kwargs={
             "temperature": 0.8,
@@ -265,7 +265,7 @@ summarize_selected = ExecutorStep(
         model_name=QWEN3_8B_BASE_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": 1,
-            "max_model_len": 32768 + 2048,
+            "max_model_len": 32768,
         },
         generation_kwargs={
             "temperature": 0.4,
@@ -381,7 +381,7 @@ cycle_gen_questions = ExecutorStep(
         model_name=QWEN3_8B_BASE_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": 1,
-            "max_model_len": 32768 + 2048,
+            "max_model_len": 32768,
         },
         generation_kwargs={
             "temperature": 0.6,
@@ -508,7 +508,7 @@ cycle_compare = ExecutorStep(
         model_name=QWEN3_8B_BASE_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": 1,
-            "max_model_len": 32768 + 2048,
+            "max_model_len": 32768,
         },
         generation_kwargs={
             "temperature": 0.6,
@@ -566,7 +566,7 @@ factual_check = ExecutorStep(
         model_name=QWEN3_8B_BASE_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": 1,
-            "max_model_len": 32768 + 2048,
+            "max_model_len": 32768,
         },
         generation_kwargs={
             "temperature": 0.6,
@@ -624,7 +624,7 @@ correctness_check = ExecutorStep(
         model_name=QWEN3_8B_BASE_HF_ID,
         engine_kwargs={
             "tensor_parallel_size": 1,
-            "max_model_len": 32768 + 2048,
+            "max_model_len": 32768,
         },
         generation_kwargs={
             "temperature": 0.6,
