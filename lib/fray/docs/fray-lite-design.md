@@ -76,20 +76,13 @@ class Client(Protocol):
 
 
 def current_client() -> Client:
-    """Get the current client from context or environment.
+    """Get the current client from context or auto-detection.
 
     Resolution order:
     1. Explicitly set client (via set_current_client or context manager)
-    2. FRAY_CLIENT_SPEC environment variable (see format below)
-    3. LocalClient (default)
-
-    FRAY_CLIENT_SPEC format:
-        "local"                             → LocalClient()
-        "local?threads=4"                   → LocalClient(max_threads=4)
-        "ray"                               → RayClient(address="auto")
-        "ray?namespace=my-ns"               → RayClient(namespace="my-ns")
-        "iris://controller:10000"           → FrayIrisClient("controller:10000")
-        "iris://controller:10000?ws=/path"  → FrayIrisClient("controller:10000", workspace="/path")
+    2. Auto-detect Iris environment (via get_iris_ctx())
+    3. Auto-detect Ray environment (via ray.is_initialized())
+    4. LocalClient (default)
     """
     ...
 
@@ -697,11 +690,11 @@ This is the foundation everything else builds on.
 4. Write tests: create actor, call `.method.remote()`, verify result;
    create group, `wait_ready()`, dispatch to multiple actors
 
-**Spiral step 1c — current_client + FRAY_CLIENT_SPEC:**
+**Spiral step 1c — current_client + auto-detection:**
 
-1. Implement `current_client()` with context var + env var resolution
+1. Implement `current_client()` with context var + auto-detection
 2. Implement `set_current_client()` context manager
-3. Write tests: default → LocalClient, explicit set, env var parsing
+3. Write tests: default → LocalClient, explicit set, auto-detection
 
 **Deliverable**: `LocalClient` passing all protocol tests. Callers can
 `pip install` and use `fray.v2` for local development immediately.
@@ -730,10 +723,10 @@ Validated against a local Ray cluster.
 4. Implement `RayClient.create_actor_group()` — N Ray actors
 5. Test: create actor on local Ray, call methods, verify results
 
-**Spiral step 2c — FRAY_CLIENT_SPEC integration:**
+**Spiral step 2c — Ray auto-detection:**
 
-1. Wire `"ray"` and `"ray?namespace=..."` into `current_client()` resolution
-2. Test: set env var, get RayClient
+1. Wire Ray auto-detection via `ray.is_initialized()` into `current_client()`
+2. Test: Ray auto-detection returns RayClient
 
 **Deliverable**: `RayClient` passing the same protocol tests as `LocalClient`,
 plus Ray-specific integration tests.
@@ -754,7 +747,7 @@ This is the easiest migration — pure job submission, no actors.
 3. Run existing Levanter tests to verify no regression.
 
 **Deliverable**: Levanter training works on Ray via `fray.v2`. Can be tested
-end-to-end with `FRAY_CLIENT_SPEC=ray`.
+end-to-end with Ray auto-detection.
 
 
 ### Phase 4: Migrate Zephyr

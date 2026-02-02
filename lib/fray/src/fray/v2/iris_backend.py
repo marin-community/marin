@@ -27,7 +27,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from iris.cluster.types import Constraint, Entrypoint as IrisEntrypoint, EnvironmentSpec, ResourceSpec
@@ -456,6 +456,17 @@ class FrayIrisClient:
             bundle_gcs_path,
         )
         self._iris = IrisClientLib.remote(controller_address, workspace=workspace, bundle_gcs_path=bundle_gcs_path)
+
+    @staticmethod
+    def from_iris_client(iris_client: IrisClientLib) -> FrayIrisClient:
+        """Create a FrayIrisClient by wrapping an existing IrisClient.
+
+        This avoids creating a new connection when we already have an IrisClient
+        from the context (e.g., when running inside an Iris task).
+        """
+        instance = cast(FrayIrisClient, object.__new__(FrayIrisClient))
+        instance._iris = iris_client
+        return instance
 
     def submit(self, request: JobRequest) -> IrisJobHandle:
         iris_resources = convert_resources(request.resources)
