@@ -76,6 +76,9 @@ class ActorServer:
         self._actual_port: int | None = None
         self._threads = threads if threads is not None else get_thread_registry().container
         self._server: uvicorn.Server | None = None
+        # Create dedicated executor for running actor methods
+        # This avoids relying on asyncio's default executor which can be shut down prematurely
+        self._executor = self._threads.spawn_executor(max_workers=32, prefix="actor-method")
 
     @property
     def address(self) -> str:
@@ -125,9 +128,12 @@ class ActorServer:
             args = cloudpickle.loads(request.serialized_args) if request.serialized_args else ()
             kwargs = cloudpickle.loads(request.serialized_kwargs) if request.serialized_kwargs else {}
 
-            # Run the method in a thread pool to avoid blocking the event loop.
+            # Run the method in our dedicated thread pool to avoid blocking the event loop.
             # This allows actors to make outgoing RPC calls without deadlocking.
-            result = await asyncio.to_thread(method, *args, **kwargs)
+            # We use our own executor instead of asyncio.to_thread() to avoid issues
+            # when asyncio's default executor is shut down during process cleanup.
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(self._executor, method, *args, **kwargs)
 
             return actor_pb2.ActorResponse(serialized_value=cloudpickle.dumps(result))
 
@@ -239,6 +245,10 @@ class ActorServer:
         )
 
         return self._actual_port
+
+    def wait(self) -> None:
+        """Block until the server exits."""
+        self._threads.wait()
 
     def stop(self) -> None:
         """Stop the actor server and wait for threads to exit."""
