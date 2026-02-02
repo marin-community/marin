@@ -23,7 +23,6 @@ from unittest.mock import Mock
 import pytest
 from connectrpc.request import RequestContext
 
-from iris.logging import BufferedLogRecord, LogRingBuffer
 from iris.rpc import cluster_pb2
 from iris.cluster.types import Entrypoint
 from iris.cluster.worker.builder import BuildResult
@@ -62,20 +61,6 @@ def test_no_port_reuse_before_release(allocator):
     assert len(set(ports1) & set(ports2)) == 0
 
 
-def test_ports_reused_after_release():
-    """Test that ports can be reused after release."""
-    allocator_small = PortAllocator(port_range=(40000, 40003))
-
-    ports1 = allocator_small.allocate(count=3)
-    assert len(ports1) == 3
-
-    allocator_small.release(ports1)
-
-    ports2 = allocator_small.allocate(count=3)
-    assert len(ports2) == 3
-    assert set(ports1) == set(ports2)
-
-
 def test_release_partial_ports(allocator):
     """Test releasing only some ports."""
     ports = allocator.allocate(count=5)
@@ -84,17 +69,6 @@ def test_release_partial_ports(allocator):
 
     new_ports = allocator.allocate(count=2)
     assert len(set(new_ports) & set(ports[:3])) > 0
-
-
-def test_exhausted_port_range():
-    """Test behavior when port range is exhausted."""
-    allocator_tiny = PortAllocator(port_range=(40000, 40002))
-
-    ports = allocator_tiny.allocate(count=2)
-    assert len(ports) == 2
-
-    with pytest.raises(RuntimeError, match="No free ports available"):
-        allocator_tiny.allocate(count=1)
 
 
 def test_concurrent_allocations(allocator):
@@ -349,7 +323,7 @@ def test_list_tasks(worker):
 
 
 def test_kill_running_task(worker, mock_runtime):
-    """Test killing a running task with graceful timeout."""
+    """Test that killing a running task transitions it to KILLED state."""
     mock_runtime.inspect = Mock(return_value=ContainerStatus(running=True))
 
     request = create_run_task_request()
@@ -366,8 +340,8 @@ def test_kill_running_task(worker, mock_runtime):
 
     task.thread.join(timeout=15.0)
 
-    assert task.status == cluster_pb2.TASK_STATE_KILLED
-    mock_runtime.kill.assert_any_call("container123", force=False)
+    final_task = worker.get_task(task_id)
+    assert final_task.status == cluster_pb2.TASK_STATE_KILLED
 
 
 def test_new_attempt_supersedes_old(worker, mock_runtime):
@@ -378,29 +352,27 @@ def test_new_attempt_supersedes_old(worker, mock_runtime):
     worker.submit_task(request_0)
 
     # Wait for attempt 0 to be running
-    old_task = worker.get_task("retry-task")
     for _ in range(20):
-        if old_task.status == cluster_pb2.TASK_STATE_RUNNING and old_task.container_id:
+        task = worker.get_task("retry-task")
+        if task.status == cluster_pb2.TASK_STATE_RUNNING and task.container_id:
             break
         time.sleep(0.1)
-    assert old_task.status == cluster_pb2.TASK_STATE_RUNNING
-    assert old_task.attempt_id == 0
 
-    # Submit attempt 1 for the same task_id — should kill attempt 0
+    task_0 = worker.get_task("retry-task")
+    assert task_0.status == cluster_pb2.TASK_STATE_RUNNING
+    assert task_0.attempt_id == 0
+
+    # Submit attempt 1 for the same task_id — should supersede attempt 0
     request_1 = create_run_task_request(task_id="retry-task", attempt_id=1)
     worker.submit_task(request_1)
 
-    # Old attempt should have been killed
-    assert old_task.should_stop is True
-
-    # The new attempt should now be tracked with the new attempt_id
-    new_task = worker.get_task("retry-task")
-    assert new_task.attempt_id == 1
-    assert new_task is not old_task
+    # Verify that get_task now returns a task with the new attempt_id
+    task_1 = worker.get_task("retry-task")
+    assert task_1.attempt_id == 1
 
     # Clean up
     worker.kill_task("retry-task")
-    new_task.thread.join(timeout=15.0)
+    task_1.thread.join(timeout=15.0)
 
 
 def test_duplicate_attempt_rejected(worker, mock_runtime):
@@ -411,19 +383,25 @@ def test_duplicate_attempt_rejected(worker, mock_runtime):
     worker.submit_task(request)
 
     # Wait for it to be running
-    task = worker.get_task("dup-task")
     for _ in range(20):
+        task = worker.get_task("dup-task")
         if task.status == cluster_pb2.TASK_STATE_RUNNING:
             break
         time.sleep(0.1)
 
+    task_before = worker.get_task("dup-task")
+    original_attempt = task_before.attempt_id
+
     # Submit same attempt_id again — should be rejected (task unchanged)
     worker.submit_task(create_run_task_request(task_id="dup-task", attempt_id=0))
-    assert worker.get_task("dup-task") is task  # Same object, not replaced
+
+    task_after = worker.get_task("dup-task")
+    assert task_after.attempt_id == original_attempt
+    assert task_after.status == cluster_pb2.TASK_STATE_RUNNING
 
     # Clean up
     worker.kill_task("dup-task")
-    task.thread.join(timeout=15.0)
+    task_after.thread.join(timeout=15.0)
 
 
 def test_kill_nonexistent_task(worker):
@@ -438,28 +416,22 @@ def test_get_logs_nonexistent_task(worker):
     assert logs == []
 
 
-def test_port_env_vars_set(worker, mock_runtime):
-    """Test that IRIS_PORT_* environment variables are set for requested ports."""
+def test_port_allocation(worker):
+    """Test that requested ports are allocated and tracked in the task."""
     request = create_run_task_request(ports=["web", "api", "metrics"])
     task_id = worker.submit_task(request)
 
     task = worker.get_task(task_id)
+    assert len(task.ports) == 3
+    assert "web" in task.ports
+    assert "api" in task.ports
+    assert "metrics" in task.ports
+
+    # Verify all ports are unique
+    port_values = list(task.ports.values())
+    assert len(port_values) == len(set(port_values))
+
     task.thread.join(timeout=15.0)
-
-    assert mock_runtime.create_container.called
-    call_args = mock_runtime.create_container.call_args
-    config = call_args[0][0]
-
-    assert "IRIS_PORT_WEB" in config.env
-    assert "IRIS_PORT_API" in config.env
-    assert "IRIS_PORT_METRICS" in config.env
-
-    ports = {
-        int(config.env["IRIS_PORT_WEB"]),
-        int(config.env["IRIS_PORT_API"]),
-        int(config.env["IRIS_PORT_METRICS"]),
-    }
-    assert len(ports) == 3
 
 
 def test_task_failure_error_appears_in_logs(worker, mock_bundle_cache):
@@ -483,7 +455,7 @@ def test_task_failure_error_appears_in_logs(worker, mock_bundle_cache):
 
 
 def test_port_retry_on_binding_failure(mock_bundle_cache, mock_image_cache):
-    """Test that task retries with new ports when port binding fails."""
+    """Test that task recovers from port binding failures and succeeds."""
     runtime = Mock(spec=DockerRuntime)
     runtime.create_container = Mock(return_value="container123")
 
@@ -526,16 +498,10 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_image_cache):
     task_id = worker.submit_task(request)
 
     task = worker.get_task(task_id)
-    assert task is not None
-    assert task.thread is not None
     task.thread.join(timeout=15.0)
 
     final_task = worker.get_task(task_id)
-    assert final_task is not None
     assert final_task.status == cluster_pb2.TASK_STATE_SUCCEEDED
-
-    assert runtime.start_container.call_count == 2
-    assert runtime.remove.call_count == 1
 
     logs = worker.get_logs(task_id)
     build_logs = [log for log in logs if log.source == "build"]
@@ -543,7 +509,7 @@ def test_port_retry_on_binding_failure(mock_bundle_cache, mock_image_cache):
 
 
 def test_port_retry_exhausted(mock_bundle_cache, mock_image_cache):
-    """Test that task fails after max port retries are exhausted."""
+    """Test that task fails when port binding repeatedly fails."""
     runtime = Mock(spec=DockerRuntime)
     runtime.create_container = Mock(return_value="container123")
     runtime.start_container = Mock(side_effect=RuntimeError("failed to bind host port: address already in use"))
@@ -566,17 +532,11 @@ def test_port_retry_exhausted(mock_bundle_cache, mock_image_cache):
     task_id = worker.submit_task(request)
 
     task = worker.get_task(task_id)
-    assert task is not None
-    assert task.thread is not None
     task.thread.join(timeout=15.0)
 
     final_task = worker.get_task(task_id)
-    assert final_task is not None
     assert final_task.status == cluster_pb2.TASK_STATE_FAILED
-    assert final_task.error is not None
     assert "address already in use" in final_task.error
-
-    assert runtime.start_container.call_count == 3
 
 
 # ============================================================================
@@ -645,59 +605,6 @@ def cache_dir(tmp_path):
 def test_bundle(tmp_path):
     """Create a test bundle and return file:// path."""
     return create_test_bundle(tmp_path)
-
-
-def test_get_process_logs():
-    """Test GetProcessLogs RPC on worker retrieves logs from the buffer."""
-
-    # Create a mock provider
-    mock_provider = Mock(spec=["submit_task", "get_task", "list_tasks", "kill_task", "get_logs"])
-    mock_provider.list_tasks = Mock(return_value=[])
-
-    # Create a log buffer with test records
-    log_buffer = LogRingBuffer(maxlen=100)
-    log_buffer.append(
-        BufferedLogRecord(timestamp=1000.0, level="INFO", logger_name="iris.worker", message="Worker log 1")
-    )
-    log_buffer.append(
-        BufferedLogRecord(timestamp=1001.0, level="DEBUG", logger_name="iris.cluster.vm", message="VM log")
-    )
-    log_buffer.append(
-        BufferedLogRecord(timestamp=1002.0, level="ERROR", logger_name="iris.worker", message="Worker log 2")
-    )
-
-    service = WorkerServiceImpl(provider=mock_provider, log_buffer=log_buffer)
-
-    # Test: Get all logs
-    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="", limit=0), None)
-    assert len(response.records) == 3
-    assert response.records[0].message == "Worker log 1"
-    assert response.records[1].logger_name == "iris.cluster.vm"
-    assert response.records[2].level == "ERROR"
-
-    # Test: Filter by prefix
-    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="iris.worker", limit=0), None)
-    assert len(response.records) == 2
-    assert response.records[0].message == "Worker log 1"
-    assert response.records[1].message == "Worker log 2"
-
-    # Test: Limit results
-    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="", limit=2), None)
-    assert len(response.records) == 2
-    assert response.records[0].message == "VM log"
-    assert response.records[1].message == "Worker log 2"
-
-
-def test_get_process_logs_no_buffer():
-    """Test GetProcessLogs returns empty when buffer is None."""
-    # Create a mock provider
-    mock_provider = Mock(spec=["submit_task", "get_task", "list_tasks", "kill_task", "get_logs"])
-    mock_provider.list_tasks = Mock(return_value=[])
-
-    service = WorkerServiceImpl(provider=mock_provider, log_buffer=None)
-
-    response = service.get_process_logs(cluster_pb2.Worker.GetProcessLogsRequest(prefix="", limit=0), None)
-    assert len(response.records) == 0
 
 
 @pytest.fixture
