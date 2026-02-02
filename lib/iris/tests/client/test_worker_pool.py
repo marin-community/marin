@@ -33,7 +33,7 @@ def local_client():
     """
     client = IrisClient.local()
     yield client
-    client.shutdown(wait=False)
+    client.shutdown()
 
 
 class TestWorkerPoolE2E:
