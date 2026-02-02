@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import logging
 import socket
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -531,19 +530,6 @@ class FrayIrisClient:
         iris_resources = convert_resources(resources)
         iris_constraints = convert_constraints(resources)
 
-        # Child actor jobs need a dockerfile to build their container image.
-        # Priority: inherit parent's dockerfile (preserves extras like --package marin --extra cpu),
-        # otherwise generate a default one.
-        from iris.cluster.client.job_info import get_job_info
-        from iris.cluster.types import EnvironmentSpec, generate_dockerfile
-
-        job_info = get_job_info()
-        parent_dockerfile = job_info.dockerfile if job_info is not None else None
-        dockerfile = parent_dockerfile or generate_dockerfile(
-            python_version=f"{sys.version_info.major}.{sys.version_info.minor}"
-        )
-        iris_environment = EnvironmentSpec(dockerfile=dockerfile)
-
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name
         entrypoint = IrisEntrypoint.from_callable(_host_actor, actor_class, args, kwargs, name)
@@ -551,7 +537,6 @@ class FrayIrisClient:
             entrypoint=entrypoint,
             name=name,
             resources=iris_resources,
-            environment=iris_environment,
             ports=["actor"],
             constraints=iris_constraints if iris_constraints else None,
             replicas=count,  # Create N replicas in a single job

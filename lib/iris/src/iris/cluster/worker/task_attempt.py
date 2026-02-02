@@ -21,7 +21,6 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 import logging
 import shutil
 import socket
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -349,14 +348,9 @@ class TaskAttempt:
         env_config = self.request.environment
         dockerfile = env_config.dockerfile
         if not dockerfile:
-            # Fallback: generate on worker if client didn't provide one
-            py_version = env_config.python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
-            from iris.cluster.types import generate_dockerfile
-
-            dockerfile = generate_dockerfile(
-                python_version=py_version,
-                extras=list(env_config.extras) if env_config.extras else None,
-                pip_packages=list(env_config.pip_packages) if env_config.pip_packages else None,
+            raise RuntimeError(
+                f"Task {self.task_id} has no dockerfile in environment config. "
+                "The client must provide a dockerfile when submitting jobs."
             )
 
         self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="populating uv cache")

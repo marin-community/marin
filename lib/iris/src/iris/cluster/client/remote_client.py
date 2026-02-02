@@ -14,9 +14,11 @@
 
 """RPC-based cluster client implementation."""
 
+import sys
 import time
 
-from iris.cluster.types import Entrypoint, is_job_finished
+from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import Entrypoint, generate_dockerfile, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
 from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
@@ -72,12 +74,21 @@ class RemoteClusterClient:
 
         entrypoint_proto = entrypoint.to_proto()
 
+        # If no dockerfile is provided, inherit from the parent job or generate a default.
+        dockerfile = environment.dockerfile if environment and environment.dockerfile else ""
+        if not dockerfile:
+            job_info = get_job_info()
+            if job_info is not None and job_info.dockerfile:
+                dockerfile = job_info.dockerfile
+            else:
+                dockerfile = generate_dockerfile(python_version=f"{sys.version_info.major}.{sys.version_info.minor}")
+
         env_config = cluster_pb2.EnvironmentConfig(
             pip_packages=list(environment.pip_packages) if environment else [],
             env_vars=dict(environment.env_vars) if environment else {},
             extras=list(environment.extras) if environment else [],
             python_version=environment.python_version if environment else "",
-            dockerfile=environment.dockerfile if environment else "",
+            dockerfile=dockerfile,
         )
 
         # Determine parent job ID (all but last component)

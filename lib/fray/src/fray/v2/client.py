@@ -170,17 +170,10 @@ def current_client() -> Client:
     if client is not None:
         return client
 
-    # Auto-detect Iris environment: check ContextVar first, then env vars.
-    # iris_ctx() auto-creates from IRIS_JOB_ID env var if the ContextVar is unset,
-    # which is the case when running inside an Iris task container.
     try:
-        import os
-
-        from iris.client.client import get_iris_ctx, iris_ctx
+        from iris.client.client import get_iris_ctx
 
         ctx = get_iris_ctx()
-        if ctx is None and os.environ.get("IRIS_JOB_ID"):
-            ctx = iris_ctx()
         if ctx is not None:
             from fray.v2.iris_backend import FrayIrisClient
 

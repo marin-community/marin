@@ -459,13 +459,24 @@ def iris_ctx() -> IrisContext:
 def get_iris_ctx() -> IrisContext | None:
     """Get the current IrisContext, or None if not in a job.
 
-    Unlike iris_ctx(), this function does not auto-create context
-    from environment if called outside a job context.
+    Checks the ContextVar first. If unset, checks whether we're inside an
+    Iris job (via get_job_info) and auto-creates the context if so.
 
     Returns:
         Current IrisContext or None
     """
-    return _iris_context.get()
+    ctx = _iris_context.get()
+    if ctx is not None:
+        return ctx
+
+    # If job_info is available (ContextVar or IRIS_JOB_ID env), we're in a job.
+    job_info = get_job_info()
+    if job_info is not None:
+        ctx = create_context_from_env()
+        _iris_context.set(ctx)
+        return ctx
+
+    return None
 
 
 @contextmanager
