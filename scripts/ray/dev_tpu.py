@@ -44,7 +44,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
-
 import atexit
 import click
 import getpass
