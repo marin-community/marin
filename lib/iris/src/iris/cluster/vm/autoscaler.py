@@ -198,37 +198,26 @@ class Autoscaler:
 
         # Thread management
         self._threads = threads if threads is not None else get_thread_container()
-        self._scale_up_executor = self._threads.spawn_executor(
-            max_workers=max(len(scale_groups), 4),
-            prefix="scale-up",
-        )
 
     def _wait_for_inflight(self) -> None:
         """Wait for in-flight scale-ups to complete without terminating anything.
 
-        Test-only: not concurrency-safe with concurrent execute() calls.
+        Test-only: Waits for all scale-up threads to complete.
         """
-        self._scale_up_executor.shutdown(wait=True)
-        # Re-create executor so the autoscaler remains usable after waiting
-        self._scale_up_executor = self._threads.spawn_executor(
-            max_workers=max(len(self._groups), 4),
-            prefix="scale-up",
-        )
+        # Wait for all threads in the container to finish
+        self._threads.wait()
 
     def shutdown(self) -> None:
         """Shutdown the autoscaler, terminate all VM groups, and wait for in-flight scale-ups.
 
         Shutdown ordering:
-        1. Wait for in-flight scale-ups (executor will be stopped by ThreadContainer)
+        1. Wait for in-flight scale-up threads to complete
         2. Stop all VM bootstrap threads (call vm.stop() on each VM)
         3. Terminate VMs and cleanup (group.terminate_all())
         4. Stop VM managers (cleanup local platform threads if present)
-
-        Note: The executor is owned by ThreadContainer and will be shut down when
-        the parent container stops. We just wait for pending work here.
         """
-        # Step 1: Wait for in-flight scale-ups
-        self._scale_up_executor.shutdown(wait=True)
+        # Step 1: Wait for in-flight scale-up threads
+        self._threads.wait()
 
         # Step 2: Stop all VM bootstrap threads
         for group in self._groups.values():
@@ -418,15 +407,21 @@ class Autoscaler:
     def _execute_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> None:
         """Initiate async scale-up for a scale group.
 
-        Marks the group as REQUESTING and submits the actual scale-up work to
-        a background thread pool. Returns immediately without blocking.
+        Marks the group as REQUESTING and spawns a background thread for the
+        actual scale-up work. Returns immediately without blocking.
         """
-        # Mark group as requesting before submitting to executor
+        # Mark group as requesting before spawning thread
         timeout = Duration.from_proto(self._config.requesting_timeout)
         group.mark_requesting(ts, timeout)
 
-        # Submit to background thread
-        self._scale_up_executor.submit(self._do_scale_up, group, ts, reason)
+        # Spawn background thread for scale-up
+        def _scale_up_wrapper(stop_event):
+            self._do_scale_up(group, ts, reason)
+
+        self._threads.spawn(
+            target=_scale_up_wrapper,
+            name=f"scale-up-{group.name}",
+        )
 
     def _do_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> bool:
         """Execute the actual blocking scale-up work.
