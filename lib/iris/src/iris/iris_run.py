@@ -23,7 +23,6 @@ Usage:
         -- python experiments/train.py --epochs 10
 """
 
-import argparse
 import getpass
 import logging
 import os
@@ -31,12 +30,14 @@ import sys
 import time
 from pathlib import Path
 
+import click
 import yaml
 
 from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
 from iris.cluster.vm.debug import controller_tunnel
 from iris.rpc import cluster_pb2
+from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -75,11 +76,11 @@ def load_cluster_config(config_path: Path) -> dict:
     return {"zone": zone, "project_id": project_id, "controller_address": controller_address}
 
 
-def load_env_vars(env_flags: list[list[str]] | None) -> dict[str, str]:
+def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | None) -> dict[str, str]:
     """Load environment variables from .marin.yaml and merge with flags.
 
     Args:
-        env_flags: List of [KEY, VALUE] or [KEY] pairs from argparse
+        env_flags: Tuple of (KEY,) or (KEY, VALUE) tuples from Click
 
     Returns:
         Merged environment variables
@@ -217,6 +218,7 @@ def run_iris_job(
     replicas: int = 1,
     max_retries: int = 0,
     timeout: int = 0,
+    extras: list[str] | None = None,
 ) -> int:
     """Core job submission logic (testable without CLI).
 
@@ -246,6 +248,7 @@ def run_iris_job(
     env_vars = add_standard_env_vars(env_vars)
     resources = build_resources(tpu, gpu, cpu, memory)
     job_name = job_name or generate_job_name(command)
+    extras = extras or []
 
     logger.info(f"Submitting job: {job_name}")
     logger.info(f"Command: {' '.join(command)}")
@@ -268,6 +271,7 @@ def run_iris_job(
             max_retries=max_retries,
             timeout=timeout,
             wait=wait,
+            extras=extras,
         )
     else:
         # Remote cluster - use SSH tunnel
@@ -287,6 +291,7 @@ def run_iris_job(
                 max_retries=max_retries,
                 timeout=timeout,
                 wait=wait,
+                extras=extras,
             )
 
 
@@ -300,6 +305,7 @@ def _submit_and_wait_job(
     max_retries: int,
     timeout: int,
     wait: bool,
+    extras: list[str] | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -324,10 +330,10 @@ def _submit_and_wait_job(
         entrypoint=entrypoint,
         name=job_name,
         resources=resources,
-        environment=EnvironmentSpec(env_vars=env_vars),
+        environment=EnvironmentSpec(env_vars=env_vars, extras=extras or []),
         replicas=replicas,
         max_retries_failure=max_retries,
-        timeout_seconds=timeout,
+        timeout=Duration.from_seconds(timeout) if timeout else None,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
@@ -352,121 +358,134 @@ def _submit_and_wait_job(
         return 0
 
 
-def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+@click.command(
+    context_settings={"ignore_unknown_options": True},
+    help="""Submit jobs to Iris clusters.
 
-    parser = argparse.ArgumentParser(
-        description="Submit jobs to Iris clusters",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
 Examples:
-  # Simple CPU job
-  iris_run.py --config cluster.yaml -- python script.py
 
+  \b
+  # Simple CPU job
+  iris-run --config cluster.yaml -- python script.py
+
+  \b
   # TPU job with environment variables
-  iris_run.py --config cluster.yaml --tpu v5litepod-16 \\
+  iris-run --config cluster.yaml --tpu v5litepod-16 \\
     -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 
+  \b
   # Submit and detach
-  iris_run.py --config cluster.yaml --no-wait -- python long_job.py
-        """,
-    )
+  iris-run --config cluster.yaml --no-wait -- python long_job.py
+""",
+)
+@click.option(
+    "--config",
+    required=True,
+    type=click.Path(exists=True, path_type=Path),
+    help="Path to Iris cluster config YAML",
+)
+@click.option(
+    "-e",
+    "--env-vars",
+    "env_vars",
+    multiple=True,
+    type=(str, str),
+    help="Set environment variables for the job (KEY VALUE). Can be repeated.",
+)
+@click.option(
+    "--tpu",
+    type=str,
+    help="TPU type to request (e.g., v5litepod-16)",
+)
+@click.option(
+    "--gpu",
+    type=int,
+    help="Number of GPUs to request",
+)
+@click.option(
+    "--cpu",
+    type=int,
+    help="Number of CPUs to request (default: 1)",
+)
+@click.option(
+    "--memory",
+    type=str,
+    help="Memory size to request (e.g., 8GB, 512MB; default: 2GB)",
+)
+@click.option(
+    "--no-wait",
+    is_flag=True,
+    help="Don't wait for job completion",
+)
+@click.option(
+    "--job-name",
+    type=str,
+    help="Custom job name (default: auto-generated)",
+)
+@click.option(
+    "--replicas",
+    type=int,
+    default=1,
+    help="Number of tasks for gang scheduling (default: 1)",
+)
+@click.option(
+    "--max-retries",
+    type=int,
+    default=0,
+    help="Max retries on failure (default: 0)",
+)
+@click.option(
+    "--timeout",
+    type=int,
+    default=0,
+    help="Job timeout in seconds (default: 0 = no timeout)",
+)
+@click.option(
+    "--extra",
+    multiple=True,
+    help="UV extras to install (e.g., --extra cpu). Can be repeated.",
+)
+@click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
+def main(
+    config: Path,
+    env_vars: tuple[tuple[str, str], ...],
+    tpu: str | None,
+    gpu: int | None,
+    cpu: int | None,
+    memory: str | None,
+    no_wait: bool,
+    job_name: str | None,
+    replicas: int,
+    max_retries: int,
+    timeout: int,
+    extra: tuple[str, ...],
+    cmd: tuple[str, ...],
+):
+    """Submit jobs to Iris clusters."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    parser.add_argument(
-        "--config",
-        required=True,
-        type=Path,
-        help="Path to Iris cluster config YAML",
-    )
-    parser.add_argument(
-        "--env_vars",
-        "-e",
-        action="append",
-        nargs="+",
-        metavar=("KEY", "VALUE"),
-        help="Set environment variables for the job. If only KEY is provided, VALUE is set to empty string.",
-    )
-    parser.add_argument(
-        "--tpu",
-        type=str,
-        help="TPU type to request (e.g., v5litepod-16)",
-    )
-    parser.add_argument(
-        "--gpu",
-        type=int,
-        help="Number of GPUs to request",
-    )
-    parser.add_argument(
-        "--cpu",
-        type=int,
-        help="Number of CPUs to request (default: 1)",
-    )
-    parser.add_argument(
-        "--memory",
-        type=str,
-        help="Memory size to request (e.g., 8GB, 512MB; default: 2GB)",
-    )
-    parser.add_argument(
-        "--no-wait",
-        action="store_true",
-        help="Don't wait for job completion",
-    )
-    parser.add_argument(
-        "--job-name",
-        type=str,
-        help="Custom job name (default: auto-generated)",
-    )
-    parser.add_argument(
-        "--replicas",
-        type=int,
-        default=1,
-        help="Number of tasks for gang scheduling (default: 1)",
-    )
-    parser.add_argument(
-        "--max-retries",
-        type=int,
-        default=0,
-        help="Max retries on failure (default: 0)",
-    )
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=0,
-        help="Job timeout in seconds (default: 0 = no timeout)",
-    )
-    parser.add_argument(
-        "cmd",
-        nargs=argparse.REMAINDER,
-        help="Command to run (must start with --)",
-    )
-
-    args = parser.parse_args()
-
-    # Validate command format
-    if not args.cmd or args.cmd[0] != "--":
-        parser.error("Command must start with --")
-
-    command = args.cmd[1:]
+    command = list(cmd)
     if not command:
-        parser.error("No command provided after --")
+        raise click.UsageError("No command provided after --")
 
     # Load env vars - let exceptions propagate
-    env_vars = load_env_vars(args.env_vars)
+    env_vars_dict = load_env_vars(env_vars)
 
     # Call core logic - let exceptions propagate
     exit_code = run_iris_job(
-        config_path=args.config,
+        config_path=config,
         command=command,
-        env_vars=env_vars,
-        tpu=args.tpu,
-        gpu=args.gpu,
-        cpu=args.cpu,
-        memory=args.memory,
-        wait=not args.no_wait,
-        job_name=args.job_name,
-        replicas=args.replicas,
-        max_retries=args.max_retries,
-        timeout=args.timeout,
+        env_vars=env_vars_dict,
+        tpu=tpu,
+        gpu=gpu,
+        cpu=cpu,
+        memory=memory,
+        wait=not no_wait,
+        job_name=job_name,
+        replicas=replicas,
+        max_retries=max_retries,
+        timeout=timeout,
+        extras=list(extra),
     )
     sys.exit(exit_code)
 

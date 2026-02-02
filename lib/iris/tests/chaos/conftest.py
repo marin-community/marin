@@ -37,6 +37,11 @@ def _slow():
     time.sleep(120)
 
 
+def _block(s):
+    """Block until sentinel is signalled. Pass a SentinelFile instance."""
+    s.wait()
+
+
 @pytest.fixture(autouse=True)
 def _reset_chaos():
     yield
@@ -67,9 +72,9 @@ def cluster():
         yield url, client
 
 
-def submit(client, fn, name, **kw):
+def submit(client, fn, name, *args, **kw):
     return client.submit(
-        entrypoint=Entrypoint.from_callable(fn),
+        entrypoint=Entrypoint.from_callable(fn, *args),
         name=name,
         resources=ResourceSpec(cpu=1, memory="1g"),
         environment=EnvironmentSpec(),

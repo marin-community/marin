@@ -47,7 +47,7 @@ from iris.cluster.vm.autoscaler import Autoscaler
 from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
-from iris.time_utils import ExponentialBackoff, now_ms
+from iris.time_utils import Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +211,7 @@ class ControllerConfig:
     scheduler_interval_seconds: float = 0.5
     """How often to run the scheduling loop (in seconds)."""
 
-    worker_timeout_seconds: float = 60.0
+    worker_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
     """How long without worker heartbeats before declaring a worker unavailable."""
 
     max_dispatch_parallelism: int = 32
@@ -474,8 +474,10 @@ class Controller:
                         resources=job.request.resources,
                         ports=list(job.request.ports),
                         attempt_id=task.current_attempt_id,
-                        timeout_seconds=job.request.timeout_seconds,
                     )
+                    # Copy timeout if set (check milliseconds field > 0)
+                    if job.request.timeout.milliseconds > 0:
+                        request.timeout.CopyFrom(job.request.timeout)
                     wd = self._dispatch.setdefault(worker.worker_id, WorkerDispatch())
                     wd.dispatch_outbox.append(request)
 
@@ -486,14 +488,17 @@ class Controller:
     def _mark_task_unschedulable(self, task: ControllerTask) -> None:
         """Mark a task as unschedulable due to timeout."""
         job = self._state.get_job(task.job_id)
-        timeout_seconds = job.request.scheduling_timeout_seconds if job else 0
-        logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout_seconds}s), marking as UNSCHEDULABLE")
+        if job and job.request.HasField("scheduling_timeout"):
+            timeout = Duration.from_proto(job.request.scheduling_timeout)
+        else:
+            timeout = None
+        logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout}), marking as UNSCHEDULABLE")
         txn = self._state.handle_event(
             TaskStateChangedEvent(
                 task_id=task.task_id,
                 new_state=cluster_pb2.TASK_STATE_UNSCHEDULABLE,
                 attempt_id=task.current_attempt_id,
-                error=f"Scheduling timeout exceeded ({timeout_seconds}s)",
+                error=f"Scheduling timeout exceeded ({timeout})",
             )
         )
         if txn.tasks_to_kill:
@@ -572,14 +577,7 @@ class Controller:
         tasks_to_run: list[cluster_pb2.Worker.RunTaskRequest],
         tasks_to_kill: list[str],
     ) -> None:
-        """Process a completed heartbeat future.
-
-        Args:
-            future: Completed future from heartbeat RPC
-            worker: The worker that was heartbeated
-            tasks_to_run: Tasks that were sent to the worker
-            tasks_to_kill: Task IDs that were sent for killing
-        """
+        """Process a completed heartbeat future."""
         try:
             response = future.result()
             self._process_heartbeat_response(worker, response)
@@ -594,14 +592,6 @@ class Controller:
         tasks_to_kill: list[str],
     ) -> cluster_pb2.HeartbeatResponse:
         """Send a heartbeat to a single worker.
-
-        Args:
-            worker: The worker to heartbeat
-            tasks_to_run: Tasks to start on this worker
-            tasks_to_kill: Task IDs to kill on this worker
-
-        Returns:
-            HeartbeatResponse on success
 
         Raises:
             Exception on RPC failure (caught and handled by _handle_heartbeat_future)
@@ -634,7 +624,7 @@ class Controller:
         Updates heartbeat timestamp and processes completed tasks. Reconciliation
         of running vs expected tasks is handled worker-side using expected_tasks.
         """
-        self._state.handle_event(WorkerHeartbeatEvent(worker_id=worker.worker_id, timestamp_ms=now_ms()))
+        self._state.handle_event(WorkerHeartbeatEvent(worker_id=worker.worker_id, timestamp=Timestamp.now()))
 
         for entry in response.completed_tasks:
             task_id = TaskId(entry.task_id)
@@ -676,10 +666,8 @@ class Controller:
 
     def _check_worker_timeouts(self) -> None:
         """Check for worker timeouts and send kill RPCs for affected tasks."""
-        timeout_ms = int(self._config.worker_timeout_seconds * 1000)
-
         # State computes failed workers and marks them atomically under lock
-        tasks_to_kill = self._state.check_worker_timeouts(timeout_ms)
+        tasks_to_kill = self._state.check_worker_timeouts(self._config.worker_timeout)
 
         # Send kill RPCs outside lock
         if tasks_to_kill:

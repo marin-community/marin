@@ -49,7 +49,7 @@ from iris.cluster.worker.docker import ContainerConfig, ContainerRuntime, Contai
 from iris.cluster.worker.worker import PortAllocator, Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import cluster_pb2, config_pb2, vm_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -355,7 +355,7 @@ class LocalVmGroup(VmGroupProtocol):
         self._scale_group = scale_group
         self._workers = workers
         self._worker_ids = worker_ids
-        self._created_at_ms = now_ms()
+        self._created_at = Timestamp.now()
         self._vm_registry = vm_registry
         self._terminated = False
 
@@ -372,8 +372,8 @@ class LocalVmGroup(VmGroupProtocol):
                 address=f"127.0.0.1:{port}",
                 zone="local",
                 worker_id=worker_id,
-                created_at_ms=self._created_at_ms,
-                state_changed_at_ms=self._created_at_ms,
+                created_at=self._created_at.to_proto(),
+                state_changed_at=self._created_at.to_proto(),
             )
             # Create a stub ManagedVm that just holds the info
             managed_vm = _StubManagedVm(vm_info)
@@ -394,7 +394,8 @@ class LocalVmGroup(VmGroupProtocol):
 
     @property
     def created_at_ms(self) -> int:
-        return self._created_at_ms
+        """Timestamp when this VM group was created (milliseconds since epoch)."""
+        return self._created_at.epoch_ms()
 
     def status(self) -> VmGroupStatus:
         if self._terminated:
@@ -439,7 +440,7 @@ class LocalVmGroup(VmGroupProtocol):
         return vm_pb2.SliceInfo(
             slice_id=self._group_id,
             scale_group=self._scale_group,
-            created_at_ms=self._created_at_ms,
+            created_at=self._created_at.to_proto(),
             vms=[vm.info for vm in self._managed_vms],
         )
 
@@ -523,7 +524,7 @@ class LocalVmManager:
                 cache_dir=self._cache_path,
                 controller_address=self._controller_address,
                 worker_id=worker_id,
-                poll_interval_seconds=0.1,  # Fast polling for demos
+                poll_interval=Duration.from_seconds(0.1),
             )
             worker = Worker(
                 worker_config,
@@ -588,8 +589,8 @@ def _create_local_autoscaler(
         scale_groups[name] = ScalingGroup(
             config=sg_config,
             vm_manager=manager,
-            scale_up_cooldown_ms=1000,
-            scale_down_cooldown_ms=300_000,
+            scale_up_cooldown=Duration.from_ms(1000),
+            scale_down_cooldown=Duration.from_ms(300_000),
         )
 
     return Autoscaler(

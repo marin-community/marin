@@ -27,6 +27,7 @@ from iris.cluster.types import Entrypoint
 from iris.cluster.vm.cluster_manager import ClusterManager
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.time_utils import Duration, Timestamp
 
 
 def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
@@ -52,7 +53,7 @@ def _make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig
     config.scale_groups["local-cpu"].CopyFrom(sg)
 
     # Fast autoscaler evaluation for tests
-    config.autoscaler.evaluation_interval_seconds = 0.5
+    config.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
 
     return config
 
@@ -119,13 +120,13 @@ class LocalClusterClient:
         resources: cluster_pb2.ResourceSpecProto,
         environment: cluster_pb2.EnvironmentConfig | None = None,
         ports: list[str] | None = None,
-        scheduling_timeout_seconds: int = 0,
+        scheduling_timeout: Duration | None = None,
         constraints: list[cluster_pb2.Constraint] | None = None,
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
-        timeout_seconds: int = 0,
+        timeout: Duration | None = None,
     ) -> None:
         self._remote_client.submit_job(
             job_id=job_id,
@@ -133,13 +134,13 @@ class LocalClusterClient:
             resources=resources,
             environment=environment,
             ports=ports,
-            scheduling_timeout_seconds=scheduling_timeout_seconds,
+            scheduling_timeout=scheduling_timeout,
             constraints=constraints,
             coscheduling=coscheduling,
             replicas=replicas,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
-            timeout_seconds=timeout_seconds,
+            timeout=timeout,
         )
 
     def get_job_status(self, job_id: str) -> cluster_pb2.JobStatus:
@@ -183,7 +184,7 @@ class LocalClusterClient:
     def fetch_task_logs(
         self,
         task_id: str,
-        start_ms: int = 0,
+        start: "Timestamp | None" = None,
         max_lines: int = 0,
     ) -> list[cluster_pb2.Worker.LogEntry]:
-        return self._remote_client.fetch_task_logs(task_id, start_ms, max_lines)
+        return self._remote_client.fetch_task_logs(task_id, start, max_lines)

@@ -19,7 +19,6 @@ organized into subcommand groups for cluster operations and image builds.
 """
 
 import concurrent.futures
-import datetime
 import importlib.util
 import json
 import logging
@@ -48,6 +47,7 @@ from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.controller import create_controller
 from iris.cluster.vm.debug import controller_tunnel
 from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
+from iris.time_utils import Duration, Timestamp
 from iris.logging import configure_logging as _configure_logging
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
@@ -70,8 +70,7 @@ def _format_timestamp(ms: int) -> str:
     """Format millisecond timestamp as human-readable string."""
     if ms == 0:
         return "-"
-    dt = datetime.datetime.fromtimestamp(ms / 1000, tz=datetime.timezone.utc)
-    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    return Timestamp.from_ms(ms).as_formatted_date()
 
 
 def _format_status_table(status: vm_pb2.AutoscalerStatus) -> str:
@@ -545,7 +544,7 @@ def controller_run_local(
         port=port,
         bundle_prefix=effective_bundle_prefix,
         scheduler_interval_seconds=scheduler_interval,
-        worker_timeout_seconds=worker_timeout,
+        worker_timeout=Duration.from_seconds(worker_timeout),
     )
 
     autoscaler = None
@@ -1249,11 +1248,12 @@ def cluster_restart(ctx):
 @click.option("--validate", is_flag=True, help="Submit a health check after reload")
 @click.pass_context
 def cluster_reload(ctx, no_build: bool, validate: bool):
-    """Reload cluster by rebuilding images and redeploying on existing VMs.
+    """Reload cluster by rebuilding images and reloading the controller.
 
-    Faster than a full restart: rebuilds Docker images, SSHs into existing
-    controller and worker VMs, pulls new images, and restarts containers.
-    Existing VMs are preserved.
+    Faster than a full restart: rebuilds Docker images and reloads the controller VM.
+    The controller will automatically re-bootstrap all worker VMs with the latest
+    worker image when it starts up. This ensures all workers run the latest image
+    without manual intervention.
 
     Use --validate to verify the reloaded controller is healthy by establishing
     an SSH tunnel and checking the health endpoint.
@@ -1273,10 +1273,11 @@ def cluster_reload(ctx, no_build: bool, validate: bool):
 
     manager = ClusterManager(config)
 
-    click.echo("Reloading cluster (controller + workers)...")
+    click.echo("Reloading controller (workers will be re-bootstrapped automatically)...")
     try:
         address = manager.reload()
-        click.echo(f"Cluster reloaded. Controller at {address}")
+        click.echo(f"Controller reloaded at {address}")
+        click.echo("Workers will be re-bootstrapped with latest image on next controller reconcile.")
     except Exception as e:
         click.echo(f"Failed to reload cluster: {e}", err=True)
         raise SystemExit(1) from e
