@@ -498,6 +498,21 @@ def main(config: Path, output_dir: Path, stay_open: bool):
 
         print(f"\nDashboard URL: {url}")
 
+        if not stay_open:
+            # Terminate all non-terminal jobs so the controller can shut down cleanly
+            # without waiting for in-flight heartbeat dispatches to long-running workers.
+            terminal_states = (
+                cluster_pb2.JOB_STATE_SUCCEEDED,
+                cluster_pb2.JOB_STATE_FAILED,
+                cluster_pb2.JOB_STATE_KILLED,
+                cluster_pb2.JOB_STATE_WORKER_FAILED,
+            )
+            for name, jid in job_ids.items():
+                status = client.status(jid)
+                if status.state not in terminal_states:
+                    logger.info("Terminating remaining job %s (%s)", name, jid)
+                    client.terminate(jid)
+
         if stay_open:
             print("Cluster will remain running. Press Ctrl-C to shutdown...")
             try:
