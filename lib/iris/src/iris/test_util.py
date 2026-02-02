@@ -33,6 +33,9 @@ class SentinelFile:
         return self._path
 
     def signal(self) -> None:
+        dirname = os.path.dirname(self._path)
+        if dirname:
+            os.makedirs(dirname, exist_ok=True)
         with open(self._path, "w"):
             pass
 
