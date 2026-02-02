@@ -24,8 +24,10 @@ from fray.v2.local import LocalClient
 
 def test_default_returns_local_client():
     """When no context is set, should return LocalClient."""
-    client = current_client()
-    assert isinstance(client, LocalClient)
+    with patch("iris.client.get_iris_ctx", return_value=None):
+        with patch("ray.is_initialized", return_value=False):
+            client = current_client()
+            assert isinstance(client, LocalClient)
 
 
 def test_set_current_client_context_manager():
@@ -82,8 +84,9 @@ def test_iris_auto_detection_reuses_client():
 def test_iris_not_detected_when_no_context():
     """Should not detect Iris when get_iris_ctx() returns None."""
     with patch("iris.client.get_iris_ctx", return_value=None):
-        client = current_client()
-        assert isinstance(client, LocalClient)
+        with patch("ray.is_initialized", return_value=False):
+            client = current_client()
+            assert isinstance(client, LocalClient)
 
 
 def test_ray_auto_detection():

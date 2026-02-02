@@ -226,7 +226,7 @@ def test_build_runtime_env_cpu_sets_jax_platforms():
         entrypoint=Entrypoint.from_callable(lambda: None),
         resources=ResourceConfig(device=CpuConfig()),
     )
-    env = build_runtime_env(request, "ray")
+    env = build_runtime_env(request)
     assert env["env_vars"]["JAX_PLATFORMS"] == "cpu"
 
 
@@ -238,7 +238,7 @@ def test_build_runtime_env_tpu_clears_jax_platforms():
         entrypoint=Entrypoint.from_callable(lambda: None),
         resources=ResourceConfig(device=TpuConfig(variant="v4-8")),
     )
-    env = build_runtime_env(request, "ray")
+    env = build_runtime_env(request)
     assert env["env_vars"]["JAX_PLATFORMS"] == ""
 
 
@@ -250,7 +250,7 @@ def test_build_runtime_env_gpu_clears_jax_platforms():
         entrypoint=Entrypoint.from_callable(lambda: None),
         resources=ResourceConfig(device=GpuConfig(variant="H100")),
     )
-    env = build_runtime_env(request, "ray")
+    env = build_runtime_env(request)
     assert env["env_vars"]["JAX_PLATFORMS"] == ""
 
 

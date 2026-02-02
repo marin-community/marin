@@ -181,10 +181,7 @@ def current_client() -> Client:
         if iris_ctx is not None:
             from fray.v2.iris_backend import FrayIrisClient
 
-            # Extract controller address and bundle path from context
-            controller_address = iris_ctx.client._controller_address
-            bundle_gcs_path = os.environ.get("IRIS_BUNDLE_GCS_PATH")
-            return FrayIrisClient(controller_address, bundle_gcs_path=bundle_gcs_path)
+            return FrayIrisClient.from_iris_client(iris_ctx.client)
     except ImportError:
         pass  # Iris not installed
 
