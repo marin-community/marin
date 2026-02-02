@@ -183,7 +183,7 @@ def test_slice_terminate_multiple(cli_runner: CliRunner, config_file: Path, test
 
     assert len(list(group.vm_groups())) == 2
 
-    with patch("iris.cli.slice.load_autoscaler", return_value=(autoscaler, mock_config)):
+    with patch("iris.cli.cluster.load_autoscaler", return_value=(autoscaler, mock_config)):
         result = cli_runner.invoke(
             iris, ["cluster", "--config", str(config_file), "slice", "terminate", slice1.slice_id, slice2.slice_id]
         )
