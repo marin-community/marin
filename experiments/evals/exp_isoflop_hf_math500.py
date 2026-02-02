@@ -57,7 +57,7 @@ def build_hf_steps(prompt_format: str = "question_only"):
         name = f"{directory_friendly_name}"
         steps.append(
             ExecutorStep(
-                name=f"analysis/math500/{name}",
+                name=f"analysis/math500_rollouts/{name}",
                 fn=run_math500_eval,
                 config=Math500EvalConfig(
                     model_path=output_path_of(model_instance),
@@ -84,7 +84,7 @@ def build_isoflop_steps(prompt_format: str = "question_only"):
         name = f"{experiment_name}"
         steps.append(
             ExecutorStep(
-                name=f"analysis/math500/{name}",
+                name=f"analysis/math500_rollouts/{name}",
                 fn=run_math500_eval,
                 config=Math500EvalConfig(
                     model_path=checkpoint_path,
@@ -99,8 +99,6 @@ def build_isoflop_steps(prompt_format: str = "question_only"):
     return steps
 
 def build_steps(model_types: list[str], prompt_format: str = "question_only"):
-    isoflop_steps, isoflop_candidates = MARIN_SCALING_SUITES["nemotron"]
-
     steps = []
     if "iso" in model_types:
         isoflop_steps = build_isoflop_steps(prompt_format=prompt_format)
@@ -157,7 +155,7 @@ def math500_rollouts_tokenized(tokenizer: str, prompt_format: str = "question_on
                 name=f"documents/math500_rollouts/{name}/{filter_type}",
                 fn=process_math500_data,
                 config=Math500ProcessConfig(
-                    input_path=output_path_of(eval_step),
+                    eval_path=output_path_of(eval_step),
                     output_path=this_output_path(),
                     filter=filter_type,
                 ),
@@ -187,7 +185,7 @@ def main():
     import logging
     logging.getLogger("marin.execution.executor").setLevel(logging.ERROR)
 
-    model_types = ["iso","hf"]
+    model_types = ["hf"]
     prompt_format = "standard_fewshot"
     steps = build_steps(model_types=model_types, prompt_format=prompt_format)
 
