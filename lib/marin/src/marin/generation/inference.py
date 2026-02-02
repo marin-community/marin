@@ -84,6 +84,10 @@ class TextGenerationInferenceConfig:
     # Useful for multi-sample voting where each sample needs to be checked independently.
     save_samples_as_list: bool = False
 
+    # Ray Data retry settings
+    # Maximum number of retries for failed tasks. Set to -1 for infinite retries.
+    max_task_retries: int = -1
+
 
 class OneToOneFilenameProvider(FilenameProvider):
     def __init__(self, files: list[str], input_path: str):
@@ -114,6 +118,9 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
 
     # This allows us to run long-running tasks even if there is preemption.
     ctx.max_errored_blocks = -1
+
+    # Limit task retries (-1 for infinite)
+    ctx.max_task_retries = config.max_task_retries
 
     # Helps with debugging
     ctx.log_internal_stack_trace_to_stdout = True
