@@ -47,7 +47,7 @@ from iris.cluster.vm.ssh import (
 )
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ def check_health(
     result = HealthCheckResult(healthy=False)
 
     try:
-        curl_result = conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
+        curl_result = conn.run(f"curl -sf http://localhost:{port}/health", timeout=Duration.from_seconds(10))
         if curl_result.returncode == 0:
             result.healthy = True
             result.curl_output = curl_result.stdout.strip()
@@ -118,7 +118,7 @@ def check_health(
     try:
         status_result = conn.run(
             f"sudo docker inspect --format='{{{{.State.Status}}}}' {container_name} 2>/dev/null || echo 'not_found'",
-            timeout=10,
+            timeout=Duration.from_seconds(10),
         )
         result.container_status = status_result.stdout.strip()
     except Exception as e:
@@ -126,7 +126,8 @@ def check_health(
 
     if result.container_status in ("restarting", "exited", "dead", "not_found"):
         try:
-            logs_result = conn.run(f"sudo docker logs {container_name} --tail 20 2>&1", timeout=15)
+            cmd = f"sudo docker logs {container_name} --tail 20 2>&1"
+            logs_result = conn.run(cmd, timeout=Duration.from_seconds(15))
             if logs_result.returncode == 0 and logs_result.stdout.strip():
                 result.container_logs = logs_result.stdout.strip()
         except Exception as e:
@@ -188,7 +189,7 @@ def wait_healthy_via_ssh(
 
     # Try to get more detailed container logs (more lines than check_health fetches)
     try:
-        logs_result = conn.run(f"sudo docker logs {container_name} --tail 50 2>&1", timeout=15)
+        logs_result = conn.run(f"sudo docker logs {container_name} --tail 50 2>&1", timeout=Duration.from_seconds(15))
         if logs_result.returncode == 0 and logs_result.stdout.strip():
             logger.error("Container logs (last 50 lines):\n%s", logs_result.stdout.strip())
         elif last_result.container_logs:
@@ -857,7 +858,7 @@ class ManualController:
         stop_script = CONTROLLER_STOP_SCRIPT.format(container_name=CONTROLLER_CONTAINER_NAME)
 
         try:
-            result = conn.run(f"bash -c {shlex.quote(stop_script)}", timeout=60)
+            result = conn.run(f"bash -c {shlex.quote(stop_script)}", timeout=Duration.from_seconds(60))
             if result.returncode != 0:
                 logger.warning("Stop script returned %d: %s", result.returncode, result.stderr)
         except Exception as e:
@@ -902,11 +903,16 @@ class ManualController:
     def _create_ssh_connection(self, host: str) -> DirectSshConnection:
         """Create SSH connection for the given host."""
         ssh = self.config.ssh
+        connect_timeout = (
+            Duration.from_proto(ssh.connect_timeout)
+            if ssh.HasField("connect_timeout") and ssh.connect_timeout.milliseconds > 0
+            else Duration.from_seconds(30)
+        )
         return DirectSshConnection(
             host=host,
             user=ssh.user or "root",
             key_file=ssh.key_file or None,
-            connect_timeout=ssh.connect_timeout or 30,
+            connect_timeout=connect_timeout,
         )
 
     def fetch_startup_logs(self, tail_lines: int = 100) -> str | None:
@@ -920,7 +926,8 @@ class ManualController:
 
         logger.info("Fetching container logs from %s...", host)
         try:
-            result = conn.run(f"sudo docker logs {CONTROLLER_CONTAINER_NAME} --tail {tail_lines}", timeout=30)
+            cmd = f"sudo docker logs {CONTROLLER_CONTAINER_NAME} --tail {tail_lines}"
+            result = conn.run(cmd, timeout=Duration.from_seconds(30))
             if result.returncode == 0:
                 return result.stdout
             logger.warning("Failed to fetch container logs: %s", result.stderr)

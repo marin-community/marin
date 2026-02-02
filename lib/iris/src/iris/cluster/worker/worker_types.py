@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_pb2 import TaskState
+from iris.time_utils import Timestamp
 
 
 class LogLine(BaseModel):
@@ -33,11 +34,12 @@ class LogLine(BaseModel):
         return cls(timestamp=datetime.now(timezone.utc), source=source, data=data)
 
     def to_proto(self) -> cluster_pb2.Worker.LogEntry:
-        return cluster_pb2.Worker.LogEntry(
-            timestamp_ms=int(self.timestamp.timestamp() * 1000),
+        proto = cluster_pb2.Worker.LogEntry(
             source=self.source,
             data=self.data,
         )
+        proto.timestamp.CopyFrom(Timestamp.from_seconds(self.timestamp.timestamp()).to_proto())
+        return proto
 
 
 class TaskLogs(BaseModel):

@@ -18,7 +18,7 @@ import logging
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import uvicorn
@@ -34,9 +34,10 @@ from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
+from iris.managed_thread import ThreadContainer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,8 @@ class WorkerConfig:
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
-    poll_interval_seconds: float = 5.0
+    poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
+    heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
 
 
 class Worker:
@@ -108,45 +110,45 @@ class Worker:
             port=config.port,
         )
 
-        self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
+        self._threads = ThreadContainer()
 
-        # Heartbeat/registration thread
-        self._heartbeat_thread: threading.Thread | None = None
-        self._stop_heartbeat = threading.Event()
         self._worker_id: str | None = config.worker_id
         self._controller_client: ControllerServiceClientSync | None = None
+
+        # Heartbeat tracking for timeout detection
+        self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
 
     def start(self) -> None:
         # Clean up any orphaned containers from previous runs
         self._cleanup_all_iris_containers()
 
-        self._server_thread = threading.Thread(
-            target=self._run_server,
-            daemon=True,
+        # Start HTTP server
+        self._server = uvicorn.Server(
+            uvicorn.Config(
+                self._dashboard._app,
+                host=self._config.host,
+                port=self._config.port,
+                log_level="error",
+            )
         )
-        self._server_thread.start()
+        self._threads.spawn_server(self._server, name="worker-server")
 
         # Wait for server startup with exponential backoff
         ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-            lambda: self._server is not None and self._server.started,
+            lambda: self._server.started,
             timeout=5.0,
         )
 
-        # Create controller client synchronously (before any tasks can be dispatched)
+        # Create controller client if controller configured
         if self._config.controller_address:
             self._controller_client = ControllerServiceClientSync(
                 address=self._config.controller_address,
                 timeout_ms=5000,
             )
 
-        # Start heartbeat loop if controller configured
-        if self._config.controller_address:
-            self._heartbeat_thread = threading.Thread(
-                target=self._heartbeat_loop,
-                daemon=True,
-            )
-            self._heartbeat_thread.start()
+            # Start lifecycle thread: register + serve + reset loop
+            self._threads.spawn(target=self._run_lifecycle, name="worker-lifecycle")
 
     def _cleanup_all_iris_containers(self) -> None:
         """Remove all iris-managed containers at startup.
@@ -158,20 +160,12 @@ class Worker:
             logger.info("Startup cleanup: removed %d iris containers", removed)
 
     def wait(self) -> None:
-        """Block until the server thread exits."""
-        if self._server_thread:
-            self._server_thread.join()
+        self._threads.wait()
 
     def stop(self) -> None:
-        self._stop_heartbeat.set()
-        if self._heartbeat_thread:
-            self._heartbeat_thread.join(timeout=5.0)
-
-        # Stop uvicorn server
         if self._server:
             self._server.should_exit = True
-        if self._server_thread:
-            self._server_thread.join(timeout=5.0)
+        self._threads.stop()
 
         # Kill and remove all containers
         with self._lock:
@@ -194,20 +188,64 @@ class Worker:
             except OSError:
                 pass
 
-    def _run_server(self) -> None:
-        try:
-            config = uvicorn.Config(
-                self._dashboard._app,
-                host=self._config.host,
-                port=self._config.port,
-                log_level="error",
-            )
-            self._server = uvicorn.Server(config)
-            self._server.run()
-        except Exception as e:
-            print(f"Worker server error: {e}")
+    def _run_lifecycle(self, stop_event: threading.Event) -> None:
+        """Main lifecycle: register, serve, reset, repeat.
 
-    def _heartbeat_loop(self) -> None:
+        This loop runs continuously until shutdown. On each iteration:
+        1. Reset worker state (kill all containers)
+        2. Register with controller (retry until accepted)
+        3. Serve (wait for heartbeats from controller)
+        4. If heartbeat timeout expires, return to step 1
+        """
+        while not stop_event.is_set():
+            self._reset_worker_state()
+            worker_id = self._register(stop_event)
+            if worker_id is None:
+                # Shutdown requested during registration
+                break
+            self._worker_id = worker_id
+            self._serve(stop_event)
+
+    def _register(self, stop_event: threading.Event) -> str | None:
+        """Register with controller. Retries until accepted or shutdown.
+
+        Returns the assigned worker_id, or None if shutdown was requested.
+        """
+        metadata = self._worker_metadata
+        address = self._resolve_address()
+
+        # Controller client is created in start() before this thread starts
+        assert self._controller_client is not None
+
+        logger.info("Attempting to register with controller at %s", self._config.controller_address)
+
+        while not stop_event.is_set():
+            try:
+                # Chaos injection for testing delayed registration
+                if rule := chaos("worker.register"):
+                    time.sleep(rule.delay_seconds)
+                    if rule.error:
+                        raise rule.error
+
+                response = self._controller_client.register(
+                    cluster_pb2.Controller.RegisterRequest(
+                        address=address,
+                        metadata=metadata,
+                    )
+                )
+                if response.accepted:
+                    logger.info("Registered with controller: %s", response.worker_id)
+                    return response.worker_id
+                else:
+                    logger.warning("Registration rejected by controller, retrying in 5s")
+            except Exception as e:
+                logger.warning("Registration failed: %s, retrying in 5s", e)
+            stop_event.wait(5.0)
+
+        return None
+
+    def _resolve_address(self) -> str:
+        """Resolve the address to advertise to the controller."""
         metadata = self._worker_metadata
 
         # Determine the address to advertise to the controller.
@@ -224,105 +262,26 @@ class Worker:
             vm_address = f"{address_host}:{self._config.port}"
             metadata.vm_address = vm_address
 
-        # Derive worker_id from vm_address (no UUID generation)
-        if not self._worker_id:
-            self._worker_id = vm_address
+        return f"{address_host}:{self._config.port}"
 
-        # Controller client is created in start() before this thread starts
-        assert self._controller_client is not None
+    def _serve(self, stop_event: threading.Event) -> None:
+        """Wait for heartbeats from controller. Returns when heartbeat timeout expires.
 
-        # Retry registration until successful (or reset requested)
-        attempt = 0
-        while not self._stop_heartbeat.is_set():
-            attempt += 1
+        This method blocks in a loop, checking the time since last heartbeat.
+        When the timeout expires, it returns, triggering a reset and re-registration.
+        """
+        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
+        logger.info("Serving (waiting for controller heartbeats)")
 
-            # Get active task IDs for controller restart recovery (RUNNING or BUILDING)
-            with self._lock:
-                active_tasks = [
-                    t
-                    for t in self._tasks.values()
-                    if t.status in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
-                ]
-                running_tasks = [
-                    cluster_pb2.Controller.RunningTaskEntry(
-                        task_id=t.task_id,
-                        attempt_id=t.attempt_id,
-                    )
-                    for t in active_tasks
-                ]
-
-            request = cluster_pb2.Controller.RegisterWorkerRequest(
-                worker_id=self._worker_id,
-                address=f"{address_host}:{self._config.port}",
-                metadata=metadata,
-                running_tasks=running_tasks,
-            )
-
-            try:
-                if rule := chaos("worker.heartbeat"):
-                    time.sleep(rule.delay_seconds)
-                    logger.debug("chaos: skipping heartbeat")
-                    continue
-                logger.debug("Registration attempt %d for worker %s", attempt, self._worker_id)
-                response = self._controller_client.register_worker(request)
-
-                if response.should_reset:
-                    logger.warning("Controller signaled reset for worker %s, cleaning up", self._worker_id)
-                    self._reset_worker_state()
-                    continue  # Re-register with empty task list
-
-                if response.accepted:
-                    logger.info("Registered with controller: %s", self._worker_id)
-                    break
-            except Exception as e:
-                logger.warning("Registration attempt %d failed, retrying in 5s: %s", attempt, e)
-            self._stop_heartbeat.wait(5.0)
-
-        # Periodic heartbeat (re-registration)
-        heartbeat_interval = 10.0  # seconds
-        while not self._stop_heartbeat.is_set():
-            self._stop_heartbeat.wait(heartbeat_interval)
-            if self._stop_heartbeat.is_set():
-                break
-            try:
-                if rule := chaos("worker.heartbeat"):
-                    time.sleep(rule.delay_seconds)
-                    logger.debug("chaos: skipping heartbeat")
-                    continue
-                # Update active task IDs for each heartbeat
-                with self._lock:
-                    active_tasks = [
-                        t
-                        for t in self._tasks.values()
-                        if t.status in (cluster_pb2.TASK_STATE_RUNNING, cluster_pb2.TASK_STATE_BUILDING)
-                    ]
-                    running_tasks = [
-                        cluster_pb2.Controller.RunningTaskEntry(
-                            task_id=t.task_id,
-                            attempt_id=t.attempt_id,
-                        )
-                        for t in active_tasks
-                    ]
-                request = cluster_pb2.Controller.RegisterWorkerRequest(
-                    worker_id=self._worker_id,
-                    address=f"{address_host}:{self._config.port}",
-                    metadata=metadata,
-                    running_tasks=running_tasks,
-                )
-                response = self._controller_client.register_worker(request)
-
-                if response.should_reset:
-                    logger.warning("Controller signaled reset during heartbeat, cleaning up")
-                    self._reset_worker_state()
-            except Exception as e:
-                logger.warning(f"Heartbeat failed: {e}")
+        while not stop_event.is_set():
+            if self._heartbeat_deadline.expired():
+                logger.warning("No heartbeat from controller, resetting")
+                return
+            # Check every second
+            stop_event.wait(1.0)
 
     def _reset_worker_state(self) -> None:
-        """Reset worker state: wipe all containers and clear tracking.
-
-        Called when controller signals should_reset (e.g., after controller restart
-        when worker claims tasks the controller doesn't know about).
-        """
+        """Reset worker state: wipe all containers and clear tracking."""
         logger.info("Resetting worker state")
 
         # Clear task tracking
@@ -334,40 +293,71 @@ class Worker:
 
         logger.info("Worker state reset complete")
 
-    def _report_task_state(self, task: TaskAttempt) -> None:
-        """Report task state to controller."""
+    def _notify_task_update(self, task: TaskAttempt) -> None:
+        """Notify controller that task state changed.
+
+        Sends a lightweight ping to the controller, triggering a priority heartbeat.
+        """
         if not self._controller_client or not self._worker_id:
             return
 
-        if rule := chaos("worker.report_task_state"):
-            time.sleep(rule.delay_seconds)
-            logger.debug("chaos: skipping report_task_state")
-            return
-
+        # Send a lightweight ping to trigger priority heartbeat (best-effort)
         try:
-            request = cluster_pb2.Controller.ReportTaskStateRequest(
-                worker_id=self._worker_id,
-                task_id=task.task_id,
-                job_id=task.job_id,
-                task_index=task.task_index,
-                state=task.status,
-                exit_code=task.exit_code or 0,
-                error=task.error or "",
-                finished_at_ms=task.finished_at_ms or 0,
-                attempt_id=task.attempt_id,
+            self._controller_client.notify_task_update(
+                cluster_pb2.Controller.NotifyTaskUpdateRequest(
+                    worker_id=self._worker_id,
+                )
             )
-            self._controller_client.report_task_state(request)
         except Exception as e:
-            logger.warning(f"Failed to report task state to controller: {e}")
+            # Best-effort ping; if it fails, the next regular heartbeat will deliver the update
+            logger.debug("notify_task_update failed (update will be delivered via next heartbeat): %s", e, exc_info=True)
 
     # Task management methods
 
+    _TERMINAL_STATES = frozenset(
+        {
+            cluster_pb2.TASK_STATE_SUCCEEDED,
+            cluster_pb2.TASK_STATE_FAILED,
+            cluster_pb2.TASK_STATE_KILLED,
+            cluster_pb2.TASK_STATE_WORKER_FAILED,
+        }
+    )
+
     def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str:
-        """Submit a new task for execution."""
+        """Submit a new task for execution.
+
+        If a non-terminal task with the same task_id already exists:
+        - Same or older attempt_id: rejected as duplicate
+        - Newer attempt_id: old attempt is killed and new one starts
+        """
         if rule := chaos("worker.submit_task"):
             time.sleep(rule.delay_seconds)
             raise RuntimeError("chaos: worker rejecting task")
         task_id = request.task_id
+
+        should_kill_existing = False
+        with self._lock:
+            existing = self._tasks.get(task_id)
+            if existing is not None and existing.status not in self._TERMINAL_STATES:
+                if request.attempt_id <= existing.attempt_id:
+                    logger.info(
+                        "Rejecting duplicate task %s (attempt %d, status=%s)",
+                        task_id,
+                        request.attempt_id,
+                        existing.status,
+                    )
+                    return task_id
+                logger.info(
+                    "Superseding task %s: attempt %d -> %d, killing old attempt",
+                    task_id,
+                    existing.attempt_id,
+                    request.attempt_id,
+                )
+                should_kill_existing = True
+
+        if should_kill_existing:
+            self.kill_task(task_id)
+
         job_id = request.job_id
         task_index = request.task_index
         num_tasks = request.num_tasks
@@ -405,8 +395,8 @@ class Worker:
             worker_id=self._worker_id,
             controller_address=self._config.controller_address,
             port_allocator=self._port_allocator,
-            report_state=self._report_task_state,
-            poll_interval_seconds=self._config.poll_interval_seconds,
+            report_state=lambda: self._notify_task_update(attempt),
+            poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
 
         with self._lock:
@@ -434,6 +424,106 @@ class Worker:
         from execution internals.
         """
         return list(self._tasks.values())
+
+    def handle_heartbeat(self, request: cluster_pb2.HeartbeatRequest) -> cluster_pb2.HeartbeatResponse:
+        """Handle controller-initiated heartbeat with reconciliation.
+
+        Processes tasks_to_run and tasks_to_kill, reconciles expected_tasks against
+        actual state, and returns current running/completed tasks.
+        """
+        # Reset heartbeat deadline
+        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
+
+        # Start new tasks
+        for run_req in request.tasks_to_run:
+            try:
+                self.submit_task(run_req)
+                logger.info("Heartbeat: submitted task %s", run_req.task_id)
+            except Exception as e:
+                logger.warning("Heartbeat: failed to submit task %s: %s", run_req.task_id, e)
+
+        # Kill requested tasks
+        for task_id in request.tasks_to_kill:
+            try:
+                self.kill_task(task_id)
+                logger.info("Heartbeat: killed task %s", task_id)
+            except Exception as e:
+                logger.warning("Heartbeat: failed to kill task %s: %s", task_id, e)
+
+        # Build expected_tasks lookup
+        expected_task_ids = {entry.task_id: entry for entry in request.expected_tasks}
+
+        # Terminal states
+        terminal_states = {
+            cluster_pb2.TASK_STATE_SUCCEEDED,
+            cluster_pb2.TASK_STATE_FAILED,
+            cluster_pb2.TASK_STATE_KILLED,
+            cluster_pb2.TASK_STATE_WORKER_FAILED,
+        }
+
+        running_tasks = []
+        completed_tasks = []
+
+        with self._lock:
+            # Reconcile expected_tasks against actual state
+            for expected_entry in request.expected_tasks:
+                task_id = expected_entry.task_id
+                task = self._tasks.get(task_id)
+
+                if task is None:
+                    # Task not found - report as WORKER_FAILED
+                    completed_tasks.append(
+                        cluster_pb2.Controller.CompletedTaskEntry(
+                            task_id=task_id,
+                            job_id="",  # We don't have this information
+                            task_index=0,
+                            state=cluster_pb2.TASK_STATE_WORKER_FAILED,
+                            exit_code=0,
+                            error="Task not found on worker",
+                            finished_at=Timestamp.now().to_proto(),
+                            attempt_id=expected_entry.attempt_id,
+                        )
+                    )
+                elif task.status in terminal_states:
+                    # Task is terminal - report as completed
+                    task_proto = task.to_proto()
+                    completed_tasks.append(
+                        cluster_pb2.Controller.CompletedTaskEntry(
+                            task_id=task_proto.task_id,
+                            job_id=task_proto.job_id,
+                            task_index=task_proto.task_index,
+                            state=task_proto.state,
+                            exit_code=task_proto.exit_code,
+                            error=task_proto.error,
+                            finished_at=task_proto.finished_at,
+                            attempt_id=task_proto.current_attempt_id,
+                        )
+                    )
+                else:
+                    # Task is running/building - include in running_tasks
+                    running_tasks.append(
+                        cluster_pb2.Controller.RunningTaskEntry(
+                            task_id=task_id,
+                            attempt_id=task.to_proto().current_attempt_id,
+                            state=task.status,
+                        )
+                    )
+
+            # Report all non-terminal tasks (including unexpected ones)
+            for task_id, task in self._tasks.items():
+                if task_id not in expected_task_ids and task.status not in terminal_states:
+                    running_tasks.append(
+                        cluster_pb2.Controller.RunningTaskEntry(
+                            task_id=task_id,
+                            attempt_id=task.to_proto().current_attempt_id,
+                            state=task.status,
+                        )
+                    )
+
+        return cluster_pb2.HeartbeatResponse(
+            running_tasks=running_tasks,
+            completed_tasks=completed_tasks,
+        )
 
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:
         """Kill a running task."""
@@ -478,7 +568,12 @@ class Worker:
         return True
 
     def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]:
-        """Get logs for a task."""
+        """Get logs for a task.
+
+        Args:
+            task_id: ID of the task to get logs for
+            start_line: Line offset (supports negative indexing: -1000 = last 1000 lines)
+        """
         task = self._tasks.get(task_id)
         if not task:
             return []
@@ -496,8 +591,9 @@ class Worker:
                 logs.append(log_line.to_proto())
 
         # Sort by timestamp
-        logs.sort(key=lambda x: x.timestamp_ms)
+        logs.sort(key=lambda x: x.timestamp.epoch_ms)
 
+        # Python slicing naturally supports negative indexing
         return logs[start_line:]
 
     @property

@@ -19,7 +19,6 @@ organized into subcommand groups for cluster operations and image builds.
 """
 
 import concurrent.futures
-import datetime
 import importlib.util
 import json
 import logging
@@ -39,15 +38,16 @@ from iris.build import build_image, push_to_registries
 from iris.client import IrisClient
 from iris.cluster.controller.controller import Controller, ControllerConfig, RpcWorkerStubFactory
 from iris.cluster.types import Entrypoint
+from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.config import (
     create_autoscaler_from_config,
     create_manual_autoscaler,
     load_config,
 )
-from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.controller import create_controller
 from iris.cluster.vm.debug import controller_tunnel
 from iris.cluster.vm.vm_platform import compute_slice_state_counts, slice_all_ready, slice_any_failed
+from iris.time_utils import Duration, Timestamp
 from iris.logging import configure_logging as _configure_logging
 from iris.rpc import cluster_connect, cluster_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
@@ -70,8 +70,7 @@ def _format_timestamp(ms: int) -> str:
     """Format millisecond timestamp as human-readable string."""
     if ms == 0:
         return "-"
-    dt = datetime.datetime.fromtimestamp(ms / 1000, tz=datetime.timezone.utc)
-    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    return Timestamp.from_ms(ms).as_formatted_date()
 
 
 def _format_status_table(status: vm_pb2.AutoscalerStatus) -> str:
@@ -293,6 +292,36 @@ def _wait_for_slice_obj(slice_obj, poll_interval: float = 5.0) -> bool:
         time.sleep(poll_interval)
 
 
+def _validate_cluster_health(config) -> None:
+    """Validate cluster by submitting a test job and waiting for it to complete."""
+    from pathlib import Path
+
+    from iris.cluster.types import ResourceSpec
+
+    zone = config.zone
+    project = config.project_id
+    label_prefix = config.label_prefix or "iris"
+
+    with controller_tunnel(zone, project, label_prefix=label_prefix) as tunnel_url:
+        click.echo(f"  Connected to controller at {tunnel_url}")
+        client = IrisClient.remote(tunnel_url, workspace=Path.cwd())
+
+        def _validate_hello():
+            print("Reload validation job OK")
+            return 42
+
+        click.echo("  Submitting validation job...")
+        job = client.submit(
+            entrypoint=Entrypoint.from_callable(_validate_hello),
+            name="reload-validate",
+            resources=ResourceSpec(cpu=1),
+        )
+        click.echo(f"  Job submitted: {job.job_id}")
+        click.echo("  Waiting for job (workers may need to scale up)...")
+        status = job.wait(timeout=600, raise_on_failure=True)
+        click.echo(f"  Job completed: {cluster_pb2.JobState.Name(status.state)}")
+
+
 # =============================================================================
 # Main CLI Group
 # =============================================================================
@@ -318,10 +347,13 @@ def iris(ctx, verbose: bool, show_traceback: bool):
 # =============================================================================
 
 # Add service commands as top-level groups for direct RPC access:
-#   iris controller-rpc list-jobs --url http://localhost:10000
-#   iris worker-rpc heartbeat --url http://localhost:10001
-#   iris actor-rpc invoke --url http://localhost:10002
-iris.add_command(ServiceCommands("controller", name="controller-rpc", help="Controller service RPC methods"))
+#   iris controller-rpc --url http://localhost:10000 list-jobs
+#   iris controller-rpc --config examples/eu-west4.yaml list-jobs
+#   iris worker-rpc --url http://localhost:10001 heartbeat
+#   iris actor-rpc --url http://localhost:10002 invoke
+iris.add_command(
+    ServiceCommands("controller", name="controller-rpc", help="Controller service RPC methods (use --url or --config)")
+)
 iris.add_command(ServiceCommands("worker", name="worker-rpc", help="Worker service RPC methods"))
 iris.add_command(ServiceCommands("actor", name="actor-rpc", help="Actor service RPC methods"))
 
@@ -515,7 +547,7 @@ def controller_run_local(
         port=port,
         bundle_prefix=effective_bundle_prefix,
         scheduler_interval_seconds=scheduler_interval,
-        worker_timeout_seconds=worker_timeout,
+        worker_timeout=Duration.from_seconds(worker_timeout),
     )
 
     autoscaler = None
@@ -1214,6 +1246,55 @@ def cluster_restart(ctx):
     ctx.invoke(cluster_start)
 
 
+@cluster.command("reload")
+@click.option("--no-build", is_flag=True, help="Skip image building (use existing images)")
+@click.option("--validate", is_flag=True, help="Submit a health check after reload")
+@click.pass_context
+def cluster_reload(ctx, no_build: bool, validate: bool):
+    """Reload cluster by rebuilding images and reloading the controller.
+
+    Faster than a full restart: rebuilds Docker images and reloads the controller VM.
+    The controller will automatically re-bootstrap all worker VMs with the latest
+    worker image when it starts up. This ensures all workers run the latest image
+    without manual intervention.
+
+    Use --validate to verify the reloaded controller is healthy by establishing
+    an SSH tunnel and checking the health endpoint.
+
+    Examples:
+        uv run iris cluster --config=examples/eu-west4.yaml reload
+        uv run iris cluster --config=examples/eu-west4.yaml reload --no-build
+        uv run iris cluster --config=examples/eu-west4.yaml reload --validate
+    """
+    config = ctx.obj.get("config")
+    if not config:
+        click.echo("Error: --config is required", err=True)
+        raise SystemExit(1)
+
+    if not no_build:
+        _build_cluster_images(config)
+
+    manager = ClusterManager(config)
+
+    click.echo("Reloading controller (workers will be re-bootstrapped automatically)...")
+    try:
+        address = manager.reload()
+        click.echo(f"Controller reloaded at {address}")
+        click.echo("Workers will be re-bootstrapped with latest image on next controller reconcile.")
+    except Exception as e:
+        click.echo(f"Failed to reload cluster: {e}", err=True)
+        raise SystemExit(1) from e
+
+    if validate:
+        click.echo("\nValidating cluster health...")
+        try:
+            _validate_cluster_health(config)
+            click.echo("Cluster validation passed.")
+        except Exception as e:
+            click.echo(f"Cluster validation failed: {e}", err=True)
+            raise SystemExit(1) from e
+
+
 @cluster.command("status")
 @click.pass_context
 def cluster_status_cmd(ctx):
@@ -1278,7 +1359,6 @@ def build():
 @click.option("--platform", default="linux/amd64", help="Target platform (e.g., linux/amd64, linux/arm64)")
 @click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to (can be repeated)")
 @click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
-@click.option("--no-cache", is_flag=True, help="Build without using cache")
 def build_worker_image(
     tag: str,
     push: bool,
@@ -1287,7 +1367,6 @@ def build_worker_image(
     platform: str,
     region: tuple[str, ...],
     project: str,
-    no_cache: bool,
 ):
     """Build Docker image for Iris worker.
 
@@ -1305,7 +1384,7 @@ def build_worker_image(
         uv run iris build worker-image -t iris-worker:v1 \\
             --push --region us-central1 --region europe-west4
     """
-    build_image("worker", tag, push, dockerfile, context, platform, region, project, no_cache)
+    build_image("worker", tag, push, dockerfile, context, platform, region, project)
 
 
 @build.command("controller-image")
@@ -1322,7 +1401,6 @@ def build_worker_image(
 @click.option("--platform", default="linux/amd64", help="Target platform (e.g., linux/amd64, linux/arm64)")
 @click.option("--region", multiple=True, help="GCP Artifact Registry regions to push to (can be repeated)")
 @click.option("--project", default="hai-gcp-models", help="GCP project ID for registry")
-@click.option("--no-cache", is_flag=True, help="Build without using cache")
 def build_controller_image(
     tag: str,
     push: bool,
@@ -1331,7 +1409,6 @@ def build_controller_image(
     platform: str,
     region: tuple[str, ...],
     project: str,
-    no_cache: bool,
 ):
     """Build Docker image for Iris controller.
 
@@ -1349,7 +1426,7 @@ def build_controller_image(
         uv run iris build controller-image -t iris-controller:v1 \\
             --push --region us-central1 --region europe-west4
     """
-    build_image("controller", tag, push, dockerfile, context, platform, region, project, no_cache)
+    build_image("controller", tag, push, dockerfile, context, platform, region, project)
 
 
 @build.command("push")

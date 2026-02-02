@@ -47,6 +47,7 @@ class ContainerConfig:
     timeout_seconds: int | None = None
     mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
     ports: dict[str, int] = field(default_factory=dict)  # name -> host_port
+    network_mode: str = ""  # e.g. "host" for --network=host
     task_id: str | None = None
     job_id: str | None = None
     worker_metadata: cluster_pb2.WorkerMetadata | None = None
@@ -273,12 +274,16 @@ except Exception:
         cmd = [
             "docker",
             "create",
-            "--add-host=host.docker.internal:host-gateway",
             "--security-opt",
             "no-new-privileges",
             "-w",
             config.workdir,
         ]
+
+        if config.network_mode:
+            cmd.extend(["--network", config.network_mode])
+        else:
+            cmd.append("--add-host=host.docker.internal:host-gateway")
 
         # Always drop all capabilities, then add back only what's needed.
         cmd.extend(["--cap-drop", "ALL"])
@@ -314,8 +319,10 @@ except Exception:
             cmd.extend(["-v", f"{host}:{container}:{mode}"])
 
         # Port mappings (name is for reference only, bind host->container)
-        for host_port in config.ports.values():
-            cmd.extend(["-p", f"{host_port}:{host_port}"])
+        # Skip when using host networking — ports are already on the host.
+        if not config.network_mode:
+            for host_port in config.ports.values():
+                cmd.extend(["-p", f"{host_port}:{host_port}"])
 
         cmd.append(config.image)
         cmd.extend(self._build_command(config.entrypoint))

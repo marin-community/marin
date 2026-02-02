@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import shlex
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from iris.cluster.vm.ssh import (
@@ -38,7 +38,7 @@ from iris.cluster.vm.ssh import (
 )
 from iris.rpc import config_pb2, vm_pb2
 from iris.rpc.proto_utils import vm_state_name
-from iris.time_utils import now_ms
+from iris.time_utils import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +283,7 @@ class SshConfig:
     user: str = "root"
     key_file: str | None = None
     port: int = 22
-    connect_timeout: int = 30
+    connect_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(30))
 
 
 # ============================================================================
@@ -322,7 +322,7 @@ class ManagedVm:
         address: str | None = None,
         discovery_preamble: str = "",
     ):
-        now = now_ms()
+        now = Timestamp.now()
         self.info = vm_pb2.VmInfo(
             vm_id=vm_id,
             slice_id=slice_id,
@@ -330,8 +330,8 @@ class ManagedVm:
             state=vm_pb2.VM_STATE_BOOTING,
             address=address or "",
             zone=zone,
-            created_at_ms=now,
-            state_changed_at_ms=now,
+            created_at=now.to_proto(),
+            state_changed_at=now.to_proto(),
             labels=labels or {},
         )
         self._conn = conn
@@ -360,28 +360,21 @@ class ManagedVm:
         Worker ID is not set by ManagedVm - the worker generates its own ID
         from IRIS_VM_ADDRESS or host:port at startup.
         """
-        boot_timeout = self._timeouts.boot_timeout_seconds or 300
-        poll_interval = self._timeouts.ssh_poll_interval_seconds or 5
+        boot_timeout = Duration.from_proto(self._timeouts.boot_timeout)
+        poll_interval = Duration.from_proto(self._timeouts.ssh_poll_interval)
         vm_id = self.info.vm_id
         vm_address = self.info.address
 
         logger.info("VM %s: Starting lifecycle (state=BOOTING)", vm_id)
 
         try:
-            # If address is already known, check if worker is healthy before bootstrapping.
-            # This handles controller restart recovery - skip bootstrap if worker is running.
-            if vm_address:
-                logger.info("VM %s: Address known, checking if worker already healthy", vm_id)
-                if self._check_worker_healthy():
-                    logger.info("VM %s: Worker already healthy, skipping bootstrap", vm_id)
-                    self._transition(vm_pb2.VM_STATE_READY)
-                    return
-
+            # Always bootstrap VMs when controller adopts them to ensure latest image.
+            # The controller re-bootstraps all VMs on startup to pull the latest worker image.
             # Wait for connection
-            logger.info("VM %s: Waiting for connection (timeout=%ds)", vm_id, boot_timeout)
+            logger.info("VM %s: Waiting for connection (timeout=%.1fs)", vm_id, boot_timeout.to_seconds())
             if not wait_for_connection(self._conn, boot_timeout, poll_interval, self._stop):
-                self.info.init_error = f"Boot timeout after {boot_timeout}s"
-                logger.error("VM %s: Boot timeout after %ds", vm_id, boot_timeout)
+                self.info.init_error = f"Boot timeout after {boot_timeout.to_seconds():.1f}s"
+                logger.error("VM %s: Boot timeout after %.1fs", vm_id, boot_timeout.to_seconds())
                 self._transition(vm_pb2.VM_STATE_FAILED)
                 return
 
@@ -466,7 +459,7 @@ class ManagedVm:
         """Check if worker container is already running and healthy."""
         port = self._bootstrap_config.worker_port or 10001
         try:
-            result = self._conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
+            result = self._conn.run(f"curl -sf http://localhost:{port}/health", timeout=Duration.from_seconds(10))
             return result.returncode == 0
         except Exception:
             return False
@@ -475,7 +468,7 @@ class ManagedVm:
         """Update state with timestamp and log the transition."""
         old_state = self.info.state
         self.info.state = new_state
-        self.info.state_changed_at_ms = now_ms()
+        self.info.state_changed_at.CopyFrom(Timestamp.now().to_proto())
         if self._phase:
             self.info.init_phase = self._phase
         logger.info("VM %s: %s -> %s", self.info.vm_id, vm_state_name(old_state), vm_state_name(new_state))
@@ -489,7 +482,7 @@ class ManagedVm:
         """Check if worker is healthy via health endpoint."""
         port = self._bootstrap_config.worker_port or 10001
         try:
-            result = self._conn.run(f"curl -sf http://localhost:{port}/health", timeout=10)
+            result = self._conn.run(f"curl -sf http://localhost:{port}/health", timeout=Duration.from_seconds(10))
             return result.returncode == 0
         except Exception:
             return False
@@ -498,7 +491,7 @@ class ManagedVm:
         """Shutdown worker container."""
         cmd = "docker stop iris-worker" if graceful else "docker kill iris-worker"
         try:
-            self._conn.run(cmd, timeout=30)
+            self._conn.run(cmd, timeout=Duration.from_seconds(30))
             return True
         except Exception:
             return False

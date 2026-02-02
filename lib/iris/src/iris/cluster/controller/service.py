@@ -31,7 +31,6 @@ from iris.cluster.controller.bundle_store import BundleStore
 from iris.cluster.controller.events import (
     JobCancelledEvent,
     JobSubmittedEvent,
-    TaskStateChangedEvent,
     WorkerRegisteredEvent,
 )
 from iris.cluster.controller.scheduler import SchedulingContext, TaskScheduleResult
@@ -42,7 +41,7 @@ from iris.rpc import cluster_pb2, vm_pb2
 from iris.rpc.cluster_connect import WorkerServiceClientSync
 from iris.rpc.errors import rpc_error_handler
 from iris.rpc.proto_utils import task_state_name
-from iris.time_utils import now_ms
+from iris.time_utils import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +112,7 @@ class ControllerServiceImpl:
     ) -> cluster_pb2.Controller.LaunchJobResponse:
         """Submit a new job to the controller.
 
-        The job is expanded into tasks based on the resources.replicas field
+        The job is expanded into tasks based on the replicas field
         (defaulting to 1). Each task has ID "{job_id}/task-{index}".
         """
         with rpc_error_handler("launching job"):
@@ -141,7 +140,7 @@ class ControllerServiceImpl:
                 JobSubmittedEvent(
                     job_id=JobId(job_id),
                     request=request,
-                    timestamp_ms=now_ms(),
+                    timestamp=Timestamp.now(),
                 )
             )
             self._scheduler.wake()
@@ -175,55 +174,59 @@ class ControllerServiceImpl:
                     worker_address = worker.address
 
             # Convert task attempts to proto
-            attempts = [
-                cluster_pb2.TaskAttempt(
+            attempts = []
+            for attempt in task.attempts:
+                proto_attempt = cluster_pb2.TaskAttempt(
                     attempt_id=attempt.attempt_id,
                     worker_id=str(attempt.worker_id) if attempt.worker_id else "",
                     state=attempt.state,
                     exit_code=attempt.exit_code or 0,
                     error=attempt.error or "",
-                    started_at_ms=attempt.started_at_ms or 0,
-                    finished_at_ms=attempt.finished_at_ms or 0,
                     is_worker_failure=attempt.is_worker_failure,
                 )
-                for attempt in task.attempts
-            ]
+                if attempt.started_at is not None:
+                    proto_attempt.started_at.CopyFrom(attempt.started_at.to_proto())
+                if attempt.finished_at is not None:
+                    proto_attempt.finished_at.CopyFrom(attempt.finished_at.to_proto())
+                attempts.append(proto_attempt)
 
             current_attempt = task.current_attempt
-            task_started_at_ms = current_attempt.started_at_ms or 0 if current_attempt else 0
-            task_finished_at_ms = current_attempt.finished_at_ms or 0 if current_attempt else 0
 
-            task_statuses.append(
-                cluster_pb2.TaskStatus(
-                    task_id=str(task.task_id),
-                    job_id=str(task.job_id),
-                    task_index=task.task_index,
-                    state=task.state,
-                    worker_id=str(task.worker_id) if task.worker_id else "",
-                    worker_address=worker_address,
-                    started_at_ms=task_started_at_ms,
-                    finished_at_ms=task_finished_at_ms,
-                    exit_code=task.exit_code or 0,
-                    error=task.error or "",
-                    current_attempt_id=task.current_attempt_id,
-                    attempts=attempts,
-                )
+            proto_task_status = cluster_pb2.TaskStatus(
+                task_id=str(task.task_id),
+                job_id=str(task.job_id),
+                task_index=task.task_index,
+                state=task.state,
+                worker_id=str(task.worker_id) if task.worker_id else "",
+                worker_address=worker_address,
+                exit_code=task.exit_code or 0,
+                error=task.error or "",
+                current_attempt_id=task.current_attempt_id,
+                attempts=attempts,
             )
+            if current_attempt and current_attempt.started_at:
+                proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
+            if current_attempt and current_attempt.finished_at:
+                proto_task_status.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
+            task_statuses.append(proto_task_status)
 
-        return cluster_pb2.Controller.GetJobStatusResponse(
-            job=cluster_pb2.JobStatus(
-                job_id=job.job_id,
-                state=job.state,
-                error=job.error or "",
-                exit_code=job.exit_code or 0,
-                started_at_ms=job.started_at_ms or 0,
-                finished_at_ms=job.finished_at_ms or 0,
-                parent_job_id=str(job.parent_job_id) if job.parent_job_id else "",
-                failure_count=total_failure_count,
-                preemption_count=total_preemption_count,
-                tasks=task_statuses,
-            )
+        # Build the JobStatus proto and set timestamps
+        proto_job_status = cluster_pb2.JobStatus(
+            job_id=job.job_id,
+            state=job.state,
+            error=job.error or "",
+            exit_code=job.exit_code or 0,
+            parent_job_id=str(job.parent_job_id) if job.parent_job_id else "",
+            failure_count=total_failure_count,
+            preemption_count=total_preemption_count,
+            tasks=task_statuses,
         )
+        if job.started_at:
+            proto_job_status.started_at.CopyFrom(job.started_at.to_proto())
+        if job.finished_at:
+            proto_job_status.finished_at.CopyFrom(job.finished_at.to_proto())
+
+        return cluster_pb2.Controller.GetJobStatusResponse(job=proto_job_status)
 
     def terminate_job(
         self,
@@ -296,26 +299,28 @@ class ControllerServiceImpl:
             # diagnostics are computed in list_tasks where they belong.
             pending_reason = j.error or ""
 
-            jobs.append(
-                cluster_pb2.JobStatus(
-                    job_id=j.job_id,
-                    state=j.state,
-                    error=j.error or "",
-                    exit_code=j.exit_code or 0,
-                    started_at_ms=j.started_at_ms or 0,
-                    finished_at_ms=j.finished_at_ms or 0,
-                    parent_job_id=str(j.parent_job_id) if j.parent_job_id else "",
-                    failure_count=total_failure_count,
-                    preemption_count=total_preemption_count,
-                    name=j.request.name if j.request else "",
-                    submitted_at_ms=j.submitted_at_ms or 0,
-                    resources=j.request.resources if j.request else cluster_pb2.ResourceSpecProto(),
-                    task_state_counts=task_state_counts,
-                    task_count=len(tasks),
-                    completed_count=completed_count,
-                    pending_reason=pending_reason,
-                )
+            proto_job = cluster_pb2.JobStatus(
+                job_id=j.job_id,
+                state=j.state,
+                error=j.error or "",
+                exit_code=j.exit_code or 0,
+                parent_job_id=str(j.parent_job_id) if j.parent_job_id else "",
+                failure_count=total_failure_count,
+                preemption_count=total_preemption_count,
+                name=j.request.name if j.request else "",
+                resources=j.request.resources if j.request else cluster_pb2.ResourceSpecProto(),
+                task_state_counts=task_state_counts,
+                task_count=len(tasks),
+                completed_count=completed_count,
+                pending_reason=pending_reason,
             )
+            if j.started_at:
+                proto_job.started_at.CopyFrom(j.started_at.to_proto())
+            if j.finished_at:
+                proto_job.finished_at.CopyFrom(j.finished_at.to_proto())
+            if j.submitted_at:
+                proto_job.submitted_at.CopyFrom(j.submitted_at.to_proto())
+            jobs.append(proto_job)
         return cluster_pb2.Controller.ListJobsResponse(jobs=jobs)
 
     # --- Task Management ---
@@ -339,24 +344,24 @@ class ControllerServiceImpl:
                 worker_address = worker.address
 
         current_attempt = task.current_attempt
-        started_at_ms = current_attempt.started_at_ms or 0 if current_attempt else 0
-        finished_at_ms = current_attempt.finished_at_ms or 0 if current_attempt else 0
 
-        return cluster_pb2.Controller.GetTaskStatusResponse(
-            task=cluster_pb2.TaskStatus(
-                task_id=str(task.task_id),
-                job_id=str(task.job_id),
-                task_index=task.task_index,
-                state=task.state,
-                worker_id=str(task.worker_id) if task.worker_id else "",
-                worker_address=worker_address,
-                started_at_ms=started_at_ms,
-                finished_at_ms=finished_at_ms,
-                exit_code=task.exit_code or 0,
-                error=task.error or "",
-                current_attempt_id=task.current_attempt_id,
-            )
+        proto_task_status = cluster_pb2.TaskStatus(
+            task_id=str(task.task_id),
+            job_id=str(task.job_id),
+            task_index=task.task_index,
+            state=task.state,
+            worker_id=str(task.worker_id) if task.worker_id else "",
+            worker_address=worker_address,
+            exit_code=task.exit_code or 0,
+            error=task.error or "",
+            current_attempt_id=task.current_attempt_id,
         )
+        if current_attempt and current_attempt.started_at:
+            proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
+        if current_attempt and current_attempt.finished_at:
+            proto_task_status.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
+
+        return cluster_pb2.Controller.GetTaskStatusResponse(task=proto_task_status)
 
     def list_tasks(
         self,
@@ -396,143 +401,72 @@ class ControllerServiceImpl:
 
             # Use attempt timestamps since task-level timestamps are not set
             current_attempt = task.current_attempt
-            started_at_ms = current_attempt.started_at_ms or 0 if current_attempt else 0
-            finished_at_ms = current_attempt.finished_at_ms or 0 if current_attempt else 0
 
-            task_statuses.append(
-                cluster_pb2.TaskStatus(
-                    task_id=str(task.task_id),
-                    job_id=str(task.job_id),
-                    task_index=task.task_index,
-                    state=task.state,
-                    worker_id=str(task.worker_id) if task.worker_id else "",
-                    worker_address=worker_address,
-                    started_at_ms=started_at_ms,
-                    finished_at_ms=finished_at_ms,
-                    exit_code=task.exit_code or 0,
-                    error=task.error or "",
-                    current_attempt_id=task.current_attempt_id,
-                    pending_reason=pending_reason,
-                    can_be_scheduled=can_be_scheduled,
-                )
+            proto_task_status = cluster_pb2.TaskStatus(
+                task_id=str(task.task_id),
+                job_id=str(task.job_id),
+                task_index=task.task_index,
+                state=task.state,
+                worker_id=str(task.worker_id) if task.worker_id else "",
+                worker_address=worker_address,
+                exit_code=task.exit_code or 0,
+                error=task.error or "",
+                current_attempt_id=task.current_attempt_id,
+                pending_reason=pending_reason,
+                can_be_scheduled=can_be_scheduled,
             )
+            if current_attempt and current_attempt.started_at:
+                proto_task_status.started_at.CopyFrom(current_attempt.started_at.to_proto())
+            if current_attempt and current_attempt.finished_at:
+                proto_task_status.finished_at.CopyFrom(current_attempt.finished_at.to_proto())
+            task_statuses.append(proto_task_status)
 
         return cluster_pb2.Controller.ListTasksResponse(tasks=task_statuses)
 
-    def report_task_state(
-        self,
-        request: cluster_pb2.Controller.ReportTaskStateRequest,
-        ctx: Any,
-    ) -> cluster_pb2.Controller.ReportTaskStateResponse:
-        """Handle task state report from a worker.
-
-        Workers report task state changes (BUILDING, RUNNING, SUCCEEDED, FAILED, etc.)
-        via this RPC. The controller updates task state and aggregates to job state.
-        """
-        task_id = TaskId(request.task_id)
-        task = self._state.get_task(task_id)
-        if not task:
-            logger.warning(f"Received task state report for unknown task {task_id}")
-            return cluster_pb2.Controller.ReportTaskStateResponse()
-
-        new_state = request.state
-
-        txn = self._state.handle_event(
-            TaskStateChangedEvent(
-                task_id=task_id,
-                new_state=new_state,
-                error=request.error if request.error else None,
-                exit_code=request.exit_code if request.exit_code else None,
-                attempt_id=request.attempt_id,
-            )
-        )
-
-        logger.debug(f"Task {task_id} reported state {new_state}")
-
-        # Send kill RPCs to workers for any tasks that were killed as a result
-        if txn.tasks_to_kill:
-            self._scheduler.kill_tasks_on_workers(txn.tasks_to_kill)
-
-        # Wake scheduler if task finished (may free capacity)
-        if task.is_finished():
-            self._scheduler.wake()
-
-        return cluster_pb2.Controller.ReportTaskStateResponse()
-
     # --- Worker Management ---
 
-    def register_worker(
+    def register(
         self,
-        request: cluster_pb2.Controller.RegisterWorkerRequest,
+        request: cluster_pb2.Controller.RegisterRequest,
         ctx: Any,
-    ) -> cluster_pb2.Controller.RegisterWorkerResponse:
-        """Register a new worker or process a heartbeat from an existing worker.
+    ) -> cluster_pb2.Controller.RegisterResponse:
+        """One-shot worker registration. Returns worker_id.
 
-        Performs bidirectional reconciliation:
-        1. Worker claims unknown tasks (controller restart) -> signal reset
-        2. Controller expects tasks worker doesn't report (worker restart) -> mark tasks failed
+        Worker registers once, then waits for heartbeats from the controller.
         """
-        worker_id = WorkerId(request.worker_id)
+        with rpc_error_handler("registering worker"):
+            # Derive worker_id from vm_address if present, otherwise from address
+            worker_id = WorkerId(request.metadata.vm_address or request.address)
 
-        reported_tasks = {entry.task_id for entry in request.running_tasks}
-
-        # Case 1: Worker claims unknown tasks (controller restart recovery)
-        if reported_tasks:
-            unknown_tasks = [tid for tid in reported_tasks if self._state.get_task(TaskId(tid)) is None]
-            if unknown_tasks:
-                logger.warning("Worker %s claims unknown tasks %s, signaling reset", worker_id, unknown_tasks)
-                return cluster_pb2.Controller.RegisterWorkerResponse(
-                    accepted=False,
-                    should_reset=True,
+            self._state.handle_event(
+                WorkerRegisteredEvent(
+                    worker_id=worker_id,
+                    address=request.address,
+                    metadata=request.metadata,
+                    timestamp=Timestamp.now(),
                 )
-
-        # Case 2: Controller expects tasks worker doesn't report (worker restart recovery)
-        existing_worker = self._state.get_worker(worker_id)
-        if existing_worker:
-            expected_tasks = existing_worker.running_tasks
-            missing_tasks = expected_tasks - {TaskId(tid) for tid in reported_tasks}
-            if missing_tasks:
-                logger.warning("Worker %s missing expected tasks %s, marking failed", worker_id, missing_tasks)
-                for task_id in missing_tasks:
-                    task = self._state.get_task(task_id)
-                    if not task:
-                        continue
-                    self._state.handle_event(
-                        TaskStateChangedEvent(
-                            task_id=task_id,
-                            new_state=cluster_pb2.TASK_STATE_WORKER_FAILED,
-                            attempt_id=task.current_attempt_id,
-                            error="Worker restarted without task",
-                            exit_code=1,
-                        )
-                    )
-
-        # Case 3: Worker running stale attempt (attempt ID mismatch)
-        if request.running_tasks:
-            for entry in request.running_tasks:
-                task = self._state.get_task(TaskId(entry.task_id))
-                if task and task.current_attempt_id != entry.attempt_id:
-                    logger.error(
-                        "Worker %s running stale attempt of task %s: " "worker_attempt=%d controller_attempt=%d",
-                        worker_id,
-                        entry.task_id,
-                        entry.attempt_id,
-                        task.current_attempt_id,
-                    )
-                    # Kill the stale task on this worker
-                    self._scheduler.kill_tasks_on_workers({TaskId(entry.task_id)})
-
-        # Use WORKER_REGISTERED event for both new and existing workers
-        self._state.handle_event(
-            WorkerRegisteredEvent(
-                worker_id=worker_id,
-                address=request.address,
-                metadata=request.metadata,
-                timestamp_ms=now_ms(),
             )
-        )
+            self._scheduler.wake()
+
+            logger.info("Worker registered: %s at %s", worker_id, request.address)
+            return cluster_pb2.Controller.RegisterResponse(
+                worker_id=str(worker_id),
+                accepted=True,
+            )
+
+    def notify_task_update(
+        self,
+        request: cluster_pb2.Controller.NotifyTaskUpdateRequest,
+        ctx: Any,
+    ) -> cluster_pb2.Empty:
+        """Hint from worker that it has new completions. Triggers priority heartbeat.
+
+        This is a lightweight ping - the actual completion data comes via the next
+        heartbeat response.
+        """
+        # Just wake the scheduler; it will trigger a priority heartbeat for this worker
         self._scheduler.wake()
-        return cluster_pb2.Controller.RegisterWorkerResponse(accepted=True)
+        return cluster_pb2.Empty()
 
     def list_workers(
         self,
@@ -546,7 +480,7 @@ class ControllerServiceImpl:
             status_message = ""
             if not w.healthy:
                 if w.consecutive_failures > 0:
-                    time_since_last_hb = now_ms() - w.last_heartbeat_ms if w.last_heartbeat_ms else 0
+                    time_since_last_hb = w.last_heartbeat.age_ms()
                     time_since_str = f"{time_since_last_hb // 1000}s ago" if time_since_last_hb else "never"
                     status_message = f"Heartbeat timeout ({w.consecutive_failures} failures, last seen {time_since_str})"
                 else:
@@ -557,7 +491,7 @@ class ControllerServiceImpl:
                     worker_id=w.worker_id,
                     healthy=w.healthy,
                     consecutive_failures=w.consecutive_failures,
-                    last_heartbeat_ms=w.last_heartbeat_ms,
+                    last_heartbeat=w.last_heartbeat.to_proto(),
                     running_job_ids=list(w.running_tasks),  # Now contains task IDs
                     address=w.address,
                     metadata=w.metadata,
@@ -576,7 +510,7 @@ class ControllerServiceImpl:
         """Register a service endpoint.
 
         Endpoints are registered regardless of job state, but only become visible to clients
-        (via lookup/list) when the job is RUNNING.
+        (via lookup/list) when the job is executing (not in a terminal state).
         """
         with rpc_error_handler("registering endpoint"):
             endpoint_id = str(uuid.uuid4())
@@ -591,7 +525,7 @@ class ControllerServiceImpl:
                 address=request.address,
                 job_id=JobId(request.job_id),
                 metadata=dict(request.metadata),
-                registered_at_ms=now_ms(),
+                registered_at=Timestamp.now(),
             )
 
             self._state.add_endpoint(endpoint)
@@ -612,7 +546,7 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.LookupEndpointRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.LookupEndpointResponse:
-        """Look up a service endpoint by name. Only endpoints for RUNNING jobs are returned."""
+        """Look up a service endpoint by name. Only endpoints for executing jobs are returned."""
         endpoints = self._state.lookup_endpoints(request.name)
         if not endpoints:
             logger.debug("Endpoint lookup found no results: name=%s", request.name)
@@ -634,7 +568,7 @@ class ControllerServiceImpl:
         request: cluster_pb2.Controller.ListEndpointsRequest,
         ctx: Any,
     ) -> cluster_pb2.Controller.ListEndpointsResponse:
-        """List endpoints by name prefix. Only endpoints for RUNNING jobs are returned."""
+        """List endpoints by name prefix. Only endpoints for executing jobs are returned."""
         endpoints = self._state.list_endpoints_by_prefix(request.prefix)
         return cluster_pb2.Controller.ListEndpointsResponse(
             endpoints=[
@@ -710,6 +644,7 @@ class ControllerServiceImpl:
             raise ConnectError(Code.NOT_FOUND, f"Worker {task.worker_id} not found")
 
         log_filter = cluster_pb2.Worker.FetchLogsFilter(
+            start_line=request.start_line,
             start_ms=request.start_ms,
             max_lines=request.limit,
         )
@@ -739,14 +674,13 @@ class ControllerServiceImpl:
         for txn in transactions:
             for action in txn.actions:
                 details_str = json.dumps(action.details) if action.details else ""
-                actions.append(
-                    cluster_pb2.Controller.TransactionAction(
-                        timestamp_ms=action.timestamp_ms,
-                        action=action.action,
-                        entity_id=action.entity_id,
-                        details=details_str,
-                    )
+                proto_action = cluster_pb2.Controller.TransactionAction(
+                    action=action.action,
+                    entity_id=action.entity_id,
+                    details=details_str,
                 )
+                proto_action.timestamp.CopyFrom(action.timestamp.to_proto())
+                actions.append(proto_action)
         return cluster_pb2.Controller.GetTransactionsResponse(actions=actions)
 
     # --- Process Logs ---

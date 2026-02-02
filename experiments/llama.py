@@ -172,7 +172,6 @@ llama_30m = LlamaConfig(
     num_heads=2,
     num_kv_heads=2,
     num_layers=4,
-    cross_entropy_block_size=32000,
 )
 
 llama_50m = LlamaConfig(

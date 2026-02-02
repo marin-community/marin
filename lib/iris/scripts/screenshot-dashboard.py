@@ -71,7 +71,7 @@ def _failed_job():
 def _slow_job():
     import time as _time
 
-    _time.sleep(30)
+    _time.sleep(120)
     return "done"
 
 
@@ -165,12 +165,13 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-coscheduled",
-        resources=ResourceSpec(cpu=1, memory="2g", replicas=4),
+        resources=ResourceSpec(cpu=1, memory="2g"),
         environment=EnvironmentSpec(),
         constraints=[
             Constraint(key="tpu-name", op=ConstraintOp.EQ, value="nonexistent-tpu-xyz"),
         ],
         coscheduling=CoschedulingConfig(group_by="tpu-name"),
+        replicas=4,
     )
     job_ids["coscheduled"] = str(job.job_id)
     logger.info("Submitted coscheduled job: %s", job.job_id)
@@ -205,9 +206,10 @@ def submit_demo_jobs(client: IrisClient) -> dict[str, str]:
     job = client.submit(
         entrypoint=Entrypoint.from_callable(_succeeded_job),
         name="snapshot-insufficient-capacity",
-        resources=ResourceSpec(cpu=1, memory="1g", replicas=100),
+        resources=ResourceSpec(cpu=1, memory="1g"),
         environment=EnvironmentSpec(),
         coscheduling=CoschedulingConfig(group_by="scale-group"),
+        replicas=100,
     )
     job_ids["insufficient-capacity"] = str(job.job_id)
     logger.info("Submitted insufficient-capacity job: %s", job.job_id)
@@ -274,6 +276,25 @@ def wait_for_terminal_jobs(client: IrisClient, job_ids: dict[str, str], timeout:
                 task_state_name = cluster_pb2.TaskState.Name(task_status.state)
                 logger.warning("  Building job did not enter BUILDING state within timeout (state: %s)", task_state_name)
 
+    # Wait for running job's task to actually reach RUNNING state (not just ASSIGNED)
+    running_jid = job_ids.get("running")
+    if running_jid:
+        logger.info("Waiting for running job (%s) task to enter RUNNING state...", running_jid)
+        run_deadline = time.monotonic() + 15.0
+        while time.monotonic() < run_deadline:
+            status = client.status(running_jid)
+            if status.tasks and status.tasks[0].state == cluster_pb2.TASK_STATE_RUNNING:
+                logger.info("  running task entered RUNNING state")
+                break
+            time.sleep(0.5)
+        else:
+            status = client.status(running_jid)
+            if status.tasks:
+                task_state_name = cluster_pb2.TaskState.Name(status.tasks[0].state)
+                logger.warning(
+                    "  Running job task did not enter RUNNING state within timeout (state: %s)", task_state_name
+                )
+
     # Kill the "killed" job after a brief delay so it has time to start
     killed_jid = job_ids.get("killed")
     if killed_jid:
@@ -335,7 +356,7 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             page.wait_for_load_state("domcontentloaded")
             page.wait_for_function(
                 "() => document.getElementById('root').children.length > 0"
-                " && !document.getElementById('root').textContent.includes('Loading...')",
+                " && !document.body.textContent.includes('Loading')",
                 timeout=10000,
             )
 
@@ -354,7 +375,7 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
             page.wait_for_load_state("domcontentloaded")
             page.wait_for_function(
                 "() => document.getElementById('root').children.length > 0"
-                " && !document.getElementById('root').textContent.includes('Loading...')",
+                " && !document.body.textContent.includes('Loading')",
                 timeout=10000,
             )
             path = output_dir / f"job-{label}.png"
@@ -403,7 +424,7 @@ def capture_screenshots(dashboard_url: str, job_ids: dict[str, str], output_dir:
         page.goto(f"{dashboard_url}#logs")
         page.wait_for_load_state("domcontentloaded")
         page.wait_for_function(
-            "() => !document.body.textContent.includes('Loading')",
+            "() => document.querySelectorAll('.log-line').length > 0",
             timeout=10000,
         )
         path = output_dir / "controller-logs.png"
@@ -495,6 +516,21 @@ def main(config: Path, output_dir: Path, stay_open: bool):
             logger.info("Skipping screenshots (no --output-dir specified)")
 
         print(f"\nDashboard URL: {url}")
+
+        if not stay_open:
+            # Terminate all non-terminal jobs so the controller can shut down cleanly
+            # without waiting for in-flight heartbeat dispatches to long-running workers.
+            terminal_states = (
+                cluster_pb2.JOB_STATE_SUCCEEDED,
+                cluster_pb2.JOB_STATE_FAILED,
+                cluster_pb2.JOB_STATE_KILLED,
+                cluster_pb2.JOB_STATE_WORKER_FAILED,
+            )
+            for name, jid in job_ids.items():
+                status = client.status(jid)
+                if status.state not in terminal_states:
+                    logger.info("Terminating remaining job %s (%s)", name, jid)
+                    client.terminate(jid)
 
         if stay_open:
             print("Cluster will remain running. Press Ctrl-C to shutdown...")

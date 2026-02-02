@@ -19,35 +19,39 @@ Tests that Iris handles RPC failures gracefully:
 - Heartbeat timeout (60s)
 - Heartbeat reconciliation (running_tasks)
 """
+
 import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
+from iris.time_utils import Duration
 from .conftest import submit, wait, _quick, _slow
 
 
+@pytest.mark.chaos
 def test_dispatch_intermittent_failure(cluster):
-    """Test intermittent dispatch failure (30%). Controller retries dispatch 4x with
-    backoff. Task should eventually succeed.
+    """Test intermittent heartbeat failure during dispatch (30%). Task assignments are
+    buffered and retried on next heartbeat cycle. Task should eventually succeed.
     """
     _url, client = cluster
-    enable_chaos("controller.dispatch", failure_rate=0.3)
+    enable_chaos("controller.heartbeat", failure_rate=0.3)
     job = submit(client, _quick, "intermittent-dispatch")
     status = wait(client, job, timeout=60)
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-@pytest.mark.skip(reason="Iris bug: infinite retry loop, jobs stuck PENDING forever (gh#2533)")
+@pytest.mark.chaos
 def test_dispatch_permanent_failure(cluster):
-    """Test permanent dispatch failure. All 4 retries fail → WorkerFailedEvent → task
-    rescheduled to other workers → all fail → job FAILED.
+    """Test permanent heartbeat failure. After 3 consecutive failures → WorkerFailedEvent →
+    task marked WORKER_FAILED → rescheduled → all workers fail → job FAILED or UNSCHEDULABLE.
     """
     _url, client = cluster
-    enable_chaos("controller.dispatch", failure_rate=1.0)
-    job = submit(client, _quick, "permanent-dispatch")
-    status = wait(client, job, timeout=120)
-    assert status.state == cluster_pb2.JOB_STATE_FAILED
+    enable_chaos("controller.heartbeat", failure_rate=1.0)
+    job = submit(client, _quick, "permanent-dispatch", scheduling_timeout=Duration.from_seconds(5))
+    status = wait(client, job, timeout=20)
+    assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
+@pytest.mark.chaos
 def test_heartbeat_temporary_failure(cluster):
     """Test heartbeat fails 3 times (30s gap), but worker timeout is 60s. Worker should
     NOT be marked failed. Task should still succeed.
@@ -59,25 +63,30 @@ def test_heartbeat_temporary_failure(cluster):
     assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED
 
 
-@pytest.mark.skip(reason="Iris bug: infinite retry loop, jobs stuck PENDING forever (gh#2533)")
+@pytest.mark.chaos
 def test_heartbeat_permanent_failure(cluster):
     """Test heartbeat permanently fails. After 60s, worker marked failed, tasks
-    become WORKER_FAILED.
+    become WORKER_FAILED. With scheduling timeout, job eventually fails.
     """
     _url, client = cluster
     enable_chaos("worker.heartbeat", failure_rate=1.0)
-    job = submit(client, _slow, "perm-hb-fail")
-    status = wait(client, job, timeout=90)
-    assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_WORKER_FAILED)
+    job = submit(client, _slow, "perm-hb-fail", scheduling_timeout=Duration.from_seconds(5))
+    status = wait(client, job, timeout=20)
+    assert status.state in (
+        cluster_pb2.JOB_STATE_FAILED,
+        cluster_pb2.JOB_STATE_WORKER_FAILED,
+        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
+    )
 
 
-@pytest.mark.skip(reason="Iris bug: reconciliation misidentifies completed tasks as worker failures (gh#2534)")
-def test_report_task_state_failure(cluster):
-    """Test report_task_state always fails. Controller should detect task completion
-    via heartbeat reconciliation (running_tasks goes empty when task finishes).
+@pytest.mark.chaos
+def test_notify_task_update_failure(cluster):
+    """Test notify_task_update always fails. Worker buffers completion and delivers
+    it via the next heartbeat response. Controller processes it → job SUCCEEDED.
+    The notify_task_update RPC is just a hint to trigger priority heartbeat.
     """
     _url, client = cluster
-    enable_chaos("worker.report_task_state", failure_rate=1.0)
-    job = submit(client, _quick, "report-fail")
+    enable_chaos("worker.notify_task_update", failure_rate=1.0)
+    job = submit(client, _quick, "notify-fail")
     status = wait(client, job, timeout=60)
-    assert status.state in (cluster_pb2.JOB_STATE_SUCCEEDED, cluster_pb2.JOB_STATE_FAILED)
+    assert status.state == cluster_pb2.JOB_STATE_SUCCEEDED

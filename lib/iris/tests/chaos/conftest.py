@@ -19,8 +19,7 @@ from iris.chaos import reset_chaos
 from iris.cluster.vm.cluster_manager import ClusterManager, make_local_config
 from iris.cluster.vm.config import load_config
 from iris.client.client import IrisClient
-from iris.cluster.types import Entrypoint, ResourceSpec, EnvironmentSpec
-from iris.rpc import cluster_pb2
+from iris.cluster.types import Entrypoint, ResourceSpec, EnvironmentSpec, is_job_finished
 
 from .chronos import VirtualClock
 
@@ -38,12 +37,9 @@ def _slow():
     time.sleep(120)
 
 
-TERMINAL_STATES = {
-    cluster_pb2.JOB_STATE_SUCCEEDED,
-    cluster_pb2.JOB_STATE_FAILED,
-    cluster_pb2.JOB_STATE_KILLED,
-    cluster_pb2.JOB_STATE_WORKER_FAILED,
-}
+def _block(s):
+    """Block until sentinel is signalled. Pass a SentinelFile instance."""
+    s.wait()
 
 
 @pytest.fixture(autouse=True)
@@ -76,9 +72,9 @@ def cluster():
         yield url, client
 
 
-def submit(client, fn, name, **kw):
+def submit(client, fn, name, *args, **kw):
     return client.submit(
-        entrypoint=Entrypoint.from_callable(fn),
+        entrypoint=Entrypoint.from_callable(fn, *args),
         name=name,
         resources=ResourceSpec(cpu=1, memory="1g"),
         environment=EnvironmentSpec(),
@@ -97,7 +93,7 @@ def wait(client, job, timeout=60, chronos=None):
         start_time = chronos.time()
         while chronos.time() - start_time < timeout:
             status = client.status(str(job.job_id))
-            if status.state in TERMINAL_STATES:
+            if is_job_finished(status.state):
                 return status
             chronos.tick(0.5)  # Advance by poll interval
         return client.status(str(job.job_id))
@@ -106,7 +102,7 @@ def wait(client, job, timeout=60, chronos=None):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             status = client.status(str(job.job_id))
-            if status.state in TERMINAL_STATES:
+            if is_job_finished(status.state):
                 return status
             time.sleep(0.5)
         return client.status(str(job.job_id))

@@ -27,6 +27,7 @@ from iris.cluster.vm.controller import (
     GcpController,
     HealthCheckResult,
     ManualController,
+    check_health,
     create_controller,
 )
 from iris.cluster.vm.managed_vm import (
@@ -35,11 +36,18 @@ from iris.cluster.vm.managed_vm import (
     _build_env_flags,
 )
 from iris.rpc import config_pb2
+from iris.time_utils import Duration
 
 
 @pytest.fixture
 def ssh_bootstrap_config() -> config_pb2.IrisClusterConfig:
     """Config for SSH bootstrap mode."""
+    ssh_config = config_pb2.SshConfig(
+        user="ubuntu",
+        key_file="/home/ubuntu/.ssh/id_rsa",
+    )
+    ssh_config.connect_timeout.CopyFrom(Duration.from_seconds(30).to_proto())
+
     return config_pb2.IrisClusterConfig(
         provider_type="manual",
         controller_vm=config_pb2.ControllerVmConfig(
@@ -49,11 +57,7 @@ def ssh_bootstrap_config() -> config_pb2.IrisClusterConfig:
                 port=10000,
             ),
         ),
-        ssh=config_pb2.SshConfig(
-            user="ubuntu",
-            key_file="/home/ubuntu/.ssh/id_rsa",
-            connect_timeout=30,
-        ),
+        ssh=ssh_config,
     )
 
 
@@ -107,7 +111,7 @@ def test_manual_controller_start_runs_bootstrap(
         host="10.0.0.100",
         user="ubuntu",
         key_file="/home/ubuntu/.ssh/id_rsa",
-        connect_timeout=30,
+        connect_timeout=Duration.from_seconds(30),
     )
     mock_run_streaming.assert_called_once()
     call_args = mock_run_streaming.call_args
@@ -703,3 +707,18 @@ class TestBootstrapScript:
                     # No raw placeholders should remain
                     for placeholder in ["{cache_dir}", "{docker_image}", "{worker_port}", "{env_flags}"]:
                         assert placeholder not in script
+
+
+def test_check_health_passes_duration_to_conn_run():
+    """check_health passes Duration objects (not bare ints) to conn.run timeout."""
+    mock_conn = MagicMock()
+    mock_conn.run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="healthy", stderr="")
+
+    result = check_health(mock_conn, port=8080, container_name="test-container")
+
+    assert result.healthy
+    for call in mock_conn.run.call_args_list:
+        timeout_arg = call.kwargs.get("timeout")
+        assert isinstance(
+            timeout_arg, Duration
+        ), f"conn.run called with timeout={timeout_arg!r} (type {type(timeout_arg).__name__}), expected Duration"
