@@ -399,13 +399,17 @@ class TestSshConfigMerging:
 
     def test_uses_cluster_default_ssh_config(self):
         """get_ssh_config returns cluster defaults when no group override."""
+        from iris.time_utils import Duration
+
+        ssh_config_proto = config_pb2.SshConfig(
+            user="ubuntu",
+            key_file="~/.ssh/cluster_key",
+            port=2222,
+        )
+        ssh_config_proto.connect_timeout.CopyFrom(Duration.from_seconds(60).to_proto())
+
         config = config_pb2.IrisClusterConfig(
-            ssh=config_pb2.SshConfig(
-                user="ubuntu",
-                key_file="~/.ssh/cluster_key",
-                port=2222,
-                connect_timeout=60,
-            ),
+            ssh=ssh_config_proto,
         )
 
         ssh_config = get_ssh_config(config)
@@ -413,7 +417,7 @@ class TestSshConfigMerging:
         assert ssh_config.user == "ubuntu"
         assert ssh_config.key_file == "~/.ssh/cluster_key"
         assert ssh_config.port == 2222
-        assert ssh_config.connect_timeout == 60
+        assert ssh_config.connect_timeout == Duration.from_seconds(60)
 
     def test_applies_per_group_ssh_overrides(self):
         """get_ssh_config applies per-group SSH overrides for manual provider."""
@@ -446,13 +450,17 @@ class TestSshConfigMerging:
 
     def test_partial_per_group_overrides_merge_with_defaults(self):
         """Per-group overrides merge with cluster defaults for unset fields."""
+        from iris.time_utils import Duration
+
+        ssh_config_proto = config_pb2.SshConfig(
+            user="ubuntu",
+            key_file="~/.ssh/cluster_key",
+            port=22,
+        )
+        ssh_config_proto.connect_timeout.CopyFrom(Duration.from_seconds(30).to_proto())
+
         config = config_pb2.IrisClusterConfig(
-            ssh=config_pb2.SshConfig(
-                user="ubuntu",
-                key_file="~/.ssh/cluster_key",
-                port=22,
-                connect_timeout=30,
-            ),
+            ssh=ssh_config_proto,
             scale_groups={
                 "manual_group": config_pb2.ScaleGroupConfig(
                     name="manual_group",
@@ -471,10 +479,12 @@ class TestSshConfigMerging:
         assert ssh_config.user == "admin"  # Overridden
         assert ssh_config.key_file == "~/.ssh/cluster_key"  # From default
         assert ssh_config.port == 22  # From default
-        assert ssh_config.connect_timeout == 30  # From default
+        assert ssh_config.connect_timeout.to_seconds() == 30  # From default
 
     def test_uses_defaults_when_cluster_ssh_config_empty(self):
         """get_ssh_config uses built-in defaults when cluster config empty."""
+        from iris.time_utils import Duration
+
         config = config_pb2.IrisClusterConfig()
 
         ssh_config = get_ssh_config(config)
@@ -482,4 +492,4 @@ class TestSshConfigMerging:
         assert ssh_config.user == "root"
         assert ssh_config.key_file is None
         assert ssh_config.port == 22
-        assert ssh_config.connect_timeout == 30
+        assert ssh_config.connect_timeout == Duration.from_seconds(30)

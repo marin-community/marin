@@ -31,7 +31,6 @@ from iris.cluster.controller.state import (
 )
 from iris.cluster.types import AttributeValue, JobId, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import now_ms
 
 logger = logging.getLogger(__name__)
 
@@ -599,13 +598,7 @@ class Scheduler:
 
     def _is_task_timed_out(self, task: ControllerTask, job: ControllerJob) -> bool:
         """Check if a task has exceeded its scheduling timeout."""
-        timeout_seconds = job.request.scheduling_timeout_seconds
-        if timeout_seconds <= 0:
-            return False
-
-        pending_duration_ms = now_ms() - task.submitted_at_ms
-        timeout_ms = timeout_seconds * 1000
-        return pending_duration_ms > timeout_ms
+        return job.scheduling_deadline is not None and job.scheduling_deadline.expired()
 
     def task_schedule_status(self, task: ControllerTask, context: SchedulingContext) -> TaskScheduleResult:
         """Get the current scheduling status of a task.
@@ -648,8 +641,7 @@ class Scheduler:
             return TaskScheduleResult(
                 task=task,
                 failure_reason=(
-                    f"Coscheduling: {len(matching_ids)} workers match constraints "
-                    f"but none have '{group_by}' attribute"
+                    f"Coscheduling: {len(matching_ids)} workers match constraints but none have '{group_by}' attribute"
                 ),
             )
 
@@ -658,7 +650,7 @@ class Scheduler:
             return TaskScheduleResult(
                 task=task,
                 failure_reason=(
-                    f"Coscheduling: need {num_tasks} workers in same '{group_by}' group, " f"largest group has {best}"
+                    f"Coscheduling: need {num_tasks} workers in same '{group_by}' group, largest group has {best}"
                 ),
             )
 

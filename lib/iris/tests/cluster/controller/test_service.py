@@ -259,7 +259,7 @@ def test_terminate_job_marks_as_killed(service, job_request):
     # Verify via get_job_status RPC
     status_response = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="test-job"), None)
     assert status_response.job.state == cluster_pb2.JOB_STATE_KILLED
-    assert status_response.job.finished_at_ms > 0
+    assert status_response.job.finished_at.epoch_ms > 0
 
 
 def test_terminate_job_not_found(service):
@@ -283,7 +283,7 @@ def test_terminate_pending_job(service, job_request):
     # Verify via get_job_status RPC
     status_response = service.get_job_status(cluster_pb2.Controller.GetJobStatusRequest(job_id="test-job"), None)
     assert status_response.job.state == cluster_pb2.JOB_STATE_KILLED
-    assert status_response.job.finished_at_ms > 0
+    assert status_response.job.finished_at.epoch_ms > 0
 
 
 def test_terminate_job_cascades_to_children(service, job_request):
@@ -325,6 +325,7 @@ def test_terminate_job_only_affects_descendants(service, job_request):
 def test_terminate_job_skips_already_finished_children(service, state, job_request):
     """Verify terminate_job skips children already in terminal state."""
     from iris.cluster.controller.state import ControllerJob
+    from iris.time_utils import Timestamp
 
     # Launch parent via RPC
     service.launch_job(job_request("parent"), None)
@@ -336,7 +337,7 @@ def test_terminate_job_skips_already_finished_children(service, state, job_reque
         request=job_request("child-succeeded"),
         state=cluster_pb2.JOB_STATE_SUCCEEDED,
         parent_job_id=JobId("parent"),
-        finished_at_ms=12345,
+        finished_at=Timestamp.from_ms(12345),
     )
     state.add_job(child_succeeded)
 

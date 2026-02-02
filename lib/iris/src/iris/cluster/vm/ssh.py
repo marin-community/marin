@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -254,8 +254,8 @@ def connection_available(conn: SshConnection, timeout: int = 30) -> bool:
 
 def wait_for_connection(
     conn: SshConnection,
-    timeout_seconds: int,
-    poll_interval: int = 5,
+    timeout: Duration,
+    poll_interval: Duration,
     stop_event: threading.Event | None = None,
 ) -> bool:
     """Wait for remote connection to become available.
@@ -264,6 +264,7 @@ def wait_for_connection(
     or the timeout expires. Logs prominently on first failure and
     periodically during the wait to help diagnose connection issues.
     """
+    timeout_seconds = timeout.to_seconds()
     deadline = time.time() + timeout_seconds
     start_time = deadline - timeout_seconds
     attempt = 0
@@ -291,7 +292,7 @@ def wait_for_connection(
             remaining = timeout_seconds - elapsed
             logger.info("SSH: Still waiting for %s (%ds elapsed, %ds remaining)", conn.address, elapsed, remaining)
 
-        time.sleep(poll_interval)
+        time.sleep(poll_interval.to_seconds())
 
     logger.error("SSH: Connection timeout after %ds to %s (%d attempts)", timeout_seconds, conn.address, attempt)
     return False

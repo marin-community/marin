@@ -28,6 +28,7 @@ from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import LogBuffer
 from iris.rpc import cluster_pb2
 from iris.rpc.errors import rpc_error_handler
+from iris.time_utils import Timer
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ class WorkerServiceImpl:
     def __init__(self, provider: TaskProvider, log_buffer: LogBuffer | None = None):
         self._provider = provider
         self._log_buffer = log_buffer
-        self._start_time = time.time()
+        self._timer = Timer()
 
     def get_task_status(
         self,
@@ -95,9 +96,9 @@ class WorkerServiceImpl:
         result = []
         for entry in logs:
             # Time range filter (start_ms is exclusive for incremental polling)
-            if request.filter.start_ms and entry.timestamp_ms <= request.filter.start_ms:
+            if request.filter.start_ms and entry.timestamp.epoch_ms <= request.filter.start_ms:
                 continue
-            if request.filter.end_ms and entry.timestamp_ms > request.filter.end_ms:
+            if request.filter.end_ms and entry.timestamp.epoch_ms > request.filter.end_ms:
                 continue
             # TODO: Regex filter is vulnerable to DoS via catastrophic backtracking.
             # Malicious regex like (a+)+ can cause minutes of CPU time. Consider using
@@ -124,11 +125,12 @@ class WorkerServiceImpl:
         tasks = self._provider.list_tasks()
         running = sum(1 for t in tasks if t.status == cluster_pb2.TASK_STATE_RUNNING)
 
-        return cluster_pb2.Worker.HealthResponse(
+        response = cluster_pb2.Worker.HealthResponse(
             healthy=True,
-            uptime_ms=int((time.time() - self._start_time) * 1000),
             running_tasks=running,
         )
+        response.uptime.milliseconds = self._timer.elapsed_ms()
+        return response
 
     def get_process_logs(
         self,

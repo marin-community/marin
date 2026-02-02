@@ -10,9 +10,12 @@ bootstrap:
   worker_port: 10001
 
 timeouts:
-  boot_timeout_seconds: 300
-  init_timeout_seconds: 600
-  ssh_poll_interval_seconds: 5
+  boot_timeout:
+    milliseconds: 300000
+  init_timeout:
+    milliseconds: 600000
+  ssh_poll_interval:
+    milliseconds: 5000
 
 controller_vm:
   image: europe-west4-docker.pkg.dev/hai-gcp-models/marin/iris-controller:latest

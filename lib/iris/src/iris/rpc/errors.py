@@ -21,7 +21,7 @@ from collections.abc import Generator
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from iris.time_utils import now_ms
+from iris.time_utils import Timestamp
 
 
 @contextmanager
@@ -66,8 +66,8 @@ def connect_error_with_traceback(
 
     details = errors_pb2.ErrorDetails(
         message=message,
-        timestamp_ms=now_ms(),
     )
+    details.timestamp.epoch_ms = Timestamp.now().to_proto()
 
     if exc is not None:
         details.exception_type = f"{type(exc).__module__}.{type(exc).__name__}"

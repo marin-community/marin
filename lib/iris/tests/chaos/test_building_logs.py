@@ -29,7 +29,7 @@ def _quick_task():
     return 42
 
 
-@pytest.mark.skip(reason="Flaky in CI — build log visibility depends on timing; will re-enable after stabilization")
+@pytest.mark.skip(reason="Flaky: chaos delay doesn't reliably trigger BUILDING state")
 def test_build_logs_visible_during_building_state(cluster):
     """Verify that build logs are visible while task is in BUILDING state.
 
@@ -70,8 +70,9 @@ def test_build_logs_visible_during_building_state(cluster):
                 job_running_during_building = True
 
             # Try to fetch logs for the building task
+            task_id = f"{job.job_id}/task-0"
             try:
-                logs = client.fetch_task_logs(str(job.job_id), 0)
+                logs = client.fetch_task_logs(task_id)
                 # Look for build logs
                 for entry in logs:
                     if entry.source == "build":

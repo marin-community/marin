@@ -53,9 +53,9 @@ class EvalResult:
 
 def generate_screenshots(output_dir: Path) -> None:
     """Generate dashboard screenshots using screenshot-dashboard.py."""
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("Generating dashboard screenshots...")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
 
     script_path = Path(__file__).parent / "screenshot-dashboard.py"
     cmd = ["uv", "run", str(script_path), "--output-dir", str(output_dir)]
@@ -64,7 +64,7 @@ def generate_screenshots(output_dir: Path) -> None:
     if result.returncode != 0:
         print(f"Warning: Screenshot generation failed with code {result.returncode}")
 
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
 
 
 async def run_analysis_agent(
@@ -77,9 +77,9 @@ async def run_analysis_agent(
     Returns:
         EvalResult with status ("OK" or "NOT_OK"), summary, and report path
     """
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"ITERATION {iteration}: ANALYSIS AGENT")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
 
     # Get all screenshots
     screenshots = sorted(screenshot_dir.glob("*.png"))
@@ -153,11 +153,11 @@ Instructions:
 
     summary = "\n".join(summary_lines[:5]) if summary_lines else response_text[:300]
 
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("ANALYSIS SUMMARY:")
     print(f"Status: {status}")
     print(f"Summary:\n{summary}")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
 
     return EvalResult(status=status, summary=summary, report_path=report_path)
 
@@ -177,9 +177,9 @@ async def run_fixer_agent(
     Returns:
         Summary of changes made
     """
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"ITERATION {iteration}: FIXER AGENT")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
 
     # Build context - reference files for the agent to read
     context_parts = [
@@ -244,10 +244,10 @@ async def run_fixer_agent(
             summary = line.split("CHANGES SUMMARY:", 1)[1].strip()
             break
 
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("FIXER SUMMARY:")
     print(f"{summary}")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
 
     return summary
 
@@ -303,11 +303,11 @@ async def main_async():
     }
 
     # Main loop
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("DASHBOARD EVALUATION LOOP")
     print(f"Screenshot directory: {args.screenshot_dir}")
     print(f"Max iterations: {args.max_iterations}")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
 
     for iteration in range(1, args.max_iterations + 1):
         # Step 1: Run analysis agent
@@ -319,10 +319,10 @@ async def main_async():
 
         # Check status
         if eval_result.status == "OK":
-            print(f"\n{'='*80}")
+            print(f"\n{'=' * 80}")
             print("✅ EVALUATION PASSED!")
             print(f"Dashboard meets all criteria after {iteration} iteration(s)")
-            print(f"{'='*80}")
+            print(f"{'=' * 80}")
             break
 
         # Step 2: Run fixer agent
@@ -336,11 +336,11 @@ async def main_async():
             # After fixes, regenerate screenshots
             generate_screenshots(args.screenshot_dir)
         else:
-            print(f"\n{'='*80}")
+            print(f"\n{'=' * 80}")
             print(f"❌ EVALUATION FAILED after {args.max_iterations} iterations")
             print(f"Last status: {eval_result.status}")
             print(f"See report: {eval_result.report_path}")
-            print(f"{'='*80}")
+            print(f"{'=' * 80}")
 
     print("\nEvaluation loop complete.")
 

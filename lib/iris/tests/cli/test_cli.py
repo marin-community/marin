@@ -52,11 +52,12 @@ def _make_mock_slice(slice_id: str, scale_group: str = "test-group") -> MagicMoc
         )
     ]
     mock.status.return_value = VmGroupStatus(vms=snapshots)
-    mock.to_proto.return_value = vm_pb2.SliceInfo(
+    slice_proto = vm_pb2.SliceInfo(
         slice_id=slice_id,
         scale_group=scale_group,
-        created_at_ms=1000000,
     )
+    slice_proto.created_at.epoch_ms = 1000000
+    mock.to_proto.return_value = slice_proto
     return mock
 
 

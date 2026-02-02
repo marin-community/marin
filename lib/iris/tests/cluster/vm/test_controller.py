@@ -35,11 +35,18 @@ from iris.cluster.vm.managed_vm import (
     _build_env_flags,
 )
 from iris.rpc import config_pb2
+from iris.time_utils import Duration
 
 
 @pytest.fixture
 def ssh_bootstrap_config() -> config_pb2.IrisClusterConfig:
     """Config for SSH bootstrap mode."""
+    ssh_config = config_pb2.SshConfig(
+        user="ubuntu",
+        key_file="/home/ubuntu/.ssh/id_rsa",
+    )
+    ssh_config.connect_timeout.CopyFrom(Duration.from_seconds(30).to_proto())
+
     return config_pb2.IrisClusterConfig(
         provider_type="manual",
         controller_vm=config_pb2.ControllerVmConfig(
@@ -49,11 +56,7 @@ def ssh_bootstrap_config() -> config_pb2.IrisClusterConfig:
                 port=10000,
             ),
         ),
-        ssh=config_pb2.SshConfig(
-            user="ubuntu",
-            key_file="/home/ubuntu/.ssh/id_rsa",
-            connect_timeout=30,
-        ),
+        ssh=ssh_config,
     )
 
 
@@ -107,7 +110,7 @@ def test_manual_controller_start_runs_bootstrap(
         host="10.0.0.100",
         user="ubuntu",
         key_file="/home/ubuntu/.ssh/id_rsa",
-        connect_timeout=30,
+        connect_timeout=Duration.from_seconds(30),
     )
     mock_run_streaming.assert_called_once()
     call_args = mock_run_streaming.call_args

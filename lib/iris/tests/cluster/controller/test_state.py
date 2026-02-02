@@ -42,7 +42,7 @@ from iris.cluster.controller.state import (
 )
 from iris.cluster.types import JobId, TaskId, WorkerId, DeviceType
 from iris.rpc import cluster_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Timestamp
 
 # =============================================================================
 # Test Helpers
@@ -148,7 +148,7 @@ def register_worker(
             worker_id=wid,
             address=address,
             metadata=metadata,
-            timestamp_ms=now_ms(),
+            timestamp=Timestamp.now(),
         )
     )
     return wid
@@ -165,7 +165,7 @@ def submit_job(
         JobSubmittedEvent(
             job_id=jid,
             request=request,
-            timestamp_ms=now_ms(),
+            timestamp=Timestamp.now(),
         )
     )
     return state.get_job_tasks(jid)

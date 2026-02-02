@@ -30,7 +30,7 @@ from iris.cluster.controller.scheduler import Scheduler, SchedulingResult
 from iris.cluster.controller.state import ControllerState, ControllerTask, ControllerWorker
 from iris.cluster.types import JobId, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Timestamp
 
 
 def _make_test_entrypoint() -> cluster_pb2.Entrypoint:
@@ -58,7 +58,7 @@ def register_worker(
             worker_id=wid,
             address=address,
             metadata=metadata,
-            timestamp_ms=now_ms(),
+            timestamp=Timestamp.now(),
         )
     )
     return wid
@@ -76,7 +76,7 @@ def submit_job(
         JobSubmittedEvent(
             job_id=jid,
             request=request,
-            timestamp_ms=timestamp_ms if timestamp_ms is not None else now_ms(),
+            timestamp=Timestamp.from_ms(timestamp_ms) if timestamp_ms is not None else Timestamp.now(),
         )
     )
     return state.get_job_tasks(jid)
@@ -148,14 +148,18 @@ def job_request():
         memory_bytes: int = 1024**3,
         scheduling_timeout_seconds: int = 0,
     ) -> cluster_pb2.Controller.LaunchJobRequest:
-        return cluster_pb2.Controller.LaunchJobRequest(
+        from iris.time_utils import Duration
+
+        request = cluster_pb2.Controller.LaunchJobRequest(
             name=name,
             entrypoint=_make_test_entrypoint(),
             resources=cluster_pb2.ResourceSpecProto(cpu=cpu, memory_bytes=memory_bytes),
             environment=cluster_pb2.EnvironmentConfig(),
-            scheduling_timeout_seconds=scheduling_timeout_seconds,
             replicas=1,
         )
+        if scheduling_timeout_seconds > 0:
+            request.scheduling_timeout.CopyFrom(Duration.from_seconds(scheduling_timeout_seconds).to_proto())
+        return request
 
     return _make
 
@@ -330,19 +334,26 @@ def test_scheduler_skips_tasks_that_dont_fit(scheduler, state, job_request, work
 
 def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
     """Verify scheduler identifies tasks that exceeded scheduling timeout and logs the event."""
+    import time
+
+    from iris.time_utils import Deadline, Duration
+
     register_worker(state, "w1", "addr", worker_metadata(cpu=2))
 
     # Job that requires 100 CPUs (will never fit) with 1 second timeout
-    # Submitted 2 seconds ago, so it should be timed out
     request = cluster_pb2.Controller.LaunchJobRequest(
         name="impossible-job",
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=100, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
-        scheduling_timeout_seconds=1,
         replicas=1,
     )
-    tasks = submit_job(state, "j1", request, timestamp_ms=now_ms() - 2000)
+    request.scheduling_timeout.CopyFrom(Duration.from_seconds(1).to_proto())
+    tasks = submit_job(state, "j1", request)
+
+    # Manually set the deadline to 2 seconds ago (using monotonic time)
+    job = state.get_job(JobId("j1"))
+    job.scheduling_deadline = Deadline(time.monotonic() - 2.0)
 
     pending_tasks = state.peek_pending_tasks()
     workers = state.get_available_workers()
@@ -356,7 +367,7 @@ def test_scheduler_detects_timed_out_tasks(scheduler, state, worker_metadata):
 
 
 def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
-    """Verify task with scheduling_timeout_seconds=0 never times out."""
+    """Verify task with scheduling_timeout=0 never times out."""
     register_worker(state, "w1", "addr", worker_metadata(cpu=2))
 
     # Job that can't fit but has no timeout (0)
@@ -365,10 +376,10 @@ def test_scheduler_no_timeout_when_zero(scheduler, state, worker_metadata):
         entrypoint=_make_test_entrypoint(),
         resources=cluster_pb2.ResourceSpecProto(cpu=100, memory_bytes=1024**3),
         environment=cluster_pb2.EnvironmentConfig(),
-        scheduling_timeout_seconds=0,  # No timeout
         replicas=1,
     )
-    submit_job(state, "j1", request, timestamp_ms=now_ms() - 10000)
+    # No timeout set (field not present)
+    submit_job(state, "j1", request, timestamp_ms=Timestamp.now().epoch_ms() - 10000)
 
     pending_tasks = state.peek_pending_tasks()
     workers = state.get_available_workers()

@@ -14,13 +14,12 @@
 
 """RPC-based cluster client implementation."""
 
-import sys
 import time
 
-from iris.cluster.types import Entrypoint, generate_dockerfile, is_job_finished
+from iris.cluster.types import Entrypoint, is_job_finished
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
 
 class RemoteClusterClient:
@@ -60,28 +59,24 @@ class RemoteClusterClient:
         resources: cluster_pb2.ResourceSpecProto,
         environment: cluster_pb2.EnvironmentConfig | None = None,
         ports: list[str] | None = None,
-        scheduling_timeout_seconds: int = 0,
+        scheduling_timeout: Duration | None = None,
         constraints: list[cluster_pb2.Constraint] | None = None,
         coscheduling: cluster_pb2.CoschedulingConfig | None = None,
         replicas: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 100,
-        timeout_seconds: int = 0,
+        timeout: Duration | None = None,
     ) -> None:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
 
         entrypoint_proto = entrypoint.to_proto()
 
-        env_config = environment if environment else cluster_pb2.EnvironmentConfig()
-
-        # Ensure dockerfile is populated so the worker doesn't have to generate it
-        if not env_config.dockerfile:
-            py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-            env_config = cluster_pb2.EnvironmentConfig(
-                env_vars=dict(env_config.env_vars),
-                dockerfile=generate_dockerfile(python_version=py_version),
-            )
+        env_config = cluster_pb2.EnvironmentConfig(
+            pip_packages=list(environment.pip_packages) if environment else [],
+            env_vars=dict(environment.env_vars) if environment else {},
+            extras=list(environment.extras) if environment else [],
+        )
 
         # Determine parent job ID (all but last component)
         parts = job_id.rsplit("/", 1)
@@ -97,15 +92,11 @@ class RemoteClusterClient:
                 bundle_gcs_path=self._bundle_gcs_path,
                 ports=ports or [],
                 parent_job_id=parent_job_id,
-                scheduling_timeout_seconds=scheduling_timeout_seconds,
                 constraints=constraints or [],
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
-                timeout_seconds=timeout_seconds,
             )
-            if coscheduling is not None:
-                request.coscheduling.CopyFrom(coscheduling)
         else:
             request = cluster_pb2.Controller.LaunchJobRequest(
                 name=job_id,
@@ -115,15 +106,18 @@ class RemoteClusterClient:
                 bundle_blob=self._bundle_blob or b"",
                 ports=ports or [],
                 parent_job_id=parent_job_id,
-                scheduling_timeout_seconds=scheduling_timeout_seconds,
                 constraints=constraints or [],
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
-                timeout_seconds=timeout_seconds,
             )
-            if coscheduling is not None:
-                request.coscheduling.CopyFrom(coscheduling)
+
+        if scheduling_timeout is not None:
+            request.scheduling_timeout.CopyFrom(scheduling_timeout.to_proto())
+        if timeout is not None:
+            request.timeout.CopyFrom(timeout.to_proto())
+        if coscheduling is not None:
+            request.coscheduling.CopyFrom(coscheduling)
         self._client.launch_job(request)
 
     def get_job_status(self, job_id: str) -> cluster_pb2.JobStatus:
@@ -150,7 +144,7 @@ class RemoteClusterClient:
         Raises:
             TimeoutError: If job doesn't complete within timeout
         """
-        start = time.monotonic()
+        deadline = Deadline.from_seconds(timeout)
         backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
 
         while True:
@@ -158,13 +152,11 @@ class RemoteClusterClient:
             if is_job_finished(job_info.state):
                 return job_info
 
-            elapsed = time.monotonic() - start
-            if elapsed >= timeout:
+            if deadline.expired():
                 raise TimeoutError(f"Job {job_id} did not complete in {timeout}s")
 
             interval = backoff.next_interval()
-            remaining = timeout - elapsed
-            time.sleep(min(interval, remaining))
+            time.sleep(min(interval, deadline.remaining_seconds()))
 
     def terminate_job(self, job_id: str) -> None:
         request = cluster_pb2.Controller.TerminateJobRequest(job_id=job_id)
@@ -246,7 +238,7 @@ class RemoteClusterClient:
     def fetch_task_logs(
         self,
         task_id: str,
-        start_ms: int = 0,
+        start: Timestamp | None = None,
         max_lines: int = 0,
     ) -> list[cluster_pb2.Worker.LogEntry]:
         """Fetch logs for a specific task.
@@ -255,7 +247,7 @@ class RemoteClusterClient:
 
         Args:
             task_id: Full task ID in format "{job_id}/task-{index}"
-            start_ms: Only return logs after this timestamp (milliseconds since epoch)
+            start: Only return logs after this timestamp (None = from beginning)
             max_lines: Maximum number of log lines to return (0 = unlimited)
 
         Returns:
@@ -270,7 +262,7 @@ class RemoteClusterClient:
         request = cluster_pb2.Controller.GetTaskLogsRequest(
             job_id=job_id,
             task_index=task_index,
-            start_ms=start_ms,
+            start_ms=start.epoch_ms() if start else 0,
             limit=max_lines,
         )
         response = self._client.get_task_logs(request)

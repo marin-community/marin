@@ -19,10 +19,12 @@ Tests that Iris handles RPC failures gracefully:
 - Heartbeat timeout (60s)
 - Heartbeat reconciliation (running_tasks)
 """
+
 import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import cluster_pb2
-from .conftest import submit, wait, _quick, _block
+from iris.time_utils import Duration
+from .conftest import submit, wait, _quick, _slow
 
 
 @pytest.mark.chaos
@@ -44,7 +46,7 @@ def test_dispatch_permanent_failure(cluster):
     """
     _url, client = cluster
     enable_chaos("controller.heartbeat", failure_rate=1.0)
-    job = submit(client, _quick, "permanent-dispatch", scheduling_timeout_seconds=5)
+    job = submit(client, _quick, "permanent-dispatch", scheduling_timeout=Duration.from_seconds(5))
     status = wait(client, job, timeout=20)
     assert status.state in (cluster_pb2.JOB_STATE_FAILED, cluster_pb2.JOB_STATE_UNSCHEDULABLE)
 
@@ -62,13 +64,13 @@ def test_heartbeat_temporary_failure(cluster):
 
 
 @pytest.mark.chaos
-def test_heartbeat_permanent_failure(cluster, sentinel):
+def test_heartbeat_permanent_failure(cluster):
     """Test heartbeat permanently fails. After 60s, worker marked failed, tasks
     become WORKER_FAILED. With scheduling timeout, job eventually fails.
     """
     _url, client = cluster
     enable_chaos("worker.heartbeat", failure_rate=1.0)
-    job = submit(client, _block, "perm-hb-fail", sentinel, scheduling_timeout_seconds=5)
+    job = submit(client, _slow, "perm-hb-fail", scheduling_timeout=Duration.from_seconds(5))
     status = wait(client, job, timeout=20)
     assert status.state in (
         cluster_pb2.JOB_STATE_FAILED,

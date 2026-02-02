@@ -26,7 +26,7 @@ infrastructure layer, not requiring the full cluster fixture.
 import pytest
 
 from iris.rpc import config_pb2, vm_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Timestamp
 from tests.cluster.vm.fakes import FailureMode, FakeVmManager, FakeVmManagerConfig
 
 
@@ -55,7 +55,7 @@ def test_quota_exceeded_retry():
     group = manager.create_vm_group()
 
     # Tick to advance VM state transitions
-    manager.tick(now_ms())
+    manager.tick(Timestamp.now().to_proto())
 
     # Verify VMs reach READY state
     status = group.status()
@@ -79,7 +79,7 @@ def test_vm_init_stuck():
     group = manager.create_vm_group()
 
     # Tick to complete boot phase
-    manager.tick(now_ms())
+    manager.tick(Timestamp.now().to_proto())
 
     # VMs should transition from BOOTING -> INITIALIZING but not to READY
     status = group.status()
@@ -110,7 +110,7 @@ def test_vm_preempted():
     group = manager.create_vm_group()
 
     # Tick to advance VMs to READY state
-    manager.tick(now_ms())
+    manager.tick(Timestamp.now().to_proto())
 
     # Verify at least one VM is READY
     status = group.status()

@@ -39,6 +39,7 @@ from iris.cluster.worker.docker import DockerRuntime
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import cluster_pb2, config_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
+from iris.time_utils import Duration
 
 
 def find_free_port() -> int:
@@ -76,7 +77,9 @@ def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
     config.scale_groups["local-cpu"].CopyFrom(sg)
 
     # Fast autoscaler evaluation for tests
-    config.autoscaler.evaluation_interval_seconds = 0.5
+    from iris.time_utils import Duration
+
+    config.autoscaler.evaluation_interval.CopyFrom(Duration.from_seconds(0.5).to_proto())
 
     return config
 
@@ -165,7 +168,7 @@ class E2ECluster:
                 cache_dir=cache_path,
                 controller_address=f"http://127.0.0.1:{self._controller_port}",
                 worker_id=worker_id,
-                poll_interval_seconds=0.1,  # Fast polling for tests
+                poll_interval=Duration.from_seconds(0.1),  # Fast polling for tests
             )
             worker = Worker(
                 worker_config,
@@ -222,7 +225,7 @@ class E2ECluster:
         cpu: int = 1,
         memory: str = "1g",
         ports: list[str] | None = None,
-        scheduling_timeout_seconds: int = 0,
+        scheduling_timeout: Duration | None = None,
         replicas: int = 1,
         **kwargs,
     ):
@@ -236,7 +239,7 @@ class E2ECluster:
             resources=resources,
             environment=environment,
             ports=ports,
-            scheduling_timeout_seconds=scheduling_timeout_seconds,
+            scheduling_timeout=scheduling_timeout,
             replicas=replicas,
         )
 
@@ -428,7 +431,7 @@ class TestResourceScheduling:
             lambda: None,
             name=unique_name("impossible-job"),
             cpu=10000,
-            scheduling_timeout_seconds=1,
+            scheduling_timeout=Duration.from_seconds(1),
         )
 
         # Should become UNSCHEDULABLE
