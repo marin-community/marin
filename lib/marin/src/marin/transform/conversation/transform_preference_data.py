@@ -38,6 +38,8 @@ import fsspec
 from datasets import get_dataset_config_info
 from zephyr import Backend, Dataset, write_jsonl_file
 
+from marin.utils import is_path_like
+
 from .preference_data_adapters import PreferenceTransformAdapter, get_preference_adapter
 
 logger = logging.getLogger(__name__)
@@ -76,14 +78,6 @@ class SplitTask:
 def generate_hash_from_pair(chosen, rejected) -> str:
     """Generate a hash from chosen and rejected message lists."""
     return hashlib.sha256((str(chosen) + str(rejected)).encode()).hexdigest()
-
-
-def _is_fsspec_path(path: str) -> bool:
-    """Return True if the input path is an fsspec URL or an existing local path."""
-    protocol, _ = fsspec.core.split_protocol(path)
-    if protocol is not None:
-        return True
-    return os.path.exists(path)
 
 
 def _get_fsspec_protocol(fs: fsspec.AbstractFileSystem) -> str | None:
@@ -173,7 +167,7 @@ def get_dataset_tasks(cfg: TransformPreferenceDatasetConfig):
     Yields SplitTask objects for each subset/split combination.
     """
     input_path = cfg.input_path
-    if _is_fsspec_path(input_path):
+    if is_path_like(input_path):
         subsets = cfg.subsets or [None]
         splits = cfg.splits or _infer_splits_from_files(input_path, subsets, cfg.filetype)
         if not splits:
@@ -252,7 +246,7 @@ def process_split_task(task: SplitTask) -> dict:
         raise ValueError(f"No preference adapter found for source: {task.adapter_name or task.source}")
 
     logger.info(f"Processing subset: {subset}, split: {split}")
-    if _is_fsspec_path(task.input_path):
+    if is_path_like(task.input_path):
         data_files = _find_split_files(task.input_path, subset, split, task.filetype)
         dataset = datasets.load_dataset(
             task.filetype,

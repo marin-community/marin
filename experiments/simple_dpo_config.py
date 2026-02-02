@@ -44,11 +44,11 @@ class SimpleDPOConfig:
     max_seq_len: int = 4096
 
     weight_decay: float = 0.0
-    warmup: float = 0.03
+    warmup: float = 0.0
     cooldown: float | None = None
     lr_schedule: str = "linear"
     min_lr_ratio: float = 0.0
-    max_grad_norm: float | None = None
+    max_grad_norm: float | None = 1
 
     steps_per_eval: int = 1000
     steps_per_checkpoint: int = 1000

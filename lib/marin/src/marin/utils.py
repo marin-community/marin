@@ -318,6 +318,17 @@ def fsspec_mtime(file_path: str) -> datetime:
     return fs.modified(file_path)
 
 
+def is_path_like(path: str) -> bool:
+    """Return True if path is a URL (gs://, s3://, etc.) or an existing local path.
+
+    Use this to distinguish file paths from HuggingFace dataset/model identifiers.
+    """
+    protocol, _ = fsspec.core.split_protocol(path)
+    if protocol is not None:
+        return True
+    return os.path.exists(path)
+
+
 def validate_marin_gcp_path(path: str) -> str:
     """
     Validate the given path according to the marin GCP convention.
