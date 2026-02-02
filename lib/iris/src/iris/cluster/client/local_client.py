@@ -188,3 +188,6 @@ class LocalClusterClient:
         max_lines: int = 0,
     ) -> list[cluster_pb2.Worker.LogEntry]:
         return self._remote_client.fetch_task_logs(task_id, start, max_lines)
+
+    def get_autoscaler_status(self) -> cluster_pb2.Controller.GetAutoscalerStatusResponse:
+        return self._remote_client.get_autoscaler_status()

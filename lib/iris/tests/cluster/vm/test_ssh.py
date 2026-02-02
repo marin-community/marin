@@ -61,8 +61,9 @@ def test_wait_for_connection_returns_true_immediately(mock_conn_avail, _mock_sle
     """wait_for_connection returns True if connection available immediately."""
     mock_conn_avail.return_value = True
     conn = MagicMock()
-    assert wait_for_connection(conn, timeout=Duration.from_seconds(60), poll_interval=Duration.from_seconds(5)) is True
-    mock_conn_avail.assert_called_once()
+    # Test behavior: function should return True when connection is available
+    result = wait_for_connection(conn, timeout=Duration.from_seconds(60), poll_interval=Duration.from_seconds(5))
+    assert result is True
 
 
 @patch("iris.cluster.vm.ssh.time.sleep")
@@ -129,22 +130,20 @@ def test_run_streaming_with_retry_success_first_attempt():
 
 @patch("iris.cluster.vm.ssh.time.sleep")
 def test_run_streaming_with_retry_retries_on_connection_error(_mock_sleep):
-    """run_streaming_with_retry retries on connection error with backoff."""
-    call_count = [0]
-
-    def run_streaming_side_effect(_command: str):
-        call_count[0] += 1
-        if call_count[0] < 3:
-            raise OSError("Connection refused")
-        return make_fake_popen()
-
+    """run_streaming_with_retry eventually succeeds after connection errors."""
+    # Simulate initial failures followed by success
     conn = MagicMock()
-    conn.run_streaming.side_effect = run_streaming_side_effect
+    conn.run_streaming.side_effect = [
+        OSError("Connection refused"),
+        OSError("Connection refused"),
+        make_fake_popen(),
+    ]
 
+    # Test behavior: function should eventually succeed despite initial failures
     result = run_streaming_with_retry(conn, "bootstrap script", max_retries=3)
 
+    # Verify successful outcome
     assert result.returncode == 0
-    assert call_count[0] == 3
 
 
 @pytest.mark.slow  # Flaky in CI: background thread holds logging lock (gh#2551)

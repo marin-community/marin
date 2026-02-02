@@ -15,7 +15,6 @@
 """E2E tests for WorkerPool using LocalClusterClient."""
 
 import pytest
-
 from iris.client import IrisClient
 from iris.client.worker_pool import (
     WorkerPool,
@@ -33,7 +32,7 @@ def local_client():
     """
     client = IrisClient.local()
     yield client
-    client.shutdown(wait=False)
+    client.shutdown(wait=True)
 
 
 class TestWorkerPoolE2E:
