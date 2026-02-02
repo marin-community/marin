@@ -1476,7 +1476,8 @@ def maybe_replace_chat_template(tokenizer: HfTokenizer):
     if "Qwen/Qwen2.5" in tokenizer.name_or_path and "-Instruct" in tokenizer.name_or_path:
         from experiments.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
         tokenizer.chat_template = QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
-    elif tokenizer.name_or_path == "Qwen/Qwen3-8B":
+    elif re.match(r"Qwen/Qwen3-\d+(\.\d+)?B$", tokenizer.name_or_path):
+        # Matches Qwen3 instruct models (Qwen3-4B, Qwen3-8B, etc.) but not -Base variants
         from experiments.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
         tokenizer.chat_template = QWEN_3_CHAT_TEMPLATE
     elif re.match(r"Qwen/Qwen3-\d+(\.\d+)?B-Base", tokenizer.name_or_path):
