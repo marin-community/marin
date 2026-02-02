@@ -465,7 +465,9 @@ class Worker:
             # Run the task attempt
             attempt.run()
         finally:
-            # Ensure bridge thread exits (should be immediate since stop_event was set)
+            # Signal watch thread to exit (in case task completed normally without stop)
+            stop_event.set()
+            # Join watch thread (should exit immediately now)
             watch_thread.join(timeout=1.0)
 
     def get_task(self, task_id: str) -> TaskInfo | None:

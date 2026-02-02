@@ -24,7 +24,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import pytest
-from iris.managed_thread import ThreadRegistry, set_thread_registry
 from iris.test_util import SentinelFile
 
 # httpx logs every HTTP request at INFO level, which floods test output
@@ -111,17 +110,6 @@ def docker_cleanup_session(use_docker):
 def sentinel(tmp_path) -> SentinelFile:
     """Per-test sentinel file for blocking/unblocking job threads."""
     return SentinelFile(str(tmp_path / "sentinel"))
-
-
-@pytest.fixture(autouse=True)
-def _thread_registry():
-    """Per-test ThreadRegistry: every test gets a clean registry, all threads
-    are shut down (blocking) before the next test starts."""
-    registry = ThreadRegistry()
-    old = set_thread_registry(registry)
-    yield registry
-    registry.shutdown(timeout=5.0)
-    set_thread_registry(old)
 
 
 def pytest_sessionfinish(session, exitstatus):

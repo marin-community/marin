@@ -185,12 +185,15 @@ def worker(mock_bundle_cache, mock_image_cache, mock_runtime):
         port_range=(50000, 50100),
         poll_interval=Duration.from_seconds(0.1),  # Fast polling for tests
     )
-    return Worker(
+    worker = Worker(
         config,
         bundle_provider=mock_bundle_cache,
         image_provider=mock_image_cache,
         container_runtime=mock_runtime,
     )
+    yield worker
+    # Cleanup: stop all worker threads
+    worker.stop(timeout=5.0)
 
 
 def create_test_entrypoint():

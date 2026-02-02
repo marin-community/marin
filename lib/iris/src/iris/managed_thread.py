@@ -12,14 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ManagedThread and ThreadRegistry for structured thread lifecycle management.
+"""ManagedThread and ThreadContainer for structured thread lifecycle management.
 
 ManagedThread wraps threading.Thread with an integrated stop event, ensuring
-threads are non-daemon and can be cleanly shut down. ThreadRegistry tracks
-multiple ManagedThreads for bulk shutdown.
+threads are non-daemon and can be cleanly shut down. ThreadContainer groups
+ManagedThreads at the component level for bulk shutdown.
 
-Components use the global registry via get_thread_registry(). Tests swap in
-a fresh registry via set_thread_registry() and call shutdown() in teardown.
+Components create their own ThreadContainer instances. Tests ensure proper
+cleanup by calling component.stop() methods which cascade to ThreadContainer.stop().
 """
 
 import logging
@@ -69,64 +69,21 @@ class ManagedThread:
         return self._thread.name
 
 
-class ThreadRegistry:
-    """Tracks ManagedThreads for bulk shutdown."""
-
-    def __init__(self) -> None:
-        self._threads: list[ManagedThread] = []
-        self._lock = threading.Lock()
-
-    def spawn(self, target: Callable[..., Any], *, name: str | None = None, args: tuple = ()) -> ManagedThread:
-        """Create, register, and start a ManagedThread."""
-        thread = ManagedThread(target=target, name=name, args=args)
-        with self._lock:
-            self._threads.append(thread)
-        thread.start()
-        return thread
-
-    def shutdown(self, timeout: float | None = None) -> None:
-        """Stop all threads and block until they exit.
-
-        Signals all threads to stop, then joins each. If timeout is None
-        (the default), blocks indefinitely — rely on pytest-timeout to
-        catch hangs. If timeout is set, uses a deadline-based budget.
-        """
-        with self._lock:
-            threads = list(self._threads)
-
-        for thread in threads:
-            thread.stop()
-
-        if timeout is None:
-            for thread in threads:
-                thread.join()
-        else:
-            deadline = time.monotonic() + timeout
-            for thread in threads:
-                remaining = max(0, deadline - time.monotonic())
-                thread.join(timeout=remaining)
-
-    def __enter__(self) -> "ThreadRegistry":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.shutdown()
-
-
 class ThreadContainer:
     """Component-scoped thread group with bulk stop/join.
 
-    Threads are spawned into the global ThreadRegistry (for test cleanup)
-    and also tracked locally so the owning component can shut them all
-    down in one call.
+    Threads are created, tracked, and managed entirely within this container.
+    The owning component calls stop() to signal all threads and wait for exit.
     """
 
     def __init__(self) -> None:
         self._threads: list[ManagedThread] = []
 
     def spawn(self, target: Callable[..., Any], *, name: str | None = None, args: tuple = ()) -> ManagedThread:
-        thread = get_thread_registry().spawn(target=target, name=name, args=args)
+        """Create, track, and start a ManagedThread."""
+        thread = ManagedThread(target=target, name=name, args=args)
         self._threads.append(thread)
+        thread.start()
         return thread
 
     def spawn_server(self, server: Any, *, name: str) -> ManagedThread:
@@ -163,36 +120,18 @@ def _stop_event_to_server(stop_event: threading.Event, server: Any) -> None:
 
 
 def spawn_server(server: Any, *, name: str) -> ManagedThread:
-    """Spawn a uvicorn Server as a managed thread in the global registry.
+    """Create a ManagedThread for a uvicorn Server.
 
     Bridges the ManagedThread stop_event to server.should_exit so the server
-    shuts down cleanly when the registry signals stop.
+    shuts down cleanly when stop() is called.
+
+    Note: The caller is responsible for tracking and stopping the returned thread.
     """
 
     def _run(stop_event: threading.Event) -> None:
         _stop_event_to_server(stop_event, server)
         server.run()
 
-    return get_thread_registry().spawn(target=_run, name=name)
-
-
-# ---------------------------------------------------------------------------
-# Global registry
-# ---------------------------------------------------------------------------
-
-_global_registry = ThreadRegistry()
-_registry_lock = threading.Lock()
-
-
-def get_thread_registry() -> ThreadRegistry:
-    """Return the process-wide ThreadRegistry."""
-    return _global_registry
-
-
-def set_thread_registry(registry: ThreadRegistry) -> ThreadRegistry:
-    """Replace the global registry. Returns the previous one (for restore)."""
-    global _global_registry
-    with _registry_lock:
-        old = _global_registry
-        _global_registry = registry
-    return old
+    thread = ManagedThread(target=_run, name=name)
+    thread.start()
+    return thread
