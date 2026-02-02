@@ -220,9 +220,10 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
 
     ctx = iris_ctx()
     job_info = get_job_info()
-    task_index = job_info.task_index if job_info is not None else 0
+    if job_info is None:
+        raise RuntimeError("_host_actor must run inside an Iris job but get_job_info() returned None")
 
-    actor_name = f"{name_prefix}-{task_index}"
+    actor_name = f"{name_prefix}-{job_info.task_index}"
     logger.info(f"Starting actor: {actor_name} (job_id={ctx.job_id})")
 
     instance = actor_class(*args, **kwargs)
@@ -231,9 +232,7 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     server.register(actor_name, instance)
     actual_port = server.serve_background()
 
-    # Use the routable host IP injected by Iris as IRIS_ADVERTISE_HOST,
-    # available via get_job_info().advertise_host.
-    advertise_host = job_info.advertise_host if job_info is not None else _get_host_ip()
+    advertise_host = job_info.advertise_host
     address = f"{advertise_host}:{actual_port}"
     logger.info(f"Registering endpoint: {actor_name} -> {address}")
     ctx.registry.register(actor_name, address)
