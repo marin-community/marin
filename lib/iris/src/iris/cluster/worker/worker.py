@@ -18,7 +18,7 @@ import logging
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import uvicorn
@@ -36,7 +36,7 @@ from iris.cluster.worker.worker_types import TaskInfo
 from iris.logging import get_global_buffer
 from iris.rpc import cluster_pb2
 from iris.rpc.cluster_connect import ControllerServiceClientSync
-from iris.time_utils import ExponentialBackoff
+from iris.time_utils import Deadline, Duration, ExponentialBackoff, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +52,8 @@ class WorkerConfig:
     port_range: tuple[int, int] = (30000, 40000)
     controller_address: str | None = None
     worker_id: str | None = None
-    poll_interval_seconds: float = 5.0
-    heartbeat_timeout_seconds: float = 60.0
+    poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
+    heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
 
 
 class Worker:
@@ -119,7 +119,7 @@ class Worker:
         self._controller_client: ControllerServiceClientSync | None = None
 
         # Heartbeat tracking for timeout detection
-        self._last_heartbeat_time = time.monotonic()
+        self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
 
     def start(self) -> None:
         # Clean up any orphaned containers from previous runs
@@ -293,14 +293,12 @@ class Worker:
         This method blocks in a loop, checking the time since last heartbeat.
         When the timeout expires, it returns, triggering a reset and re-registration.
         """
-        self._last_heartbeat_time = time.monotonic()
-        heartbeat_timeout = self._config.heartbeat_timeout_seconds
+        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
         logger.info("Serving (waiting for controller heartbeats)")
 
         while not self._stop_event.is_set():
-            elapsed = time.monotonic() - self._last_heartbeat_time
-            if elapsed > heartbeat_timeout:
-                logger.warning("No heartbeat from controller for %.0fs, resetting", elapsed)
+            if self._heartbeat_deadline.expired():
+                logger.warning("No heartbeat from controller, resetting")
                 return
             # Check every second
             self._stop_event.wait(1.0)
@@ -339,12 +337,50 @@ class Worker:
 
     # Task management methods
 
+    _TERMINAL_STATES = frozenset(
+        {
+            cluster_pb2.TASK_STATE_SUCCEEDED,
+            cluster_pb2.TASK_STATE_FAILED,
+            cluster_pb2.TASK_STATE_KILLED,
+            cluster_pb2.TASK_STATE_WORKER_FAILED,
+        }
+    )
+
     def submit_task(self, request: cluster_pb2.Worker.RunTaskRequest) -> str:
-        """Submit a new task for execution."""
+        """Submit a new task for execution.
+
+        If a non-terminal task with the same task_id already exists:
+        - Same or older attempt_id: rejected as duplicate
+        - Newer attempt_id: old attempt is killed and new one starts
+        """
         if rule := chaos("worker.submit_task"):
             time.sleep(rule.delay_seconds)
             raise RuntimeError("chaos: worker rejecting task")
         task_id = request.task_id
+
+        should_kill_existing = False
+        with self._lock:
+            existing = self._tasks.get(task_id)
+            if existing is not None and existing.status not in self._TERMINAL_STATES:
+                if request.attempt_id <= existing.attempt_id:
+                    logger.info(
+                        "Rejecting duplicate task %s (attempt %d, status=%s)",
+                        task_id,
+                        request.attempt_id,
+                        existing.status,
+                    )
+                    return task_id
+                logger.info(
+                    "Superseding task %s: attempt %d -> %d, killing old attempt",
+                    task_id,
+                    existing.attempt_id,
+                    request.attempt_id,
+                )
+                should_kill_existing = True
+
+        if should_kill_existing:
+            self.kill_task(task_id)
+
         job_id = request.job_id
         task_index = request.task_index
         num_tasks = request.num_tasks
@@ -382,8 +418,8 @@ class Worker:
             worker_id=self._worker_id,
             controller_address=self._config.controller_address,
             port_allocator=self._port_allocator,
-            report_state=self._notify_task_update,
-            poll_interval_seconds=self._config.poll_interval_seconds,
+            report_state=lambda: self._notify_task_update(attempt),
+            poll_interval_seconds=self._config.poll_interval.to_seconds(),
         )
 
         with self._lock:
@@ -418,8 +454,8 @@ class Worker:
         Processes tasks_to_run and tasks_to_kill, reconciles expected_tasks against
         actual state, and returns current running/completed tasks.
         """
-        # Update heartbeat timestamp
-        self._last_heartbeat_time = time.monotonic()
+        # Reset heartbeat deadline
+        self._heartbeat_deadline = Deadline.from_seconds(self._config.heartbeat_timeout.to_seconds())
 
         # Start new tasks
         for run_req in request.tasks_to_run:
@@ -467,7 +503,7 @@ class Worker:
                             state=cluster_pb2.TASK_STATE_WORKER_FAILED,
                             exit_code=0,
                             error="Task not found on worker",
-                            finished_at_ms=int(time.time() * 1000),
+                            finished_at=Timestamp.now().to_proto(),
                             attempt_id=expected_entry.attempt_id,
                         )
                     )
@@ -482,7 +518,7 @@ class Worker:
                             state=task_proto.state,
                             exit_code=task_proto.exit_code,
                             error=task_proto.error,
-                            finished_at_ms=task_proto.finished_at_ms,
+                            finished_at=task_proto.finished_at,
                             attempt_id=task_proto.current_attempt_id,
                         )
                     )
@@ -492,6 +528,7 @@ class Worker:
                         cluster_pb2.Controller.RunningTaskEntry(
                             task_id=task_id,
                             attempt_id=task.to_proto().current_attempt_id,
+                            state=task.status,
                         )
                     )
 
@@ -502,6 +539,7 @@ class Worker:
                         cluster_pb2.Controller.RunningTaskEntry(
                             task_id=task_id,
                             attempt_id=task.to_proto().current_attempt_id,
+                            state=task.status,
                         )
                     )
 
@@ -553,7 +591,12 @@ class Worker:
         return True
 
     def get_logs(self, task_id: str, start_line: int = 0) -> list[cluster_pb2.Worker.LogEntry]:
-        """Get logs for a task."""
+        """Get logs for a task.
+
+        Args:
+            task_id: ID of the task to get logs for
+            start_line: Line offset (supports negative indexing: -1000 = last 1000 lines)
+        """
         task = self._tasks.get(task_id)
         if not task:
             return []
@@ -571,8 +614,9 @@ class Worker:
                 logs.append(log_line.to_proto())
 
         # Sort by timestamp
-        logs.sort(key=lambda x: x.timestamp_ms)
+        logs.sort(key=lambda x: x.timestamp.epoch_ms)
 
+        # Python slicing naturally supports negative indexing
         return logs[start_line:]
 
     @property

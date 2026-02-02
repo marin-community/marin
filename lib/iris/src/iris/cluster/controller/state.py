@@ -47,7 +47,7 @@ from iris.cluster.controller.events import (
 )
 from iris.cluster.types import AttributeValue, DeviceType, JobId, TaskId, WorkerId
 from iris.rpc import cluster_pb2
-from iris.time_utils import now_ms
+from iris.time_utils import Deadline, Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -179,9 +179,9 @@ class ControllerTaskAttempt:
     state: int = cluster_pb2.TASK_STATE_ASSIGNED
 
     # Timing
-    created_at_ms: int = 0
-    started_at_ms: int | None = None
-    finished_at_ms: int | None = None
+    created_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
+    started_at: Timestamp | None = None
+    finished_at: Timestamp | None = None
 
     # Result
     exit_code: int | None = None
@@ -196,13 +196,13 @@ class ControllerTaskAttempt:
     ) -> None:
         """Transition this attempt to a new state."""
         self.state = new_state
-        ts = now_ms()
+        now = Timestamp.now()
 
         if new_state == cluster_pb2.TASK_STATE_RUNNING:
-            self.started_at_ms = ts
+            self.started_at = now
 
         if new_state in TERMINAL_TASK_STATES:
-            self.finished_at_ms = ts
+            self.finished_at = now
             self.exit_code = exit_code
             self.error = error
 
@@ -284,8 +284,8 @@ class ControllerTask:
     state: int = cluster_pb2.TASK_STATE_PENDING
     error: str | None = None
     exit_code: int | None = None
-    started_at_ms: int | None = None
-    finished_at_ms: int | None = None
+    started_at: Timestamp | None = None
+    finished_at: Timestamp | None = None
 
     # Retry policy (immutable after creation)
     max_retries_failure: int = 0
@@ -299,7 +299,7 @@ class ControllerTask:
     attempts: list[ControllerTaskAttempt] = field(default_factory=list)
 
     # Submission timestamp (distinct from attempt start times)
-    submitted_at_ms: int = 0
+    submitted_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
 
     # --- Read-only properties that derive from attempts ---
 
@@ -346,12 +346,11 @@ class ControllerTask:
         Returns:
             The new attempt so caller can track it.
         """
-        ts = now_ms()
         attempt = ControllerTaskAttempt(
             attempt_id=len(self.attempts),
             worker_id=worker_id,
             state=initial_state,
-            created_at_ms=ts,
+            created_at=Timestamp.now(),
         )
         self.attempts.append(attempt)
 
@@ -391,7 +390,7 @@ class ControllerTask:
         if not self.attempts:
             self.state = new_state
             if new_state in TERMINAL_TASK_STATES:
-                self.finished_at_ms = now_ms()
+                self.finished_at = Timestamp.now()
                 self.error = error
                 self.exit_code = exit_code
             return TaskTransitionResult.COMPLETE
@@ -416,7 +415,7 @@ class ControllerTask:
                 # Terminal: record final outcome
                 self.error = error
                 self.exit_code = exit_code
-                self.finished_at_ms = now_ms()
+                self.finished_at = Timestamp.now()
             return result
 
         # For success, set exit_code to 0 if not provided
@@ -431,7 +430,7 @@ class ControllerTask:
             self.state = new_state
             self.exit_code = final_exit_code
             self.error = error
-            self.finished_at_ms = now_ms()
+            self.finished_at = Timestamp.now()
             return TaskTransitionResult.COMPLETE
 
         # For other terminal states (KILLED, UNSCHEDULABLE)
@@ -448,7 +447,7 @@ class ControllerTask:
             self.state = new_state
             self.error = actual_error
             self.exit_code = exit_code
-            self.finished_at_ms = now_ms()
+            self.finished_at = Timestamp.now()
             return TaskTransitionResult.COMPLETE
 
         # Non-terminal states (BUILDING, RUNNING)
@@ -556,9 +555,12 @@ class ControllerJob:
     parent_job_id: JobId | None = None
 
     # Timestamps
-    submitted_at_ms: int = 0
-    started_at_ms: int | None = None
-    finished_at_ms: int | None = None
+    submitted_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
+    started_at: Timestamp | None = None
+    finished_at: Timestamp | None = None
+
+    # Scheduling deadline (set when job has a scheduling_timeout)
+    scheduling_deadline: Deadline | None = None
 
     error: str | None = None
     exit_code: int | None = None
@@ -572,12 +574,12 @@ class ControllerJob:
     def mark_dispatched(self) -> None:
         """Mark job as running. Called when first task starts."""
         self.state = cluster_pb2.JOB_STATE_RUNNING
-        self.started_at_ms = now_ms()
+        self.started_at = Timestamp.now()
 
     def revert_dispatch(self) -> None:
         """Revert dispatch if no tasks actually started."""
         self.state = cluster_pb2.JOB_STATE_PENDING
-        self.started_at_ms = None
+        self.started_at = None
 
     def transition(
         self,
@@ -607,25 +609,29 @@ class ControllerJob:
         if new_state == cluster_pb2.JOB_STATE_FAILED:
             return self._handle_failure(is_worker_failure, error, exit_code)
 
-        ts = now_ms()
+        now = Timestamp.now()
 
         # Non-failure terminal states
         if new_state == cluster_pb2.JOB_STATE_SUCCEEDED:
             self.state = new_state
-            self.finished_at_ms = ts
+            self.finished_at = now
             self.exit_code = exit_code or 0
             return JobTransitionResult.COMPLETE
 
         if new_state == cluster_pb2.JOB_STATE_KILLED:
             self.state = new_state
-            self.finished_at_ms = ts
+            self.finished_at = now
             self.error = error
             return JobTransitionResult.COMPLETE
 
         if new_state == cluster_pb2.JOB_STATE_UNSCHEDULABLE:
             self.state = new_state
-            self.finished_at_ms = ts
-            self.error = error or f"Scheduling timeout exceeded ({self.request.scheduling_timeout_seconds}s)"
+            self.finished_at = now
+            if self.request.HasField("scheduling_timeout"):
+                timeout = Duration.from_proto(self.request.scheduling_timeout)
+            else:
+                timeout = None
+            self.error = error or f"Scheduling timeout exceeded ({timeout})"
             return JobTransitionResult.COMPLETE
 
         # Non-terminal states (BUILDING, RUNNING)
@@ -649,15 +655,15 @@ class ControllerJob:
         if can_retry:
             # Reset state for retry
             self.state = cluster_pb2.JOB_STATE_PENDING
-            self.started_at_ms = None
-            self.finished_at_ms = None
+            self.started_at = None
+            self.finished_at = None
             self.error = None
             self.exit_code = None
             return JobTransitionResult.SHOULD_RETRY
         else:
             # Terminal failure
             self.state = cluster_pb2.JOB_STATE_FAILED
-            self.finished_at_ms = now_ms()
+            self.finished_at = Timestamp.now()
             self.error = error
             self.exit_code = exit_code
             return JobTransitionResult.EXCEEDED_RETRY_LIMIT
@@ -704,10 +710,14 @@ class ControllerJob:
         if counts[cluster_pb2.TASK_STATE_KILLED] > 0 and not self.is_finished():
             return cluster_pb2.JOB_STATE_KILLED
 
-        # Job is RUNNING if any task is running
-        if counts[cluster_pb2.TASK_STATE_RUNNING] > 0 and self.state != cluster_pb2.JOB_STATE_RUNNING:
-            if self.started_at_ms is None:
-                self.started_at_ms = now_ms()
+        # Job is RUNNING if any task is assigned, building, or running
+        if (
+            counts[cluster_pb2.TASK_STATE_RUNNING] > 0
+            or counts[cluster_pb2.TASK_STATE_BUILDING] > 0
+            or counts[cluster_pb2.TASK_STATE_ASSIGNED] > 0
+        ) and self.state != cluster_pb2.JOB_STATE_RUNNING:
+            if self.started_at is None:
+                self.started_at = Timestamp.now()
             return cluster_pb2.JOB_STATE_RUNNING
 
         # No state change detected
@@ -787,7 +797,7 @@ def expand_job_to_tasks(job: ControllerJob) -> list[ControllerTask]:
             task_index=i,
             max_retries_failure=job.max_retries_failure,
             max_retries_preemption=job.max_retries_preemption,
-            submitted_at_ms=job.submitted_at_ms,
+            submitted_at=job.submitted_at,
         )
         tasks.append(task)
 
@@ -824,7 +834,7 @@ class ControllerWorker:
         metadata: Worker environment metadata (includes cpu, memory, device, disk)
         healthy: Whether worker is currently healthy
         consecutive_failures: Number of consecutive heartbeat failures
-        last_heartbeat_ms: Timestamp of last successful heartbeat
+        last_heartbeat: Timestamp of last successful heartbeat
         running_tasks: Set of task IDs currently running on this worker
         committed_cpu: Total CPU cores committed to running tasks
         committed_mem: Total memory bytes committed to running tasks
@@ -839,7 +849,7 @@ class ControllerWorker:
     # Health tracking
     healthy: bool = True
     consecutive_failures: int = 0
-    last_heartbeat_ms: int = 0
+    last_heartbeat: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
 
     # Currently running tasks
     running_tasks: set[TaskId] = field(default_factory=set)
@@ -856,6 +866,28 @@ class ControllerWorker:
     def get_committed_resources(self) -> tuple[int, int, int]:
         """Return committed (cpu, memory_bytes, gpu_count) for this worker."""
         return (self.committed_cpu, self.committed_mem, self.committed_gpu)
+
+    def heartbeat_deadline(self, timeout: Duration) -> Timestamp:
+        """Compute the deadline when this worker's heartbeat will expire.
+
+        Args:
+            timeout: Heartbeat timeout duration
+
+        Returns:
+            Timestamp when the heartbeat will be considered expired
+        """
+        return self.last_heartbeat.add(timeout)
+
+    def is_heartbeat_expired(self, timeout: Duration) -> bool:
+        """Check if this worker's heartbeat has expired.
+
+        Args:
+            timeout: Heartbeat timeout duration
+
+        Returns:
+            True if the worker has not sent a heartbeat within the timeout period
+        """
+        return self.last_heartbeat.age_ms() > timeout.to_ms()
 
     def assign_task(self, task_id: TaskId, resources: cluster_pb2.ResourceSpecProto) -> None:
         """Assign a task to this worker, updating committed resources."""
@@ -916,7 +948,7 @@ class ControllerEndpoint:
         address: Network address (host:port)
         job_id: Job that registered this endpoint
         metadata: Additional key-value metadata
-        registered_at_ms: Timestamp when endpoint was registered
+        registered_at: Timestamp when endpoint was registered
     """
 
     endpoint_id: str
@@ -924,7 +956,7 @@ class ControllerEndpoint:
     address: str
     job_id: JobId
     metadata: dict[str, str] = field(default_factory=dict)
-    registered_at_ms: int = 0
+    registered_at: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
 
 
 # =============================================================================
@@ -1008,15 +1040,16 @@ class ControllerState:
 
             self._transactions.append(txn)
 
-            # Log transaction for debugging
+            # Log transaction for debugging; demote all heartbeat events to DEBUG
             if txn.actions:
-                logger.info(f"Event {type(event).__name__}: {len(txn.actions)} actions")
+                log = logger.debug if isinstance(event, WorkerHeartbeatEvent) else logger.info
+                log(f"Event {type(event).__name__}: {len(txn.actions)} actions")
                 for action in txn.actions:
-                    logger.info(f"  - {action.action} {action.entity_id} {action.details}")
+                    log(f"  - {action.action} {action.entity_id} {action.details}")
 
             return txn
 
-    def check_worker_timeouts(self, timeout_ms: int) -> set[TaskId]:
+    def check_worker_timeouts(self, timeout: Duration) -> set[TaskId]:
         """Check for timed-out workers and mark them as failed.
 
         Atomically identifies all workers that have exceeded the heartbeat timeout,
@@ -1027,18 +1060,17 @@ class ControllerState:
         with incoming heartbeats.
 
         Args:
-            timeout_ms: Maximum time since last heartbeat before declaring timeout
+            timeout: Maximum time since last heartbeat before declaring timeout
 
         Returns:
             Set of task IDs that need kill RPCs sent to workers
         """
         with self._lock:
-            current_time_ms = now_ms()
             tasks_to_kill: set[TaskId] = set()
 
             for worker in self._workers.values():
-                if worker.healthy and (current_time_ms - worker.last_heartbeat_ms) > timeout_ms:
-                    logger.warning(f"Worker {worker.worker_id} timed out (no heartbeat for {timeout_ms}ms)")
+                if worker.healthy and worker.is_heartbeat_expired(timeout):
+                    logger.warning(f"Worker {worker.worker_id} timed out (no heartbeat for {timeout.to_ms()}ms)")
                     txn = TransactionLog(
                         event=WorkerFailedEvent(
                             worker_id=worker.worker_id,
@@ -1063,7 +1095,7 @@ class ControllerState:
 
         if worker:
             # Existing worker - heartbeat update
-            worker.last_heartbeat_ms = event.timestamp_ms
+            worker.last_heartbeat = event.timestamp
             worker.healthy = True
             worker.consecutive_failures = 0
             worker.metadata = event.metadata
@@ -1075,7 +1107,7 @@ class ControllerState:
                 worker_id=event.worker_id,
                 address=event.address,
                 metadata=event.metadata,
-                last_heartbeat_ms=event.timestamp_ms,
+                last_heartbeat=event.timestamp,
                 attributes=attributes,
             )
             self._workers[event.worker_id] = worker
@@ -1083,7 +1115,7 @@ class ControllerState:
 
     def _on_worker_heartbeat(self, txn: TransactionLog, event: WorkerHeartbeatEvent) -> None:
         worker = self._workers[event.worker_id]
-        worker.last_heartbeat_ms = event.timestamp_ms
+        worker.last_heartbeat = event.timestamp
         worker.healthy = True
         worker.consecutive_failures = 0
         txn.log("heartbeat", event.worker_id)
@@ -1132,11 +1164,14 @@ class ControllerState:
         job = ControllerJob(
             job_id=event.job_id,
             request=event.request,
-            submitted_at_ms=event.timestamp_ms,
+            submitted_at=event.timestamp,
             parent_job_id=parent_job_id,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
         )
+        if job.request.HasField("scheduling_timeout") and job.request.scheduling_timeout.milliseconds > 0:
+            job.scheduling_deadline = Deadline.from_now(Duration.from_proto(job.request.scheduling_timeout))
+
         self._jobs[event.job_id] = job
         self._tasks_by_job[event.job_id] = []
 
@@ -1145,7 +1180,7 @@ class ControllerState:
         except ValueError as e:
             job.state = cluster_pb2.JOB_STATE_FAILED
             job.error = str(e)
-            job.finished_at_ms = now_ms()
+            job.finished_at = Timestamp.now()
             txn.log("job_validation_failed", event.job_id, error=str(e))
             return
 
@@ -1184,7 +1219,7 @@ class ControllerState:
 
         job.state = cluster_pb2.JOB_STATE_KILLED
         job.error = event.reason
-        job.finished_at_ms = now_ms()
+        job.finished_at = Timestamp.now()
         txn.log("job_cancelled", event.job_id, reason=event.reason)
 
     # -------------------------------------------------------------------------
@@ -1475,7 +1510,7 @@ class ControllerState:
             FAILED, KILLED, and UNSCHEDULABLE states.
         """
         job.state = new_state
-        job.finished_at_ms = now_ms()
+        job.finished_at = Timestamp.now()
 
         killed_tasks: set[TaskId] = set()
         if new_state == cluster_pb2.JOB_STATE_FAILED:
@@ -1516,7 +1551,7 @@ class ControllerState:
         (these are the tasks that need KILL RPCs).
         """
         job = self._jobs.get(job_id)
-        ts = now_ms()
+        now = Timestamp.now()
         tasks_needing_kill_rpc: set[TaskId] = set()
         tasks_to_remove_from_queue: set[TaskId] = set()
 
@@ -1529,7 +1564,7 @@ class ControllerState:
             had_worker = task.worker_id is not None
 
             task.state = cluster_pb2.TASK_STATE_KILLED
-            task.finished_at_ms = ts
+            task.finished_at = now
             task.error = error
 
             # Update job's task state counts
@@ -1586,13 +1621,13 @@ class ControllerState:
 
     def load_workers_from_config(self, configs: list[WorkerConfig]) -> None:
         """Load workers from static configuration."""
-        ts = now_ms()
+        now = Timestamp.now()
         for cfg in configs:
             worker = ControllerWorker(
                 worker_id=WorkerId(cfg.worker_id),
                 address=cfg.address,
                 metadata=cfg.metadata,
-                last_heartbeat_ms=ts,
+                last_heartbeat=now,
             )
             self.add_worker(worker)
 

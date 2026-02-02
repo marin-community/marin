@@ -16,6 +16,7 @@ edition = "2023";
 
 package iris.cluster;
 
+import "time.proto";
 import "vm.proto";
 
 // ============================================================================
@@ -70,8 +71,8 @@ message TaskStatus {
   int32 exit_code = 7;
   string error = 8;
 
-  int64 started_at_ms = 9;
-  int64 finished_at_ms = 10;
+  iris.time.Timestamp started_at = 9;
+  iris.time.Timestamp finished_at = 10;
 
   map<string, int32> ports = 11;      // Per-task port allocations
   ResourceUsage resource_usage = 12;
@@ -92,8 +93,8 @@ message TaskAttempt {
   TaskState state = 3;
   int32 exit_code = 4;
   string error = 5;
-  int64 started_at_ms = 6;
-  int64 finished_at_ms = 7;
+  iris.time.Timestamp started_at = 6;
+  iris.time.Timestamp finished_at = 7;
   bool is_worker_failure = 8;
 }
 
@@ -107,8 +108,8 @@ message ResourceUsage {
 }
 
 message BuildMetrics {
-  int64 build_started_ms = 1;
-  int64 build_finished_ms = 2;
+  iris.time.Timestamp build_started = 1;
+  iris.time.Timestamp build_finished = 2;
   bool from_cache = 3;
   string image_tag = 4;
 }
@@ -118,8 +119,8 @@ message JobStatus {
   JobState state = 2;
   int32 exit_code = 3;
   string error = 4;
-  int64 started_at_ms = 5;
-  int64 finished_at_ms = 6;
+  iris.time.Timestamp started_at = 5;
+  iris.time.Timestamp finished_at = 6;
 
   // Port allocations
   map<string, int32> ports = 7;
@@ -143,7 +144,7 @@ message JobStatus {
 
   // Job metadata from request (for dashboard display)
   string name = 25;                        // Job name from request
-  int64 submitted_at_ms = 26;              // Submission timestamp
+  iris.time.Timestamp submitted_at = 26;
 
   // Resource specification from job request (for dashboard display)
   ResourceSpecProto resources = 27;
@@ -343,8 +344,8 @@ message Controller {
     bytes bundle_blob = 7;             // Direct bundle upload (controller writes to bundle_dir)
 
     // Scheduling timeout - job fails with UNSCHEDULABLE if not scheduled within this time
-    // 0 means no timeout (wait forever)
-    int32 scheduling_timeout_seconds = 8;
+    // If not set or milliseconds=0, no timeout (wait forever)
+    iris.time.Duration scheduling_timeout = 8;
 
     // Named ports to allocate (e.g., ["http", "grpc", "actor"])
     // Worker allocates ports and injects FLUSTER_PORT_<NAME> env vars into the container
@@ -380,9 +381,9 @@ message Controller {
     // For multi-host TPU jobs, set to the number of VMs in the slice.
     int32 replicas = 20;
 
-    // Per-task timeout in seconds. Task is killed if it runs longer than this.
-    // 0 means no timeout.
-    int32 timeout_seconds = 21;
+    // Per-task timeout. Task is killed if it runs longer than this.
+    // If not set or milliseconds=0, no timeout.
+    iris.time.Duration timeout = 21;
   }
 
   message LaunchJobResponse {
@@ -431,12 +432,13 @@ message Controller {
     string worker_id = 1;
     string address = 2;              // host:port for WorkerService
     WorkerMetadata metadata = 3;
-    int64 registered_at_ms = 4;
+    iris.time.Timestamp registered_at = 4;
   }
 
   message RunningTaskEntry {
     string task_id = 1;
     int32 attempt_id = 2;
+    TaskState state = 3;
   }
 
   // A task completion reported by the worker in its heartbeat response.
@@ -448,7 +450,7 @@ message Controller {
     TaskState state = 4;
     int32 exit_code = 5;
     string error = 6;
-    int64 finished_at_ms = 7;
+    iris.time.Timestamp finished_at = 7;
     int32 attempt_id = 8;
   }
 
@@ -457,7 +459,7 @@ message Controller {
     string worker_id = 1;
     bool healthy = 2;
     int32 consecutive_failures = 3;
-    int64 last_heartbeat_ms = 4;
+    iris.time.Timestamp last_heartbeat = 4;
     repeated string running_job_ids = 5;
     string address = 6;                    // Worker RPC address (host:port)
     WorkerMetadata metadata = 7;           // Full worker metadata
@@ -469,7 +471,6 @@ message Controller {
   message ListWorkersResponse {
     repeated WorkerHealthStatus workers = 1;
   }
-
 
   message RegisterRequest {
     string address = 1;
@@ -547,7 +548,7 @@ message Controller {
 
   // --- Transactions / Actions Log ---
   message TransactionAction {
-    int64 timestamp_ms = 1;
+    iris.time.Timestamp timestamp = 1;
     string action = 2;
     string entity_id = 3;
     string details = 4;
@@ -567,6 +568,7 @@ message Controller {
     int32 task_index = 2;
     int64 start_ms = 3;
     int64 limit = 4;
+    int64 start_line = 5;  // Supports negative indexing: -1000 = last 1000 lines
   }
 
   message GetTaskLogsResponse {
@@ -600,7 +602,7 @@ message Worker {
     EnvironmentConfig environment = 6;
     string bundle_gcs_path = 7;
     ResourceSpecProto resources = 8;
-    int32 timeout_seconds = 9;
+    iris.time.Duration timeout = 9;
     repeated string ports = 10;
     int32 attempt_id = 11;
   }
@@ -617,7 +619,7 @@ message Worker {
   }
 
   message LogEntry {
-    int64 timestamp_ms = 1;
+    iris.time.Timestamp timestamp = 1;
     string source = 2;  // "stdout", "stderr", or "build"
     string data = 3;    // Log line content
   }
@@ -641,12 +643,12 @@ message Worker {
 
   message KillTaskRequest {
     string task_id = 1;
-    int32 term_timeout_ms = 2;      // Time to wait for graceful termination before SIGKILL
+    iris.time.Duration term_timeout = 2;  // Time to wait for graceful termination before SIGKILL
   }
 
   message HealthResponse {
     bool healthy = 1;
-    int64 uptime_ms = 2;
+    iris.time.Duration uptime = 2;
     int32 running_tasks = 3;        // Renamed from running_jobs
   }
 

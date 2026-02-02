@@ -19,11 +19,9 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import logging
-import os
 import time
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
-from urllib.parse import parse_qs, urlparse
 
 from fray.v2.types import JobRequest, JobStatus, ResourceConfig
 
@@ -159,58 +157,41 @@ def wait_all(
 # ---------------------------------------------------------------------------
 
 
-def _parse_client_spec(spec: str) -> Client:
-    """Parse a FRAY_CLIENT_SPEC string into a Client instance.
-
-    Supported formats:
-        "local"              → LocalClient()
-        "local?threads=4"    → LocalClient(max_threads=4)
-        "ray"                → NotImplementedError
-        "iris://host:port"   → NotImplementedError
-    """
-    from fray.v2.local import LocalClient
-
-    parsed = urlparse(spec if "://" in spec else f"fray://{spec}")
-    scheme = parsed.scheme if "://" in spec else spec.split("?")[0]
-
-    if scheme == "local":
-        params = parse_qs(parsed.query if "://" in spec else (spec.split("?", 1)[1] if "?" in spec else ""))
-        threads = int(params["threads"][0]) if "threads" in params else 8
-        return LocalClient(max_threads=threads)
-    elif scheme == "ray":
-        from fray.v2.ray.backend import RayClient
-
-        params = parse_qs(parsed.query if "://" in spec else (spec.split("?", 1)[1] if "?" in spec else ""))
-        namespace = params["namespace"][0] if "namespace" in params else None
-        return RayClient(namespace=namespace)
-    elif scheme == "iris":
-        from pathlib import Path
-
-        from fray.v2.iris_backend import FrayIrisClient
-
-        controller_address = f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname
-        params = parse_qs(parsed.query)
-        workspace = Path(params["ws"][0]) if "ws" in params else None
-        return FrayIrisClient(controller_address, workspace=workspace)
-    else:
-        raise ValueError(f"Unknown FRAY_CLIENT_SPEC scheme: {scheme!r}")
-
-
 def current_client() -> Client:
     """Return the current fray Client.
 
     Resolution order:
         1. Explicitly set client (via set_current_client)
-        2. FRAY_CLIENT_SPEC environment variable
-        3. LocalClient() default
+        2. Auto-detect Iris environment (get_iris_ctx() returns context)
+        3. Auto-detect Ray environment (ray.is_initialized())
+        4. LocalClient() default
     """
     client = _current_client_var.get()
     if client is not None:
         return client
 
-    spec = os.environ.get("FRAY_CLIENT_SPEC")
-    if spec is not None:
-        return _parse_client_spec(spec)
+    # Auto-detect Iris environment
+    try:
+        from iris.client import get_iris_ctx
+
+        iris_ctx = get_iris_ctx()
+        if iris_ctx is not None:
+            from fray.v2.iris_backend import FrayIrisClient
+
+            return FrayIrisClient.from_iris_client(iris_ctx.client)
+    except ImportError:
+        pass  # Iris not installed
+
+    # Auto-detect Ray environment
+    try:
+        import ray
+
+        if ray.is_initialized():
+            from fray.v2.ray.backend import RayClient
+
+            return RayClient()
+    except ImportError:
+        pass  # Ray not installed
 
     from fray.v2.local import LocalClient
 

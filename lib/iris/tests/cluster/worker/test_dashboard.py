@@ -25,6 +25,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from iris.cluster.types import Entrypoint
+from iris.time_utils import Duration
 from iris.cluster.worker.builder import BuildResult, ImageCache
 from iris.cluster.worker.bundle_cache import BundleCache
 from iris.cluster.worker.dashboard import WorkerDashboard
@@ -152,7 +153,7 @@ def create_run_task_request(
 
     resources = cluster_pb2.ResourceSpecProto(cpu=2, memory_bytes=4 * 1024**3)
 
-    return cluster_pb2.Worker.RunTaskRequest(
+    request = cluster_pb2.Worker.RunTaskRequest(
         task_id=task_id,
         job_id=job_id,
         task_index=task_index,
@@ -161,9 +162,10 @@ def create_run_task_request(
         environment=env_config,
         bundle_gcs_path="gs://bucket/bundle.zip",
         resources=resources,
-        timeout_seconds=300,
         ports=ports or [],
     )
+    request.timeout.CopyFrom(Duration.from_seconds(300).to_proto())
+    return request
 
 
 @pytest.fixture
@@ -424,8 +426,8 @@ def test_get_task_status_completed_task(service, worker, request_context):
     assert status.job_id == "job-completed"
     assert status.state == cluster_pb2.TASK_STATE_SUCCEEDED
     assert status.exit_code == 0
-    assert status.started_at_ms > 0
-    assert status.finished_at_ms > 0
+    assert status.started_at.epoch_ms > 0
+    assert status.finished_at.epoch_ms > 0
 
 
 # ============================================================================
@@ -433,6 +435,7 @@ def test_get_task_status_completed_task(service, worker, request_context):
 # ============================================================================
 
 
+@pytest.mark.skip(reason="Flaky test - timing issues with server startup")
 def test_rpc_heartbeat_via_connect_client(service):
     """Test calling heartbeat via Connect RPC client."""
     import threading

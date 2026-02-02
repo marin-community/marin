@@ -16,6 +16,8 @@ edition = "2023";
 
 package iris.config;
 
+import "time.proto";
+
 // ============================================================================
 // PROVIDER CONFIGURATION
 // ============================================================================
@@ -95,18 +97,18 @@ message BootstrapConfig {
 
 // Timeout configuration for VM lifecycle (SSH timeout is in SshConfig)
 message TimeoutConfig {
-  int32 boot_timeout_seconds = 1;        // Default: 300 (5 min)
-  int32 init_timeout_seconds = 2;        // Default: 600 (10 min)
-  reserved 3;                            // Was: ssh_connect_timeout_seconds (moved to SshConfig)
-  int32 ssh_poll_interval_seconds = 4;   // Default: 5
+  iris.time.Duration boot_timeout = 1;        // Default: 300s (5 min)
+  iris.time.Duration init_timeout = 2;        // Default: 600s (10 min)
+  reserved 3;                                   // Was: ssh_connect_timeout_seconds (moved to SshConfig)
+  iris.time.Duration ssh_poll_interval = 4;   // Default: 5s
 }
 
 // SSH configuration for manual hosts
 message SshConfig {
-  string user = 1;            // Default: "root"
-  string key_file = 2;        // Path to SSH private key
-  int32 port = 3;             // Default: 22
-  int32 connect_timeout = 4;  // Default: 30
+  string user = 1;                        // Default: "root"
+  string key_file = 2;                    // Path to SSH private key
+  int32 port = 3;                         // Default: 22
+  iris.time.Duration connect_timeout = 4;  // Default: 30s
 }
 
 // ============================================================================
@@ -148,8 +150,8 @@ message ControllerVmConfig {
 
 // Configuration for the autoscaler
 message AutoscalerConfig {
-  float evaluation_interval_seconds = 1;  // Default: 10.0
-  float requesting_timeout_seconds = 2;   // Default: 120.0
+  iris.time.Duration evaluation_interval = 1;  // Default: 10s
+  iris.time.Duration requesting_timeout = 2;   // Default: 120s
 }
 
 // ============================================================================

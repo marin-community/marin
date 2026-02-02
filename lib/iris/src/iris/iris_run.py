@@ -37,6 +37,7 @@ from iris.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
 from iris.cluster.vm.debug import controller_tunnel
 from iris.rpc import cluster_pb2
+from iris.time_utils import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -290,6 +291,7 @@ def run_iris_job(
                 max_retries=max_retries,
                 timeout=timeout,
                 wait=wait,
+                extras=extras,
             )
 
 
@@ -331,7 +333,7 @@ def _submit_and_wait_job(
         environment=EnvironmentSpec(env_vars=env_vars, extras=extras or []),
         replicas=replicas,
         max_retries_failure=max_retries,
-        timeout_seconds=timeout,
+        timeout=Duration.from_seconds(timeout) if timeout else None,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
@@ -462,11 +464,7 @@ def main(
     """Submit jobs to Iris clusters."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-    # Validate command format
-    if not cmd or cmd[0] != "--":
-        raise click.UsageError("Command must start with --")
-
-    command = list(cmd[1:])
+    command = list(cmd)
     if not command:
         raise click.UsageError("No command provided after --")
 

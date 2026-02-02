@@ -20,7 +20,6 @@ Integration tests that need a running cluster are marked with @pytest.mark.iris.
 
 import pickle
 
-
 from fray.v2.iris_backend import (
     IrisActorHandle,
     convert_constraints,
@@ -180,34 +179,3 @@ class TestIrisActorHandlePickle:
         data = pickle.dumps(handle)
         restored = pickle.loads(data)
         assert restored._client is None
-
-
-# ---------------------------------------------------------------------------
-# FRAY_CLIENT_SPEC parsing for iris://
-# ---------------------------------------------------------------------------
-
-
-class TestIrisClientSpec:
-    def test_iris_spec_parses(self):
-        """Verify iris:// spec creates FrayIrisClient (mocked — no real controller)."""
-        from unittest.mock import patch
-
-        with patch("fray.v2.iris_backend.IrisClientLib") as mock_iris:
-            from fray.v2.client import _parse_client_spec
-            from fray.v2.iris_backend import FrayIrisClient
-
-            client = _parse_client_spec("iris://controller:10000")
-            assert isinstance(client, FrayIrisClient)
-            mock_iris.remote.assert_called_once_with("controller:10000", workspace=None)
-
-    def test_iris_spec_with_workspace(self):
-        from pathlib import Path
-        from unittest.mock import patch
-
-        with patch("fray.v2.iris_backend.IrisClientLib") as mock_iris:
-            from fray.v2.client import _parse_client_spec
-            from fray.v2.iris_backend import FrayIrisClient
-
-            client = _parse_client_spec("iris://controller:10000?ws=/tmp/my-workspace")
-            assert isinstance(client, FrayIrisClient)
-            mock_iris.remote.assert_called_once_with("controller:10000", workspace=Path("/tmp/my-workspace"))
