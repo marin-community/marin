@@ -722,10 +722,14 @@ class Controller:
                 if self._server:
                     self._server.should_exit = True
 
-            watch_thread = threading.Thread(target=_watch_stop, daemon=True, name="server-stop-bridge")
+            watch_thread = threading.Thread(target=_watch_stop, daemon=False, name="server-stop-bridge")
             watch_thread.start()
 
-            self._server.run()
+            try:
+                self._server.run()
+            finally:
+                # Ensure bridge thread exits (should be immediate since stop_event was set)
+                watch_thread.join(timeout=1.0)
         except Exception as e:
             logger.exception("Controller server error: %s", e)
 

@@ -223,8 +223,12 @@ class ControllerProtocol(Protocol):
         """Start controller, return address. Idempotent - returns existing if healthy."""
         ...
 
-    def stop(self) -> None:
-        """Stop controller."""
+    def stop(self, timeout: float = 60.0) -> None:
+        """Stop controller.
+
+        Args:
+            timeout: Maximum time to wait for shutdown (default 60s).
+        """
         ...
 
     def restart(self) -> str:
@@ -496,8 +500,12 @@ class GcpController:
         logger.info("Controller started successfully at %s", address)
         return address
 
-    def stop(self) -> None:
-        """Terminate controller GCE VM."""
+    def stop(self, timeout: float = 60.0) -> None:
+        """Terminate controller GCE VM.
+
+        Args:
+            timeout: Ignored for GCP (VM termination is asynchronous).
+        """
         self._delete_vm()
 
     def restart(self) -> str:
@@ -845,8 +853,12 @@ class ManualController:
         logger.info("Controller started at %s", self.address)
         return self.address
 
-    def stop(self) -> None:
-        """Stop controller via SSH."""
+    def stop(self, timeout: float = 60.0) -> None:
+        """Stop controller via SSH.
+
+        Args:
+            timeout: Maximum time to wait for shutdown (default 60s).
+        """
         if not self._bootstrapped:
             logger.info("Controller was not bootstrapped by us, skipping stop")
             return
@@ -1004,9 +1016,14 @@ class LocalController:
         self._controller.start()
         return self._controller.url
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 60.0) -> None:
+        """Stop local controller.
+
+        Args:
+            timeout: Maximum time to wait for shutdown (default 60s).
+        """
         if self._controller:
-            self._controller.stop()
+            self._controller.stop(timeout=timeout)
             self._controller = None
         if self._temp_dir:
             self._temp_dir.cleanup()

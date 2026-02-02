@@ -101,7 +101,7 @@ class ClusterManager:
             timeout: Maximum time to wait for shutdown (default 60s).
         """
         if self._controller:
-            self._controller.stop()
+            self._controller.stop(timeout=timeout)
             self._controller = None
             logger.info("Controller stopped")
 

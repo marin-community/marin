@@ -211,10 +211,14 @@ class Worker:
                 if self._server:
                     self._server.should_exit = True
 
-            watch_thread = threading.Thread(target=_watch_stop, daemon=True, name="server-stop-bridge")
+            watch_thread = threading.Thread(target=_watch_stop, daemon=False, name="server-stop-bridge")
             watch_thread.start()
 
-            self._server.run()
+            try:
+                self._server.run()
+            finally:
+                # Ensure bridge thread exits (should be immediate since stop_event was set)
+                watch_thread.join(timeout=1.0)
         except Exception as e:
             print(f"Worker server error: {e}")
 
@@ -454,11 +458,15 @@ class Worker:
             stop_event.wait()
             attempt.should_stop = True
 
-        watch_thread = threading.Thread(target=_watch_stop, daemon=True, name=f"task-stop-bridge-{attempt.task_id}")
+        watch_thread = threading.Thread(target=_watch_stop, daemon=False, name=f"task-stop-bridge-{attempt.task_id}")
         watch_thread.start()
 
-        # Run the task attempt
-        attempt.run()
+        try:
+            # Run the task attempt
+            attempt.run()
+        finally:
+            # Ensure bridge thread exits (should be immediate since stop_event was set)
+            watch_thread.join(timeout=1.0)
 
     def get_task(self, task_id: str) -> TaskInfo | None:
         """Get a task by ID.
