@@ -21,7 +21,6 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import List, Optional
 
 import equinox as eqx
@@ -60,6 +59,126 @@ except ImportError as e:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_checkpoint_name(checkpoint_path: Optional[str], hf_checkpoint: Optional[str]) -> str:
+    """Extract a clean name from checkpoint path for use in filenames.
+
+    Converts paths like:
+    - gs://marin-us-east1/checkpoints/vlm-model-name/hf/step-12345/ -> us_east1_vlm_model_name_step_12345
+    - gs://marin-us-central1/hf/model-name/step-1000/ -> us_central1_model_name_step_1000
+    - Qwen/Qwen2-VL-7B -> Qwen_Qwen2_VL_7B
+
+    Special characters are replaced with underscores.
+    """
+    import re
+
+    path = checkpoint_path or hf_checkpoint or "unknown"
+
+    # Remove trailing slashes
+    path = path.rstrip("/")
+
+    # For GCS paths, try to extract meaningful parts
+    if path.startswith("gs://"):
+        # Remove gs:// prefix and bucket name
+        parts = path.split("/")
+        # parts[0] is "gs:", parts[1] is "", parts[2] is bucket name
+        bucket_name = parts[2] if len(parts) > 2 else ""
+
+        # Extract zone from bucket name (e.g., "marin-us-east1" -> "us-east1")
+        zone_prefix = ""
+        if bucket_name.startswith("marin-"):
+            zone_prefix = bucket_name[len("marin-"):]  # e.g., "us-east1"
+
+        # Find 'hf' directory if present and take everything after it
+        if "hf" in parts:
+            hf_idx = parts.index("hf")
+            meaningful_parts = parts[hf_idx + 1:]
+        else:
+            # Otherwise take last 2-3 meaningful parts
+            meaningful_parts = [p for p in parts[-3:] if p and p not in ("checkpoints", "hf")]
+
+        path = "_".join([zone_prefix] + meaningful_parts) if zone_prefix else "_".join(meaningful_parts)
+    else:
+        # For HF model names like "Qwen/Qwen2-VL-7B", just use the path
+        path = path.split("/")[-1] if "/" in path else path
+
+    # Replace special characters with underscores
+    name = re.sub(r"[^a-zA-Z0-9_]", "_", path)
+    # Collapse multiple underscores
+    name = re.sub(r"_+", "_", name)
+    # Remove leading/trailing underscores
+    name = name.strip("_")
+
+    # Truncate if too long (filesystem limits)
+    if len(name) > 100:
+        name = name[:100]
+
+    return name or "unknown_checkpoint"
+
+
+def _get_checkpoint_path(output_dir: str, checkpoint_name: str, benchmark: str) -> str:
+    """Get the checkpoint file path for a given benchmark."""
+    return f"{output_dir.rstrip('/')}/checkpoints/{checkpoint_name}_{benchmark}_checkpoint.json"
+
+
+def _save_eval_checkpoint(
+    checkpoint_path: str,
+    benchmark: str,
+    results: dict,
+    processed_indices: list,
+    total_samples: int,
+):
+    """Save evaluation checkpoint to support resume."""
+    checkpoint_data = {
+        "benchmark": benchmark,
+        "results": {str(k): v for k, v in results.items()},  # Convert keys to strings for JSON
+        "processed_indices": [int(idx) for idx in processed_indices],
+        "total_samples": total_samples,
+    }
+
+    fs, plain_path = fsspec.core.url_to_fs(checkpoint_path)
+    # Ensure parent directory exists
+    parent_dir = "/".join(plain_path.rsplit("/", 1)[:-1])
+    if parent_dir:
+        fs.makedirs(parent_dir, exist_ok=True)
+
+    with fs.open(plain_path, "w") as f:
+        json.dump(checkpoint_data, f, indent=2)
+
+    logger.info(f"Checkpoint saved: {checkpoint_path} ({len(processed_indices)}/{total_samples} samples)")
+
+
+def _load_eval_checkpoint(checkpoint_path: str) -> Optional[dict]:
+    """Load evaluation checkpoint if it exists."""
+    try:
+        fs, plain_path = fsspec.core.url_to_fs(checkpoint_path)
+        if not fs.exists(plain_path):
+            return None
+
+        with fs.open(plain_path, "r") as f:
+            checkpoint_data = json.load(f)
+
+        # Convert string keys back to integers
+        checkpoint_data["results"] = {int(k): v for k, v in checkpoint_data["results"].items()}
+        checkpoint_data["processed_indices"] = set(checkpoint_data["processed_indices"])
+
+        logger.info(f"Loaded checkpoint: {checkpoint_path} ({len(checkpoint_data['processed_indices'])}/{checkpoint_data['total_samples']} samples)")
+        return checkpoint_data
+    except Exception as e:
+        logger.warning(f"Failed to load checkpoint {checkpoint_path}: {e}")
+        return None
+
+
+def _delete_eval_checkpoint(checkpoint_path: str):
+    """Delete checkpoint file after successful completion."""
+    try:
+        fs, plain_path = fsspec.core.url_to_fs(checkpoint_path)
+        if fs.exists(plain_path):
+            fs.rm(plain_path)
+            logger.info(f"Deleted checkpoint: {checkpoint_path}")
+    except Exception as e:
+        logger.warning(f"Failed to delete checkpoint {checkpoint_path}: {e}")
 
 
 # ============================================================================
@@ -326,6 +445,12 @@ def main(config: EvalVLMEvalKitConfig):
             os.makedirs(work_dir, exist_ok=True)
         model_name = "levanter_vlm"
 
+        # Get checkpoint name for this evaluation run
+        eval_checkpoint_name = _extract_checkpoint_name(
+            config.checkpoint_path,
+            str(config.hf_checkpoint) if config.hf_checkpoint else None
+        )
+
         all_results = {}
         all_predictions = {}  # Store detailed predictions for each benchmark
         for benchmark in config.benchmarks:
@@ -344,8 +469,18 @@ def main(config: EvalVLMEvalKitConfig):
 
                 # Run inference in batches (similar to vlm_eval_harness.py:600-705)
                 results = {}
+                processed_indices = set()
                 batch_size = max(1, config.vlm_batch_size)
                 num_batches = (len(data) + batch_size - 1) // batch_size
+
+                # Try to load checkpoint for resume
+                checkpoint_path = _get_checkpoint_path(work_dir, eval_checkpoint_name, benchmark)
+                if config.auto_resume:
+                    checkpoint_data = _load_eval_checkpoint(checkpoint_path)
+                    if checkpoint_data is not None:
+                        results = checkpoint_data["results"]
+                        processed_indices = checkpoint_data["processed_indices"]
+                        logger.info(f"Resuming {benchmark} from checkpoint: {len(processed_indices)}/{len(data)} samples already processed")
 
                 for batch_idx in tqdm(range(num_batches), desc=f"Evaluating {benchmark} (batch_size={batch_size})"):
                     batch_start = batch_idx * batch_size
@@ -358,6 +493,10 @@ def main(config: EvalVLMEvalKitConfig):
 
                     for i, (_, item) in enumerate(batch_data.iterrows()):
                         idx = item['index']
+
+                        # Skip already processed indices (for resume)
+                        if idx in processed_indices:
+                            continue
 
                         # Build prompt
                         if hasattr(vlm_model, 'use_custom_prompt') and vlm_model.use_custom_prompt(dataset_name):
@@ -374,6 +513,7 @@ def main(config: EvalVLMEvalKitConfig):
                         except Exception as e:
                             logger.error(f"Error creating request for index {idx}: {e}")
                             results[idx] = ""
+                            processed_indices.add(idx)
 
                     # Generate for batch
                     if vlm_requests:
@@ -391,11 +531,13 @@ def main(config: EvalVLMEvalKitConfig):
                                     generated_tokens = result.tokens[i]
                                     text = vlm_model.tokenizer.decode(generated_tokens, skip_special_tokens=True)
                                     results[idx] = text.strip()
+                                    processed_indices.add(idx)
                                     if not text.strip():
                                         logger.warning(f"Empty generation for index {idx}: generated_len={len(generated_tokens)}")
                                 else:
                                     logger.warning(f"No tokens for index {idx}: result.tokens={result.tokens is not None}, i={i}, num_tokens={num_tokens}")
                                     results[idx] = ""
+                                    processed_indices.add(idx)
                         except Exception as e:
                             logger.error(f"Error during batch generation: {e}")
                             import traceback
@@ -403,12 +545,23 @@ def main(config: EvalVLMEvalKitConfig):
                             for idx in batch_indices:
                                 if idx not in results:
                                     results[idx] = ""
+                                processed_indices.add(idx)
                     else:
                         logger.warning(f"Batch {batch_idx}: No valid VLM requests created")
 
-                    processed = batch_end
+                    processed = len(processed_indices)
                     if processed % 50 == 0 or processed == len(data):
                         logger.info(f"Processed {processed}/{len(data)} samples")
+
+                    # Save checkpoint periodically
+                    if config.checkpoint_interval > 0 and processed % config.checkpoint_interval == 0:
+                        _save_eval_checkpoint(
+                            checkpoint_path=checkpoint_path,
+                            benchmark=benchmark,
+                            results=results,
+                            processed_indices=list(processed_indices),
+                            total_samples=len(data),
+                        )
 
                 # Save predictions to Excel file
                 result_file = os.path.join(work_dir, f'{model_name}_{dataset_name}.xlsx')
@@ -435,6 +588,9 @@ def main(config: EvalVLMEvalKitConfig):
                 all_results[benchmark] = eval_result
                 logger.info(f"{benchmark} results: {eval_result}")
 
+                # Delete checkpoint after successful completion
+                _delete_eval_checkpoint(checkpoint_path)
+
                 # Log to tracker
                 if isinstance(eval_result, dict):
                     for metric_name, value in eval_result.items():
@@ -448,6 +604,18 @@ def main(config: EvalVLMEvalKitConfig):
                 import traceback
                 traceback.print_exc()
                 all_results[benchmark] = {"error": str(e)}
+                # Save checkpoint on error for resume
+                try:
+                    if config.checkpoint_interval > 0 and results and processed_indices:
+                        _save_eval_checkpoint(
+                            checkpoint_path=checkpoint_path,
+                            benchmark=benchmark,
+                            results=results,
+                            processed_indices=list(processed_indices),
+                            total_samples=len(data),
+                        )
+                except NameError:
+                    pass  # Variables not defined yet
 
         # Print summary
         print("\n" + "=" * 60)
@@ -468,13 +636,14 @@ def main(config: EvalVLMEvalKitConfig):
         # Save results (supports both local and GCS paths)
         output_dir = config.output_dir or "./vlm_evalkit_results"
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Use checkpoint name instead of timestamp for better tracking and resume support
+        checkpoint_name = _extract_checkpoint_name(config.checkpoint_path, str(config.hf_checkpoint) if config.hf_checkpoint else None)
         benchmark_names = "_".join(config.benchmarks[:3])
         if len(config.benchmarks) > 3:
             benchmark_names += f"_and_{len(config.benchmarks) - 3}_more"
 
         results_data = {
-            "timestamp": timestamp,
+            "checkpoint_name": checkpoint_name,
             "checkpoint": config.checkpoint_path or str(config.hf_checkpoint),
             "benchmarks": config.benchmarks,
             "results": all_results,
@@ -514,7 +683,7 @@ def main(config: EvalVLMEvalKitConfig):
         }
 
         # Use fsspec to support both local and GCS paths
-        results_filename = f"results_{benchmark_names}_{timestamp}.json"
+        results_filename = f"results_{benchmark_names}_{checkpoint_name}.json"
         fs, plain_path = fsspec.core.url_to_fs(output_dir)
         fs.makedirs(plain_path, exist_ok=True)
         results_file = os.path.join(plain_path, results_filename)
@@ -529,7 +698,7 @@ def main(config: EvalVLMEvalKitConfig):
 
         # Save samples to separate JSON file (like lm-eval-harness format)
         if all_predictions:
-            samples_filename = f"samples_{benchmark_names}_{timestamp}.json"
+            samples_filename = f"samples_{benchmark_names}_{checkpoint_name}.json"
             samples_file = os.path.join(plain_path, samples_filename)
             with fs.open(samples_file, "w") as f:
                 json.dump(all_predictions, f, indent=2, default=str)
