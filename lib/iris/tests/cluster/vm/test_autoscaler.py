@@ -1209,6 +1209,8 @@ class TestAutoscalerWaterfallEndToEnd:
         assert len(decisions) == 1
         assert decisions[0].scale_group == "primary"
 
+        autoscaler.shutdown()
+
     def test_backoff_cascades_to_fallback(self):
         """Generic failure triggers backoff, which cascades to fallback."""
 
@@ -1925,14 +1927,14 @@ class TestAutoscalerAsyncScaleUp:
             for vm in vm_group.vms():
                 original_stop = vm.stop
 
-                def make_stop_wrapper(vm_id):
+                def make_stop_wrapper(vm_id, orig_stop):
                     def stop_wrapper():
                         stop_called.append(vm_id)
-                        return original_stop()
+                        return orig_stop()
 
                     return stop_wrapper
 
-                vm.stop = make_stop_wrapper(vm.info.vm_id)
+                vm.stop = make_stop_wrapper(vm.info.vm_id, original_stop)
 
         # Shutdown should call stop() on all VMs
         autoscaler.shutdown()

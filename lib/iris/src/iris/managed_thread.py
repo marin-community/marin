@@ -12,14 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ManagedThread and ThreadRegistry for structured thread lifecycle management.
+"""ManagedThread and ThreadContainer for structured thread lifecycle management.
 
 ManagedThread wraps threading.Thread with an integrated stop event, ensuring
-threads are non-daemon and can be cleanly shut down. ThreadRegistry tracks
-multiple ManagedThreads for bulk shutdown.
-
-Components use the global registry via get_thread_registry(). Tests swap in
-a fresh registry via set_thread_registry() and call shutdown() in teardown.
+threads are non-daemon and can be cleanly shut down. ThreadContainer provides
+component-scoped thread groups with hierarchical composition.
 """
 
 import logging
@@ -61,6 +58,9 @@ class ManagedThread:
 
     def stop(self) -> None:
         self._stop_event.set()
+        print("STOPPED THREAD", self._thread.name)
+        self._thread.join()
+        print("JOINED THREAD", self._thread.name)
 
     def join(self, timeout: float | None = None) -> None:
         self._thread.join(timeout=timeout)
@@ -76,50 +76,6 @@ class ManagedThread:
     @property
     def name(self) -> str | None:
         return self._thread.name
-
-
-class ThreadRegistry:
-    """Tracks ManagedThreads for bulk shutdown."""
-
-    def __init__(self) -> None:
-        self._threads: list[ManagedThread] = []
-        self._lock = threading.Lock()
-
-    def spawn(self, target: Callable[..., Any], *, name: str | None = None, args: tuple = ()) -> ManagedThread:
-        """Create, register, and start a ManagedThread."""
-        thread = ManagedThread(target=target, name=name, args=args)
-        with self._lock:
-            self._threads.append(thread)
-        thread.start()
-        return thread
-
-    def shutdown(self, timeout: float | None = None) -> None:
-        """Stop all threads and block until they exit.
-
-        Signals all threads to stop, then joins each. If timeout is None
-        (the default), blocks indefinitely — rely on pytest-timeout to
-        catch hangs. If timeout is set, uses a deadline-based budget.
-        """
-        with self._lock:
-            threads = list(self._threads)
-
-        for thread in threads:
-            thread.stop()
-
-        if timeout is None:
-            for thread in threads:
-                thread.join()
-        else:
-            deadline = time.monotonic() + timeout
-            for thread in threads:
-                remaining = max(0, deadline - time.monotonic())
-                thread.join(timeout=remaining)
-
-    def __enter__(self) -> "ThreadRegistry":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.shutdown()
 
 
 class ThreadContainer:
@@ -145,21 +101,24 @@ class ThreadContainer:
 
     def spawn_server(self, server: Any, *, name: str) -> ManagedThread:
         def _run(stop_event: threading.Event) -> None:
-            server_done = threading.Event()
+            import sys
+
+            print("RUNNING SERVER", server, name, file=sys.stderr)
 
             def _watch_stop() -> None:
-                while not server_done.is_set():
-                    if stop_event.wait(timeout=0.25):
-                        server.should_exit = True
-                        return
+                while not stop_event.is_set():
+                    time.sleep(0.25)
+
+                print("STOPPING SERVER", server, name, file=sys.stderr)
+                server.should_exit = True
+                print("STOPPED SERVER", server, name, file=sys.stderr)
 
             watcher = threading.Thread(target=_watch_stop, name=f"{name}-stop-watcher")
             watcher.start()
-            try:
-                server.run()
-            finally:
-                server_done.set()
-                watcher.join()
+            server.run()
+            print("SERVER DONE", server, name, file=sys.stderr)
+            assert server.should_exit
+            watcher.join()
 
         return self.spawn(target=_run, name=name)
 
@@ -177,6 +136,11 @@ class ThreadContainer:
             self._children.append(child)
         return child
 
+    @property
+    def is_alive(self) -> bool:
+        """True if any thread in this container or its children is still running."""
+        return any(t.is_alive for t in self._threads) or any(c.is_alive for c in self._children)
+
     def alive_threads(self) -> list[ManagedThread]:
         """Return threads that are still alive, including those in child containers."""
         alive = [t for t in self._threads if t.is_alive]
@@ -192,12 +156,14 @@ class ThreadContainer:
             thread.join()
 
     def stop(self, timeout: float = 5.0) -> None:
-        """Stop children first, then executors, then own threads."""
+        """Stop children first, then own threads, then executors.
+
+        Threads are stopped before executors because threads may submit work
+        to executors; signaling threads to exit first avoids
+        'cannot schedule new futures after shutdown' errors.
+        """
         for child in self._children:
             child.stop(timeout=timeout)
-
-        for executor in self._executors:
-            executor.shutdown(wait=True)
 
         for thread in self._threads:
             thread.stop()
@@ -206,54 +172,9 @@ class ThreadContainer:
             remaining = max(0, deadline - time.monotonic())
             thread.join(timeout=remaining)
 
+        for thread in self._threads:
+            if thread.is_alive:
+                logger.warning("Thread %s did not exit within %s seconds", thread.name, timeout)
 
-def spawn_server(server: Any, *, name: str) -> ManagedThread:
-    """Spawn a uvicorn Server as a managed thread in the global registry.
-
-    Bridges the ManagedThread stop_event to server.should_exit so the server
-    shuts down cleanly when the registry signals stop.
-    """
-
-    def _run(stop_event: threading.Event) -> None:
-        # Poll stop_event in a local non-daemon thread that exits once
-        # either the stop_event fires or the server finishes on its own.
-        server_done = threading.Event()
-
-        def _watch_stop() -> None:
-            # Wait for whichever comes first: stop requested or server exited.
-            while not server_done.is_set():
-                if stop_event.wait(timeout=0.25):
-                    server.should_exit = True
-                    return
-
-        watcher = threading.Thread(target=_watch_stop, name=f"{name}-stop-watcher")
-        watcher.start()
-        try:
-            server.run()
-        finally:
-            server_done.set()
-            watcher.join()
-
-    return get_thread_registry().spawn(target=_run, name=name)
-
-
-# ---------------------------------------------------------------------------
-# Global registry
-# ---------------------------------------------------------------------------
-
-_global_registry = ThreadRegistry()
-_registry_lock = threading.Lock()
-
-
-def get_thread_registry() -> ThreadRegistry:
-    """Return the process-wide ThreadRegistry."""
-    return _global_registry
-
-
-def set_thread_registry(registry: ThreadRegistry) -> ThreadRegistry:
-    """Replace the global registry. Returns the previous one (for restore)."""
-    global _global_registry
-    with _registry_lock:
-        old = _global_registry
-        _global_registry = registry
-    return old
+        for executor in self._executors:
+            executor.shutdown(wait=True)

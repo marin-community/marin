@@ -1046,7 +1046,7 @@ class LocalController:
 
 def create_controller(
     config: config_pb2.IrisClusterConfig,
-    threads: "ThreadContainer | None" = None,
+    threads: ThreadContainer | None = None,
 ) -> ControllerProtocol:
     """Factory function to create appropriate controller type.
 

@@ -31,7 +31,6 @@ from typing import Any, NewType
 
 import cloudpickle
 import uvicorn
-
 from connectrpc.request import RequestContext
 
 from iris.managed_thread import ThreadContainer
@@ -237,7 +236,7 @@ class ActorServer:
 
     def stop(self) -> None:
         """Stop the actor server and wait for threads to exit."""
-        self._threads.stop(timeout=5.0)
+        self._threads.stop()
 
     def shutdown(self) -> None:
         """Deprecated: use stop() instead."""

@@ -18,7 +18,7 @@ import logging
 import threading
 from collections import defaultdict
 from collections.abc import Sequence
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, as_completed
 from dataclasses import dataclass, field
 from time import sleep
 from typing import Protocol
@@ -297,10 +297,11 @@ class Controller:
         self._dispatch: dict[WorkerId, WorkerDispatch] = {}
         self._dispatch_lock = threading.Lock()
 
-        # Thread pool for parallel heartbeat dispatch
-        self._dispatch_executor = ThreadPoolExecutor(
+        # Thread pool for parallel heartbeat dispatch, owned by the ThreadContainer
+        # so it is shut down automatically during stop().
+        self._dispatch_executor = self._threads.spawn_executor(
             max_workers=config.max_dispatch_parallelism,
-            thread_name_prefix="dispatch",
+            prefix="dispatch",
         )
 
         # Autoscaler (passed in, configured in start() if provided)
@@ -353,13 +354,10 @@ class Controller:
         self._wake_event.set()
         self._heartbeat_event.set()
 
-        # Stop all managed threads (signals stop_event + joins; server stop is
-        # handled by spawn_server's stop_event bridge)
+        # Stop all managed threads and executors (signals stop_event + joins;
+        # server stop is handled by spawn_server's stop_event bridge, executor
+        # shutdown is handled by ThreadContainer)
         self._threads.stop()
-
-        # Shutdown dispatch executor - wait for in-flight requests to complete
-        # Don't cancel futures to avoid httpx logging to closed stdout/stderr
-        self._dispatch_executor.shutdown(wait=True, cancel_futures=False)
 
         # Shutdown autoscaler
         if self._autoscaler:

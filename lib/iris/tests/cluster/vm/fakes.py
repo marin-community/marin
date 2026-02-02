@@ -94,6 +94,9 @@ class FakeVm:
         self._boot_delay_ms = boot_delay_ms
         self._init_delay_ms = init_delay_ms
 
+    def stop(self) -> None:
+        """No-op: FakeVm has no background threads to stop."""
+
     def tick(self, ts: int) -> None:
         """Process state transitions based on elapsed time."""
         if self.info.state == vm_pb2.VM_STATE_BOOTING:

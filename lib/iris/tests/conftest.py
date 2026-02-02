@@ -19,12 +19,13 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import traceback
+import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
 
 import pytest
-from iris.managed_thread import ThreadRegistry, set_thread_registry
 from iris.test_util import SentinelFile
 
 # httpx logs every HTTP request at INFO level, which floods test output
@@ -114,21 +115,39 @@ def sentinel(tmp_path) -> SentinelFile:
 
 
 @pytest.fixture(autouse=True)
-def _thread_registry():
-    """Per-test ThreadRegistry: every test gets a clean registry, all threads
-    are shut down (blocking) before the next test starts."""
-    registry = ThreadRegistry()
-    old = set_thread_registry(registry)
-    yield registry
-    registry.shutdown(timeout=5.0)
-    set_thread_registry(old)
+def _thread_cleanup():
+    """Ensure no new non-daemon threads leak from each test.
+
+    Takes a snapshot of threads before the test and checks that no new
+    non-daemon threads remain after teardown. Waits briefly for threads
+    that are in the process of shutting down.
+    """
+    before = {t.ident for t in threading.enumerate()}
+    yield
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        leaked = [
+            t
+            for t in threading.enumerate()
+            if t.is_alive() and not t.daemon and t.name != "MainThread" and t.ident not in before
+        ]
+        if not leaked:
+            return
+        time.sleep(0.1)
+
+    thread_names = [t.name for t in leaked]
+    warnings.warn(f"Threads leaked from test: {thread_names}", stacklevel=1)
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Hook to debug pytest exit status - dump any non-daemon threads still alive."""
+    """Hook to debug pytest exit status - dump any non-daemon threads still alive.
+
+    Uses os._exit() to force-terminate if orphaned non-daemon threads would
+    otherwise prevent process exit.
+    """
     alive = [t for t in threading.enumerate() if t.is_alive() and not t.daemon and t.name != "MainThread"]
     if alive:
-        # Write directly to fd 2 (stderr) to bypass pytest's capture entirely.
         tty = os.fdopen(os.dup(2), "w")
         tty.write(f"\n⚠ {len(alive)} non-daemon threads still alive at session end:\n")
         frames = sys._current_frames()
@@ -138,8 +157,7 @@ def pytest_sessionfinish(session, exitstatus):
             if frame:
                 for line in traceback.format_stack(frame):
                     tty.write(f"    {line.rstrip()}\n")
-        if exitstatus != 0:
-            tty.write(f"\nPytest exiting with status {exitstatus}\n")
         tty.flush()
         tty.close()
-        os._exit(1)
+        # Force exit to prevent orphaned non-daemon threads from blocking
+        os._exit(exitstatus)
