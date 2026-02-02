@@ -40,8 +40,16 @@ class ManagedThread:
 
     def __init__(self, target: Callable[..., Any], *, name: str | None = None, args: tuple = ()):
         self._stop_event = threading.Event()
+
+        def _safe_target(*a: Any) -> None:
+            try:
+                target(*a)
+            except Exception:
+                logger.exception("ManagedThread %s crashed", name or "<unnamed>")
+                raise
+
         self._thread = threading.Thread(
-            target=target,
+            target=_safe_target,
             args=(self._stop_event, *args),
             daemon=False,
             name=name,
